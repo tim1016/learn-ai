@@ -68,7 +68,7 @@
     </ng-template>
     <ng-template #body let-run>
       <tr class="sr-row" (click)="open(run)">
-        <td>{{ run.created_at_ms | date: 'yyyy-MM-dd HH:mm' }}</td>
+        <td>{{ run.created_at_ms | timestampDisplay: 'local' : 'datetime' }}</td>
         <td class="sr-spec-cell">
           <span class="sr-spec-label">{{ run.strategy_spec_id }}</span>
           @if (run.parent_run_id) {
@@ -79,9 +79,9 @@
         </td>
         <td>{{ run.symbol }}</td>
         <td class="sr-window-cell">
-          {{ run.start_ms | date: 'yyyy-MM-dd': 'UTC' }}
+          {{ run.start_ms | timestampDisplay: 'date-et' }}
           <span class="sr-window-sep">→</span>
-          {{ run.end_ms | date: 'yyyy-MM-dd': 'UTC' }}
+          {{ run.end_ms | timestampDisplay: 'date-et' }}
           <span class="sr-resolution">{{ run.resolution_minutes | number: '1.0-0' }}m</span>
         </td>
         <td>

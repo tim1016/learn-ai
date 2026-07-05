@@ -40,6 +40,7 @@ import {
   RUN_DOCK_SOURCE,
   RUN_DOCK_STORAGE_KEY,
 } from "../../shared/run-dock/run-dock-source";
+import { formatTimestampIsoInZone } from "../../shared/timestamp";
 import { EngineRunDockSource } from "./engine-run-dock-source";
 import { LeanScriptEditorComponent } from "../lean-script-editor/lean-script-editor.component";
 import { EMA_CROSSOVER_SOURCE_TEMPLATE } from "../lean-script-editor/lean-script-editor.template";
@@ -120,9 +121,9 @@ interface ParamProperty {
 
 interface EngineTrade {
   trade_number: number;
-  entry_time: string;
+  entry_time: number;
   entry_price: number;
-  exit_time: string;
+  exit_time: number;
   exit_price: number;
   indicators: Record<string, number>;
   pnl_pts: number;
@@ -137,8 +138,8 @@ interface EngineTrade {
  * and can be unit-tested in isolation.
  */
 export interface StudyTradeApiItem {
-  entryTimestamp: string;
-  exitTimestamp: string;
+  entryTimestamp: number;
+  exitTimestamp: number;
   entryPrice: number;
   exitPrice: number;
   pnL: number;
@@ -187,7 +188,7 @@ interface EngineBacktestResponse {
   lean_statistics: any | null;
   trades: EngineTrade[];
   log_lines: string[];
-  equity_curve?: { timestamp: string; equity: number; cash: number; holdings_value: number }[];
+  equity_curve?: { timestamp: number; equity: number; cash: number; holdings_value: number }[];
   chart_bars?: { t: number; o: number; h: number; l: number; c: number; v: number }[];
   insights?: Record<string, any>[];
   insight_summary?: Record<string, any>;
@@ -1151,7 +1152,7 @@ export class LeanEngineComponent implements OnInit {
       finalEquity: r.final_equity,
       parameters: JSON.stringify(this.paramValues()),
       notes: null,
-      executedAt: new Date().toISOString(),
+      executedAt: Date.now(),
       durationMs: 0,
     };
   }
@@ -1219,59 +1220,14 @@ export class LeanEngineComponent implements OnInit {
   }
 
   /**
-   * Format a backend ISO-8601 timestamp in the currently selected timezone,
+   * Format a backend int64-ms UTC timestamp in the currently selected timezone,
    * emitting ISO-8601 with a numeric offset (e.g. 2025-04-17T10:00:00-04:00).
    * UTC is rendered with a trailing 'Z'. Returned string is what the table
    * cell displays AND what the CSV row writes for that field, so the two
    * stay in lockstep regardless of which zone is picked.
    */
-  formatTradeTime(iso: string): string {
-    if (!iso) return "";
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso; // fail-soft: keep raw
-
-    const zone = this.selectedTimezone();
-    if (zone === "UTC") {
-      return d.toISOString().replace(/\.\d{3}Z$/, "Z");
-    }
-
-    const parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: zone,
-      hour12: false,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    })
-      .formatToParts(d)
-      .reduce<Record<string, string>>((acc, p) => {
-        if (p.type !== "literal") acc[p.type] = p.value;
-        return acc;
-      }, {});
-
-    // Some engines emit '24' for midnight — normalize to '00'.
-    const hh = parts["hour"] === "24" ? "00" : parts["hour"];
-    const local = `${parts["year"]}-${parts["month"]}-${parts["day"]}T${hh}:${parts["minute"]}:${parts["second"]}`;
-
-    // Signed offset in minutes for this zone at this specific instant
-    // (correctly handles DST transitions per-trade).
-    const asUtc = Date.UTC(
-      Number(parts["year"]),
-      Number(parts["month"]) - 1,
-      Number(parts["day"]),
-      Number(hh),
-      Number(parts["minute"]),
-      Number(parts["second"]),
-    );
-    const offsetMinutes = Math.round((asUtc - d.getTime()) / 60000);
-    const sign = offsetMinutes >= 0 ? "+" : "-";
-    const abs = Math.abs(offsetMinutes);
-    const offH = String(Math.floor(abs / 60)).padStart(2, "0");
-    const offM = String(abs % 60).padStart(2, "0");
-
-    return `${local}${sign}${offH}:${offM}`;
+  formatTradeTime(ms: number): string {
+    return formatTimestampIsoInZone(ms, this.selectedTimezone());
   }
 
   tradeIndicatorEntries(trade: EngineTrade): { key: string; value: number }[] {

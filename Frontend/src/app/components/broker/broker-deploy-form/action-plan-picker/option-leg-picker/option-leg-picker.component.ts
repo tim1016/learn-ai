@@ -1,4 +1,4 @@
-import { DatePipe, DecimalPipe } from '@angular/common';
+import { DecimalPipe } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -14,6 +14,7 @@ import type {
   SymbolMatch,
 } from '../../../../../api/broker-models';
 import { BrokerService } from '../../../../../services/broker.service';
+import { fmtBrokerExpiryDate } from '../../../format';
 
 /**
  * Drill-down option-leg picker (Slice 1F).
@@ -35,7 +36,7 @@ import { BrokerService } from '../../../../../services/broker.service';
 @Component({
   selector: 'app-option-leg-picker',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DatePipe, DecimalPipe],
+  imports: [DecimalPipe],
   templateUrl: './option-leg-picker.component.html',
   styleUrl: './option-leg-picker.component.scss',
 })
@@ -58,6 +59,7 @@ export class OptionLegPickerComponent {
   readonly canQualify = computed<boolean>(
     () => this.selectedExpiryMs() !== null && this.selectedStrike() !== null,
   );
+  readonly fmtBrokerExpiryDate = fmtBrokerExpiryDate;
 
   constructor() {
     // Symbol changes (e.g. operator picks a different ticker on the

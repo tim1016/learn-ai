@@ -13,8 +13,8 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
-import pandas_market_calendars as mcal
 
+from app.lean_sidecar.trading_calendar import session_windows_ms_utc, valid_session_minutes_ms_utc
 from app.services.dataset_service import (
     calculate_dynamic_indicators,
     compute_warmup_start_date,
@@ -104,27 +104,25 @@ def _compute_summary(df: pd.DataFrame) -> dict[str, Any]:
 
 
 def step1_session_filter(df: pd.DataFrame, from_date: str, to_date: str) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Filter to valid NYSE RTH minutes using pandas_market_calendars."""
+    """Filter to valid NYSE RTH minutes using the canonical calendar."""
     bars_before = len(df)
 
-    nyse = mcal.get_calendar("NYSE")
-    schedule = nyse.schedule(start_date=from_date, end_date=to_date)
-    valid_minutes = mcal.date_range(schedule, frequency="1min")
+    valid_minutes = valid_session_minutes_ms_utc(from_date, to_date)
 
     dt_utc = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
     # Round to minute to match calendar
     dt_rounded = dt_utc.dt.floor("min")
-    mask = dt_rounded.isin(valid_minutes)
+    epoch = pd.Timestamp("1970-01-01", tz="UTC")
+    dt_rounded_ms = ((dt_rounded - epoch) // pd.Timedelta(milliseconds=1)).astype("int64")
+    mask = dt_rounded_ms.isin(valid_minutes)
     df = df[mask].reset_index(drop=True)
 
     # Detect early-close days
-    early_close_days = []
-    for date_val, row in schedule.iterrows():
-        market_open = row["market_open"]
-        market_close = row["market_close"]
-        session_minutes = int((market_close - market_open).total_seconds() / 60)
+    early_close_days: list[str] = []
+    for window in session_windows_ms_utc(from_date, to_date):
+        session_minutes = (window.close_ms_utc - window.open_ms_utc) // 60_000
         if session_minutes < 390:
-            early_close_days.append(str(date_val.date()))
+            early_close_days.append(window.session_date.isoformat())
 
     bars_removed = bars_before - len(df)
     logger.info(f"[DQ STEP 1] NYSE session filter: {bars_before} → {len(df)} bars ({bars_removed} removed)")
@@ -509,7 +507,7 @@ def get_pipeline_docs() -> list[dict[str, Any]]:
                 "Normal day: 9:30 → 16:00 ET (390 minutes)",
                 "Early close: 9:30 → 13:00 ET (210 minutes)",
             ],
-            "code": "nyse = mcal.get_calendar('NYSE')\nschedule = nyse.schedule(start_date, end_date)\nvalid_minutes = mcal.date_range(schedule, frequency='1min')\ndf = df[df['ts'].isin(valid_minutes)]",
+            "code": "valid_ms = valid_session_minutes_ms_utc(start_date, end_date)\ndf = df[df['ts_ms'].isin(valid_ms)]",
             "impact": "Eliminates zero-volume fabricated bars, false flat candles after close, false end-of-day indicator bleed",
         },
         {

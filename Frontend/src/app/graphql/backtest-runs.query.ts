@@ -66,7 +66,7 @@ export const UPDATE_BACKTEST_RUN_NOTES_MUTATION = gql`
 `;
 
 export interface BacktestRunNode {
-  id: string;
+  id: number;
   source: "engine" | "strategy-lab" | "lean-sidecar";
   /** PR B (2026-05-19) — unified engine identity (PYTHON | LEAN). */
   engine: Engine;
@@ -75,7 +75,7 @@ export interface BacktestRunNode {
   parameters: string | null;
   startDate: string;
   endDate: string;
-  executedAt: string;
+  executedAt: number;
   totalTrades: number;
   totalPnL: number;
   /** PR B — commission per order recorded at persist time. Null on legacy rows. */
@@ -103,7 +103,7 @@ export type Engine = "PYTHON" | "LEAN";
 
 export function toRunHistoryRow(node: BacktestRunNode): RunHistoryRow {
   return {
-    id: node.id,
+    id: String(node.id),
     source: node.source,
     engine: node.engine,
     strategyName: node.strategyName,

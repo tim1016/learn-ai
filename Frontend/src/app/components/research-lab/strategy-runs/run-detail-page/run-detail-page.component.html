@@ -14,8 +14,8 @@
         <span><strong>Resolution:</strong> {{ data.ledger.resolution_minutes }}m</span>
         <span>
           <strong>Window:</strong>
-          {{ data.ledger.start_ms | date: 'yyyy-MM-dd': 'UTC' }} →
-          {{ data.ledger.end_ms | date: 'yyyy-MM-dd': 'UTC' }}
+          {{ data.ledger.start_ms | timestampDisplay: 'date-et' }} →
+          {{ data.ledger.end_ms | timestampDisplay: 'date-et' }}
         </span>
         <span><strong>Run ID:</strong> <code>{{ data.ledger.run_id }}</code></span>
       </div>
@@ -187,9 +187,9 @@
         <ng-template #body let-t>
           <tr>
             <td>{{ t.trade_number }}</td>
-            <td>{{ t.entry_time_ms | date: 'yyyy-MM-dd HH:mm' }}</td>
+            <td>{{ t.entry_time_ms | timestampDisplay: 'et' : 'datetime' }}</td>
             <td>${{ t.entry_price | number: '1.2-2' }}</td>
-            <td>{{ t.exit_time_ms | date: 'yyyy-MM-dd HH:mm' }}</td>
+            <td>{{ t.exit_time_ms | timestampDisplay: 'et' : 'datetime' }}</td>
             <td>${{ t.exit_price | number: '1.2-2' }}</td>
             <td>{{ t.bars_held }}</td>
             <td>{{ t.pnl_pts | number: '1.2-2' }}</td>
@@ -266,11 +266,11 @@
         <dd><code>{{ data.ledger.random_seed }}</code></dd>
 
         <dt>Created</dt>
-        <dd>{{ data.ledger.created_at_ms | date: 'yyyy-MM-dd HH:mm:ss' }}</dd>
+        <dd>{{ data.ledger.created_at_ms | timestampDisplay: 'local' : 'datetime' }}</dd>
 
         @if (data.ledger.completed_at_ms; as completedMs) {
           <dt>Completed</dt>
-          <dd>{{ completedMs | date: 'yyyy-MM-dd HH:mm:ss' }}</dd>
+          <dd>{{ completedMs | timestampDisplay: 'local' : 'datetime' }}</dd>
         }
 
         @if (data.ledger.parent_run_id; as parentId) {

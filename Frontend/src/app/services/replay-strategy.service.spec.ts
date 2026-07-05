@@ -7,8 +7,8 @@ import { createMockAggregatesTimeSeries } from '../../testing/factories/market-d
 function createMockTrade(overrides: Partial<BacktestTrade> = {}): BacktestTrade {
   return {
     tradeType: 'LONG',
-    entryTimestamp: '2026-01-05T09:35:00.000Z',
-    exitTimestamp: '2026-01-05T09:40:00.000Z',
+    entryTimestamp: Date.UTC(2026, 0, 5, 9, 35),
+    exitTimestamp: Date.UTC(2026, 0, 5, 9, 40),
     entryPrice: 150,
     exitPrice: 152,
     pnl: 2,
@@ -150,20 +150,20 @@ describe('ReplayStrategyService', () => {
 
     for (let n = 0; n < 20; n++) {
       replayEngine.seekTo(n);
-      const currentTimestampMs = new Date(replayEngine.currentBar()!.timestamp).getTime();
+      const currentTimestampMs = replayEngine.currentBar()!.timestamp;
 
       for (const trade of service.visibleTrades()) {
-        expect(new Date(trade.entryTimestamp).getTime()).toBeLessThanOrEqual(currentTimestampMs);
+        expect(trade.entryTimestamp).toBeLessThanOrEqual(currentTimestampMs);
       }
 
       for (const trade of service.completedTrades()) {
-        expect(new Date(trade.exitTimestamp).getTime()).toBeLessThanOrEqual(currentTimestampMs);
+        expect(trade.exitTimestamp).toBeLessThanOrEqual(currentTimestampMs);
       }
 
       const active = service.activePosition();
       if (active) {
-        expect(new Date(active.entryTimestamp).getTime()).toBeLessThanOrEqual(currentTimestampMs);
-        expect(new Date(active.exitTimestamp).getTime()).toBeGreaterThan(currentTimestampMs);
+        expect(active.entryTimestamp).toBeLessThanOrEqual(currentTimestampMs);
+        expect(active.exitTimestamp).toBeGreaterThan(currentTimestampMs);
       }
     }
   });

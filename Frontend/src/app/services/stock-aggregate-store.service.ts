@@ -58,7 +58,7 @@ export class StockAggregateStore {
       const merged = [...existing, ...entry.aggregates];
 
       // Deduplicate by timestamp
-      const uniqueMap = new Map<string, StockAggregate>();
+      const uniqueMap = new Map<number, StockAggregate>();
       for (const agg of merged) {
         uniqueMap.set(agg.timestamp, agg);
       }

@@ -90,7 +90,7 @@ export class VolumeChartComponent implements AfterViewInit, OnDestroy {
 
     const histogramData: HistogramData[] = data
       .map(agg => ({
-        time: (new Date(agg.timestamp).getTime() / 1000) as UTCTimestamp,
+        time: (agg.timestamp / 1000) as UTCTimestamp,
         value: agg.volume,
         color: agg.close >= agg.open ? '#26a69a' : '#ef5350'
       }))

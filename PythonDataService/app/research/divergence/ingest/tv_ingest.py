@@ -18,10 +18,11 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import asdict, dataclass
-from datetime import time
 from pathlib import Path
 
 import pandas as pd
+
+from app.lean_sidecar.trading_calendar import regular_session_mask_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -73,8 +74,6 @@ TV_DEFAULT_COLS: tuple[str, ...] = (
     "ADX",  # default ADX
 )
 
-_RTH_OPEN = time(9, 30)
-_RTH_CLOSE = time(16, 0)  # last 15-min bar starts at 15:45, contents up to 15:59
 _PERIOD_SECONDS = {"5m": 300, "15m": 900, "1h": 3600}
 
 
@@ -116,10 +115,9 @@ def _assert_monotonic_unique(df: pd.DataFrame) -> None:
         raise IngestValidationError("Timestamps are not strictly increasing")
 
 
-def _assert_rth_only(df: pd.DataFrame, et_col: str = "et") -> int:
-    et_time = df[et_col].dt.time
-    non_rth = ((et_time < _RTH_OPEN) | (et_time >= _RTH_CLOSE)).sum()
-    return int(non_rth)
+def _assert_rth_only(df: pd.DataFrame) -> int:
+    ts_ms = (df["time"].astype("int64") * 1000).astype("int64")
+    return int((~regular_session_mask_ms_utc(ts_ms)).sum())
 
 
 def _assert_bar_counts(df: pd.DataFrame, timeframe: str) -> tuple[int, int]:

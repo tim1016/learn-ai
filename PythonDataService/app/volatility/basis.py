@@ -29,17 +29,14 @@ constant would be wrong in both directions.
 from __future__ import annotations
 
 import math
-from typing import Final
 
 import pandas as pd
-import pandas_market_calendars as mcal
 
+from app.lean_sidecar.trading_calendar import trading_session_count
 from app.volatility.conventions import (
     CALENDAR_DAYS_PER_YEAR,
     TRADING_DAYS_PER_YEAR,
 )
-
-_NYSE: Final = mcal.get_calendar("NYSE")
 
 
 def _et_date(ts: pd.Timestamp) -> pd.Timestamp:
@@ -74,10 +71,9 @@ def nyse_trading_days_in_window(
         ts = pd.Timestamp(asof, unit="ms", tz="UTC")
     else:
         ts = asof
-    start_date = _et_date(ts)
-    end_date_inclusive = start_date + pd.Timedelta(days=calendar_days - 1)
-    schedule = _NYSE.schedule(start_date=start_date, end_date=end_date_inclusive)
-    return len(schedule)
+    start_date = _et_date(ts).date()
+    end_date_inclusive = (pd.Timestamp(start_date) + pd.Timedelta(days=calendar_days - 1)).date()
+    return trading_session_count(start_date, end_date_inclusive)
 
 
 def convert_iv_act365_to_trading252(

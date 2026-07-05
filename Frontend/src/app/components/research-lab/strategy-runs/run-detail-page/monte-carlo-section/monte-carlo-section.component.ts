@@ -1,4 +1,4 @@
-import { CommonModule, DatePipe } from '@angular/common';
+import { CommonModule } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -17,6 +17,7 @@ import { TagModule } from 'primeng/tag';
 import { MonteCarloService } from '../../../../../services/monte-carlo.service';
 import type { MonteCarloConfig } from '../../../../../services/monte-carlo.types';
 import type { RunLedger } from '../../../../../services/strategy-runs.types';
+import { TimestampDisplayPipe } from '../../../../../shared/timestamp';
 
 /**
  * Embedded section on the run-detail page showing Monte Carlo
@@ -38,7 +39,7 @@ import type { RunLedger } from '../../../../../services/strategy-runs.types';
     MessageModule,
     TableModule,
     TagModule,
-    DatePipe,
+    TimestampDisplayPipe,
   ],
   templateUrl: './monte-carlo-section.component.html',
   styleUrls: ['./monte-carlo-section.component.scss'],

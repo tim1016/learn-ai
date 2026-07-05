@@ -56,7 +56,7 @@ export class ReplayEngineService {
   load(bars: StockAggregate[]): void {
     this.clearInterval();
     const sorted = [...bars].sort(
-      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+      (a, b) => a.timestamp - b.timestamp
     );
     this._bars.set(sorted);
     this._currentIndex.set(0);

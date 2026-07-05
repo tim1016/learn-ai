@@ -1,7 +1,7 @@
-using System.Globalization;
 using System.Text.Json;
 using Backend.Data;
 using Backend.Models.MarketData;
+using Backend.Temporal;
 using Microsoft.EntityFrameworkCore;
 
 namespace Backend;
@@ -29,6 +29,10 @@ public static class StudiesApi
         AppDbContext db,
         CancellationToken ct)
     {
+        var tradeTimestampError = ValidateSaveStudyTradeTimestamps(request);
+        if (tradeTimestampError is not null)
+            return Results.BadRequest(new { error = tradeTimestampError });
+
         // Resolve or create the Ticker entity
         var ticker = await db.Tickers
             .FirstOrDefaultAsync(t => t.Symbol == request.Symbol.ToUpper(), ct);
@@ -95,8 +99,8 @@ public static class StudiesApi
                 execution.Trades.Add(new BacktestTrade
                 {
                     TradeType = t.TradeType ?? "Buy",
-                    EntryTimestamp = ParseUtc(t.EntryTimestamp),
-                    ExitTimestamp = ParseUtc(t.ExitTimestamp),
+                    EntryTimestamp = UnixMs.ToUtcDateTime(t.EntryTimestamp!.Value),
+                    ExitTimestamp = UnixMs.ToUtcDateTime(t.ExitTimestamp!.Value),
                     EntryPrice = t.EntryPrice,
                     ExitPrice = t.ExitPrice,
                     Quantity = t.Quantity ?? 1m,
@@ -111,6 +115,23 @@ public static class StudiesApi
         await db.SaveChangesAsync(ct);
 
         return Results.Created($"/api/studies/{execution.Id}", new { id = execution.Id });
+    }
+
+    internal static string? ValidateSaveStudyTradeTimestamps(SaveStudyRequest request)
+    {
+        if (request.Trades is not { Count: > 0 })
+            return null;
+
+        for (var i = 0; i < request.Trades.Count; i++)
+        {
+            var trade = request.Trades[i];
+            if (trade.EntryTimestamp is null or <= 0)
+                return $"trades[{i}].entryTimestamp is required and must be a positive int64 ms UTC timestamp.";
+            if (trade.ExitTimestamp is null or <= 0)
+                return $"trades[{i}].exitTimestamp is required and must be a positive int64 ms UTC timestamp.";
+        }
+
+        return null;
     }
 
     // ── GET /api/studies — list studies with sorting ──────────────
@@ -182,7 +203,7 @@ public static class StudiesApi
                 FinalEquity = e.FinalEquity,
                 Parameters = e.Parameters,
                 Notes = e.Notes,
-                ExecutedAt = e.ExecutedAt,
+                ExecutedAt = UnixMs.FromUtc(e.ExecutedAt),
                 DurationMs = e.DurationMs,
             })
             .ToListAsync(ct);
@@ -247,13 +268,13 @@ public static class StudiesApi
             DrawdownRecoveryDays = execution.DrawdownRecoveryDays,
             LeanStatisticsJson = execution.LeanStatisticsJson,
             Notes = execution.Notes,
-            ExecutedAt = execution.ExecutedAt,
+            ExecutedAt = UnixMs.FromUtc(execution.ExecutedAt),
             DurationMs = execution.DurationMs,
             Trades = execution.Trades.OrderBy(t => t.EntryTimestamp).Select(t => new StudyTradeItem
             {
                 TradeType = t.TradeType,
-                EntryTimestamp = t.EntryTimestamp,
-                ExitTimestamp = t.ExitTimestamp,
+                EntryTimestamp = UnixMs.FromUtc(t.EntryTimestamp),
+                ExitTimestamp = UnixMs.FromUtc(t.ExitTimestamp),
                 EntryPrice = t.EntryPrice,
                 ExitPrice = t.ExitPrice,
                 Quantity = t.Quantity,
@@ -296,15 +317,6 @@ public static class StudiesApi
 
         return Results.NoContent();
     }
-
-    // Parse UTC ISO-8601 trade timestamps from the Python engine.
-    // Rejects naive strings (no offset) to fail-fast on malformed producer output.
-    private static DateTime ParseUtc(string s) =>
-        DateTimeOffset.ParseExact(
-            s,
-            new[] { "yyyy-MM-ddTHH:mm:ss'Z'", "yyyy-MM-ddTHH:mm:ss.ffffff'Z'" },
-            CultureInfo.InvariantCulture,
-            System.Globalization.DateTimeStyles.None).UtcDateTime;
 
     // PR B (2026-05-19) — one-cycle backwards-compat for pre-PR-B callers
     // that POST without ``DataPolicyJson``. Records the engines' actual
@@ -397,8 +409,8 @@ public record SaveStudyRequest
 public record SaveStudyTrade
 {
     public string? TradeType { get; init; }
-    public string EntryTimestamp { get; init; } = "";
-    public string ExitTimestamp { get; init; } = "";
+    public long? EntryTimestamp { get; init; }
+    public long? ExitTimestamp { get; init; }
     public decimal EntryPrice { get; init; }
     public decimal ExitPrice { get; init; }
     // Nullable so callers that haven't been updated still validate; missing
@@ -452,7 +464,7 @@ public record StudyListItem
     public decimal FinalEquity { get; init; }
     public string Parameters { get; init; } = "{}";
     public string? Notes { get; init; }
-    public DateTime ExecutedAt { get; init; }
+    public long ExecutedAt { get; init; }
     public long DurationMs { get; init; }
 }
 
@@ -472,8 +484,8 @@ public record StudyDetailResponse : StudyListItem
 public record StudyTradeItem
 {
     public string TradeType { get; init; } = "";
-    public DateTime EntryTimestamp { get; init; }
-    public DateTime ExitTimestamp { get; init; }
+    public long EntryTimestamp { get; init; }
+    public long ExitTimestamp { get; init; }
     public decimal EntryPrice { get; init; }
     public decimal ExitPrice { get; init; }
     public decimal Quantity { get; init; } = 1m;

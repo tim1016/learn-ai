@@ -23,11 +23,10 @@ const GET_TICKERS_QUERY = `
 
 const GET_TICKER_STATS_QUERY = `
   query GetTickerStats($symbol: String!) {
-    stockAggregates(
-      where: { ticker: { symbol: { eq: $symbol } } }
-      order: [{ timestamp: ASC }]
-    ) {
-      timestamp
+    stockAggregateStats(symbol: $symbol) {
+      count
+      earliest
+      latest
     }
   }
 `;
@@ -35,6 +34,14 @@ const GET_TICKER_STATS_QUERY = `
 interface GraphQLResponse<T> {
   data: T;
   errors?: { message: string }[];
+}
+
+interface StockAggregateStatsResponse {
+  stockAggregateStats: {
+    count: number;
+    earliest: number | null;
+    latest: number | null;
+  };
 }
 
 @Injectable({
@@ -58,19 +65,19 @@ export class TickerService {
       );
   }
 
-  getAggregateStats(symbol: string): Observable<{ count: number; earliest: string | null; latest: string | null }> {
+  getAggregateStats(symbol: string): Observable<{ count: number; earliest: number | null; latest: number | null }> {
     return this.http
-      .post<GraphQLResponse<{ stockAggregates: { timestamp: string }[] }>>(GRAPHQL_URL, {
+      .post<GraphQLResponse<StockAggregateStatsResponse>>(GRAPHQL_URL, {
         query: GET_TICKER_STATS_QUERY,
         variables: { symbol }
       })
       .pipe(
         map(response => {
-          const aggs = response.data.stockAggregates ?? [];
+          const stats = response.data.stockAggregateStats;
           return {
-            count: aggs.length,
-            earliest: aggs.length > 0 ? aggs[0].timestamp : null,
-            latest: aggs.length > 0 ? aggs[aggs.length - 1].timestamp : null
+            count: stats.count,
+            earliest: stats.earliest,
+            latest: stats.latest
           };
         })
       );

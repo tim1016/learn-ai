@@ -24,7 +24,7 @@
               [class.chip-selected]="selectedExpiryMs() === ms"
               (click)="selectExpiry(ms)"
             >
-              {{ ms | date: 'yyyy-MM-dd' : 'UTC' }}
+              {{ fmtBrokerExpiryDate(ms) }}
             </button>
           </li>
         }

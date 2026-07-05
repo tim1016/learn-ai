@@ -1,4 +1,4 @@
-"""Tests for previous_completed_nyse_session_close_ms.
+"""Tests for canonical scheduled NYSE session helpers.
 
 The function is consumed only by indicator-state hydrate-validation
 (see indicator_state.py); test it as a pure function so the validation
@@ -12,10 +12,10 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.engine.live.nyse_calendar import (
+from app.lean_sidecar.trading_calendar import (
     NoSessionError,
-    nyse_session_state_at_ms,
-    previous_completed_nyse_session_close_ms,
+    previous_completed_session_close_ms,
+    session_state_at_ms,
 )
 
 _NY = ZoneInfo("America/New_York")
@@ -41,7 +41,7 @@ def _ms(year: int, month: int, day: int, hour: int, minute: int) -> int:
     ],
 )
 def test_previous_completed_session_close(case: str, session_start_ms: int, expected_prev_close_ms: int) -> None:
-    actual = previous_completed_nyse_session_close_ms(session_start_ms)
+    actual = previous_completed_session_close_ms(session_start_ms)
     assert actual == expected_prev_close_ms, f"{case}: expected {expected_prev_close_ms}, got {actual}"
 
 
@@ -53,7 +53,7 @@ def test_weekend_session_start_returns_previous_friday_close() -> None:
     # We declare the contract: a session_start_ms before the first
     # session in our lookback raises NoSessionError. A Saturday with
     # 14-day lookback returns Friday close (not a raise).
-    assert previous_completed_nyse_session_close_ms(sat) == _ms(2026, 5, 15, 16, 0)
+    assert previous_completed_session_close_ms(sat) == _ms(2026, 5, 15, 16, 0)
 
 
 def test_session_start_ms_before_any_lookback_session_raises() -> None:
@@ -61,7 +61,7 @@ def test_session_start_ms_before_any_lookback_session_raises() -> None:
     # but the contract is: if no session exists in the lookback window
     # ending at session_start_ms, raise.
     with pytest.raises(NoSessionError):
-        previous_completed_nyse_session_close_ms(0)
+        previous_completed_session_close_ms(0)
 
 
 @pytest.mark.parametrize(
@@ -82,9 +82,9 @@ def test_session_start_ms_before_any_lookback_session_raises() -> None:
 def test_nyse_session_state_honors_calendar(
     at_ms: int, expected: str
 ) -> None:
-    assert nyse_session_state_at_ms(at_ms) == expected
+    assert session_state_at_ms(at_ms) == expected
 
 
 def test_nyse_session_state_rejects_negative_timestamp() -> None:
     with pytest.raises(ValueError, match="non-negative"):
-        nyse_session_state_at_ms(-1)
+        session_state_at_ms(-1)

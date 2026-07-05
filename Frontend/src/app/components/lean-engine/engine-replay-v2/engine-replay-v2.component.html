@@ -76,11 +76,11 @@
                     </span>
                   </td>
                   <td class="ts">
-                    <div class="time">{{ t.entryTimestamp | date:'MMM d, HH:mm' }}</div>
+                    <div class="time">{{ t.entryTimestamp | timestampDisplay: 'et' : 'datetime' }}</div>
                     <div class="price">{{ t.entryPrice | number:'1.2-2' }}</div>
                   </td>
                   <td class="ts">
-                    <div class="time">{{ t.exitTimestamp | date:'MMM d, HH:mm' }}</div>
+                    <div class="time">{{ t.exitTimestamp | timestampDisplay: 'et' : 'datetime' }}</div>
                     <div class="price">{{ t.exitPrice | number:'1.2-2' }}</div>
                   </td>
                   <td class="num pnl">

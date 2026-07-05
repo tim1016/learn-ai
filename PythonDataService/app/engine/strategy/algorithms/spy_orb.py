@@ -25,17 +25,14 @@ Validation properties:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order import Direction, OrderEvent
 from app.engine.framework.insight import Insight, InsightDirection
 from app.engine.strategy.base import LoggedTrade, Strategy
-
-# RTH boundaries (Eastern Time).
-_RTH_OPEN = time(9, 30)
-_RTH_CLOSE = time(16, 0)
+from app.lean_sidecar.trading_calendar import is_regular_session_ms_utc
 
 
 @dataclass
@@ -134,8 +131,7 @@ class SpyOpeningRangeBreakout(Strategy):
     @staticmethod
     def _is_rth(bar_time: datetime) -> bool:
         """True if the bar falls within regular trading hours."""
-        t = bar_time.time()
-        return _RTH_OPEN <= t < _RTH_CLOSE
+        return is_regular_session_ms_utc(int(bar_time.timestamp() * 1000))
 
     def _reset_day(self) -> None:
         """Reset all daily state for a new session."""

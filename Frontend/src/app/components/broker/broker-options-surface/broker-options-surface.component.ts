@@ -22,7 +22,7 @@ import { brokerSse, type SseStatus, type SseStream } from '../../../services/bro
 import type {
   IbkrSurfaceSnapshot,
 } from '../../../api/broker-models';
-import { fmtCurrency, fmtDateNy, fmtTimestampNy } from '../format';
+import { fmtBrokerExpiryDate, fmtCurrency, fmtTimestampNy } from '../format';
 
 const DEFAULT_SYMBOL = 'SPY';
 const DEFAULT_DEBOUNCE_MS = 500;
@@ -191,7 +191,6 @@ export class BrokerOptionsSurfaceComponent {
   private putChart: unknown = null;
 
   readonly fmtCurrency = fmtCurrency;
-  readonly fmtDateNy = fmtDateNy;
   readonly fmtTimestampNy = fmtTimestampNy;
 
   readonly zMetricLabel = computed(
@@ -450,7 +449,7 @@ export class BrokerOptionsSurfaceComponent {
     const echarts = await import('echarts');
     await import('echarts-gl');
 
-    const xCategories = xs.map((ms) => fmtDateNy(ms));
+    const xCategories = xs.map((ms) => fmtBrokerExpiryDate(ms));
     const yCategories = ys.map((k) => k.toFixed(2));
 
     if (!this.callChart) this.callChart = echarts.init(callHost);

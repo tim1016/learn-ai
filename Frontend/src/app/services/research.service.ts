@@ -243,7 +243,7 @@ export interface ResearchExperiment {
   passedValidation: boolean;
   monotonicityRatio: number;
   isMonotonic: boolean;
-  createdAt: string;
+  createdAt: number;
 }
 
 export interface FeatureInfo {
@@ -535,7 +535,7 @@ export interface SignalExperiment {
   bestCostBps: number;
   flipSign: boolean;
   regimeGateEnabled: boolean;
-  createdAt: string;
+  createdAt: number;
 }
 
 export interface RunSignalEngineInput {

@@ -92,7 +92,7 @@
             <dt>Generated</dt>
             <dd class="mono">{{ fmtDateNy(receipt.generated_at_ms) }}</dd>
             <dt>Expires</dt>
-            <dd class="mono">{{ fmtDateNy(receipt.expires_at_ms) }}</dd>
+            <dd class="mono">{{ fmtBrokerExpiryDate(receipt.expires_at_ms) }}</dd>
           </dl>
           <p class="receipt-reason">{{ accountReconciliationReason() }}</p>
         } @else {
@@ -195,7 +195,7 @@
                   {{ p.strike === null || p.strike === undefined ? '—' : fmtCurrency(p.strike) }}
                 </td>
                 <td class="mono">{{ p.right ?? '—' }}</td>
-                <td class="mono">{{ fmtDateNy(p.expiry_ms) }}</td>
+                <td class="mono">{{ fmtBrokerExpiryDate(p.expiry_ms) }}</td>
                 <td class="mono num">
                   {{ pnl?.position === null || pnl?.position === undefined ? p.quantity : fmtSignedNumber(pnl?.position, 0) }}
                 </td>

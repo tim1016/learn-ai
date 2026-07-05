@@ -1,4 +1,4 @@
-import { CommonModule, DatePipe, DecimalPipe, PercentPipe } from '@angular/common';
+import { CommonModule, DecimalPipe, PercentPipe } from '@angular/common';
 import {
   AfterViewInit,
   ChangeDetectionStrategy,
@@ -31,6 +31,7 @@ import type {
   WalkForwardResponse,
   WalkForwardStatus,
 } from '../../../../services/walk-forward.types';
+import { TimestampDisplayPipe } from '../../../../shared/timestamp';
 
 const CHART_THEME = {
   bg: '#0f172a',
@@ -70,9 +71,9 @@ const COMBINED_CURVE_COLOR = '#a78bfa';
     MessageModule,
     TableModule,
     TagModule,
-    DatePipe,
     DecimalPipe,
     PercentPipe,
+    TimestampDisplayPipe,
   ],
   templateUrl: './walk-forward-detail-page.component.html',
   styleUrls: ['./walk-forward-detail-page.component.scss'],

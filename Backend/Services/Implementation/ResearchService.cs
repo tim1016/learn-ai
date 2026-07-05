@@ -4,6 +4,7 @@ using Backend.Data;
 using Backend.Models.DTOs;
 using Backend.Models.MarketData;
 using Backend.Services.Interfaces;
+using Backend.Temporal;
 using Microsoft.EntityFrameworkCore;
 
 namespace Backend.Services.Implementation;
@@ -68,7 +69,7 @@ public class ResearchService : IResearchService
 
         // Step 2: Convert to OHLCV bars for Python
         var bars = aggregates.Select(a => new OhlcvBarDto(
-            new DateTimeOffset(a.Timestamp, TimeSpan.Zero).ToUnixTimeMilliseconds(),
+            UnixMs.FromUtc(a.Timestamp),
             a.Open, a.High, a.Low, a.Close, a.Volume
         )).ToList();
 
@@ -134,7 +135,7 @@ public class ResearchService : IResearchService
                 PassedValidation = e.PassedValidation,
                 MonotonicityRatio = (double)e.MonotonicityRatio,
                 IsMonotonic = e.IsMonotonic,
-                CreatedAt = e.CreatedAt,
+                CreatedAt = UnixMs.FromUtc(e.CreatedAt),
             })
             .ToListAsync(cancellationToken);
 
@@ -166,7 +167,7 @@ public class ResearchService : IResearchService
                 PassedValidation = e.PassedValidation,
                 MonotonicityRatio = (double)e.MonotonicityRatio,
                 IsMonotonic = e.IsMonotonic,
-                CreatedAt = e.CreatedAt,
+                CreatedAt = UnixMs.FromUtc(e.CreatedAt),
             })
             .FirstOrDefaultAsync(cancellationToken);
 
@@ -210,7 +211,7 @@ public class ResearchService : IResearchService
             aggregates.Count, ticker);
 
         var bars = aggregates.Select(a => new OhlcvBarDto(
-            new DateTimeOffset(a.Timestamp, TimeSpan.Zero).ToUnixTimeMilliseconds(),
+            UnixMs.FromUtc(a.Timestamp),
             a.Open, a.High, a.Low, a.Close, a.Volume
         )).ToList();
 
@@ -277,7 +278,7 @@ public class ResearchService : IResearchService
                 BestCostBps = (double)e.BestCostBps,
                 FlipSign = e.FlipSign,
                 RegimeGateEnabled = e.RegimeGateEnabled,
-                CreatedAt = e.CreatedAt,
+                CreatedAt = UnixMs.FromUtc(e.CreatedAt),
             })
             .ToListAsync(cancellationToken);
     }
@@ -435,7 +436,7 @@ public class ResearchService : IResearchService
 
         var dailyBars = stockFetchResult.Aggregates
             .Select(a => new OhlcvBarDto(
-                new DateTimeOffset(a.Timestamp, TimeSpan.Zero).ToUnixTimeMilliseconds(),
+                UnixMs.FromUtc(a.Timestamp),
                 a.Open, a.High, a.Low, a.Close, a.Volume))
             .ToList();
 

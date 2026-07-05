@@ -3,6 +3,7 @@ using Backend.Data;
 using Backend.Models.Comparison;
 using Backend.Models.MarketData;
 using Backend.Services.Interfaces;
+using Backend.Temporal;
 using HotChocolate;
 using HotChocolate.Types;
 using Microsoft.EntityFrameworkCore;
@@ -59,8 +60,8 @@ public class CompareBacktestRunsResolver
             .ToList();
 
         return new RunComparisonResult(
-            Left: left,
-            Right: right,
+            Left: BacktestRunNodeType.FromExecution(left),
+            Right: BacktestRunNodeType.FromExecution(right),
             Guardrails: guardrails,
             Summary: summary,
             Divergences: divergences,
@@ -115,8 +116,8 @@ public class CompareBacktestRunsResolver
     {
         return new PersistLeanTradePayload(
             TradeNumber: tradeNumber,
-            EntryMsUtc: new DateTimeOffset(t.EntryTimestamp, TimeSpan.Zero).ToUnixTimeMilliseconds(),
-            ExitMsUtc: new DateTimeOffset(t.ExitTimestamp, TimeSpan.Zero).ToUnixTimeMilliseconds(),
+            EntryMsUtc: UnixMs.FromUtc(t.EntryTimestamp),
+            ExitMsUtc: UnixMs.FromUtc(t.ExitTimestamp),
             EntryPrice: t.EntryPrice,
             ExitPrice: t.ExitPrice,
             Quantity: t.Quantity,

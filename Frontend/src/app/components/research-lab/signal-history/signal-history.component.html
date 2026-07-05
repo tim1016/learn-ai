@@ -121,7 +121,7 @@
             <td [class]="sharpeClass(exp.meanOosSharpe)">{{ exp.meanOosSharpe | number: '1.3-3' }}</td>
             <td class="cell-mono cell-dim">{{ exp.bestThreshold | number: '1.2-2' }}</td>
             <td class="cell-period">{{ exp.startDate }} — {{ exp.endDate }}</td>
-            <td class="cell-mono cell-dim">{{ exp.createdAt | date: 'short' }}</td>
+            <td class="cell-mono cell-dim">{{ exp.createdAt | timestampDisplay: 'local' : 'datetime' }}</td>
             <td>
               <p-button icon="pi pi-external-link" label="View Report" severity="secondary" [text]="true"
                 size="small" (onClick)="openReport(exp.id)" />

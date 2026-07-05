@@ -18,7 +18,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field as dc_field
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from datetime import time as time_of_day
 from decimal import Decimal
 from pathlib import Path
@@ -69,7 +69,7 @@ from app.models.responses import (
     LeanStatisticsResponse,
     LeanTradeStatsResponse,
 )
-from app.services.strategies.common import TradeRecord
+from app.services.strategies.common import TradeRecord, format_timestamp
 from app.services.strategies.lean_statistics import compute_lean_statistics
 
 router = APIRouter()
@@ -1519,9 +1519,9 @@ EngineBacktestRequest.model_rebuild()
 
 class EngineTradeResponse(BaseModel):
     trade_number: int
-    entry_time: str
+    entry_time: int
     entry_price: float
-    exit_time: str
+    exit_time: int
     exit_price: float
     # Filled share/contract count from the engine's fill model. Required for
     # downstream dollar-PnL persistence — without it, ``BacktestTrade.Quantity``
@@ -1641,15 +1641,9 @@ def _format_trade(index: int, trade: Any) -> EngineTradeResponse:
     indicators = {k: float(v) for k, v in raw_indicators.items()}
     return EngineTradeResponse(
         trade_number=index,
-        # ISO-8601 with Z designator: this string is the wire format the
-        # .NET ``StudiesApi.ParseUtc`` requires when persisting trades, and
-        # per ``.claude/rules/numerical-rigor.md`` §"Timestamp rigor" naive
-        # ISO strings are banned at boundaries. Earlier `"%Y-%m-%d %H:%M"`
-        # encoding caused every Python engine save to silently 500 against
-        # `/api/studies` since the parser was hardened.
-        entry_time=_to_utc_iso(trade.entry_time),
+        entry_time=_to_ms_utc(trade.entry_time),
         entry_price=float(trade.entry_price),
-        exit_time=_to_utc_iso(trade.exit_time),
+        exit_time=_to_ms_utc(trade.exit_time),
         exit_price=float(trade.exit_price),
         quantity=int(trade.quantity),
         indicators=indicators,
@@ -1657,6 +1651,23 @@ def _format_trade(index: int, trade: Any) -> EngineTradeResponse:
         pnl_pct=float(trade.pnl_pct),
         result=trade.result,
         signal_reason=getattr(trade, "signal_reason", "") or "",
+    )
+
+
+def _format_trade_record(index: int, trade: Any, cumulative_pnl_pct: float) -> TradeRecord:
+    raw_indicators = getattr(trade, "indicators", None) or {}
+    return TradeRecord(
+        trade_number=index,
+        trade_type="Buy",  # engine strategies are long-only for now
+        entry_timestamp=_to_ms_utc(trade.entry_time),
+        exit_timestamp=_to_ms_utc(trade.exit_time),
+        entry_price=float(trade.entry_price),
+        exit_price=float(trade.exit_price),
+        pnl=float(trade.pnl_pts),
+        pnl_pct=float(trade.pnl_pct),
+        cumulative_pnl_pct=cumulative_pnl_pct,
+        signal_reason=getattr(trade, "signal_reason", "") or "",
+        indicator_snapshot={k: float(v) for k, v in raw_indicators.items()},
     )
 
 
@@ -2130,21 +2141,7 @@ def execute_engine_backtest(
             trade_records: list[TradeRecord] = []
             for i, t in enumerate(trades):
                 cum_pnl += float(t.pnl_pct)
-                trade_records.append(
-                    TradeRecord(
-                        trade_number=i + 1,
-                        trade_type="Buy",  # engine strategies are long-only for now
-                        entry_timestamp=t.entry_time.strftime("%Y-%m-%d %H:%M"),
-                        exit_timestamp=t.exit_time.strftime("%Y-%m-%d %H:%M"),
-                        entry_price=float(t.entry_price),
-                        exit_price=float(t.exit_price),
-                        pnl=float(t.pnl_pts),
-                        pnl_pct=float(t.pnl_pct),
-                        cumulative_pnl_pct=cum_pnl,
-                        signal_reason=getattr(t, "signal_reason", "") or "",
-                        indicator_snapshot={k: float(v) for k, v in (getattr(t, "indicators", None) or {}).items()},
-                    )
-                )
+                trade_records.append(_format_trade_record(i + 1, t, cum_pnl))
 
             lean_stats = compute_lean_statistics(
                 df=df,
@@ -2172,7 +2169,7 @@ def execute_engine_backtest(
 
     equity_curve_dicts = [
         {
-            "timestamp": s.timestamp.isoformat(),
+            "timestamp": _to_ms_utc(s.timestamp),
             "equity": float(s.equity),
             "cash": float(s.cash),
             "holdings_value": float(s.holdings_value),
@@ -2183,7 +2180,7 @@ def execute_engine_backtest(
     # ── Serialize consolidated bars for charting ──
     chart_bars_dicts = [
         {
-            "t": int(b.time.timestamp() * 1000),
+            "t": _to_ms_utc(b.time),
             "o": float(b.open),
             "h": float(b.high),
             "l": float(b.low),
@@ -2245,25 +2242,12 @@ def execute_engine_backtest(
 # ---------------------------------------------------------------------------
 # Wire-format helpers
 # ---------------------------------------------------------------------------
-def _to_utc_iso(dt: datetime) -> str:
-    """Format a datetime as ISO-8601 UTC with Z designator.
-
-    Required by .NET ``StudiesApi.ParseUtc`` which only accepts
-    ``yyyy-MM-ddTHH:mm:ss'Z'``. Naive inputs are treated as UTC for
-    defensive backwards-compat — the engine's bar pipeline normally
-    yields tz-aware ET datetimes, but a strategy that bypasses the
-    standard pipeline must not silently fail the save.
-
-    See ``.claude/rules/numerical-rigor.md`` §"Timestamp rigor": naive
-    ISO strings are banned as wire format; this is the canonical
-    encoding for engine→backend trade timestamps until they move to
-    int64 ms UTC.
-    """
-    if dt.tzinfo is None:
-        dt_utc = dt.replace(tzinfo=UTC)
-    else:
-        dt_utc = dt.astimezone(UTC)
-    return dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+def _to_ms_utc(dt: datetime) -> int:
+    """Convert a datetime to canonical int64 ms UTC for API payloads."""
+    try:
+        return format_timestamp(dt)
+    except ValueError as exc:
+        raise ValueError("engine timestamp must be timezone-aware before serialization") from exc
 
 
 # ---------------------------------------------------------------------------

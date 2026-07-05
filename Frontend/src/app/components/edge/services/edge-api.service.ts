@@ -19,10 +19,10 @@ interface AggregatesResponse {
 }
 
 /** The python /api/aggregates/fetch sanitizer normalizes to long-form fields:
- *  open/high/low/close/volume + ISO `timestamp`. The Polygon SDK shorthand
+ *  open/high/low/close/volume + int64-ms `timestamp`. The Polygon SDK shorthand
  *  (t/o/h/l/c/v) is also supported below in case a different code path returns it. */
 interface AggregateBarRaw {
-  timestamp?: string | number;
+  timestamp?: number;
   t?: number;
   open?: number; high?: number; low?: number; close?: number; volume?: number;
   o?: number;    h?: number;    l?: number;   c?: number;     v?: number;
@@ -183,7 +183,6 @@ export class EdgeApiService {
   private normalizeBar(d: AggregateBarRaw): BarPayload | null {
     let ts: number;
     if (typeof d.timestamp === "number") ts = d.timestamp;
-    else if (typeof d.timestamp === "string") ts = Date.parse(d.timestamp);
     else if (typeof d.t === "number") ts = d.t;
     else return null;
     if (!Number.isFinite(ts) || ts <= 0) return null;

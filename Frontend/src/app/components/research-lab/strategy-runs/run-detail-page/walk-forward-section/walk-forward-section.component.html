@@ -62,11 +62,11 @@
       </ng-template>
       <ng-template #body let-wf>
         <tr class="wf-row" (click)="open(wf)">
-          <td>{{ wf.created_at_ms | date: 'yyyy-MM-dd HH:mm' }}</td>
+          <td>{{ wf.created_at_ms | timestampDisplay: 'local' : 'datetime' }}</td>
           <td class="wf-policy-cell">{{ splitSummary(wf.split_policy) }}</td>
           <td class="wf-window-cell">
-            {{ wf.start_ms | date: 'yyyy-MM-dd' }} →
-            {{ wf.end_ms | date: 'yyyy-MM-dd' }}
+            {{ wf.start_ms | timestampDisplay: 'date-et' }} →
+            {{ wf.end_ms | timestampDisplay: 'date-et' }}
           </td>
           <td class="wf-hash-cell">{{ shortHash(wf.walk_forward_id, 16) }}…</td>
         </tr>

@@ -9,6 +9,7 @@ import {
 import { CurrencyPipe } from "@angular/common";
 import { EngineSourceLiteral, RunHistoryRow } from "./run-history.types";
 import type { DataPolicy } from "../../../models/data-policy";
+import { TimestampDisplayPipe } from "../../../shared/timestamp";
 
 const ENGINE_LABELS: Record<EngineSourceLiteral, string> = {
   engine: "Engine Lab",
@@ -19,7 +20,7 @@ const ENGINE_LABELS: Record<EngineSourceLiteral, string> = {
 @Component({
   selector: "app-run-history",
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CurrencyPipe],
+  imports: [CurrencyPipe, TimestampDisplayPipe],
   templateUrl: "./run-history.component.html",
   styleUrl: "./run-history.component.scss",
 })

@@ -13,7 +13,7 @@ from __future__ import annotations
 import csv
 import json
 import time as timing
-from datetime import datetime, time
+from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -23,14 +23,13 @@ from app.engine.engine import BacktestEngine
 from app.engine.execution.fill_model import FillModel
 from app.engine.execution.order import FillMode
 from app.engine.strategy.algorithms.spy_ema_crossover import SpyEmaCrossoverAlgorithm
+from app.lean_sidecar.trading_calendar import is_regular_session_ms_utc
 
 EASTERN = ZoneInfo("America/New_York")
-RTH_OPEN = time(9, 30)
-RTH_CLOSE = time(16, 0)
 
 
 class RTHFilteredReader:
-    """Wraps a LEAN minute reader to yield only 09:30-16:00 ET bars.
+    """Wraps a LEAN minute reader to yield only scheduled NYSE RTH bars.
 
     Our local cache was fetched with extended hours; the committed LEAN
     fixture was produced from RTH-only data. Filtering at the reader
@@ -44,8 +43,7 @@ class RTHFilteredReader:
 
     def iter_bars(self, symbol, start, end):  # noqa: ANN001
         for bar in self._inner.iter_bars(symbol, start, end):
-            local = bar.time.astimezone(EASTERN).time()
-            if RTH_OPEN <= local < RTH_CLOSE:
+            if is_regular_session_ms_utc(int(bar.time.timestamp() * 1000)):
                 yield bar
 HERE = Path(__file__).resolve().parent
 CACHE_ROOT = HERE / "lean-cache"
@@ -96,7 +94,7 @@ def main() -> None:
 
     print(f"Cache: {CACHE_ROOT}")
     print(f"Engine run: {RUN_START} -> {RUN_END}")
-    print(f"RTH filter: {RTH_OPEN} - {RTH_CLOSE} ET")
+    print("RTH filter: canonical NYSE calendar")
     print(f"Comparison window: entries >= {COMPARE_FROM}")
     print("Running backtest...")
     result = engine.run(strategy)

@@ -26,8 +26,8 @@ import type {
 import {
   absDiff,
   deltaAbsBand,
+  fmtBrokerExpiryDate,
   fmtCurrency,
-  fmtDateNy,
   fmtNumber,
   fmtPercent,
   fmtTimestampNy,
@@ -136,7 +136,6 @@ export class BrokerOptionsChainComponent {
   readonly fmtNumber = fmtNumber;
   readonly fmtPercent = fmtPercent;
   readonly fmtTimestampNy = fmtTimestampNy;
-  readonly fmtDateNy = fmtDateNy;
 
   readonly canStream = computed(() => {
     const h = this.health.health();
@@ -228,7 +227,7 @@ export class BrokerOptionsChainComponent {
       const result = await this.broker.expirations(this.symbol());
       const opts: ExpirationOption[] = result.expirations_ms.map((ms) => ({
         ms,
-        label: fmtDateNy(ms),
+        label: fmtBrokerExpiryDate(ms),
       }));
       this.expirations.set(opts);
       // Default to nearest expiry.
@@ -437,4 +436,3 @@ function isoDateFromMs(ms: number): string | null {
   });
   return fmt.format(d); // en-CA emits YYYY-MM-DD
 }
-

@@ -17,6 +17,8 @@ from __future__ import annotations
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
+import pandas as pd
+
 _ET = ZoneInfo("America/New_York")
 
 
@@ -190,3 +192,31 @@ class TestBlockedDatesInRange:
         # 2026-11-27 = Black Friday (half-day).
         assert blocked[date(2026, 11, 26)] == "holiday"
         assert date(2026, 11, 27) not in blocked
+
+
+class TestRegularSessionMaskMsUtc:
+    def test_matches_session_boundaries(self) -> None:
+        from app.lean_sidecar.trading_calendar import (
+            regular_session_mask_ms_utc,
+            session_close_ms_utc,
+            session_open_ms_utc,
+        )
+
+        session = date(2026, 1, 6)
+        open_ms = session_open_ms_utc(session)
+        close_ms = session_close_ms_utc(session)
+        values = pd.Series([open_ms, close_ms - 1, close_ms, open_ms - 1])
+
+        mask = regular_session_mask_ms_utc(values)
+
+        assert mask.tolist() == [True, True, False, False]
+
+
+class TestHolidayNamesInRange:
+    def test_includes_ad_hoc_nyse_closures(self) -> None:
+        from app.lean_sidecar.trading_calendar import holiday_names_in_range
+
+        names = holiday_names_in_range(date(2012, 10, 29), date(2012, 10, 30))
+
+        assert names[date(2012, 10, 29)] == "NYSE ad-hoc closure"
+        assert names[date(2012, 10, 30)] == "NYSE ad-hoc closure"

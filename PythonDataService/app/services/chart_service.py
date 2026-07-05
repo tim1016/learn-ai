@@ -16,13 +16,13 @@ import logging
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-import pandas_market_calendars as mcal
 
+from app.lean_sidecar.trading_calendar import session_window_for_date, session_windows_ms_utc
 from app.services.dataset_service import (
     INDICATOR_CONFIGS,
     calculate_dynamic_indicators,
@@ -173,33 +173,31 @@ _resample_cache = LRUTTLCache(max_size=128, ttl_seconds=900)
 _indicator_cache = LRUTTLCache(max_size=256, ttl_seconds=900)
 
 
-# ──────────────────────────────────────────────
-# NYSE calendar helper
-# ──────────────────────────────────────────────
-_nyse = mcal.get_calendar("NYSE")
-
-
-def _get_trading_schedule(from_date: str, to_date: str) -> pd.DataFrame:
-    """Return NYSE trading schedule (market_open, market_close) for the range."""
-    return _nyse.schedule(start_date=from_date, end_date=to_date)
-
-
 def _count_trading_minutes(from_date: str, to_date: str, session: str) -> int:
     """Count actual trading minutes using NYSE calendar."""
-    schedule = _get_trading_schedule(from_date, to_date)
-    if schedule.empty:
+    windows = session_windows_ms_utc(date.fromisoformat(from_date), date.fromisoformat(to_date))
+    if not windows:
         return 0
 
     if session == "rth":
-        total = 0
-        for _, row in schedule.iterrows():
-            open_t = row["market_open"]
-            close_t = row["market_close"]
-            total += int((close_t - open_t).total_seconds() / 60)
-        return total
+        return sum((window.close_ms_utc - window.open_ms_utc) // 60_000 for window in windows)
     else:
         # Extended: ~16 hours per trading day (04:00–20:00 ET)
-        return len(schedule) * 960
+        return len(windows) * 960
+
+
+def _get_trading_schedule(from_date: str, to_date: str) -> pd.DataFrame:
+    """Return the chart-service schedule view from the canonical NYSE calendar."""
+    windows = session_windows_ms_utc(date.fromisoformat(from_date), date.fromisoformat(to_date))
+    if not windows:
+        return pd.DataFrame(columns=["market_open", "market_close"])
+    return pd.DataFrame(
+        {
+            "market_open": [pd.Timestamp(window.open_ms_utc, unit="ms", tz="UTC") for window in windows],
+            "market_close": [pd.Timestamp(window.close_ms_utc, unit="ms", tz="UTC") for window in windows],
+        },
+        index=pd.DatetimeIndex([pd.Timestamp(window.session_date) for window in windows]),
+    )
 
 
 def estimate_bars_per_timeframe(from_date: str, to_date: str, session: str) -> dict[str, int]:
@@ -316,17 +314,15 @@ def _classify_gap(before_ts: int, after_ts: int) -> str:
     if before_date != after_date:
         return "overnight"
 
-    # Same date: check if it's a session boundary (RTH open/close transition)
-    before_mins = before_dt.hour * 60 + before_dt.minute
-    after_mins = after_dt.hour * 60 + after_dt.minute
-    rth_open = 9 * 60 + 30  # 09:30
-    rth_close = 16 * 60  # 16:00
+    # Same date: check if it's a scheduled session boundary.
+    try:
+        window = session_window_for_date(before_date)
+    except LookupError:
+        return "unexpected"
 
-    # Pre-market → RTH boundary
-    if before_mins < rth_open and after_mins >= rth_open:
+    if before_ts < window.open_ms_utc <= after_ts:
         return "session_boundary"
-    # RTH → post-market boundary
-    if before_mins < rth_close and after_mins >= rth_close:
+    if before_ts < window.close_ms_utc <= after_ts:
         return "session_boundary"
 
     # Same session, same date: unexpected intraday gap

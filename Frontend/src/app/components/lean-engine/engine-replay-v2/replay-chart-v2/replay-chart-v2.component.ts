@@ -156,7 +156,7 @@ export class ReplayChartV2Component {
       return;
     }
     const data: CandlestickData[] = win.bars.map(b => ({
-      time: (new Date(b.timestamp).getTime() / 1000) as UTCTimestamp,
+      time: (b.timestamp / 1000) as UTCTimestamp,
       open: b.open, high: b.high, low: b.low, close: b.close,
     }));
     this.candles.setData(data);

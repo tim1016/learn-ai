@@ -54,7 +54,7 @@ describe('TickerService', () => {
 
       const req = httpMock.expectOne('http://localhost:5000/graphql');
       expect(req.request.body.variables).toEqual({ symbol: 'AAPL' });
-      req.flush({ data: { stockAggregates: [] } });
+      req.flush({ data: { stockAggregateStats: { count: 0, earliest: null, latest: null } } });
     });
 
     it('should return count and date range from response', async () => {
@@ -62,25 +62,25 @@ describe('TickerService', () => {
 
       httpMock.expectOne('http://localhost:5000/graphql').flush({
         data: {
-          stockAggregates: [
-            { timestamp: '2026-01-01T00:00:00Z' },
-            { timestamp: '2026-01-02T00:00:00Z' },
-            { timestamp: '2026-01-03T00:00:00Z' },
-          ],
+          stockAggregateStats: {
+            count: 3,
+            earliest: Date.UTC(2026, 0, 1),
+            latest: Date.UTC(2026, 0, 3),
+          },
         },
       });
 
       const stats = await promise;
       expect(stats.count).toBe(3);
-      expect(stats.earliest).toBe('2026-01-01T00:00:00Z');
-      expect(stats.latest).toBe('2026-01-03T00:00:00Z');
+      expect(stats.earliest).toBe(Date.UTC(2026, 0, 1));
+      expect(stats.latest).toBe(Date.UTC(2026, 0, 3));
     });
 
     it('should return nulls for empty response', async () => {
       const promise = firstValueFrom(service.getAggregateStats('UNKNOWN'));
 
       httpMock.expectOne('http://localhost:5000/graphql').flush({
-        data: { stockAggregates: [] },
+        data: { stockAggregateStats: { count: 0, earliest: null, latest: null } },
       });
 
       const stats = await promise;

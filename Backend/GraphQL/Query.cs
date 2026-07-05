@@ -6,6 +6,7 @@ using Backend.Models.MarketData;
 using Backend.Models.DTOs.PolygonResponses;
 using Backend.Services.Implementation;
 using Backend.Services.Interfaces;
+using Backend.Temporal;
 using HotChocolate;
 using HotChocolate.Data;
 using Microsoft.EntityFrameworkCore;
@@ -36,6 +37,45 @@ public class Query
     [UseSorting]
     public IQueryable<StockAggregate> GetStockAggregates(AppDbContext context)
         => context.StockAggregates;
+
+    [GraphQLName("stockAggregateStats")]
+    public async Task<StockAggregateStatsType> GetStockAggregateStats(
+        AppDbContext context,
+        string symbol,
+        CancellationToken cancellationToken)
+    {
+        var normalizedSymbol = symbol.ToUpperInvariant();
+        var query = context.StockAggregates
+            .AsNoTracking()
+            .Where(a => a.Ticker != null && a.Ticker.Symbol == normalizedSymbol);
+
+        var count = await query.CountAsync(cancellationToken);
+        if (count == 0)
+        {
+            return new StockAggregateStatsType
+            {
+                Count = 0,
+                Earliest = null,
+                Latest = null,
+            };
+        }
+
+        var earliest = await query
+            .OrderBy(a => a.Timestamp)
+            .Select(a => a.Timestamp)
+            .FirstAsync(cancellationToken);
+        var latest = await query
+            .OrderByDescending(a => a.Timestamp)
+            .Select(a => a.Timestamp)
+            .FirstAsync(cancellationToken);
+
+        return new StockAggregateStatsType
+        {
+            Count = count,
+            Earliest = UnixMs.FromUtc(earliest),
+            Latest = UnixMs.FromUtc(latest),
+        };
+    }
 
     /// <summary>
     /// Get trades with filtering
@@ -131,7 +171,7 @@ public class Query
             Close = a.Close,
             Volume = a.Volume,
             VolumeWeightedAveragePrice = a.VolumeWeightedAveragePrice,
-            Timestamp = a.Timestamp,
+            Timestamp = UnixMs.FromUtc(a.Timestamp),
             Timespan = a.Timespan,
             Multiplier = a.Multiplier,
             TransactionCount = a.TransactionCount
@@ -244,7 +284,7 @@ public class Query
                 symbol, aggregates.Count, indicators.Count);
 
             var bars = aggregates.Select(a => new OhlcvBarDto(
-                new DateTimeOffset(a.Timestamp, TimeSpan.Zero).ToUnixTimeMilliseconds(),
+                UnixMs.FromUtc(a.Timestamp),
                 a.Open, a.High, a.Low, a.Close, a.Volume
             )).ToList();
 
@@ -1342,6 +1382,13 @@ public class Query
     }
 
     #endregion
+}
+
+public sealed class StockAggregateStatsType
+{
+    public int Count { get; init; }
+    public long? Earliest { get; init; }
+    public long? Latest { get; init; }
 }
 
 public class OptionsChainSnapshotResult

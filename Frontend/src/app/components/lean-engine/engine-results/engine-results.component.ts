@@ -17,6 +17,7 @@ import {
   gradeSharpe, gradeSortino, gradeProfitFactor, gradeWinRate,
   gradeMaxDrawdown, gradeExpectancy, gradeNetProfit,
 } from '../metric-grade.util';
+import { formatTimestampIsoInZone } from '../../../shared/timestamp';
 
 // ── Shared types (mirrored from lean-engine) ──────────────────
 export interface LeanPortfolioStats {
@@ -59,9 +60,9 @@ export interface LeanStatistics {
 
 export interface EngineTrade {
   trade_number: number;
-  entry_time: string;
+  entry_time: number;
   entry_price: number;
-  exit_time: string;
+  exit_time: number;
   exit_price: number;
   indicators: Record<string, number>;
   pnl_pts: number;
@@ -265,24 +266,8 @@ export class EngineResultsComponent {
     return value.toFixed(places);
   }
 
-  formatTradeTime(iso: string): string {
-    if (!iso) return '';
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return iso;
-    const zone = this.selectedTimezone();
-    if (zone === 'UTC') return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
-
-    const parts = new Intl.DateTimeFormat('en-CA', {
-      timeZone: zone, hour12: false,
-      year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit',
-    }).formatToParts(d).reduce<Record<string, string>>((acc, p) => {
-      if (p.type !== 'literal') acc[p.type] = p.value;
-      return acc;
-    }, {});
-
-    const hh = parts['hour'] === '24' ? '00' : parts['hour'];
-    return `${parts['year']}-${parts['month']}-${parts['day']}T${hh}:${parts['minute']}:${parts['second']}`;
+  formatTradeTime(ms: number): string {
+    return formatTimestampIsoInZone(ms, this.selectedTimezone());
   }
 
   tradeIndicatorEntries(trade: EngineTrade): { key: string; value: number }[] {
