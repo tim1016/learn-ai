@@ -1083,3 +1083,36 @@ the *deployment* binds.
   block, and account readiness gates the *start*. The standalone paper-confirm
   modal is replaced by the loud start treatment; a hard confirm/block is reserved
   for elevated conditions (live identity, account `NOT_PROVEN`).
+
+### Revised 2026-07-05 — validation is a human flag; Deploy re-homes to Bots (see ADR 0023)
+
+A `grill-me` session revised several points above. Where they conflict, **ADR 0023 wins**:
+
+- **Validation is a human flag, not an automatic verdict.** The Validation page
+  **runs both engines** — our Python engine and the LEAN engine (QuantConnect is the
+  LEAN reference; the backtest ID only *pins* the reference run) — and displays how
+  well their buy/sell entry signals and PnL match (`DivergenceCategory` + a headline
+  %). A **person** sets the `validated` / `invalidated` flag; there is **no automatic
+  threshold** (a ~95% match is human guidance, not a rule). The QC backtest ID is
+  **provenance**, not the credential. This replaces "validated iff … a passing
+  port-vs-QC reconciliation" above.
+- **The flag is always saved with its evidence + a reason — accountability, not
+  prevention.** The system never blocks the human: a strategy flagged `validated` at
+  0% agreement is allowed and is stored with the full evidence snapshot (both engines'
+  output, match %, `DivergenceCategory`, backtest ID, flagger, timestamp) and a
+  required reason. That persisted reason is the "documented reason"
+  `numerical-rigor.md` requires for accepting a *behavioral* equivalence.
+- **Validation never trades.** No read-only/paper/live orders, no broker, no readiness
+  gates on the Validation page. Its asset is the **safe canary** (the signal entity
+  itself) and its sizing is a **1-share informational** readout, not an input.
+- **Execution mode (read-only / paper / live) is a Deploy concern**, not a validation
+  level. All three modes are plumbed; **read-only + paper are built now, `live` is
+  runtime-inactive** (hard-blocked under ADR 0011) until a **separate IBKR live
+  account** and a live-trading safety project. One backtest ID validates a strategy
+  for every deploy mode.
+- **The Deploy page re-homes from `Strategy Lab` to the `Broker` group, next to
+  `Bots` / Bot Control.** There is exactly one Deploy page (rebuilt + re-homed, never
+  duplicated). Validation stays in `Strategy Lab`.
+- **Deploy signal stream now defaults to the validated signal, overridable** to any
+  symbol — relaxing the "does not default, constrain, or warn" rule above to
+  "defaults, does not constrain." (Amends ADR 0020 §2.)
