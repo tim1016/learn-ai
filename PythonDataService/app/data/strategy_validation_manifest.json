@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0",
+  "validated_strategies": [
+    {
+      "strategy_key": "deployment_validation",
+      "settings_file_ref": "PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json",
+      "settings_file_sha256": "2d487f718a83edfdaef24f21a1ef5536d885485cf08071e0cde16c391974bc20",
+      "qc_cloud_backtest_id": "d2fe45a7142e88575f6fbd75229f8681",
+      "audit_copy_ref": "references/qc-shadow/DeploymentValidationAlgorithm.py",
+      "audit_copy_sha256": "3dbb1c0f54254951828f3c74e4dc6e2f7c1bcc0784465c8532f109ea191c3af0",
+      "reconciliation_ref": "references/qc-shadow/backtests/2024-03-28_to_2026-03-03/attribution.md",
+      "validation_case_symbol": "SPY",
+      "reconciliation_status": "passed",
+      "diagnostics": {
+        "verdict": "passed",
+        "trades_matched": 56,
+        "trades_validated": 56,
+        "pnl_max_abs_diff": "0.00",
+        "divergence_counts": {},
+        "notes": [
+          "Validated strategy binding promoted from stored run-ledger QC evidence and the committed QC audit copy.",
+          "The referenced QC attribution records 112 fills paired into 56 long round-trips for SPY."
+        ]
+      }
+    }
+  ]
+}

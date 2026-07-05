@@ -54,6 +54,20 @@ describe('AppSidebarComponent', () => {
     expect(labels).not.toContain('Options Chain (Live)');
     expect(labels).not.toContain('Options Surface (3D)');
   });
+
+  it('groups strategy lifecycle pages under Strategy Lab', () => {
+    const fixture = setup();
+
+    clickGroup(fixture, 'Strategy Lab');
+
+    const links = navLinks(fixture);
+    expect(links.get('Strategy Validation')).toBe('/strategy-validation');
+    expect(links.get('Deploy')).toBe('/broker/deploy');
+    expect(links.get('Strategy Spec')).toBe('/spec-strategy');
+    expect(links.get('Engine Lab')).toBe('/engine');
+    expect(links.has('Dashboard')).toBe(false);
+    expect(links.has('Tracked Instruments')).toBe(false);
+  });
 });
 
 function setup(): ComponentFixture<AppSidebarComponent> {

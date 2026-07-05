@@ -139,6 +139,13 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "strategy-validation",
+    loadComponent: () =>
+      import(
+        "./components/strategy-validation/strategy-validation.component"
+      ).then((m) => m.StrategyValidationComponent),
+  },
+  {
     path: "engine/docs",
     redirectTo: "engine",
     pathMatch: "full",

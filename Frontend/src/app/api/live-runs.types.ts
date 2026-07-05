@@ -248,7 +248,7 @@ export interface HostRunnerStartRequest {
   ibkr_host: string;
 }
 
-export const DEFAULT_MAX_ORDERS_PER_DAY = 2;
+export const DEFAULT_MAX_ORDERS_PER_DAY = 2000;
 
 export interface HostRunnerStopRequest {
   force: boolean;

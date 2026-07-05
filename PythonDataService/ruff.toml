@@ -33,6 +33,13 @@ ignore = [
     "B011",  # assert False — valid in tests
     "B017",  # assert-raises broad exception — acceptable in tests
 ]
+"app/data/qc-shadow/*.py" = [
+    "F401",  # QuantConnect audit copies import LEAN symbols via wildcard.
+    "F403",  # Reference artifacts must stay byte-identical to the uploaded QC source.
+    "F405",  # LEAN runtime names come from AlgorithmImports.
+    "I001",  # Do not reorder imports in committed QC audit copies.
+    "RUF100",  # Do not strip original noqa comments from reference artifacts.
+]
 
 [lint.isort]
 # ``scripts`` is listed explicitly so ruff's isort gives the same answer
