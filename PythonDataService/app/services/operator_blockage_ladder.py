@@ -228,22 +228,20 @@ def _runtime_freshness_stage(
         )
     if runtime_freshness.headline is not None:
         notice = runtime_freshness.headline
-        severity: OperatorSurfaceConditionSeverity = "warning" if notice.tier != "critical" else "critical"
         return _StageDraft(
             "runtime_freshness",
             "Runtime evidence",
-            severity,
+            _condition_severity(notice.tier),
             notice.title,
             notice.message,
             reason_codes=tuple(runtime_freshness.stale_reason_codes),
         )
     if runtime_freshness.additional_reasons:
         notice = runtime_freshness.additional_reasons[0]
-        severity = "warning" if notice.tier != "critical" else "critical"
         return _StageDraft(
             "runtime_freshness",
             "Runtime evidence",
-            severity,
+            _condition_severity(notice.tier),
             notice.title,
             notice.message,
             reason_codes=tuple(runtime_freshness.stale_reason_codes),

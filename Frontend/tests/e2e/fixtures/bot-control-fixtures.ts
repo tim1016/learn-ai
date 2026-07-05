@@ -8,6 +8,7 @@ import type {
   LiveInstanceStatus,
   LiveInstanceSummary,
   OperatorGate,
+  OperatorSurfaceNamedCondition,
   OperatorNotice,
   ReadinessVerdict,
 } from '../../../src/app/api/live-instances.types';
@@ -192,7 +193,11 @@ export function buildScenarioStatus(opts: BotControlScenarioOptions): LiveInstan
           disabled_reason_code: hostState === 'RUNNING' ? 'ALREADY_RUNNING' : 'START_SETTINGS_INCOMPLETE',
         },
       },
-      broker: { safety_verdict: brokerSafety, connection: brokerConnection },
+      broker: {
+        safety_verdict: brokerSafety,
+        connection: brokerConnection,
+        connection_condition: brokerConnectionCondition(brokerConnection),
+      },
       configuration: { verdict: readinessVerdict === 'READY' ? 'READY' : 'ATTENTION', reason_codes: [] },
       current_risk: {
         posture: Object.keys(ownedPositions).length ? 'LONG' : 'FLAT',
@@ -408,6 +413,36 @@ function hostProcessState(
   if (processState === 'idle' && intent === 'RUNNING') return 'WAITING_FOR_HOST';
   if (processState === 'exited') return 'EXITED';
   return 'IDLE';
+}
+
+function brokerConnectionCondition(
+  connection: NonNullable<BotControlScenarioOptions['brokerConnection']>,
+): OperatorSurfaceNamedCondition {
+  if (connection === 'CONNECTED') {
+    return {
+      code: 'BROKER_CONNECTED',
+      severity: 'ok',
+      title: 'Broker session connected',
+      summary: 'The runtime has fresh proof that the IBKR broker session is connected.',
+      remediation: null,
+    };
+  }
+  if (connection === 'DISCONNECTED') {
+    return {
+      code: 'BROKER_DISCONNECTED',
+      severity: 'warning',
+      title: 'Broker session disconnected',
+      summary: 'The runtime cannot prove an active IBKR broker session.',
+      remediation: 'Reconnect the broker session, then refresh broker evidence.',
+    };
+  }
+  return {
+    code: 'BROKER_CONNECTION_UNKNOWN',
+    severity: 'warning',
+    title: 'Broker connection unproven',
+    summary: 'The backend does not have enough runtime evidence to prove the broker connection state.',
+    remediation: 'Start or refresh the live runtime so broker proof can be recorded.',
+  };
 }
 
 function lifecycleAction(

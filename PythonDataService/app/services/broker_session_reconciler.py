@@ -71,18 +71,20 @@ def reconcile_broker_session_snapshot(
     """Reconcile session rows and lift infrastructure into global events."""
 
     visible_socket_rows: list[GatewaySocketRow] = []
+    gvproxy_socket_rows: list[GatewaySocketRow] = []
     global_events: list[BrokerSessionGlobalEvent] = []
     for socket in socket_rows:
         if _is_gvproxy_socket(socket):
-            global_events.append(_gvproxy_global_event(socket, as_of_ms))
+            gvproxy_socket_rows.append(socket)
         else:
             visible_socket_rows.append(socket)
+    if gvproxy_socket_rows:
+        global_events.append(_gvproxy_global_event(gvproxy_socket_rows, as_of_ms))
 
     rows = reconcile_broker_session_roster(
         socket_rows=visible_socket_rows,
         registry_snapshot=registry_snapshot,
         runtime_index=runtime_index,
-        data_plane_health=None,
         as_of_ms=as_of_ms,
         socket_probe_available=socket_probe_available,
         stale_after_ms=stale_after_ms,
@@ -97,7 +99,6 @@ def reconcile_broker_session_roster(
     socket_rows: list[GatewaySocketRow],
     registry_snapshot: HostRunnerInstancesStatus | None,
     runtime_index: dict[str, RuntimeIndexEntry],
-    data_plane_health: IbkrConnectionHealth | None,
     as_of_ms: int,
     socket_probe_available: bool = True,
     stale_after_ms: int = 25_000,
@@ -240,9 +241,6 @@ def reconcile_broker_session_roster(
             )
         )
 
-    if data_plane_health is not None:
-        rows.append(_data_plane_row(data_plane_health, as_of_ms))
-
     return sorted(rows, key=_sort_key)
 
 
@@ -323,27 +321,6 @@ def _registry_claim(
     )
 
 
-def _data_plane_row(
-    health: IbkrConnectionHealth,
-    as_of_ms: int,
-) -> BrokerSessionRosterRow:
-    return BrokerSessionRosterRow(
-        row_id=f"system:data-plane:{health.client_id}",
-        identity_type="system",
-        recency="current",
-        socket_present=health.connected,
-        account_id=health.account_id,
-        client_id=health.client_id,
-        remote_host=health.host,
-        remote_port=health.port,
-        connection_state=health.connection_state,
-        recovery_state=health.recovery_state
-        or recovery_state_from_connection_state(health.connection_state),
-        last_event_ms=health.last_transition_ms,
-        as_of_ms=as_of_ms,
-    )
-
-
 def _data_plane_global_event(
     health: IbkrConnectionHealth,
     as_of_ms: int,
@@ -364,9 +341,21 @@ def _data_plane_global_event(
 def _data_plane_event_severity(
     health: IbkrConnectionHealth,
 ) -> str:
-    if health.connected:
+    if health.connection_state == "connected" and health.connected:
         return "info"
-    if health.connection_state in {"hard_down", "soft_lost", "reconnecting", "recovering"}:
+    if health.connection_state == "disabled":
+        return "info"
+    if health.connection_state in {"degraded_data_farm", "hard_down"}:
+        return "critical"
+    if health.connection_state in {
+        "soft_lost",
+        "subscriptions_stale",
+        "reconnecting",
+        "recovering",
+        "disconnected",
+    }:
+        return "warning"
+    if health.connected:
         return "warning"
     return "neutral"
 
@@ -374,25 +363,51 @@ def _data_plane_event_severity(
 def _data_plane_event_summary(
     health: IbkrConnectionHealth,
 ) -> str:
-    if health.connected:
+    if health.connection_state == "connected" and health.connected:
         return "The data-plane IBKR client is connected; this is global infrastructure, not a bot-owned session."
     if health.disabled:
         return "The data-plane IBKR client is disabled because live bot sessions are owned by the host runner."
+    if health.connection_state == "degraded_data_farm":
+        return "The data-plane IBKR client is socket-connected, but IBKR data-farm evidence is degraded."
+    if health.connection_state in _DATA_PLANE_DEGRADED_COPY:
+        return (
+            f"The data-plane IBKR client reports {_DATA_PLANE_DEGRADED_COPY[health.connection_state]}; "
+            "this global fact is separate from bot-owned sessions."
+        )
+    if health.connected:
+        return "The data-plane IBKR client is socket-connected, but its broker state is not healthy."
     return "The data-plane IBKR client is not connected; this global fact is separate from bot-owned sessions."
 
 
+_DATA_PLANE_DEGRADED_COPY = {
+    "soft_lost": "broker feed loss",
+    "subscriptions_stale": "stale broker subscriptions",
+    "reconnecting": "broker reconnect in progress",
+    "recovering": "broker stream recovery in progress",
+    "hard_down": "exhausted broker recovery",
+    "disconnected": "broker disconnect",
+}
+
+
 def _gvproxy_global_event(
-    socket: GatewaySocketRow,
+    sockets: list[GatewaySocketRow],
     as_of_ms: int,
 ) -> BrokerSessionGlobalEvent:
+    count = len(sockets)
+    summary = (
+        "A virtual-machine network proxy is connected to the IBKR gateway port. "
+        "It is infrastructure, not a bot broker session."
+    )
+    if count > 1:
+        summary = (
+            f"{count} virtual-machine network proxy sockets are connected to the IBKR gateway port. "
+            "They are infrastructure, not bot broker sessions."
+        )
     return BrokerSessionGlobalEvent(
         code="GATEWAY_NETWORK_PROXY",
         label="Gateway network proxy",
         severity="info",
-        summary=(
-            "A virtual-machine network proxy is connected to the IBKR gateway port. "
-            "It is infrastructure, not a bot broker session."
-        ),
+        summary=summary,
         current=True,
         source="network",
         observed_at_ms=as_of_ms,

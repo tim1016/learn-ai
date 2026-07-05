@@ -79,6 +79,7 @@ def test_history_service_returns_recent_absent_rows_as_past_closed(
 
     assert [row.run_id for row in rows] == ["run-a"]
     assert rows[0].recency == "past_closed"
+    assert rows[0].presentation.recency.label == "Past session"
     assert rows[0].socket_present is False
     assert rows[0].as_of_ms == 10
 

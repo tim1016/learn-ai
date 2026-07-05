@@ -691,6 +691,12 @@ def test_trader_guidance_runtime_market_closed_uses_notice_copy() -> None:
     )
     assert runtime_line.detail == "Market closed"
     assert runtime_line.tone == "neutral"
+    runtime_stage = next(
+        stage for stage in surface.blockage_ladder.stages if stage.id == "runtime_freshness"
+    )
+    assert surface.blockage_ladder.current_stage_id == "runtime_freshness"
+    assert runtime_stage.severity == "info"
+    assert runtime_stage.state == "info"
 
 
 def test_trader_guidance_account_freeze_is_never_collapsed() -> None:
