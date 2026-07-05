@@ -66,10 +66,118 @@ small code {
   align-items: start;
 }
 
+.deploy-top-strip {
+  display: grid;
+  grid-template-columns: minmax(12rem, 0.85fr) minmax(14rem, 1fr);
+  gap: 0.75rem;
+  padding: 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.deploy-readiness-strip {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.readiness-fact {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+  padding: 0.5rem 0.6rem;
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  text-decoration: none;
+
+  span,
+  strong,
+  small {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  span {
+    color: rgba(255, 255, 255, 0.62);
+    font-size: 0.72rem;
+  }
+
+  strong {
+    font-size: 0.9rem;
+  }
+
+  small {
+    font-size: 0.72rem;
+    line-height: 1.25;
+  }
+
+  &.state-ok {
+    border-color: rgba(46, 160, 67, 0.42);
+    background: rgba(46, 160, 67, 0.08);
+  }
+
+  &.state-warn {
+    border-color: rgba(245, 158, 11, 0.48);
+    background: rgba(217, 119, 6, 0.1);
+  }
+
+  &.state-down {
+    border-color: rgba(215, 58, 73, 0.45);
+    background: rgba(215, 58, 73, 0.1);
+  }
+}
+
 .form {
   display: flex;
   flex-direction: column;
   gap: 0.85rem;
+}
+
+.form-tabs {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.35rem;
+
+  a {
+    display: grid;
+    gap: 0.1rem;
+    min-width: 0;
+    min-height: 3rem;
+    padding: 0.45rem 0.55rem;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.035);
+    color: inherit;
+    text-decoration: none;
+
+    span,
+    small {
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+
+    span {
+      font-size: 0.85rem;
+    }
+
+    small {
+      color: rgba(255, 255, 255, 0.62);
+      font-size: 0.72rem;
+    }
+
+    &.active {
+      border-color: #7dd3fc;
+      background: rgba(37, 99, 235, 0.18);
+    }
+
+    &.complete small {
+      color: #86efac;
+    }
+  }
 }
 
 .group,
@@ -216,6 +324,51 @@ small code {
   color: rgba(255, 255, 255, 0.72);
 }
 
+.validation-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 0;
+
+  div {
+    min-width: 0;
+    padding: 0.45rem 0.55rem;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  dt,
+  dd {
+    margin: 0;
+  }
+
+  dt {
+    color: rgba(255, 255, 255, 0.62);
+    font-size: 0.72rem;
+  }
+
+  dd {
+    overflow-wrap: anywhere;
+    font-size: 0.88rem;
+  }
+}
+
+.validation-link {
+  justify-self: start;
+  color: #7dd3fc;
+  font-size: 0.88rem;
+}
+
+.launch-warning {
+  margin: -0.1rem 0 0;
+  padding: 0.55rem 0.65rem;
+  border-left: 3px solid #f59e0b;
+  border-radius: 4px;
+  background: rgba(217, 119, 6, 0.14);
+  color: #fde68a;
+  font-size: 0.84rem;
+}
+
 .launch-fields {
   display: grid;
   gap: 0.55rem;
@@ -341,50 +494,6 @@ small code {
   }
 }
 
-.dialog-backdrop {
-  position: fixed;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 1rem;
-  background: rgba(0, 0, 0, 0.58);
-  z-index: 20;
-}
-
-.confirm {
-  width: min(100%, 420px);
-  padding: 1rem;
-  border: 1px solid rgba(248, 113, 113, 0.5);
-  border-radius: 6px;
-  background: #171717;
-
-  h2,
-  p {
-    margin: 0 0 0.65rem;
-  }
-}
-
-.confirm-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.55rem;
-
-  button {
-    padding: 0.4rem 0.75rem;
-    border-radius: 4px;
-    border: 1px solid rgba(255, 255, 255, 0.18);
-    background: rgba(255, 255, 255, 0.08);
-    color: inherit;
-    font: inherit;
-    cursor: pointer;
-  }
-
-  .danger {
-    border-color: #ef4444;
-    background: #b91c1c;
-  }
-}
-
 .sizing-presets {
   display: flex;
   flex-direction: column;
@@ -474,11 +583,21 @@ small code {
     position: static;
   }
 
+  .deploy-top-strip,
+  .deploy-readiness-strip,
+  .form-tabs {
+    grid-template-columns: 1fr;
+  }
+
   .field.inline {
     grid-template-columns: 1fr;
   }
 
   .mode {
+    grid-template-columns: 1fr;
+  }
+
+  .validation-summary {
     grid-template-columns: 1fr;
   }
 }

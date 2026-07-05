@@ -29,41 +29,110 @@
     </div>
   }
 
+  <section class="deploy-top-strip" aria-label="Deployment setup">
+    <label class="field">
+      <span>Deployment name</span>
+      <input data-deploy-field="instanceId" type="text" [value]="instanceId()" (input)="setInstanceId($event)" required
+        placeholder="deployment-validation-paper" autocomplete="off" spellcheck="false" />
+    </label>
+    <label class="field">
+      <span>Connected broker account</span>
+      <input pInputText data-deploy-field="accountId" type="text" [value]="accountId()" readonly required
+        placeholder="Broker account unavailable" autocomplete="off" aria-readonly="true" />
+      <small>{{ brokerAccountAvailable() ? 'Sourced from the connected broker session.' : 'Connect the broker session before deploying.' }}</small>
+    </label>
+    <div class="deploy-readiness-strip" aria-label="Deploy readiness facts">
+      @for (fact of deployReadinessFacts(); track fact.key) {
+        <a [routerLink]="fact.link" [class]="'readiness-fact state-' + fact.state">
+          <span>{{ fact.label }}</span>
+          <strong>{{ fact.condition }}</strong>
+          <small>{{ fact.detail }}</small>
+        </a>
+      }
+    </div>
+  </section>
+
   <div class="workspace">
     <form class="form" (input)="syncRenderedFieldValues()" (change)="syncRenderedFieldValues()" (submit)="$event.preventDefault(); submit()">
+      <nav class="form-tabs" role="tablist" aria-label="Deploy sections">
+        @for (tab of deployTabs(); track tab.key) {
+          <a
+            role="tab"
+            [attr.aria-selected]="activeDeployTab() === tab.key"
+            [class.active]="activeDeployTab() === tab.key"
+            [class.complete]="tab.complete"
+            [href]="'#' + tab.target"
+            (click)="setActiveDeployTab(tab.key)"
+          >
+            <span>{{ tab.label }}</span>
+            <small>{{ tab.complete ? 'Complete' : 'Open' }}</small>
+          </a>
+        }
+      </nav>
+
       <section class="group" aria-labelledby="strategy-section">
         <h2 id="strategy-section">Strategy</h2>
         <label class="field">
           <span>Strategy</span>
           <select data-deploy-field="strategyKey" [value]="strategyKey()" (change)="setStrategyKey($event)" required>
             <option value="" disabled>Select a strategy…</option>
-            @for (s of strategies.value() ?? []; track s.name) {
-              <option [value]="s.name">{{ s.display_name }}</option>
+            @for (s of validatedStrategies(); track s.strategy_key) {
+              <option [value]="s.strategy_key">{{ s.display_name }}</option>
             }
           </select>
+          <small>Only strategies with completed Strategy Validation appear here.</small>
         </label>
 
-        @if (manualSpecPath()) {
-          <label class="field">
-            <span>Strategy settings file</span>
-            <input data-deploy-field="specPath" type="text" [value]="specPath()" (input)="setSpecPath($event)" required
-              placeholder="PythonDataService/app/engine/strategy/spec/fixtures/<name>.spec.json" autocomplete="off" spellcheck="false" />
-            <small>Repo-relative path to the strategy settings JSON.</small>
-          </label>
-        } @else {
-          <label class="field">
-            <span>Strategy settings file</span>
-            <select data-deploy-field="specPath" [value]="specPath()" (change)="setSpecFixturePath($event)" required>
-              <option value="" disabled>Select a settings file…</option>
-              @for (fixture of specFixtures.value() ?? []; track fixture.path) {
-                <option [value]="fixture.path">{{ fixture.spec_name || fixture.name }}</option>
-              }
-            </select>
-            <small>{{ selectedFixture()?.path ?? 'Defaults to the file that matches the selected strategy.' }}</small>
-          </label>
-          <button type="button" class="text-button" (click)="useManualSpecPath()">Enter path manually</button>
-        }
+        <label class="field">
+          <span>Strategy settings file</span>
+          <input data-deploy-field="specPath" type="text" [value]="specPath()" readonly required
+            placeholder="Select a validated strategy first" autocomplete="off" spellcheck="false" aria-readonly="true" />
+          @if (selectedValidation(); as validation) {
+            <small>Locked by validation receipt. SHA-256: <code>{{ validation.settings_file_sha256 }}</code></small>
+          } @else {
+            <small>Promote a strategy in Strategy Validation before deploying it.</small>
+          }
+        </label>
 
+      </section>
+
+      <section class="group" aria-labelledby="verification-section">
+        <h2 id="verification-section">Backtest verification</h2>
+        <p class="plain-help">Deploy binds to the QuantConnect backtest and audit source promoted by Strategy Validation. The signal stream below stays independent from the validation-case symbol.</p>
+        @if (selectedValidation(); as validation) {
+          <dl class="validation-summary">
+            <div>
+              <dt>Status</dt>
+              <dd>{{ validation.reconciliation_status ?? validation.validation_state }}</dd>
+            </div>
+            <div>
+              <dt>Validation case</dt>
+              <dd>{{ validation.validation_case_symbol ?? 'n/a' }}</dd>
+            </div>
+            <div>
+              <dt>Trades validated</dt>
+              <dd>{{ validation.diagnostics?.trades_validated ?? 0 }}</dd>
+            </div>
+          </dl>
+          <a routerLink="/strategy-validation" class="validation-link">View full validation</a>
+        }
+        <label class="field">
+          <span>Backtest ID <span class="hint" title="The id QuantConnect assigns to a Cloud backtest. Open the backtest on quantconnect.com and copy the id from the page URL (…/backtests/&lt;id&gt;).">ⓘ</span></span>
+          <input data-deploy-field="qcBacktestId" type="text" [value]="qcBacktestId()" readonly required
+            placeholder="e.g. 1a2b3c4d…" autocomplete="off" spellcheck="false" />
+          <small>Locked to the promoted QC Cloud backtest.</small>
+        </label>
+
+        <label class="field">
+          <span>Algorithm audit copy <span class="hint" title="The committed algorithm source you uploaded to QuantConnect, under references/qc-shadow/. It is hashed into the run id to prove the deployed code matches the backtest.">ⓘ</span></span>
+          <input data-deploy-field="qcAuditCopyPath" type="text" [value]="qcAuditCopyPath()" readonly required
+            placeholder="references/qc-shadow/<Algorithm>.py" autocomplete="off" spellcheck="false" />
+          <small>Committed QC algorithm source, not a results CSV. SHA-256: <code>{{ selectedValidation()?.audit_copy_sha256 ?? 'pending' }}</code></small>
+        </label>
+      </section>
+
+      <section class="group" aria-labelledby="signal-section">
+        <h2 id="signal-section">Signal stream</h2>
         <label class="field" for="signal-stream">
           <span>Signal stream</span>
           @if (fixtureSymbols().length > 0) {
@@ -86,39 +155,7 @@
               spellcheck="false"
             />
           }
-          <small>Feeds strategy data via <code>live_config.symbol</code>. The Action plan below controls the traded instrument.</small>
-        </label>
-      </section>
-
-      <section class="group" aria-labelledby="account-section">
-        <h2 id="account-section">Account</h2>
-        <label class="field">
-          <span>Connected broker account</span>
-          <input pInputText data-deploy-field="accountId" type="text" [value]="accountId()" readonly required
-            placeholder="Broker account unavailable" autocomplete="off" aria-readonly="true" />
-          <small>{{ brokerAccountAvailable() ? 'Sourced from the connected broker session.' : 'Connect the broker session before deploying.' }}</small>
-        </label>
-      </section>
-
-      <section class="group" aria-labelledby="verification-section">
-        <h2 id="verification-section">Backtest verification</h2>
-        <p class="plain-help">Bind this deployment to the QuantConnect backtest that validated it. Live trades are checked against that saved result. Both fields come from one backtest you ran on <a href="https://www.quantconnect.com" target="_blank" rel="noopener noreferrer">quantconnect.com</a>.</p>
-        <label class="field">
-          <span>Backtest ID <span class="hint" title="The id QuantConnect assigns to a Cloud backtest. Open the backtest on quantconnect.com and copy the id from the page URL (…/backtests/&lt;id&gt;).">ⓘ</span></span>
-          <input data-deploy-field="qcBacktestId" type="text" [value]="qcBacktestId()" (input)="setQcBacktestId($event)" required
-            placeholder="e.g. 1a2b3c4d…" autocomplete="off" spellcheck="false" />
-          <small>Run the strategy on quantconnect.com, then copy this backtest's id from its page URL.</small>
-        </label>
-
-        <label class="field">
-          <span>Algorithm audit copy <span class="hint" title="The committed algorithm source you uploaded to QuantConnect, under references/qc-shadow/. It is hashed into the run id to prove the deployed code matches the backtest.">ⓘ</span></span>
-          <select data-deploy-field="qcAuditCopyPath" [value]="qcAuditCopyPath()" (change)="setQcAuditCopyPath($event)" required>
-            <option value="" disabled>Select the committed algorithm source…</option>
-            @for (path of qcAuditCopyOptions(); track path) {
-              <option [value]="path">{{ path }}</option>
-            }
-          </select>
-          <small>This is the algorithm file you ran on QuantConnect, committed under <code>references/qc-shadow/</code> — not a results CSV. The deployment-validation copy is shown even while the daemon listing is unavailable.</small>
+          <small>Feeds strategy data via <code>live_config.symbol</code>. Validation case and traded legs stay separate.</small>
         </label>
       </section>
 
@@ -242,6 +279,11 @@
           </label>
         </fieldset>
         <p class="capability-proof" [class.dimmed]="!startNow()">{{ executionCapabilityProof() }}</p>
+        @if (startNow() && !readonlyFlag()) {
+          <p class="launch-warning" role="status">
+            Paper orders are enabled for launch. Guardrail limit: {{ maxOrdersPerDay() }} orders/day.
+          </p>
+        }
 
         <div class="launch-fields" [class.dimmed]="!startNow()">
           <label class="field inline">
@@ -262,12 +304,6 @@
         <label class="check">
           <input type="checkbox" [checked]="startNow()" (change)="setStartNow($event)" />
           <span>Start trading immediately</span>
-        </label>
-
-        <label class="field">
-          <span>Deployment name</span>
-          <input data-deploy-field="instanceId" type="text" [value]="instanceId()" (input)="setInstanceId($event)" required
-            placeholder="spy-ema-paper-1" autocomplete="off" spellcheck="false" />
         </label>
       </section>
 
@@ -321,21 +357,4 @@
       <p class="blocked" role="status">{{ reason ?? 'Ready to deploy.' }}</p>
     </aside>
   </div>
-
-  @if (showLiveConfirm()) {
-    <div class="dialog-backdrop" role="presentation">
-      <section class="confirm" role="dialog" aria-modal="true" aria-labelledby="live-confirm-title">
-        <h2 id="live-confirm-title">Enable paper order submission?</h2>
-        <p>
-          This start will send orders to the connected broker paper account ({{ accountId() || 'the selected account' }}) with
-          <strong>readonly_at_start: false</strong> and <strong>submission_capability: PAPER_ORDERS_ENABLED</strong>.
-          It is not real-money live trading while broker identity remains paper-only, but it can create paper fills.
-        </p>
-        <div class="confirm-actions">
-          <button type="button" class="danger" (click)="confirmLiveAndSubmit()">Deploy & enable paper orders</button>
-          <button type="button" (click)="cancelLiveConfirm()">Cancel</button>
-        </div>
-      </section>
-    </div>
-  }
 </section>

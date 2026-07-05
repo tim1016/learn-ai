@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BrokerService } from '../../../services/broker.service';
 import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
+import { StrategyValidationService } from '../../../services/strategy-validation.service';
+import type { StrategyValidationCatalog } from '../../../services/strategy-validation.types';
 import { BrokerDeployFormComponent } from './broker-deploy-form.component';
 
 let activeFixture: { destroy(): void; detectChanges(): void } | null = null;
@@ -13,6 +15,50 @@ let activeFixture: { destroy(): void; detectChanges(): void } | null = null;
 const DEPLOYMENT_VALIDATION_AUDIT_COPY = 'references/qc-shadow/DeploymentValidationAlgorithm.py';
 const DEPLOYMENT_VALIDATION_SPEC_PATH =
   'PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json';
+const DEPLOYMENT_VALIDATION_QC_BACKTEST_ID = 'd2fe45a7142e88575f6fbd75229f8681';
+const DEFAULT_STRATEGY_VALIDATION_CATALOG: StrategyValidationCatalog = {
+  strategies: [
+    {
+      strategy_key: 'deployment_validation',
+      display_name: 'Deployment Validation',
+      description: '',
+      validation_state: 'validated',
+      deployable: true,
+      settings_file_ref: DEPLOYMENT_VALIDATION_SPEC_PATH,
+      settings_file_sha256: 'spec-sha',
+      qc_cloud_backtest_id: DEPLOYMENT_VALIDATION_QC_BACKTEST_ID,
+      audit_copy_ref: DEPLOYMENT_VALIDATION_AUDIT_COPY,
+      audit_copy_sha256: 'audit-sha',
+      reconciliation_ref: 'references/qc-shadow/backtests/2024-03-28_to_2026-03-03/attribution.md',
+      validation_case_symbol: 'SPY',
+      reconciliation_status: 'passed',
+      diagnostics: {
+        verdict: 'passed',
+        trades_matched: 56,
+        trades_validated: 56,
+        pnl_max_abs_diff: '0.00',
+        divergence_counts: {},
+        notes: [],
+      },
+    },
+    {
+      strategy_key: 'spy_orb',
+      display_name: 'Opening Range Breakout',
+      description: '',
+      validation_state: 'needs_validation',
+      deployable: false,
+      settings_file_ref: null,
+      settings_file_sha256: null,
+      qc_cloud_backtest_id: null,
+      audit_copy_ref: null,
+      audit_copy_sha256: null,
+      reconciliation_ref: null,
+      validation_case_symbol: null,
+      reconciliation_status: null,
+      diagnostics: null,
+    },
+  ],
+};
 
 function setup(
   opts: {
@@ -42,6 +88,8 @@ function setup(
       description: string | null;
     }[];
     accountPromise?: Promise<{ account_id: string } | null>;
+    accountTruth?: { final_verdict: 'clean' | 'not_proven'; status_label: string; status_detail: string };
+    strategyValidationCatalog?: StrategyValidationCatalog;
   } = {},
 ) {
   const svc = {
@@ -106,6 +154,13 @@ function setup(
   };
   const broker = {
     account: vi.fn().mockReturnValue(opts.accountPromise ?? Promise.resolve({ account_id: 'DU123' })),
+    accountTruth: vi.fn().mockResolvedValue(
+      opts.accountTruth ?? {
+        final_verdict: 'clean',
+        status_label: 'Clean',
+        status_detail: 'Broker/account evidence is fresh enough to start.',
+      },
+    ),
     positions: vi
       .fn()
       .mockResolvedValue({ positions: opts.positions ?? [] }),
@@ -115,12 +170,18 @@ function setup(
     blockers: () => [],
     daemonState: () => (opts.daemonDown ? 'down' : 'ok'),
     brokerState: () => 'ok',
+    brokerDetail: () => 'Connected',
     fleetState: () => (opts.fleetBlocks ? 'warn' : 'ok'),
     nothingDeployed: () => false,
     daemonDown: () => opts.daemonDown ?? false,
     fleetBlocksStarts: () => opts.fleetBlocks ?? false,
     daemonFreshness: () => ({ state: 'unknown', sha: null, commitsBehind: null }),
     reload: vi.fn(),
+  };
+  const strategyValidation = {
+    getCatalog: vi.fn().mockResolvedValue(
+      opts.strategyValidationCatalog ?? DEFAULT_STRATEGY_VALIDATION_CATALOG,
+    ),
   };
   const queryParamMap = convertToParamMap(opts.queryParams ?? {});
   TestBed.configureTestingModule({
@@ -129,6 +190,7 @@ function setup(
       { provide: LiveRunsService, useValue: svc },
       { provide: BrokerService, useValue: broker },
       { provide: BrokerConnectivityService, useValue: connectivity },
+      { provide: StrategyValidationService, useValue: strategyValidation },
       {
         provide: ActivatedRoute,
         useValue: { snapshot: { queryParamMap } },
@@ -149,13 +211,14 @@ async function flush() {
 }
 
 function fillRequired(component: BrokerDeployFormComponent) {
-  component.strategyKey.set('spy_ema_crossover');
-  component.specPath.set('PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json');
+  component.strategyKey.set('deployment_validation');
+  component.specPath.set(DEPLOYMENT_VALIDATION_SPEC_PATH);
   component.signalStream.set('SPY');
   component.accountId.set('DU123');
-  component.qcBacktestId.set('bt-1');
-  component.qcAuditCopyPath.set('references/qc-shadow/A.py');
-  component.instanceId.set('spy-ema-paper-1');
+  component.qcBacktestId.set(DEPLOYMENT_VALIDATION_QC_BACKTEST_ID);
+  component.qcAuditCopyPath.set(DEPLOYMENT_VALIDATION_AUDIT_COPY);
+  component.instanceId.set('deployment-validation-paper');
+  component.startNow.set(false);
   activeFixture?.detectChanges();
 }
 
@@ -222,6 +285,72 @@ afterEach(() => {
 });
 
 describe('BrokerDeployFormComponent', () => {
+  it('lists only validated strategies and auto-populates provenance read-only', async () => {
+    const { fixture, component } = setup();
+    await flush();
+    fixture.detectChanges();
+
+    const strategyOptions = Array.from(
+      fieldControl(fixture, 'Strategy').querySelectorAll('option'),
+    ).map((option) => option.textContent ?? '');
+    expect(strategyOptions).toContain('Deployment Validation');
+    expect(strategyOptions).not.toContain('Opening Range Breakout');
+
+    changeSelect(fixture, 'Strategy', 'deployment_validation');
+    await flush();
+    fixture.detectChanges();
+
+    expect(component.specPath()).toBe(DEPLOYMENT_VALIDATION_SPEC_PATH);
+    expect(component.qcBacktestId()).toBe('d2fe45a7142e88575f6fbd75229f8681');
+    expect(component.qcAuditCopyPath()).toBe(DEPLOYMENT_VALIDATION_AUDIT_COPY);
+    expect(fieldControl(fixture, 'Backtest ID')).toHaveProperty('readOnly', true);
+    expect(fieldControl(fixture, 'Algorithm audit copy')).toHaveProperty('readOnly', true);
+    expect(fixture.nativeElement.textContent).toContain('View full validation');
+  });
+
+  it('defaults launch to paper orders with the 2000-order guardrail', async () => {
+    const { fixture, component } = setup();
+    await flush();
+    fixture.detectChanges();
+
+    expect(component.startNow()).toBe(true);
+    expect(component.readonlyFlag()).toBe(false);
+    expect(component.maxOrdersPerDay()).toBe(2000);
+    expect(fixture.nativeElement.textContent).toContain('PAPER_ORDERS_ENABLED');
+    expect(fixture.nativeElement.textContent).toContain('Guardrail limit: 2000 orders/day');
+    expect(deployButton(fixture).textContent).toContain('Deploy & start');
+  });
+
+  it('renders the deploy top strip, free-navigation tabs, and named readiness facts', async () => {
+    const { fixture } = setup();
+    await flush();
+    fixture.detectChanges();
+
+    const host = fixture.nativeElement as HTMLElement;
+    const topStrip = host.querySelector('.deploy-top-strip');
+    expect(topStrip?.textContent).toContain('Deployment name');
+    expect(topStrip?.textContent).toContain('Connected broker account');
+
+    const tabs = Array.from(
+      host.querySelectorAll<HTMLElement>('.form-tabs a'),
+    ).map((tab) => tab.textContent ?? '');
+    expect(tabs).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('Strategy'),
+        expect.stringContaining('Signal stream'),
+        expect.stringContaining('Sizing'),
+        expect.stringContaining('Legs'),
+        expect.stringContaining('Launch'),
+      ]),
+    );
+
+    const readiness = host.querySelector('.deploy-readiness-strip');
+    expect(readiness?.textContent).toContain('Engine');
+    expect(readiness?.textContent).toContain('Broker');
+    expect(readiness?.textContent).toContain('Account');
+    expect(readiness?.textContent).toContain('Fleet');
+  });
+
   it('submits a deploy request with the collected fields and reports success', async () => {
     const { fixture, svc, component } = setup();
     await flush();
@@ -234,11 +363,11 @@ describe('BrokerDeployFormComponent', () => {
     expect(svc.deployInstance).toHaveBeenCalledTimes(1);
     const req = svc.deployInstance.mock.calls[0][0];
     expect(req).toMatchObject({
-      strategy_spec_path: 'PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json',
-      qc_audit_copy_path: 'references/qc-shadow/A.py',
-      qc_cloud_backtest_id: 'bt-1',
-      strategy_instance_id: 'spy-ema-paper-1',
-      strategy_key: 'spy_ema_crossover',
+      strategy_spec_path: DEPLOYMENT_VALIDATION_SPEC_PATH,
+      qc_audit_copy_path: DEPLOYMENT_VALIDATION_AUDIT_COPY,
+      qc_cloud_backtest_id: DEPLOYMENT_VALIDATION_QC_BACKTEST_ID,
+      strategy_instance_id: 'deployment-validation-paper',
+      strategy_key: 'deployment_validation',
       start: false,
     });
     expect(req).not.toHaveProperty('account_id');
@@ -249,7 +378,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(fixture.nativeElement.textContent).toContain('run-new');
     expect(fixture.nativeElement.querySelector('.back')?.getAttribute('href')).toBe('/broker/bots');
     expect(fixture.nativeElement.querySelector('.goto')?.getAttribute('href')).toBe(
-      '/broker/bots/spy-ema-paper-1',
+      '/broker/bots/deployment-validation-paper',
     );
   });
 
@@ -362,7 +491,18 @@ describe('BrokerDeployFormComponent', () => {
   });
 
   it('submits StrategyExplicit and disables the sizing selector for an explicit-surface strategy', async () => {
-    const { svc, component, fixture } = setup();
+    const { svc, component, fixture } = setup({
+      strategyValidationCatalog: {
+        strategies: [
+          {
+            ...DEFAULT_STRATEGY_VALIDATION_CATALOG.strategies[0],
+            strategy_key: 'spy_ema_crossover_options',
+            display_name: 'EMA Crossover Options',
+            settings_file_ref: 'PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json',
+          },
+        ],
+      },
+    });
     await flush();
     component.strategyKey.set('spy_ema_crossover_options');
     component.specPath.set('PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json');
@@ -371,6 +511,7 @@ describe('BrokerDeployFormComponent', () => {
     component.qcBacktestId.set('bt-1');
     component.qcAuditCopyPath.set('references/qc-shadow/A.py');
     component.instanceId.set('opt-paper-1');
+    component.startNow.set(false);
     fixture.detectChanges();
     await flush();
 
@@ -503,33 +644,23 @@ describe('BrokerDeployFormComponent', () => {
 
     const req = svc.deployInstance.mock.calls[0][0];
     expect(req.start).toBe(true);
-    expect(req.start_options.strategy).toBe('spy_ema_crossover');
-    expect(req.start_options.max_orders_per_day).toBe(2);
+    expect(req.start_options.strategy).toBe('deployment_validation');
+    expect(req.start_options.max_orders_per_day).toBe(2000);
   });
 
-  it('keeps the deployment validation audit copy selectable when the daemon listing is empty', async () => {
+  it('locks deployment validation provenance when the daemon listing is empty', async () => {
     const { fixture, component } = setup({ qcEntries: [] });
     await flush();
     fixture.detectChanges();
 
-    const host = fixture.nativeElement as HTMLElement;
-    const options = Array.from(host.querySelectorAll<HTMLOptionElement>('option')).map(
-      (option) => option.textContent ?? '',
-    );
-    expect(options).toContain(DEPLOYMENT_VALIDATION_AUDIT_COPY);
-
     component.strategyKey.set('deployment_validation');
     await flush();
+    fixture.detectChanges();
 
     expect(component.qcAuditCopyPath()).toBe(DEPLOYMENT_VALIDATION_AUDIT_COPY);
     expect(component.specPath()).toBe(DEPLOYMENT_VALIDATION_SPEC_PATH);
-    // Default stays a one-round-trip paper canary: entry + exit, then fail closed.
-    expect(component.maxOrdersPerDay()).toBe(2);
-
-    component.strategyKey.set('spy_ema_crossover');
-    await flush();
-
-    expect(component.qcAuditCopyPath()).toBe('');
+    expect(component.maxOrdersPerDay()).toBe(2000);
+    expect(fieldControl(fixture, 'Algorithm audit copy')).toHaveProperty('readOnly', true);
   });
 
   it('auto-selects the deployment validation spec after the operator previously used manual spec mode', async () => {
@@ -554,7 +685,9 @@ describe('BrokerDeployFormComponent', () => {
     fixture.detectChanges();
 
     changeSelect(fixture, 'Strategy', 'deployment_validation');
-    typeText(fixture, 'Backtest ID', 'bt-validated');
+    await flush();
+    fixture.detectChanges();
+    changeSelect(fixture, 'Signal stream', 'SPY');
     typeText(fixture, 'Deployment name', 'deployment-validation-paper');
     await flush();
     fixture.detectChanges();
@@ -572,7 +705,8 @@ describe('BrokerDeployFormComponent', () => {
 
     fieldControl(fixture, 'Strategy').value = 'deployment_validation';
     fieldControl(fixture, 'Connected broker account').value = 'DU123';
-    fieldControl(fixture, 'Backtest ID').value = 'bt-validated';
+    fieldControl(fixture, 'Signal stream').value = 'SPY';
+    fieldControl(fixture, 'Backtest ID').value = DEPLOYMENT_VALIDATION_QC_BACKTEST_ID;
     fieldControl(fixture, 'Algorithm audit copy').value = DEPLOYMENT_VALIDATION_AUDIT_COPY;
     fieldControl(fixture, 'Deployment name').value = 'deployment-validation-paper';
 
@@ -596,7 +730,8 @@ describe('BrokerDeployFormComponent', () => {
     fixture.detectChanges();
 
     fieldControl(fixture, 'Strategy').value = 'deployment_validation';
-    fieldControl(fixture, 'Backtest ID').value = 'd2fe45a7142e88575f6fbd75229f8681';
+    fieldControl(fixture, 'Signal stream').value = 'SPY';
+    fieldControl(fixture, 'Backtest ID').value = DEPLOYMENT_VALIDATION_QC_BACKTEST_ID;
     fieldControl(fixture, 'Algorithm audit copy').value = DEPLOYMENT_VALIDATION_AUDIT_COPY;
     fieldControl(fixture, 'Deployment name').value = 'june25';
 
@@ -622,7 +757,9 @@ describe('BrokerDeployFormComponent', () => {
     fixture.detectChanges();
 
     changeSelect(fixture, 'Strategy', 'deployment_validation');
-    typeText(fixture, 'Backtest ID', 'd2fe45a7142e88575f6fbd75229f8681');
+    await flush();
+    fixture.detectChanges();
+    changeSelect(fixture, 'Signal stream', 'SPY');
     typeText(fixture, 'Deployment name', 'june25');
     await flush();
     fixture.detectChanges();
@@ -679,10 +816,11 @@ describe('BrokerDeployFormComponent', () => {
     const { fixture, component } = setup({ qcEntries: [] });
     await flush();
     component.strategyKey.set('deployment_validation');
+    await flush();
     fixture.detectChanges();
 
     expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'Missing: Backtest ID, Deployment name.',
+      'Missing: Signal stream, Deployment name.',
     );
   });
 
@@ -739,6 +877,16 @@ describe('BrokerDeployFormComponent', () => {
           description: null,
         },
       ],
+      strategyValidationCatalog: {
+        strategies: [
+          {
+            ...DEFAULT_STRATEGY_VALIDATION_CATALOG.strategies[0],
+            strategy_key: 'multi_signal',
+            display_name: 'Multi Signal',
+            settings_file_ref: 'PythonDataService/app/engine/strategy/spec/fixtures/multi_signal.spec.json',
+          },
+        ],
+      },
     });
     await flush();
 
@@ -756,7 +904,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(component.resolvedSignalStream()).toBe('QQQ');
   });
 
-  it('asks for confirmation before starting with paper order submission enabled', async () => {
+  it('starts with paper order submission enabled without an extra modal', async () => {
     const { fixture, svc, component } = setup();
     await flush();
     fillRequired(component);
@@ -768,15 +916,12 @@ describe('BrokerDeployFormComponent', () => {
     await component.submit();
     fixture.detectChanges();
 
-    expect(svc.deployInstance).not.toHaveBeenCalled();
-    expect(fixture.nativeElement.textContent).toContain('Enable paper order submission?');
-    expect(fixture.nativeElement.textContent).toContain('PAPER_ORDERS_ENABLED');
-
-    await component.confirmLiveAndSubmit();
-
     expect(svc.deployInstance).toHaveBeenCalledTimes(1);
+    expect(fixture.nativeElement.textContent).not.toContain('Enable paper order submission?');
+    expect(fixture.nativeElement.textContent).toContain('PAPER_ORDERS_ENABLED');
     const req = svc.deployInstance.mock.calls[0][0];
     expect(req.start_options.readonly).toBe(false);
+    expect(req.start_options.max_orders_per_day).toBe(2000);
   });
 
   it('reuses a stable start_date_ms across retries (idempotency)', async () => {
@@ -853,6 +998,30 @@ describe('BrokerDeployFormComponent', () => {
     expect(deployButton(fixture).disabled).toBe(false);
   });
 
+  it('blocks start when account truth is not proven but allows deploy-only staging', async () => {
+    const { fixture, component } = setup({
+      accountTruth: {
+        final_verdict: 'not_proven',
+        status_label: 'Not proven',
+        status_detail: 'Run account reconcile before starting.',
+      },
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    fixture.detectChanges();
+
+    expect(deployButton(fixture).disabled).toBe(true);
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Account NOT_PROVEN',
+    );
+
+    component.startNow.set(false);
+    fixture.detectChanges();
+
+    expect(deployButton(fixture).disabled).toBe(false);
+  });
+
   it('blocks "Deploy & start" onto an already-running instance, but allows deploy-only', async () => {
     const { fixture, component } = setup({ instances: [{ strategy_instance_id: 'Minute', process_state: 'running' }] });
     await flush();
@@ -879,13 +1048,31 @@ describe('BrokerDeployFormComponent', () => {
       getQcAuditCopies: vi.fn().mockResolvedValue({ scope_root: 'references/qc-shadow', entries: [] }),
       getInstances: vi.fn().mockResolvedValue([]),
       deployInstance: vi.fn(),
+      getAuditCopySizingLookup: vi.fn().mockResolvedValue({
+        verdict: 'cannot_prove',
+        detail: 'allow-list unavailable in tests',
+        expected_rule: null,
+        actual_rule: null,
+      }),
     };
-    const broker = { account: vi.fn().mockResolvedValue(null) };
+    const broker = {
+      account: vi.fn().mockResolvedValue(null),
+      accountTruth: vi.fn().mockResolvedValue({
+        final_verdict: 'not_proven',
+        status_label: 'Not proven',
+        status_detail: 'No connected account proof.',
+      }),
+      positions: vi.fn().mockResolvedValue({ positions: [] }),
+    };
+    const strategyValidation = {
+      getCatalog: vi.fn().mockResolvedValue(DEFAULT_STRATEGY_VALIDATION_CATALOG),
+    };
     const connectivity = {
       links: () => [],
       blockers: () => [],
       daemonState: () => 'ok',
       brokerState: () => 'ok',
+      brokerDetail: () => 'Connected',
       fleetState: () => 'ok',
       nothingDeployed: () => false,
       daemonDown: () => false,
@@ -901,23 +1088,25 @@ describe('BrokerDeployFormComponent', () => {
         { provide: LiveRunsService, useValue: svc },
         { provide: BrokerService, useValue: broker },
         { provide: BrokerConnectivityService, useValue: connectivity },
+        { provide: StrategyValidationService, useValue: strategyValidation },
       ],
     });
     const harness = await RouterTestingHarness.create();
     const component = await harness.navigateByUrl(
-      '/broker/deploy?strategy_key=spy_ema_crossover&spec_path=spec%2Fpath.json' +
+      '/broker/deploy?strategy_key=deployment_validation&spec_path=spec%2Fpath.json' +
         '&signal_stream=aapl&account_id=DU777&qc_backtest_id=bt-redeploy' +
         '&qc_audit_copy_path=audit%2Fcopy.py&instance_id=recovered_inst',
       BrokerDeployFormComponent,
     );
     activeFixture = harness.fixture;
+    await flush();
 
-    expect(component.strategyKey()).toBe('spy_ema_crossover');
-    expect(component.specPath()).toBe('spec/path.json');
+    expect(component.strategyKey()).toBe('deployment_validation');
+    expect(component.specPath()).toBe(DEPLOYMENT_VALIDATION_SPEC_PATH);
     expect(component.signalStream()).toBe('AAPL');
     expect(component.resolvedSignalStream()).toBe('AAPL');
-    expect(component.qcBacktestId()).toBe('bt-redeploy');
-    expect(component.qcAuditCopyPath()).toBe('audit/copy.py');
+    expect(component.qcBacktestId()).toBe(DEPLOYMENT_VALIDATION_QC_BACKTEST_ID);
+    expect(component.qcAuditCopyPath()).toBe(DEPLOYMENT_VALIDATION_AUDIT_COPY);
     expect(component.instanceId()).toBe('recovered_inst');
     // Account is no longer sourced from the redeploy URL; Deploy requires the
     // currently connected broker session to provide it.
