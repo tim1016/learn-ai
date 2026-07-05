@@ -86,5 +86,10 @@
       font-size: 0.68rem;
       white-space: normal;
     }
+
+    .table-asset {
+      --asset-identity-symbol-color: var(--text-secondary);
+      --asset-identity-symbol-max-width: 10ch;
+    }
   }
 }

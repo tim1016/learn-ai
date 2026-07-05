@@ -69,7 +69,7 @@
             <span class="call">{{ line.request.call }}</span>
             <span class="source">{{ line.source }}</span>
             @if (line.symbol) {
-              <span class="symbol">{{ line.symbol }}</span>
+              <app-asset-identity class="symbol" [symbol]="line.symbol" size="sm" />
             }
             @if (line.account_id) {
               <span class="account">{{ line.account_id }}</span>

@@ -60,9 +60,22 @@
         [class.warn]="tone === 'warn'"
         [class.bad]="tone === 'bad'"
       >
-        {{ symbol() || '—' }} · {{ statusLabel() }}
+        @if (symbol(); as chartSymbol) {
+          <app-asset-identity
+            class="chart-status-asset"
+            [symbol]="chartSymbol"
+            size="sm"
+            tone="inverse"
+          />
+          <span aria-hidden="true">·</span>
+        } @else {
+          <span>—</span>
+          <span aria-hidden="true">·</span>
+        }
+        <span>{{ statusLabel() }}</span>
         @if (tradeCount() > 0) {
-          · {{ tradeCount() }} trades
+          <span aria-hidden="true">·</span>
+          <span>{{ tradeCount() }} trades</span>
         }
       </span>
     </div>

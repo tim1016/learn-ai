@@ -1,0 +1,93 @@
+:host {
+  --asset-identity-logo-size: 28px;
+  --asset-identity-symbol-color: var(--text-primary, #172033);
+  --asset-identity-name-color: var(--text-muted, #6b7280);
+  --asset-identity-fallback-bg: var(--surface-elev, #eef2f7);
+  --asset-identity-fallback-border: var(--border, #d6dde8);
+
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  color: var(--asset-identity-symbol-color);
+}
+
+:host(.asset-identity--sm) {
+  --asset-identity-logo-size: 22px;
+
+  gap: 6px;
+}
+
+:host(.asset-identity--lg) {
+  --asset-identity-logo-size: 36px;
+
+  gap: 10px;
+}
+
+:host(.asset-identity--inverse) {
+  --asset-identity-symbol-color: #ffffff;
+  --asset-identity-name-color: rgba(255, 255, 255, 0.72);
+  --asset-identity-fallback-bg: rgba(255, 255, 255, 0.12);
+  --asset-identity-fallback-border: rgba(255, 255, 255, 0.28);
+}
+
+.asset-identity__logo,
+.asset-identity__fallback {
+  width: var(--asset-identity-logo-size);
+  height: var(--asset-identity-logo-size);
+  flex: 0 0 var(--asset-identity-logo-size);
+  border-radius: 50%;
+}
+
+.asset-identity__logo {
+  display: block;
+  background: #ffffff;
+  object-fit: cover;
+}
+
+.asset-identity__fallback {
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--asset-identity-fallback-border);
+  background: var(--asset-identity-fallback-bg);
+  color: var(--asset-identity-symbol-color);
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+:host(.asset-identity--lg) .asset-identity__fallback {
+  font-size: 0.78rem;
+}
+
+:host(.asset-identity--sm) .asset-identity__fallback {
+  font-size: 0.56rem;
+}
+
+.asset-identity__copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.1;
+}
+
+.asset-identity__symbol,
+.asset-identity__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-identity__symbol {
+  max-width: var(--asset-identity-symbol-max-width, 14ch);
+  color: var(--asset-identity-symbol-color);
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.asset-identity__name {
+  max-width: var(--asset-identity-name-max-width, 22ch);
+  color: var(--asset-identity-name-color);
+  font-size: 0.75rem;
+}

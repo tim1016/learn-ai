@@ -31,6 +31,7 @@ import {
   createSeriesMarkers,
 } from 'lightweight-charts';
 import { firstValueFrom } from 'rxjs';
+import { AssetIdentityComponent } from '../../../../../shared/asset-identity';
 import type {
   ActiveDateEntry,
   ActivityFillMarker,
@@ -176,6 +177,7 @@ const RESOLUTION_OPTIONS: ChartResolution[] = ['1m', '5s'];
 
 @Component({
   selector: 'app-bot-trade-chart-card',
+  imports: [AssetIdentityComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './bot-trade-chart-card.component.html',
   styleUrl: './bot-trade-chart-card.component.scss',

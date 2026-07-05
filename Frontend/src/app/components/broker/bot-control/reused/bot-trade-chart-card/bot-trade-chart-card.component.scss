@@ -188,6 +188,11 @@
   }
 }
 
+.chart-status-asset {
+  --asset-identity-symbol-color: currentColor;
+  --asset-identity-symbol-max-width: 10ch;
+}
+
 .chart-wrap {
   width: 100%;
   // Height is applied inline by the component so it can vary by resolution.

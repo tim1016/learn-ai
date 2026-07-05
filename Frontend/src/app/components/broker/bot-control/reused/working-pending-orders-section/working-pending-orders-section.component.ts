@@ -1,6 +1,7 @@
 import { CommonModule } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 
+import { AssetIdentityComponent } from '../../../../../shared/asset-identity';
 import { fmtNumber, fmtTimestampLocal } from '../../../format';
 
 import type { ActivityOrderRow } from '../bot-trade-chart-card/bot-trade-chart-card.types';
@@ -28,7 +29,7 @@ interface OrderDisplay {
 @Component({
   selector: 'app-working-pending-orders-section',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [CommonModule],
+  imports: [CommonModule, AssetIdentityComponent],
   templateUrl: './working-pending-orders-section.component.html',
   styleUrl: './working-pending-orders-section.component.scss',
 })

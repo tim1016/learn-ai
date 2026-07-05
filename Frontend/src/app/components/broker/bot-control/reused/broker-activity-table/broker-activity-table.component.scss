@@ -199,4 +199,9 @@
   .activity-tag {
     margin-left: 0.35rem;
   }
+
+  .table-asset {
+    --asset-identity-symbol-color: var(--text-secondary);
+    --asset-identity-symbol-max-width: 10ch;
+  }
 }

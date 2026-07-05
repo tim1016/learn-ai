@@ -28,6 +28,7 @@ import type {
 } from '../../../api/live-instances.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { formatReceiptLabel, ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { ActiveBotSidebarNoticeService } from '../../../shell/active-bot-sidebar-notice.service';
 import type { ActiveBotSidebarNotice } from '../../../shell/active-bot-sidebar-notice.service';
 import { ActivityTabComponent } from './tabs/activity-tab.component';
@@ -120,6 +121,7 @@ const EMPTY_TIMELINE_STATE: LifecycleTimelinePaneState = {
     RouterLink,
     TabsModule,
     ReceiptLabelPipe,
+    AssetIdentityComponent,
     OverviewTabComponent,
     ActivityTabComponent,
     TypedHaltConfirmComponent,

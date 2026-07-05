@@ -1,0 +1,21 @@
+@if (showLogo()) {
+  <img
+    class="asset-identity__logo"
+    [src]="logoUrl()"
+    alt=""
+    aria-hidden="true"
+    loading="lazy"
+    decoding="async"
+    referrerpolicy="no-referrer"
+    (error)="onLogoError()"
+  />
+} @else {
+  <span class="asset-identity__fallback" aria-hidden="true">{{ fallbackText() }}</span>
+}
+
+<span class="asset-identity__copy">
+  <span class="asset-identity__symbol">{{ displaySymbol() }}</span>
+  @if (displayName(); as assetName) {
+    <span class="asset-identity__name">{{ assetName }}</span>
+  }
+</span>

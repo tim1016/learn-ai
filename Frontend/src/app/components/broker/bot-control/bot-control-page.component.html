@@ -23,7 +23,11 @@
       <span class="connection-pill" [class]="'tone-' + conn.tone" aria-label="Broker connection">
         <span class="conn-dot" aria-hidden="true"></span>
         @if (conn.symbol) {
-          <span class="conn-symbol">{{ conn.symbol }}</span>
+          <app-asset-identity
+            class="conn-asset"
+            [symbol]="conn.symbol"
+            size="sm"
+          />
           <span class="conn-sep" aria-hidden="true">·</span>
         }
         <span class="conn-state">{{ conn.state }}</span>
@@ -227,7 +231,19 @@
                 >
                   <header class="workbench-panel-head">
                     <h2 id="recent-activity-heading">Recent activity</h2>
-                    <span class="workbench-meta">{{ s.symbol ?? 'Unknown symbol' }} · {{ s.process.state }}</span>
+                    <span class="workbench-meta">
+                      @if (s.symbol) {
+                        <app-asset-identity
+                          class="workbench-asset"
+                          [symbol]="s.symbol"
+                          size="sm"
+                        />
+                      } @else {
+                        <span>Unknown symbol</span>
+                      }
+                      <span aria-hidden="true">·</span>
+                      <span>{{ s.process.state }}</span>
+                    </span>
                   </header>
                   <div class="workbench-panel-body">
                     <app-trader-guidance-timeline
