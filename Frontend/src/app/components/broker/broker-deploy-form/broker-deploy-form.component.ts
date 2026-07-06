@@ -45,6 +45,7 @@ import {
 const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
 type DeployTabKey = 'strategy' | 'signal' | 'sizing' | 'legs' | 'launch';
+type ExecutionMode = 'read_only' | 'paper_orders' | 'live';
 
 interface DeployTab {
   key: DeployTabKey;
@@ -115,7 +116,7 @@ export class BrokerDeployFormComponent {
   readonly qcBacktestId = signal<string>('');
   readonly qcAuditCopyPath = signal<string>('');
   readonly instanceId = signal<string>('');
-  readonly readonlyFlag = signal<boolean>(false);
+  readonly executionMode = signal<ExecutionMode>('paper_orders');
   readonly hydratePolicy = signal<HydratePolicy>('require');
   readonly maxOrdersPerDay = signal<number>(DEFAULT_MAX_ORDERS_PER_DAY);
   readonly startNow = signal<boolean>(true);
@@ -136,6 +137,7 @@ export class BrokerDeployFormComponent {
   // (ADR § 3); Custom ships in PR4.
   readonly sizingPreset = signal<SizingPreset>('safe_canary');
   readonly activeDeployTab = signal<DeployTabKey>('strategy');
+  private readonly signalStreamManuallyEdited = signal<boolean>(false);
 
   // ADR 0009 § 3 — Reference parity gate. Refetched whenever the chosen audit
   // copy changes; surfaces the verdict (`proven_match` / `proven_mismatch` /
@@ -193,7 +195,10 @@ export class BrokerDeployFormComponent {
 
   readonly validatedStrategies = computed<StrategyValidationSummary[]>(() =>
     (this.strategyValidations.value()?.strategies ?? []).filter(
-      (strategy) => strategy.validation_state === 'validated' && strategy.deployable,
+      (strategy) =>
+        strategy.validation_state === 'validated' &&
+        strategy.deployable &&
+        strategy.behavioral_equivalence?.verdict === 'accepted_for_deploy',
     ),
   );
 
@@ -243,14 +248,17 @@ export class BrokerDeployFormComponent {
     () => (this.account.hasValue() ? (this.account.value()?.account_id ?? '') : ''),
   );
 
-  readonly executionCapability = computed<'read_only' | 'paper_orders'>(() =>
-    this.readonlyFlag() ? 'read_only' : 'paper_orders',
-  );
-  readonly executionCapabilityProof = computed<string>(() =>
-    this.readonlyFlag()
+  readonly readonlyFlag = computed<boolean>(() => this.executionMode() === 'read_only');
+  readonly executionCapability = computed<ExecutionMode>(() => this.executionMode());
+  readonly executionCapabilityProof = computed<string>(() => {
+    const mode = this.executionMode();
+    if (mode === 'live') {
+      return 'readonly_at_start: false · submission_capability: LIVE_ORDERS_BLOCKED';
+    }
+    return mode === 'read_only'
       ? 'readonly_at_start: true · submission_capability: READ_ONLY_OBSERVATION'
-      : 'readonly_at_start: false · submission_capability: PAPER_ORDERS_ENABLED',
-  );
+      : 'readonly_at_start: false · submission_capability: PAPER_ORDERS_ENABLED';
+  });
 
   readonly actionPlanTradeSymbol = computed<string | null>(() =>
     BrokerDeployFormComponent.singleLongStockActionSymbol(this.actionPlan()),
@@ -373,7 +381,10 @@ export class BrokerDeployFormComponent {
     const seedParent = qp.get('parent_run_id');
     if (seedParent) this.parentRunId.set(seedParent);
     const seedSignalStream = qp.get('signal_stream');
-    if (seedSignalStream) this.signalStream.set(normalizedSymbol(seedSignalStream));
+    if (seedSignalStream) {
+      this.signalStreamManuallyEdited.set(true);
+      this.signalStream.set(normalizedSymbol(seedSignalStream));
+    }
 
     effect(() => {
       const validation = this.selectedValidation();
@@ -387,6 +398,10 @@ export class BrokerDeployFormComponent {
       }
       if (validation.audit_copy_ref && this.qcAuditCopyPath() !== validation.audit_copy_ref) {
         this.qcAuditCopyPath.set(validation.audit_copy_ref);
+      }
+      const validationSignal = normalizedSymbol(validation.validation_case_symbol);
+      if (validationSignal && !this.signalStreamManuallyEdited()) {
+        this.signalStream.set(validationSignal);
       }
     });
 
@@ -462,6 +477,9 @@ export class BrokerDeployFormComponent {
   readonly blockedReason = computed<string | null>(() => {
     if (this.connectivity.daemonDown()) {
       return 'Live engine unavailable. Start it on this machine, then recheck.';
+    }
+    if (this.startNow() && this.executionMode() === 'live') {
+      return 'Live execution is not available from Deploy yet. Pick read-only or paper orders.';
     }
     const coexistence = this.allInCoexistenceBlock();
     if (coexistence !== null) return coexistence;
@@ -616,6 +634,7 @@ export class BrokerDeployFormComponent {
     const strategyKey = this.renderedFieldValue('strategyKey');
     if (this.shouldSyncRenderedValue(strategyKey, this.strategyKey(), includeEmpty, onlyEmptySignals)) {
       this.manualSpecPath.set(false);
+      this.signalStreamManuallyEdited.set(false);
       this.strategyKey.set(strategyKey);
     }
 
@@ -648,6 +667,7 @@ export class BrokerDeployFormComponent {
 
   setStrategyKey(e: Event): void {
     this.manualSpecPath.set(false);
+    this.signalStreamManuallyEdited.set(false);
     this.strategyKey.set(this.text(e));
   }
   setSpecPath(e: Event): void {
@@ -660,6 +680,7 @@ export class BrokerDeployFormComponent {
     this.seedSignalStreamFromFixturePath(path);
   }
   setSignalStream(e: Event): void {
+    this.signalStreamManuallyEdited.set(true);
     this.signalStream.set(normalizedSymbol(this.text(e)));
   }
   useManualSpecPath(): void {
@@ -677,10 +698,14 @@ export class BrokerDeployFormComponent {
   setInstanceId(e: Event): void {
     this.instanceId.set(this.text(e));
   }
-  setReadonly(e: Event): void {
+  setExecutionMode(e: Event): void {
     if (e.target instanceof HTMLInputElement) {
-      this.readonlyFlag.set(e.target.value !== 'paper_orders');
+      this.setExecutionModeValue(e.target.value);
     }
+  }
+  private setExecutionModeValue(value: string): void {
+    if (value !== 'read_only' && value !== 'paper_orders' && value !== 'live') return;
+    this.executionMode.set(value);
   }
   setHydratePolicy(e: Event): void {
     const v = this.text(e);

@@ -23,5 +23,46 @@
         ]
       }
     }
+  ],
+  "seed_flag_events": [
+    {
+      "event_id": "seed-deployment-validation-accepted-for-deploy",
+      "event_version": "1.0",
+      "strategy_key": "deployment_validation",
+      "flag": "validated",
+      "flagged_by": "migration:strategy-validation-prd-seed",
+      "flagged_at_ms": 1775088000000,
+      "reason": "Seeded from the committed QuantConnect reconciliation evidence accepted for deployment.",
+      "behavioral_equivalence": {
+        "verdict": "accepted_for_deploy",
+        "detail": "Human validation accepted the current engine evidence for deployment.",
+        "tolerance": "manifest_reconciliation_passed",
+        "tolerance_reason": "Registered reconciliation status and diagnostics verdict are passed; the manifest settings-file hash also matches the current source.",
+        "gating_divergence_counts": {}
+      },
+      "evidence_snapshot": {
+        "settings_file_ref": "PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json",
+        "settings_file_sha256": "2d487f718a83edfdaef24f21a1ef5536d885485cf08071e0cde16c391974bc20",
+        "qc_cloud_backtest_id": "d2fe45a7142e88575f6fbd75229f8681",
+        "audit_copy_ref": "references/qc-shadow/DeploymentValidationAlgorithm.py",
+        "audit_copy_sha256": "3dbb1c0f54254951828f3c74e4dc6e2f7c1bcc0784465c8532f109ea191c3af0",
+        "reconciliation_ref": "references/qc-shadow/backtests/2024-03-28_to_2026-03-03/attribution.md",
+        "validation_case_symbol": "SPY",
+        "reconciliation_status": "passed",
+        "diagnostics": {
+          "verdict": "passed",
+          "trades_matched": 56,
+          "trades_validated": 56,
+          "pnl_max_abs_diff": "0.00",
+          "divergence_counts": {},
+          "notes": [
+            "Validated strategy binding promoted from stored run-ledger QC evidence and the committed QC audit copy.",
+            "The referenced QC attribution records 112 fills paired into 56 long round-trips for SPY."
+          ]
+        }
+      },
+      "evidence_snapshot_sha256": "2b2700c79e823aa3d11779f156df4dae6456606ad0ba852789b37d672c18dbc5",
+      "superseded_by_event_id": null
+    }
   ]
 }

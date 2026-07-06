@@ -1045,21 +1045,20 @@ the *deployment* binds.
   non-authoring surface for this workflow.
 - **Strategy catalog & validation state** — the Strategy Validation surface is a
   catalog of **all** strategies carrying a validation state, not a list of only
-  the good ones. A strategy is **validated** (has a QC backtest ID + saved audit
-  copy + passing port-vs-QC reconciliation → deployable) or **unvalidated** (shown
-  as "needs validation" → not deployable). **Validation is the gate to
-  deployability**: only validated strategies appear in the Deploy flow's strategy
-  dropdown; adding validation to an unvalidated strategy flips it deployable. The
-  validation binding is **backend-owned and stored** (already present today as the
+  the good ones. Under ADR 0023, validation state is projected from append-only
+  flag events. A human-recorded `validated` flag is auditable immediately, but it
+  reaches the Deploy dropdown only when the latest non-superseded flag event also
+  has `behavioral_equivalence.verdict == accepted_for_deploy`. The validation
+  binding is **Python-owned and stored** (already present today as the
   `qc_cloud_backtest_id` + `qc_audit_copy_path`/`sha` + `strategy_spec_path`/`sha`
   chain in each `run_ledger.json`, plus the qc-shadow attribution and the
   `docs/references/reconciliations/` reports) — the surface consolidates it, it is
   not re-typed.
-- **Deployment binding surface** — the Deploy-a-strategy flow selects one validated
-  strategy (auto-populating its validation evidence: settings file, QC backtest ID,
-  audit copy, reconciliation verdict — none typed) and binds the independent,
-  per-deployment inputs: signal stream, position sizing, action-plan legs, launch
-  options, deployment name, and the read-only connected account.
+- **Deployment binding surface** — the Deploy-a-strategy flow selects one validated,
+  deployable strategy (auto-populating its validation evidence: settings file, QC
+  backtest ID, audit copy, reconciliation verdict — none typed) and binds the
+  independent, per-deployment inputs: signal stream, position sizing, action-plan
+  legs, launch options, deployment name, and the read-only connected account.
 - **Actionable readiness gate** — a deploy readiness fact (Engine / Broker /
   Account / Fleet) rendered at **trader altitude** (a backend-authored named
   condition via `receiptLabel`, drill-down to its full page; never raw socket rows
@@ -1089,19 +1088,26 @@ the *deployment* binds.
 A `grill-me` session revised several points above. Where they conflict, **ADR 0023 wins**:
 
 - **Validation is a human flag, not an automatic verdict.** The Validation page
-  **runs both engines** — our Python engine and the LEAN engine (QuantConnect is the
-  LEAN reference; the backtest ID only *pins* the reference run) — and displays how
-  well their buy/sell entry signals and PnL match (`DivergenceCategory` + a headline
-  %). A **person** sets the `validated` / `invalidated` flag; there is **no automatic
-  threshold** (a ~95% match is human guidance, not a rule). The QC backtest ID is
-  **provenance**, not the credential. This replaces "validated iff … a passing
-  port-vs-QC reconciliation" above.
+  refreshes registered Python-vs-LEAN/QC evidence (QuantConnect is the LEAN
+  reference; the backtest ID only *pins* the reference run) and displays how well
+  their buy/sell entry signals and PnL match (`DivergenceCategory` + a headline %).
+  A **person** sets the `validated` / `invalidated` flag; there is **no automatic
+  threshold that writes the flag** (a ~95% match is human guidance, not a rule). The
+  QC backtest ID is **provenance**, not the credential. This replaces "validated iff
+  … a passing port-vs-QC reconciliation" above. A future dedicated engine-run
+  trigger must not be confused with the shipped manifest evidence refresh.
 - **The flag is always saved with its evidence + a reason — accountability, not
-  prevention.** The system never blocks the human: a strategy flagged `validated` at
-  0% agreement is allowed and is stored with the full evidence snapshot (both engines'
-  output, match %, `DivergenceCategory`, backtest ID, flagger, timestamp) and a
-  required reason. That persisted reason is the "documented reason"
-  `numerical-rigor.md` requires for accepting a *behavioral* equivalence.
+  prevention.** The system never blocks the human from recording a judgment: a
+  strategy flagged `validated` at 0% agreement is allowed and is stored with the full
+  evidence snapshot (registered diagnostics, `DivergenceCategory`, backtest ID,
+  artifact refs/hashes, authenticated flagger, timestamp) and a required reason.
+- **Deployability is stricter than merely recording a `validated` flag.** The Deploy
+  dropdown includes only the latest non-superseded flag event where the flag is
+  `validated` and `behavioral_equivalence.verdict == accepted_for_deploy`,
+  preserving `numerical-rigor.md`'s behavioral-equivalence requirement (matching
+  signals/PnL within a documented tolerance plus a reason). A 0%-agreement
+  `validated` event is auditable but not deployable unless the numerical-rigor
+  authority changes.
 - **Validation never trades.** No read-only/paper/live orders, no broker, no readiness
   gates on the Validation page. Its asset is the **safe canary** (the signal entity
   itself) and its sizing is a **1-share informational** readout, not an input.

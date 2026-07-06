@@ -5,6 +5,8 @@ import { firstValueFrom } from 'rxjs';
 import type {
   StrategyValidationCatalog,
   StrategyValidationDetail,
+  StrategyValidationFlagRequest,
+  StrategyValidationRefreshResult,
 } from './strategy-validation.types';
 
 @Injectable({ providedIn: 'root' })
@@ -19,6 +21,27 @@ export class StrategyValidationService {
   getDetail(strategyKey: string): Promise<StrategyValidationDetail> {
     return firstValueFrom(
       this.http.get<StrategyValidationDetail>(`${this.base}/${encodeURIComponent(strategyKey)}`),
+    );
+  }
+
+  refreshValidationEvidence(strategyKey: string): Promise<StrategyValidationRefreshResult> {
+    return firstValueFrom(
+      this.http.post<StrategyValidationRefreshResult>(
+        `${this.base}/${encodeURIComponent(strategyKey)}/refresh`,
+        {},
+      ),
+    );
+  }
+
+  flagValidation(
+    strategyKey: string,
+    request: StrategyValidationFlagRequest,
+  ): Promise<StrategyValidationDetail> {
+    return firstValueFrom(
+      this.http.post<StrategyValidationDetail>(
+        `${this.base}/${encodeURIComponent(strategyKey)}/flag`,
+        request,
+      ),
     );
   }
 }

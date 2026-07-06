@@ -1,10 +1,14 @@
 <section class="deploy">
   <header class="head">
     <div>
+      <p class="eyebrow"><i class="pi pi-send" aria-hidden="true"></i> Broker deploy</p>
       <h1>Deploy a strategy</h1>
-      <p class="subtitle">Create a live strategy instance and bind it to the QuantConnect backtest that approved it.</p>
+      <p class="subtitle">Create one live strategy instance from a validated receipt, then decide whether to start it now.</p>
     </div>
-    <a routerLink="/broker/bots" class="back">Bots</a>
+    <nav class="head-actions" aria-label="Deploy page links">
+      <a routerLink="/strategy-validation" class="validation-link">Validation</a>
+      <a routerLink="/broker/bots" class="back">Bots</a>
+    </nav>
   </header>
 
   <app-broker-connectivity-strip />
@@ -53,24 +57,65 @@
   </section>
 
   <div class="workspace">
+    <aside class="readiness" aria-label="Deployment command">
+      <section class="command-panel">
+        <p class="eyebrow">Deploy command</p>
+        <h2>{{ startNow() ? 'Deploy & start' : 'Deploy only' }}</h2>
+        <p>{{ selectedValidation()?.display_name ?? 'Select a validated strategy before deploying.' }}</p>
+        <button type="button" class="primary" [disabled]="!canSubmit()" (click)="submit()">
+          <i class="pi pi-send" aria-hidden="true"></i>
+          {{ startNow() ? 'Deploy & start' : 'Deploy' }}
+        </button>
+        @let reason = blockedReason();
+        <p class="blocked" role="status">{{ reason ?? 'Ready to deploy.' }}</p>
+      </section>
+
+      <section>
+        <h2>Now</h2>
+        <ul>
+          @for (check of nowChecks(); track check.key) {
+            <li [class]="'state-' + check.state">
+              <span class="dot" aria-hidden="true"></span>
+              <span>{{ check.label }}</span>
+              <small>{{ check.detail }}</small>
+            </li>
+          }
+        </ul>
+      </section>
+
+      <section class="at-deploy">
+        <h2>At deploy</h2>
+        <ul>
+          @for (check of deployChecks(); track check.key) {
+            <li [class]="'state-' + check.state">
+              <span class="dot" aria-hidden="true"></span>
+              <span>{{ check.label }}</span>
+              <small>{{ check.detail }}</small>
+            </li>
+          }
+        </ul>
+      </section>
+    </aside>
+
     <form class="form" (input)="syncRenderedFieldValues()" (change)="syncRenderedFieldValues()" (submit)="$event.preventDefault(); submit()">
       <nav class="form-tabs" role="tablist" aria-label="Deploy sections">
         @for (tab of deployTabs(); track tab.key) {
-          <a
+          <button
+            type="button"
             role="tab"
             [attr.aria-selected]="activeDeployTab() === tab.key"
+            [attr.aria-controls]="tab.target"
             [class.active]="activeDeployTab() === tab.key"
             [class.complete]="tab.complete"
-            [href]="'#' + tab.target"
             (click)="setActiveDeployTab(tab.key)"
           >
             <span>{{ tab.label }}</span>
-            <small>{{ tab.complete ? 'Complete' : 'Open' }}</small>
-          </a>
+            <small>{{ tab.complete ? 'Complete' : 'Needs input' }}</small>
+          </button>
         }
       </nav>
 
-      <section class="group" aria-labelledby="strategy-section">
+      <section class="group" [class.step-hidden]="activeDeployTab() !== 'strategy'" aria-labelledby="strategy-section">
         <h2 id="strategy-section">Strategy</h2>
         <label class="field">
           <span>Strategy</span>
@@ -96,7 +141,7 @@
 
       </section>
 
-      <section class="group" aria-labelledby="verification-section">
+      <section class="group" [class.step-hidden]="activeDeployTab() !== 'strategy'" aria-labelledby="verification-section">
         <h2 id="verification-section">Backtest verification</h2>
         <p class="plain-help">Deploy binds to the QuantConnect backtest and audit source promoted by Strategy Validation. The signal stream below stays independent from the validation-case symbol.</p>
         @if (selectedValidation(); as validation) {
@@ -131,7 +176,7 @@
         </label>
       </section>
 
-      <section class="group" aria-labelledby="signal-section">
+      <section class="group" [class.step-hidden]="activeDeployTab() !== 'signal'" aria-labelledby="signal-section">
         <h2 id="signal-section">Signal stream</h2>
         <label class="field" for="signal-stream">
           <span>Signal stream</span>
@@ -150,7 +195,7 @@
         </label>
       </section>
 
-      <section class="group" aria-labelledby="sizing-section">
+      <section class="group" [class.step-hidden]="activeDeployTab() !== 'sizing'" aria-labelledby="sizing-section">
         <h2 id="sizing-section">Position sizing</h2>
         @if (sizingSurfaceIsExplicit()) {
           <p class="plain-help self-sized" role="status">
@@ -245,32 +290,39 @@
         }
       </section>
 
-      <section class="group" aria-labelledby="launch-section">
+      <section class="group" [class.step-hidden]="activeDeployTab() !== 'launch'" aria-labelledby="launch-section">
         <div class="group-head">
           <h2 id="launch-section">Launch options</h2>
           @if (!startNow()) {
             <span class="scope-note">Applies only when starting now</span>
           }
         </div>
-        <fieldset class="mode" [class.orders-selected]="executionCapability() === 'paper_orders'" [disabled]="!startNow()">
+        <fieldset class="mode" [class.orders-selected]="executionCapability() === 'paper_orders'" [class.live-selected]="executionCapability() === 'live'" [disabled]="!startNow()">
           <legend>Execution capability</legend>
           <label>
-            <input type="radio" name="launch-mode" value="read_only" [checked]="readonlyFlag()" (change)="setReadonly($event)" />
+            <input type="radio" name="launch-mode" value="read_only" [checked]="executionCapability() === 'read_only'" (change)="setExecutionMode($event)" />
             <span>
               <strong>READ-ONLY OBSERVATION</strong>
               <small>No broker orders are submitted.</small>
             </span>
           </label>
           <label>
-            <input type="radio" name="launch-mode" value="paper_orders" [checked]="!readonlyFlag()" (change)="setReadonly($event)" />
+            <input type="radio" name="launch-mode" value="paper_orders" [checked]="executionCapability() === 'paper_orders'" (change)="setExecutionMode($event)" />
             <span>
               <strong>PAPER ORDERS ENABLED</strong>
               <small>Sets <code>readonly</code> false for this start.</small>
             </span>
           </label>
+          <label class="blocked-option">
+            <input type="radio" name="launch-mode" value="live" [checked]="executionCapability() === 'live'" (change)="setExecutionMode($event)" />
+            <span>
+              <strong>LIVE ORDERS</strong>
+              <small>Visible for routing, blocked at submit.</small>
+            </span>
+          </label>
         </fieldset>
         <p class="capability-proof" [class.dimmed]="!startNow()">{{ executionCapabilityProof() }}</p>
-        @if (startNow() && !readonlyFlag()) {
+        @if (startNow() && executionCapability() === 'paper_orders') {
           <p class="launch-warning" role="status">
             Paper orders are enabled for launch. Guardrail limit: {{ maxOrdersPerDay() }} orders/day.
           </p>
@@ -298,7 +350,7 @@
         </label>
       </section>
 
-      <section class="action-plan" aria-labelledby="action-plan-picker-heading">
+      <section class="action-plan" [class.step-hidden]="activeDeployTab() !== 'legs'" aria-labelledby="action-plan-picker-heading">
         <h2 id="action-plan-picker-heading">Action plan</h2>
         <p class="muted">
           Declare the instrument(s) the bot opens on entry and closes on exit.
@@ -313,39 +365,5 @@
 
       <app-broker-operation-result [error]="error()" />
     </form>
-
-    <aside class="readiness" aria-label="Deployment readiness">
-      <section>
-        <h2>Now</h2>
-        <ul>
-          @for (check of nowChecks(); track check.key) {
-            <li [class]="'state-' + check.state">
-              <span class="dot" aria-hidden="true"></span>
-              <span>{{ check.label }}</span>
-              <small>{{ check.detail }}</small>
-            </li>
-          }
-        </ul>
-      </section>
-
-      <section class="at-deploy">
-        <h2>At deploy</h2>
-        <ul>
-          @for (check of deployChecks(); track check.key) {
-            <li [class]="'state-' + check.state">
-              <span class="dot" aria-hidden="true"></span>
-              <span>{{ check.label }}</span>
-              <small>{{ check.detail }}</small>
-            </li>
-          }
-        </ul>
-      </section>
-
-      <button type="button" class="primary" [disabled]="!canSubmit()" (click)="submit()">
-        {{ startNow() ? 'Deploy & start' : 'Deploy' }}
-      </button>
-      @let reason = blockedReason();
-      <p class="blocked" role="status">{{ reason ?? 'Ready to deploy.' }}</p>
-    </aside>
   </div>
 </section>

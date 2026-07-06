@@ -40,6 +40,12 @@ const DEFAULT_STRATEGY_VALIDATION_CATALOG: StrategyValidationCatalog = {
         divergence_counts: {},
         notes: [],
       },
+      behavioral_equivalence: {
+        verdict: 'accepted_for_deploy',
+        detail: 'Human validation accepted the current engine evidence for deployment.',
+      },
+      current_flag_event: null,
+      flag_events: [],
     },
     {
       strategy_key: 'spy_orb',
@@ -56,6 +62,9 @@ const DEFAULT_STRATEGY_VALIDATION_CATALOG: StrategyValidationCatalog = {
       validation_case_symbol: null,
       reconciliation_status: null,
       diagnostics: null,
+      behavioral_equivalence: null,
+      current_flag_event: null,
+      flag_events: [],
     },
   ],
 };
@@ -267,7 +276,7 @@ function typeText(
 
 function chooseExecutionCapability(
   fixture: { nativeElement: HTMLElement },
-  value: 'read_only' | 'paper_orders',
+  value: 'read_only' | 'paper_orders' | 'live',
 ): void {
   const control = fixture.nativeElement.querySelector<HTMLInputElement>(
     `input[name="launch-mode"][value="${value}"]`,
@@ -303,6 +312,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(component.specPath()).toBe(DEPLOYMENT_VALIDATION_SPEC_PATH);
     expect(component.qcBacktestId()).toBe('d2fe45a7142e88575f6fbd75229f8681');
     expect(component.qcAuditCopyPath()).toBe(DEPLOYMENT_VALIDATION_AUDIT_COPY);
+    expect(component.signalStream()).toBe('SPY');
     expect(fieldControl(fixture, 'Backtest ID')).toHaveProperty('readOnly', true);
     expect(fieldControl(fixture, 'Algorithm audit copy')).toHaveProperty('readOnly', true);
     expect(fixture.nativeElement.textContent).toContain('View full validation');
@@ -314,6 +324,7 @@ describe('BrokerDeployFormComponent', () => {
     fixture.detectChanges();
 
     expect(component.startNow()).toBe(true);
+    expect(component.executionCapability()).toBe('paper_orders');
     expect(component.readonlyFlag()).toBe(false);
     expect(component.maxOrdersPerDay()).toBe(2000);
     expect(fixture.nativeElement.textContent).toContain('PAPER_ORDERS_ENABLED');
@@ -332,7 +343,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(topStrip?.textContent).toContain('Connected broker account');
 
     const tabs = Array.from(
-      host.querySelectorAll<HTMLElement>('.form-tabs a'),
+      host.querySelectorAll<HTMLElement>('.form-tabs [role="tab"]'),
     ).map((tab) => tab.textContent ?? '');
     expect(tabs).toEqual(
       expect.arrayContaining([
@@ -349,6 +360,29 @@ describe('BrokerDeployFormComponent', () => {
     expect(readiness?.textContent).toContain('Broker');
     expect(readiness?.textContent).toContain('Account');
     expect(readiness?.textContent).toContain('Fleet');
+  });
+
+  it('reveals sizing controls when the Sizing step is selected', async () => {
+    const { fixture, component } = setup();
+    await flush();
+    fixture.detectChanges();
+
+    const host = fixture.nativeElement as HTMLElement;
+    const sizingTab = host.querySelector<HTMLButtonElement>(
+      '.form-tabs button[aria-controls="sizing-section"]',
+    );
+    expect(sizingTab).toBeTruthy();
+    expect(sizingTab?.getAttribute('href')).toBeNull();
+
+    sizingTab?.click();
+    fixture.detectChanges();
+
+    const sizingGroup = host.querySelector('#sizing-section')?.closest('.group');
+    const strategyGroup = host.querySelector('#strategy-section')?.closest('.group');
+    expect(component.activeDeployTab()).toBe('sizing');
+    expect(sizingGroup?.classList.contains('step-hidden')).toBe(false);
+    expect(strategyGroup?.classList.contains('step-hidden')).toBe(true);
+    expect(sizingGroup?.querySelector('.sizing-presets')).toBeTruthy();
   });
 
   it('submits a deploy request with the collected fields and reports success', async () => {
@@ -820,7 +854,7 @@ describe('BrokerDeployFormComponent', () => {
     fixture.detectChanges();
 
     expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'Missing: Signal stream, Deployment name.',
+      'Missing: Deployment name.',
     );
   });
 
@@ -884,6 +918,7 @@ describe('BrokerDeployFormComponent', () => {
             strategy_key: 'multi_signal',
             display_name: 'Multi Signal',
             settings_file_ref: 'PythonDataService/app/engine/strategy/spec/fixtures/multi_signal.spec.json',
+            validation_case_symbol: null,
           },
         ],
       },
@@ -922,6 +957,26 @@ describe('BrokerDeployFormComponent', () => {
     const req = svc.deployInstance.mock.calls[0][0];
     expect(req.start_options.readonly).toBe(false);
     expect(req.start_options.max_orders_per_day).toBe(2000);
+  });
+
+  it('shows live execution as an option but blocks submit before the request boundary', async () => {
+    const { fixture, svc, component } = setup();
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    fixture.detectChanges();
+
+    chooseExecutionCapability(fixture, 'live');
+    fixture.detectChanges();
+
+    expect(component.executionCapability()).toBe('live');
+    expect(component.readonlyFlag()).toBe(false);
+    expect(component.blockedReason()).toContain('Live execution is not available');
+    expect(deployButton(fixture).disabled).toBe(true);
+
+    await component.submit();
+
+    expect(svc.deployInstance).not.toHaveBeenCalled();
   });
 
   it('reuses a stable start_date_ms across retries (idempotency)', async () => {
