@@ -83,6 +83,7 @@ from app.engine.live.runtime_producer import (
     build_control_plane_block_from_lease,
 )
 from app.engine.strategy.base import LoggedTrade, Strategy
+from app.engine.strategy.spec.schema import SUPPORTED_LIVE_RUNTIME_BAR_SOURCE
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -468,7 +469,7 @@ class LiveEngine:
         strategy_key: str = "",
         strategy_instance_id: str = "",
         run_mode: str = "live_paper",
-        bar_source: str = "ibkr_paper_delayed",
+        bar_source: str = SUPPORTED_LIVE_RUNTIME_BAR_SOURCE,
         decision_columns: tuple[str, ...] = DECISION_COLUMNS,
         owned_perm_ids: set[int] | None = None,
         # ADR 0009 § 6 — propagated registered sizing surface. ``None`` ⇒

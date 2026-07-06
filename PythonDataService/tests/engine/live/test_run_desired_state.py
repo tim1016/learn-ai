@@ -364,12 +364,17 @@ def test_start_legacy_ledger_falls_back_to_strategy_with_warning(
 
 
 def test_start_does_not_refuse_when_desired_state_running(tmp_path: Path) -> None:
-    """Sanity: a RUNNING (or absent) desired-state must NOT trigger the
-    STOPPED refusal — only STOPPED does."""
+    """Absent desired-state defaults to RUNNING and is made durable.
+
+    The cockpit submit gate reads the sidecar, not the engine's in-memory
+    default. If start accepts absence without seeding the file, a launched bot
+    can be running while submit readiness still says "no durable intent".
+    """
     run_dir = _build_started_ledger(tmp_path)
     artifacts_root = tmp_path / "artifacts"
     artifacts_root.mkdir()
     # No desired_state.json written → defaults to RUNNING.
+    repo = DesiredStateRepo(stable_desired_state_path(artifacts_root, "spy_ema_crossover"))
 
     args = argparse.Namespace(
         command="start",
@@ -387,6 +392,11 @@ def test_start_does_not_refuse_when_desired_state_running(tmp_path: Path) -> Non
     # Whatever the engine does with zero bars, it is NOT the STOPPED
     # refusal (which would be exit 1 with no run attempted).
     assert rc != 1
+    rec = repo.read()
+    assert rec is not None
+    assert rec.desired_state is DesiredState.RUNNING
+    assert rec.updated_by == "engine"
+    assert rec.reason == "run.start:default_running"
 
 
 # ──────────────────── pause / resume / stop CLI verbs ─────────────────

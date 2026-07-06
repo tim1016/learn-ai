@@ -20,6 +20,7 @@ codes are unchanged.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import time
 from collections.abc import Iterator
@@ -36,6 +37,7 @@ from app.engine.live.run_ledger import (
     read_ledger,
     write_ledger,
 )
+from app.engine.strategy.spec.schema import SUPPORTED_LIVE_RUNTIME_BAR_SOURCE
 
 # Default paths included in the dirty-tree gate. Mirrors the CLI default so the
 # CLI and the daemon refuse to deploy from the same dirty scope.
@@ -117,6 +119,25 @@ class UnknownLiveConfigKeyError(DeployError):
     Reject at the deploy boundary so the bad key is never hashed into
     ``run_id``. Otherwise the ledger persists with a field the runtime will
     refuse to interpret, leaving an unstartable run on disk."""
+
+
+class UnsupportedBarSourceDescriptorError(DeployError):
+    """The spec declares a bar source the current live runtime cannot execute.
+
+    The live runtime currently streams bars through IBKR ``reqRealTimeBars``.
+    A spec that advertises another source would stamp misleading provenance
+    and can hide market-data readiness failures until after launch.
+    """
+
+    def __init__(self, strategy_spec_path: Path, actual: object) -> None:
+        super().__init__(
+            f"strategy spec {strategy_spec_path} declares bar_source_descriptor={actual!r}, "
+            f"but this live runtime supports only {SUPPORTED_LIVE_RUNTIME_BAR_SOURCE!r}. "
+            "Deploy a spec that matches the executable runtime source, or add a runtime "
+            "adapter for that bar source before launching."
+        )
+        self.strategy_spec_path = strategy_spec_path
+        self.actual = actual
 
 
 class RunAlreadyExistsError(DeployError):
@@ -254,6 +275,29 @@ def _enforce_explicit_surface_policy(strategy_key: str, live_config: dict) -> No
             f"{sizing.get('kind')!r}. The strategy sizes itself via internal accounting; "
             "the deploy-page policy cannot meaningfully reinterpret its quantity."
         )
+
+
+def enforce_supported_strategy_bar_source(strategy_spec_path: Path) -> None:
+    """Reject specs that advertise a bar source the runtime cannot produce.
+
+    The StrategySpec schema owns the default, but deploy tests and older
+    direct-call paths may provide minimal JSON fixtures. Missing
+    ``bar_source_descriptor`` therefore means the current schema default; an
+    explicit non-runtime value is rejected before the ledger is written.
+    """
+    try:
+        payload = json.loads(strategy_spec_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise SpecOrAuditMissingError(str(exc)) from exc
+    except json.JSONDecodeError as exc:
+        raise DeployIOError(f"could not parse strategy spec {strategy_spec_path}: {exc}") from exc
+    except OSError as exc:
+        raise DeployIOError(f"could not read strategy spec {strategy_spec_path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise DeployIOError(f"strategy spec {strategy_spec_path} must be a JSON object")
+    descriptor = payload.get("bar_source_descriptor", SUPPORTED_LIVE_RUNTIME_BAR_SOURCE)
+    if descriptor != SUPPORTED_LIVE_RUNTIME_BAR_SOURCE:
+        raise UnsupportedBarSourceDescriptorError(strategy_spec_path, descriptor)
 
 
 def _existing_run_for_strategy_instance(
@@ -406,6 +450,11 @@ def deploy_run(params: DeployParams) -> DeployResult:
     # and we'd hash a misleading run_id before the engine refuses on the
     # first set_holdings call.)
     _enforce_explicit_surface_policy(params.strategy_key, canonical_live_config)
+
+    # The runtime's bar loop uses IBKR reqRealTimeBars today. Fail at deploy
+    # if the spec advertises any other source so a bot cannot launch with
+    # misleading decision-row provenance or a false "delayed data" assumption.
+    enforce_supported_strategy_bar_source(params.strategy_spec_path)
 
     # ADR 0009 — record the audit copy path relative to the repo so a
     # later read (the start gate, the cockpit) can re-verify against the

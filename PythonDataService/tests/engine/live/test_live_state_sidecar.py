@@ -52,6 +52,25 @@ def test_read_missing_returns_none(tmp_path: Path) -> None:
     assert repo.read() is None
 
 
+def test_write_if_missing_creates_sidecar(tmp_path: Path) -> None:
+    repo = LiveStateSidecarRepo(tmp_path / "live_state.json")
+    env = _min_envelope(run_id="first")
+
+    assert repo.write_if_missing(env) is True
+    assert repo.read() == env
+
+
+def test_write_if_missing_preserves_existing_sidecar(tmp_path: Path) -> None:
+    repo = LiveStateSidecarRepo(tmp_path / "live_state.json")
+    first = _min_envelope(run_id="first")
+    second = _min_envelope(run_id="second")
+
+    repo.write(first)
+
+    assert repo.write_if_missing(second) is False
+    assert repo.read() == first
+
+
 def test_round_trip_persists_identity_tuple(tmp_path: Path) -> None:
     repo = LiveStateSidecarRepo(tmp_path / "live_state.json")
     env = _min_envelope(
@@ -365,3 +384,35 @@ def test_concurrent_writers_serialize_without_error(tmp_path: Path) -> None:
     loaded = repo.read()
     assert loaded is not None
     assert loaded.run_id in {"alpha", "beta"}
+
+
+def test_concurrent_write_if_missing_keeps_first_seed(tmp_path: Path) -> None:
+    import threading
+
+    path = tmp_path / "live_state.json"
+    repo = LiveStateSidecarRepo(path)
+    barrier = threading.Barrier(3)
+    successes: list[str] = []
+    errors: list[BaseException] = []
+
+    def seed(label: str) -> None:
+        try:
+            barrier.wait()
+            if repo.write_if_missing(_min_envelope(run_id=label)):
+                successes.append(label)
+        except BaseException as exc:
+            errors.append(exc)
+
+    t1 = threading.Thread(target=seed, args=("alpha",))
+    t2 = threading.Thread(target=seed, args=("beta",))
+    t1.start()
+    t2.start()
+    barrier.wait()
+    t1.join()
+    t2.join()
+
+    assert errors == []
+    assert len(successes) == 1
+    loaded = repo.read()
+    assert loaded is not None
+    assert loaded.run_id == successes[0]

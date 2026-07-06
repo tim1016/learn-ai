@@ -25,6 +25,7 @@ from app.engine.live.deploy import (
     SpecOrAuditMissingError,
     StrategyInstanceIdAlreadyUsedError,
     UnknownLiveConfigKeyError,
+    UnsupportedBarSourceDescriptorError,
     deploy_run,
 )
 
@@ -280,6 +281,24 @@ def test_deploy_run_directory_as_spec_raises_io_error(
     a_dir = repo / "PythonDataService"  # exists, but is a directory
     with pytest.raises(DeployIOError):
         deploy_run(_params(repo, a_dir, qc, tmp_path / "live_runs"))
+
+
+@requires_git
+def test_deploy_run_rejects_unsupported_bar_source_descriptor(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    repo, spec, qc = repo_with_inputs
+    spec.write_text('{"bar_source_descriptor": "ibkr_paper_delayed"}', encoding="utf-8")
+    subprocess.run(["git", "add", "PythonDataService/spec.json"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "unsupported bar source", "--no-gpg-sign"],
+        cwd=repo,
+        check=True,
+    )
+
+    with pytest.raises(UnsupportedBarSourceDescriptorError, match=r"ibkr_realtime_bars"):
+        deploy_run(_params(repo, spec, qc, tmp_path / "live_runs"))
+    assert not (tmp_path / "live_runs").exists()
 
 
 @requires_git

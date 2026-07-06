@@ -191,7 +191,7 @@ async def test_decisions_carry_core_columns_and_provenance(tmp_path: Path) -> No
     assert set(df["run_id"]) == {"run-abc"}
     assert set(df["strategy_key"]) == {"spy_ema_crossover"}
     assert set(df["mode"]) == {"live_paper"}
-    assert set(df["bar_source"]) == {"ibkr_paper_delayed"}
+    assert set(df["bar_source"]) == {"ibkr_realtime_bars"}
     assert set(df["intended_fill_model"]) == {"NEXT_BAR_OPEN"}
 
 

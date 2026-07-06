@@ -3,7 +3,11 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.engine.strategy.spec.schema import PredictionRef
+from app.engine.strategy.spec.schema import (
+    SUPPORTED_LIVE_RUNTIME_BAR_SOURCE,
+    PredictionRef,
+    StrategySpec,
+)
 
 
 def test_prediction_ref_lookup_defaults_to_exact_bar_close() -> None:
@@ -64,8 +68,6 @@ def test_strategy_spec_client_id_rejects_out_of_range() -> None:
     spec fails at load with a clear error rather than constructing an
     out-of-range IbkrClient that only fails later at Gateway connect
     (PR #377 Codex P2)."""
-    from app.engine.strategy.spec.schema import StrategySpec
-
     with pytest.raises(ValidationError):
         StrategySpec.model_validate(_minimal_spec_dict(client_id=-1))
     with pytest.raises(ValidationError):
@@ -74,3 +76,14 @@ def test_strategy_spec_client_id_rejects_out_of_range() -> None:
     # In-range values and omission both validate.
     assert StrategySpec.model_validate(_minimal_spec_dict(client_id=11)).client_id == 11
     assert StrategySpec.model_validate(_minimal_spec_dict()).client_id is None
+
+
+def test_strategy_spec_bar_source_defaults_to_live_runtime_source() -> None:
+    spec = StrategySpec.model_validate(_minimal_spec_dict())
+
+    assert spec.bar_source_descriptor == SUPPORTED_LIVE_RUNTIME_BAR_SOURCE
+
+
+def test_strategy_spec_bar_source_rejects_unknown_descriptor() -> None:
+    with pytest.raises(ValidationError):
+        StrategySpec.model_validate(_minimal_spec_dict(bar_source_descriptor="paper-ish"))

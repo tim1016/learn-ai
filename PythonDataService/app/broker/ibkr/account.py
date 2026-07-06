@@ -119,9 +119,8 @@ async def _fetch_account_summary_rows(
     req_account_summary(req_id, "All", _ACCOUNT_SUMMARY_TAGS)
     try:
         await asyncio.wait_for(future, timeout=timeout_s)
-    except TimeoutError:
+    finally:
         _cancel_account_summary_request(client, req_id)
-        raise
     return [v for v in acct_summary.values() if v.account == account_id]
 
 

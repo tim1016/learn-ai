@@ -152,6 +152,23 @@ _RUNTIME_FRESHNESS_RULES: tuple[_Rule, ...] = tuple(sorted([
         runbook_slug=_RUNBOOK,
     ),
     _Rule(
+        priority=65,
+        source_codes=frozenset({"BAR_LOOP_SOURCE_MISSING"}),
+        notice_code="runtime.market_data_stale",
+        tier="warning",
+        title="Market data has not started",
+        message=(
+            "The bot subscribed to the market-data feed, but no source bar has "
+            "arrived yet. New trading decisions are held until IBKR sends bars."
+        ),
+        action=OperatorNoticeAction(
+            kind="external_manual_check",
+            label="Check IBKR market data",
+            target="ibkr_connection",
+        ),
+        runbook_slug=_RUNBOOK,
+    ),
+    _Rule(
         priority=60,
         source_codes=frozenset({"BAR_LOOP_LATEST_BAR_STALE"}),
         notice_code="runtime.market_data_stale",

@@ -54,7 +54,7 @@ The migration is a deliberate project (Gateway+IBC reconfig on the new host, IBK
 
 **Non-consequences:**
 - One Gateway with multiple `clientId`s is confirmed as the intra-host pattern. No second Gateway unless an IBKR-side constraint forces it.
-- IBKR paper market data remains delayed (no subscription) for now. The delay is logged into each `DecisionRow.bar_source` as `ibkr_paper_delayed` and contributes a documented expected baseline floor to Layer B `DATA_DRIFT_*` divergence categories. The decision to subscribe is itself triggered by Layer B becoming uninformative, not by topology.
+- The executable live runtime currently streams IBKR `reqRealTimeBars`; deployable specs log each `DecisionRow.bar_source` as `ibkr_realtime_bars`. Specs that advertise `ibkr_paper_delayed` must be rejected at deploy/start until a delayed-paper runtime adapter exists, because otherwise the artifact provenance hides market-data readiness failures behind a source the engine never actually opened.
 
 ## References
 
