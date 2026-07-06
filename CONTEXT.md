@@ -1122,3 +1122,86 @@ A `grill-me` session revised several points above. Where they conflict, **ADR 00
 - **Deploy signal stream now defaults to the validated signal, overridable** to any
   symbol — relaxing the "does not default, constrain, or warn" rule above to
   "defaults, does not constrain." (Amends ADR 0020 §2.)
+
+## Bot event stream — narrated gate pipeline (resolved 2026-07-06)
+
+A per-bot stream that narrates a strategy instance's live pipeline — bar
+evaluation → gates → order → broker outcome — so an operator can answer both
+"why isn't my bot trading?" and "where exactly did that order die, and what was
+the most granular error we had?" It **generalizes** the ADR-0014 broker-activity
+stream *upstream*: broker executions become its terminal event-type, not a
+separate channel. It carries evidence, not verdicts — the cockpit's readiness
+verdict stays the authority for "can it trade now" (see below).
+
+- **Bot event stream** — the canonical name for the per-bot narrated pipeline
+  stream. _Avoid_: "event service", "activity feed" (the ADR-0014 broker-activity
+  stream is now the *tail* of this, not a peer). Extends [[Activity structural
+  cluster]], [[Usable activity row]], [[Stable activity stream]].
+- **Evaluation** — one bar-evaluation a bot performs. The spine unit *before* an
+  order exists, so a block that happens upstream of any order (stale data, session
+  closed, no signal) still has a home. Most evaluations are quiet.
+- **Terminal error** — the **most-granular error captured at the exact gate where
+  an evaluation or order actually failed**, preferring the external system's native
+  error (IBKR `errorCode`/`errorString`, subprocess exit + stderr, OS errno) over
+  any generic wrapper the engine puts around it. The operator sees a backend-authored
+  *useful derivation* of it (title/message) with the *exact* error kept as expandable
+  forensic evidence. _Avoid_: "last threaded error" (the originating phrase; fuzzy —
+  it does not mean "outermost" or "most recent", it means *most granular at the
+  failing gate*).
+- **Gate-walk** — the ordered sequence of gates one evaluation traverses (e.g.
+  `sizing ✓ → broker-safety ✓ → daily-cap ✗`). Drill-in detail, never a spine row.
+- **Gate-step** — a single gate traversal in a gate-walk, raw-captured **at
+  enforcement time** with `evaluation_id`, `gate_id`, `gate_result`
+  (`pass | skip | block`), `source_authority`, and structured facts. Never
+  reconstructed after the fact from the readiness sidecar — that is a "can it act
+  on the next bar?" now-vector, not a history log. The block-outcome gate-step is
+  where a [[Terminal error]] attaches.
+- **Spine event vs gate-step event** — the two altitudes of the stream. **Spine
+  events** are the sparse, authored, visible rows (`evaluation_idle`, `signal_fired`,
+  `order_submitted`, `order_filled`, `order_cancelled`, `order_rejected`, `blocked`,
+  `halted`, `launch_failed`). `order_cancelled` preserves existing ADR-0014
+  cancellation rows as non-escalating broker-tail outcomes. **Gate-step events** are
+  the drill-in detail beneath a row. A
+  quiet bar folds to one `evaluation_idle` heartbeat; it never scrolls.
+- **Order-cluster promotion** — a spine row **starts** keyed to its [[Evaluation]]
+  and is **promoted** to the order's `order_ref` identity the moment an intent is
+  minted, so the operator follows one unbroken row from *bar evaluated → signal →
+  gates → submitted → filled/rejected*. This is [[Activity structural cluster]]
+  extended across the full pipeline.
+- **BotEventRow / BotEventRaw** — the stream's versioned wire contracts:
+  `BotEventRaw` (the enforcement-point-captured raw event in the run-scoped WAL)
+  and `BotEventRow` (the authored projection row), with [[Gate-step]] and
+  [[Terminal error]] as child shapes. A **new** contract — broker executions are
+  terminal child event-types; `BrokerActivityRow` maps into the stream tail via an
+  explicit replacement map. _Avoid_: informally extending `BrokerActivityRow`
+  (its "one IBKR execution" identity is a load-bearing ADR-0014 contract).
+- **Enforcement-point authored** — the runtime that enforces *or observes* a gate
+  owns its raw capture: the engine loop for evaluation/submit gates, the
+  daemon/launcher for spawn failures and subprocess stderr, the broker session
+  layer for session collisions. The publisher authors the projection. _Avoid_:
+  "engine authored" as the blanket invariant — it is only the common case.
+- **Surface disposal (replace, don't add)** — exactly one current-verdict surface
+  (`operator_surface`) and one historical stream (the Bot event stream); every
+  other surface (Broker Activity table, working/pending orders, rejection rows,
+  incident headline, gate checklists) is a projection over one of the two, or is
+  deleted. Removal in service of truth and robustness is encouraged. The gates
+  themselves are the safety model and untouchable; only their duplicate
+  visualizations are disposed. _Avoid_: peer surfaces; "a sixth channel".
+- **The rejection break** — a broker rejection is *expected as a broker-callback
+  shape* but *terminal as an operator outcome*. The old `verdict=expected`
+  rejection row is **replaced** by `order_rejected`, never kept alongside a notice.
+- **Stream evidence vs cockpit verdict (single source, two projections)** — gate
+  outcomes are authored **once** per evaluation at the enforcement point. The
+  `operator_surface` readiness verdict renders the **current** "can it trade now"
+  summary (contract unchanged); the Bot event stream renders the **historical
+  walk** over time. Neither re-derives the other's verdict — the same facts, two
+  views. Honors the engine-authored-readiness doctrine and CLAUDE.md
+  single-source-of-truth #5.
+- **Terminal-outcomes escalate** — most stream events wait to be found; the terminal
+  outcomes (`halted`, `order_rejected`, `launch_failed`, submit-uncertain) also mint
+  an [[operator notice]] / OperatorIncident so the cockpit's `incident_headline` +
+  page-wide auto-expand surface them even when the operator is not watching the
+  stream. Self-protective, expected blocks (market closed, no signal) stay in-stream
+  at `info` — escalating those is how alarm fatigue is trained. Escalation is
+  deduped by incident key (instance + `order_ref`/`evaluation_id` + terminal code):
+  one failure, one visible terminal story.

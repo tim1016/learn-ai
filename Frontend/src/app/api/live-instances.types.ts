@@ -577,8 +577,12 @@ export type OperatorNoticeCode =
   // PR 6 — reconciliation (reserved).
   | 'reconciliation.required_after_uncertain_flatten'
   | 'reconciliation.discovered_execution_not_in_engine_state'
-  // Broker session mirror — ADR 0018 orphaned-socket observability.
-  | 'broker_session.orphaned_socket';
+  | 'broker_session.orphaned_socket'
+  | 'order.rejected'
+  | 'submit.uncertain'
+  | 'submit.halted'
+  | 'submit.launch_failed'
+  | 'submit.unmapped_diagnostic';
 
 export type OperatorNoticeActionKind =
   | 'none'
@@ -610,7 +614,7 @@ export interface OperatorNotice {
 export interface OperatorIncident {
   schema_version: number;
   incident_id: string;
-  category: 'watchdog' | 'activity' | 'reconciliation';
+  category: 'watchdog' | 'activity' | 'reconciliation' | 'order' | 'submit';
   notice: OperatorNotice;
   started_at_ms: number;
   resolved_at_ms: number | null;

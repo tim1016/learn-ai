@@ -99,6 +99,18 @@ def test_code_literal_declares_broker_session_slots():
     assert "broker_session.orphaned_socket" in codes
 
 
+def test_code_literal_declares_order_submit_slots():
+    codes = set(get_literal_args(OperatorNoticeCode))
+    order_submit_slots = {
+        "order.rejected",
+        "submit.uncertain",
+        "submit.halted",
+        "submit.launch_failed",
+        "submit.unmapped_diagnostic",
+    }
+    assert order_submit_slots <= codes
+
+
 def test_runtime_freshness_reason_code_literal_has_thirteen_members():
     codes = set(get_literal_args(RuntimeFreshnessReasonCode))
     assert codes == {
@@ -158,6 +170,13 @@ def test_incident_records_started_and_unresolved_by_default():
 
 
 def test_incident_category_is_closed_enum():
+    assert set(get_literal_args(OperatorIncident.model_fields["category"].annotation)) == {
+        "watchdog",
+        "activity",
+        "reconciliation",
+        "order",
+        "submit",
+    }
     with pytest.raises(ValueError):
         OperatorIncident.model_validate(
             {
