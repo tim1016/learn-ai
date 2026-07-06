@@ -384,7 +384,12 @@ app.include_router(broker_session.router, dependencies=BROKER_SESSION_MIRROR_DEP
 # Golden fixture catalog — reads manifest.json + artifacts/fixture-validation/latest.json.
 # No live computation at request time (see docs/process/autonomous-decisions.md D-010).
 app.include_router(golden_fixtures.router, prefix="/api", tags=["golden-fixtures"])
-app.include_router(strategy_validation.router, prefix="/api/strategy-validation", tags=["strategy-validation"])
+app.include_router(
+    strategy_validation.router,
+    prefix="/api/strategy-validation",
+    tags=["strategy-validation"],
+    dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
+)
 # Live paper-trading run observer (read-only). Three-layer caching:
 # Layer 1: 15 s TTL on dir listing; Layer 2: mtime-signature LRU on status;
 # Layer 3: inode-tracked incremental deque on log tail.

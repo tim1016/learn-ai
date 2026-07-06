@@ -3,7 +3,8 @@
     "/api/accounts",
     "/api/broker",
     "/api/live-instances",
-    "/api/live-runs"
+    "/api/live-runs",
+    "/api/strategy-validation"
   ],
   "protected_read_prefixes": [
     "/api/broker/session-mirror"

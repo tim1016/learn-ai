@@ -1,17 +1,30 @@
 from __future__ import annotations
 
+import fcntl
+import getpass
 import hashlib
+import hmac
 import json
 import logging
+import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from app.research.parity.qc_reconciler import DivergenceCategory
 from app.schemas.strategy_validation import (
+    StrategyBehavioralEquivalence,
+    StrategyEvidenceSnapshot,
     StrategyReferenceCode,
+    StrategyValidationDetail,
     StrategyValidationDiagnostics,
     StrategyValidationEntry,
+    StrategyValidationFlagEvent,
+    StrategyValidationFlagRequest,
+    StrategyValidationRefreshResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -19,6 +32,7 @@ logger = logging.getLogger(__name__)
 _SERVICE_ROOT = Path(__file__).resolve().parents[2]
 _REPO_ROOT = _SERVICE_ROOT.parent
 DEFAULT_MANIFEST_PATH = _SERVICE_ROOT / "app" / "data" / "strategy_validation_manifest.json"
+DEFAULT_FLAG_EVENTS_PATH = _SERVICE_ROOT / "artifacts" / "strategy_validation" / "flag_events.json"
 
 _DIVERGENCE_CATEGORY_VALUES = {category.value for category in DivergenceCategory}
 
@@ -53,34 +67,42 @@ class StrategyEvidenceSeed:
 def seed_strategy_validation_manifest(
     registry: list[StrategyRegistrySeed],
     evidence: list[StrategyEvidenceSeed],
+    flag_events: list[StrategyValidationFlagEvent] | None = None,
 ) -> list[StrategyValidationEntry]:
     evidence_by_strategy = {item.strategy_key: item for item in evidence}
+    events_by_strategy = _events_by_strategy(flag_events or [])
     entries: list[StrategyValidationEntry] = []
     for strategy in registry:
         proof = evidence_by_strategy.get(strategy.strategy_key)
+        events = events_by_strategy.get(strategy.strategy_key, [])
+        current_event = _current_flag_event(events)
         if proof is None:
             entries.append(
                 StrategyValidationEntry(
                     strategy_key=strategy.strategy_key,
                     display_name=strategy.display_name,
                     description=strategy.description,
-                    validation_state="needs_validation",
+                    validation_state=_validation_state_for_event(current_event),
                     deployable=False,
+                    behavioral_equivalence=current_event.behavioral_equivalence if current_event else None,
+                    current_flag_event=current_event,
+                    flag_events=events,
                 )
             )
             continue
 
         _validate_divergence_categories(proof.divergence_counts)
-        deployable = _evidence_is_deployable(proof)
+        evidence_deployable = _evidence_is_deployable(proof)
+        deployable = _event_accepts_deploy(current_event) and evidence_deployable
         notes = list(proof.notes)
-        if not deployable:
+        if not evidence_deployable:
             notes.extend(_validation_failure_notes(proof))
         entries.append(
             StrategyValidationEntry(
                 strategy_key=strategy.strategy_key,
                 display_name=strategy.display_name,
                 description=strategy.description,
-                validation_state="validated" if deployable else "needs_validation",
+                validation_state=_validation_state_for_event(current_event),
                 deployable=deployable,
                 settings_file_ref=proof.settings_file_ref,
                 settings_file_sha256=proof.settings_file_sha256,
@@ -98,6 +120,9 @@ def seed_strategy_validation_manifest(
                     divergence_counts=dict(proof.divergence_counts),
                     notes=notes,
                 ),
+                behavioral_equivalence=current_event.behavioral_equivalence if current_event else None,
+                current_flag_event=current_event,
+                flag_events=events,
             )
         )
     return entries
@@ -106,19 +131,103 @@ def seed_strategy_validation_manifest(
 def load_strategy_validation_entries(
     registry: list[StrategyRegistrySeed],
     manifest_path: Path = DEFAULT_MANIFEST_PATH,
+    flag_events_path: Path = DEFAULT_FLAG_EVENTS_PATH,
     repo_root: Path = _REPO_ROOT,
 ) -> list[StrategyValidationEntry]:
-    try:
-        raw = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.error("Failed to read strategy validation manifest: %s", exc)
-        raise StrategyValidationManifestError("Strategy validation manifest unreadable") from exc
+    raw = _load_manifest_raw(manifest_path)
 
     evidence = [
         _evidence_seed_from_raw(item, repo_root=repo_root)
         for item in raw.get("validated_strategies", [])
     ]
-    return seed_strategy_validation_manifest(registry, evidence)
+    seed_events = _flag_events_from_raw(raw.get("seed_flag_events", raw.get("flag_events", [])))
+    runtime_events = _load_runtime_flag_events(flag_events_path)
+    flag_events = [*seed_events, *runtime_events]
+    return seed_strategy_validation_manifest(registry, evidence, flag_events)
+
+
+def append_strategy_validation_flag_event(
+    strategy_key: str,
+    request: StrategyValidationFlagRequest,
+    registry: list[StrategyRegistrySeed],
+    *,
+    manifest_path: Path = DEFAULT_MANIFEST_PATH,
+    flag_events_path: Path = DEFAULT_FLAG_EVENTS_PATH,
+    repo_root: Path = _REPO_ROOT,
+    flagged_by: str,
+    now_ms: int | None = None,
+) -> StrategyValidationEntry:
+    raw = _load_manifest_raw(manifest_path)
+    evidence = [
+        _evidence_seed_from_raw(item, repo_root=repo_root)
+        for item in raw.get("validated_strategies", [])
+    ]
+    proof_by_strategy = {item.strategy_key: item for item in evidence}
+    if not any(seed.strategy_key == strategy_key for seed in registry):
+        raise StrategyValidationNotFoundError(strategy_key)
+
+    proof = proof_by_strategy.get(strategy_key)
+    if proof is not None:
+        _validate_divergence_categories(proof.divergence_counts)
+    current_ms = now_ms if now_ms is not None else int(time.time() * 1000)
+    snapshot = _snapshot_for_proof(proof)
+    event = StrategyValidationFlagEvent(
+        event_id=uuid.uuid4().hex,
+        strategy_key=strategy_key,
+        flag=request.flag,
+        flagged_by=flagged_by,
+        flagged_at_ms=current_ms,
+        reason=request.reason,
+        behavioral_equivalence=_behavioral_equivalence_for_flag(request.flag, proof),
+        evidence_snapshot=snapshot,
+        evidence_snapshot_sha256=_snapshot_sha256(snapshot),
+    )
+
+    _append_runtime_flag_event(flag_events_path, event)
+
+    entries = load_strategy_validation_entries(
+        registry,
+        manifest_path=manifest_path,
+        flag_events_path=flag_events_path,
+        repo_root=repo_root,
+    )
+    return _entry_by_strategy(entries, strategy_key)
+
+
+def refresh_strategy_validation_manifest_evidence(
+    strategy_key: str,
+    registry: list[StrategyRegistrySeed],
+    *,
+    manifest_path: Path = DEFAULT_MANIFEST_PATH,
+    flag_events_path: Path = DEFAULT_FLAG_EVENTS_PATH,
+    repo_root: Path = _REPO_ROOT,
+    now_ms: int | None = None,
+) -> StrategyValidationRefreshResult:
+    entries = load_strategy_validation_entries(
+        registry,
+        manifest_path=manifest_path,
+        flag_events_path=flag_events_path,
+        repo_root=repo_root,
+    )
+    entry = _entry_by_strategy(entries, strategy_key)
+    detail = StrategyValidationDetail(
+        **entry.model_dump(),
+        reference_code=reference_code_for_entry(entry, repo_root=repo_root),
+    )
+    refreshed_at_ms = now_ms if now_ms is not None else int(time.time() * 1000)
+    return StrategyValidationRefreshResult(
+        refresh_id=f"manifest-evidence:{strategy_key}:{refreshed_at_ms}",
+        refreshed_at_ms=refreshed_at_ms,
+        detail=detail,
+    )
+
+
+def local_strategy_validation_actor() -> str:
+    try:
+        username = getpass.getuser().strip()
+    except (OSError, RuntimeError):
+        username = ""
+    return f"local:{username}" if username else "local:unknown"
 
 
 def reference_code_for_entry(entry: StrategyValidationEntry, *, repo_root: Path = _REPO_ROOT) -> StrategyReferenceCode | None:
@@ -140,6 +249,214 @@ def reference_code_for_entry(entry: StrategyValidationEntry, *, repo_root: Path 
 
 class StrategyValidationManifestError(RuntimeError):
     pass
+
+
+class StrategyValidationNotFoundError(RuntimeError):
+    pass
+
+
+def _load_manifest_raw(manifest_path: Path) -> dict[str, Any]:
+    try:
+        return json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.error("Failed to read strategy validation manifest: %s", exc)
+        raise StrategyValidationManifestError("Strategy validation manifest unreadable") from exc
+
+
+def _load_runtime_flag_events(flag_events_path: Path) -> list[StrategyValidationFlagEvent]:
+    if not flag_events_path.exists():
+        return []
+    raw = _load_flag_event_log_raw(flag_events_path)
+    return _flag_events_from_raw(raw.get("flag_events", []))
+
+
+def _load_flag_event_log_raw(flag_events_path: Path) -> dict[str, Any]:
+    try:
+        raw = json.loads(flag_events_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.error("Failed to read strategy validation flag event log: %s", exc)
+        raise StrategyValidationManifestError("Strategy validation flag event log unreadable") from exc
+    if isinstance(raw, list):
+        return {"schema_version": "1.0", "flag_events": raw}
+    if not isinstance(raw, dict):
+        raise StrategyValidationManifestError("Strategy validation flag event log must be an object")
+    return raw
+
+
+def _write_json_atomic(path: Path, raw: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp_path.write_text(
+            json.dumps(raw, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        tmp_path.replace(path)
+    except OSError as exc:
+        logger.error("Failed to write strategy validation JSON artifact: %s", exc)
+        raise StrategyValidationManifestError("Strategy validation JSON artifact unwritable") from exc
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+
+
+def _append_runtime_flag_event(
+    flag_events_path: Path,
+    event: StrategyValidationFlagEvent,
+) -> None:
+    flag_events_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = flag_events_path.with_suffix(f"{flag_events_path.suffix}.lock")
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        raw = (
+            _load_flag_event_log_raw(flag_events_path)
+            if flag_events_path.exists()
+            else {"schema_version": "1.0", "flag_events": []}
+        )
+        raw.setdefault("schema_version", "1.0")
+        raw.setdefault("flag_events", [])
+        if not isinstance(raw["flag_events"], list):
+            raise StrategyValidationManifestError("Strategy validation flag_events must be a list")
+        raw["flag_events"].append(event.model_dump())
+        _write_json_atomic(flag_events_path, raw)
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _flag_events_from_raw(raw_events: Any) -> list[StrategyValidationFlagEvent]:
+    if raw_events is None:
+        return []
+    if not isinstance(raw_events, list):
+        raise StrategyValidationManifestError("Strategy validation flag_events must be a list")
+    try:
+        events = [StrategyValidationFlagEvent.model_validate(item) for item in raw_events]
+    except ValidationError as exc:
+        logger.error("Invalid strategy validation flag event: %s", exc)
+        raise StrategyValidationManifestError("Strategy validation flag event invalid") from exc
+    for event in events:
+        _verify_flag_event_snapshot_hash(event)
+    return events
+
+
+def _verify_flag_event_snapshot_hash(event: StrategyValidationFlagEvent) -> None:
+    actual = _snapshot_sha256(event.evidence_snapshot)
+    if not hmac.compare_digest(actual, event.evidence_snapshot_sha256):
+        raise StrategyValidationManifestError("Strategy validation flag event snapshot SHA mismatch")
+
+
+def _events_by_strategy(
+    events: list[StrategyValidationFlagEvent],
+) -> dict[str, list[StrategyValidationFlagEvent]]:
+    grouped: dict[str, list[StrategyValidationFlagEvent]] = {}
+    for event in events:
+        grouped.setdefault(event.strategy_key, []).append(event)
+    return grouped
+
+
+def _current_flag_event(events: list[StrategyValidationFlagEvent]) -> StrategyValidationFlagEvent | None:
+    active_events = [
+        (index, event)
+        for index, event in enumerate(events)
+        if event.superseded_by_event_id is None
+    ]
+    if not active_events:
+        return None
+    return max(active_events, key=lambda item: (item[1].flagged_at_ms, item[0]))[1]
+
+
+def _validation_state_for_event(event: StrategyValidationFlagEvent | None) -> str:
+    return "validated" if event is not None and event.flag == "validated" else "needs_validation"
+
+
+def _event_accepts_deploy(event: StrategyValidationFlagEvent | None) -> bool:
+    return (
+        event is not None
+        and event.flag == "validated"
+        and event.behavioral_equivalence.verdict == "accepted_for_deploy"
+    )
+
+
+def _snapshot_for_proof(proof: StrategyEvidenceSeed | None) -> StrategyEvidenceSnapshot:
+    if proof is None:
+        return StrategyEvidenceSnapshot()
+    return StrategyEvidenceSnapshot(
+        settings_file_ref=proof.settings_file_ref,
+        settings_file_sha256=proof.settings_file_sha256,
+        qc_cloud_backtest_id=proof.qc_cloud_backtest_id,
+        audit_copy_ref=proof.audit_copy_ref,
+        audit_copy_sha256=proof.audit_copy_sha256,
+        reconciliation_ref=proof.reconciliation_ref,
+        validation_case_symbol=proof.validation_case_symbol,
+        reconciliation_status=proof.reconciliation_status,
+        diagnostics=StrategyValidationDiagnostics(
+            verdict=proof.verdict,
+            trades_matched=proof.trades_matched,
+            trades_validated=proof.trades_validated,
+            pnl_max_abs_diff=proof.pnl_max_abs_diff,
+            divergence_counts=dict(proof.divergence_counts),
+            notes=list(proof.notes),
+        ),
+    )
+
+
+def _snapshot_sha256(snapshot: StrategyEvidenceSnapshot) -> str:
+    payload = json.dumps(
+        snapshot.model_dump(),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return _sha256_bytes(payload)
+
+
+def _behavioral_equivalence_for_flag(
+    flag: str,
+    proof: StrategyEvidenceSeed | None,
+) -> StrategyBehavioralEquivalence:
+    if flag == "invalidated":
+        return StrategyBehavioralEquivalence(
+            verdict="rejected",
+            detail="Human validation rejected this strategy for deployment.",
+            tolerance_reason="Rejected human flag events are never deployable.",
+            gating_divergence_counts=_gating_divergence_counts(proof),
+        )
+    if proof is None:
+        return StrategyBehavioralEquivalence(
+            verdict="evidence_only",
+            detail="Human validation recorded without a registered engine evidence snapshot.",
+            tolerance_reason="No registered evidence snapshot is available for a deployability decision.",
+        )
+    if _evidence_is_deployable(proof):
+        return StrategyBehavioralEquivalence(
+            verdict="accepted_for_deploy",
+            detail="Human validation accepted the current engine evidence for deployment.",
+            tolerance="manifest_reconciliation_passed",
+            tolerance_reason=(
+                "Registered reconciliation status and diagnostics verdict are passed; "
+                "the manifest settings-file hash also matches the current source."
+            ),
+            gating_divergence_counts=_gating_divergence_counts(proof),
+        )
+    return StrategyBehavioralEquivalence(
+        verdict="evidence_only",
+        detail="Human validation recorded, but engine evidence is not deployable.",
+        tolerance="manifest_reconciliation_not_accepted",
+        tolerance_reason=" ".join(_validation_failure_notes(proof)),
+        gating_divergence_counts=_gating_divergence_counts(proof),
+    )
+
+
+def _gating_divergence_counts(proof: StrategyEvidenceSeed | None) -> dict[str, int]:
+    return dict(proof.divergence_counts) if proof is not None else {}
+
+
+def _entry_by_strategy(
+    entries: list[StrategyValidationEntry],
+    strategy_key: str,
+) -> StrategyValidationEntry:
+    entry = next((item for item in entries if item.strategy_key == strategy_key), None)
+    if entry is None:
+        raise StrategyValidationNotFoundError(strategy_key)
+    return entry
 
 
 def _evidence_seed_from_raw(raw: dict[str, Any], *, repo_root: Path) -> StrategyEvidenceSeed:

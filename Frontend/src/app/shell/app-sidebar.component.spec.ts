@@ -34,6 +34,16 @@ describe('AppSidebarComponent', () => {
     expect(link?.getAttribute('href')).toBe('/broker/session-mirror');
   });
 
+  it('surfaces deploy beside bots in the Broker menu', () => {
+    const fixture = setup();
+
+    clickGroup(fixture, 'Broker');
+
+    const links = navLinks(fixture);
+    expect(links.get('Deploy')).toBe('/broker/deploy');
+    expect(links.get('Bots')).toBe('/broker/bots');
+  });
+
   it('surfaces live options visualizations in the Options menu', () => {
     const fixture = setup();
 
@@ -55,14 +65,14 @@ describe('AppSidebarComponent', () => {
     expect(labels).not.toContain('Options Surface (3D)');
   });
 
-  it('groups strategy lifecycle pages under Strategy Lab', () => {
+  it('keeps validation and engine tooling under Strategy Lab', () => {
     const fixture = setup();
 
     clickGroup(fixture, 'Strategy Lab');
 
     const links = navLinks(fixture);
     expect(links.get('Strategy Validation')).toBe('/strategy-validation');
-    expect(links.get('Deploy')).toBe('/broker/deploy');
+    expect(links.has('Deploy')).toBe(false);
     expect(links.get('Strategy Spec')).toBe('/spec-strategy');
     expect(links.get('Engine Lab')).toBe('/engine');
     expect(links.has('Dashboard')).toBe(false);

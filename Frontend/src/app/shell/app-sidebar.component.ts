@@ -87,6 +87,7 @@ const NAV: NavGroup[] = [
       { label: 'Orders', route: '/broker/orders' },
       { label: 'Reconciliation', route: '/broker/reconciliation' },
       { label: 'Session Mirror', route: '/broker/session-mirror' },
+      { label: 'Deploy', route: '/broker/deploy' },
       { label: 'Bots', route: '/broker/bots' },
     ],
   },
@@ -105,7 +106,6 @@ const NAV: NavGroup[] = [
     icon: 'pi pi-briefcase',
     items: [
       { label: 'Strategy Validation', route: '/strategy-validation' },
-      { label: 'Deploy', route: '/broker/deploy' },
       // PR B.5 (2026-05-19) — Engine Lab subsumes the standalone
       // LEAN Lab via the Engine dropdown; /lean-lab redirects here.
       { label: 'Strategy Spec', route: '/spec-strategy' },

@@ -252,25 +252,32 @@
             <span class="scope-note">Applies only when starting now</span>
           }
         </div>
-        <fieldset class="mode" [class.orders-selected]="executionCapability() === 'paper_orders'" [disabled]="!startNow()">
+        <fieldset class="mode" [class.orders-selected]="executionCapability() === 'paper_orders'" [class.live-selected]="executionCapability() === 'live'" [disabled]="!startNow()">
           <legend>Execution capability</legend>
           <label>
-            <input type="radio" name="launch-mode" value="read_only" [checked]="readonlyFlag()" (change)="setReadonly($event)" />
+            <input type="radio" name="launch-mode" value="read_only" [checked]="executionCapability() === 'read_only'" (change)="setExecutionMode($event)" />
             <span>
               <strong>READ-ONLY OBSERVATION</strong>
               <small>No broker orders are submitted.</small>
             </span>
           </label>
           <label>
-            <input type="radio" name="launch-mode" value="paper_orders" [checked]="!readonlyFlag()" (change)="setReadonly($event)" />
+            <input type="radio" name="launch-mode" value="paper_orders" [checked]="executionCapability() === 'paper_orders'" (change)="setExecutionMode($event)" />
             <span>
               <strong>PAPER ORDERS ENABLED</strong>
               <small>Sets <code>readonly</code> false for this start.</small>
             </span>
           </label>
+          <label class="blocked-option">
+            <input type="radio" name="launch-mode" value="live" [checked]="executionCapability() === 'live'" (change)="setExecutionMode($event)" />
+            <span>
+              <strong>LIVE ORDERS</strong>
+              <small>Visible for routing, blocked at submit.</small>
+            </span>
+          </label>
         </fieldset>
         <p class="capability-proof" [class.dimmed]="!startNow()">{{ executionCapabilityProof() }}</p>
-        @if (startNow() && !readonlyFlag()) {
+        @if (startNow() && executionCapability() === 'paper_orders') {
           <p class="launch-warning" role="status">
             Paper orders are enabled for launch. Guardrail limit: {{ maxOrdersPerDay() }} orders/day.
           </p>

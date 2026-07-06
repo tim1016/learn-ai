@@ -44,7 +44,52 @@
             </span>
           </header>
 
-          @if (selected.deployable && selected.diagnostics) {
+          <section class="sv-actions" aria-label="Validation actions">
+            <button type="button" class="sv-refresh" [disabled]="actionBusy()" (click)="refreshValidationEvidence()">
+              Refresh evidence
+            </button>
+            <fieldset class="sv-flag-choice">
+              <legend>Human flag</legend>
+              <label [class.selected]="flagChoice() === 'validated'">
+                <input type="radio" name="validation-flag" value="validated" [checked]="flagChoice() === 'validated'" (change)="setFlagChoice($event)" />
+                <span>Accept</span>
+              </label>
+              <label [class.selected]="flagChoice() === 'invalidated'">
+                <input type="radio" name="validation-flag" value="invalidated" [checked]="flagChoice() === 'invalidated'" (change)="setFlagChoice($event)" />
+                <span>Reject</span>
+              </label>
+            </fieldset>
+            <label class="sv-reason">
+              <span>Reason</span>
+              <textarea [value]="flagReason()" (input)="setFlagReason($event)" rows="3"></textarea>
+            </label>
+            <button type="button" class="sv-save" [disabled]="actionBusy()" (click)="submitFlag()">
+              Save flag
+            </button>
+            @if (actionMessage()) {
+              <p class="sv-action-message" role="status">{{ actionMessage() }}</p>
+            }
+            @if (actionError()) {
+              <p class="sv-action-error" role="alert">{{ actionError() }}</p>
+            }
+          </section>
+
+          @if (selected.current_flag_event; as event) {
+            <section class="sv-current-flag" aria-label="Current validation flag">
+              <dl>
+                <div><dt>Flag</dt><dd>{{ flagLabel(event.flag) }}</dd></div>
+                <div><dt>Actor</dt><dd>{{ event.flagged_by | receiptLabel }}</dd></div>
+                <div><dt>Time</dt><dd>{{ formatMs(event.flagged_at_ms) }}</dd></div>
+                <div><dt>Behavior</dt><dd>{{ event.behavioral_equivalence.verdict | receiptLabel }}</dd></div>
+                <div><dt>Tolerance</dt><dd>{{ (event.behavioral_equivalence.tolerance ?? 'n/a') | receiptLabel }}</dd></div>
+                <div><dt>Snapshot</dt><dd><code>{{ event.evidence_snapshot_sha256 }}</code></dd></div>
+              </dl>
+              <p>{{ event.behavioral_equivalence.detail }}</p>
+              <p>{{ event.reason }}</p>
+            </section>
+          }
+
+          @if (selected.diagnostics) {
             <dl class="sv-evidence">
               <div><dt>QC backtest</dt><dd>{{ selected.qc_cloud_backtest_id }}</dd></div>
               <div><dt>Validation case</dt><dd>{{ selected.validation_case_symbol }}</dd></div>
