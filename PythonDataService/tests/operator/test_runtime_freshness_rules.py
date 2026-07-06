@@ -111,8 +111,11 @@ def test_first_bar_timeout_gets_specific_market_data_notice():
 
     assert headline is not None
     assert headline.code == "runtime.market_data_first_bar_timeout"
-    assert headline.title == "Market data first bar timed out"
+    assert headline.tier == "critical"
+    assert headline.title == "IBKR market data is silent"
+    assert "competing live session" in headline.message
     assert headline.action.kind == "external_manual_check"
+    assert headline.action.label == "Fix IBKR market data"
     assert "BAR_LOOP_FIRST_BAR_TIMEOUT" in headline.source_codes
 
 
