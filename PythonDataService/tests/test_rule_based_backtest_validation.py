@@ -607,6 +607,20 @@ class TestFormatTimestampRegression:
         # 2024-01-01T00:00:00Z == 1704067200000 ms
         assert _format_timestamp(1704067200000) == 1704067200000
 
+    def test_format_rejects_naive_datetime(self):
+        from datetime import datetime
+
+        from app.services.rule_based_backtest import _format_timestamp
+
+        with pytest.raises(ValueError, match="timezone-aware"):
+            _format_timestamp(datetime(2024, 1, 1, 0, 0))
+
+    def test_naive_string_rejected(self):
+        from app.services.rule_based_backtest import _format_timestamp
+
+        with pytest.raises(ValueError, match="include a timezone"):
+            _format_timestamp("2024-01-01 00:00")
+
     def test_iso_string_with_timezone_emits_int64_ms_utc(self):
         from app.services.rule_based_backtest import _format_timestamp
 

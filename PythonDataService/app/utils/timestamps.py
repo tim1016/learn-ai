@@ -1,6 +1,6 @@
 """Shared timestamp conversion helpers.
 
-Per ``.claude/rules/numerical-rigor.md``, ``int64 ms UTC`` is the canonical
+Per ``.claude/rules/temporal-rigor.md``, ``int64 ms UTC`` is the canonical
 wire and storage format for timestamps. ``to_ms_utc`` is the single
 conversion boundary from a tz-aware ``datetime`` to that format;
 ``now_ms_utc`` is the single sanctioned way to produce a fresh wall-clock
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import time
 from datetime import datetime
+from numbers import Real
 
 
 def now_ms_utc() -> int:
@@ -42,4 +43,32 @@ def to_ms_utc(dt: datetime) -> int:
     truncation and ``round()`` agree. If sub-ms resolutions ever land,
     revisit with banker's rounding.
     """
+    if dt.tzinfo is None or dt.utcoffset() is None:
+        raise ValueError("timestamp datetime must be timezone-aware")
     return int(dt.timestamp() * 1000)
+
+
+def timestamp_like_to_ms_utc(value: object, *, field_name: str = "timestamp") -> int:
+    """Normalize a timestamp-like value to canonical ``int64 ms UTC``.
+
+    This is for legacy data-frame seams that may still hand internal strategy
+    helpers epoch ms, tz-aware datetimes, or timezone-bearing strings. Boundary
+    DTOs should stay typed as numeric ms and should not call this to accept
+    arbitrary user input.
+    """
+    if isinstance(value, bool):
+        raise TypeError(f"{field_name} must not be a boolean")
+    if isinstance(value, Real):
+        return int(value)
+    if isinstance(value, datetime):
+        return to_ms_utc(value)
+    if isinstance(value, str):
+        normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError as exc:
+            raise ValueError(f"{field_name} string must be ISO-8601 with timezone: {value!r}") from exc
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError(f"{field_name} string must include a timezone: {value!r}")
+        return to_ms_utc(parsed)
+    raise TypeError(f"unsupported {field_name} type: {type(value).__name__}")

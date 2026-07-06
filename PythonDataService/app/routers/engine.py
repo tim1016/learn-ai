@@ -69,8 +69,9 @@ from app.models.responses import (
     LeanStatisticsResponse,
     LeanTradeStatsResponse,
 )
-from app.services.strategies.common import TradeRecord, format_timestamp
+from app.services.strategies.common import TradeRecord
 from app.services.strategies.lean_statistics import compute_lean_statistics
+from app.utils.timestamps import to_ms_utc
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -2245,7 +2246,7 @@ def execute_engine_backtest(
 def _to_ms_utc(dt: datetime) -> int:
     """Convert a datetime to canonical int64 ms UTC for API payloads."""
     try:
-        return format_timestamp(dt)
+        return to_ms_utc(dt)
     except ValueError as exc:
         raise ValueError("engine timestamp must be timezone-aware before serialization") from exc
 

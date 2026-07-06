@@ -108,6 +108,11 @@ def test_format_timestamp_string_with_timezone_converted_to_ms():
     assert format_timestamp("2024-01-01T00:00:00Z") == 1_704_067_200_000
 
 
+def test_format_timestamp_naive_string_rejected():
+    with pytest.raises(ValueError, match="include a timezone"):
+        format_timestamp("2024-01-01T00:00:00")
+
+
 def test_make_trade_buy_records_correct_pnl_and_cum():
     entry = pd.Series(
         {
@@ -164,3 +169,5 @@ def test_make_trade_sell_inverts_pnl_direction():
     # Short: pnl = entry - exit = 2.
     assert trade.pnl == pytest.approx(2.0, abs=1e-12, rel=0)
     assert trade.pnl_pct == pytest.approx(2.0 / 102.0, abs=1e-12, rel=0)
+    assert trade.entry_timestamp == 1_704_119_400_000
+    assert trade.exit_timestamp == 1_704_120_300_000

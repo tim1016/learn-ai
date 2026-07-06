@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
 import pandas_ta as ta
+
+from app.utils.timestamps import timestamp_like_to_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -253,17 +254,6 @@ def _compute_max_drawdown(cum_pnl: list[float]) -> float:
     return max_dd
 
 
-def _format_timestamp(ts) -> int:
+def _format_timestamp(ts: object) -> int:
     """Convert a timestamp-like value to canonical int64 ms UTC."""
-    if isinstance(ts, (int, float, np.integer, np.floating)):
-        return int(ts)
-    if isinstance(ts, datetime):
-        if ts.tzinfo is None:
-            raise ValueError("rule-based trade timestamp must be timezone-aware")
-        return round(ts.astimezone(UTC).timestamp() * 1000)
-    if isinstance(ts, str):
-        parsed = pd.Timestamp(ts)
-        if parsed.tzinfo is None:
-            raise ValueError(f"rule-based trade timestamp string must include a timezone: {ts!r}")
-        return round(parsed.tz_convert("UTC").timestamp() * 1000)
-    raise TypeError(f"unsupported timestamp type: {type(ts).__name__}")
+    return timestamp_like_to_ms_utc(ts, field_name="rule-based trade timestamp")
