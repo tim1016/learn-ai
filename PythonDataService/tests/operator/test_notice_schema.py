@@ -49,6 +49,7 @@ def test_code_literal_declares_pr1_runtime_slots():
         "runtime.market_closed",
         "runtime.market_session_halted",
         "runtime.market_data_stale",
+        "runtime.market_data_first_bar_timeout",
         "runtime.market_data_feed_stalled",
         "runtime.broker_probe_stale",
         "runtime.broker_probe_missing",
@@ -98,7 +99,7 @@ def test_code_literal_declares_broker_session_slots():
     assert "broker_session.orphaned_socket" in codes
 
 
-def test_runtime_freshness_reason_code_literal_has_twelve_members():
+def test_runtime_freshness_reason_code_literal_has_thirteen_members():
     codes = set(get_literal_args(RuntimeFreshnessReasonCode))
     assert codes == {
         "ENGINE_RUNTIME_MISSING",
@@ -107,6 +108,7 @@ def test_runtime_freshness_reason_code_literal_has_twelve_members():
         "BROKER_PROBE_STALE",
         "BROKER_PROBE_MISSING",
         "BAR_LOOP_HEARTBEAT_STALE",
+        "BAR_LOOP_FIRST_BAR_TIMEOUT",
         "BAR_LOOP_SOURCE_MISSING",
         "BAR_LOOP_LATEST_BAR_STALE",
         "BAR_LOOP_SESSION_CLOSED",

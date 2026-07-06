@@ -124,11 +124,29 @@ def build_bar_loop_block(
     heartbeat_at_ms: int,
     latest_source_bar_ms: int | None,
     expected_interval_ms: int | None,
+    source_state: Literal[
+        "NOT_REQUESTED",
+        "WAITING_FIRST_BAR",
+        "ACTIVE",
+        "NO_FIRST_BAR_TIMEOUT",
+        "FAILED",
+    ] = "NOT_REQUESTED",
+    source: str | None = None,
+    symbol: str | None = None,
+    subscription_requested_at_ms: int | None = None,
+    first_bar_deadline_ms: int | None = None,
+    detail: str | None = None,
 ) -> BarLoopBlock:
     return BarLoopBlock(
         heartbeat_at_ms=heartbeat_at_ms,
         latest_source_bar_ms=latest_source_bar_ms,
         expected_interval_ms=expected_interval_ms,
+        source_state=source_state,
+        source=source,
+        symbol=symbol,
+        subscription_requested_at_ms=subscription_requested_at_ms,
+        first_bar_deadline_ms=first_bar_deadline_ms,
+        detail=detail,
     )
 
 

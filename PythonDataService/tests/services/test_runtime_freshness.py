@@ -46,6 +46,7 @@ def _snapshot(
     bar_loop_heartbeat_ms: int | None = None,
     latest_source_bar_ms: int | None = None,
     expected_interval_ms: int | None = 60_000,
+    bar_loop_source_state: str = "NOT_REQUESTED",
     control_plane_lease_observed_ms: int | None = None,
     observed_daemon_boot_id: str | None = "daemon-001",
     expected_daemon_boot_id: str | None = "daemon-001",
@@ -80,6 +81,7 @@ def _snapshot(
             heartbeat_at_ms=bar_loop_heartbeat_ms or base,
             latest_source_bar_ms=latest_source_bar_ms,
             expected_interval_ms=expected_interval_ms,
+            source_state=bar_loop_source_state,  # type: ignore[arg-type]
         ),
         control_plane=ControlPlaneBlock(
             lease_observed_at_ms=control_plane_lease_observed_ms or base,
@@ -237,6 +239,25 @@ def test_bar_loop_missing_first_source_bar_is_actionable() -> None:
 
     assert result.bar_loop.state == "STALE"
     assert result.bar_loop.stale_reason_codes == ["BAR_LOOP_SOURCE_MISSING"]
+    assert result.posture_demoted is False
+
+
+def test_bar_loop_first_bar_timeout_is_actionable_even_with_fresh_heartbeat() -> None:
+    base = 1_700_000_000_000
+    now = base + 20_000
+    snap = _snapshot(
+        bar_loop_heartbeat_ms=now,
+        command_loop_heartbeat_ms=now,
+        broker_probe_completed_ms=now,
+        control_plane_lease_observed_ms=now,
+        latest_source_bar_ms=None,
+        expected_interval_ms=60_000,
+        bar_loop_source_state="NO_FIRST_BAR_TIMEOUT",
+    )
+    result = evaluate_runtime_freshness(snap, now_ms=now)
+
+    assert result.bar_loop.state == "STALE"
+    assert result.bar_loop.stale_reason_codes == ["BAR_LOOP_FIRST_BAR_TIMEOUT"]
     assert result.posture_demoted is False
 
 
