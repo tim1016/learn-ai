@@ -25,9 +25,10 @@ def test_deployment_validation_spec_fixture_loads() -> None:
 
     assert spec.symbols == ["SPY"]
     assert spec.resolution.period_minutes == 1
-    assert spec.client_id == 12
     assert spec.decision_columns == []
-    assert json.loads(path.read_text(encoding="utf-8"))["name"] == "Deployment Validation"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["name"] == "Deployment Validation"
+    assert "client_id" not in payload
 
 
 def _assert_time_call(node: ast.AST, hour: int, minute: int) -> None:

@@ -321,6 +321,7 @@ async def test_start_launches_existing_run_with_host_env(
     manager, run_dir = daemon_context
     fake_process = FakeProcess()
     captured: dict[str, Any] = {}
+    monkeypatch.setenv("LIVE_RUNNER_IBKR_CLIENT_ID_POOL", "70-71")
 
     def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
         captured["command"] = command
@@ -347,13 +348,55 @@ async def test_start_launches_existing_run_with_host_env(
     assert body["accepted"] is True
     assert body["process"]["state"] == "running"
     assert body["process"]["pid"] == 4242
+    assert body["process"]["ibkr_client_id"] == 70
     assert "--readonly" in captured["command"]
     assert "--hydrate-policy" in captured["command"]
     assert "optional" in captured["command"]
     assert str(run_dir) in captured["command"]
     assert captured["kwargs"]["cwd"] == str(manager.repo_root)
     assert captured["kwargs"]["env"]["IBKR_HOST"] == "127.0.0.1"
+    assert captured["kwargs"]["env"]["IBKR_CLIENT_ID"] == "70"
     assert "PythonDataService" in captured["kwargs"]["env"]["PYTHONPATH"]
+
+
+async def test_start_allocates_distinct_ibkr_client_ids_for_sibling_instances(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, run_dir = daemon_context
+    second_run_id = "run-daemon-" + "b" * 53
+    second_run_dir = manager.live_runs_root / second_run_id
+    second_run_dir.mkdir(parents=True)
+    monkeypatch.setenv("LIVE_RUNNER_IBKR_CLIENT_ID_POOL", "80-81")
+    captured_ids: list[str] = []
+
+    def _write_ledger(path: Path, strategy_instance_id: str, run_id: str, account_id: str) -> None:
+        (path / "run_ledger.json").write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "strategy_instance_id": strategy_instance_id,
+                    "account_id": account_id,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    _write_ledger(run_dir, "first-bot", RUN_ID, "DU111")
+    _write_ledger(second_run_dir, "second-bot", second_run_id, "DU112")
+
+    def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
+        captured_ids.append(kwargs["env"]["IBKR_CLIENT_ID"])
+        return FakeProcess()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    first = manager.start(RUN_ID, request=HostRunnerStartRequest())
+    second = manager.start(second_run_id, request=HostRunnerStartRequest())
+
+    assert first.accepted is True
+    assert second.accepted is True
+    assert captured_ids == ["80", "81"]
 
 
 async def test_start_writes_account_registry_before_spawn(

@@ -272,7 +272,7 @@ async def test_connect_client_id_in_use_returns_409(monkeypatch, reset_settings)
     from app.broker.ibkr import client as ibkr_client_module
     from app.routers import broker as broker_router
 
-    fake = FakeClient(connect_raises=IbkrClientIdInUseError("clientId 1 already in use"))
+    fake = FakeClient(connect_raises=IbkrClientIdInUseError(client_id=1, host="127.0.0.1", port=4002))
     ibkr_client_module.set_client(fake)  # type: ignore[arg-type]
     monkeypatch.setattr(broker_router, "_ibkr_client_factory", lambda: fake)
     try:

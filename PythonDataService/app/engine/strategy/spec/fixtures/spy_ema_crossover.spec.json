@@ -39,7 +39,6 @@
   "diagnostics": {
     "snapshot_at_entry": ["ema5", "ema10", "rsi14"]
   },
-  "client_id": 11,
   "submit_mode": "live_paper",
   "bar_source_descriptor": "ibkr_realtime_bars",
   "decision_columns": [

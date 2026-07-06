@@ -194,6 +194,17 @@ def _host_process_stage(host_process: OperatorSurfaceHostProcess) -> _StageDraft
             "Bot process is running",
             "The host daemon reports this bot process is running.",
         )
+    if host_process.last_exit_error_code == "IBKR_CLIENT_ID_IN_USE":
+        return _StageDraft(
+            "host_process",
+            "Host process",
+            "critical",
+            "IBKR client ID is already in use",
+            host_process.last_exit_error_message
+            or "IBKR Gateway rejected this bot because the requested client ID is already in use.",
+            "Stop the sibling session using that client ID, expand the live-runner client-id pool, or restart IB Gateway if the slot is stale.",
+            reason_codes=("IBKR_CLIENT_ID_IN_USE",),
+        )
     return _StageDraft(
         "host_process",
         "Host process",

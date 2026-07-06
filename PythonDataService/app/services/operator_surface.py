@@ -231,6 +231,7 @@ def _project_host_start_capability(
 def _project_host_process(
     process: InstanceProcessView,
     desired_state: DesiredStateView | None,
+    last_exit: InstanceLastExit | None = None,
     start_run_id: str | None = None,
     start_defaults: InstanceStartDefaults | None = None,
     poisoned: bool = False,
@@ -243,7 +244,13 @@ def _project_host_process(
     # operator has set durable intent to RUNNING.
     if state == "IDLE" and desired_state is not None and desired_state.state == "RUNNING":
         state = "WAITING_FOR_HOST"
-    notice = None if state == "RUNNING" else _HOST_PROCESS_NOTICE_BY_STATE.get(state)
+    last_exit_error_code = last_exit.exit_error_code if last_exit is not None else None
+    last_exit_error_message = last_exit.exit_error_message if last_exit is not None else None
+    last_exit_error_detail = last_exit.exit_error_detail if last_exit is not None else {}
+    if state == "EXITED" and last_exit_error_code == "IBKR_CLIENT_ID_IN_USE":
+        notice = last_exit_error_message or "IBKR rejected startup because the requested client ID is already in use."
+    else:
+        notice = None if state == "RUNNING" else _HOST_PROCESS_NOTICE_BY_STATE.get(state)
     # ``copyable_command`` is authored ONLY for UNREACHABLE, and only when
     # trusted deployment configuration supplies a non-empty command. The
     # EXITED / IDLE / WAITING_FOR_HOST cases use ``start_capability``
@@ -263,6 +270,9 @@ def _project_host_process(
         state=state,
         notice=notice,
         copyable_command=copyable_command,
+        last_exit_error_code=last_exit_error_code,
+        last_exit_error_message=last_exit_error_message,
+        last_exit_error_detail=last_exit_error_detail,
         start_capability=start_capability,
     )
 
@@ -981,6 +991,7 @@ def compute_operator_surface(
     host_process = _project_host_process(
         process,
         desired_state,
+        last_exit=last_exit,
         start_run_id=start_run_id,
         start_defaults=start_defaults,
         poisoned=poisoned,

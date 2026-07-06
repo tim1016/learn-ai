@@ -15,7 +15,11 @@ DEFAULT_IBKR_HOST_ALLOWLIST: frozenset[str] = frozenset(
         "host.docker.internal",
     }
 )
-IBKR_HOST_POLICY_ENV_KEYS: tuple[str, str] = ("IBKR_HOST_ALLOWLIST", "IBKR_HOST")
+IBKR_HOST_POLICY_ENV_KEYS: tuple[str, ...] = (
+    "IBKR_HOST_ALLOWLIST",
+    "IBKR_HOST",
+    "LIVE_RUNNER_IBKR_CLIENT_ID_POOL",
+)
 
 
 def load_policy_env_file(
@@ -24,10 +28,10 @@ def load_policy_env_file(
     environ: MutableMapping[str, str] | None = None,
     missing_ok: bool = True,
 ) -> tuple[str, ...]:
-    """Load daemon-owned IBKR host policy keys from a dotenv-style file.
+    """Load daemon-owned IBKR policy keys from a dotenv-style file.
 
-    The host daemon needs only the connection host allow-list contract, not the
-    whole application settings surface. Keep this narrow and non-executable:
+    The host daemon needs only its connection policy and child client-id pool,
+    not the whole application settings surface. Keep this narrow and non-executable:
     ``.env`` is parsed as data, never sourced by a shell.
     """
     target = os.environ if environ is None else environ

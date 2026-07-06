@@ -208,6 +208,17 @@ class IbkrClientIdInUseError(BrokerError):
     ``IBKR_CLIENT_ID``) instead of hiding it under ``TimeoutError``.
     """
 
+    def __init__(self, *, client_id: int, host: str, port: int) -> None:
+        self.client_id = client_id
+        self.host = host
+        self.port = port
+        super().__init__(
+            f"IBKR clientId {client_id} is already in use on "
+            f"Gateway at {host}:{port}. The slot will not free up on retry — "
+            "remediation: restart IB Gateway to clear the zombie session, or "
+            "start this bot with a different IBKR_CLIENT_ID."
+        )
+
 
 def _is_paper_account(account_id: str) -> bool:
     """Paper accounts at IBKR begin with ``DU``."""
@@ -476,11 +487,9 @@ class IbkrClient:
                 last_error = exc
                 if self._client_id_in_use_seen:
                     raise IbkrClientIdInUseError(
-                        f"IBKR clientId {s.client_id} is already in use on "
-                        f"Gateway at {resolved_host}:{s.port}. The slot will "
-                        f"not free up on retry — remediation: restart IB "
-                        f"Gateway to clear the zombie session, or set a "
-                        f"different IBKR_CLIENT_ID in .env."
+                        client_id=s.client_id,
+                        host=resolved_host,
+                        port=s.port,
                     ) from exc
                 logger.warning(
                     "IBKR connect attempt %d failed: %s",

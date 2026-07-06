@@ -94,6 +94,7 @@ load_policy_env_file(Path(sys.argv[1]), environ=effective_env)
 payload = {
     "IBKR_HOST": effective_env.get("IBKR_HOST", ""),
     "IBKR_HOST_ALLOWLIST": effective_env.get("IBKR_HOST_ALLOWLIST", ""),
+    "LIVE_RUNNER_IBKR_CLIENT_ID_POOL": effective_env.get("LIVE_RUNNER_IBKR_CLIENT_ID_POOL", ""),
     "allowed_ibkr_hosts": sorted(allowed_ibkr_hosts(effective_env)),
     "env_file": str(Path(sys.argv[1])),
 }

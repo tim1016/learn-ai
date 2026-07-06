@@ -876,23 +876,21 @@ def _strategy_param_resolution_from_live_config(
     )
 
 
-def _make_ibkr_client(spec_client_id: int | None):
-    """Construct the IBKR client for a live ``start``, pinning the Gateway
-    clientId the strategy spec declares (PRD-A §16.3 isolation invariant).
+def _make_ibkr_client(runtime_client_id: int | None = None):
+    """Construct the IBKR client for a live ``start``.
 
-    When ``spec_client_id`` is set, the per-strategy clientId overrides the
-    env/default so two strategies never collide on one Gateway. When the
-    spec omits it (``None``), fall back to ``IbkrSettings``' env/default
-    clientId. ``IbkrClient()`` does not connect at construction, so this is
-    safe to build before the pre-flight gates run.
+    Gateway ``clientId`` is runtime infrastructure, not strategy behavior.
+    The host daemon assigns it per child via ``IBKR_CLIENT_ID``; direct CLI
+    runs inherit the normal ``IbkrSettings`` environment/default. The optional
+    argument exists for tests and one-shot tooling, not StrategySpec loading.
     """
     from app.broker.ibkr.client import IbkrClient
 
-    if spec_client_id is None:
+    if runtime_client_id is None:
         return IbkrClient()
     from app.broker.ibkr.config import get_settings
 
-    settings = get_settings().model_copy(update={"client_id": spec_client_id})
+    settings = get_settings().model_copy(update={"client_id": runtime_client_id})
     return IbkrClient(settings)
 
 
@@ -1580,17 +1578,16 @@ def cmd_start(args: argparse.Namespace) -> int:
         desired_repo.set(state, updated_by="engine", reason=reason, now_ms=now_ms())
 
     # Resolve the decision-row schema + provenance from the strategy spec
-    # the ledger pins (PRD-A §16.1 Resolution 5). Loaded BEFORE the client
-    # so spec.client_id can pin the Gateway clientId (§16.3 isolation
-    # invariant). The spec is authoritative for the strategy-specific
-    # columns, submit_mode (the run's mode), bar_source, and client_id.
+    # the ledger pins (PRD-A §16.1 Resolution 5). The spec is authoritative for
+    # strategy behavior: decision columns, submit_mode, and bar_source. IBKR
+    # Gateway clientId is deployment/runtime infrastructure and comes from the
+    # host daemon / environment, not the StrategySpec.
     # If the spec can't be loaded at runtime (path moved since init-ledger,
-    # parse error), fall back to the default EMA schema + env client id so
-    # a decisions.parquet is still produced — and log it.
+    # parse error), fall back to the default EMA schema so a decisions.parquet
+    # is still produced — and log it.
     decision_columns = DECISION_COLUMNS
     run_mode = "live_paper"
     bar_source = SUPPORTED_LIVE_RUNTIME_BAR_SOURCE
-    spec_client_id: int | None = None
     try:
         enforce_supported_strategy_bar_source(Path(ledger.strategy_spec_path))
     except UnsupportedBarSourceDescriptorError as exc:
@@ -1603,7 +1600,6 @@ def cmd_start(args: argparse.Namespace) -> int:
         decision_columns = resolve_decision_columns(spec)
         run_mode = spec.submit_mode
         bar_source = spec.bar_source_descriptor
-        spec_client_id = spec.client_id
     except (OSError, ValueError) as exc:
         logger.warning(
             "could not load strategy spec at %s for decision schema; falling back to default EMA schema: %s",
@@ -1615,7 +1611,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     client = getattr(args, "client", None)
     if broker is None:
         if client is None:
-            client = _make_ibkr_client(spec_client_id)
+            client = _make_ibkr_client()
         from app.engine.live.live_portfolio import IbkrBrokerAdapter
 
         broker = IbkrBrokerAdapter(client)
@@ -1893,6 +1889,17 @@ def cmd_start(args: argparse.Namespace) -> int:
             try:
                 await client.connect()
             except Exception as exc:
+                from app.broker.ibkr.client import IbkrClientIdInUseError
+
+                exit_error_code: str | None = None
+                exit_error_detail: dict[str, object] = {}
+                if isinstance(exc, IbkrClientIdInUseError):
+                    exit_error_code = "IBKR_CLIENT_ID_IN_USE"
+                    exit_error_detail = {
+                        "client_id": exc.client_id,
+                        "host": exc.host,
+                        "port": exc.port,
+                    }
                 # connect() runs BEFORE the outer try/finally below, so a
                 # connect failure (clientId collision / IbkrClientIdInUseError,
                 # paper-sentinel refusal, port/broker error) would otherwise
@@ -1915,6 +1922,9 @@ def cmd_start(args: argparse.Namespace) -> int:
                             "last_update_ms": now_ms(),
                             "exit_code": 3,
                             "exit_reason": ExitReason.exception,
+                            "exit_error_code": exit_error_code,
+                            "exit_error_message": f"{type(exc).__name__}: {exc}",
+                            "exit_error_detail": exit_error_detail,
                         }
                     ),
                 )

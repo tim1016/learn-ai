@@ -27,7 +27,8 @@ Before kicking off the dry run, confirm:
   IBKR_MODE=paper
   IBKR_PORT=4002
   IBKR_HOST=auto      # or an explicit IP if not running in container
-  IBKR_CLIENT_ID=42   # spec §5: this run owns client_id=42
+  IBKR_CLIENT_ID=42   # data-plane/manual CLI client; UI child bots use LIVE_RUNNER_IBKR_CLIENT_ID_POOL
+  LIVE_RUNNER_IBKR_CLIENT_ID_POOL=50-99
   IBKR_READONLY=true  # dry run only — flip to false on day 1 of paper week
   ```
 - [ ] Source tree is clean within scope:
@@ -177,7 +178,8 @@ daemon once from the repo root:
 ```
 
 `start-live-daemon.sh` passes `--env-file .env` to the daemon. The daemon
-loads only `IBKR_HOST_ALLOWLIST` and `IBKR_HOST` from that file, and any
+loads only `IBKR_HOST_ALLOWLIST`, `IBKR_HOST`, and
+`LIVE_RUNNER_IBKR_CLIENT_ID_POOL` from that file, and any
 already-exported process env value wins. To prove what a local launch will
 feed into the daemon policy without stopping or starting a daemon, run:
 
@@ -217,22 +219,17 @@ the container lifespan client from taking an IBKR client id while still
 serving `/api/live-runs`.
 
 **Before launching through the manual CLI path, stop the
-`polygon-data-service` container** so its lifespan `IbkrClient` releases
-`client_id=42`:
+`polygon-data-service` container** if the manual child will reuse the same
+`IBKR_CLIENT_ID` as the data-plane lifespan client:
 
 ```bash
 podman compose stop python-service
 ```
 
-The dry-run validates the spec § 5 single-client operating mode (one
-API client owning `client_id=42`). If you leave the container up, its
-lifespan client also holds an IBKR connection — operator-facing
-diagnostics work, but the run no longer certifies single-client mode
-and the dry-run client either collides on `client_id=42` (IBKR error
-326) or is forced onto a different id, breaking the invariant
-Prerequisites declared. Stop the container; restart it with
-`podman compose start python-service` after Step 4 if you want the
-broker REST endpoints back for post-mortem inspection.
+UI-launched bots do not require this stop: the host daemon assigns each child
+an `IBKR_CLIENT_ID` from `LIVE_RUNNER_IBKR_CLIENT_ID_POOL`. Stop the container;
+restart it with `podman compose start python-service` after Step 4 if you want
+the broker REST endpoints back for post-mortem inspection.
 
 One env-var override is required at the command line:
 
@@ -240,9 +237,10 @@ One env-var override is required at the command line:
   the *container's* view of the Windows host bridge; from the host
   itself, Gateway listens on loopback. Pydantic-settings prioritizes
   process env vars over the `.env` file, so the inline override wins.
-  `IBKR_CLIENT_ID` does **not** need an override: the `.env` default
-  `42` is exactly what the run is supposed to use, and with the
-  container stopped the id is free.
+  For a manual one-off CLI run, set `IBKR_CLIENT_ID` only if another API
+  session already owns the `.env` value. UI-launched bot children do not read a
+  client id from the strategy spec; the host daemon assigns one from
+  `LIVE_RUNNER_IBKR_CLIENT_ID_POOL`.
 
 ```bash
 IBKR_HOST=127.0.0.1 \

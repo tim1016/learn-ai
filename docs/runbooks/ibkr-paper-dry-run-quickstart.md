@@ -17,7 +17,8 @@ You've already done `podman compose up -d`. Confirm these last few prereqs:
   IBKR_MODE=paper
   IBKR_PORT=4002
   IBKR_HOST=auto
-  IBKR_CLIENT_ID=42
+  IBKR_CLIENT_ID=42   # data-plane broker client
+  LIVE_RUNNER_IBKR_CLIENT_ID_POOL=50-99  # UI-launched bot children
   IBKR_READONLY=true
   ```
 - Source tree is clean: `git status -- PythonDataService references/qc-shadow` is empty.
@@ -65,7 +66,7 @@ what code and what spec produced the day's output. Init-ledger refuses if your
 tree is dirty — that's how `code_sha` stays meaningful.
 
 ```bash
-PYTHONPATH=PythonDataService python -m app.engine.live.run init-ledger --repo-root . --clean-tree-scope PythonDataService references/qc-shadow --strategy-spec-path PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json --qc-audit-copy-path references/qc-shadow/SpyEmaCrossoverAlgorithm.py --qc-cloud-backtest-id dry-run-no-cloud --account-id "$ACCOUNT" --start-date-ms $(date -u -d "today 09:30 EDT" +%s000) --live-config-json '{"symbol":"SPY","force_flat_at":"15:55","client_id":42}' --run-root PythonDataService/artifacts/live_runs
+PYTHONPATH=PythonDataService python -m app.engine.live.run init-ledger --repo-root . --clean-tree-scope PythonDataService references/qc-shadow --strategy-spec-path PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json --qc-audit-copy-path references/qc-shadow/SpyEmaCrossoverAlgorithm.py --qc-cloud-backtest-id dry-run-no-cloud --account-id "$ACCOUNT" --start-date-ms $(date -u -d "today 09:30 EDT" +%s000) --live-config-json '{"symbol":"SPY","force_flat_at":"15:55","sizing":{"kind":"FixedShares","value":1}}' --run-root PythonDataService/artifacts/live_runs
 ```
 
 **Expect:** a single stdout line of the form
@@ -119,8 +120,9 @@ Or launch the local UI daemon once and use `/broker/bots` to open the bot, then 
 ./start-live-daemon.sh --background
 ```
 
-The launcher passes `.env` to the daemon for the host policy keys only:
-`IBKR_HOST_ALLOWLIST` and `IBKR_HOST`. Exported process env values still win.
+The launcher passes `.env` to the daemon for its IBKR policy keys:
+`IBKR_HOST_ALLOWLIST`, `IBKR_HOST`, and `LIVE_RUNNER_IBKR_CLIENT_ID_POOL`.
+Exported process env values still win.
 The browser/data-plane path only checks that `ibkr_host` is a bare host name
 or IP address; the daemon is the authority that accepts or rejects that host.
 Run `./start-live-daemon.sh --print-launch-env` to inspect the effective

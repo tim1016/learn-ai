@@ -77,6 +77,51 @@ _RUN_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{1,127}$")
 _QC_SHADOW_SUBDIR = Path("references") / "qc-shadow"
 _DEFAULT_ALLOWED_ORIGINS = "http://localhost:4200,http://127.0.0.1:4200"
 _STOP_WAIT_SECONDS = 2.0
+_DEFAULT_IBKR_CLIENT_ID_POOL = "50-99"
+_IBKR_CLIENT_ID_MIN = 0
+_IBKR_CLIENT_ID_MAX = 2**31 - 1
+
+
+def _parse_ibkr_client_id_pool(raw: str) -> tuple[int, ...]:
+    """Parse a daemon-owned IBKR client-id pool.
+
+    Accepts comma-separated integers and inclusive ranges, e.g. ``50-99`` or
+    ``50,51,60-65``. Client IDs are runtime session identity, not strategy
+    identity; the daemon owns this pool so sibling bot processes can coexist
+    without sharing a Gateway ``clientId``.
+    """
+
+    ids: list[int] = []
+    seen: set[int] = set()
+    for part in raw.split(","):
+        token = part.strip()
+        if not token:
+            continue
+        if "-" in token:
+            start_text, end_text = token.split("-", 1)
+            try:
+                start = int(start_text.strip())
+                end = int(end_text.strip())
+            except ValueError as exc:
+                raise ValueError(f"invalid IBKR client id range {token!r}") from exc
+            if end < start:
+                raise ValueError(f"invalid IBKR client id range {token!r}: end is before start")
+            values = range(start, end + 1)
+        else:
+            try:
+                values = (int(token),)
+            except ValueError as exc:
+                raise ValueError(f"invalid IBKR client id {token!r}") from exc
+        for value in values:
+            if not (_IBKR_CLIENT_ID_MIN <= value <= _IBKR_CLIENT_ID_MAX):
+                raise ValueError(f"IBKR client id {value} is outside the supported range")
+            if value in seen:
+                continue
+            seen.add(value)
+            ids.append(value)
+    if not ids:
+        raise ValueError("IBKR client id pool is empty")
+    return tuple(ids)
 
 
 def _host_platform() -> str:
@@ -178,6 +223,7 @@ class ManagedProcess:
     started_at_ms: int
     log_path: Path
     log_handle: TextIO
+    ibkr_client_id: int | None = None
     stopping: bool = False
     ended_at_ms: int | None = None
     registry_retired_at_ms: int | None = None
@@ -412,6 +458,7 @@ class RunnerProcessManager:
                 run_id=managed.run_id,
                 strategy_instance_id=sid,
                 pid=managed.process.pid,
+                ibkr_client_id=managed.ibkr_client_id,
                 started_at_ms=managed.started_at_ms,
                 command=managed.command,
                 log_path=str(managed.log_path),
@@ -422,6 +469,7 @@ class RunnerProcessManager:
             run_id=managed.run_id,
             strategy_instance_id=sid,
             pid=managed.process.pid,
+            ibkr_client_id=managed.ibkr_client_id,
             started_at_ms=managed.started_at_ms,
             ended_at_ms=managed.ended_at_ms,
             exit_code=exit_code,
@@ -509,7 +557,8 @@ class RunnerProcessManager:
                 self._sibling_symbols(key),
                 self._sibling_all_in_symbols(key),
             )
-            env = self._build_child_env(request)
+            ibkr_client_id = self._allocate_ibkr_client_id(exclude_key=key)
+            env = self._build_child_env(request, ibkr_client_id=ibkr_client_id)
             log_path = run_dir / "host_daemon.log"
             log_handle = log_path.open("a", encoding="utf-8")
 
@@ -550,8 +599,15 @@ class RunnerProcessManager:
                 started_at_ms=_now_ms(),
                 log_path=log_path,
                 log_handle=log_handle,
+                ibkr_client_id=ibkr_client_id,
             )
-            logger.info("Started host live runner for run=%s instance=%s with pid=%s", run_id, key, process.pid)
+            logger.info(
+                "Started host live runner for run=%s instance=%s with pid=%s ibkr_client_id=%s",
+                run_id,
+                key,
+                process.pid,
+                ibkr_client_id,
+            )
             return HostRunnerActionResponse(accepted=True, process=self.process_status(run_id))
 
     def emergency_flatten(self, run_id: str, account: str) -> HostRunnerActionResponse:
@@ -1085,12 +1141,47 @@ class RunnerProcessManager:
         sizing = live_config.get("sizing")
         return sizing if isinstance(sizing, dict) else None
 
-    def _build_child_env(self, request: HostRunnerStartRequest) -> dict[str, str]:
+    def _ibkr_client_id_pool(self) -> tuple[int, ...]:
+        raw = os.environ.get("LIVE_RUNNER_IBKR_CLIENT_ID_POOL", _DEFAULT_IBKR_CLIENT_ID_POOL)
+        try:
+            return _parse_ibkr_client_id_pool(raw)
+        except ValueError as exc:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                f"Invalid LIVE_RUNNER_IBKR_CLIENT_ID_POOL: {exc}",
+            ) from exc
+
+    def _active_ibkr_client_ids(self, *, exclude_key: str) -> set[int]:
+        active: set[int] = set()
+        for key, managed in self._managed.items():
+            if key == exclude_key:
+                continue
+            self._refresh(managed)
+            if managed.process.poll() is None and managed.ibkr_client_id is not None:
+                active.add(managed.ibkr_client_id)
+        return active
+
+    def _allocate_ibkr_client_id(self, *, exclude_key: str) -> int:
+        active = self._active_ibkr_client_ids(exclude_key=exclude_key)
+        for client_id in self._ibkr_client_id_pool():
+            if client_id not in active:
+                return client_id
+        raise HostRunnerError(
+            status.HTTP_409_CONFLICT,
+            (
+                "No IBKR client IDs are available in LIVE_RUNNER_IBKR_CLIENT_ID_POOL. "
+                "Stop a sibling bot, expand the daemon client-id pool, or restart IB Gateway "
+                "if a stale session is holding a slot."
+            ),
+        )
+
+    def _build_child_env(self, request: HostRunnerStartRequest, *, ibkr_client_id: int) -> dict[str, str]:
         env = os.environ.copy()
         python_path = str(self.repo_root / "PythonDataService")
         existing = env.get("PYTHONPATH")
         env["PYTHONPATH"] = python_path if not existing else f"{python_path}{os.pathsep}{existing}"
         env["IBKR_HOST"] = request.ibkr_host
+        env["IBKR_CLIENT_ID"] = str(ibkr_client_id)
         # PRD #619-B — propagate this daemon's boot_id so the spawned
         # child captures it as ``expected_daemon_boot_id`` and the
         # watchdog can detect daemon restart.
@@ -1447,8 +1538,9 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help=(
-            "Dotenv file that supplies daemon-owned IBKR host policy keys "
-            "(IBKR_HOST_ALLOWLIST / IBKR_HOST). Defaults to <repo-root>/.env."
+            "Dotenv file that supplies daemon-owned IBKR policy keys "
+            "(IBKR_HOST_ALLOWLIST / IBKR_HOST / LIVE_RUNNER_IBKR_CLIENT_ID_POOL). "
+            "Defaults to <repo-root>/.env."
         ),
     )
     return parser
@@ -1492,7 +1584,7 @@ def main(argv: list[str] | None = None) -> int:
         auth_token=token,
     )
     if loaded_policy_keys:
-        logger.info("host daemon loaded IBKR host policy keys from %s: %s", env_file, ",".join(loaded_policy_keys))
+        logger.info("host daemon loaded IBKR policy keys from %s: %s", env_file, ",".join(loaded_policy_keys))
     logger.info(
         "host daemon binding %s:%s with mandatory %s auth (token at %s)",
         args.host,
