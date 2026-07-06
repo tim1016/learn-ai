@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,12 @@ from app.engine.live.account_registry import (
     write_account_instance_binding,
 )
 from app.engine.live.daemon_auth import TOKEN_HEADER
-from app.engine.live.host_daemon import RunnerProcessManager, build_parser, create_app
+from app.engine.live.host_daemon import (
+    RunnerProcessManager,
+    _parse_ibkr_client_id_pool,
+    build_parser,
+    create_app,
+)
 from app.engine.live.host_runner_policy import validate_ibkr_host_allowed
 from app.schemas.broker_session import GatewaySocketRow
 from app.schemas.live_runs import (
@@ -397,6 +403,82 @@ async def test_start_allocates_distinct_ibkr_client_ids_for_sibling_instances(
     assert first.accepted is True
     assert second.accepted is True
     assert captured_ids == ["80", "81"]
+
+
+def test_parse_ibkr_client_id_pool_rejects_zero_and_huge_ranges() -> None:
+    assert _parse_ibkr_client_id_pool("50,52-53,52") == (50, 52, 53)
+
+    with pytest.raises(ValueError, match="outside"):
+        _parse_ibkr_client_id_pool("0")
+    with pytest.raises(ValueError, match="outside"):
+        _parse_ibkr_client_id_pool("0-2")
+    with pytest.raises(ValueError, match="maximum"):
+        _parse_ibkr_client_id_pool("1-5000")
+
+
+def test_concurrent_starts_cannot_allocate_same_ibkr_client_id(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, first_run_dir = daemon_context
+    first_run_id = RUN_ID
+    second_run_id = "run-daemon-" + "b" * 53
+    second_run_dir = manager.live_runs_root / second_run_id
+    second_run_dir.mkdir(parents=True)
+    monkeypatch.setenv("LIVE_RUNNER_IBKR_CLIENT_ID_POOL", "90-91")
+
+    def _write_ledger(path: Path, strategy_instance_id: str, run_id: str) -> None:
+        (path / "run_ledger.json").write_text(
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "strategy_instance_id": strategy_instance_id,
+                    "account_id": "DU111",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    _write_ledger(first_run_dir, "first-bot", first_run_id)
+    _write_ledger(second_run_dir, "second-bot", second_run_id)
+
+    captured_ids: list[str] = []
+    captured_lock = threading.Lock()
+    first_popen_entered = threading.Event()
+    allow_first_popen_to_finish = threading.Event()
+
+    def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
+        del command
+        with captured_lock:
+            captured_ids.append(kwargs["env"]["IBKR_CLIENT_ID"])
+            call_number = len(captured_ids)
+        if call_number == 1:
+            first_popen_entered.set()
+            assert allow_first_popen_to_finish.wait(timeout=2.0)
+        return FakeProcess()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    errors: list[BaseException] = []
+
+    def _start(run_id: str) -> None:
+        try:
+            manager.start(run_id, request=HostRunnerStartRequest())
+        except BaseException as exc:  # pragma: no cover - reported after join
+            errors.append(exc)
+
+    first = threading.Thread(target=_start, args=(first_run_id,))
+    second = threading.Thread(target=_start, args=(second_run_id,))
+    first.start()
+    assert first_popen_entered.wait(timeout=2.0)
+    second.start()
+    allow_first_popen_to_finish.set()
+    first.join(timeout=2.0)
+    second.join(timeout=2.0)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert errors == []
+    assert captured_ids == ["90", "91"]
 
 
 async def test_start_writes_account_registry_before_spawn(

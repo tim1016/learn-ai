@@ -56,6 +56,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
+    from app.broker.ibkr.client import IbkrClient
     from app.engine.live.account_artifacts import (
         AccountOwnerGeneration,
     )
@@ -876,7 +877,7 @@ def _strategy_param_resolution_from_live_config(
     )
 
 
-def _make_ibkr_client(runtime_client_id: int | None = None):
+def _make_ibkr_client(runtime_client_id: int | None = None) -> IbkrClient:
     """Construct the IBKR client for a live ``start``.
 
     Gateway ``clientId`` is runtime infrastructure, not strategy behavior.
@@ -1893,6 +1894,7 @@ def cmd_start(args: argparse.Namespace) -> int:
 
                 exit_error_code: str | None = None
                 exit_error_detail: dict[str, object] = {}
+                exc_summary = f"{type(exc).__name__}: {exc}"
                 if isinstance(exc, IbkrClientIdInUseError):
                     exit_error_code = "IBKR_CLIENT_ID_IN_USE"
                     exit_error_detail = {
@@ -1911,7 +1913,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                 # failure path below) so the operator sees the real reason.
                 logger.exception("IBKR connect() failed before session start", extra={"step": "1"})
                 print(
-                    f"[START] could not connect to IBKR: {type(exc).__name__}: {exc}",
+                    f"[START] could not connect to IBKR: {exc_summary}",
                     file=sys.stderr,
                 )
                 write_run_status(
@@ -1923,7 +1925,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                             "exit_code": 3,
                             "exit_reason": ExitReason.exception,
                             "exit_error_code": exit_error_code,
-                            "exit_error_message": f"{type(exc).__name__}: {exc}",
+                            "exit_error_message": exc_summary,
                             "exit_error_detail": exit_error_detail,
                         }
                     ),

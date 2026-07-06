@@ -77,7 +77,11 @@ from app.services.mutation_attempt import MutationAttempt
 from app.services.operator_blockage_ladder import author_blockage_ladder
 from app.services.operator_broker_projection import BrokerConnectionStateInput, project_broker
 from app.services.operator_capability import evaluate_all_actions
-from app.services.operator_trader_guidance import author_submit_readiness, author_trader_guidance
+from app.services.operator_trader_guidance import (
+    IBKR_CLIENT_ID_IN_USE,
+    author_submit_readiness,
+    author_trader_guidance,
+)
 from app.services.resume_guard_state import ResumeGuardState, empty_guard_state
 from app.services.runtime_freshness import (
     DomainFreshness,
@@ -247,7 +251,7 @@ def _project_host_process(
     last_exit_error_code = last_exit.exit_error_code if last_exit is not None else None
     last_exit_error_message = last_exit.exit_error_message if last_exit is not None else None
     last_exit_error_detail = last_exit.exit_error_detail if last_exit is not None else {}
-    if state == "EXITED" and last_exit_error_code == "IBKR_CLIENT_ID_IN_USE":
+    if state != "RUNNING" and last_exit_error_code == IBKR_CLIENT_ID_IN_USE:
         notice = last_exit_error_message or "IBKR rejected startup because the requested client ID is already in use."
     else:
         notice = None if state == "RUNNING" else _HOST_PROCESS_NOTICE_BY_STATE.get(state)

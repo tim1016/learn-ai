@@ -78,8 +78,9 @@ _QC_SHADOW_SUBDIR = Path("references") / "qc-shadow"
 _DEFAULT_ALLOWED_ORIGINS = "http://localhost:4200,http://127.0.0.1:4200"
 _STOP_WAIT_SECONDS = 2.0
 _DEFAULT_IBKR_CLIENT_ID_POOL = "50-99"
-_IBKR_CLIENT_ID_MIN = 0
+_IBKR_CLIENT_ID_MIN = 1
 _IBKR_CLIENT_ID_MAX = 2**31 - 1
+_IBKR_CLIENT_ID_POOL_MAX_SPAN = 1_000
 
 
 def _parse_ibkr_client_id_pool(raw: str) -> tuple[int, ...]:
@@ -88,7 +89,8 @@ def _parse_ibkr_client_id_pool(raw: str) -> tuple[int, ...]:
     Accepts comma-separated integers and inclusive ranges, e.g. ``50-99`` or
     ``50,51,60-65``. Client IDs are runtime session identity, not strategy
     identity; the daemon owns this pool so sibling bot processes can coexist
-    without sharing a Gateway ``clientId``.
+    without sharing a Gateway ``clientId``. Values must be nonzero and ranges
+    are bounded before expansion so malformed env values cannot explode memory.
     """
 
     ids: list[int] = []
@@ -106,6 +108,12 @@ def _parse_ibkr_client_id_pool(raw: str) -> tuple[int, ...]:
                 raise ValueError(f"invalid IBKR client id range {token!r}") from exc
             if end < start:
                 raise ValueError(f"invalid IBKR client id range {token!r}: end is before start")
+            span = end - start + 1
+            if span > _IBKR_CLIENT_ID_POOL_MAX_SPAN:
+                raise ValueError(
+                    f"IBKR client id range {token!r} spans {span} values; "
+                    f"maximum is {_IBKR_CLIENT_ID_POOL_MAX_SPAN}"
+                )
             values = range(start, end + 1)
         else:
             try:
@@ -276,6 +284,10 @@ class RunnerProcessManager:
 
         self._start_lock_per_instance: dict[str, _threading.RLock] = {}
         self._start_lock_table_lock = _threading.Lock()
+        # Cross-instance registry guard. Client-id allocation observes the
+        # managed-process registry, so allocate -> spawn -> register must be one
+        # critical section; otherwise sibling starts can pick the same free id.
+        self._managed_lock = _threading.RLock()
         # The git SHA of the code THIS process is running, captured ONCE at
         # launch. The daemon does not reload on `git pull`, so the running code
         # is frozen at startup even as the working tree advances — comparing this
@@ -406,28 +418,30 @@ class RunnerProcessManager:
     def instances(self) -> HostRunnerInstancesStatus:
         """All managed instances with their live binding (registry authority)."""
         out: list[HostRunnerInstance] = []
-        for managed in self._managed.values():
-            self._refresh(managed)
-            out.append(
-                HostRunnerInstance(
-                    strategy_instance_id=managed.strategy_instance_id,
-                    run_id=managed.run_id,
-                    run_dir=str(managed.run_dir),
-                    process=self._status_of(managed),
+        with self._managed_lock:
+            for managed in self._managed.values():
+                self._refresh(managed)
+                out.append(
+                    HostRunnerInstance(
+                        strategy_instance_id=managed.strategy_instance_id,
+                        run_id=managed.run_id,
+                        run_dir=str(managed.run_dir),
+                        process=self._status_of(managed),
+                    )
                 )
-            )
         return HostRunnerInstancesStatus(instances=out, fetched_at_ms=_now_ms())
 
     def instance_status(self, strategy_instance_id: str) -> HostRunnerProcessStatus:
         """Live process status for one strategy instance (idle if untracked)."""
-        managed = self._managed.get(strategy_instance_id)
-        if managed is None:
-            return HostRunnerProcessStatus(
-                state=HostRunnerProcessState.idle,
-                message=f"No managed process for strategy_instance_id {strategy_instance_id!r}.",
-            )
-        self._refresh(managed)
-        return self._status_of(managed)
+        with self._managed_lock:
+            managed = self._managed.get(strategy_instance_id)
+            if managed is None:
+                return HostRunnerProcessStatus(
+                    state=HostRunnerProcessState.idle,
+                    message=f"No managed process for strategy_instance_id {strategy_instance_id!r}.",
+                )
+            self._refresh(managed)
+            return self._status_of(managed)
 
     def process_status(self, run_id: str | None = None) -> HostRunnerProcessStatus:
         """Return a run's subprocess state (back-compat, run-addressed).
@@ -437,15 +451,16 @@ class RunnerProcessManager:
         tracks it, else idle — so selected-run controls don't inherit another
         run's status.
         """
-        if run_id is None:
-            return self._first_process_status()
-        managed = self._by_run_id(run_id)
-        if managed is None:
-            return HostRunnerProcessStatus(
-                state=HostRunnerProcessState.idle,
-                message=f"No host runner process for {run_id}.",
-            )
-        return self._status_of(managed)
+        with self._managed_lock:
+            if run_id is None:
+                return self._first_process_status()
+            managed = self._by_run_id(run_id)
+            if managed is None:
+                return HostRunnerProcessStatus(
+                    state=HostRunnerProcessState.idle,
+                    message=f"No host runner process for {run_id}.",
+                )
+            return self._status_of(managed)
 
     def _status_of(self, managed: ManagedProcess) -> HostRunnerProcessStatus:
         """Build a process-status snapshot from a managed process."""
@@ -480,19 +495,21 @@ class RunnerProcessManager:
         )
 
     def _first_process_status(self) -> HostRunnerProcessStatus:
-        for managed in self._managed.values():
-            self._refresh(managed)
-        for managed in self._managed.values():
-            if managed.process.poll() is None:
-                return self._status_of(managed)
-        return HostRunnerProcessStatus(state=HostRunnerProcessState.idle, message="No host runner process.")
+        with self._managed_lock:
+            for managed in self._managed.values():
+                self._refresh(managed)
+            for managed in self._managed.values():
+                if managed.process.poll() is None:
+                    return self._status_of(managed)
+            return HostRunnerProcessStatus(state=HostRunnerProcessState.idle, message="No host runner process.")
 
     def _by_run_id(self, run_id: str) -> ManagedProcess | None:
-        for managed in self._managed.values():
-            if managed.run_id == run_id:
-                self._refresh(managed)
-                return managed
-        return None
+        with self._managed_lock:
+            for managed in self._managed.values():
+                if managed.run_id == run_id:
+                    self._refresh(managed)
+                    return managed
+            return None
 
     def _instance_start_lock(self, key: str):
         """VCR-P3-P / Phase 6D — return the RLock for ``key``, creating one
@@ -528,7 +545,7 @@ class RunnerProcessManager:
         sid = self._resolve_strategy_instance_id(run_dir)
         key = sid or run_id
 
-        with self._instance_start_lock(key):
+        with self._instance_start_lock(key), self._managed_lock:
             existing = self._managed.get(key)
             if existing is not None:
                 self._refresh(existing)
@@ -1091,14 +1108,15 @@ class RunnerProcessManager:
     def _sibling_symbols(self, exclude_key: str) -> set[str]:
         """Symbols owned by other currently-running managed instances."""
         symbols: set[str] = set()
-        for key, managed in self._managed.items():
-            if key == exclude_key:
-                continue
-            self._refresh(managed)
-            if managed.process.poll() is None:
-                symbol = self._resolve_symbol(managed.run_dir)
-                if symbol:
-                    symbols.add(symbol)
+        with self._managed_lock:
+            for key, managed in self._managed.items():
+                if key == exclude_key:
+                    continue
+                self._refresh(managed)
+                if managed.process.poll() is None:
+                    symbol = self._resolve_symbol(managed.run_dir)
+                    if symbol:
+                        symbols.add(symbol)
         return symbols
 
     def _sibling_all_in_symbols(self, exclude_key: str) -> set[str]:
@@ -1113,14 +1131,15 @@ class RunnerProcessManager:
         from app.engine.live.pre_flight import _is_set_holdings_full
 
         symbols: set[str] = set()
-        for key, managed in self._managed.items():
-            if key == exclude_key:
-                continue
-            self._refresh(managed)
-            if managed.process.poll() is None and _is_set_holdings_full(self._read_sibling_sizing(managed.run_dir)):
-                symbol = self._resolve_symbol(managed.run_dir)
-                if symbol:
-                    symbols.add(symbol)
+        with self._managed_lock:
+            for key, managed in self._managed.items():
+                if key == exclude_key:
+                    continue
+                self._refresh(managed)
+                if managed.process.poll() is None and _is_set_holdings_full(self._read_sibling_sizing(managed.run_dir)):
+                    symbol = self._resolve_symbol(managed.run_dir)
+                    if symbol:
+                        symbols.add(symbol)
         return symbols
 
     @staticmethod
@@ -1153,12 +1172,13 @@ class RunnerProcessManager:
 
     def _active_ibkr_client_ids(self, *, exclude_key: str) -> set[int]:
         active: set[int] = set()
-        for key, managed in self._managed.items():
-            if key == exclude_key:
-                continue
-            self._refresh(managed)
-            if managed.process.poll() is None and managed.ibkr_client_id is not None:
-                active.add(managed.ibkr_client_id)
+        with self._managed_lock:
+            for key, managed in self._managed.items():
+                if key == exclude_key:
+                    continue
+                self._refresh(managed)
+                if managed.process.poll() is None and managed.ibkr_client_id is not None:
+                    active.add(managed.ibkr_client_id)
         return active
 
     def _allocate_ibkr_client_id(self, *, exclude_key: str) -> int:

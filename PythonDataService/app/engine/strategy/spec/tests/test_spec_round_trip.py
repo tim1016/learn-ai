@@ -152,6 +152,7 @@ def run_all() -> None:
         ("multi-symbol rejected", test_rejects_multi_symbol),
         ("undeclared indicator ref rejected", test_rejects_undeclared_indicator_ref),
         ("extra fields rejected", test_rejects_extra_fields),
+        ("client_id strategy field rejected", test_rejects_client_id_as_strategy_field),
         ("unknown kind rejected", test_rejects_unknown_condition_kind),
         ("duplicate indicator ids rejected", test_rejects_duplicate_indicator_ids),
     ]
