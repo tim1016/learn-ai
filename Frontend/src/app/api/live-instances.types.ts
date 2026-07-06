@@ -335,6 +335,11 @@ export interface OperatorSurfaceHostProcess {
    *  Angular renders verbatim and MUST NOT construct, interpolate, or
    *  transform this string. */
   copyable_command: string | null;
+  /** Typed last-exit evidence promoted from `run_status.json`.
+   *  Keeps already-exited startup failures specific in the cockpit. */
+  last_exit_error_code: string | null;
+  last_exit_error_message: string | null;
+  last_exit_error_detail: Record<string, unknown>;
   /** Per-instance Start-bot-process button. Always present so the
    *  cockpit can render a disabled state with a server-authored reason. */
   start_capability: HostProcessStartCapability;
