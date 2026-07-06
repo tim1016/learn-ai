@@ -90,6 +90,7 @@ logger = logging.getLogger(__name__)
 
 
 _ENGINE_TZ = ZoneInfo("America/New_York")
+LIVE_SOURCE_BAR_INTERVAL_MS = 60_000
 BAR_SOURCE_WATCHDOG_INTERVAL_S = 5.0
 BAR_SOURCE_FIRST_BAR_TIMEOUT_S = 120.0
 
@@ -2747,8 +2748,12 @@ class LiveEngine:
         ``heartbeat_at_ms`` is wall-clock (loop scheduling). The bar's
         close time is the market-data freshness signal — a closed
         market has a fresh heartbeat but a stale latest_source_bar_ms.
-        ``expected_interval_ms`` comes from the strategy spec / config
-        when wired; ``None`` for replay tests.
+        ``expected_interval_ms`` is the live source-bar cadence. It is
+        intentionally not the strategy decision/consolidator cadence:
+        IBKR emits 5-second bars, ``stream_minute_bars`` consolidates
+        them into 1-minute ``TradeBar`` inputs, and freshness should
+        detect a stalled source in minutes rather than waiting for the
+        strategy's longer decision interval.
         """
         if self._runtime_aggregator is None:
             return
@@ -2771,8 +2776,7 @@ class LiveEngine:
         )
 
     def _bar_loop_expected_interval_ms(self) -> int:
-        interval_ms = int(self._config.consolidator_period_min * 60_000)
-        return max(interval_ms, 1)
+        return LIVE_SOURCE_BAR_INTERVAL_MS
 
     async def _publish_bar_source_waiting_block(
         self,

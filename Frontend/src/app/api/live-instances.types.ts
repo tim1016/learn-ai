@@ -554,6 +554,7 @@ export type OperatorNoticeCode =
   | 'runtime.market_closed'
   | 'runtime.market_session_halted'
   | 'runtime.market_data_stale'
+  | 'runtime.market_data_first_bar_timeout'
   | 'runtime.market_data_feed_stalled'
   | 'runtime.broker_probe_stale'
   | 'runtime.broker_probe_missing'

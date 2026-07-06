@@ -310,6 +310,7 @@ async def test_engine_publishes_bar_loop_block_per_bar(tmp_path: Path) -> None:
     assert agg.bar_loop_updates[0].latest_source_bar_ms is None
     # The first bar-driven update (index 1) reflects bar[0]'s end_time.
     assert agg.bar_loop_updates[1].latest_source_bar_ms == int(bars[0].end_time.timestamp() * 1000)
+    assert agg.bar_loop_updates[1].expected_interval_ms == 60_000
     assert agg.bar_loop_updates[-1].latest_source_bar_ms == int(bars[-1].end_time.timestamp() * 1000)
 
 
