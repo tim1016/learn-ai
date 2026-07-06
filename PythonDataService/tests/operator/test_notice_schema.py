@@ -98,7 +98,7 @@ def test_code_literal_declares_broker_session_slots():
     assert "broker_session.orphaned_socket" in codes
 
 
-def test_runtime_freshness_reason_code_literal_has_eleven_members():
+def test_runtime_freshness_reason_code_literal_has_twelve_members():
     codes = set(get_literal_args(RuntimeFreshnessReasonCode))
     assert codes == {
         "ENGINE_RUNTIME_MISSING",
@@ -107,6 +107,7 @@ def test_runtime_freshness_reason_code_literal_has_eleven_members():
         "BROKER_PROBE_STALE",
         "BROKER_PROBE_MISSING",
         "BAR_LOOP_HEARTBEAT_STALE",
+        "BAR_LOOP_SOURCE_MISSING",
         "BAR_LOOP_LATEST_BAR_STALE",
         "BAR_LOOP_SESSION_CLOSED",
         "BAR_LOOP_SESSION_HALTED",

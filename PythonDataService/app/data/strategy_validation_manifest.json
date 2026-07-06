@@ -4,7 +4,7 @@
     {
       "strategy_key": "deployment_validation",
       "settings_file_ref": "PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json",
-      "settings_file_sha256": "2d487f718a83edfdaef24f21a1ef5536d885485cf08071e0cde16c391974bc20",
+      "settings_file_sha256": "3cfea46ba95b4c7ed682a3e8b0a8ddf52db7ff6a9ecdc6beb5e953e9c66676d6",
       "qc_cloud_backtest_id": "d2fe45a7142e88575f6fbd75229f8681",
       "audit_copy_ref": "references/qc-shadow/DeploymentValidationAlgorithm.py",
       "audit_copy_sha256": "3dbb1c0f54254951828f3c74e4dc6e2f7c1bcc0784465c8532f109ea191c3af0",
@@ -42,7 +42,7 @@
       },
       "evidence_snapshot": {
         "settings_file_ref": "PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json",
-        "settings_file_sha256": "2d487f718a83edfdaef24f21a1ef5536d885485cf08071e0cde16c391974bc20",
+        "settings_file_sha256": "3cfea46ba95b4c7ed682a3e8b0a8ddf52db7ff6a9ecdc6beb5e953e9c66676d6",
         "qc_cloud_backtest_id": "d2fe45a7142e88575f6fbd75229f8681",
         "audit_copy_ref": "references/qc-shadow/DeploymentValidationAlgorithm.py",
         "audit_copy_sha256": "3dbb1c0f54254951828f3c74e4dc6e2f7c1bcc0784465c8532f109ea191c3af0",
@@ -61,7 +61,7 @@
           ]
         }
       },
-      "evidence_snapshot_sha256": "2b2700c79e823aa3d11779f156df4dae6456606ad0ba852789b37d672c18dbc5",
+      "evidence_snapshot_sha256": "037f56d8c4b17d74d81b803e4c37679a861a74d035db0b2836612b506e025887",
       "superseded_by_event_id": null
     }
   ]

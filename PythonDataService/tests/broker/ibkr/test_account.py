@@ -191,6 +191,37 @@ async def test_fetch_account_summary_timeout_cancels_subscription_request() -> N
     ib_client.cancelAccountSummary.assert_called_once_with(42)
 
 
+@pytest.mark.asyncio
+async def test_fetch_account_summary_success_cancels_subscription_request() -> None:
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+    future.set_result(None)
+    wrapper = SimpleNamespace(
+        acctSummary={
+            "TotalCashValue": _value("DU1234567", "TotalCashValue", "1234.50"),
+            "NetLiquidation": _value("DU1234567", "NetLiquidation", "1250.00"),
+        },
+        startReq=Mock(return_value=future),
+    )
+    ib_client = SimpleNamespace(
+        getReqId=Mock(return_value=42),
+        reqAccountSummary=Mock(),
+        cancelAccountSummary=Mock(),
+    )
+    client = SimpleNamespace(
+        ib=SimpleNamespace(client=ib_client, wrapper=wrapper),
+        connected_account="DU1234567",
+        require_connected=lambda: None,
+    )
+
+    out = await fetch_account_summary(client)
+
+    assert out.cash_balance == 1234.5
+    assert out.net_liquidation == 1250.0
+    ib_client.reqAccountSummary.assert_called_once()
+    ib_client.cancelAccountSummary.assert_called_once_with(42)
+
+
 # ── _ibkr_position_to_model ─────────────────────────────────────────────
 
 

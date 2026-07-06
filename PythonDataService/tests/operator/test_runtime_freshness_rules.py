@@ -94,6 +94,17 @@ def test_combined_heartbeat_and_latest_bar_emit_feed_stalled():
     assert "BAR_LOOP_LATEST_BAR_STALE" in headline.source_codes
 
 
+def test_missing_first_source_bar_gets_actionable_market_data_notice():
+    runtime = _runtime_with(bar_loop=["BAR_LOOP_SOURCE_MISSING"])
+    headline, _reasons = compose_runtime_freshness_notices(runtime)
+
+    assert headline is not None
+    assert headline.code == "runtime.market_data_stale"
+    assert headline.title == "Market data has not started"
+    assert headline.action.kind == "external_manual_check"
+    assert "BAR_LOOP_SOURCE_MISSING" in headline.source_codes
+
+
 def test_boot_id_mismatch_wins_over_lease_stale():
     runtime = _runtime_with(
         control_plane=["CONTROL_PLANE_BOOT_ID_MISMATCH", "CONTROL_PLANE_LEASE_STALE"],

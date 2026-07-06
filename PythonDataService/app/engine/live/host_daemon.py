@@ -47,6 +47,7 @@ from app.engine.live.deploy import (
     SpecOrAuditMissingError,
     StrategyInstanceIdAlreadyUsedError,
     UnknownLiveConfigKeyError,
+    UnsupportedBarSourceDescriptorError,
     deploy_run,
     git_head_sha,
 )
@@ -682,6 +683,8 @@ class RunnerProcessManager:
             raise HostRunnerError(status.HTTP_400_BAD_REQUEST, f"Sizing policy required: {exc}") from exc
         except UnknownLiveConfigKeyError as exc:
             raise HostRunnerError(status.HTTP_400_BAD_REQUEST, f"Unknown live_config key: {exc}") from exc
+        except UnsupportedBarSourceDescriptorError as exc:
+            raise HostRunnerError(status.HTTP_400_BAD_REQUEST, f"Unsupported bar source: {exc}") from exc
         except SpecOrAuditMissingError as exc:
             raise HostRunnerError(status.HTTP_400_BAD_REQUEST, f"Missing input: {exc}") from exc
         except GitUnavailableError as exc:

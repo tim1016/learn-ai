@@ -78,7 +78,9 @@ from app.engine.live.deploy import (
     SizingPolicyMissingError,
     SpecOrAuditMissingError,
     UnknownLiveConfigKeyError,
+    UnsupportedBarSourceDescriptorError,
     deploy_run,
+    enforce_supported_strategy_bar_source,
 )
 from app.engine.live.pre_flight import (
     check_all_in_coexistence,
@@ -221,6 +223,9 @@ def cmd_init_ledger(args: argparse.Namespace) -> int:
         return 2
     except UnknownLiveConfigKeyError as exc:
         print(f"[INIT-LEDGER] {exc}", file=sys.stderr)
+        return 2
+    except UnsupportedBarSourceDescriptorError as exc:
+        print(f"[INIT-LEDGER] unsupported bar source: {exc}", file=sys.stderr)
         return 2
     except DeployIOError as exc:
         print(f"[INIT-LEDGER] filesystem error: {exc}", file=sys.stderr)
@@ -1003,6 +1008,31 @@ def _build_live_state_seed_envelope(
     )
 
 
+def _seed_live_state_sidecar_if_missing(
+    *,
+    artifacts_root: Path,
+    strategy_instance_id: str,
+    seed_envelope: LiveStateEnvelope | None,
+) -> None:
+    """Create the stable live-state sidecar before the first bar if absent.
+
+    Broker-activity publisher bootstrap needs the per-instance envelope at
+    launch time, while the normal writer only runs after the first processed
+    bar. Seed only the brand-new case; existing sidecars can carry prior
+    submitted-order evidence that reconciliation still needs.
+    """
+    if seed_envelope is None:
+        return
+    from app.engine.live.live_state_sidecar import (
+        LiveStateSidecarRepo,
+        stable_live_state_path,
+    )
+
+    repo = LiveStateSidecarRepo(stable_live_state_path(artifacts_root, strategy_instance_id))
+    if repo.read() is None:
+        repo.write(seed_envelope)
+
+
 def _read_owned_perm_ids(live_state_path: Path) -> set[int]:
     """Load durable bot-owned permIds from the live-state sidecar."""
     from app.engine.live.live_state_sidecar import LiveStateSidecarRepo
@@ -1196,6 +1226,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     from app.engine.live.run_logging import configure_run_logging
     from app.engine.live.run_status import now_ms, write_run_status
     from app.engine.strategy.spec import load_spec_from_path
+    from app.engine.strategy.spec.schema import SUPPORTED_LIVE_RUNTIME_BAR_SOURCE
     from app.schemas.live_runs import ExitReason, RunStatusSidecar
 
     def _record_poison_refusal() -> None:
@@ -1462,13 +1493,14 @@ def cmd_start(args: argparse.Namespace) -> int:
     desired_state_path = stable_desired_state_path(_artifacts_root, strategy_instance_id)
     desired_repo = DesiredStateRepo(desired_state_path)
     try:
-        desired = desired_repo.read_state()
+        desired_record = desired_repo.read()
     except DesiredStateCorruptError as exc:
         print(
             f"[START] desired_state.json at {desired_state_path} is corrupted: {exc}",
             file=sys.stderr,
         )
         return 1
+    desired = desired_record.desired_state if desired_record is not None else DesiredState.RUNNING
     if desired is DesiredState.STOPPED:
         print(
             f"[START] HALT — desired_state=STOPPED for {strategy_instance_id} "
@@ -1477,6 +1509,20 @@ def cmd_start(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
+    if desired_record is None:
+        try:
+            desired_repo.set(
+                DesiredState.RUNNING,
+                updated_by="engine",
+                reason="run.start:default_running",
+                now_ms=now_ms(),
+            )
+        except OSError as exc:
+            print(
+                f"[START] could not seed desired_state=RUNNING for {strategy_instance_id}: {exc}",
+                file=sys.stderr,
+            )
+            return 3
     start_paused = desired is DesiredState.PAUSED
     if start_paused:
         logger.info(
@@ -1544,13 +1590,28 @@ def cmd_start(args: argparse.Namespace) -> int:
     # a decisions.parquet is still produced — and log it.
     decision_columns = DECISION_COLUMNS
     run_mode = "live_paper"
-    bar_source = "ibkr_paper_delayed"
+    bar_source = SUPPORTED_LIVE_RUNTIME_BAR_SOURCE
     spec_client_id: int | None = None
+    try:
+        enforce_supported_strategy_bar_source(Path(ledger.strategy_spec_path))
+    except UnsupportedBarSourceDescriptorError as exc:
+        print(f"[START] unsupported bar source: {exc}", file=sys.stderr)
+        return 3
+    except (DeployIOError, SpecOrAuditMissingError):
+        pass
     try:
         spec = load_spec_from_path(Path(ledger.strategy_spec_path))
         decision_columns = resolve_decision_columns(spec)
         run_mode = spec.submit_mode
         bar_source = spec.bar_source_descriptor
+        if bar_source != SUPPORTED_LIVE_RUNTIME_BAR_SOURCE:
+            print(
+                "[START] unsupported bar_source_descriptor "
+                f"{bar_source!r} in {ledger.strategy_spec_path}; "
+                f"live runtime supports only {SUPPORTED_LIVE_RUNTIME_BAR_SOURCE!r}",
+                file=sys.stderr,
+            )
+            return 3
         spec_client_id = spec.client_id
     except (OSError, ValueError) as exc:
         logger.warning(
@@ -1589,6 +1650,11 @@ def cmd_start(args: argparse.Namespace) -> int:
     if live_state_writer is not None:
         from app.engine.live.live_state_sidecar import stable_live_state_path
 
+        _seed_live_state_sidecar_if_missing(
+            artifacts_root=_artifacts_root,
+            strategy_instance_id=strategy_instance_id,
+            seed_envelope=live_state_seed,
+        )
         owned_perm_ids = _read_owned_perm_ids(stable_live_state_path(_artifacts_root, strategy_instance_id))
 
     # Operator command channel (PRD-A § 16.4 Resolution 7 / PR-D). The

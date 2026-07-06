@@ -109,6 +109,8 @@ class IndicatorBlock(BaseModel):
 # ---------------------------------------------------------------------------
 ComparisonOp = Literal["<", "<=", "==", ">=", ">", "!="]
 PredictionLookup = Literal["exact_bar_close", "next_after_bar_close"]
+LiveBarSourceDescriptor = Literal["ibkr_realtime_bars", "ibkr_paper_delayed"]
+SUPPORTED_LIVE_RUNTIME_BAR_SOURCE: LiveBarSourceDescriptor = "ibkr_realtime_bars"
 
 
 class _ConditionBase(BaseModel):
@@ -452,7 +454,7 @@ class StrategySpec(BaseModel):
     # an out-of-range IbkrClient that only fails later at Gateway connect.
     client_id: int | None = Field(default=None, ge=0, le=2**31 - 1)
     submit_mode: Literal["live_paper", "shadow"] = "live_paper"
-    bar_source_descriptor: str = "ibkr_paper_delayed"
+    bar_source_descriptor: LiveBarSourceDescriptor = SUPPORTED_LIVE_RUNTIME_BAR_SOURCE
     decision_columns: list[DecisionColumnSpec] = Field(default_factory=list)
 
     @model_validator(mode="after")

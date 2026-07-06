@@ -18,8 +18,10 @@ import pytest
 from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarRepo
 from app.engine.live.run import (
     _account_durable_intents_from_events,
+    _build_live_state_seed_envelope,
     _build_live_state_writer,
     _read_owned_perm_ids,
+    _seed_live_state_sidecar_if_missing,
     build_parser,
     main,
 )
@@ -253,6 +255,76 @@ def test_live_state_writer_does_not_lose_audit_rows_when_write_fails(tmp_path: P
     # The audit row was NOT drained because the write failed; the next flush
     # will retry it.
     assert portfolio.sizing_resolutions == [{"symbol": "SPY", "policy_kind": "X"}]
+
+
+def test_seed_live_state_sidecar_if_missing_creates_envelope(tmp_path: Path) -> None:
+    class _Client:
+        settings = type("_Settings", (), {"client_id": 42})()
+
+    artifacts_root = tmp_path / "artifacts"
+    seed = _build_live_state_seed_envelope(
+        strategy_instance_id="deployment_validation",
+        run_id="run-new",
+        client=_Client(),
+        last_processed_bar_ms=1_780_000_000_000,
+    )
+
+    _seed_live_state_sidecar_if_missing(
+        artifacts_root=artifacts_root,
+        strategy_instance_id="deployment_validation",
+        seed_envelope=seed,
+    )
+
+    repo = LiveStateSidecarRepo(
+        artifacts_root / "live_state" / "deployment_validation" / "live_state.json"
+    )
+    loaded = repo.read()
+    assert loaded is not None
+    assert loaded.strategy_instance_id == "deployment_validation"
+    assert loaded.run_id == "run-new"
+    assert loaded.bot_order_namespace == "learn-ai/deployment_validation/v1"
+    assert loaded.ib_client_id == 42
+    assert loaded.submitted_orders == {}
+
+
+def test_seed_live_state_sidecar_if_missing_preserves_existing_envelope(tmp_path: Path) -> None:
+    class _Client:
+        settings = type("_Settings", (), {"client_id": 43})()
+
+    artifacts_root = tmp_path / "artifacts"
+    path = artifacts_root / "live_state" / "deployment_validation" / "live_state.json"
+    repo = LiveStateSidecarRepo(path)
+    repo.write(
+        LiveStateEnvelope(
+            strategy_instance_id="deployment_validation",
+            run_id="run-old",
+            bot_order_namespace="learn-ai/deployment_validation/v1",
+            ib_client_id=42,
+            submitted_orders={"intent-1": {"perm_id": 123}},
+            known_perm_ids=[123],
+            last_processed_bar_ms=1_780_000_000_000,
+            last_artifact_flush_ms=1_780_000_000_500,
+        )
+    )
+    seed = _build_live_state_seed_envelope(
+        strategy_instance_id="deployment_validation",
+        run_id="run-new",
+        client=_Client(),
+        last_processed_bar_ms=1_780_000_060_000,
+    )
+
+    _seed_live_state_sidecar_if_missing(
+        artifacts_root=artifacts_root,
+        strategy_instance_id="deployment_validation",
+        seed_envelope=seed,
+    )
+
+    loaded = repo.read()
+    assert loaded is not None
+    assert loaded.run_id == "run-old"
+    assert loaded.ib_client_id == 42
+    assert loaded.submitted_orders == {"intent-1": {"perm_id": 123}}
+    assert loaded.known_perm_ids == [123]
 
 
 def test_lookup_sizing_surface_resolves_module_name_to_registry_key() -> None:
@@ -859,6 +931,30 @@ def _write_ledger_with_strategy_key(tmp_path: Path, strategy_key: str) -> Path:
     return run_dir
 
 
+def _write_valid_deployment_validation_spec(path: Path, *, bar_source_descriptor: str) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "name": "Deployment Validation",
+                "symbols": ["SPY"],
+                "resolution": {"period_minutes": 1},
+                "indicators": [],
+                "entry": {
+                    "logic": "AND",
+                    "conditions": [],
+                    "size": {"kind": "SetHoldings", "fraction": 1.0},
+                },
+                "position": {"kind": "EQUITY_LONG"},
+                "survival": [],
+                "exit": {"logic": "OR", "conditions": []},
+                "bar_source_descriptor": bar_source_descriptor,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_start_rejects_strategy_inconsistent_with_ledger_key(
     tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:
@@ -890,6 +986,49 @@ def test_start_guard_noops_when_ledger_strategy_key_empty(
     err = capsys.readouterr().err
     assert "is not registered" in err
     assert "does not match the ledger's strategy_key" not in err
+
+
+def test_start_refuses_unsupported_bar_source_descriptor(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    from app.engine.live.run_ledger import build_ledger, write_ledger
+
+    spec = tmp_path / "spec.json"
+    _write_valid_deployment_validation_spec(spec, bar_source_descriptor="ibkr_paper_delayed")
+    qc_audit = tmp_path / "qc_audit.py"
+    qc_audit.write_text("# QC audit copy stub\n", encoding="utf-8")
+    ledger = build_ledger(
+        code_sha="deadbeef" * 5,
+        strategy_spec_path=spec,
+        qc_audit_copy_path=qc_audit,
+        qc_cloud_backtest_id="bt-test-1",
+        account_id="DU123",
+        start_date_ms=1714838400000,
+        live_config={"sizing": {"kind": "FixedShares", "value": 1}},
+        strategy_key="deployment_validation",
+        strategy_instance_id="deployment-validation",
+    )
+    run_dir = tmp_path / ledger.run_id
+    write_ledger(run_dir / "run_ledger.json", ledger)
+
+    rc = main(
+        [
+            "start",
+            "--run-dir",
+            str(run_dir),
+            "--strategy",
+            "deployment_validation",
+            "--readonly",
+            "--artifacts-root",
+            str(tmp_path / "artifacts"),
+        ]
+    )
+
+    assert rc == 3
+    err = capsys.readouterr().err
+    assert "unsupported bar source" in err
+    assert "bar_source_descriptor" in err
+    assert "ibkr_realtime_bars" in err
 
 
 def test_live_config_from_ledger_applies_known_fields() -> None:

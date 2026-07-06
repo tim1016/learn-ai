@@ -41,7 +41,7 @@
   },
   "client_id": 11,
   "submit_mode": "live_paper",
-  "bar_source_descriptor": "ibkr_paper_delayed",
+  "bar_source_descriptor": "ibkr_realtime_bars",
   "decision_columns": [
     {"name": "ema5",  "dtype": "float64", "nullable": false, "semantic": "EMA(5) of consolidated close at decision time"},
     {"name": "ema10", "dtype": "float64", "nullable": false, "semantic": "EMA(10) of consolidated close at decision time"},

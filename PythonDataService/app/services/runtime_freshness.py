@@ -205,11 +205,14 @@ def _evaluate_bar_loop(
         config.bar_loop_source_min_ms,
     )
 
-    stale_reasons: list[str] = []
-    if heartbeat_age > allowed_lag:
-        stale_reasons.append("BAR_LOOP_HEARTBEAT_STALE")
     latest = snapshot.bar_loop.latest_source_bar_ms
     latest_age = (now_ms - latest) if latest is not None else None
+    stale_reasons: list[str] = []
+    if heartbeat_age > allowed_lag:
+        if latest is None:
+            stale_reasons.append("BAR_LOOP_SOURCE_MISSING")
+        else:
+            stale_reasons.append("BAR_LOOP_HEARTBEAT_STALE")
     if latest is not None and latest_age is not None and latest_age > allowed_lag:
         stale_reasons.append("BAR_LOOP_LATEST_BAR_STALE")
 

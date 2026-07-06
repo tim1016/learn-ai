@@ -222,6 +222,24 @@ def test_bar_loop_stale_past_allowed_lag() -> None:
     assert "BAR_LOOP_HEARTBEAT_STALE" in result.bar_loop.stale_reason_codes
 
 
+def test_bar_loop_missing_first_source_bar_is_actionable() -> None:
+    base = 1_700_000_000_000
+    now = base + 121_000
+    snap = _snapshot(
+        bar_loop_heartbeat_ms=base,
+        command_loop_heartbeat_ms=now,
+        broker_probe_completed_ms=now,
+        control_plane_lease_observed_ms=now,
+        latest_source_bar_ms=None,
+        expected_interval_ms=60_000,
+    )
+    result = evaluate_runtime_freshness(snap, now_ms=now)
+
+    assert result.bar_loop.state == "STALE"
+    assert result.bar_loop.stale_reason_codes == ["BAR_LOOP_SOURCE_MISSING"]
+    assert result.posture_demoted is False
+
+
 def test_bar_loop_stale_latest_bar_only() -> None:
     """Heartbeat fresh but the latest market data is old → STALE with
     ``BAR_LOOP_LATEST_BAR_STALE``."""
