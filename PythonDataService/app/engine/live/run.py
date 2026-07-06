@@ -1029,8 +1029,7 @@ def _seed_live_state_sidecar_if_missing(
     )
 
     repo = LiveStateSidecarRepo(stable_live_state_path(artifacts_root, strategy_instance_id))
-    if repo.read() is None:
-        repo.write(seed_envelope)
+    repo.write_if_missing(seed_envelope)
 
 
 def _read_owned_perm_ids(live_state_path: Path) -> set[int]:
@@ -1596,7 +1595,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         enforce_supported_strategy_bar_source(Path(ledger.strategy_spec_path))
     except UnsupportedBarSourceDescriptorError as exc:
         print(f"[START] unsupported bar source: {exc}", file=sys.stderr)
-        return 3
+        return 2
     except (DeployIOError, SpecOrAuditMissingError):
         pass
     try:
@@ -1604,14 +1603,6 @@ def cmd_start(args: argparse.Namespace) -> int:
         decision_columns = resolve_decision_columns(spec)
         run_mode = spec.submit_mode
         bar_source = spec.bar_source_descriptor
-        if bar_source != SUPPORTED_LIVE_RUNTIME_BAR_SOURCE:
-            print(
-                "[START] unsupported bar_source_descriptor "
-                f"{bar_source!r} in {ledger.strategy_spec_path}; "
-                f"live runtime supports only {SUPPORTED_LIVE_RUNTIME_BAR_SOURCE!r}",
-                file=sys.stderr,
-            )
-            return 3
         spec_client_id = spec.client_id
     except (OSError, ValueError) as exc:
         logger.warning(

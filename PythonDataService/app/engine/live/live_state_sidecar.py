@@ -149,6 +149,20 @@ class LiveStateSidecarRepo:
         with _file_lock(self._path):
             self._write_locked(envelope)
 
+    def write_if_missing(self, envelope: LiveStateEnvelope) -> bool:
+        """Atomically seed the sidecar only when no envelope exists.
+
+        Returns True when ``envelope`` was written, False when an existing
+        envelope won. The read and write share one lock so concurrent
+        bootstrap attempts cannot clobber the first seed.
+        """
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with _file_lock(self._path):
+            if self.read() is not None:
+                return False
+            self._write_locked(envelope)
+            return True
+
     def _write_locked(self, envelope: LiveStateEnvelope) -> None:
         """File-mechanics half of write(). Caller must hold _file_lock.
 

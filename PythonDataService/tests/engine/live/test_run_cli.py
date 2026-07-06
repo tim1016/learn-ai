@@ -1024,7 +1024,7 @@ def test_start_refuses_unsupported_bar_source_descriptor(
         ]
     )
 
-    assert rc == 3
+    assert rc == 2
     err = capsys.readouterr().err
     assert "unsupported bar source" in err
     assert "bar_source_descriptor" in err

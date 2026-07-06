@@ -109,6 +109,8 @@ class IndicatorBlock(BaseModel):
 # ---------------------------------------------------------------------------
 ComparisonOp = Literal["<", "<=", "==", ">=", ">", "!="]
 PredictionLookup = Literal["exact_bar_close", "next_after_bar_close"]
+# ``ibkr_paper_delayed`` remains schema-legal for historical/future specs,
+# but deploy/start reject it until a matching live runtime adapter exists.
 LiveBarSourceDescriptor = Literal["ibkr_realtime_bars", "ibkr_paper_delayed"]
 SUPPORTED_LIVE_RUNTIME_BAR_SOURCE: LiveBarSourceDescriptor = "ibkr_realtime_bars"
 
