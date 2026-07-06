@@ -399,10 +399,10 @@ def test_engine_exit_timing():
         entry_ts = None
         exit_ts = None
         for i, bar in enumerate(bars):
-            # Engine emits canonical int64 ms UTC timestamps.
-            if bar["timestamp"] == trade.entry_timestamp:
+            bar_ts = int(bar["timestamp"])
+            if bar_ts == trade.entry_timestamp:
                 entry_ts = i
-            if bar["timestamp"] == trade.exit_timestamp:
+            if bar_ts == trade.exit_timestamp:
                 exit_ts = i
 
         if entry_ts is not None and exit_ts is not None:
@@ -594,13 +594,14 @@ def test_duplicate_timestamps_are_deduped():
 
 
 class TestFormatTimestampRegression:
-    """Regression for the local-time-parse bug (audit § 2.3).
+    """Regression for the timestamp wire contract (ADR 0022).
 
-    The durable fix is not a better string; it is no string at all. Rule-based
-    trade timestamps leave the Python boundary as canonical int64 ms UTC.
+    Before ADR 0022, `_format_timestamp` emitted strings that browsers parsed
+    inconsistently. The contract is now simpler: int64 ms UTC in, int64 ms UTC
+    out; rendering is the frontend display component's job.
     """
 
-    def test_ms_epoch_emits_ms_utc(self):
+    def test_ms_epoch_emits_int64_ms_utc(self):
         from app.services.rule_based_backtest import _format_timestamp
 
         # 2024-01-01T00:00:00Z == 1704067200000 ms
@@ -614,17 +615,29 @@ class TestFormatTimestampRegression:
         with pytest.raises(ValueError, match="timezone-aware"):
             _format_timestamp(datetime(2024, 1, 1, 0, 0))
 
-    def test_timezone_aware_string_roundtrips_to_ms(self):
-        """A timezone-bearing string is normalized before it crosses the boundary."""
-        from app.services.rule_based_backtest import _format_timestamp
-
-        assert _format_timestamp("2024-01-01T00:00:00Z") == 1704067200000
-
     def test_naive_string_rejected(self):
         from app.services.rule_based_backtest import _format_timestamp
 
         with pytest.raises(ValueError, match="include a timezone"):
             _format_timestamp("2024-01-01 00:00")
+
+    def test_iso_string_with_timezone_emits_int64_ms_utc(self):
+        from app.services.rule_based_backtest import _format_timestamp
+
+        assert _format_timestamp("2024-01-01T00:00:00Z") == 1704067200000
+
+    def test_timestamp_format_does_not_emit_a_display_string(self):
+        from app.services.rule_based_backtest import _format_timestamp
+
+        result = _format_timestamp(1704067200000)
+        assert isinstance(result, int)
+
+    def test_ms_roundtrip_is_identity(self):
+        from app.services.rule_based_backtest import _format_timestamp
+
+        input_ms = 1704067200000
+        emitted = _format_timestamp(input_ms)
+        assert emitted == input_ms
 
 
 if __name__ == "__main__":

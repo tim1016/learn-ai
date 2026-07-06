@@ -1,5 +1,4 @@
 using Backend.Data;
-using Backend.Models.MarketData;
 using HotChocolate;
 using HotChocolate.Types;
 using Microsoft.EntityFrameworkCore;
@@ -18,14 +17,14 @@ namespace Backend.GraphQL;
 public class BacktestRunMutation
 {
     /// <summary>
-    /// Update the free-text notes column on a <see cref="StrategyExecution"/>.
+    /// Update the free-text notes column on a backtest run.
     /// Returns the updated row so the client can show the persisted value
     /// without a follow-up query. Throws <see cref="GraphQLException"/> when
     /// the id does not resolve to a row — surfaces as a structured GraphQL
     /// error rather than a 404, matching the rest of the schema.
     /// </summary>
     [GraphQLName("updateBacktestRunNotes")]
-    public async Task<StrategyExecution?> UpdateBacktestRunNotesAsync(
+    public async Task<BacktestRunNotesResult> UpdateBacktestRunNotesAsync(
         AppDbContext db,
         int id,
         string notes,
@@ -43,6 +42,8 @@ public class BacktestRunMutation
 
         execution.Notes = notes;
         await db.SaveChangesAsync(ct);
-        return execution;
+        return new BacktestRunNotesResult(execution.Id, execution.Notes);
     }
 }
+
+public sealed record BacktestRunNotesResult(int Id, string? Notes);

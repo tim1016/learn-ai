@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -46,7 +46,7 @@ def get_trailing_12m_cash_dividends(
     underlyings legitimately pay no dividend).
     """
     if observation_date is None:
-        observation_date = datetime.now().strftime("%Y-%m-%d")
+        observation_date = datetime.now(UTC).date().isoformat()
     end_dt = datetime.strptime(observation_date, "%Y-%m-%d")
     start_dt = end_dt - timedelta(days=365)
     try:
@@ -83,7 +83,7 @@ def compute_dividend_yield(
     if spot_price <= 0:
         raise ValueError(f"spot_price must be positive: {spot_price}")
     if observation_date is None:
-        observation_date = datetime.now().strftime("%Y-%m-%d")
+        observation_date = datetime.now(UTC).date().isoformat()
     key = (ticker.upper(), observation_date)
     if _is_cache_valid(key) and key in _yield_cache:
         return _yield_cache[key]

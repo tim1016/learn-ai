@@ -1,4 +1,4 @@
-import { CommonModule, DatePipe } from '@angular/common';
+import { CommonModule } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -16,6 +16,7 @@ import { TableModule } from 'primeng/table';
 import type { RunLedger } from '../../../../../services/strategy-runs.types';
 import { WalkForwardService } from '../../../../../services/walk-forward.service';
 import type { WalkForwardConfig } from '../../../../../services/walk-forward.types';
+import { TimestampDisplayPipe } from '../../../../../shared/timestamp';
 
 /**
  * Embedded section on the run-detail page showing walk-forward
@@ -34,7 +35,7 @@ import type { WalkForwardConfig } from '../../../../../services/walk-forward.typ
     ButtonModule,
     MessageModule,
     TableModule,
-    DatePipe,
+    TimestampDisplayPipe,
   ],
   templateUrl: './walk-forward-section.component.html',
   styleUrls: ['./walk-forward-section.component.scss'],

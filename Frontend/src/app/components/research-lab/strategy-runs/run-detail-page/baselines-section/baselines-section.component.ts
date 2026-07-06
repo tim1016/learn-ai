@@ -1,4 +1,4 @@
-import { CommonModule, DatePipe } from '@angular/common';
+import { CommonModule } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -17,6 +17,7 @@ import { TagModule } from 'primeng/tag';
 import { BaselinesService } from '../../../../../services/baselines.service';
 import type { BaselineConfig } from '../../../../../services/baselines.types';
 import type { RunLedger } from '../../../../../services/strategy-runs.types';
+import { TimestampDisplayPipe } from '../../../../../shared/timestamp';
 
 /**
  * Embedded section on the run-detail page showing null-baseline
@@ -39,7 +40,7 @@ import type { RunLedger } from '../../../../../services/strategy-runs.types';
     MessageModule,
     TableModule,
     TagModule,
-    DatePipe,
+    TimestampDisplayPipe,
   ],
   templateUrl: './baselines-section.component.html',
   styleUrls: ['./baselines-section.component.scss'],

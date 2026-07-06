@@ -7,7 +7,7 @@ python-dotenv==1.0.0
 polygon-api-client==1.12.5
 setuptools>=70.0,<81
 pandas-ta==0.4.71b0
-pandas_market_calendars
+pandas_market_calendars==5.4.0
 httpx==0.28.1
 requests>=2.28
 python-multipart==0.0.20

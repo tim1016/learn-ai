@@ -32,20 +32,13 @@ from datetime import date as Date
 from datetime import timedelta
 from typing import Literal
 
-import pandas as pd
-import pandas_market_calendars as mcal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.lean_sidecar.trading_calendar import (
     blocked_dates_in_range,
+    holiday_names_in_range,
     is_trading_day,
 )
-
-# Reuse the NYSE calendar singleton for holiday-name lookups. The
-# ``regular_holidays`` attribute returns a ``pandas.tseries.holiday``
-# calendar whose ``.holidays(start, end, return_name=True)`` produces
-# a Series indexed by date with the holiday name as the value.
-_NYSE = mcal.get_calendar("NYSE")
 
 
 class ExcludedDay(BaseModel):
@@ -81,22 +74,6 @@ class WindowSummary(BaseModel):
     sessions_excluded: list[ExcludedDay] = Field(default_factory=list)
 
 
-def _holiday_names(start: Date, end_inclusive: Date) -> dict[Date, str]:
-    """Return ``{date: holiday_name}`` for NYSE holidays in
-    ``[start, end_inclusive]``.
-
-    Calls into the underlying ``pandas.tseries.holiday`` calendar that
-    backs ``pandas_market_calendars``. Returns an empty dict if no
-    holidays fall in the range.
-    """
-    series = _NYSE.regular_holidays.holidays(
-        pd.Timestamp(start),
-        pd.Timestamp(end_inclusive),
-        return_name=True,
-    )
-    return {ts.date(): str(name) for ts, name in series.items()}
-
-
 def summarize_window(start: Date, end: Date) -> WindowSummary:
     """Build a :class:`WindowSummary` for ``[start, end]`` (inclusive).
 
@@ -111,7 +88,7 @@ def summarize_window(start: Date, end: Date) -> WindowSummary:
         )
 
     blocked = blocked_dates_in_range(start, end)
-    holiday_names = _holiday_names(start, end)
+    holiday_names = holiday_names_in_range(start, end)
 
     included: list[Date] = []
     excluded: list[ExcludedDay] = []

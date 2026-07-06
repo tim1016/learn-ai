@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -484,7 +484,7 @@ python3 generate_validation_report.py
 </ul>
 
 <div class="footer">
-  Generated {datetime.now().strftime('%Y-%m-%d %H:%M')} local &middot;
+  Generated {datetime.now(UTC).strftime('%Y-%m-%d %H:%M')} UTC &middot;
   Source: <code>PythonDataService/run_spy_partial_parity.py</code>,
   <code>PythonDataService/generate_validation_report.py</code> &middot;
   Fixture: <code>app/engine/tests/fixtures/spy_lean_trades.csv</code> (LEAN reference, committed)

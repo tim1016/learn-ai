@@ -9,7 +9,7 @@ A scientific platform for porting and validating trading logic. Reference implem
 3. **Sovereignty over the math.** Reference code is studied, ported, and then the dependency is eliminated. Vendored references in `references/` exist for audit, not for runtime use.
 4. **Strict equivalence is the default.** Warmup bars, timestamp alignment, commission, and fill models must match the reference exactly. If they can't, that fact is documented in the port's module docstring.
 5. **Single source of truth for any numerical answer.** Math may live in any layer that fits the use case; what's not negotiable is that there is **one** canonical implementation per concept. Duplicates are acceptable only when they exist for a real reason (latency, layer-locality, vendor parity) and carry a parity test naming the canonical file in their provenance block. The provenance block (`Formula`/`Reference`/`Canonical implementation`/`Validated against`) is enforced by the `learn-ai-validation` skill.
-6. **Timestamps are `int64 ms UTC` at all boundaries.** Wire and storage must always use `int64 ms UTC`; ISO strings and `DateTime` are disallowed as wire/storage formats. Language-native datetime types (`pd.Timestamp`, `DateTime`, `Date`) are permitted only for local arithmetic inside a single function and must be converted back to `int64 ms UTC` before returning, persisting, or serializing. See `.claude/rules/numerical-rigor.md` → "Timestamp rigor" for the full policy, the two conversion boundaries, and the ban list.
+6. **Time is `int64 ms UTC`, and the calendar is the source of truth.** Every temporal value in flight, at rest, or on the wire is `int64 ms UTC`; ISO strings and `DateTime` are disallowed as wire/storage formats. Language-native datetime types (`pd.Timestamp`, `DateTime`, `Date`) are permitted only for local arithmetic inside a single function and must be converted back to `int64 ms UTC` before returning, persisting, or serializing. All scheduled session structure (trading days, session open/close, early closes, alignment) derives from a single canonical calendar module — no hardcoded session times. Real-time market liveness (halts) is a separate concern owned by the live feed. `.claude/rules/temporal-rigor.md` is the full authority — as authoritative for time as `numerical-rigor.md` is for math (decision: ADR 0022).
 
 ## Repo map
 
@@ -57,6 +57,7 @@ Full conventions live in `.claude/rules/`. Read the relevant file before signifi
 - `.claude/rules/python.md` — FastAPI, pandas, async conventions
 - `.claude/rules/testing.md` — Per-stack testing standards
 - `.claude/rules/numerical-rigor.md` — The core scientific rules (tolerances, golden fixtures, reconciliation taxonomy)
+- `.claude/rules/temporal-rigor.md` — The temporal authority (int64 ms UTC representation, calendar-as-source-of-truth, display modes) — peer of numerical-rigor
 
 ## Hard rules (apply to every task)
 

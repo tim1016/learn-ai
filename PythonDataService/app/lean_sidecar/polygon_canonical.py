@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 
 from app.engine.data.polygon_export import group_by_trading_date, polygon_bar_to_trade_bar
 from app.engine.data.trade_bar import TradeBar
+from app.lean_sidecar.trading_calendar import is_regular_session_ms_utc
 from app.services.dataset_service import fetch_bars_chunks_raw
 from app.services.polygon_client import PolygonClientService
 
@@ -215,10 +216,6 @@ def get_default_provider() -> CanonicalBarsProvider:
 _ET = ZoneInfo("America/New_York")
 _UTC = ZoneInfo("UTC")
 
-# RTH session: [09:30, 16:00) ET.
-_RTH_OPEN_MINUTE = 9 * 60 + 30
-_RTH_CLOSE_MINUTE = 16 * 60
-
 
 class CanonicalBarsError(ValueError):
     """Polygon returned bars that violate the canonical-input contract.
@@ -230,9 +227,7 @@ class CanonicalBarsError(ValueError):
 
 
 def _is_rth(ts_ms: int) -> bool:
-    et = datetime.fromtimestamp(ts_ms / 1000, tz=_UTC).astimezone(_ET)
-    minute_of_day = et.hour * 60 + et.minute
-    return _RTH_OPEN_MINUTE <= minute_of_day < _RTH_CLOSE_MINUTE
+    return is_regular_session_ms_utc(ts_ms)
 
 
 def fetch_canonical_minute_bars(
@@ -257,7 +252,7 @@ def fetch_canonical_minute_bars(
         * Every NYSE session in ``[start_date, end_date]`` must appear in
           the grouped output; missing sessions raise
           ``polygon_window_incomplete``.
-        * Every session must include its 09:30 ET bar and the
+        * Every session must include its scheduled open bar and the
           close-1 boundary bar (half-day aware via
           ``trading_calendar.session_close_minute_et``); missing
           boundary bars raise ``polygon_session_incomplete``.
@@ -322,13 +317,6 @@ def fetch_canonical_minute_bars(
     return [(d, grouped[d]) for d in sorted(grouped.keys())]
 
 
-# Set of valid 09:30 + close-boundary minutes-of-day for boundary checks.
-# A regular session closes at 16:00 ET; the last *bar* before close is
-# 15:59 (start-of-bar minute). Half-days close earlier (e.g. 13:00 ET);
-# the last bar there is 12:59.
-_RTH_FIRST_BAR_MINUTE = _RTH_OPEN_MINUTE  # 09:30
-
-
 def _assert_window_complete(
     *,
     grouped: dict[date, list[TradeBar]],
@@ -341,7 +329,7 @@ def _assert_window_complete(
     Two checks:
       1. Every NYSE session in ``[start_date, end_date]`` is present in
          ``grouped``; otherwise raise ``polygon_window_incomplete``.
-      2. Every session has its 09:30 ET bar plus the close-1 boundary
+      2. Every session has its scheduled open bar plus the close-1 boundary
          bar (half-day calendar aware); otherwise raise
          ``polygon_session_incomplete``.
 
@@ -349,7 +337,7 @@ def _assert_window_complete(
     Production paths default to lenient; the parity test and freshness
     canary opt in.
     """
-    from app.lean_sidecar.trading_calendar import expected_sessions, session_close_minute_et
+    from app.lean_sidecar.trading_calendar import expected_sessions, session_close_minute_et, session_window_for_date
 
     expected = expected_sessions(start_date, end_date)
     missing_sessions = [d for d in expected if d not in grouped]
@@ -367,11 +355,15 @@ def _assert_window_complete(
             et_dt = tb.time.astimezone(_ET)
             bar_minutes.add(et_dt.hour * 60 + et_dt.minute)
 
+        window = session_window_for_date(d)
+        open_et = datetime.fromtimestamp(window.open_ms_utc / 1000, tz=_UTC).astimezone(_ET)
+        open_minute = open_et.hour * 60 + open_et.minute
         close_minute = session_close_minute_et(d)
         required_last_bar_minute = close_minute - 1
         missing_boundaries: list[str] = []
-        if _RTH_FIRST_BAR_MINUTE not in bar_minutes:
-            missing_boundaries.append("09:30")
+        if open_minute not in bar_minutes:
+            hh, mm = divmod(open_minute, 60)
+            missing_boundaries.append(f"{hh:02d}:{mm:02d}")
         if required_last_bar_minute not in bar_minutes:
             hh, mm = divmod(required_last_bar_minute, 60)
             missing_boundaries.append(f"{hh:02d}:{mm:02d}")

@@ -1,6 +1,6 @@
 """Shared timestamp conversion helpers.
 
-Per ``.claude/rules/numerical-rigor.md``, ``int64 ms UTC`` is the canonical
+Per ``.claude/rules/temporal-rigor.md``, ``int64 ms UTC`` is the canonical
 wire and storage format for timestamps. ``to_ms_utc`` is the single
 conversion boundary from a tz-aware ``datetime`` to that format;
 ``now_ms_utc`` is the single sanctioned way to produce a fresh wall-clock

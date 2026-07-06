@@ -17,45 +17,20 @@
  * produces "24" at midnight.
  */
 
-const PARTS_OPTIONS: Intl.DateTimeFormatOptions = {
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit',
-  second: '2-digit',
-  hourCycle: 'h23',
-};
-
-interface WallClockParts {
-  year: string;
-  month: string;
-  day: string;
-  hour: string;
-  minute: string;
-  second: string;
-}
-
-function getParts(ms: number, timeZone?: string): WallClockParts {
-  const fmt = new Intl.DateTimeFormat(
-    'en-US',
-    timeZone ? { ...PARTS_OPTIONS, timeZone } : PARTS_OPTIONS,
-  );
-  const out: Partial<WallClockParts> = {};
-  for (const p of fmt.formatToParts(new Date(ms))) {
-    if (p.type !== 'literal') {
-      (out as Record<string, string>)[p.type] = p.value;
-    }
-  }
-  return out as WallClockParts;
-}
+import { formatTimestampDisplay } from '../shared/timestamp';
 
 export function formatLocalTimestamp(ms: number, timeZone?: string): string {
-  const p = getParts(ms, timeZone);
-  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`;
+  return formatTimestampDisplay(ms, {
+    mode: 'local',
+    granularity: 'datetime',
+    localTimeZone: timeZone,
+  });
 }
 
 export function formatLocalClock(ms: number, timeZone?: string): string {
-  const p = getParts(ms, timeZone);
-  return `${p.hour}:${p.minute}:${p.second}`;
+  return formatTimestampDisplay(ms, {
+    mode: 'local',
+    granularity: 'time',
+    localTimeZone: timeZone,
+  });
 }

@@ -17,11 +17,13 @@ from app.services.strategies.common import (
 
 
 def _trade(num: int, trade_type: str = "Buy", pnl_pct: float = 0.01, cum: float | None = None) -> TradeRecord:
+    entry_ms = int(datetime(2024, 1, 1, 14, 30, tzinfo=UTC).timestamp() * 1000)
+    exit_ms = int(datetime(2024, 1, 1, 14, 45, tzinfo=UTC).timestamp() * 1000)
     return TradeRecord(
         trade_number=num,
         trade_type=trade_type,
-        entry_timestamp=1_704_119_400_000,
-        exit_timestamp=1_704_120_300_000,
+        entry_timestamp=entry_ms,
+        exit_timestamp=exit_ms,
         entry_price=100.0,
         exit_price=100.0 * (1.0 + pnl_pct),
         pnl=pnl_pct * 100.0,
@@ -80,10 +82,11 @@ def test_compute_max_drawdown_empty_is_zero():
     assert _compute_max_drawdown([]) == 0.0
 
 
-def test_format_timestamp_epoch_ms_returns_canonical_ms():
-    ms = format_timestamp(1_704_067_200_000)
+def test_format_timestamp_epoch_ms_produces_int64_ms_utc():
+    # 2024-01-01 00:00:00 UTC = 1_704_067_200_000 ms.
+    ts = format_timestamp(1_704_067_200_000)
 
-    assert ms == 1_704_067_200_000
+    assert ts == 1_704_067_200_000
 
 
 def test_format_timestamp_naive_datetime_rejected():
@@ -91,17 +94,17 @@ def test_format_timestamp_naive_datetime_rejected():
         format_timestamp(datetime(2024, 1, 1, 14, 30, 0))
 
 
-def test_format_timestamp_aware_datetime_converted_to_ms_utc():
+def test_format_timestamp_aware_datetime_converted_to_ms():
     from datetime import timedelta, timezone
 
     et = timezone(timedelta(hours=-4))
-    ms = format_timestamp(datetime(2024, 4, 1, 10, 30, 0, tzinfo=et))
+    ts = format_timestamp(datetime(2024, 4, 1, 10, 30, 0, tzinfo=et))
 
     # 10:30 EDT = 14:30 UTC.
-    assert ms == 1_711_981_800_000
+    assert ts == 1_711_981_800_000
 
 
-def test_format_timestamp_tz_aware_string_converted_to_ms_utc():
+def test_format_timestamp_string_with_timezone_converted_to_ms():
     assert format_timestamp("2024-01-01T00:00:00Z") == 1_704_067_200_000
 
 

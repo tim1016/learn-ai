@@ -1,4 +1,4 @@
-import { CommonModule, DatePipe, DecimalPipe, PercentPipe } from '@angular/common';
+import { CommonModule, DecimalPipe, PercentPipe } from '@angular/common';
 import {
   AfterViewInit,
   ChangeDetectionStrategy,
@@ -30,6 +30,7 @@ import type {
   MonteCarloResponse,
   MonteCarloStatus,
 } from '../../../../services/monte-carlo.types';
+import { TimestampDisplayPipe } from '../../../../shared/timestamp';
 
 const CHART_THEME = {
   bg: '#0f172a',
@@ -74,9 +75,9 @@ const P95_COLOR = 'rgba(74, 222, 128, 0.8)'; // muted green — optimistic tail
     MessageModule,
     TableModule,
     TagModule,
-    DatePipe,
     DecimalPipe,
     PercentPipe,
+    TimestampDisplayPipe,
   ],
   templateUrl: './monte-carlo-detail-page.component.html',
   styleUrls: ['./monte-carlo-detail-page.component.scss'],

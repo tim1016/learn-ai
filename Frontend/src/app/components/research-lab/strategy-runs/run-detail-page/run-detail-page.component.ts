@@ -1,4 +1,4 @@
-import { CommonModule, DatePipe, DecimalPipe, PercentPipe } from '@angular/common';
+import { CommonModule, DecimalPipe, PercentPipe } from '@angular/common';
 import {
   AfterViewInit,
   ChangeDetectionStrategy,
@@ -34,6 +34,7 @@ import type {
 import { BaselinesSectionComponent } from './baselines-section/baselines-section.component';
 import { MonteCarloSectionComponent } from './monte-carlo-section/monte-carlo-section.component';
 import { WalkForwardSectionComponent } from './walk-forward-section/walk-forward-section.component';
+import { TimestampDisplayPipe } from '../../../../shared/timestamp';
 
 const CHART_THEME = {
   bg: '#0f172a',
@@ -75,9 +76,9 @@ const DRAWDOWN_COLOR = '#f87171';
     MessageModule,
     TableModule,
     TagModule,
-    DatePipe,
     DecimalPipe,
     PercentPipe,
+    TimestampDisplayPipe,
     WalkForwardSectionComponent,
     MonteCarloSectionComponent,
     BaselinesSectionComponent,

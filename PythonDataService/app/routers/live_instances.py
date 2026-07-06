@@ -59,13 +59,13 @@ from app.engine.live.live_artifact_io import (
     read_parquet_tail,
 )
 from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarCorruptError, LiveStateSidecarRepo
-from app.engine.live.nyse_calendar import nyse_session_state_at_ms
 from app.engine.live.order_identity import mint_intent_id
 from app.engine.live.readiness import build_start_readiness
 from app.engine.live.readiness_sidecar import read_readiness
 from app.engine.live.signal_tone import latest_signal_tone
 from app.engine.strategy.spec.descriptors import decision_column_descriptors
 from app.engine.strategy.spec.schema import load_spec_from_path
+from app.lean_sidecar.trading_calendar import session_state_at_ms
 from app.operator.incidents.store import IncidentStore
 from app.operator.notices.schema import OperatorNotice, OperatorNoticeAction
 from app.routers.live_runs import (
@@ -700,7 +700,7 @@ def _resolve_engine_runtime_snapshot_and_freshness(
     return snapshot, evaluate_runtime_freshness(
         snapshot,
         now_ms=now_ms,
-        session_state=nyse_session_state_at_ms(now_ms),
+        session_state=session_state_at_ms(now_ms),
     )
 
 

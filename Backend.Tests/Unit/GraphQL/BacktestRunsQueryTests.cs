@@ -7,9 +7,9 @@ using Microsoft.EntityFrameworkCore;
 namespace Backend.Tests.Unit.GraphQL;
 
 /// <summary>
-/// Tests for BacktestRunsQuery.GetBacktestRuns filtering logic.
+/// Tests for BacktestRunsQuery.GetBacktestRuns filtering and wire-contract logic.
 /// The [UsePaging] middleware is a HC concern; these tests verify the
-/// IQueryable predicate behaviour against an InMemory DbContext.
+/// resolver behaviour against an InMemory DbContext.
 /// </summary>
 public class BacktestRunsQueryTests
 {
@@ -84,7 +84,7 @@ public class BacktestRunsQueryTests
     {
         var (query, db) = await BuildAsync();
 
-        var result = await query.GetBacktestRuns(db, engine: Engine.LEAN).ToListAsync();
+        var result = query.GetBacktestRuns(db, engine: Engine.LEAN).ToList();
 
         Assert.Single(result);
         Assert.Equal("lean-sidecar", result[0].Source);
@@ -100,7 +100,7 @@ public class BacktestRunsQueryTests
         // unified history table doesn't lose pre-PR-B runs.
         var (query, db) = await BuildAsync();
 
-        var result = await query.GetBacktestRuns(db, engine: Engine.PYTHON).ToListAsync();
+        var result = query.GetBacktestRuns(db, engine: Engine.PYTHON).ToList();
 
         Assert.Equal(2, result.Count);
         Assert.Contains(result, r => r.Source == "engine");
@@ -112,9 +112,20 @@ public class BacktestRunsQueryTests
     {
         var (query, db) = await BuildAsync();
 
-        var result = await query.GetBacktestRuns(db).ToListAsync();
+        var result = query.GetBacktestRuns(db).ToList();
 
         Assert.Equal(3, result.Count);
+    }
+
+    [Fact]
+    public async Task GetBacktestRuns_ReturnsQueryableForDatabasePaging()
+    {
+        var (query, db) = await BuildAsync();
+
+        var result = query.GetBacktestRuns(db);
+
+        Assert.IsAssignableFrom<IQueryable<BacktestRunNodeType>>(result);
+        Assert.Single(result.Take(1));
     }
 
     [Fact]
@@ -123,8 +134,8 @@ public class BacktestRunsQueryTests
         var (query, db) = await BuildAsync();
 
         // "SPY" appears in two rows, "AAPL" in one
-        var spyRows = await query.GetBacktestRuns(db, symbol: "SPY").ToListAsync();
-        var aaplRows = await query.GetBacktestRuns(db, symbol: "AAPL").ToListAsync();
+        var spyRows = query.GetBacktestRuns(db, symbol: "SPY").ToList();
+        var aaplRows = query.GetBacktestRuns(db, symbol: "AAPL").ToList();
 
         Assert.Equal(2, spyRows.Count);
         Assert.Single(aaplRows);
@@ -136,7 +147,7 @@ public class BacktestRunsQueryTests
     {
         var (query, db) = await BuildAsync();
 
-        var result = await query.GetBacktestRuns(db, engine: Engine.LEAN).ToListAsync();
+        var result = query.GetBacktestRuns(db, engine: Engine.LEAN).ToList();
 
         Assert.Single(result);
         var execution = result[0];
@@ -150,7 +161,7 @@ public class BacktestRunsQueryTests
     {
         var (query, db) = await BuildAsync();
 
-        var result = await query.GetBacktestRuns(db).ToListAsync();
+        var result = query.GetBacktestRuns(db).ToList();
 
         // Seed order: lean (2025-06-01), engine (2025-05-01), strategy-lab (2025-04-01)
         Assert.Equal("lean-sidecar", result[0].Source);
@@ -166,8 +177,19 @@ public class BacktestRunsQueryTests
         // any substring; the fix uses an exact JSON key/value fragment.
         var (query, db) = await BuildAsync();
 
-        var result = await query.GetBacktestRuns(db, symbol: "SP").ToListAsync();
+        var result = query.GetBacktestRuns(db, symbol: "SP").ToList();
 
         Assert.Empty(result);
+    }
+
+    [Fact]
+    public async Task GetBacktestRuns_ExecutedAt_ReturnsUnixMilliseconds()
+    {
+        var (query, db) = await BuildAsync();
+
+        var result = query.GetBacktestRuns(db, engine: Engine.LEAN).ToList();
+
+        var execution = Assert.Single(result);
+        Assert.Equal(1_748_736_000_000, execution.ExecutedAt);
     }
 }

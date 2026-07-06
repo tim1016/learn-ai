@@ -34,9 +34,6 @@ from zoneinfo import ZoneInfo
 
 from app.engine.data.trade_bar import TradeBar
 
-# Regular trading hours open in minutes past midnight ET. 09:30 ET = 570.
-_RTH_OPEN_MIN_ET = 9 * 60 + 30
-
 # LEAN's price scale factor: prices on disk are multiplied by 10000.
 PRICE_SCALE = Decimal(10000)
 
@@ -130,26 +127,24 @@ def _parse_csv_bytes(
 def _filter_to_rth(bars: list[TradeBar], trading_date: date) -> list[TradeBar]:
     """Drop bars whose start time falls outside NYSE regular trading hours.
 
-    Uses :func:`app.lean_sidecar.trading_calendar.session_close_minute_et`
-    so half-days (13:00 ET close) are respected. When the date is not a
-    NYSE session at all (shouldn't happen — ``iter_dates`` only yields
+    Uses :func:`app.lean_sidecar.trading_calendar.session_window_for_date`
+    so half-days and future calendar changes are respected. When the date is
+    not a NYSE session at all (shouldn't happen — ``iter_dates`` only yields
     dates with zips, but defend anyway), every bar is dropped.
 
-    Bar ``time`` is the bar start in ET. A 1-minute bar at 09:30:00 covers
-    the 09:30:00-09:31:00 window and is the first RTH bar; a 1-minute
-    bar at 15:59:00 covers the 15:59:00-16:00:00 window and is the last.
-    The comparison is therefore ``[09:30, close)`` on bar start minute.
+    Bar ``time`` is the bar start in ET, and the comparison is
+    ``[scheduled_open, scheduled_close)`` in canonical ms UTC.
     """
     # Lazy import to keep app.lean_sidecar internal to its own boundary at
     # module-load time — the engine layer should not pay for pandas-market-
     # calendars unless a strategy actually loads bars with session filtering.
-    from app.lean_sidecar.trading_calendar import session_close_minute_et
+    from app.lean_sidecar.trading_calendar import session_window_for_date
 
     try:
-        close_min = session_close_minute_et(trading_date)
+        window = session_window_for_date(trading_date)
     except LookupError:
         return []
-    return [b for b in bars if _RTH_OPEN_MIN_ET <= b.time.hour * 60 + b.time.minute < close_min]
+    return [b for b in bars if window.open_ms_utc <= int(b.time.timestamp() * 1000) < window.close_ms_utc]
 
 
 class LeanMinuteDataReader:

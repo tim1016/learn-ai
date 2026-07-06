@@ -314,7 +314,7 @@ def hydrate(
         ladder rejects (after writing the receipt).
     """
     # Local import to keep module-load surface minimal.
-    from app.engine.live.nyse_calendar import NoSessionError, previous_completed_nyse_session_close_ms
+    from app.lean_sidecar.trading_calendar import NoSessionError, previous_completed_session_close_ms
 
     strategy_key: str = strategy.STRATEGY_KEY
     symbol: str = (
@@ -417,7 +417,7 @@ def hydrate(
 
     # Check #3: calendar — previous completed NYSE session.
     try:
-        expected_prev_close_ms = previous_completed_nyse_session_close_ms(session_start_ms)
+        expected_prev_close_ms = previous_completed_session_close_ms(session_start_ms)
     except NoSessionError:
         receipt = _base_receipt(
             accepted=False,

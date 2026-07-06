@@ -18,6 +18,7 @@ import { TagModule } from 'primeng/tag';
 import { MessageModule } from 'primeng/message';
 import { TooltipModule } from 'primeng/tooltip';
 import { DialogModule } from 'primeng/dialog';
+import { TimestampDisplayPipe } from '../../../shared/timestamp';
 
 interface ColumnHelp {
   icon: string;
@@ -38,6 +39,7 @@ interface ColumnHelp {
     MessageModule,
     TooltipModule,
     DialogModule,
+    TimestampDisplayPipe,
   ],
   templateUrl: './signal-history.component.html',
   styleUrls: ['./signal-history.component.scss'],

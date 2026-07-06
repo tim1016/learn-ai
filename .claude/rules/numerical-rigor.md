@@ -75,47 +75,9 @@ If a test fails at the default, do NOT loosen the tolerance to make it pass. Ins
 
 ## Timestamp rigor
 
-Timestamp handling is the single largest source of divergence in backtesting. Strict rules:
+**Moved.** Timestamp representation, the two conversion boundaries, the trading-calendar authority, the display modes, and the grep-able ban list now live in their own peer authority: **`.claude/rules/temporal-rigor.md`** (decision record: `docs/architecture/adrs/0022-temporal-authority-calendar-and-timestamp.md`). Time is as authoritative there as math is here.
 
-### Canonical format
-
-**Every timestamp in flight, at rest, or on the wire is an integer count of milliseconds since Unix epoch UTC.** No exceptions. ISO strings, `datetime` / `DateTime` objects, tz-aware ISO-with-`Z`, and naive datetimes are all **disallowed as wire and storage formats**. The in-memory language-native types are allowed only for arithmetic within a single function; they must be converted back to `int64 ms` before returning, writing, or serializing.
-
-Rationale: four different wire formats were in flight before this rule (`int ms`, naive-ISO-with-lying-`Z`, `"YYYY-MM-DD HH:MM"` that parses as local in the browser, .NET `DateTime` with `Kind=Local`-by-accident). See `docs/audits/computational-fidelity-2026-04-22.md` § 2 and its addendum § 3.
-
-### Two and only two conversion boundaries
-
-1. **External-API ingestion.** Parse → `int64 ms UTC` immediately on receipt. Validate monotonicity and uniqueness at the same point and **fail fast** on violations: reject any duplicate timestamp and any non-strictly-increasing sequence with a descriptive error. Do not silently repair the feed (no `drop_duplicates`, no forward-fill, no reordering) — duplicates and gaps are signals about upstream corruption and must surface, not be masked. Everything downstream consumes `int64 ms`.
-2. **UI rendering.** `int64 ms UTC` → the **viewer/user's local timezone** for display by default. If a view needs a different display timezone, it must state that explicitly in the UI or contract (for example, an exchange-session view may render `America/New_York` / ET). The display-side string is never stored, never sent back to a server, never compared against another timestamp.
-
-No other place in the codebase converts timestamps for wire, storage, or serialization. Transient in-function timezone conversion for wall-clock semantics (see the classical rule below) is allowed, provided the result is not persisted and is converted back to canonical `int64 ms UTC` before return, write, or serialize.
-
-#### Finite ingestion vs. live subscriptions
-
-The fail-fast rule above governs **finite** ingestion — a historical fetch is a closed dataset where a duplicate or gap *is* upstream corruption, so it must halt. An **active broker subscription** is a different boundary: a long-lived stream (e.g. IBKR `reqRealTimeBars`) can legitimately *redeliver* the bar it most recently sent, and the vendor does not contractually promise duplicate-free delivery. For these and only these live subscriptions, a redelivery of the most-recently-accepted element may be absorbed **idempotently** — but it must be **surfaced, never silenced**: logged with a structured `action` and incremented on an observable counter, exactly like the fail-fast path emits an error. The relaxation is narrow:
-
-- Exact redelivery (same timestamp, same payload) → skip; do not double-count.
-- Same timestamp, *different* payload, before the aggregate it feeds is emitted → treat as a correction; recompute the open aggregate from its stored parts (never fold-and-sum).
-- Any timestamp belonging to an *already-emitted* aggregate (i.e. `< last_accepted`) → still **fatal**; downstream has already consumed a now-stale value. Non-monotonic-within-the-open-aggregate stays fatal too until a real feed demonstrates otherwise.
-
-Reference implementation: `app/broker/ibkr/bars.py` (`policy="strict"` is the finite default; `policy="live_idempotent"` is the subscription relaxation). Silent `drop_duplicates`/forward-fill/reorder remains banned in both modes — absorbing a redelivery is not the same as repairing a feed.
-
-### Ban list (CI-enforceable with grep)
-
-- `datetime.utcnow` — deprecated in Python 3.12; use `datetime.now(UTC)` at the ingestion boundary, then immediately convert to ms.
-- `datetime.utcfromtimestamp` — same.
-- `datetime.now()` without a `tz=` argument — timezone-ambiguous.
-- `pd.to_datetime(...)` without `utc=True` — produces naive objects that lie when `.strftime("...Z")` is appended.
-- `DateTime.Parse(...)` in any timestamp-canonicalization path — **disallowed**. The common belief that it "produces `Kind=Local`" is misleading: naive strings actually parse as `Kind=Unspecified`, and passing `DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal` causes the parser to **silently coerce** naive strings to UTC. Both paths violate fail-fast ingestion. For string input, require `DateTimeOffset.ParseExact` (or `DateTime.ParseExact`) with `CultureInfo.InvariantCulture` and a format that includes an explicit offset designator; reject ambiguous/naive strings. Prefer: accept timestamps as numeric `long` (ms since epoch) and skip string parsing entirely.
-- `new Date(string)` in TypeScript where the string is not an ISO-8601 with tz designator — parses as local in Chrome/Safari, as `Invalid Date` in Firefox. If the input is a timestamp, it should have been typed `number` and passed directly.
-- `string` or `DateTime` typing on any field literally named `timestamp` / `ts` / `time` in a GraphQL DTO, C# DTO, Pydantic model, or TS interface. The type is `long` / `int` / `number`.
-
-### Classical rules (kept)
-
-- **All logic operates in `America/New_York`** when wall-clock semantics matter (session filters, exchange-aligned bar starts). The conversion is per-operation, never persisted.
-- **Bar timestamp = bar close.** A bar labeled `09:45:00` contains trades from `09:30:00` (inclusive) to `09:45:00` (exclusive).
-- **Never forward-fill or interpolate to align.** If two series have different timestamps, that's data telling you something — don't silence it.
-- **Bar alignment is explicit.** A 15-min bar starts at an exchange-aligned minute (`:00`, `:15`, `:30`, `:45`). A bar that starts at `:07` is wrong.
+The one-line invariant, kept here because numerical work depends on it: **every temporal value in flight, at rest, or on the wire is `int64 ms UTC`**, and all scheduled session structure derives from the single canonical calendar module. For warmup, bar-close labeling, and alignment rules that touch numerical equivalence, see the "Classical rules" and the calendar authority in `temporal-rigor.md`.
 
 ## Warmup rigor
 

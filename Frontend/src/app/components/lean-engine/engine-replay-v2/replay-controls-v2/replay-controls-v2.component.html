@@ -61,7 +61,7 @@
   <div class="transport-right">
     <div class="time-readout">
       <span class="time">
-        @if (currentTime(); as t) { {{ t | date:'MMM d, HH:mm' }} } @else { — }
+        @if (currentTime(); as t) { {{ t | timestampDisplay: 'et' : 'datetime' }} } @else { — }
       </span>
       <span class="idx">{{ indexLabel() }}</span>
     </div>

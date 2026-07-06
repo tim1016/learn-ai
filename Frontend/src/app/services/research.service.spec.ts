@@ -121,7 +121,7 @@ describe('ResearchService', () => {
           passedValidation: true,
           monotonicityRatio: 1.0,
           isMonotonic: true,
-          createdAt: '2024-04-01T00:00:00Z',
+          createdAt: Date.UTC(2024, 3, 1),
         },
       ];
 
@@ -235,7 +235,7 @@ describe('ResearchService', () => {
           startDate: '2024-01-01', endDate: '2024-03-31', barsUsed: 200,
           overallGrade: 'B', statusLabel: 'Candidate', overallPassed: true,
           meanOosSharpe: 0.8, bestThreshold: 1.0, bestCostBps: 5,
-          flipSign: true, regimeGateEnabled: true, createdAt: '2024-04-01T00:00:00Z',
+          flipSign: true, regimeGateEnabled: true, createdAt: Date.UTC(2024, 3, 1),
         },
       ];
 

@@ -9,13 +9,18 @@ import json
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from datetime import date as Date
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-import pandas_market_calendars as mcal
 import pandas_ta as ta
 
+from app.lean_sidecar.trading_calendar import (
+    session_close_ms_utc,
+    session_window_for_date,
+    session_windows_ms_utc,
+)
 from app.services.polygon_client import PolygonClientService
 
 
@@ -32,8 +37,6 @@ _DAYS_PER_CHUNK = _POLYGON_MAX_BARS // _MINUTES_PER_DAY
 _WARMUP_MULTIPLIER = 5
 
 _ET = ZoneInfo("US/Eastern")
-_RTH_START_HOUR, _RTH_START_MIN = 9, 30
-_RTH_END_HOUR, _RTH_END_MIN = 16, 0
 
 # Default indicator configurations matching TradingView standard setup
 DEFAULT_INDICATORS: list[dict[str, Any]] = [
@@ -407,17 +410,22 @@ def filter_session(
     if session != "rth":
         return df
 
-    dt_utc = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
-    dt_et = dt_utc.dt.tz_convert(_ET)
-    time_minutes = dt_et.dt.hour * 60 + dt_et.dt.minute
+    dt_et = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert(_ET)
     bar_window_minutes = max(1, multiplier) * _BAR_WINDOW_MINUTES_PER_UNIT.get(timespan, 1)
+    bar_window_ms = bar_window_minutes * 60_000
 
-    rth_start = _RTH_START_HOUR * 60 + _RTH_START_MIN  # 570
-    rth_end = _RTH_END_HOUR * 60 + _RTH_END_MIN  # 960
+    start_date = dt_et.dt.date.min()
+    end_date = dt_et.dt.date.max()
+    windows = session_windows_ms_utc(start_date, end_date)
+    if not windows:
+        logger.info(f"[SESSION] RTH filter ({multiplier}{timespan}): {len(df)} → 0 bars")
+        return df.iloc[0:0].reset_index(drop=True)
 
-    overlaps_rth = (time_minutes < rth_end) & ((time_minutes + bar_window_minutes) > rth_start)
-    is_weekday = dt_et.dt.dayofweek < 5
-    mask = overlaps_rth & is_weekday
+    bar_start_ms = df["timestamp"].astype("int64")
+    bar_end_ms = bar_start_ms + bar_window_ms
+    mask = pd.Series(False, index=df.index)
+    for window in windows:
+        mask |= (bar_start_ms < window.close_ms_utc) & (bar_end_ms > window.open_ms_utc)
 
     before = len(df)
     df = df[mask].reset_index(drop=True)
@@ -469,10 +477,6 @@ def fetch_rth_closes(
     return closes
 
 
-# Wall-clock minute (ET) at which the regular trading session ends.
-_RTH_CLOSE_MINUTE = _RTH_END_HOUR * 60 + _RTH_END_MIN  # 16:00 → 960
-
-
 def add_previous_close_column(
     df: pd.DataFrame,
     rth_closes: dict[str, float],
@@ -507,7 +511,16 @@ def add_previous_close_column(
     dt_et = pd.to_datetime(df["timestamp"], unit="ms", utc=True).dt.tz_convert(_ET)
     bar_dates = dt_et.dt.date.astype(str).reset_index(drop=True)
     bar_minute_of_day = (dt_et.dt.hour * 60 + dt_et.dt.minute).reset_index(drop=True)
-    after_close_mask = bar_minute_of_day >= _RTH_CLOSE_MINUTE
+    close_minute_by_date: dict[str, int] = {}
+    for date_str in sorted(set(bar_dates)):
+        try:
+            close_ms = session_close_ms_utc(Date.fromisoformat(date_str))
+        except LookupError:
+            continue
+        close_et = datetime.fromtimestamp(close_ms / 1000, tz=UTC).astimezone(_ET)
+        close_minute_by_date[date_str] = close_et.hour * 60 + close_et.minute
+    session_close_minute = bar_dates.map(close_minute_by_date)
+    after_close_mask = session_close_minute.notna() & (bar_minute_of_day >= session_close_minute)
 
     sorted_dates = sorted(rth_closes.keys())
     prev_date_map: dict[str, str] = {sorted_dates[i]: sorted_dates[i - 1] for i in range(1, len(sorted_dates))}
@@ -565,16 +578,15 @@ def forward_fill_gaps(
 
     # Group by trading date and build continuous bar ranges
     filled_frames = []
-    for date, group in df.groupby(dt_et.dt.date):
-        day_dt = pd.Timestamp(date)
-        if day_dt.dayofweek >= 5:
-            continue  # skip weekends
+    for trading_date, group in df.groupby(dt_et.dt.date):
 
         if session == "rth":
-            start = datetime.combine(
-                date, datetime.min.time().replace(hour=_RTH_START_HOUR, minute=_RTH_START_MIN, tzinfo=_ET)
-            )
-            end = datetime.combine(date, datetime.min.time().replace(hour=_RTH_END_HOUR, minute=0, tzinfo=_ET))
+            try:
+                window = session_window_for_date(trading_date)
+            except LookupError:
+                continue
+            start = datetime.fromtimestamp(window.open_ms_utc / 1000, tz=UTC).astimezone(_ET)
+            end = datetime.fromtimestamp(window.close_ms_utc / 1000, tz=UTC).astimezone(_ET)
         else:
             # Extended: 04:00 - 20:00 ET (typical Polygon range)
             first_bar = group["_dt_et"].iloc[0]
@@ -673,23 +685,20 @@ def _tag_session_column(
     """Tag each bar with session type: 'rth', 'pre', or 'post' using NYSE calendar."""
     if df.empty:
         return df
-    nyse = mcal.get_calendar("NYSE")
-    schedule = nyse.schedule(start_date=from_date, end_date=to_date)
-    if schedule.empty:
+    windows = session_windows_ms_utc(from_date, to_date)
+    if not windows:
         df["session"] = "pre"
         return df
 
-    dt_utc = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
+    timestamps = df["timestamp"].astype("int64")
     df["session"] = "pre"  # default
-    for _, row in schedule.iterrows():
-        open_t = row["market_open"]
-        close_t = row["market_close"]
-        rth_mask = (dt_utc >= open_t) & (dt_utc < close_t)
+    for window in windows:
+        rth_mask = (timestamps >= window.open_ms_utc) & (timestamps < window.close_ms_utc)
         df.loc[rth_mask, "session"] = "rth"
-        close_et = close_t.tz_convert(_ET)
-        post_end = close_et.replace(hour=20, minute=0, second=0)
-        post_end_utc = post_end.tz_convert("UTC")
-        post_mask = (dt_utc >= close_t) & (dt_utc < post_end_utc)
+        close_et = datetime.fromtimestamp(window.close_ms_utc / 1000, tz=UTC).astimezone(_ET)
+        post_end = close_et.replace(hour=20, minute=0, second=0, microsecond=0)
+        post_end_ms = int(post_end.astimezone(UTC).timestamp() * 1000)
+        post_mask = (timestamps >= window.close_ms_utc) & (timestamps < post_end_ms)
         df.loc[post_mask, "session"] = "post"
     return df
 
@@ -1213,7 +1222,7 @@ def build_metadata_kv_csv(
         ("bar_count", str(bar_count)),
         ("raw_bars_from_polygon", str(raw_bar_count)),
         ("bars_after_processing", str(filled_bar_count or bar_count)),
-        ("generated_at", datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")),
+        ("generated_at", datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")),
         ("data_source", "Polygon.io (Starter plan)"),
         ("calculation_engine", f"pandas-ta {getattr(ta, 'version', 'unknown')}"),
     ]

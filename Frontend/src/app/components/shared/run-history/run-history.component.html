@@ -54,7 +54,7 @@
           <td>{{ row.symbol ?? '—' }}</td>
           <td>{{ row.startDate }} – {{ row.endDate }}</td>
           <td class="bars-cell">{{ barsSummary(row.dataPolicy) }}</td>
-          <td>{{ row.executedAt }}</td>
+          <td>{{ row.executedAt | timestampDisplay: 'local' : 'datetime' }}</td>
           <td class="num">{{ row.totalTrades }}</td>
           <td class="num" [class.positive]="row.totalPnl > 0" [class.negative]="row.totalPnl < 0">
             {{ row.totalPnl | currency:'USD':'symbol':'1.2-2' }}

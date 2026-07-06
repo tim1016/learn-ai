@@ -21,7 +21,7 @@ export class ReplayIndicatorService {
     const currentBar = this.replayEngine.currentBar();
     if (!currentBar || series.length === 0) return [];
 
-    const currentTimestampMs = new Date(currentBar.timestamp).getTime();
+    const currentTimestampMs = currentBar.timestamp;
 
     return series.map(s => ({
       name: s.name,

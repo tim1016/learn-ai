@@ -1,4 +1,4 @@
-import { CommonModule, DatePipe, DecimalPipe } from '@angular/common';
+import { CommonModule, DecimalPipe } from '@angular/common';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -14,6 +14,7 @@ import { TagModule } from 'primeng/tag';
 
 import { StrategyRunsService } from '../../../services/strategy-runs.service';
 import type { RunLedger } from '../../../services/strategy-runs.types';
+import { TimestampDisplayPipe } from '../../../shared/timestamp';
 
 /**
  * Run-ledger list view (Phase B of the build-alpha-style research
@@ -40,8 +41,8 @@ import type { RunLedger } from '../../../services/strategy-runs.types';
     MessageModule,
     TableModule,
     TagModule,
-    DatePipe,
     DecimalPipe,
+    TimestampDisplayPipe,
   ],
   templateUrl: './strategy-runs.component.html',
   styleUrls: ['./strategy-runs.component.scss'],

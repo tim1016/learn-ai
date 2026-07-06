@@ -2,11 +2,11 @@ import {
   Component, ChangeDetectionStrategy, inject, computed,
   ElementRef, viewChild,
 } from '@angular/core';
-import { DatePipe } from '@angular/common';
 import { Tooltip } from 'primeng/tooltip';
 import {
   ReplayEngineV2Service, Direction, WindowSize,
 } from '../services/replay-engine-v2.service';
+import { TimestampDisplayPipe } from '../../../../shared/timestamp';
 
 interface TradePip {
   xPct: number;
@@ -21,7 +21,7 @@ interface WindowBracket {
 @Component({
   selector: 'app-replay-controls-v2',
   standalone: true,
-  imports: [DatePipe, Tooltip],
+  imports: [Tooltip, TimestampDisplayPipe],
   templateUrl: './replay-controls-v2.component.html',
   styleUrls: ['./replay-controls-v2.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -46,8 +46,8 @@ export class ReplayControlsV2Component {
     const total = this.svc.totalBars();
     const bars = this.svc.bars();
     if (total <= 1 || trades.length === 0) return [];
-    const firstMs = new Date(bars[0].timestamp).getTime();
-    const lastMs = new Date(bars[total - 1].timestamp).getTime();
+    const firstMs = bars[0].timestamp;
+    const lastMs = bars[total - 1].timestamp;
     const span = lastMs - firstMs || 1;
     return trades.map(t => ({
       xPct: ((t.entryMs - firstMs) / span) * 100,

@@ -1,10 +1,10 @@
-using Backend.Models.MarketData;
+using Backend.GraphQL;
 
 namespace Backend.GraphQL.Comparison;
 
 public record RunComparisonResult(
-    StrategyExecution Left,
-    StrategyExecution Right,
+    BacktestRunNodeType Left,
+    BacktestRunNodeType Right,
     ComparisonGuardrails Guardrails,
     ComparisonSummary Summary,
     IReadOnlyList<TradeDivergence> Divergences,
