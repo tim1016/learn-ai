@@ -155,16 +155,17 @@ _RUNTIME_FRESHNESS_RULES: tuple[_Rule, ...] = tuple(sorted([
         priority=68,
         source_codes=frozenset({"BAR_LOOP_FIRST_BAR_TIMEOUT"}),
         notice_code="runtime.market_data_first_bar_timeout",
-        tier="warning",
-        title="Market data first bar timed out",
+        tier="critical",
+        title="IBKR market data is silent",
         message=(
-            "The bot started the live bar source, but no first consolidated "
-            "bar arrived before the startup deadline. New trading decisions "
-            "are held until IBKR sends bars."
+            "IBKR accepted the live bar subscription, but no first bar arrived "
+            "before the startup deadline. This often means a competing live "
+            "session or paper market-data entitlement issue is starving the "
+            "paper API feed. New trading decisions are held until bars arrive."
         ),
         action=OperatorNoticeAction(
             kind="external_manual_check",
-            label="Check IBKR market data",
+            label="Fix IBKR market data",
             target="ibkr_connection",
         ),
         runbook_slug=_RUNBOOK,

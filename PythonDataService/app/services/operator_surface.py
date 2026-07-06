@@ -1027,6 +1027,7 @@ def compute_operator_surface(
         account_freeze=account_freeze,
         guard_state=resolved_guards,
         reconciliation=reconciliation_projection,
+        runtime_freshness=runtime_freshness_projection,
         readiness_gates=readiness_gates,
         account_truth=account_truth_assessment,
     )

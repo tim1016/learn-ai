@@ -725,6 +725,53 @@ def test_trader_guidance_runtime_market_closed_uses_notice_copy() -> None:
     assert runtime_stage.state == "info"
 
 
+def test_trader_guidance_runtime_first_bar_timeout_blocks_submit_loudly() -> None:
+    fresh = DomainFreshness(state="FRESH", age_ms=100)
+    runtime = RuntimeFreshness(
+        command_loop=fresh,
+        broker=fresh,
+        bar_loop=DomainFreshness(
+            state="STALE",
+            age_ms=90_000,
+            stale_reason_codes=["BAR_LOOP_FIRST_BAR_TIMEOUT"],
+        ),
+        control_plane=fresh,
+        posture_demoted=False,
+    )
+
+    surface = _surface(
+        safety_verdict_final="paper-only",
+        broker_connection_state="connected",
+        runtime_freshness=runtime,
+        guard_state=_guard(),
+        account_owner=_owner(),
+        reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
+        now_ms=_RTH_MID,
+    )
+
+    assert surface.submit_readiness.code == "blocked_before_submit"
+    assert surface.submit_readiness.can_submit is False
+    assert "MARKET_DATA_FIRST_BAR_TIMEOUT" in surface.submit_readiness.blocking_reason_codes
+    assert surface.trader_guidance.situation_code == "submission_blocked"
+    attention = next(
+        group
+        for group in surface.trader_guidance.additional_attention_groups
+        if group.code == "runtime_freshness"
+    )
+    assert attention.severity == "critical"
+    assert attention.headline == "IBKR market data is silent"
+    assert "competing live session" in attention.explanation
+    assert "restart Gateway" in attention.operator_next_step
+    proof_lines = {line.id: line for line in surface.trader_guidance.proof_lines}
+    assert "competing live session" in proof_lines["runtime-freshness"].message
+    runtime_stage = next(
+        stage for stage in surface.blockage_ladder.stages if stage.id == "runtime_freshness"
+    )
+    assert surface.blockage_ladder.current_stage_id == "runtime_freshness"
+    assert runtime_stage.severity == "critical"
+    assert runtime_stage.state == "danger"
+
+
 def test_trader_guidance_account_freeze_is_never_collapsed() -> None:
     freeze = AccountFreezeEvidence(
         account_id="DU123",

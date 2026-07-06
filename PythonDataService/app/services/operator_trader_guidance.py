@@ -147,6 +147,7 @@ def author_submit_readiness(
     account_freeze: AccountFreezeEvidence | None,
     guard_state: ResumeGuardState,
     reconciliation: OperatorSurfaceReconciliation | None,
+    runtime_freshness: OperatorSurfaceRuntimeFreshness | None,
     readiness_gates: list[OperatorGate],
     account_truth: AccountTruthAssessment,
 ) -> OperatorSurfaceSubmitReadiness:
@@ -160,6 +161,7 @@ def author_submit_readiness(
         account_freeze=account_freeze,
         guard_state=guard_state,
         reconciliation=reconciliation,
+        runtime_freshness=runtime_freshness,
         readiness_gates=readiness_gates,
         account_truth=account_truth,
     )
@@ -202,6 +204,7 @@ def author_trader_guidance(
         guard_state=guard_state,
         reconciliation=reconciliation,
         readiness_gates=readiness_gates,
+        runtime_freshness=runtime_freshness,
         account_truth=account_truth,
     )
     situation_code = _situation_code_for_submit_readiness(submit_readiness.code, findings)
@@ -246,6 +249,7 @@ def build_submit_readiness_findings(
     account_freeze: AccountFreezeEvidence | None,
     guard_state: ResumeGuardState,
     reconciliation: OperatorSurfaceReconciliation | None,
+    runtime_freshness: OperatorSurfaceRuntimeFreshness | None,
     readiness_gates: list[OperatorGate],
     account_truth: AccountTruthAssessment,
 ) -> list[SubmitReadinessFinding]:
@@ -390,6 +394,7 @@ def build_submit_readiness_findings(
                 reconciliation_remediation,
             )
         )
+    findings.extend(_runtime_freshness_findings(host_process, runtime_freshness, trading_session))
     findings.extend(_account_truth_findings(account_truth))
     for gate in _hard_blocking_readiness_gates(readiness_gates):
         findings.append(
@@ -506,6 +511,71 @@ def _account_truth_findings(assessment: AccountTruthAssessment) -> list[SubmitRe
         )
         for reason_code in assessment.reason_codes
     ]
+
+
+def _runtime_freshness_findings(
+    host_process: OperatorSurfaceHostProcess,
+    runtime_freshness: OperatorSurfaceRuntimeFreshness | None,
+    trading_session: OperatorSurfaceTradingSession,
+) -> list[SubmitReadinessFinding]:
+    if (
+        host_process.state != "RUNNING"
+        or runtime_freshness is None
+        or trading_session.permits_strategy_activity is not True
+    ):
+        return []
+
+    active_codes = set(runtime_freshness.stale_reason_codes)
+    if "BAR_LOOP_FIRST_BAR_TIMEOUT" in active_codes:
+        return [
+            _finding(
+                "blocked_before_submit",
+                "MARKET_DATA_FIRST_BAR_TIMEOUT",
+                "runtime_freshness",
+                "critical",
+                "IBKR market data is silent",
+                (
+                    "IBKR accepted the live bar subscription, but no first bar arrived. "
+                    "A competing live session or missing paper market-data entitlement can "
+                    "starve the paper API feed while broker/account calls still look healthy."
+                ),
+                (
+                    "Log out of competing IBKR live/paper sessions, verify paper market-data "
+                    "sharing or subscriptions, restart Gateway, and wait for a fresh signal bar."
+                ),
+                OpenRunbookAction(kind="open_runbook", slug="runtime-freshness"),
+            )
+        ]
+    if "BAR_LOOP_SOURCE_MISSING" in active_codes:
+        return [
+            _finding(
+                "blocked_before_submit",
+                "MARKET_DATA_SOURCE_MISSING",
+                "runtime_freshness",
+                "critical",
+                "IBKR market data has not started",
+                (
+                    "The live bar source is running, but no source bar has reached the engine. "
+                    "New trading decisions are held until the signal feed proves fresh bars."
+                ),
+                "Check IBKR market-data availability and the configured live bar source before treating the bot as ready.",
+                OpenRunbookAction(kind="open_runbook", slug="runtime-freshness"),
+            )
+        ]
+    if active_codes & {"BAR_LOOP_HEARTBEAT_STALE", "BAR_LOOP_LATEST_BAR_STALE"}:
+        return [
+            _finding(
+                "blocked_before_submit",
+                "MARKET_DATA_STALE",
+                "runtime_freshness",
+                "warning",
+                "Market data feed is stale",
+                "The signal feed has stale runtime evidence. New trading decisions are held until fresh bars arrive.",
+                "Wait for fresh bars or inspect the IBKR market-data session before treating the bot as ready.",
+                OpenRunbookAction(kind="open_runbook", slug="runtime-freshness"),
+            )
+        ]
+    return []
 
 
 def _unique_reason_codes(findings: list[SubmitReadinessFinding]) -> list[str]:

@@ -77,6 +77,7 @@ def author_blockage_ladder(
         account_freeze=account_freeze,
         guard_state=guard_state,
         reconciliation=reconciliation,
+        runtime_freshness=runtime_freshness,
         readiness_gates=readiness_gates,
         account_truth=account_truth,
     )
