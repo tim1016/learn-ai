@@ -298,6 +298,9 @@
   },
   "host_process": {
     "copyable_command": null,
+    "last_exit_error_code": null,
+    "last_exit_error_detail": {},
+    "last_exit_error_message": null,
     "notice": null,
     "start_capability": {
       "disabled_reason_code": "ALREADY_RUNNING",
