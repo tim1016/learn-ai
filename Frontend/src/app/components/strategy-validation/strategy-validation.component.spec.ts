@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
+import { provideRouter } from '@angular/router';
 import { describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -127,7 +128,10 @@ class FakeStrategyValidationService {
 describe('StrategyValidationComponent', () => {
   it('renders validated and unvalidated strategies in the catalog', async () => {
     await render(StrategyValidationComponent, {
-      providers: [{ provide: StrategyValidationService, useClass: FakeStrategyValidationService }],
+      providers: [
+        provideRouter([]),
+        { provide: StrategyValidationService, useClass: FakeStrategyValidationService },
+      ],
     });
 
     expect(await screen.findByRole('heading', { name: 'Strategy Validation' })).toBeTruthy();
@@ -139,7 +143,10 @@ describe('StrategyValidationComponent', () => {
 
   it('opens detail with QC evidence and reference code without rendering internal port source', async () => {
     await render(StrategyValidationComponent, {
-      providers: [{ provide: StrategyValidationService, useClass: FakeStrategyValidationService }],
+      providers: [
+        provideRouter([]),
+        { provide: StrategyValidationService, useClass: FakeStrategyValidationService },
+      ],
     });
 
     expect(await screen.findByText('d2fe45a7142e88575f6fbd75229f8681')).toBeTruthy();
@@ -148,7 +155,7 @@ describe('StrategyValidationComponent', () => {
     expect(screen.getByText('56 trades validated')).toBeTruthy();
     expect(screen.getByText('Fill Price Drift')).toBeTruthy();
     expect(screen.queryByText('fill_price_drift')).toBeNull();
-    expect(screen.getByText('Accepted For Deploy')).toBeTruthy();
+    expect(screen.getAllByText('Accepted For Deploy').length).toBeGreaterThan(0);
     expect(screen.getByText('migration:strategy-validation-prd-seed')).toBeTruthy();
     expect(screen.getByText('snapshot-sha')).toBeTruthy();
     expect(screen.getByText(/class DeploymentValidationAlgorithm/)).toBeTruthy();
@@ -157,7 +164,10 @@ describe('StrategyValidationComponent', () => {
 
   it('switches to the selected strategy detail', async () => {
     await render(StrategyValidationComponent, {
-      providers: [{ provide: StrategyValidationService, useClass: FakeStrategyValidationService }],
+      providers: [
+        provideRouter([]),
+        { provide: StrategyValidationService, useClass: FakeStrategyValidationService },
+      ],
     });
 
     fireEvent.click(await screen.findByRole('button', { name: /Opening Range Breakout/ }));
@@ -172,7 +182,10 @@ describe('StrategyValidationComponent', () => {
   it('refreshes validation evidence for the selected strategy', async () => {
     const service = new FakeStrategyValidationService();
     await render(StrategyValidationComponent, {
-      providers: [{ provide: StrategyValidationService, useValue: service }],
+      providers: [
+        provideRouter([]),
+        { provide: StrategyValidationService, useValue: service },
+      ],
     });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Refresh evidence' }));
@@ -186,7 +199,10 @@ describe('StrategyValidationComponent', () => {
   it('requires a reason and then saves the selected validation flag', async () => {
     const service = new FakeStrategyValidationService();
     await render(StrategyValidationComponent, {
-      providers: [{ provide: StrategyValidationService, useValue: service }],
+      providers: [
+        provideRouter([]),
+        { provide: StrategyValidationService, useValue: service },
+      ],
     });
 
     fireEvent.click(await screen.findByRole('button', { name: 'Save flag' }));

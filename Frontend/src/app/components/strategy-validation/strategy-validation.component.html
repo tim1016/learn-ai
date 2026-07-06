@@ -1,12 +1,14 @@
 <main class="strategy-validation">
   <header class="sv-header">
-    <div>
+    <div class="sv-title-block">
+      <p class="sv-eyebrow"><i class="pi pi-check-square" aria-hidden="true"></i> Validation gate</p>
       <h1>Strategy Validation</h1>
-      <p>Validated strategy evidence for deployable paper bots.</p>
+      <p>Promote only strategies with reproducible receipts into Deploy.</p>
     </div>
     <dl class="sv-counts" aria-label="Strategy validation counts">
       <div><dt>Total</dt><dd>{{ strategies().length }}</dd></div>
-      <div><dt>Validated</dt><dd>{{ validatedCount() }}</dd></div>
+      <div><dt>Deployable</dt><dd>{{ validatedCount() }}</dd></div>
+      <div><dt>Blocked</dt><dd>{{ needsValidationCount() }}</dd></div>
     </dl>
   </header>
 
@@ -16,19 +18,32 @@
     <p class="sv-error" role="alert">Strategy validation catalog could not be loaded.</p>
   } @else {
     <section class="sv-workbench" aria-label="Strategy validation catalog">
-      <div class="sv-list" aria-label="Strategies">
+      <aside class="sv-list" aria-label="Strategies">
+        <header class="sv-list-head">
+          <div>
+            <h2>Validation queue</h2>
+            <p>Select a strategy to inspect the receipts that decide deployment.</p>
+          </div>
+        </header>
         @for (strategy of strategies(); track strategy.strategy_key) {
           <button type="button" class="sv-row" [class.selected]="isSelected(strategy)" (click)="selectStrategy(strategy)">
             <span class="sv-row-main">
               <span class="sv-row-name">{{ strategy.display_name }}</span>
-              <span class="sv-row-key">{{ strategy.strategy_key }}</span>
+              <span class="sv-row-key mono">{{ strategy.strategy_key }}</span>
+              <span class="sv-row-meta">
+                @if (strategy.diagnostics) {
+                  {{ strategy.diagnostics.trades_validated }} trades · {{ (strategy.reconciliation_status ?? strategy.validation_state) | receiptLabel }}
+                } @else {
+                  Evidence missing
+                }
+              </span>
             </span>
             <span class="sv-badge" [class.validated]="strategy.validation_state === 'validated'" [class.needs-validation]="strategy.validation_state !== 'validated'">
               {{ stateLabel(strategy) }}
             </span>
           </button>
         }
-      </div>
+      </aside>
 
       <article class="sv-detail">
         @if (detail.isLoading()) {
@@ -44,8 +59,44 @@
             </span>
           </header>
 
+          <section class="sv-deploy-panel" [class.ready]="isAcceptedForDeploy(selected)" aria-label="Deploy decision">
+            <div>
+              <p class="sv-panel-label">Deploy decision</p>
+              @if (isAcceptedForDeploy(selected)) {
+                <h3>Ready for Deploy</h3>
+                <p>{{ selected.behavioral_equivalence?.detail }}</p>
+              } @else {
+                <h3>Do not deploy yet</h3>
+                <p>Validation evidence is incomplete or has not been accepted for deployment.</p>
+              }
+            </div>
+            @if (isAcceptedForDeploy(selected)) {
+              <a
+                class="sv-deploy-link"
+                routerLink="/broker/deploy"
+                [queryParams]="deployQueryParams(selected)"
+              >
+                <i class="pi pi-send" aria-hidden="true"></i>
+                Deploy strategy
+              </a>
+            } @else {
+              <button type="button" class="sv-refresh compact" [disabled]="actionBusy()" (click)="refreshValidationEvidence()">
+                <i class="pi pi-refresh" aria-hidden="true"></i>
+                Refresh evidence
+              </button>
+            }
+          </section>
+
+          <dl class="sv-decision-facts" aria-label="Selected strategy deploy facts">
+            <div><dt>Behavior</dt><dd>{{ (selected.behavioral_equivalence?.verdict ?? 'evidence_missing') | receiptLabel }}</dd></div>
+            <div><dt>QC backtest</dt><dd>{{ selected.qc_cloud_backtest_id ?? 'n/a' }}</dd></div>
+            <div><dt>Validation case</dt><dd>{{ selected.validation_case_symbol ?? 'n/a' }}</dd></div>
+            <div><dt>Reconciliation</dt><dd>{{ (selected.reconciliation_status ?? 'not_registered') | receiptLabel }}</dd></div>
+          </dl>
+
           <section class="sv-actions" aria-label="Validation actions">
             <button type="button" class="sv-refresh" [disabled]="actionBusy()" (click)="refreshValidationEvidence()">
+              <i class="pi pi-refresh" aria-hidden="true"></i>
               Refresh evidence
             </button>
             <fieldset class="sv-flag-choice">
@@ -91,11 +142,10 @@
 
           @if (selected.diagnostics) {
             <dl class="sv-evidence">
-              <div><dt>QC backtest</dt><dd>{{ selected.qc_cloud_backtest_id }}</dd></div>
-              <div><dt>Validation case</dt><dd>{{ selected.validation_case_symbol }}</dd></div>
               <div><dt>Matched</dt><dd>{{ selected.diagnostics.trades_matched }} trades matched</dd></div>
               <div><dt>Validated</dt><dd>{{ selected.diagnostics.trades_validated }} trades validated</dd></div>
               <div><dt>P&amp;L delta</dt><dd>{{ selected.diagnostics.pnl_max_abs_diff }}</dd></div>
+              <div><dt>Diagnostics</dt><dd>{{ selected.diagnostics.verdict | receiptLabel }}</dd></div>
             </dl>
 
             <section class="sv-provenance" aria-label="Validation provenance">

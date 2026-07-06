@@ -343,7 +343,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(topStrip?.textContent).toContain('Connected broker account');
 
     const tabs = Array.from(
-      host.querySelectorAll<HTMLElement>('.form-tabs a'),
+      host.querySelectorAll<HTMLElement>('.form-tabs [role="tab"]'),
     ).map((tab) => tab.textContent ?? '');
     expect(tabs).toEqual(
       expect.arrayContaining([
@@ -360,6 +360,29 @@ describe('BrokerDeployFormComponent', () => {
     expect(readiness?.textContent).toContain('Broker');
     expect(readiness?.textContent).toContain('Account');
     expect(readiness?.textContent).toContain('Fleet');
+  });
+
+  it('reveals sizing controls when the Sizing step is selected', async () => {
+    const { fixture, component } = setup();
+    await flush();
+    fixture.detectChanges();
+
+    const host = fixture.nativeElement as HTMLElement;
+    const sizingTab = host.querySelector<HTMLButtonElement>(
+      '.form-tabs button[aria-controls="sizing-section"]',
+    );
+    expect(sizingTab).toBeTruthy();
+    expect(sizingTab?.getAttribute('href')).toBeNull();
+
+    sizingTab?.click();
+    fixture.detectChanges();
+
+    const sizingGroup = host.querySelector('#sizing-section')?.closest('.group');
+    const strategyGroup = host.querySelector('#strategy-section')?.closest('.group');
+    expect(component.activeDeployTab()).toBe('sizing');
+    expect(sizingGroup?.classList.contains('step-hidden')).toBe(false);
+    expect(strategyGroup?.classList.contains('step-hidden')).toBe(true);
+    expect(sizingGroup?.querySelector('.sizing-presets')).toBeTruthy();
   });
 
   it('submits a deploy request with the collected fields and reports success', async () => {

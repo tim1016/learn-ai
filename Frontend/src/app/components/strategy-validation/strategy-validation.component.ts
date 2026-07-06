@@ -6,6 +6,7 @@ import {
   resource,
   signal,
 } from '@angular/core';
+import { RouterLink } from '@angular/router';
 
 import { StrategyValidationService } from '../../services/strategy-validation.service';
 import type {
@@ -17,7 +18,7 @@ import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
 
 @Component({
   selector: 'app-strategy-validation',
-  imports: [ReceiptLabelPipe],
+  imports: [RouterLink, ReceiptLabelPipe],
   templateUrl: './strategy-validation.component.html',
   styleUrl: './strategy-validation.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -39,8 +40,15 @@ export class StrategyValidationComponent {
   protected readonly validatedCount = computed(
     () => this.strategies().filter((strategy) => strategy.deployable).length,
   );
+  protected readonly needsValidationCount = computed(
+    () => this.strategies().filter((strategy) => !this.isAcceptedForDeploy(strategy)).length,
+  );
   protected readonly selectedKey = computed(
-    () => this.selectedOverride() ?? this.strategies()[0]?.strategy_key ?? null,
+    () =>
+      this.selectedOverride() ??
+      this.strategies().find((strategy) => this.isAcceptedForDeploy(strategy))?.strategy_key ??
+      this.strategies()[0]?.strategy_key ??
+      null,
   );
 
   protected readonly detail = resource<StrategyValidationDetail | null, string | null>({
@@ -61,6 +69,26 @@ export class StrategyValidationComponent {
 
   protected stateLabel(strategy: StrategyValidationSummary | StrategyValidationDetail): string {
     return strategy.validation_state === 'validated' ? 'Validated' : 'Needs validation';
+  }
+
+  protected isAcceptedForDeploy(
+    strategy: StrategyValidationSummary | StrategyValidationDetail,
+  ): boolean {
+    return (
+      strategy.validation_state === 'validated' &&
+      strategy.deployable &&
+      strategy.behavioral_equivalence?.verdict === 'accepted_for_deploy'
+    );
+  }
+
+  protected deployQueryParams(strategy: StrategyValidationDetail): Record<string, string> {
+    return {
+      strategy_key: strategy.strategy_key,
+      spec_path: strategy.settings_file_ref ?? '',
+      signal_stream: strategy.validation_case_symbol ?? '',
+      qc_backtest_id: strategy.qc_cloud_backtest_id ?? '',
+      qc_audit_copy_path: strategy.audit_copy_ref ?? '',
+    };
   }
 
   protected isSelected(strategy: StrategyValidationSummary): boolean {
