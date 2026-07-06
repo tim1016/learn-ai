@@ -237,6 +237,15 @@ async def _iter_bars(bars: list[TradeBar]) -> AsyncIterator[TradeBar]:
         yield b
 
 
+class _SilentTradeBarSource:
+    def __aiter__(self) -> _SilentTradeBarSource:
+        return self
+
+    async def __anext__(self) -> TradeBar:
+        await asyncio.Event().wait()
+        raise StopAsyncIteration
+
+
 @pytest.mark.asyncio
 async def test_engine_publishes_initial_blocks_on_run(tmp_path: Path) -> None:
     """At ``run()`` entry the engine seeds command_loop + control_plane
@@ -376,6 +385,93 @@ async def test_engine_publishes_first_bar_timeout_when_ibkr_source_is_silent(
     assert timeout_blocks[-1].source == "ibkr_realtime_bars"
     assert timeout_blocks[-1].symbol == "SPY"
     assert timeout_blocks[-1].first_bar_deadline_ms is not None
+
+
+@pytest.mark.asyncio
+async def test_engine_does_not_start_first_bar_watchdog_for_injected_bars(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live import live_engine as live_engine_mod
+    from app.engine.live.config import LiveConfig
+    from app.engine.live.live_engine import LiveEngine
+    from app.engine.strategy.base import Strategy
+    from tests.engine.live.fixtures.fake_broker import FakeBroker
+
+    class _NoopStrategy(Strategy):
+        def initialize(self) -> None:
+            assert self.ctx is not None
+            self.ctx.add_equity("SPY")
+            self.ctx.register_consolidator("SPY", timedelta(minutes=1), self.on_bar)
+
+        def on_bar(self, bar: TradeBar) -> None:
+            return None
+
+    monkeypatch.setattr(live_engine_mod, "BAR_SOURCE_FIRST_BAR_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(live_engine_mod, "BAR_SOURCE_WATCHDOG_INTERVAL_S", 0.005)
+
+    agg = _RecordingAggregator()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=FakeBroker(),
+        output_dir=tmp_path,
+        account_id="DU123",
+        runtime_aggregator=agg,
+    )
+    shutdown_event = asyncio.Event()
+
+    async def _stop_after_timeout() -> None:
+        await asyncio.sleep(0.05)
+        shutdown_event.set()
+
+    trigger_task = asyncio.create_task(_stop_after_timeout())
+    result = await asyncio.wait_for(
+        engine.run(
+            _NoopStrategy(),
+            bars=_SilentTradeBarSource(),
+            shutdown_event=shutdown_event,
+        ),
+        timeout=5.0,
+    )
+    await trigger_task
+
+    assert result.bars == []
+    assert all(
+        block.source_state != "NO_FIRST_BAR_TIMEOUT"
+        for block in agg.bar_loop_updates
+    )
+
+
+@pytest.mark.asyncio
+async def test_engine_ignores_stale_waiting_block_after_first_bar(
+    tmp_path: Path,
+) -> None:
+    from app.engine.live.config import LiveConfig
+    from app.engine.live.live_engine import LiveEngine
+    from tests.engine.live.fixtures.fake_broker import FakeBroker
+
+    agg = _RecordingAggregator()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=FakeBroker(),
+        output_dir=tmp_path,
+        account_id="DU123",
+        runtime_aggregator=agg,
+    )
+    stale_generation = engine._bar_source_generation
+
+    await engine._publish_bar_loop_block(_bar(1))
+    await engine._publish_bar_source_waiting_block(
+        symbol="SPY",
+        subscription_requested_at_ms=1_700_000_000_000,
+        first_bar_deadline_ms=1_700_000_120_000,
+        timed_out=True,
+        generation=stale_generation,
+    )
+
+    assert agg.bar_loop_updates[-1].source_state == "ACTIVE"
 
 
 @pytest.mark.asyncio

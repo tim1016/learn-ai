@@ -658,6 +658,8 @@ class LiveEngine:
         self._runtime_aggregator = runtime_aggregator
         self._bar_source_first_bar_seen = False
         self._bar_source_subscription_requested_at_ms: int | None = None
+        self._bar_source_generation = 0
+        self._bar_source_state_lock = asyncio.Lock()
         self._broker_monitor = broker_monitor
         self._artifacts_root_for_lease = artifacts_root_for_lease
         self._watchdog_factory = watchdog_factory
@@ -825,6 +827,7 @@ class LiveEngine:
         self._validate_paper_client()
         self._bar_source_first_bar_seen = False
         self._bar_source_subscription_requested_at_ms = None
+        self._bar_source_generation += 1
         self._write_session_metadata_on_start()
         # ADR 0009 — when the resolved live_config carries a sizing policy,
         # construct the policy-application adapter and attach it to the
@@ -1023,7 +1026,11 @@ class LiveEngine:
             if shutdown_event is None:
                 shutdown_event = asyncio.Event()
             bar_source_watchdog_task = asyncio.create_task(
-                self._bar_source_watchdog_loop(symbol, shutdown_event),
+                self._bar_source_watchdog_loop(
+                    symbol,
+                    shutdown_event,
+                    generation=self._bar_source_generation,
+                ),
                 name="bar_source_watchdog",
             )
 
@@ -2757,23 +2764,25 @@ class LiveEngine:
         """
         if self._runtime_aggregator is None:
             return
-        self._bar_source_first_bar_seen = True
         latest_source_bar_ms: int | None
         try:
             latest_source_bar_ms = int(minute_bar.end_time.timestamp() * 1000)
         except (AttributeError, TypeError):
             latest_source_bar_ms = None
-        await self._runtime_aggregator.update_bar_loop(
-            build_bar_loop_block(
-                heartbeat_at_ms=int(time.time() * 1000),
-                latest_source_bar_ms=latest_source_bar_ms,
-                expected_interval_ms=self._bar_loop_expected_interval_ms(),
-                source_state="ACTIVE",
-                source=self._bar_source,
-                symbol=getattr(minute_bar, "symbol", None),
-                subscription_requested_at_ms=self._bar_source_subscription_requested_at_ms,
+        async with self._bar_source_state_lock:
+            self._bar_source_first_bar_seen = True
+            self._bar_source_generation += 1
+            await self._runtime_aggregator.update_bar_loop(
+                build_bar_loop_block(
+                    heartbeat_at_ms=int(time.time() * 1000),
+                    latest_source_bar_ms=latest_source_bar_ms,
+                    expected_interval_ms=self._bar_loop_expected_interval_ms(),
+                    source_state="ACTIVE",
+                    source=self._bar_source,
+                    symbol=getattr(minute_bar, "symbol", None),
+                    subscription_requested_at_ms=self._bar_source_subscription_requested_at_ms,
+                )
             )
-        )
 
     def _bar_loop_expected_interval_ms(self) -> int:
         return LIVE_SOURCE_BAR_INTERVAL_MS
@@ -2785,28 +2794,38 @@ class LiveEngine:
         subscription_requested_at_ms: int,
         first_bar_deadline_ms: int,
         timed_out: bool,
+        generation: int,
     ) -> None:
         if self._runtime_aggregator is None:
             return
-        await self._runtime_aggregator.update_bar_loop(
-            build_bar_loop_block(
-                heartbeat_at_ms=int(time.time() * 1000),
-                latest_source_bar_ms=None,
-                expected_interval_ms=self._bar_loop_expected_interval_ms(),
-                source_state="NO_FIRST_BAR_TIMEOUT" if timed_out else "WAITING_FIRST_BAR",
-                source=self._bar_source,
-                symbol=symbol,
-                subscription_requested_at_ms=subscription_requested_at_ms,
-                first_bar_deadline_ms=first_bar_deadline_ms,
-                detail=(
-                    "No first consolidated bar arrived before the first-bar deadline."
-                    if timed_out
-                    else "Waiting for the first consolidated bar from the live bar source."
-                ),
+        async with self._bar_source_state_lock:
+            if self._bar_source_first_bar_seen or generation != self._bar_source_generation:
+                return
+            await self._runtime_aggregator.update_bar_loop(
+                build_bar_loop_block(
+                    heartbeat_at_ms=int(time.time() * 1000),
+                    latest_source_bar_ms=None,
+                    expected_interval_ms=self._bar_loop_expected_interval_ms(),
+                    source_state="NO_FIRST_BAR_TIMEOUT" if timed_out else "WAITING_FIRST_BAR",
+                    source=self._bar_source,
+                    symbol=symbol,
+                    subscription_requested_at_ms=subscription_requested_at_ms,
+                    first_bar_deadline_ms=first_bar_deadline_ms,
+                    detail=(
+                        "No first consolidated bar arrived before the first-bar deadline."
+                        if timed_out
+                        else "Waiting for the first consolidated bar from the live bar source."
+                    ),
+                )
             )
-        )
 
-    async def _bar_source_watchdog_loop(self, symbol: str, shutdown_event: asyncio.Event) -> None:
+    async def _bar_source_watchdog_loop(
+        self,
+        symbol: str,
+        shutdown_event: asyncio.Event,
+        *,
+        generation: int,
+    ) -> None:
         """Publish durable source-wait state until the first live bar arrives.
 
         The IBKR bar generator can sit inside ``reqRealTimeBars`` forever
@@ -2819,7 +2838,11 @@ class LiveEngine:
         self._bar_source_subscription_requested_at_ms = requested_at_ms
         first_bar_deadline_ms = requested_at_ms + int(BAR_SOURCE_FIRST_BAR_TIMEOUT_S * 1000)
         timeout_logged = False
-        while not shutdown_event.is_set() and not self._bar_source_first_bar_seen:
+        while (
+            not shutdown_event.is_set()
+            and not self._bar_source_first_bar_seen
+            and generation == self._bar_source_generation
+        ):
             now_ms = now_ms_utc()
             timed_out = now_ms >= first_bar_deadline_ms
             if timed_out and not timeout_logged:
@@ -2838,6 +2861,7 @@ class LiveEngine:
                 subscription_requested_at_ms=requested_at_ms,
                 first_bar_deadline_ms=first_bar_deadline_ms,
                 timed_out=timed_out,
+                generation=generation,
             )
             try:
                 await asyncio.wait_for(

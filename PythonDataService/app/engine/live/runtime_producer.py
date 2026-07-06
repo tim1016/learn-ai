@@ -25,6 +25,7 @@ from app.broker.ibkr.recovery_state_machine import RecoveryState
 from app.engine.live.control_plane import read_daemon_lease
 from app.engine.live.engine_runtime import (
     BarLoopBlock,
+    BarSourceState,
     BrokerBlock,
     CommandLoopBlock,
     ControlPlaneBlock,
@@ -124,13 +125,7 @@ def build_bar_loop_block(
     heartbeat_at_ms: int,
     latest_source_bar_ms: int | None,
     expected_interval_ms: int | None,
-    source_state: Literal[
-        "NOT_REQUESTED",
-        "WAITING_FIRST_BAR",
-        "ACTIVE",
-        "NO_FIRST_BAR_TIMEOUT",
-        "FAILED",
-    ] = "NOT_REQUESTED",
+    source_state: BarSourceState = "NOT_REQUESTED",
     source: str | None = None,
     symbol: str | None = None,
     subscription_requested_at_ms: int | None = None,
