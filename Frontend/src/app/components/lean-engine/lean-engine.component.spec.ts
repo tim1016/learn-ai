@@ -17,8 +17,8 @@ import type { TrustedRunRequest, TrustedRunResponse } from '../../services/lean-
 describe('mapStudyTradeToEngineTrade', () => {
   function makeItem(overrides: Partial<StudyTradeApiItem> = {}): StudyTradeApiItem {
     return {
-      entryTimestamp: '2026-04-01T13:30:00Z',
-      exitTimestamp: '2026-04-01T15:00:00Z',
+      entryTimestamp: Date.UTC(2026, 3, 1, 13, 30),
+      exitTimestamp: Date.UTC(2026, 3, 1, 15, 0),
       entryPrice: 500,
       exitPrice: 505,
       pnL: 5,
@@ -53,8 +53,8 @@ describe('mapStudyTradeToEngineTrade', () => {
       4,
     );
     expect(trade.trade_number).toBe(5);
-    expect(trade.entry_time).toBe('2026-04-01T13:30:00Z');
-    expect(trade.exit_time).toBe('2026-04-01T15:00:00Z');
+    expect(trade.entry_time).toBe(Date.UTC(2026, 3, 1, 13, 30));
+    expect(trade.exit_time).toBe(Date.UTC(2026, 3, 1, 15, 0));
     expect(trade.entry_price).toBe(100);
     expect(trade.exit_price).toBe(505);
     expect(trade.signal_reason).toBe('rsi_oversold');

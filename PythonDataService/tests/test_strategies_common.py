@@ -20,8 +20,8 @@ def _trade(num: int, trade_type: str = "Buy", pnl_pct: float = 0.01, cum: float 
     return TradeRecord(
         trade_number=num,
         trade_type=trade_type,
-        entry_timestamp="2024-01-01T14:30:00Z",
-        exit_timestamp="2024-01-01T14:45:00Z",
+        entry_timestamp=1_704_119_400_000,
+        exit_timestamp=1_704_120_300_000,
         entry_price=100.0,
         exit_price=100.0 * (1.0 + pnl_pct),
         pnl=pnl_pct * 100.0,
@@ -80,31 +80,34 @@ def test_compute_max_drawdown_empty_is_zero():
     assert _compute_max_drawdown([]) == 0.0
 
 
-def test_format_timestamp_epoch_ms_produces_iso_z_suffix():
-    # 2024-01-01 00:00:00 UTC = 1_704_067_200_000 ms.
-    iso = format_timestamp(1_704_067_200_000)
+def test_format_timestamp_epoch_ms_returns_canonical_ms():
+    ms = format_timestamp(1_704_067_200_000)
 
-    assert iso == "2024-01-01T00:00:00Z"
-
-
-def test_format_timestamp_naive_datetime_interpreted_as_utc():
-    iso = format_timestamp(datetime(2024, 1, 1, 14, 30, 0))
-
-    assert iso == "2024-01-01T14:30:00Z"
+    assert ms == 1_704_067_200_000
 
 
-def test_format_timestamp_aware_datetime_converted_to_utc():
+def test_format_timestamp_naive_datetime_rejected():
+    with pytest.raises(ValueError, match="timezone-aware"):
+        format_timestamp(datetime(2024, 1, 1, 14, 30, 0))
+
+
+def test_format_timestamp_aware_datetime_converted_to_ms_utc():
     from datetime import timedelta, timezone
 
     et = timezone(timedelta(hours=-4))
-    iso = format_timestamp(datetime(2024, 4, 1, 10, 30, 0, tzinfo=et))
+    ms = format_timestamp(datetime(2024, 4, 1, 10, 30, 0, tzinfo=et))
 
     # 10:30 EDT = 14:30 UTC.
-    assert iso == "2024-04-01T14:30:00Z"
+    assert ms == 1_711_981_800_000
 
 
-def test_format_timestamp_string_pass_through():
-    assert format_timestamp("2024-01-01T00:00:00Z") == "2024-01-01T00:00:00Z"
+def test_format_timestamp_tz_aware_string_converted_to_ms_utc():
+    assert format_timestamp("2024-01-01T00:00:00Z") == 1_704_067_200_000
+
+
+def test_format_timestamp_naive_string_rejected():
+    with pytest.raises(ValueError, match="include a timezone"):
+        format_timestamp("2024-01-01T00:00:00")
 
 
 def test_make_trade_buy_records_correct_pnl_and_cum():
@@ -134,7 +137,7 @@ def test_make_trade_buy_records_correct_pnl_and_cum():
     assert trade.pnl == pytest.approx(2.0, abs=1e-12, rel=0)
     assert trade.pnl_pct == pytest.approx(0.02, abs=1e-12, rel=0)
     assert trade.cumulative_pnl_pct == pytest.approx(0.03, abs=1e-12, rel=0)
-    assert trade.entry_timestamp.endswith("Z")
+    assert trade.entry_timestamp == 1_704_067_200_000
 
 
 def test_make_trade_sell_inverts_pnl_direction():
@@ -163,3 +166,5 @@ def test_make_trade_sell_inverts_pnl_direction():
     # Short: pnl = entry - exit = 2.
     assert trade.pnl == pytest.approx(2.0, abs=1e-12, rel=0)
     assert trade.pnl_pct == pytest.approx(2.0 / 102.0, abs=1e-12, rel=0)
+    assert trade.entry_timestamp == 1_704_119_400_000
+    assert trade.exit_timestamp == 1_704_120_300_000

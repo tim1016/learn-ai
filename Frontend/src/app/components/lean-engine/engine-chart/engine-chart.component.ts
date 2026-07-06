@@ -26,8 +26,8 @@ export interface ChartBar {
 }
 
 export interface EngineTradeForChart {
-  entry_time: string;
-  exit_time: string;
+  entry_time: number;
+  exit_time: number;
   entry_price: number;
   exit_price: number;
   pnl_pts: number;
@@ -35,7 +35,7 @@ export interface EngineTradeForChart {
 }
 
 export interface EquityCurvePoint {
-  timestamp: string;
+  timestamp: number;
   equity: number;
 }
 
@@ -281,8 +281,8 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
     const markers: any[] = [];
 
     for (const trade of tradeList) {
-      const entryTs = this.parseToSeconds(trade.entry_time);
-      const exitTs = this.parseToSeconds(trade.exit_time);
+      const entryTs = Math.floor(trade.entry_time / 1000);
+      const exitTs = Math.floor(trade.exit_time / 1000);
 
       markers.push({
         time: entryTs as UTCTimestamp,
@@ -322,7 +322,7 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
     const data: AreaData[] = [];
     for (let i = 0; i < curve.length; i += step) {
       const pt = curve[i];
-      const ts = new Date(pt.timestamp).getTime() / 1000;
+      const ts = Math.floor(pt.timestamp / 1000);
       if (!isNaN(ts)) {
         data.push({ time: ts as UTCTimestamp, value: pt.equity });
       }
@@ -330,7 +330,7 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
     // Always include last point
     if (step > 1 && curve.length > 0) {
       const last = curve[curve.length - 1];
-      const ts = new Date(last.timestamp).getTime() / 1000;
+      const ts = Math.floor(last.timestamp / 1000);
       if (!isNaN(ts)) {
         data.push({ time: ts as UTCTimestamp, value: last.equity });
       }
@@ -341,8 +341,4 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
     this.equityChart?.timeScale().fitContent();
   }
 
-  private parseToSeconds(ts: string): number {
-    const d = new Date(ts.includes('T') ? ts : ts.replace(' ', 'T') + ':00Z');
-    return Math.floor(d.getTime() / 1000);
-  }
 }

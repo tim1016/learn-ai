@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
 import pandas_ta as ta
+
+from app.utils.timestamps import timestamp_like_to_ms_utc
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +22,8 @@ logger = logging.getLogger(__name__)
 class RuleBasedTrade:
     trade_number: int
     trade_type: str  # "Buy"
-    entry_timestamp: str  # ISO 8601
-    exit_timestamp: str
+    entry_timestamp: int
+    exit_timestamp: int
     entry_price: float
     exit_price: float
     pnl: float
@@ -253,19 +254,6 @@ def _compute_max_drawdown(cum_pnl: list[float]) -> float:
     return max_dd
 
 
-def _format_timestamp(ts) -> str:
-    """Convert a timestamp (ms epoch or datetime) to unambiguous ISO 8601 UTC.
-
-    Uses the 'T' separator and 'Z' suffix so browser `new Date(str)` parses as UTC
-    on every major engine. The previous format '%Y-%m-%d %H:%M' (space, no tz)
-    was implementation-defined — Chrome/Safari parsed it as local time, causing
-    a 5-hour shift in ET browsers.
-    """
-    if isinstance(ts, (int, float, np.integer, np.floating)):
-        return datetime.fromtimestamp(int(ts) / 1000, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    if isinstance(ts, datetime):
-        dt = ts if ts.tzinfo is not None else ts.replace(tzinfo=UTC)
-        return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    if isinstance(ts, str):
-        return ts
-    return str(ts)
+def _format_timestamp(ts: object) -> int:
+    """Convert a timestamp-like value to canonical int64 ms UTC."""
+    return timestamp_like_to_ms_utc(ts, field_name="rule-based trade timestamp")

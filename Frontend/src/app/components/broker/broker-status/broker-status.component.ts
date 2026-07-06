@@ -20,8 +20,8 @@ import type {
   IbkrPositionsSnapshot,
 } from '../../../api/broker-models';
 import {
+  fmtBrokerExpiryDate,
   fmtCurrency,
-  fmtDateNy,
   fmtInteger,
   fmtSignedCurrency,
 } from '../format';
@@ -117,7 +117,7 @@ export class BrokerStatusComponent {
   readonly fmtCurrency = fmtCurrency;
   readonly fmtSignedCurrency = fmtSignedCurrency;
   readonly fmtInteger = fmtInteger;
-  readonly fmtDateNy = fmtDateNy;
+  readonly fmtBrokerExpiryDate = fmtBrokerExpiryDate;
 
   readonly fmtAge = (ms: number | null | undefined): string => {
     if (ms == null) return '—';

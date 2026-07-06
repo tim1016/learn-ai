@@ -23,9 +23,9 @@ describe('ReplayEngineService', () => {
   describe('load', () => {
     it('should sort bars by timestamp and reset index to 0', () => {
       const bars = [
-        createMockAggregate({ id: 3, timestamp: '2026-01-03T00:00:00Z' }),
-        createMockAggregate({ id: 1, timestamp: '2026-01-01T00:00:00Z' }),
-        createMockAggregate({ id: 2, timestamp: '2026-01-02T00:00:00Z' }),
+        createMockAggregate({ id: 3, timestamp: Date.UTC(2026, 0, 3) }),
+        createMockAggregate({ id: 1, timestamp: Date.UTC(2026, 0, 1) }),
+        createMockAggregate({ id: 2, timestamp: Date.UTC(2026, 0, 2) }),
       ];
 
       service.load(bars);
@@ -185,11 +185,11 @@ describe('ReplayEngineService', () => {
       service.seekTo(5);
       const visible = service.visibleBars();
       const currentBar = service.currentBar();
-      const currentTimestamp = new Date(currentBar!.timestamp).getTime();
+      const currentTimestamp = currentBar!.timestamp;
 
       // No visible bar should have a timestamp beyond the current bar
       for (const bar of visible) {
-        expect(new Date(bar.timestamp).getTime()).toBeLessThanOrEqual(currentTimestamp);
+        expect(bar.timestamp).toBeLessThanOrEqual(currentTimestamp);
       }
 
       // visibleBars should NOT contain any bar from index 6+

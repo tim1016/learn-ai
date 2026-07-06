@@ -1,6 +1,7 @@
 using Backend.Data;
 using Backend.GraphQL.Types;
 using Backend.Models.MarketData;
+using Backend.Temporal;
 using HotChocolate;
 using HotChocolate.Types;
 using Microsoft.EntityFrameworkCore;
@@ -27,13 +28,12 @@ public class BacktestRunsQuery
     /// </remarks>
     [GraphQLName("backtestRuns")]
     [UsePaging(MaxPageSize = 100, DefaultPageSize = 25)]
-    public IQueryable<StrategyExecution> GetBacktestRuns(
+    public IQueryable<BacktestRunNodeType> GetBacktestRuns(
         AppDbContext context,
         Engine? engine = null,
         string? symbol = null)
     {
         var query = context.StrategyExecutions
-            .Include(s => s.Trades)
             .AsNoTracking()
             .AsQueryable();
 
@@ -61,6 +61,87 @@ public class BacktestRunsQuery
             query = query.Where(s => s.Parameters != null && s.Parameters.Contains(jsonFragment));
         }
 
-        return query.OrderByDescending(s => s.ExecutedAt);
+        return query
+            .OrderByDescending(s => s.ExecutedAt)
+            // Keep this SQL-translatable projection aligned with
+            // BacktestRunNodeType.FromExecution below. The materialized path can
+            // call EngineExtensions.FromSource; this projection keeps the same
+            // source mapping inline so EF can translate it.
+            .Select(s => new BacktestRunNodeType
+            {
+                Id = s.Id,
+                Source = s.Source,
+                Engine = s.Source == "lean-sidecar" ? Engine.LEAN : Engine.PYTHON,
+                StrategyName = s.StrategyName,
+                LeanRunId = s.LeanRunId,
+                Parameters = s.Parameters,
+                StartDate = s.StartDate,
+                EndDate = s.EndDate,
+                ExecutedAtUtc = s.ExecutedAt,
+                TotalTrades = s.TotalTrades,
+                TotalPnL = s.TotalPnL,
+                CommissionPerOrder = s.CommissionPerOrder,
+                BrokeragePolicy = s.BrokeragePolicy,
+                Notes = s.Notes,
+                DataPolicyJson = s.DataPolicyJson,
+                Trades = s.Trades.Select(t => new BacktestRunTradeSummaryType
+                {
+                    IsSyntheticExit = t.IsSyntheticExit,
+                }).ToList(),
+            });
     }
+}
+
+public sealed record BacktestRunNodeType
+{
+    public int Id { get; init; }
+    public string Source { get; init; } = "";
+    public Engine Engine { get; init; }
+    public string StrategyName { get; init; } = "";
+    public string? LeanRunId { get; init; }
+    public string? Parameters { get; init; }
+    public string StartDate { get; init; } = "";
+    public string EndDate { get; init; } = "";
+    [GraphQLIgnore]
+    public DateTime ExecutedAtUtc { get; init; }
+    public long ExecutedAt => UnixMs.FromUtc(ExecutedAtUtc);
+    public int TotalTrades { get; init; }
+    [GraphQLName("totalPnL")]
+    public decimal TotalPnL { get; init; }
+    public decimal? CommissionPerOrder { get; init; }
+    public string? BrokeragePolicy { get; init; }
+    public string? Notes { get; init; }
+    [GraphQLIgnore]
+    public string? DataPolicyJson { get; init; }
+    public DataPolicyType? DataPolicy => DataPolicyType.TryParse(DataPolicyJson);
+    public IReadOnlyList<BacktestRunTradeSummaryType> Trades { get; init; } = [];
+
+    // Keep this materialized mapping aligned with GetBacktestRuns' projection.
+    public static BacktestRunNodeType FromExecution(StrategyExecution execution) => new()
+    {
+        Id = execution.Id,
+        Source = execution.Source,
+        Engine = EngineExtensions.FromSource(execution.Source),
+        StrategyName = execution.StrategyName,
+        LeanRunId = execution.LeanRunId,
+        Parameters = execution.Parameters,
+        StartDate = execution.StartDate,
+        EndDate = execution.EndDate,
+        ExecutedAtUtc = execution.ExecutedAt,
+        TotalTrades = execution.TotalTrades,
+        TotalPnL = execution.TotalPnL,
+        CommissionPerOrder = execution.CommissionPerOrder,
+        BrokeragePolicy = execution.BrokeragePolicy,
+        Notes = execution.Notes,
+        DataPolicyJson = execution.DataPolicyJson,
+        Trades = execution.Trades.Select(t => new BacktestRunTradeSummaryType
+        {
+            IsSyntheticExit = t.IsSyntheticExit,
+        }).ToList(),
+    };
+}
+
+public sealed record BacktestRunTradeSummaryType
+{
+    public bool IsSyntheticExit { get; init; }
 }

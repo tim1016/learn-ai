@@ -84,7 +84,7 @@
               <td class="mono">{{ p.symbol }}</td>
               <td class="num mono">{{ fmtCurrency(p.strike) }}</td>
               <td class="mono">{{ p.right ?? '—' }}</td>
-              <td class="mono">{{ fmtDateNy(p.expiry_ms) }}</td>
+              <td class="mono">{{ fmtBrokerExpiryDate(p.expiry_ms) }}</td>
               <td class="num mono">{{ fmtNumber(row.ibkrDelta, 3) }}</td>
               <td class="num mono">{{ fmtNumber(row.engineDelta, 3) }}</td>
               <td

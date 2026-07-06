@@ -10,7 +10,7 @@ export function createMockAggregate(overrides: Partial<StockAggregate> = {}): St
     close: 153.0,
     volume: 1000000,
     volumeWeightedAveragePrice: 152.0,
-    timestamp: '2026-01-15T00:00:00.000Z',
+    timestamp: Date.UTC(2026, 0, 15),
     timespan: 'day',
     multiplier: 1,
     transactionCount: 50000,
@@ -23,7 +23,7 @@ export function createMockAggregates(count: number): StockAggregate[] {
     const date = new Date(2026, 0, i + 1);
     return createMockAggregate({
       id: i + 1,
-      timestamp: date.toISOString(),
+      timestamp: date.getTime(),
       open: 150 + i,
       high: 155 + i,
       low: 148 + i,
@@ -58,7 +58,7 @@ export function createMockTicker(overrides: Partial<Ticker> = {}): Ticker {
     type: 'CS',
     active: true,
     currencySymbol: '$',
-    createdAt: '2026-01-01T00:00:00Z',
+    createdAt: Date.UTC(2026, 0, 1),
     updatedAt: null,
     sanitizationSummary: null,
     ...overrides,
@@ -76,7 +76,7 @@ export function createMockAggregatesTimeSeries(
     const basePrice = 150 + Math.sin(i * 0.05) * 10;
     return createMockAggregate({
       id: i + 1,
-      timestamp: timestamp.toISOString(),
+      timestamp: timestamp.getTime(),
       open: basePrice,
       high: basePrice + 2,
       low: basePrice - 2,

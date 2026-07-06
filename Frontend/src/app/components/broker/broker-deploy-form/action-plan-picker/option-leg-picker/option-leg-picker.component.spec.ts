@@ -85,13 +85,16 @@ async function flushAsync() {
 
 describe('OptionLegPickerComponent', () => {
   it('loads expirations on symbol change and renders them as chips', async () => {
-    const { fixture, broker, el } = setup();
+    const { fixture, broker, el } = setup({
+      expirations: [Date.UTC(2025, 11, 19, 0, 0, 0)],
+    });
 
     await flushAsync();
     fixture.detectChanges();
 
     expect(broker.expirations).toHaveBeenCalledWith('SPY');
     expect(el.querySelectorAll('.chip').length).toBeGreaterThan(0);
+    expect(el.textContent).toContain('2025-12-19');
   });
 
   it('drill-down: expiry → strike → right → qualify emits the contract', async () => {

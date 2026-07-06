@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
+
+from app.utils.timestamps import timestamp_like_to_ms_utc
 
 
 @dataclass
 class TradeRecord:
     trade_number: int
     trade_type: str  # "Buy" or "Sell"
-    entry_timestamp: str
-    exit_timestamp: str
+    entry_timestamp: int
+    exit_timestamp: int
     entry_price: float
     exit_price: float
     pnl: float
@@ -112,21 +113,9 @@ def _compute_max_drawdown(cum_pnl: list[float]) -> float:
     return max_dd
 
 
-def format_timestamp(ts) -> str:
-    """Convert a timestamp (ms epoch or datetime) to unambiguous ISO 8601 UTC.
-
-    Uses 'T' separator and 'Z' suffix so browser `new Date(str)` parses as UTC.
-    The previous format '%Y-%m-%d %H:%M' (space, no tz) parsed as local time in
-    Chrome/Safari — 5-hour shift in ET browsers.
-    """
-    if isinstance(ts, (int, float, np.integer, np.floating)):
-        return datetime.fromtimestamp(int(ts) / 1000, tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    if isinstance(ts, datetime):
-        dt = ts if ts.tzinfo is not None else ts.replace(tzinfo=UTC)
-        return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-    if isinstance(ts, str):
-        return ts
-    return str(ts)
+def format_timestamp(ts: object) -> int:
+    """Convert a timestamp-like value to canonical int64 ms UTC."""
+    return timestamp_like_to_ms_utc(ts, field_name="trade timestamp")
 
 
 def make_trade(

@@ -399,11 +399,10 @@ def test_engine_exit_timing():
         entry_ts = None
         exit_ts = None
         for i, bar in enumerate(bars):
-            # Engine emits ISO 8601 UTC (%Y-%m-%dT%H:%M:%SZ) — see _format_timestamp.
-            bar_ts_str = pd.Timestamp(bar["timestamp"], unit="ms", tz="UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
-            if bar_ts_str == trade.entry_timestamp:
+            # Engine emits canonical int64 ms UTC timestamps.
+            if bar["timestamp"] == trade.entry_timestamp:
                 entry_ts = i
-            if bar_ts_str == trade.exit_timestamp:
+            if bar["timestamp"] == trade.exit_timestamp:
                 exit_ts = i
 
         if entry_ts is not None and exit_ts is not None:
@@ -597,41 +596,35 @@ def test_duplicate_timestamps_are_deduped():
 class TestFormatTimestampRegression:
     """Regression for the local-time-parse bug (audit § 2.3).
 
-    Before fix: `_format_timestamp` emitted '2024-01-01 00:00' (no T, no tz),
-    which ECMAScript parses as local time in Chrome/Safari — a 5-hour shift in
-    ET browsers. After fix: '2024-01-01T00:00:00Z' — unambiguous UTC.
+    The durable fix is not a better string; it is no string at all. Rule-based
+    trade timestamps leave the Python boundary as canonical int64 ms UTC.
     """
 
-    def test_ms_epoch_emits_iso_utc(self):
+    def test_ms_epoch_emits_ms_utc(self):
         from app.services.rule_based_backtest import _format_timestamp
 
         # 2024-01-01T00:00:00Z == 1704067200000 ms
-        assert _format_timestamp(1704067200000) == "2024-01-01T00:00:00Z"
+        assert _format_timestamp(1704067200000) == 1704067200000
 
-    def test_format_does_not_reenact_naive_z_lie(self):
+    def test_format_rejects_naive_datetime(self):
+        from datetime import datetime
+
         from app.services.rule_based_backtest import _format_timestamp
 
-        result = _format_timestamp(1704067200000)
-        # Must have the 'T' separator (not a space) per ECMAScript spec
-        assert "T" in result
-        # Must end with 'Z' (UTC designator)
-        assert result.endswith("Z")
+        with pytest.raises(ValueError, match="timezone-aware"):
+            _format_timestamp(datetime(2024, 1, 1, 0, 0))
 
-    def test_browser_new_date_equivalent_roundtrip(self):
-        """A ET-browser parsing the emitted string should produce the same ms.
-
-        This is the invariant that was broken: '2024-01-01 00:00' parsed as
-        local-midnight in ET produced 1704085200000 (not 1704067200000).
-        """
+    def test_timezone_aware_string_roundtrips_to_ms(self):
+        """A timezone-bearing string is normalized before it crosses the boundary."""
         from app.services.rule_based_backtest import _format_timestamp
 
-        input_ms = 1704067200000
-        emitted = _format_timestamp(input_ms)
+        assert _format_timestamp("2024-01-01T00:00:00Z") == 1704067200000
 
-        # Parsing the emitted string under any tz should round-trip exactly.
-        parsed = pd.Timestamp(emitted)
-        # pd.Timestamp on an ISO-with-Z string is tz-aware UTC.
-        assert int(parsed.timestamp() * 1000) == input_ms
+    def test_naive_string_rejected(self):
+        from app.services.rule_based_backtest import _format_timestamp
+
+        with pytest.raises(ValueError, match="include a timezone"):
+            _format_timestamp("2024-01-01 00:00")
 
 
 if __name__ == "__main__":

@@ -1,19 +1,10 @@
-"""Single calendar source of truth for the LEAN sidecar.
+"""Canonical NYSE calendar source of truth.
 
 Per docs/handoffs/2026-05-18-design-p2-5-date-semantics-v2.md, both the
 ``TrustedRunRequestModel`` validator and the staging iteration consult
 this module so they cannot drift on which calendar dates are trading
 days, holidays, or half-days. The ``/calendar/blocked-dates`` endpoint
 also reads from here.
-
-This is intentionally separate from
-``app/engine/live/nyse_calendar.py``:
-
-- ``nyse_calendar`` answers a single math-rigor question (previous
-  completed session close, used by indicator-state hydrate-validation).
-- ``trading_calendar`` answers operator-facing window questions
-  (validator, staging, picker advisories). Different consumers,
-  different test surfaces, different rate of change.
 
 Backed by ``pandas_market_calendars`` (already in
 ``requirements-light.txt``).  All boundary types are ``date`` /
@@ -24,15 +15,76 @@ tz-aware ``pd.Timestamp`` is fine; it must not escape.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import date, datetime, time
+from dataclasses import dataclass
+from datetime import date, datetime
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pandas_market_calendars as mcal
 
 _ET = ZoneInfo("America/New_York")
+_UTC = ZoneInfo("UTC")
 _CALENDAR_NAME = "NYSE"
 _CALENDAR = mcal.get_calendar(_CALENDAR_NAME)
+_LOOKBACK_DAYS = 14
+_REGULAR_CLOSE_MINUTE_ET = 16 * 60
+
+NyseSessionState = Literal["RTH_OPEN", "CLOSED"]
+
+
+class NoSessionError(LookupError):
+    """No completed NYSE session exists in the requested lookback window."""
+
+
+@dataclass(frozen=True)
+class SessionWindow:
+    """One scheduled NYSE session window expressed in canonical ms UTC."""
+
+    session_date: date
+    open_ms_utc: int
+    close_ms_utc: int
+
+
+def _timestamp_to_ms_utc(ts: pd.Timestamp) -> int:
+    return int(ts.value // 1_000_000)
+
+
+def _schedule(start: date | str | pd.Timestamp, end: date | str | pd.Timestamp) -> pd.DataFrame:
+    return _CALENDAR.schedule(start_date=start, end_date=end)
+
+
+def session_windows_ms_utc(start: date | str, end: date | str) -> list[SessionWindow]:
+    """Return scheduled NYSE session windows in ``[start, end]``.
+
+    The returned values are canonical ``int64 ms UTC`` boundaries. Internal
+    ``pandas_market_calendars`` timestamps never escape this module.
+    """
+    schedule = _schedule(start, end)
+    windows: list[SessionWindow] = []
+    for idx, row in schedule.iterrows():
+        session_date = pd.Timestamp(idx).date()
+        market_open: pd.Timestamp = row["market_open"]
+        market_close: pd.Timestamp = row["market_close"]
+        windows.append(
+            SessionWindow(
+                session_date=session_date,
+                open_ms_utc=_timestamp_to_ms_utc(market_open),
+                close_ms_utc=_timestamp_to_ms_utc(market_close),
+            )
+        )
+    return windows
+
+
+def session_window_for_date(d: date) -> SessionWindow:
+    """Return the scheduled NYSE session window for ``d``.
+
+    Raises ``LookupError`` when ``d`` is not a session.
+    """
+    windows = session_windows_ms_utc(d, d)
+    if not windows:
+        raise LookupError(f"{d.isoformat()} is not a NYSE session")
+    return windows[0]
 
 
 def is_trading_day(d: date) -> bool:
@@ -42,7 +94,7 @@ def is_trading_day(d: date) -> bool:
     return True — they ARE sessions; whether the validator accepts them
     is a separate policy (see ``is_early_close``).
     """
-    schedule = _CALENDAR.schedule(start_date=d, end_date=d)
+    schedule = _schedule(d, d)
     return not schedule.empty
 
 
@@ -54,14 +106,13 @@ def is_early_close(d: date) -> bool:
     16:00-ET wall-clock counts as an early close. Non-session days
     return False categorically.
     """
-    schedule = _CALENDAR.schedule(start_date=d, end_date=d)
-    if schedule.empty:
+    try:
+        window = session_window_for_date(d)
+    except LookupError:
         return False
-    close_ts: pd.Timestamp = schedule["market_close"].iloc[0]
-    # Compare in ET. A regular session closes at 16:00 ET; anything
-    # earlier is the half-day signal.
-    close_et = close_ts.tz_convert(_ET)
-    return close_et.time() < time(16, 0)
+    close_et = datetime.fromtimestamp(window.close_ms_utc / 1000, tz=_UTC).astimezone(_ET)
+    close_minute = close_et.hour * 60 + close_et.minute
+    return close_minute < _REGULAR_CLOSE_MINUTE_ET
 
 
 def next_trading_day(d: date) -> date:
@@ -75,9 +126,9 @@ def next_trading_day(d: date) -> date:
     (Christmas → New Year's, MLK weekend, etc.) resolve in one
     schedule call.
     """
-    schedule = _CALENDAR.schedule(
-        start_date=d + pd.Timedelta(days=1),
-        end_date=d + pd.Timedelta(days=14),
+    schedule = _schedule(
+        d + pd.Timedelta(days=1),
+        d + pd.Timedelta(days=14),
     )
     if schedule.empty:
         # 14 calendar days with zero sessions only happens in
@@ -99,11 +150,38 @@ def session_open_ms_utc(d: date) -> int:
     compute the half-open window's exclusive end as
     ``session_open_ms_utc(next_trading_day(end_date))``.
     """
-    open_et = datetime(d.year, d.month, d.day, 9, 30, tzinfo=_ET)
-    # ``.timestamp()`` already gives epoch seconds in UTC; multiply
-    # for ms. Cast through float→int is exact for any date the NYSE
-    # calendar supports (≪ 2^53 ms).
-    return int(open_et.timestamp() * 1000)
+    try:
+        return session_window_for_date(d).open_ms_utc
+    except LookupError:
+        open_et = datetime(d.year, d.month, d.day, 9, 30, tzinfo=_ET)
+        # ``.timestamp()`` already gives epoch seconds in UTC; multiply
+        # for ms. Cast through float→int is exact for any date the NYSE
+        # calendar supports (≪ 2^53 ms).
+        return int(open_et.timestamp() * 1000)
+
+
+def session_close_ms_utc(d: date) -> int:
+    """Return the scheduled NYSE session close for ``d`` as int64 ms UTC."""
+    return session_window_for_date(d).close_ms_utc
+
+
+def is_regular_session_ms_utc(ts_ms: int) -> bool:
+    """True iff ``ts_ms`` falls inside the scheduled NYSE regular session."""
+    return session_state_at_ms(ts_ms) == "RTH_OPEN"
+
+
+def regular_session_mask_ms_utc(ts_ms: pd.Series) -> pd.Series:
+    """Vectorized regular-session mask for canonical ``int64 ms UTC`` values."""
+    values = ts_ms.astype("int64")
+    if values.empty:
+        return pd.Series([], index=ts_ms.index, dtype=bool)
+
+    et_dates = pd.to_datetime(values, unit="ms", utc=True).dt.tz_convert("America/New_York").dt.date
+    windows = {window.session_date: window for window in session_windows_ms_utc(et_dates.min(), et_dates.max())}
+    open_ms = et_dates.map({d: window.open_ms_utc for d, window in windows.items()}).astype("Int64")
+    close_ms = et_dates.map({d: window.close_ms_utc for d, window in windows.items()}).astype("Int64")
+    mask = open_ms.notna() & close_ms.notna() & values.ge(open_ms) & values.lt(close_ms)
+    return mask.fillna(False).astype(bool)
 
 
 def expected_sessions(start: date, end: date) -> list[date]:
@@ -114,7 +192,7 @@ def expected_sessions(start: date, end: date) -> list[date]:
     fetch's opt-in completeness check to assert no expected session is
     missing from a Polygon response.
     """
-    schedule = _CALENDAR.schedule(start_date=start, end_date=end)
+    schedule = _schedule(start, end)
     return sorted(ts.date() for ts in schedule.index)
 
 
@@ -127,12 +205,76 @@ def session_close_minute_et(d: date) -> int:
     is consulted directly). Raises :class:`LookupError` when ``d`` is
     not a session.
     """
-    schedule = _CALENDAR.schedule(start_date=d, end_date=d)
-    if schedule.empty:
-        raise LookupError(f"{d.isoformat()} is not a NYSE session")
-    close_ts: pd.Timestamp = schedule["market_close"].iloc[0]
-    close_et = close_ts.tz_convert(_ET)
+    close_et = datetime.fromtimestamp(session_close_ms_utc(d) / 1000, tz=_UTC).astimezone(_ET)
     return close_et.hour * 60 + close_et.minute
+
+
+def trading_session_count(start: date, end: date) -> int:
+    """Return the count of scheduled NYSE sessions in ``[start, end]``."""
+    return len(expected_sessions(start, end))
+
+
+def valid_session_minutes_ms_utc(
+    start: date | str,
+    end: date | str,
+    frequency: str = "1min",
+) -> set[int]:
+    """Return valid scheduled session instants as canonical ms UTC."""
+    schedule = _schedule(start, end)
+    if schedule.empty:
+        return set()
+    minutes = mcal.date_range(schedule, frequency=frequency)
+    return {_timestamp_to_ms_utc(pd.Timestamp(ts)) for ts in minutes}
+
+
+def holiday_names_in_range(start: date, end: date) -> dict[date, str]:
+    """Return ``{date: holiday_name}`` for NYSE holidays in ``[start, end]``."""
+    series = _CALENDAR.regular_holidays.holidays(
+        pd.Timestamp(start),
+        pd.Timestamp(end),
+        return_name=True,
+    )
+    out = {ts.date(): str(name) for ts, name in series.items()}
+    for raw in _CALENDAR.holidays().calendar.holidays:
+        d = pd.Timestamp(raw).date()
+        if start <= d <= end:
+            out.setdefault(d, "NYSE ad-hoc closure")
+    return out
+
+
+def session_state_at_ms(now_ms: int) -> NyseSessionState:
+    """Return scheduled NYSE session state for ``now_ms``.
+
+    This deliberately does not synthesize ``HALTED``; unscheduled liveness
+    belongs to the live broker/vendor feed.
+    """
+    if now_ms < 0:
+        raise ValueError("now_ms must be non-negative int64 ms UTC")
+    now_utc = pd.Timestamp(now_ms, unit="ms", tz="UTC")
+    ny_day = now_utc.tz_convert("America/New_York").date()
+    try:
+        window = session_window_for_date(ny_day)
+    except LookupError:
+        return "CLOSED"
+    if window.open_ms_utc <= now_ms < window.close_ms_utc:
+        return "RTH_OPEN"
+    return "CLOSED"
+
+
+def previous_completed_session_close_ms(session_start_ms: int) -> int:
+    """Return the latest scheduled NYSE close strictly before ``session_start_ms``."""
+    if session_start_ms <= 0:
+        raise NoSessionError(f"session_start_ms={session_start_ms} is not a valid trading timestamp")
+    session_start_ts = pd.Timestamp(session_start_ms, unit="ms", tz="UTC")
+    start = (session_start_ts - pd.Timedelta(days=_LOOKBACK_DAYS)).normalize()
+    end = session_start_ts.normalize()
+    windows = session_windows_ms_utc(start, end)
+    earlier = [window for window in windows if window.close_ms_utc < session_start_ms]
+    if not windows:
+        raise NoSessionError(f"no NYSE sessions in {_LOOKBACK_DAYS}-day lookback ending at {session_start_ts}")
+    if not earlier:
+        raise NoSessionError(f"no completed NYSE session strictly before {session_start_ts}")
+    return earlier[-1].close_ms_utc
 
 
 def blocked_dates_in_range(
@@ -153,7 +295,7 @@ def blocked_dates_in_range(
     # and holidays show up as absent rows, and we need to walk the
     # range to find them. Build a set of session dates first to make
     # the per-day lookup O(1). Early closes remain sessions here.
-    schedule = _CALENDAR.schedule(start_date=start, end_date=end)
+    schedule = _schedule(start, end)
     session_dates: set[date] = {ts.date() for ts in schedule.index}
 
     out: dict[date, str] = {}

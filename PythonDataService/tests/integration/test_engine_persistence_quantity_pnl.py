@@ -31,9 +31,9 @@ from app.routers.engine import (
 def _response_with_trade(*, quantity: int, pnl_pts: float) -> EngineBacktestResponse:
     trade = EngineTradeResponse(
         trade_number=1,
-        entry_time="2025-01-06T14:30:00Z",
+        entry_time=1_736_173_800_000,
         entry_price=710.0,
-        exit_time="2025-01-06T16:00:00Z",
+        exit_time=1_736_179_200_000,
         exit_price=710.0 + pnl_pts,
         quantity=quantity,
         indicators={},

@@ -5,7 +5,8 @@ Formula: long-only intraday mean-reversion on SPY 1-min bars. Session-anchored
 VWAP (typical=(H+L+C)/3); bands = vwap ± K·σ where σ is the population std
 (ddof=0) of the last LOOKBACK (close−vwap) values. Enter long when close <
 lower band (inside the session window, under the per-day trade cap); exit when
-close ≥ vwap; force-flat 15:55 ET. Fixed quantity per trade.
+close ≥ vwap; force-flat five minutes before the scheduled NYSE close.
+Fixed quantity per trade.
 
 Reference: references/quantconnect/spy_vwap_reversion/main.py
 (QuantConnect Cloud LEAN). Canonical implementation: this file.
@@ -19,12 +20,16 @@ docs/references/spy-vwap-reversion-port.md.
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from app.engine.data.trade_bar import TradeBar
 from app.engine.indicators.rolling_distance_sigma import RollingDistanceSigma
 from app.engine.indicators.vwap import SessionAnchoredVwap
 from app.engine.strategy.base import Strategy
+from app.lean_sidecar.trading_calendar import session_window_for_date
+
+_ET = ZoneInfo("America/New_York")
 
 
 class SpyVwapReversionAlgorithm(Strategy):
@@ -38,8 +43,6 @@ class SpyVwapReversionAlgorithm(Strategy):
     SKIP_OPEN_MIN = 5
     SKIP_CLOSE_MIN = 5
     MAX_TRADES_PER_DAY = 4
-    FORCE_FLAT_HOUR = 15
-    FORCE_FLAT_MINUTE = 55
 
     def __init__(self, symbol: str = "SPY") -> None:
         super().__init__()
@@ -48,6 +51,7 @@ class SpyVwapReversionAlgorithm(Strategy):
         self._vwap = SessionAnchoredVwap()
         self._sigma = RollingDistanceSigma(self.LOOKBACK)
         self._session_date = None
+        self._session_bounds_by_date: dict[date, tuple[int, int] | None] = {}
         self._trades_today = 0
         self._in_position = False
 
@@ -70,9 +74,36 @@ class SpyVwapReversionAlgorithm(Strategy):
 
     def _in_entry_window(self, t) -> bool:
         minutes = t.hour * 60 + t.minute
-        open_min = 9 * 60 + 30 + self.SKIP_OPEN_MIN
-        last_entry_min = self.FORCE_FLAT_HOUR * 60 + self.FORCE_FLAT_MINUTE - self.SKIP_CLOSE_MIN
+        session_bounds = self._session_bounds_minutes_et(t.date())
+        if session_bounds is None:
+            return False
+        session_open_min, session_close_min = session_bounds
+        open_min = session_open_min + self.SKIP_OPEN_MIN
+        last_entry_min = session_close_min - self.SKIP_CLOSE_MIN
         return open_min <= minutes < last_entry_min
+
+    def _should_force_flat(self, t) -> bool:
+        session_bounds = self._session_bounds_minutes_et(t.date())
+        if session_bounds is None:
+            return False
+        _, session_close_min = session_bounds
+        minutes = t.hour * 60 + t.minute
+        return minutes >= session_close_min - self.SKIP_CLOSE_MIN
+
+    def _session_bounds_minutes_et(self, d: date) -> tuple[int, int] | None:
+        if d not in self._session_bounds_by_date:
+            self._session_bounds_by_date[d] = self._load_session_bounds_minutes_et(d)
+        return self._session_bounds_by_date[d]
+
+    @staticmethod
+    def _load_session_bounds_minutes_et(d: date) -> tuple[int, int] | None:
+        try:
+            window = session_window_for_date(d)
+        except LookupError:
+            return None
+        open_et = datetime.fromtimestamp(window.open_ms_utc / 1000, tz=UTC).astimezone(_ET)
+        close_et = datetime.fromtimestamp(window.close_ms_utc / 1000, tz=UTC).astimezone(_ET)
+        return (open_et.hour * 60 + open_et.minute, close_et.hour * 60 + close_et.minute)
 
     def _on_bar(self, bar: TradeBar) -> None:
         assert self.ctx is not None
@@ -95,8 +126,8 @@ class SpyVwapReversionAlgorithm(Strategy):
 
         holding = self._in_position
 
-        # Force-flat at 15:55 ET — exit, no new entries.
-        if t.hour == self.FORCE_FLAT_HOUR and t.minute >= self.FORCE_FLAT_MINUTE:
+        # Force-flat before the scheduled close; half-days close earlier.
+        if self._should_force_flat(t):
             if holding:
                 self.ctx.liquidate(self._symbol)
                 self._in_position = False
