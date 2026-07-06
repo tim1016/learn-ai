@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -44,6 +45,8 @@ from app.utils.timestamps import now_ms_utc
 logger = logging.getLogger(__name__)
 
 DuplicatePolicy = Literal["strict", "live_idempotent"]
+NO_BAR_WARNING_INITIAL_INTERVAL_S = 30.0
+NO_BAR_WARNING_MAX_INTERVAL_S = 300.0
 
 
 class IBKRBarStreamError(Exception):
@@ -61,6 +64,80 @@ class LiveBarCounters:
 
     skipped_duplicate: int = 0
     applied_correction: int = 0
+
+
+@dataclass
+class _BarDeliveryLogger:
+    """Shared subscription timing logs for IBKR real-time bar streams."""
+
+    symbol: str
+    con_id: int
+    use_rth: bool
+    subscribed_at: float = field(default_factory=time.monotonic)
+    next_no_bar_log_at: float = field(init=False)
+    warning_interval_s: float = field(default=NO_BAR_WARNING_INITIAL_INTERVAL_S, init=False)
+    first_bar_logged: bool = False
+
+    def __post_init__(self) -> None:
+        self.next_no_bar_log_at = self.subscribed_at + self.warning_interval_s
+
+    def log_subscribed(self, *, initial_bar_count: int) -> None:
+        logger.info(
+            "IBKR reqRealTimeBars subscribed",
+            extra={
+                "symbol": self.symbol,
+                "con_id": self.con_id,
+                "bar_size": 5,
+                "what_to_show": "TRADES",
+                "use_rth": self.use_rth,
+                "initial_bar_count": initial_bar_count,
+            },
+        )
+
+    def maybe_log_no_bar(
+        self,
+        *,
+        bar_count: int,
+        connected: bool,
+        connection_lost: bool,
+        message: str,
+    ) -> None:
+        now = time.monotonic()
+        if now < self.next_no_bar_log_at:
+            return
+        logger.warning(
+            message,
+            extra={
+                "symbol": self.symbol,
+                "con_id": self.con_id,
+                "elapsed_s": round(now - self.subscribed_at, 3),
+                "bar_count": bar_count,
+                "connected": connected,
+                "connection_lost": connection_lost,
+                "use_rth": self.use_rth,
+                "next_warning_interval_s": self.warning_interval_s,
+            },
+        )
+        self.warning_interval_s = min(
+            self.warning_interval_s * 2,
+            NO_BAR_WARNING_MAX_INTERVAL_S,
+        )
+        self.next_no_bar_log_at = now + self.warning_interval_s
+
+    def log_first_bar(self, *, bar_count: int, message: str) -> None:
+        if self.first_bar_logged:
+            return
+        logger.info(
+            message,
+            extra={
+                "symbol": self.symbol,
+                "con_id": self.con_id,
+                "elapsed_s": round(time.monotonic() - self.subscribed_at, 3),
+                "bar_count": bar_count,
+                "use_rth": self.use_rth,
+            },
+        )
+        self.first_bar_logged = True
 
 
 def _to_utc_ms(value: datetime | int | float) -> int:
@@ -313,10 +390,17 @@ async def stream_raw_5s_bars(
     client.require_connected()
     contract = await qualify_underlying(client, symbol)
     bars = client.ib.reqRealTimeBars(contract, 5, "TRADES", useRTH=use_rth)
+    sym = symbol.upper()
+    delivery_logger = _BarDeliveryLogger(
+        symbol=sym,
+        con_id=int(contract.conId),
+        use_rth=use_rth,
+    )
+    delivery_logger.log_subscribed(initial_bar_count=len(bars))
     recorder = get_ibkr_api_evidence_recorder()
     recorder.record(
         source="bars.stream_raw_5s_bars.subscribe",
-        symbol=symbol.upper(),
+        symbol=sym,
         request=evidence_request(
             "reqRealTimeBars",
             contract={"conId": int(contract.conId), "symbol": contract.symbol, "secType": contract.secType},
@@ -327,20 +411,31 @@ async def stream_raw_5s_bars(
         ),
         response=evidence_response("realTimeBarList", fields={"bar_count": len(bars)}),
     )
-    sym = symbol.upper()
     index = 0
     try:
         while True:
             if index >= len(bars):
-                if not client.is_connected() or client.connection_lost:
+                connected = client.is_connected()
+                connection_lost = client.connection_lost
+                if not connected or connection_lost:
                     raise IBKRBarStreamError(
                         f"IBKR connection lost while streaming {symbol} 5-second "
                         "raw bars; halting rather than hanging on a dead feed."
                     )
+                delivery_logger.maybe_log_no_bar(
+                    bar_count=len(bars),
+                    connected=connected,
+                    connection_lost=connection_lost,
+                    message="IBKR reqRealTimeBars has not delivered raw 5-second bars",
+                )
                 await asyncio.sleep(0.1)
                 continue
             raw_bar = bars[index]
             index += 1
+            delivery_logger.log_first_bar(
+                bar_count=len(bars),
+                message="IBKR reqRealTimeBars delivered first raw 5-second bar",
+            )
             recorder.record(
                 source="bars.stream_raw_5s_bars.bar",
                 symbol=sym,
@@ -384,10 +479,17 @@ async def stream_minute_bars(
     client.require_connected()
     contract = await qualify_underlying(client, symbol)
     bars = client.ib.reqRealTimeBars(contract, 5, "TRADES", useRTH=use_rth)
+    sym = symbol.upper()
+    delivery_logger = _BarDeliveryLogger(
+        symbol=sym,
+        con_id=int(contract.conId),
+        use_rth=use_rth,
+    )
+    delivery_logger.log_subscribed(initial_bar_count=len(bars))
     recorder = get_ibkr_api_evidence_recorder()
     recorder.record(
         source="bars.stream_minute_bars.subscribe",
-        symbol=symbol.upper(),
+        symbol=sym,
         request=evidence_request(
             "reqRealTimeBars",
             contract={"conId": int(contract.conId), "symbol": contract.symbol, "secType": contract.secType},
@@ -410,25 +512,37 @@ async def stream_minute_bars(
                 # disconnect and raises nothing, so without this check the loop
                 # would spin forever yielding no bars and the live engine would
                 # go silently blind. Surface a fatal error instead.
-                if not client.is_connected() or client.connection_lost:
+                connected = client.is_connected()
+                connection_lost = client.connection_lost
+                if not connected or connection_lost:
                     raise IBKRBarStreamError(
                         f"IBKR connection lost while streaming {symbol} 5-second "
                         "bars; halting rather than hanging on a dead feed."
                     )
+                delivery_logger.maybe_log_no_bar(
+                    bar_count=len(bars),
+                    connected=connected,
+                    connection_lost=connection_lost,
+                    message="IBKR reqRealTimeBars has not delivered 5-second bars",
+                )
                 await asyncio.sleep(0.1)
                 continue
             raw_bar = bars[index]
             index += 1
+            delivery_logger.log_first_bar(
+                bar_count=len(bars),
+                message="IBKR reqRealTimeBars delivered first 5-second bar",
+            )
             recorder.record(
                 source="bars.stream_minute_bars.bar",
-                symbol=symbol.upper(),
+                symbol=sym,
                 request=evidence_request("reqRealTimeBars", barSize=5, whatToShow="TRADES", useRTH=use_rth),
                 response=evidence_response("realTimeBar", objects=[raw_bar]),
             )
             current, emitted, last_source_ms = aggregate_realtime_bar(
                 current,
                 raw_bar,
-                symbol=symbol.upper(),
+                symbol=sym,
                 last_source_ms=last_source_ms,
                 policy="live_idempotent",
                 counters=counters,

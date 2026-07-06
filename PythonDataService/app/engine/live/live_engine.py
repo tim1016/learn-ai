@@ -90,6 +90,9 @@ logger = logging.getLogger(__name__)
 
 
 _ENGINE_TZ = ZoneInfo("America/New_York")
+LIVE_SOURCE_BAR_INTERVAL_MS = 60_000
+BAR_SOURCE_WATCHDOG_INTERVAL_S = 5.0
+BAR_SOURCE_FIRST_BAR_TIMEOUT_S = 120.0
 
 
 def broker_callbacks_wal_path_from_output(output_dir: Path | None) -> Path | None:
@@ -653,6 +656,10 @@ class LiveEngine:
         # is owned by the caller (cmd_start); a ``None`` aggregator
         # disables every producer call site.
         self._runtime_aggregator = runtime_aggregator
+        self._bar_source_first_bar_seen = False
+        self._bar_source_subscription_requested_at_ms: int | None = None
+        self._bar_source_generation = 0
+        self._bar_source_state_lock = asyncio.Lock()
         self._broker_monitor = broker_monitor
         self._artifacts_root_for_lease = artifacts_root_for_lease
         self._watchdog_factory = watchdog_factory
@@ -818,6 +825,9 @@ class LiveEngine:
             raise ValueError("supply at most one of bars or ibkr_bars")
 
         self._validate_paper_client()
+        self._bar_source_first_bar_seen = False
+        self._bar_source_subscription_requested_at_ms = None
+        self._bar_source_generation += 1
         self._write_session_metadata_on_start()
         # ADR 0009 — when the resolved live_config carries a sizing policy,
         # construct the policy-application adapter and attach it to the
@@ -904,11 +914,13 @@ class LiveEngine:
         if len(ctx.symbols) != 1:
             raise NotImplementedError("LiveEngine v1 supports a single symbol only")
         symbol = ctx.symbols[0]
+        using_ibkr_runtime_source = False
         if bars is not None:
             source = bars
         elif ibkr_bars is not None:
             source = trade_bars_from_ibkr(ibkr_bars)
         else:
+            using_ibkr_runtime_source = True
             source = trade_bars_from_ibkr(stream_minute_bars(self._client, symbol))
 
         order_events: list[OrderEvent] = []
@@ -1007,6 +1019,19 @@ class LiveEngine:
             broker_probe_task = asyncio.create_task(
                 self._broker_probe_loop(shutdown_event),
                 name="broker_probe_loop",
+            )
+
+        bar_source_watchdog_task: asyncio.Task | None = None
+        if using_ibkr_runtime_source and self._runtime_aggregator is not None:
+            if shutdown_event is None:
+                shutdown_event = asyncio.Event()
+            bar_source_watchdog_task = asyncio.create_task(
+                self._bar_source_watchdog_loop(
+                    symbol,
+                    shutdown_event,
+                    generation=self._bar_source_generation,
+                ),
+                name="bar_source_watchdog",
             )
 
         source_iter = source.__aiter__()
@@ -1376,6 +1401,10 @@ class LiveEngine:
                 broker_probe_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await broker_probe_task
+            if bar_source_watchdog_task is not None:
+                bar_source_watchdog_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await bar_source_watchdog_task
             # Reconciliation PR 2 — drain any in-flight runtime reconcile
             # task so we don't tear down the engine while the orchestrator
             # is mid-receipt-write. The task is bounded by the broker
@@ -2726,8 +2755,12 @@ class LiveEngine:
         ``heartbeat_at_ms`` is wall-clock (loop scheduling). The bar's
         close time is the market-data freshness signal — a closed
         market has a fresh heartbeat but a stale latest_source_bar_ms.
-        ``expected_interval_ms`` comes from the strategy spec / config
-        when wired; ``None`` for replay tests.
+        ``expected_interval_ms`` is the live source-bar cadence. It is
+        intentionally not the strategy decision/consolidator cadence:
+        IBKR emits 5-second bars, ``stream_minute_bars`` consolidates
+        them into 1-minute ``TradeBar`` inputs, and freshness should
+        detect a stalled source in minutes rather than waiting for the
+        strategy's longer decision interval.
         """
         if self._runtime_aggregator is None:
             return
@@ -2736,13 +2769,107 @@ class LiveEngine:
             latest_source_bar_ms = int(minute_bar.end_time.timestamp() * 1000)
         except (AttributeError, TypeError):
             latest_source_bar_ms = None
-        await self._runtime_aggregator.update_bar_loop(
-            build_bar_loop_block(
-                heartbeat_at_ms=int(time.time() * 1000),
-                latest_source_bar_ms=latest_source_bar_ms,
-                expected_interval_ms=None,
+        async with self._bar_source_state_lock:
+            self._bar_source_first_bar_seen = True
+            self._bar_source_generation += 1
+            await self._runtime_aggregator.update_bar_loop(
+                build_bar_loop_block(
+                    heartbeat_at_ms=int(time.time() * 1000),
+                    latest_source_bar_ms=latest_source_bar_ms,
+                    expected_interval_ms=self._bar_loop_expected_interval_ms(),
+                    source_state="ACTIVE",
+                    source=self._bar_source,
+                    symbol=getattr(minute_bar, "symbol", None),
+                    subscription_requested_at_ms=self._bar_source_subscription_requested_at_ms,
+                )
             )
-        )
+
+    def _bar_loop_expected_interval_ms(self) -> int:
+        return LIVE_SOURCE_BAR_INTERVAL_MS
+
+    async def _publish_bar_source_waiting_block(
+        self,
+        *,
+        symbol: str,
+        subscription_requested_at_ms: int,
+        first_bar_deadline_ms: int,
+        timed_out: bool,
+        generation: int,
+    ) -> None:
+        if self._runtime_aggregator is None:
+            return
+        async with self._bar_source_state_lock:
+            if self._bar_source_first_bar_seen or generation != self._bar_source_generation:
+                return
+            await self._runtime_aggregator.update_bar_loop(
+                build_bar_loop_block(
+                    heartbeat_at_ms=int(time.time() * 1000),
+                    latest_source_bar_ms=None,
+                    expected_interval_ms=self._bar_loop_expected_interval_ms(),
+                    source_state="NO_FIRST_BAR_TIMEOUT" if timed_out else "WAITING_FIRST_BAR",
+                    source=self._bar_source,
+                    symbol=symbol,
+                    subscription_requested_at_ms=subscription_requested_at_ms,
+                    first_bar_deadline_ms=first_bar_deadline_ms,
+                    detail=(
+                        "No first consolidated bar arrived before the first-bar deadline."
+                        if timed_out
+                        else "Waiting for the first consolidated bar from the live bar source."
+                    ),
+                )
+            )
+
+    async def _bar_source_watchdog_loop(
+        self,
+        symbol: str,
+        shutdown_event: asyncio.Event,
+        *,
+        generation: int,
+    ) -> None:
+        """Publish durable source-wait state until the first live bar arrives.
+
+        The IBKR bar generator can sit inside ``reqRealTimeBars`` forever
+        when Gateway accepts the connection but withholds market-data
+        callbacks. The bar loop is then alive but invisible to the cockpit
+        until a generic source-missing stale reason appears. This producer
+        makes the child process state explicit and durable.
+        """
+        requested_at_ms = now_ms_utc()
+        self._bar_source_subscription_requested_at_ms = requested_at_ms
+        first_bar_deadline_ms = requested_at_ms + int(BAR_SOURCE_FIRST_BAR_TIMEOUT_S * 1000)
+        timeout_logged = False
+        while (
+            not shutdown_event.is_set()
+            and not self._bar_source_first_bar_seen
+            and generation == self._bar_source_generation
+        ):
+            now_ms = now_ms_utc()
+            timed_out = now_ms >= first_bar_deadline_ms
+            if timed_out and not timeout_logged:
+                logger.warning(
+                    "Live bar source first-bar timeout",
+                    extra={
+                        "symbol": symbol,
+                        "bar_source": self._bar_source,
+                        "timeout_s": BAR_SOURCE_FIRST_BAR_TIMEOUT_S,
+                        "subscription_requested_at_ms": requested_at_ms,
+                    },
+                )
+                timeout_logged = True
+            await self._publish_bar_source_waiting_block(
+                symbol=symbol,
+                subscription_requested_at_ms=requested_at_ms,
+                first_bar_deadline_ms=first_bar_deadline_ms,
+                timed_out=timed_out,
+                generation=generation,
+            )
+            try:
+                await asyncio.wait_for(
+                    shutdown_event.wait(),
+                    timeout=BAR_SOURCE_WATCHDOG_INTERVAL_S,
+                )
+            except TimeoutError:
+                continue
 
     async def _publish_initial_control_plane_block(self) -> None:
         """PRD #619-B B3 — seed the control-plane block at startup.
@@ -2849,7 +2976,9 @@ class LiveEngine:
             build_bar_loop_block(
                 heartbeat_at_ms=int(time.time() * 1000),
                 latest_source_bar_ms=None,
-                expected_interval_ms=None,
+                expected_interval_ms=self._bar_loop_expected_interval_ms(),
+                source_state="NOT_REQUESTED",
+                source=self._bar_source,
             )
         )
 

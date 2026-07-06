@@ -43,6 +43,14 @@ from app.schemas.artifact_io import atomic_write_pydantic_artifact, read_pydanti
 ENGINE_RUNTIME_FILENAME = "engine_runtime.json"
 ENGINE_RUNTIME_SCHEMA_VERSION = 2
 
+BarSourceState = Literal[
+    "NOT_REQUESTED",
+    "WAITING_FIRST_BAR",
+    "ACTIVE",
+    "NO_FIRST_BAR_TIMEOUT",
+    "FAILED",
+]
+
 
 # ---------------------------------------------------------------------------
 # Domain blocks — each carries its own heartbeat/observation timestamp so the
@@ -124,6 +132,12 @@ class BarLoopBlock(BaseModel):
     heartbeat_at_ms: int = Field(ge=0)
     latest_source_bar_ms: int | None = None
     expected_interval_ms: int | None = Field(default=None, ge=0)
+    source_state: BarSourceState = "NOT_REQUESTED"
+    source: str | None = None
+    symbol: str | None = None
+    subscription_requested_at_ms: int | None = Field(default=None, ge=0)
+    first_bar_deadline_ms: int | None = Field(default=None, ge=0)
+    detail: str | None = None
 
 
 class ControlPlaneBlock(BaseModel):
