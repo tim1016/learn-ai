@@ -22,6 +22,7 @@ import {
   type SpecStrategyFixture,
 } from '../../../api/live-runs.types';
 import type { ActionPlan } from '../../../api/action-plan.types';
+import type { AccountTruthResponse } from '../../../api/broker-models';
 import { ActionPlanPickerComponent } from './action-plan-picker/action-plan-picker.component';
 import { BrokerService } from '../../../services/broker.service';
 import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
@@ -52,6 +53,18 @@ interface DeployTab {
   label: string;
   target: string;
   complete: boolean;
+}
+
+interface AccountProofBlock {
+  message: string;
+  route: string;
+  fragment: string;
+  linkText: string;
+}
+
+interface DeployBlocker {
+  message: string;
+  actionLink?: AccountProofBlock;
 }
 
 // ADR 0009 § 3 — Reference parity preset's policy. Pinned here as a constant
@@ -472,47 +485,83 @@ export class BrokerDeployFormComponent {
     );
   });
 
+  readonly accountProofBlock = computed<AccountProofBlock | null>(() => {
+    if (!this.startNow()) return null;
+    const accountProof = this.accountTruth.value();
+    if (!accountProof || accountProof.final_verdict !== 'not_proven') return null;
+    const missingEvidence = BrokerDeployFormComponent.accountProofMissingEvidence(accountProof);
+    const evidenceDetail = missingEvidence.length > 0
+      ? ` Missing evidence: ${missingEvidence.join(' ')}`
+      : '';
+    return {
+      message: (
+        'Account proof is not proven. Reconcile account before starting, or turn off ' +
+        `"Start trading immediately" to deploy only.${evidenceDetail}`
+      ),
+      route: '/broker/account-monitor',
+      fragment: 'account-reconciliation-action',
+      linkText: 'Run account reconcile',
+    };
+  });
+
   /** Why Deploy can't be submitted, sourced from the connectivity strip + form.
    * Null = ready. */
-  readonly blockedReason = computed<string | null>(() => {
+  readonly activeBlocker = computed<DeployBlocker | null>(() => {
     if (this.connectivity.daemonDown()) {
-      return 'Live engine unavailable. Start it on this machine, then recheck.';
+      return { message: 'Live engine unavailable. Start it on this machine, then recheck.' };
     }
     if (this.startNow() && this.executionMode() === 'live') {
-      return 'Live execution is not available from Deploy yet. Pick read-only or paper orders.';
+      return {
+        message: 'Live execution is not available from Deploy yet. Pick read-only or paper orders.',
+      };
     }
     const coexistence = this.allInCoexistenceBlock();
-    if (coexistence !== null) return coexistence;
+    if (coexistence !== null) return { message: coexistence };
     if (this.startNow() && this.connectivity.fleetBlocksStarts()) {
-      return 'Fleet state blocks new starts. Turn off "Start trading immediately" to deploy only, or clear the account state.';
+      return {
+        message: 'Fleet state blocks new starts. Turn off "Start trading immediately" to deploy only, or clear the account state.',
+      };
     }
     if (this.startNow() && this.instanceAlreadyRunning()) {
-      return `"${this.instanceId().trim()}" is already running. Stop it first, or turn off "Start trading immediately" to deploy without starting.`;
+      return {
+        message: `"${this.instanceId().trim()}" is already running. Stop it first, or turn off "Start trading immediately" to deploy without starting.`,
+      };
     }
     if (!this.brokerAccountAvailable()) {
-      return 'Connected broker account unavailable. Connect the broker session before deploying.';
+      return { message: 'Connected broker account unavailable. Connect the broker session before deploying.' };
     }
     const accountProof = this.accountTruth.value();
     if (this.startNow()) {
       if (!accountProof) {
-        return 'Account proof is still loading. Wait for account readiness, or turn off "Start trading immediately" to deploy only.';
+        return {
+          message: 'Account proof is still loading. Wait for account readiness, or turn off "Start trading immediately" to deploy only.',
+        };
       }
-      if (accountProof.final_verdict === 'not_proven') {
-        return 'Account NOT_PROVEN. Reconcile account before starting, or turn off "Start trading immediately" to deploy only.';
+      const accountProofBlock = this.accountProofBlock();
+      if (accountProofBlock) {
+        return {
+          message: accountProofBlock.message,
+          actionLink: accountProofBlock,
+        };
       }
     }
     if (this.strategyKey().trim() !== '' && this.selectedValidation() === null) {
-      return 'Strategy must be validated before deployment. Open Strategy Validation to promote it.';
+      return {
+        message: 'Strategy must be validated before deployment. Open Strategy Validation to promote it.',
+      };
     }
-    if (!this.required()) return 'Missing: ' + this.missingRequiredFields().join(', ') + '.';
+    if (!this.required()) {
+      return { message: 'Missing: ' + this.missingRequiredFields().join(', ') + '.' };
+    }
     // PR4 reviewer fix: surface invalid Custom sizing here so the deploy
     // button disables BEFORE submit() runs; throwing inside submit() would
     // leave busy=true and the form wedged.
     const customError = this.customSizingError();
-    if (customError !== null) return customError;
+    if (customError !== null) return { message: customError };
     return null;
   });
 
+  readonly blockedReason = computed<string | null>(() => this.activeBlocker()?.message ?? null);
   readonly canSubmit = computed<boolean>(() => !this.busy() && this.blockedReason() === null);
 
   async submit(): Promise<void> {
@@ -821,6 +870,19 @@ export class BrokerDeployFormComponent {
     if (leg.position !== 'long' || leg.instrument.kind !== 'stock') return null;
     const symbol = normalizedSymbol(leg.instrument.underlying);
     return symbol || null;
+  }
+
+  private static accountProofMissingEvidence(truth: AccountTruthResponse): string[] {
+    const criticalSources = (truth.source_freshness ?? [])
+      .filter((source) => source.severity === 'critical' && source.status !== 'fresh')
+      .map((source) => source.message);
+    const evidenceGaps = (truth.evidence_gaps ?? [])
+      .filter((gap) => gap.severity === 'critical' || gap.severity === 'warning')
+      .map((gap) => gap.message);
+    const blockers = (truth.blockers ?? []).map((blocker) => blocker.title || blocker.message);
+    return [...new Set([...criticalSources, ...evidenceGaps, ...blockers])]
+      .filter((label) => label.trim() !== '')
+      .slice(0, 3);
   }
 
 }

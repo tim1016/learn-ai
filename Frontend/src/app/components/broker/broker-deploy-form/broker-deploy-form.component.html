@@ -66,8 +66,15 @@
           <i class="pi pi-send" aria-hidden="true"></i>
           {{ startNow() ? 'Deploy & start' : 'Deploy' }}
         </button>
-        @let reason = blockedReason();
-        <p class="blocked" role="status">{{ reason ?? 'Ready to deploy.' }}</p>
+        @let blocker = activeBlocker();
+        @if (blocker?.actionLink; as actionLink) {
+          <p class="blocked" role="status">
+            <span>{{ blocker?.message }}</span>
+            <a [routerLink]="actionLink.route" [fragment]="actionLink.fragment">{{ actionLink.linkText }}</a>
+          </p>
+        } @else {
+          <p class="blocked" role="status">{{ blocker?.message ?? 'Ready to deploy.' }}</p>
+        }
       </section>
 
       <section>

@@ -1,6 +1,8 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { signal } from '@angular/core';
+import { ActivatedRoute } from '@angular/router';
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
+import { of } from 'rxjs';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { AccountReconciliationReceipt } from '../../../api/account-reconciliation.types';
@@ -40,6 +42,10 @@ class FakeBrokerService {
   positions = vi.fn().mockResolvedValue(positionsSnapshot());
 }
 
+function routeFragment(fragment: string | null = null) {
+  return { provide: ActivatedRoute, useValue: { fragment: of(fragment) } };
+}
+
 describe('BrokerAccountMonitorComponent', () => {
   it('runs account reconciliation from the account truth account id', async () => {
     const broker = new FakeBrokerService();
@@ -47,6 +53,7 @@ describe('BrokerAccountMonitorComponent', () => {
       providers: [
         { provide: BrokerService, useValue: broker },
         { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        routeFragment(),
       ],
     });
 
@@ -74,6 +81,7 @@ describe('BrokerAccountMonitorComponent', () => {
       providers: [
         { provide: BrokerService, useValue: broker },
         { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        routeFragment(),
       ],
     });
 
@@ -98,6 +106,7 @@ describe('BrokerAccountMonitorComponent', () => {
       providers: [
         { provide: BrokerService, useValue: broker },
         { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        routeFragment(),
       ],
     });
 
@@ -109,6 +118,33 @@ describe('BrokerAccountMonitorComponent', () => {
     await waitFor(() => {
       expect(broker.reconcileAccount).toHaveBeenCalledWith('DU1234567');
     });
+  });
+
+  it('deep-links the account reconciliation action by URL fragment', async () => {
+    const broker = new FakeBrokerService();
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(() => undefined);
+    const scrollIntoView = vi
+      .spyOn(HTMLElement.prototype, 'scrollIntoView')
+      .mockImplementation(() => undefined);
+    await render(BrokerAccountMonitorComponent, {
+      providers: [
+        { provide: BrokerService, useValue: broker },
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        routeFragment('account-reconciliation-action'),
+      ],
+    });
+
+    const button = await screen.findByRole('button', {
+      name: /run account reconcile/i,
+    });
+
+    await waitFor(() => {
+      expect(focus).toHaveBeenCalled();
+    });
+    expect(button.id).toBe('account-reconciliation-action');
+    expect(scrollIntoView).toHaveBeenCalled();
+    focus.mockRestore();
+    scrollIntoView.mockRestore();
   });
 });
 
