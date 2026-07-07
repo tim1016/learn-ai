@@ -41,6 +41,7 @@ CONNECTIVITY_RESTORED_CODES = frozenset({1101, 1102})
 SUBSCRIPTIONS_STALE_CODES = frozenset({1101})
 DATA_FARM_DEGRADED_CODES = frozenset({2103, 2105})
 DATA_FARM_OK_CODES = frozenset({2104, 2106})
+ORDER_REJECTION_CODES = frozenset({201})
 
 IBKR_CODE_MEANINGS: dict[int, IbkrCodeMeaning] = {
     100: IbkrCodeMeaning(

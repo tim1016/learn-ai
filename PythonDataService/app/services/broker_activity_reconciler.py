@@ -121,21 +121,109 @@ def match_identity(
 ) -> str | None:
     """Return the engine ``intent_id`` for this event, or ``None`` if foreign.
 
-    A match requires: (a) the event carries a parseable ``order_ref``,
-    (b) the namespace exactly equals this instance's
-    ``bot_order_namespace`` (ADR-0008 §1 — equality, never startswith),
-    (c) the parsed ``intent_id`` is present in ``submitted_orders``.
-    Any other state is foreign (no match).
+    Prefer the broker-echoed ``order_ref`` when present. For order-scoped
+    error callbacks that arrive before a cached Trade exists, fall back to
+    the ADR-0024 identity ladder's req_id/order_id/perm_id rungs against
+    the submitted-order projection. Namespace checks remain exact
+    equality (ADR-0008 §1 — never startswith).
     """
     parsed = parse_order_ref(event.order_ref)
-    if parsed is None:
+    if parsed is not None:
+        namespace, intent_id = parsed
+        if namespace != bot_order_namespace:
+            return None
+        if intent_id not in submitted_orders:
+            return None
+        return intent_id
+    if event.event_type != "error":
         return None
-    namespace, intent_id = parsed
-    if namespace != bot_order_namespace:
+    return _match_submitted_order_identity(
+        event,
+        submitted_orders=submitted_orders,
+        bot_order_namespace=bot_order_namespace,
+    )
+
+
+def _match_submitted_order_identity(
+    event: IbkrOrderEvent,
+    *,
+    submitted_orders: Mapping[str, Any],
+    bot_order_namespace: str,
+) -> str | None:
+    event_req_id = event.req_id if event.req_id is not None else event.order_id
+    for intent_id, submitted in submitted_orders.items():
+        if not isinstance(intent_id, str) or not intent_id:
+            continue
+        if not isinstance(submitted, Mapping):
+            continue
+        if not _submitted_order_belongs_to_namespace(submitted, bot_order_namespace):
+            continue
+        if _submitted_int(submitted, "order_id") in {event_req_id, event.order_id}:
+            return intent_id
+        if event.perm_id is not None and _submitted_int(submitted, "perm_id") == event.perm_id:
+            return intent_id
+    return None
+
+
+def _submitted_order_belongs_to_namespace(
+    submitted: Mapping[str, Any], bot_order_namespace: str
+) -> bool:
+    namespace = submitted.get("bot_order_namespace")
+    if isinstance(namespace, str) and namespace:
+        return namespace == bot_order_namespace
+    order_ref = submitted.get("order_ref")
+    parsed = parse_order_ref(order_ref if isinstance(order_ref, str) else None)
+    return parsed is None or parsed[0] == bot_order_namespace
+
+
+def _submitted_int(submitted: Mapping[str, Any], field: str) -> int | None:
+    value = submitted.get(field)
+    if isinstance(value, bool):
         return None
-    if intent_id not in submitted_orders:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
         return None
-    return intent_id
+
+
+def event_with_submitted_order_facts(
+    event: IbkrOrderEvent,
+    submitted_order: Mapping[str, Any],
+) -> IbkrOrderEvent:
+    """Fill missing order-shape facts for reqId-only order-error callbacks."""
+
+    if event.event_type != "error" or not submitted_order:
+        return event
+    updates: dict[str, object] = {}
+    symbol = submitted_order.get("symbol")
+    if event.symbol is None and isinstance(symbol, str) and symbol:
+        updates["symbol"] = symbol
+    action = submitted_order.get("action") or submitted_order.get("side")
+    if event.side is None and action in {"BUY", "SELL"}:
+        updates["side"] = action
+    order_type = submitted_order.get("order_type")
+    if event.order_type is None and isinstance(order_type, str) and order_type:
+        updates["order_type"] = order_type
+    quantity = _submitted_float(
+        submitted_order.get("quantity") or submitted_order.get("requested_qty")
+    )
+    if quantity is not None:
+        if event.fill_quantity is None:
+            updates["fill_quantity"] = 0.0
+        if event.cumulative_filled is None:
+            updates["cumulative_filled"] = 0.0
+        if event.remaining is None:
+            updates["remaining"] = quantity
+    return event.model_copy(update=updates) if updates else event
+
+
+def _submitted_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
 
 
 def compute_lag_breakdown(

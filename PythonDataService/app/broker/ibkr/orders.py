@@ -36,6 +36,7 @@ from app.broker.ibkr.models import (
     IbkrOrderEvent,
     IbkrOrderSpec,
 )
+from app.broker.ibkr.order_error_stream import read_order_error_events
 from app.broker.ibkr.order_evidence import (
     all_open_orders_request_evidence,
     build_execution_recovery_evidence,
@@ -51,6 +52,7 @@ from app.broker.ibkr.order_projection import (
     event_symbol,
     order_belongs_to_account,
     resolve_event_type,
+    trade_order_event_fields,
 )
 from app.utils.timestamps import now_ms_utc
 
@@ -748,20 +750,9 @@ def _trade_to_status_event(
     account_id: str,
 ) -> IbkrOrderEvent:
     """Translate the current Trade snapshot into a status-type event."""
-    order_ref = getattr(trade.order, "orderRef", "") or None
     return IbkrOrderEvent(
-        account_id=account_id,
-        order_id=int(trade.order.orderId),
-        perm_id=int(trade.order.permId) if trade.order.permId else None,
-        con_id=int(trade.contract.conId) if trade.contract else None,
+        **trade_order_event_fields(trade, account_id),
         event_type=resolve_event_type(trade, is_fill=False),
-        status=getattr(trade.orderStatus, "status", None),
-        order_ref=order_ref,
-        symbol=event_symbol(trade),
-        side=event_side(trade),
-        order_type=event_order_type(trade),
-        cumulative_filled=float(getattr(trade.orderStatus, "filled", 0.0) or 0.0),
-        remaining=float(getattr(trade.orderStatus, "remaining", 0.0) or 0.0),
         ibkr_evidence=build_status_event_evidence(trade),
         ts_ms=now_ms_utc(),
     )
@@ -1084,6 +1075,7 @@ async def stream_order_events(
     # detect transitions on the next poll.
     last_status: dict[int, str] = {}
     last_fill_count: dict[int, int] = {}
+    last_error_seq = 0
 
     try:
         while True:
@@ -1093,6 +1085,14 @@ async def stream_order_events(
             # silently missing fills while the engine keeps submitting orders.
             client.require_live()
             trades = list(client.ib.trades())
+            error_events, last_error_seq = read_order_error_events(
+                client=client,
+                trades=trades,
+                account_id=account_id,
+                after_seq=last_error_seq,
+            )
+            for error_event in error_events:
+                yield error_event
             for trade in trades:
                 if not order_belongs_to_account(trade, account_id):
                     continue

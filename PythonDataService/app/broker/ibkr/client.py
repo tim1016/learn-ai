@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import deque
 from pathlib import Path
 
 from app.broker.ibkr.config import IbkrSettings, get_settings
@@ -37,15 +38,21 @@ from app.broker.ibkr.event_codes import (
     DATA_FARM_OK_CODES as _DATA_FARM_OK_CODES,
 )
 from app.broker.ibkr.event_codes import (
+    ORDER_REJECTION_CODES as _ORDER_REJECTION_CODES,
+)
+from app.broker.ibkr.event_codes import (
     SUBSCRIPTIONS_STALE_CODES as _SUBSCRIPTIONS_STALE_CODES,
 )
 from app.broker.ibkr.keepalive import apply_tcp_keepalive
 from app.broker.ibkr.models import ClientConnectionState, IbkrConnectionHealth
+from app.broker.ibkr.order_error_stream import OrderErrorEvent
 from app.broker.ibkr.recovery_state_machine import recovery_state_from_connection_state
 from app.services.broker_session_events import BrokerSessionEventService
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
+
+_ORDER_ERROR_BUFFER_LIMIT = 512
 
 
 # Sentinel value for ``IBKR_HOST`` that triggers host auto-resolution.
@@ -214,6 +221,12 @@ def _is_paper_account(account_id: str) -> bool:
     return account_id.upper().startswith("DU")
 
 
+def _is_order_rejection_error(req_id: int, error_code: int) -> bool:
+    """True for IBKR order-rejection callbacks that can join by reqId."""
+
+    return req_id >= 0 and error_code in _ORDER_REJECTION_CODES
+
+
 class IbkrClient:
     """Lifecycle wrapper around ``ib_async.IB``.
 
@@ -270,6 +283,8 @@ class IbkrClient:
         # timestamp so the wire-level ``last_transition_ms`` is the most
         # recent of either side.
         self._last_event_ms: int = now_ms_utc()
+        self._order_error_events: deque[OrderErrorEvent] = deque()
+        self._next_order_error_seq: int = 1
         # Operator-intended connection state. The AutoReconnectMonitor only
         # acts on observed drops when this is True; ``POST /disconnect`` sets
         # it False so the operator's "off" sticks, and a startup with
@@ -353,6 +368,8 @@ class IbkrClient:
             message=errorString,
             connection_state=self.connection_state,
         )
+        if _is_order_rejection_error(reqId, errorCode):
+            self._buffer_order_error(reqId, errorCode, errorString)
         if errorCode == 326:
             self._client_id_in_use_seen = True
             return
@@ -431,6 +448,34 @@ class IbkrClient:
                     "action": "connection_restored",
                 },
             )
+
+    def _buffer_order_error(self, req_id: int, error_code: int, error_message: str) -> None:
+        if len(self._order_error_events) >= _ORDER_ERROR_BUFFER_LIMIT:
+            dropped = self._order_error_events.popleft()
+            logger.warning(
+                "IBKR order-error replay buffer full; dropping oldest callback",
+                extra={
+                    "dropped_order_error_seq": dropped.seq,
+                    "dropped_req_id": dropped.req_id,
+                },
+            )
+        self._order_error_events.append(
+            OrderErrorEvent(
+                seq=self._next_order_error_seq,
+                req_id=req_id,
+                error_code=error_code,
+                error_message=error_message,
+                ts_ms=now_ms_utc(),
+            )
+        )
+        self._next_order_error_seq += 1
+
+    def order_errors_after(self, seq: int) -> list[OrderErrorEvent]:
+        """Return buffered order-scoped IBKR errors after ``seq`` without clearing."""
+
+        if seq < 0:
+            raise ValueError(f"order error cursor must be >= 0; got {seq}")
+        return [event for event in self._order_error_events if event.seq > seq]
 
     # ── lifecycle ───────────────────────────────────────────────────────
 

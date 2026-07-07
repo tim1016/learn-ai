@@ -149,11 +149,22 @@ class IncidentDedupeKey(BaseModel):
     terminal_code: TerminalErrorCode
     evaluation_id: str | None = Field(default=None, min_length=1)
     order_ref: str | None = Field(default=None, min_length=1)
+    req_id: int | None = None
+    order_id: int | None = None
+    perm_id: int | None = None
 
     @model_validator(mode="after")
     def _requires_evaluation_or_order(self) -> IncidentDedupeKey:
-        if not self.evaluation_id and not self.order_ref:
-            raise ValueError("IncidentDedupeKey requires evaluation_id or order_ref")
+        if not any(
+            (
+                self.evaluation_id,
+                self.order_ref,
+                self.req_id is not None,
+                self.order_id is not None,
+                self.perm_id is not None,
+            )
+        ):
+            raise ValueError("IncidentDedupeKey requires evaluation, order, or broker identity")
         return self
 
 

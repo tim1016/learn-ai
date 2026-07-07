@@ -44,7 +44,7 @@ import asyncio
 import json
 import logging
 import os
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -73,12 +73,18 @@ from app.schemas.broker_activity import (
     ReconciliationTimingPolicy,
     SizingProvenance,
 )
+from app.services.bot_event_rejection_bridge import (
+    append_order_rejection_capture,
+    is_order_rejection_row,
+)
+from app.services.bot_event_wal import BotEventRawWal, run_bot_event_wal_path
 from app.services.broker_activity_reconciler import (
     EngineIntent,
     ReconciliationContext,
     UnauthorableEventError,
     author_pending_row,
     author_row_from_event,
+    event_with_submitted_order_facts,
     match_identity,
     parse_order_ref,
 )
@@ -274,6 +280,7 @@ class BrokerActivityPublisher:
         sweep_lookback_ms: int = DEFAULT_SWEEP_LOOKBACK_MS,
     ) -> None:
         self._strategy_instance_id = strategy_instance_id
+        self._run_dir = run_dir
         self._bot_order_namespace = bot_order_namespace
         self._timing_policy = timing_policy
         self._event_source_factory = event_source_factory
@@ -298,6 +305,7 @@ class BrokerActivityPublisher:
                 target_path=instance_wal_path,
             )
         self._wal = BrokerActivityWal(instance_wal_path)
+        self._bot_event_wal = BotEventRawWal(run_bot_event_wal_path(run_dir))
         self._sidecar = LiveStateSidecarRepo(
             stable_live_state_path(artifacts_root, strategy_instance_id)
         )
@@ -749,11 +757,14 @@ class BrokerActivityPublisher:
             and parsed_ref[0] != self._bot_order_namespace
         ):
             return
+        submitted_orders = self._read_submitted_orders()
         intent_id = match_identity(
             event,
-            submitted_orders=self._read_submitted_orders(),
+            submitted_orders=submitted_orders,
             bot_order_namespace=self._bot_order_namespace,
         )
+        submitted_order = submitted_orders.get(intent_id, {}) if intent_id else {}
+        event = event_with_submitted_order_facts(event, submitted_order)
         if intent_id is None:
             # Foreign event. Only author for fills / cancels / errors —
             # not for status transitions on someone else's order.
@@ -769,7 +780,7 @@ class BrokerActivityPublisher:
             ):
                 return
 
-        intent = self._build_engine_intent(intent_id) if intent_id else None
+        intent = self._build_engine_intent(intent_id, submitted_order) if intent_id else None
         self._author_and_broadcast(event=event, intent=intent)
 
     def _author_and_broadcast(
@@ -812,6 +823,18 @@ class BrokerActivityPublisher:
                     "order_id": event.order_id,
                     "exec_id": event.exec_id,
                 },
+            )
+            return None
+
+        if is_order_rejection_row(row):
+            append_order_rejection_capture(
+                bot_event_wal=self._bot_event_wal,
+                incident_store=self._incident_store,
+                strategy_instance_id=self._strategy_instance_id,
+                run_id=self._current_run_id(),
+                event=event,
+                row=row,
+                intent=intent,
             )
             return None
 
@@ -927,36 +950,41 @@ class BrokerActivityPublisher:
             out[intent_id] = entry
         return out
 
-    def _build_engine_intent(self, intent_id: str) -> EngineIntent | None:
+    def _build_engine_intent(
+        self,
+        intent_id: str,
+        submitted_order: Mapping[str, object] | None = None,
+    ) -> EngineIntent | None:
         envelope = self._sidecar.read()
-        if envelope is None:
-            return None
-        submitted = envelope.submitted_orders.get(intent_id, {})
+        submitted = dict(submitted_order or {})
+        if envelope is not None:
+            submitted.update(envelope.submitted_orders.get(intent_id, {}))
         # Sizing provenance comes from the per-trade sizing-resolution
         # ring buffer; the publisher matches by intent_id.
         sizing_provenance: SizingProvenance | None = None
-        for entry in envelope.sizing_resolutions:
-            if entry.get("intent_id") == intent_id:
-                sizing_provenance = SizingProvenance.model_validate(
-                    {
-                        k: entry.get(k)
-                        for k in (
-                            "policy",
-                            "requested_qty",
-                            "reference_price_decimal_str",
-                            "provenance",
-                            "surface",
-                            "skip_reason",
-                        )
-                        if k in entry
-                    }
-                )
-                break
+        if envelope is not None:
+            for entry in envelope.sizing_resolutions:
+                if entry.get("intent_id") == intent_id:
+                    sizing_provenance = SizingProvenance.model_validate(
+                        {
+                            k: entry.get(k)
+                            for k in (
+                                "policy",
+                                "requested_qty",
+                                "reference_price_decimal_str",
+                                "provenance",
+                                "surface",
+                                "skip_reason",
+                            )
+                            if k in entry
+                        }
+                    )
+                    break
         return EngineIntent(
             intent_id=intent_id,
             mutation_attempt_id=submitted.get("mutation_attempt_id"),
-            requested_qty=_safe_float(submitted.get("requested_qty")),
-            requested_price=_safe_float(submitted.get("requested_price")),
+            requested_qty=_safe_float(submitted.get("requested_qty") or submitted.get("quantity")),
+            requested_price=_safe_float(submitted.get("requested_price") or submitted.get("limit_price")),
             intent_created_ms=_safe_int(submitted.get("intent_created_ms")),
             dispatched_ms=_safe_int(submitted.get("dispatched_ms")),
             acked_ms=_safe_int(submitted.get("acked_ms")),
@@ -985,6 +1013,12 @@ class BrokerActivityPublisher:
                 "couldn't update broker-activity cursor on sidecar",
                 extra={"strategy_instance_id": self._strategy_instance_id},
             )
+
+    def _current_run_id(self) -> str:
+        envelope = self._sidecar.read()
+        if envelope is not None and envelope.run_id:
+            return envelope.run_id
+        return self._run_dir.name or "unknown-run"
 
     # ── periodic sweep (PR 6 / operator-notice §11) ───────────────────
 

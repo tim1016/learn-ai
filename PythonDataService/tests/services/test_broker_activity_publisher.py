@@ -29,11 +29,20 @@ from app.engine.live.live_state_sidecar import (
     LiveStateSidecarRepo,
     stable_live_state_path,
 )
+from app.operator.incidents.store import IncidentStore
+from app.operator.notices.schema import OperatorIncident
+from app.schemas.bot_events import (
+    BotEventRaw,
+    BotEventRawType,
+    SourceAuthority,
+    TerminalErrorCode,
+)
 from app.schemas.broker_activity import (
     BrokerActivityRow,
     ReconciliationTimingPolicy,
     Verdict,
 )
+from app.services.bot_event_wal import BotEventRawWal, run_bot_event_wal_path
 from app.services.broker_activity_publisher import BrokerActivityPublisher
 from app.services.broker_activity_publisher_registry import (
     BrokerActivityPublisherRegistry,
@@ -127,6 +136,38 @@ def _intermediate_status_event(order_ref: str | None = ORDER_REF) -> IbkrOrderEv
     )
 
 
+def _rejection_event(
+    *,
+    order_ref: str | None = ORDER_REF,
+    req_id: int | None = 42,
+    order_id: int = 42,
+    symbol: str | None = "SPY",
+    side: str | None = "BUY",
+    order_type: str | None = "MKT",
+    remaining: float | None = 100.0,
+    error_code: int = 201,
+    error_message: str = "Order rejected - insufficient buying power",
+) -> IbkrOrderEvent:
+    return IbkrOrderEvent(
+        account_id="DU1234567",
+        order_id=order_id,
+        req_id=req_id,
+        perm_id=999,
+        event_type="error",
+        status="Inactive",
+        order_ref=order_ref,
+        symbol=symbol,
+        side=side,  # type: ignore[arg-type]
+        order_type=order_type,
+        fill_quantity=0.0,
+        cumulative_filled=0.0,
+        remaining=remaining,
+        error_code=error_code,
+        error_message=error_message,
+        ts_ms=1_700_000_000_000,
+    )
+
+
 def _make_event_source(events: list[IbkrOrderEvent]):
     """Factory the publisher calls once; returns an async generator
     that yields the provided events then sleeps forever (so the
@@ -146,6 +187,7 @@ def _build_publisher(
     events: list[IbkrOrderEvent],
     *,
     timing_policy: ReconciliationTimingPolicy | None = None,
+    incident_store: IncidentStore | None = None,
 ) -> tuple[BrokerActivityPublisher, Path, Path]:
     artifacts = tmp_path / "artifacts"
     run_dir = tmp_path / "run-dir"
@@ -157,6 +199,7 @@ def _build_publisher(
         artifacts_root=artifacts,
         timing_policy=timing_policy or ReconciliationTimingPolicy(),
         event_source_factory=_make_event_source(events),
+        incident_store=incident_store,
     )
     return publisher, run_dir, artifacts
 
@@ -175,6 +218,37 @@ async def _wait_for_rows(
     rows = wal.read_all()
     raise AssertionError(
         f"WAL has {len(rows)} row(s), wanted {want} within {timeout}s"
+    )
+
+
+async def _wait_for_bot_events(
+    wal_path: Path, *, want: int, timeout: float = 1.0
+) -> list[BotEventRaw]:
+    deadline = asyncio.get_event_loop().time() + timeout
+    wal = BotEventRawWal(wal_path)
+    while asyncio.get_event_loop().time() < deadline:
+        rows = wal.read_all()
+        if len(rows) >= want:
+            return rows
+        await asyncio.sleep(0.01)
+    rows = wal.read_all()
+    raise AssertionError(
+        f"bot-event WAL has {len(rows)} row(s), wanted {want} within {timeout}s"
+    )
+
+
+async def _wait_for_incidents(
+    store: IncidentStore, *, want: int, timeout: float = 1.0
+) -> list[OperatorIncident]:
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        incidents = store.list_unresolved()
+        if len(incidents) >= want:
+            return incidents
+        await asyncio.sleep(0.01)
+    incidents = store.list_unresolved()
+    raise AssertionError(
+        f"incident store has {len(incidents)} row(s), wanted {want} within {timeout}s"
     )
 
 
@@ -220,6 +294,105 @@ async def test_intermediate_status_events_are_skipped(tmp_path: Path) -> None:
         # Only the fill became a row; the Submitted transition did not.
         assert len(rows) == 1
         assert rows[0].exec_id == "exec-pub-1"
+    finally:
+        await publisher.stop()
+
+
+async def test_rejection_event_writes_bot_event_and_incident(tmp_path: Path) -> None:
+    artifacts = tmp_path / "artifacts"
+    run_dir = tmp_path / "run-dir"
+    incident_store = IncidentStore(run_dir)
+    _seed_envelope(artifacts)
+    publisher = BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=run_dir,
+        artifacts_root=artifacts,
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=_make_event_source([_rejection_event()]),
+        incident_store=incident_store,
+    )
+
+    publisher.start()
+    try:
+        raw_events = await _wait_for_bot_events(
+            run_bot_event_wal_path(run_dir), want=1
+        )
+        raw = raw_events[0]
+        assert raw.event_type is BotEventRawType.ORDER_REJECTED
+        assert raw.source_authority is SourceAuthority.BROKER_SESSION
+        assert raw.identity.intent_id == INTENT_ID
+        assert raw.identity.order_ref == ORDER_REF
+        assert raw.identity.req_id == 42
+        assert raw.identity.order_id == 42
+        assert raw.terminal_error is not None
+        assert raw.terminal_error.code is TerminalErrorCode.ORDER_REJECTED
+        assert raw.terminal_error.external_code == 201
+        assert raw.terminal_error.external_message == "Order rejected - insufficient buying power"
+        assert "broker_activity_seq" not in raw.facts
+        assert BrokerActivityWal(instance_broker_activity_wal_path(artifacts, SID)).read_all() == []
+
+        incidents = await _wait_for_incidents(incident_store, want=1)
+        incident = incidents[0]
+        assert incident.category == "order"
+        assert incident.notice.code == "order.rejected"
+        assert incident.evidence["bot_event_seq"] == raw.seq
+        assert incident.evidence["order_ref"] == ORDER_REF
+    finally:
+        await publisher.stop()
+
+
+async def test_rejection_event_matches_req_id_and_enriches_order_facts(tmp_path: Path) -> None:
+    artifacts = tmp_path / "artifacts"
+    run_dir = tmp_path / "run-dir"
+    _seed_envelope(
+        artifacts,
+        submitted_orders={
+            INTENT_ID: {
+                "order_id": 42,
+                "status": "Submitted",
+                "symbol": "SPY",
+                "action": "BUY",
+                "quantity": 100.0,
+                "order_type": "MKT",
+            }
+        },
+    )
+    publisher = BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=run_dir,
+        artifacts_root=artifacts,
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=_make_event_source(
+            [
+                _rejection_event(
+                    order_ref=None,
+                    req_id=42,
+                    order_id=42,
+                    symbol=None,
+                    side=None,
+                    order_type=None,
+                    remaining=None,
+                )
+            ]
+        ),
+    )
+
+    publisher.start()
+    try:
+        raw_events = await _wait_for_bot_events(
+            run_bot_event_wal_path(run_dir), want=1
+        )
+        raw = raw_events[0]
+        assert raw.identity.intent_id == INTENT_ID
+        assert raw.identity.order_ref is None
+        assert raw.identity.req_id == 42
+        assert raw.facts["symbol"] == "SPY"
+        assert raw.facts["side"] == "BUY"
+        assert raw.facts["quantity"] == 100.0
+        assert raw.facts["order_type"] == "MKT"
+        assert BrokerActivityWal(instance_broker_activity_wal_path(artifacts, SID)).read_all() == []
     finally:
         await publisher.stop()
 

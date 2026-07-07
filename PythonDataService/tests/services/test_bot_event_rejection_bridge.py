@@ -1,0 +1,42 @@
+from __future__ import annotations
+
+from app.schemas.bot_events import (
+    BotEventIdentity,
+    BotEventRaw,
+    BotEventRawType,
+    SourceAuthority,
+    TerminalError,
+    TerminalErrorCode,
+    TerminalErrorSource,
+)
+from app.services.bot_event_rejection_bridge import build_order_rejected_incident
+
+
+def _raw_rejection(*, seq: int = 1) -> BotEventRaw:
+    return BotEventRaw(
+        seq=seq,
+        ts_ms=1_700_000_000_000,
+        strategy_instance_id="sid-bridge-test",
+        run_id="run-bridge-test",
+        event_type=BotEventRawType.ORDER_REJECTED,
+        source_authority=SourceAuthority.BROKER_SESSION,
+        identity=BotEventIdentity(intent_id="intent-1", req_id=42, order_id=42),
+        terminal_error=TerminalError(
+            code=TerminalErrorCode.ORDER_REJECTED,
+            source=TerminalErrorSource.IBKR,
+            gate_id="broker.place_order",
+            message="IBKR order rejected",
+            external_code=201,
+            external_message="Order rejected - insufficient buying power",
+        ),
+    )
+
+
+def test_order_rejected_incident_id_is_stable_for_req_id_identity() -> None:
+    first = build_order_rejected_incident(_raw_rejection(seq=1))
+    second = build_order_rejected_incident(_raw_rejection(seq=2))
+
+    assert first.incident_id == second.incident_id
+    assert first.category == "order"
+    assert first.notice.code == "order.rejected"
+    assert first.evidence["req_id"] == 42

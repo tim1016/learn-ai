@@ -223,6 +223,16 @@ def test_incident_dedupe_key_requires_order_or_evaluation_identity() -> None:
         )
 
 
+def test_incident_dedupe_key_accepts_broker_identity() -> None:
+    key = IncidentDedupeKey(
+        strategy_instance_id="bot-a",
+        terminal_code=TerminalErrorCode.ORDER_REJECTED,
+        req_id=42,
+    )
+
+    assert key.req_id == 42
+
+
 def test_incident_dedupe_key_round_trips() -> None:
     key = IncidentDedupeKey(
         strategy_instance_id="bot-a",

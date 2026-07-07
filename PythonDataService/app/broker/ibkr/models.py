@@ -584,6 +584,14 @@ class IbkrOrderEvent(BaseModel):
 
     account_id: str
     order_id: int
+    req_id: int | None = Field(
+        default=None,
+        description=(
+            "IBKR errorEvent reqId when the event originated from an error "
+            "callback. For order-scoped errors IBKR uses the orderId here; "
+            "the bot-event stream joins this back to order_ref."
+        ),
+    )
     perm_id: int | None = None
     con_id: int | None = None
     event_type: OrderEventType
