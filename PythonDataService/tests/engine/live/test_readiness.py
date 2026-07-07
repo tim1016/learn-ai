@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from app.engine.live.readiness import (
     build_live_readiness,
+    build_live_readiness_emission,
     build_start_readiness,
     derive_verdict,
     gate,
 )
+from app.schemas.bot_events import GateStepResult, SourceAuthority
 
 
 def test_derive_verdict_rules() -> None:
@@ -38,6 +40,25 @@ def _live(**overrides):
     return build_live_readiness(**base)
 
 
+def _live_emission(evaluation_id: str, **overrides):
+    base = dict(
+        as_of_ms=1_700_000_000_000,
+        paused=False,
+        broker_connected=True,
+        submit_mode="live_paper",
+        orders_used=1,
+        orders_cap=4,
+        in_session=True,
+        force_flat_active=False,
+        poisoned=False,
+        bar_source="ibkr_realtime",
+        expected_bar_source="ibkr_realtime",
+        evaluation_id=evaluation_id,
+    )
+    base.update(overrides)
+    return build_live_readiness_emission(**base)
+
+
 def test_live_readiness_all_clear_is_ready() -> None:
     v = _live()
     assert v["kind"] == "live_readiness"
@@ -56,6 +77,30 @@ def test_live_readiness_order_cap_reached_blocks() -> None:
     v = _live(orders_used=4, orders_cap=4)
     assert v["verdict"] == "BLOCKED"
     assert any(g["name"] == "orders_cap" and g["status"] == "fail" for g in v["gates"])
+
+
+def test_live_readiness_gate_steps_capture_hard_blocks() -> None:
+    emission = _live_emission("eval-20260623T143100Z", orders_used=4, orders_cap=4)
+
+    order_cap = next(step for step in emission.gate_steps if step.gate_id == "orders_cap")
+    assert order_cap.evaluation_id == "eval-20260623T143100Z"
+    assert order_cap.gate_result is GateStepResult.BLOCK
+    assert order_cap.source_authority is SourceAuthority.ENGINE_LOOP
+    assert order_cap.facts["readiness_status"] == "fail"
+    assert order_cap.facts["readiness_severity"] == "hard"
+
+
+def test_live_readiness_gate_steps_do_not_promote_soft_warnings_to_blocks() -> None:
+    emission = _live_emission(
+        "eval-soft-warning",
+        bar_source="polygon_backfill",
+        expected_bar_source="ibkr_realtime",
+    )
+
+    data_provenance = next(step for step in emission.gate_steps if step.gate_id == "data_provenance")
+    assert data_provenance.gate_result is GateStepResult.SKIP
+    assert data_provenance.facts["readiness_status"] == "fail"
+    assert data_provenance.facts["readiness_severity"] == "soft"
 
 
 def test_live_readiness_account_registry_gate_blocks_with_canonical_result() -> None:

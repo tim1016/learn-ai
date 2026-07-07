@@ -43,6 +43,7 @@ from app.engine.live.artifacts import (
     TradeRow,
 )
 from app.engine.live.bar_adapter import trade_bars_from_ibkr
+from app.engine.live.bot_event_capture import BotEventGateStepRecorder, evaluation_id_for_bar
 from app.engine.live.broker_callbacks import (
     BrokerCallbackWal,
 )
@@ -74,7 +75,7 @@ from app.engine.live.live_portfolio import (
     LivePortfolio,
 )
 from app.engine.live.order_identity import mint_intent_id
-from app.engine.live.readiness import build_live_readiness
+from app.engine.live.readiness import build_live_readiness_emission
 from app.engine.live.readiness_sidecar import write_readiness
 from app.engine.live.runtime_producer import (
     build_bar_loop_block,
@@ -84,6 +85,7 @@ from app.engine.live.runtime_producer import (
 )
 from app.engine.strategy.base import LoggedTrade, Strategy
 from app.engine.strategy.spec.schema import SUPPORTED_LIVE_RUNTIME_BAR_SOURCE
+from app.schemas.bot_events import GateStep, GateStepResult, SourceAuthority
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -649,6 +651,11 @@ class LiveEngine:
         if self._broker_callbacks_wal is not None and isinstance(self._broker, IbkrBrokerAdapter):
             self._broker.set_broker_callback_sink(self._append_raw_broker_callback)
             self._broker_callbacks_wal_attached_to_stream = True
+        self._bot_event_gate_step_recorder = BotEventGateStepRecorder.for_run(
+            run_dir=output_dir,
+            run_id=run_id,
+            strategy_instance_id=strategy_instance_id,
+        )
         # Phase 7B / VCR-0010 — broker safety verdict observer.
         self._verdict_provider = verdict_provider
         # PRD #619-B B3 — engine_runtime aggregator. Producer hooks below
@@ -1298,6 +1305,25 @@ class LiveEngine:
                     and pending_count > 0
                     and orders_submitted_today + pending_count > self._max_orders_per_day
                 ):
+                    gate_ts_ms = int(minute_bar.end_time.timestamp() * 1000)
+                    if self._bot_event_gate_step_recorder is not None:
+                        self._bot_event_gate_step_recorder.append(
+                            ts_ms=gate_ts_ms,
+                            gate_step=GateStep(
+                                evaluation_id=evaluation_id_for_bar(gate_ts_ms),
+                                gate_id="orders_cap",
+                                gate_result=GateStepResult.BLOCK,
+                                source_authority=SourceAuthority.ENGINE_LOOP,
+                                facts={
+                                    "orders_used": orders_submitted_today,
+                                    "orders_cap": self._max_orders_per_day,
+                                    "pending_count": pending_count,
+                                    "projected_orders_used": orders_submitted_today + pending_count,
+                                    "session_date": str(current_session_date),
+                                },
+                            ),
+                            facts={"capture_reason": "max_orders_per_day"},
+                        )
                     # PR 3 / operator-notice — emit before clear so the
                     # append → fsync → clear ordering is satisfied.
                     _emit_drop_events_for_pending(
@@ -1575,7 +1601,8 @@ class LiveEngine:
             return
         poisoned = (self._output_dir / "poisoned.flag").exists()
         account_registry_gate = self._account_registry_gate_result()
-        vector = build_live_readiness(
+        evaluation_id = evaluation_id_for_bar(as_of_ms)
+        emission = build_live_readiness_emission(
             as_of_ms=as_of_ms,
             paused=self._paused,
             broker_connected=True,
@@ -1590,9 +1617,16 @@ class LiveEngine:
             account_registry_gate_result=(
                 account_registry_gate.model_dump(mode="json") if account_registry_gate is not None else None
             ),
+            evaluation_id=evaluation_id,
         )
+        if self._bot_event_gate_step_recorder is not None:
+            self._bot_event_gate_step_recorder.append_many(
+                ts_ms=as_of_ms,
+                gate_steps=emission.gate_steps,
+                facts={"projection": "live_readiness"},
+            )
         try:
-            write_readiness(self._output_dir, vector)
+            write_readiness(self._output_dir, emission.vector)
         except OSError:
             logger.warning("readiness sidecar write failed", exc_info=True)
 

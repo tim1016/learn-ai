@@ -13,6 +13,7 @@ Uses the existing FakeBroker fixture so no IBKR connection is needed.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -28,6 +29,8 @@ from app.engine.live.reconcile import (
     load_python_executions,
 )
 from app.engine.strategy.base import Strategy
+from app.schemas.bot_events import BotEventRawType, SourceAuthority
+from app.services.bot_event_wal import BotEventRawWal, run_bot_event_wal_path
 from tests.engine.live.fixtures.fake_broker import FakeBroker, iter_bars
 
 
@@ -92,6 +95,40 @@ class _OneEntryWithDecisionSnapshotStrategy(Strategy):
             signal=signal,
             intended_price=float(bar.close),
         )
+
+
+class _IdleReadinessStrategy(Strategy):
+    def initialize(self) -> None:
+        assert self.ctx is not None
+        self.ctx.add_equity("SPY")
+
+
+@pytest.mark.asyncio
+async def test_live_engine_writes_readiness_gate_steps_to_bot_event_wal(tmp_path: Path) -> None:
+    broker = FakeBroker()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        output_dir=tmp_path,
+        account_id="DU123",
+        run_id="run-readiness-gates",
+        strategy_instance_id="sid-readiness-gates",
+        max_orders_per_day=4,
+    )
+
+    await engine.run(_IdleReadinessStrategy(), iter_bars([_bar(30, "500", "500")]))
+
+    readiness = json.loads((tmp_path / "readiness.json").read_text())
+    raw_events = BotEventRawWal(run_bot_event_wal_path(tmp_path)).read_all()
+    assert len(raw_events) == len(readiness["gates"])
+    assert [event.gate_step.gate_id for event in raw_events if event.gate_step is not None] == [
+        gate["gate_result"]["gate_id"] for gate in readiness["gates"]
+    ]
+    assert all(event.event_type is BotEventRawType.GATE_STEP for event in raw_events)
+    assert all(event.source_authority is SourceAuthority.ENGINE_LOOP for event in raw_events)
+    assert all(event.identity.evaluation_id == f"bar:{readiness['as_of_ms']}" for event in raw_events)
+    assert all(event.facts["projection"] == "live_readiness" for event in raw_events)
 
 
 @pytest.mark.asyncio

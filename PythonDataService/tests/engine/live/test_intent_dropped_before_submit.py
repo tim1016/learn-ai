@@ -436,9 +436,12 @@ async def test_max_orders_drop_writes_wal_event(tmp_path: Path) -> None:
     """max_orders_per_day gate emits INTENT_DROPPED_BEFORE_SUBMIT then raises."""
     from app.engine.live.config import LiveConfig
     from app.engine.live.live_engine import LiveEngine, MaxOrdersPerDayExceeded
+    from app.schemas.bot_events import BotEventRawType, GateStepResult, SourceAuthority
+    from app.services.bot_event_wal import BotEventRawWal, run_bot_event_wal_path
     from tests.engine.live.fixtures.fake_broker import FakeBroker
 
-    wal_path = tmp_path / "intent_events.jsonl"
+    run_dir = tmp_path / "run-maxorders"
+    wal_path = run_dir / "intent_events.jsonl"
     strategy = _OrderingStrategy()
 
     broker = FakeBroker()
@@ -446,7 +449,9 @@ async def test_max_orders_drop_writes_wal_event(tmp_path: Path) -> None:
         None,
         LiveConfig(),
         broker=broker,
+        output_dir=run_dir,
         intent_wal_path=wal_path,
+        run_id="run-maxorders",
         strategy_instance_id="maxorders-test",
         max_orders_per_day=0,  # cap at 0: the very first pending batch triggers the gate
     )
@@ -458,6 +463,18 @@ async def test_max_orders_drop_writes_wal_event(tmp_path: Path) -> None:
     drops = _read_drop_events(wal_path)
     assert len(drops) >= 1
     assert all(e.drop_reason == "max_orders_per_day" for e in drops)
+
+    raw_events = BotEventRawWal(run_bot_event_wal_path(run_dir)).read_all()
+    assert len(raw_events) == 1
+    gate_event = raw_events[0]
+    assert gate_event.event_type is BotEventRawType.GATE_STEP
+    assert gate_event.source_authority is SourceAuthority.ENGINE_LOOP
+    assert gate_event.identity.evaluation_id == f"bar:{gate_event.ts_ms}"
+    assert gate_event.gate_step is not None
+    assert gate_event.gate_step.gate_id == "orders_cap"
+    assert gate_event.gate_step.gate_result is GateStepResult.BLOCK
+    assert gate_event.gate_step.facts["orders_cap"] == 0
+    assert gate_event.gate_step.facts["projected_orders_used"] == 1
 
 
 @pytest.mark.asyncio
