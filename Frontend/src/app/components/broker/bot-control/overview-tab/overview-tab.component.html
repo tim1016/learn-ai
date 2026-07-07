@@ -49,36 +49,19 @@
     <div class="gate-flow">
       @for (row of lifecycleFlowRows(); track row.node.id) {
         @let node = row.node;
-        <article
-          [class]="'flow-node status-' + node.status"
-          [class.expandable]="node.expandable"
-          [class.selected]="selectedNodeId() === node.id"
-          [class.highlighted]="highlightedNodeId() === node.id"
-          [class.primary-node]="isPrimaryNode(node)"
-          [class.blocking-node]="isBlockingNode(node)"
-          role="button"
-          tabindex="0"
-          [attr.aria-label]="nodeAriaLabel(node)"
-          (click)="expandNode(node)"
-          (keydown)="onNodeKeydown($event, node)"
-        >
-          <span class="node-lane">{{ node.lane }}</span>
-          <strong>{{ node.label }}</strong>
-          @if (node.technical_label) {
-            <span class="node-technical">{{ node.technical_label }}</span>
-          }
-          <span class="node-footer">
-            <span class="node-status">{{ node.status_label }}</span>
-            @if (isBlockingNode(node)) {
-              <span class="node-callout">Blocking step</span>
-            } @else if (isPrimaryNode(node)) {
-              <span class="node-callout">Current step</span>
-            }
-            @if (node.expandable) {
-              <span class="node-expand">Open</span>
-            }
-          </span>
-        </article>
+        <app-lifecycle-node-card
+          [node]="node"
+          [selected]="selectedNodeId() === node.id"
+          [highlighted]="highlightedNodeId() === node.id"
+          [primary]="isPrimaryNode(node)"
+          [blocking]="isBlockingNode(node)"
+          [receiptsExpanded]="isNodeReceiptsExpanded(node)"
+          [headingId]="nodeHeadingId(node)"
+          [receiptRegionId]="nodeReceiptRegionId(node)"
+          (selectedRequested)="selectNode($event)"
+          (subgraphRequested)="expandNode($event)"
+          (receiptsToggled)="toggleNodeReceipts($event)"
+        />
 
         @if (row.outgoingEdges.length) {
           <div

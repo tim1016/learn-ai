@@ -1,0 +1,74 @@
+@let currentNode = node();
+<article
+  [class]="'flow-node status-' + currentNode.status"
+  [class.expandable]="currentNode.expandable"
+  [class.selected]="selected()"
+  [class.highlighted]="highlighted()"
+  [class.primary-node]="primary()"
+  [class.blocking-node]="blocking()"
+  [attr.aria-labelledby]="headingId()"
+>
+  <header class="node-card-header">
+    <div class="node-heading-copy">
+      <span class="node-lane">{{ currentNode.lane }}</span>
+      <strong class="node-title" [id]="headingId()">{{ currentNode.label }}</strong>
+      @if (currentNode.technical_label) {
+        <span class="node-technical">{{ currentNode.technical_label }}</span>
+      }
+    </div>
+    <div class="node-actions">
+      <button
+        type="button"
+        class="node-primary-action"
+        [attr.aria-label]="selectLabel()"
+        (click)="selectNode()"
+      >
+        Select
+      </button>
+      <button
+        type="button"
+        class="node-receipts-toggle"
+        [attr.aria-label]="receiptToggleLabel()"
+        [attr.aria-expanded]="receiptsExpanded()"
+        [attr.aria-controls]="receiptRegionId()"
+        (click)="toggleReceipts()"
+      >
+        Receipts
+      </button>
+    </div>
+  </header>
+  <span class="node-footer">
+    <span class="node-status">{{ currentNode.status_label }}</span>
+    @if (blocking()) {
+      <span class="node-callout">Blocking step</span>
+    } @else if (primary()) {
+      <span class="node-callout">Current step</span>
+    }
+    @if (currentNode.expandable) {
+      <button
+        type="button"
+        class="node-expand"
+        [attr.aria-label]="openSubgraphLabel()"
+        (click)="openSubgraph()"
+      >
+        Open
+      </button>
+    }
+  </span>
+  @if (receiptsExpanded()) {
+    <section
+      class="node-receipts-region"
+      [id]="receiptRegionId()"
+      [attr.aria-labelledby]="headingId()"
+      [attr.data-testid]="'lifecycle-node-receipts-' + currentNode.id"
+    >
+      @if (currentNode.receipts.length > 0) {
+        <app-node-receipts-list [receipts]="currentNode.receipts" />
+      } @else {
+        <p class="empty-node-receipts" data-trader-copy>
+          No node-scoped receipts have been emitted for this lifecycle step yet.
+        </p>
+      }
+    </section>
+  }
+</article>

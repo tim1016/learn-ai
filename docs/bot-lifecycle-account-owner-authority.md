@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-07-03 (Account Truth source-freshness and data-plane bounds update: Bot Control submit readiness and `LivePortfolio.submit_pending_orders` now consume the cached Account Truth projection and fail closed when the cached verdict is missing, stale, not clean, or backed by stale/missing critical source evidence. Account-level reconciliation consumes the same source-freshness contract. Account Truth broker calls and data-plane shutdown paths are bounded.)
+> **Last reviewed:** 2026-07-07 (Bot Control in-node receipt update: lifecycle chart nodes are non-interactive containers with a dedicated receipts button; expanded receipt regions render node-scoped backend receipts in place, one node open at a time.)
 
 ---
 
@@ -94,10 +94,14 @@ Each lifecycle node carries its own receipt list plus an
 or `no-action-needed`. Receipt rows are backend-authored operator copy with
 `headline` and optional `detail` fields. Raw receipt ids, source/gate ids,
 reason codes, values, and timestamps remain audit payload, not primary trader
-instructions. The bot control page right-pane inspector is selected-node scoped: it may
-show only the selected node's backend receipts and the node actionability
-banner. Whole-bot proof lines and advanced diagnostics belong in the lower
-audit panel so they do not imply that every selected node has direct evidence.
+instructions. The lifecycle chart renders those receipts in the node itself:
+the node card is a non-interactive container, a dedicated header button toggles
+one expanded receipt region at a time, and nodes without emitted receipts say so
+inside the node rather than borrowing whole-status evidence. The bot control
+page right-pane inspector is selected-node scoped: it may show only the
+selected node's backend receipts and the node actionability banner. Whole-bot
+proof lines and advanced diagnostics belong in the lower audit panel so they do
+not imply that every selected node has direct evidence.
 
 When the backend does not yet fold an evidence family into a node, it must say
 so honestly with a node-scoped receipt rather than borrowing a whole-status or
