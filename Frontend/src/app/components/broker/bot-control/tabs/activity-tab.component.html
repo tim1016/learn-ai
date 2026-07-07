@@ -8,6 +8,10 @@
     />
   </section>
 
+  <section class="subsection full-row" data-testid="activity-bot-event-stream" aria-label="Bot event stream">
+    <app-bot-event-stream [runId]="chartRunId()" [refreshKey]="activityRefreshKey()" />
+  </section>
+
   <section
     class="subsection chart-panel"
     [class.full-row]="ordersToday().length === 0"

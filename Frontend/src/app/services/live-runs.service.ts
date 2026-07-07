@@ -3,6 +3,7 @@ import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import type {
   AuditCopySizingLookup,
+  BotEventPage,
   CommandsSummary,
   CommandWriteRequest,
   CommandWriteResponse,
@@ -65,6 +66,18 @@ export class LiveRunsService {
       this.http.get<LogLine[]>(`${this.base}/${encodeURIComponent(runId)}/log-tail`, {
         params: { lines },
       }),
+    );
+  }
+
+  getBotEvents(runId: string, params?: { after_seq?: number; limit?: number }): Promise<BotEventPage> {
+    let query = new HttpParams();
+    if (params?.after_seq !== undefined) query = query.set('after_seq', String(params.after_seq));
+    if (params?.limit !== undefined) query = query.set('limit', String(params.limit));
+    return firstValueFrom(
+      this.http.get<BotEventPage>(
+        `${this.base}/${encodeURIComponent(runId)}/bot-events`,
+        { params: query },
+      ),
     );
   }
 

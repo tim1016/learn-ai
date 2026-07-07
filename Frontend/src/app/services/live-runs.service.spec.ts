@@ -228,6 +228,20 @@ describe('LiveRunsService start/stop proxy', () => {
     await expect(promise).resolves.toEqual(report);
   });
 
+  it('reads bot event backfill through the live-runs data-plane route', async () => {
+    const promise = service.getBotEvents('run/with space', { after_seq: 12, limit: 25 });
+
+    const req = httpMock.expectOne((request) =>
+      request.url === '/api/live-runs/run%2Fwith%20space/bot-events'
+      && request.params.get('after_seq') === '12'
+      && request.params.get('limit') === '25',
+    );
+    expect(req.request.method).toBe('GET');
+    req.flush({ rows: [], next_seq: null });
+
+    await expect(promise).resolves.toEqual({ rows: [], next_seq: null });
+  });
+
   it('getInstanceDaemonDiagnostics encodes the strategy instance id', async () => {
     const report: DaemonDiagnosticReport = daemonReport();
     const promise = service.getInstanceDaemonDiagnostics('bot/with space');
