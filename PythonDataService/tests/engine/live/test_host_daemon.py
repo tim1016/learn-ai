@@ -29,6 +29,7 @@ from app.engine.live.daemon_auth import TOKEN_HEADER
 from app.engine.live.host_daemon import RunnerProcessManager, build_parser, create_app
 from app.engine.live.host_runner_policy import validate_ibkr_host_allowed
 from app.engine.live.run_status import write_run_status
+from app.operator.incidents.store import IncidentStore
 from app.schemas.bot_events import (
     BotEventRawType,
     SourceAuthority,
@@ -443,6 +444,8 @@ async def test_start_retires_account_registry_binding_when_spawn_fails(
     assert event.terminal_error.gate_id == "daemon.spawn"
     assert event.terminal_error.external_message == "spawn failed"
     assert event.facts["failure_stage"] == "spawn"
+    incidents = IncidentStore(run_dir).list_unresolved()
+    assert [incident.notice.code for incident in incidents] == ["submit.launch_failed"]
 
 
 async def test_child_crash_retires_account_registry_binding_when_observed(
@@ -494,6 +497,8 @@ async def test_child_crash_retires_account_registry_binding_when_observed(
     # A second status refresh must not duplicate the visible terminal story.
     manager.process_status(RUN_ID)
     assert len(BotEventRawWal(run_bot_event_wal_path(run_dir)).read_all()) == 1
+    incidents = IncidentStore(run_dir).list_unresolved()
+    assert [incident.notice.code for incident in incidents] == ["submit.launch_failed"]
     _owned, siblings = compute_reconcile_namespaces(
         artifacts_root=manager.artifacts_root,
         account_id="DU111",

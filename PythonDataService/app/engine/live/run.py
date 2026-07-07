@@ -1214,6 +1214,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         InvalidAccountIdError,
     )
     from app.engine.live.artifacts import DECISION_COLUMNS, resolve_decision_columns
+    from app.engine.live.bot_event_capture import record_halted_terminal_event
     from app.engine.live.halt import FatalHaltError, read_poisoned_flag
     from app.engine.live.live_engine import (
         LiveEngine,
@@ -1870,6 +1871,15 @@ def cmd_start(args: argparse.Namespace) -> int:
             exc,
         )
 
+    def _record_halted_bot_event(exc: BaseException, *, ts_ms: int) -> None:
+        record_halted_terminal_event(
+            run_dir=args.run_dir,
+            run_id=ledger.run_id,
+            strategy_instance_id=strategy_instance_id,
+            exc=exc,
+            ts_ms=ts_ms,
+        )
+
     bars_iter = getattr(args, "bars", None)
     print(
         f"[START] run_id={ledger.run_id} account={ledger.account_id} "
@@ -2301,12 +2311,14 @@ def cmd_start(args: argparse.Namespace) -> int:
                     f"{exc.reason.halted_at_ms}ms UTC; details={exc.reason.details}",
                     file=sys.stderr,
                 )
+                ended_at_ms = now_ms()
+                _record_halted_bot_event(exc, ts_ms=ended_at_ms)
                 write_run_status(
                     args.run_dir,
                     _entry_sidecar.model_copy(
                         update={
-                            "ended_at_ms": now_ms(),
-                            "last_update_ms": now_ms(),
+                            "ended_at_ms": ended_at_ms,
+                            "last_update_ms": ended_at_ms,
                             "exit_code": 1,
                             "exit_reason": ExitReason.fatal_halt,
                         }
@@ -2315,12 +2327,14 @@ def cmd_start(args: argparse.Namespace) -> int:
                 return 1
             except MaxOrdersPerDayExceeded as exc:
                 print(f"[START] HALT — max orders per day exceeded: {exc}", file=sys.stderr)
+                ended_at_ms = now_ms()
+                _record_halted_bot_event(exc, ts_ms=ended_at_ms)
                 write_run_status(
                     args.run_dir,
                     _entry_sidecar.model_copy(
                         update={
-                            "ended_at_ms": now_ms(),
-                            "last_update_ms": now_ms(),
+                            "ended_at_ms": ended_at_ms,
+                            "last_update_ms": ended_at_ms,
                             "exit_code": 1,
                             "exit_reason": ExitReason.max_orders_exceeded,
                         }
@@ -2329,12 +2343,14 @@ def cmd_start(args: argparse.Namespace) -> int:
                 return 1
             except ControlledLiveHaltError as exc:
                 print(f"[START] HALT — submit gate blocked: {exc}", file=sys.stderr)
+                ended_at_ms = now_ms()
+                _record_halted_bot_event(exc, ts_ms=ended_at_ms)
                 write_run_status(
                     args.run_dir,
                     _entry_sidecar.model_copy(
                         update={
-                            "ended_at_ms": now_ms(),
-                            "last_update_ms": now_ms(),
+                            "ended_at_ms": ended_at_ms,
+                            "last_update_ms": ended_at_ms,
                             "exit_code": 1,
                             "exit_reason": ExitReason.fatal_halt,
                         }
@@ -2347,12 +2363,14 @@ def cmd_start(args: argparse.Namespace) -> int:
                 # account is exactly what the gate is preventing. Exit 1 with
                 # both raw values surfaced for the cockpit failure list.
                 print(f"[START] HALT — broker account identity refusal: {exc}", file=sys.stderr)
+                ended_at_ms = now_ms()
+                _record_halted_bot_event(exc, ts_ms=ended_at_ms)
                 write_run_status(
                     args.run_dir,
                     _entry_sidecar.model_copy(
                         update={
-                            "ended_at_ms": now_ms(),
-                            "last_update_ms": now_ms(),
+                            "ended_at_ms": ended_at_ms,
+                            "last_update_ms": ended_at_ms,
                             "exit_code": 1,
                             "exit_reason": ExitReason.fatal_halt,
                         }
