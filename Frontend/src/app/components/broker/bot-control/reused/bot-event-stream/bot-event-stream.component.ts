@@ -2,34 +2,27 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  effect,
   inject,
+  Injector,
   input,
-  resource,
+  runInInjectionContext,
   signal,
 } from '@angular/core';
 
 import type {
   BotEventFactValue,
-  BotEventPage,
   BotEventRow,
   BotEventSeverity,
   GateStep,
 } from '../../../../../api/live-runs.types';
-import { LiveRunsService } from '../../../../../services/live-runs.service';
 import {
   formatReceiptLabel,
   formatReceiptValue,
   ReceiptLabelPipe,
 } from '../../../../../shared/pipes/receipt-label.pipe';
 import { formatLocalTimestamp } from '../../../../../utils/local-timestamp';
-
-const DEFAULT_LIMIT = 100;
-
-interface BotEventRequest {
-  readonly runId: string | null;
-  readonly refreshKey: number | null;
-  readonly limit: number;
-}
+import { botEventRowStream, type BotEventRowStream } from './bot-event-row-stream';
 
 interface FactEntry {
   readonly key: string;
@@ -59,34 +52,31 @@ interface DisplayRow {
 })
 export class BotEventStreamComponent {
   readonly runId = input<string | null>(null);
-  readonly refreshKey = input<number | null>(null);
-  readonly limit = input<number>(DEFAULT_LIMIT);
 
-  private readonly liveRuns = inject(LiveRunsService);
+  private readonly injector = inject(Injector);
   private readonly expanded = signal<Set<number>>(new Set());
+  private readonly stream = signal<BotEventRowStream | null>(null);
 
-  private readonly request = computed<BotEventRequest>(() => ({
-    runId: this.runId(),
-    refreshKey: this.refreshKey(),
-    limit: this.limit(),
-  }));
-
-  readonly page = resource<BotEventPage, BotEventRequest>({
-    params: () => this.request(),
-    loader: ({ params }) => {
-      if (!params.runId) return Promise.resolve({ rows: [], next_seq: null });
-      return this.liveRuns.getBotEvents(params.runId, { limit: params.limit });
-    },
-  });
+  constructor() {
+    effect((onCleanup) => {
+      const runId = this.runId();
+      if (!runId) {
+        this.stream.set(null);
+        return;
+      }
+      const next = runInInjectionContext(this.injector, () => botEventRowStream(runId));
+      this.stream.set(next);
+      onCleanup(() => next.close());
+    });
+  }
 
   readonly rows = computed<DisplayRow[]>(() =>
-    (this.page.value()?.rows ?? []).map((row) => this.toDisplayRow(row)),
+    (this.stream()?.rows() ?? []).map((row) => this.toDisplayRow(row)),
   );
-  readonly isLoading = computed<boolean>(() => this.page.isLoading());
-  readonly errorMessage = computed<string | null>(() => {
-    const error = this.page.error();
-    return error instanceof Error ? error.message : error ? String(error) : null;
-  });
+  readonly isLoading = computed<boolean>(() =>
+    this.runId() !== null && (this.stream()?.isLoading() ?? true),
+  );
+  readonly errorMessage = computed<string | null>(() => this.stream()?.errorMessage() ?? null);
   readonly rowCountLabel = computed<string>(() => `${this.rows().length} row(s)`);
 
   isExpanded(seq: number): boolean {
