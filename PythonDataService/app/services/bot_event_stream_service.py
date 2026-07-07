@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -49,6 +51,32 @@ class BotEventStreamService:
         page_rows = remaining[:limit]
         next_seq = page_rows[-1].seq if len(remaining) > len(page_rows) else None
         return BotEventStreamPage(rows=page_rows, next_seq=next_seq)
+
+    async def stream_run(
+        self,
+        *,
+        run_dir: Path,
+        since_seq: int,
+        poll_interval_s: float,
+        page_limit: int = 500,
+    ) -> AsyncIterator[BotEventRow]:
+        """Yield authored rows after ``since_seq``, then poll for live rows."""
+
+        last_seq = since_seq
+        while True:
+            page = self.backfill_run(
+                run_dir=run_dir,
+                after_seq=last_seq,
+                limit=page_limit,
+            )
+            for row in page.rows:
+                if row.seq <= last_seq:
+                    continue
+                yield row
+                last_seq = row.seq
+            if page.next_seq is not None:
+                continue
+            await asyncio.sleep(poll_interval_s)
 
 
 _SERVICE = BotEventStreamService()
