@@ -1161,6 +1161,62 @@ describe('BrokerDeployFormComponent', () => {
     expect(deployButton(fixture).disabled).toBe(true);
   });
 
+  it('uses backend identity-coherence evidence after an unconfirmed submit is rejected', async () => {
+    const { fixture, svc, component } = setup();
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    fixture.detectChanges();
+    svc.deployInstance.mockRejectedValueOnce(
+      new HttpErrorResponse({
+        status: 409,
+        error: {
+          detail: {
+            reason_code: 'IDENTITY_COHERENCE_UNCONFIRMED',
+            gate_id: 'deploy.identity_coherence',
+            message: 'Confirm the new run identity.',
+            evidence: [
+              {
+                label: 'inherited_symbol',
+                value: 'MU',
+                source: 'run_ledger.live_config.action stock target',
+              },
+              { label: 'signal_stream', value: 'SPY', source: 'live_config.symbol' },
+            ],
+            remediation: 'Confirm the current values, or turn off start.',
+          },
+        },
+      }),
+    );
+
+    expect(component.identityCoherenceEvidence()).toBeNull();
+
+    await component.submit();
+    fixture.detectChanges();
+
+    expect(component.inheritedSymbol()).toBe('MU');
+    expect(component.inheritedSymbolSource()).toBe('run_ledger.live_config.action stock target');
+    expect(component.identityCoherenceEvidence()?.facts.map((fact) => fact.value)).toEqual([
+      'MU',
+      'SPY',
+    ]);
+    expect(fixture.nativeElement.querySelector('.identity-coherence')?.textContent).toContain(
+      'Confirm new run identity',
+    );
+    expect(deployButton(fixture).disabled).toBe(true);
+
+    component.confirmIdentityCoherence();
+    fixture.detectChanges();
+    await component.submit();
+
+    const retry = svc.deployInstance.mock.calls[1][0];
+    expect(retry.identity_coherence_confirmation).toEqual({
+      inherited_symbol: 'MU',
+      signal_stream: 'SPY',
+      action_plan_symbol: null,
+    });
+  });
+
   it('allows deploy-only staging when inherited identity conflicts with the new signal stream', async () => {
     const { fixture, component } = setup({
       queryParams: {

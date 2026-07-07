@@ -75,7 +75,7 @@
               @for (fact of identity.facts; track fact.label) {
                 <div>
                   <dt>{{ fact.label }}</dt>
-                  <dd>{{ fact.value }} <small>{{ fact.source }}</small></dd>
+                  <dd>{{ fact.value }} <small>{{ fact.source | receiptLabel }}</small></dd>
                 </div>
               }
             </dl>

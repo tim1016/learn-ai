@@ -2868,6 +2868,56 @@ async def test_deploy_and_start_allows_confirmed_identity_incoherence(
     assert "identity_coherence_confirmation" not in captured
 
 
+async def test_deploy_and_start_ignores_soft_deleted_inherited_identity(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _set_connected_broker_account(monkeypatch, "DU111")
+    _write_identity_source_run(root, "spy_ema_paper", "MU")
+    _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1}, process={"state": "idle"})
+    captured: dict = {}
+
+    async def fake_deploy(_base_url: str, payload: dict) -> dict:
+        captured.update(payload)
+        return {"run_id": "run-new", "run_dir": "/runs/run-new", "created": True, "start": None}
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+    body = _deploy_body()
+    body["start"] = True
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        delete_response = await client.request("DELETE", "/api/live-instances/spy_ema_paper")
+        deploy_response = await client.post("/api/live-instances", json=body)
+
+    assert delete_response.status_code == 200
+    assert deploy_response.status_code == 201
+    assert captured["strategy_instance_id"] == "spy_ema_paper"
+
+
+async def test_deploy_and_start_ignores_request_inherited_symbol_for_new_instance(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _root = app_with_root
+    _set_connected_broker_account(monkeypatch, "DU111")
+    captured: dict = {}
+
+    async def fake_deploy(_base_url: str, payload: dict) -> dict:
+        captured.update(payload)
+        return {"run_id": "run-new", "run_dir": "/runs/run-new", "created": True, "start": None}
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+    body = _deploy_body()
+    body["start"] = True
+    body["inherited_symbol"] = "MU"
+    body["inherited_symbol_source"] = "stale redeploy URL"
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=body)
+
+    assert response.status_code == 201
+    assert captured["strategy_instance_id"] == "spy_ema_paper"
+
+
 async def test_deploy_instance_uses_connected_broker_account_when_request_omits_account(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -1776,8 +1776,7 @@ def _deploy_identity_confirmation_matches(
     )
 
 
-def _deploy_inherited_symbol(root: Path, strategy_instance_id: str) -> tuple[str, str]:
-    runs = _scan_runs_by_instance(root).get(strategy_instance_id, [])
+def _deploy_inherited_symbol(root: Path, runs: list[dict]) -> tuple[str, str]:
     run_dir = _resolve_evidence_run_dir(root, None, runs)
     if run_dir is None:
         return "", ""
@@ -1818,9 +1817,11 @@ def _raise_if_identity_coherence_blocks_start(
     sid = body.strategy_instance_id.strip()
     inherited_symbol = ""
     inherited_symbol_source = ""
+    visible_runs: list[dict] = []
     if sid:
-        inherited_symbol, inherited_symbol_source = _deploy_inherited_symbol(live_runs_root, sid)
-    if not inherited_symbol:
+        visible_runs = _visible_runs_by_instance(live_runs_root).get(sid, [])
+        inherited_symbol, inherited_symbol_source = _deploy_inherited_symbol(live_runs_root, visible_runs)
+    if not inherited_symbol and (not sid or visible_runs):
         inherited_symbol = _deploy_symbol(body.inherited_symbol)
         inherited_symbol_source = body.inherited_symbol_source or "request inherited symbol"
     if not inherited_symbol:

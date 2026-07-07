@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import {
   afterEveryRender,
   ChangeDetectionStrategy,
@@ -652,10 +653,36 @@ export class BrokerDeployFormComponent {
       // guard blocks an immediate second start rather than waiting on a 409.
       this.instances.reload();
     } catch (err) {
+      this.seedIdentityCoherenceEvidence(err);
       this.error.set(toOperationError('deploy', err));
     } finally {
       this.busy.set(false);
     }
+  }
+
+  private seedIdentityCoherenceEvidence(err: unknown): void {
+    if (!(err instanceof HttpErrorResponse)) return;
+    const detail = (err.error as { detail?: unknown } | null | undefined)?.detail;
+    if (!detail || typeof detail !== 'object') return;
+    const payload = detail as Record<string, unknown>;
+    if (payload['reason_code'] !== 'IDENTITY_COHERENCE_UNCONFIRMED') return;
+    const evidence = payload['evidence'];
+    if (!Array.isArray(evidence)) return;
+    const inherited = evidence.find(
+      (fact): fact is Record<string, unknown> =>
+        Boolean(fact) &&
+        typeof fact === 'object' &&
+        (fact as Record<string, unknown>)['label'] === 'inherited_symbol',
+    );
+    const inheritedSymbol = normalizedSymbol(
+      typeof inherited?.['value'] === 'string' ? inherited['value'] : '',
+    );
+    if (!inheritedSymbol) return;
+    this.inheritedSymbol.set(inheritedSymbol);
+    this.inheritedSymbolSource.set(
+      typeof inherited?.['source'] === 'string' ? inherited['source'] : '',
+    );
+    this.identityCoherenceConfirmedSignature.set(null);
   }
 
   // Event readers that narrow without a type assertion.
