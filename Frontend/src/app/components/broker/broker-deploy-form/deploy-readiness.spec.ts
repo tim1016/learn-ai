@@ -75,36 +75,23 @@ describe('deploy readiness helpers', () => {
 
   it('detects durable STOPPED from desired state, start capability, or gate next-step', () => {
     const base = {
-      startNow: true,
-      instanceId: 'bot-1',
-      instanceIdValid: true,
-      statusRequired: true,
-      statusLoading: false,
-      desiredState: null,
-      startCapability: null,
-    };
+	      startNow: true,
+	      instanceId: 'bot-1',
+	      instanceIdValid: true,
+	      statusLoading: false,
+	      statusUnavailable: false,
+	      desiredState: null,
+	      startCapability: null,
+	    };
 
-    expect(stoppedStartLatchState(base)).toBe('clear');
-    expect(stoppedStartLatchState({ ...base, statusLoading: true })).toBe('checking');
-    expect(stoppedStartLatchState({ ...base, startNow: false })).toBe('not_applicable');
-    expect(stoppedStartLatchState({ ...base, instanceId: '' })).toBe('not_applicable');
-    expect(stoppedStartLatchState({ ...base, instanceIdValid: false })).toBe('not_applicable');
-    expect(
-      stoppedStartLatchState({
-        ...base,
-        statusRequired: false,
-        desiredState: {
-          state: 'STOPPED',
-          updated_at_ms: 1,
-          updated_by: 'operator',
-          reason: null,
-          version: 1,
-          path_status: 'ok',
-        },
-      }),
-    ).toBe('clear');
-    expect(
-      stoppedStartLatchState({
+	    expect(stoppedStartLatchState(base)).toBe('clear');
+	    expect(stoppedStartLatchState({ ...base, statusLoading: true })).toBe('checking');
+	    expect(stoppedStartLatchState({ ...base, statusUnavailable: true })).toBe('unknown');
+	    expect(stoppedStartLatchState({ ...base, startNow: false })).toBe('not_applicable');
+	    expect(stoppedStartLatchState({ ...base, instanceId: '' })).toBe('not_applicable');
+	    expect(stoppedStartLatchState({ ...base, instanceIdValid: false })).toBe('not_applicable');
+	    expect(
+	      stoppedStartLatchState({
         ...base,
         desiredState: {
           state: 'STOPPED',

@@ -102,9 +102,7 @@ export class BrokerDeployFormComponent {
   readonly instanceStatus = resource<LiveInstanceStatus | null, string | null>({
     params: () => {
       const id = this.instanceId().trim();
-      return id !== '' && INSTANCE_ID_RE.test(id) && this.instanceKnownInFleet(id)
-        ? id
-        : null;
+      return this.startNow() && id !== '' && INSTANCE_ID_RE.test(id) ? id : null;
     },
     loader: ({ params }) => this.loadInstanceStatus(params),
   });
@@ -369,14 +367,15 @@ export class BrokerDeployFormComponent {
 
   readonly deployChecks = computed(() => buildDeployChecks(this.error()?.status));
   readonly stoppedStartLatchState = computed(() => {
-    const status = this.instanceStatus.value();
+    const statusUnavailable = this.instanceStatus.error() !== undefined;
+    const status = statusUnavailable ? null : this.instanceStatus.value();
     const id = this.instanceId().trim();
     return stoppedStartLatchState({
       startNow: this.startNow(),
       instanceId: id,
       instanceIdValid: id !== '' && INSTANCE_ID_RE.test(id),
-      statusRequired: this.instanceStatusRequired(id),
-      statusLoading: this.instances.isLoading() || this.instanceStatus.isLoading(),
+      statusLoading: this.instanceStatus.isLoading(),
+      statusUnavailable,
       desiredState: status?.desired_state,
       startCapability: status?.operator_surface.host_process.start_capability,
     });
@@ -557,6 +556,9 @@ export class BrokerDeployFormComponent {
     if (this.stoppedStartLatchState() === 'checking') {
       return 'Checking durable desired state before starting. Wait for the latch check, or turn off "Start trading immediately" to deploy only.';
     }
+    if (this.stoppedStartLatchState() === 'unknown') {
+      return 'Could not verify durable desired state before starting. Retry the status check, or turn off "Start trading immediately" to deploy only.';
+    }
     return null;
   });
 
@@ -622,19 +624,7 @@ export class BrokerDeployFormComponent {
 
   private async loadInstanceStatus(instanceId: string | null): Promise<LiveInstanceStatus | null> {
     if (instanceId === null) return null;
-    try {
-      return await this.svc.getInstanceStatus(instanceId);
-    } catch {
-      return null;
-    }
-  }
-
-  private instanceStatusRequired(instanceId: string): boolean {
-    return this.instances.isLoading() || this.instanceKnownInFleet(instanceId);
-  }
-
-  private instanceKnownInFleet(instanceId: string): boolean {
-    return this.instances.value()?.some((i) => i.strategy_instance_id === instanceId) ?? false;
+    return this.svc.getInstanceStatus(instanceId);
   }
   private renderedFieldValue(
     field:

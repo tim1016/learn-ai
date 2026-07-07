@@ -292,11 +292,11 @@
       <section class="group" [class.step-hidden]="activeDeployTab() !== 'launch'" aria-labelledby="launch-section">
         <div class="group-head">
           <h2 id="launch-section">Launch options</h2>
-          @if (!startNow()) {
+          @if (!effectiveStartNow()) {
             <span class="scope-note">Applies only when starting now</span>
           }
         </div>
-        <fieldset class="mode" [class.orders-selected]="executionCapability() === 'paper_orders'" [class.live-selected]="executionCapability() === 'live'" [disabled]="!startNow()">
+        <fieldset class="mode" [class.orders-selected]="executionCapability() === 'paper_orders'" [class.live-selected]="executionCapability() === 'live'" [disabled]="!effectiveStartNow()">
           <legend>Execution capability</legend>
           <label>
             <input type="radio" name="launch-mode" value="read_only" [checked]="executionCapability() === 'read_only'" (change)="setExecutionMode($event)" />
@@ -320,22 +320,22 @@
             </span>
           </label>
         </fieldset>
-        <p class="capability-proof" [class.dimmed]="!startNow()">{{ executionCapabilityProof() }}</p>
-        @if (startNow() && executionCapability() === 'paper_orders') {
+        <p class="capability-proof" [class.dimmed]="!effectiveStartNow()">{{ executionCapabilityProof() }}</p>
+        @if (effectiveStartNow() && executionCapability() === 'paper_orders') {
           <p class="launch-warning" role="status">
             Paper orders are enabled for launch. Guardrail limit: {{ maxOrdersPerDay() }} orders/day.
           </p>
         }
 
-        <div class="launch-fields" [class.dimmed]="!startNow()">
+        <div class="launch-fields" [class.dimmed]="!effectiveStartNow()">
           <label class="field inline">
             <span>Daily order limit</span>
-            <input type="number" min="0" max="100000" [value]="maxOrdersPerDay()" (input)="setMaxOrders($event)" />
+            <input type="number" min="0" max="100000" [value]="maxOrdersPerDay()" [disabled]="!effectiveStartNow()" (input)="setMaxOrders($event)" />
           </label>
 
           <label class="field inline">
             <span>Restore previous state <span class="hint" title="Controls whether the engine must load yesterday's saved indicator state before it starts.">ⓘ</span></span>
-            <select [value]="hydratePolicy()" (change)="setHydratePolicy($event)">
+            <select [value]="hydratePolicy()" [disabled]="!effectiveStartNow()" (change)="setHydratePolicy($event)">
               <option value="require">Required</option>
               <option value="optional">Optional</option>
               <option value="disabled">Off</option>

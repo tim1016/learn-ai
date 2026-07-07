@@ -46,14 +46,14 @@ export interface NowChecksInput {
 
 export const STOPPED_REQUIRES_RESUME = 'STOPPED_REQUIRES_RESUME';
 
-export type StoppedStartLatchState = 'not_applicable' | 'checking' | 'clear' | 'blocked';
+export type StoppedStartLatchState = 'not_applicable' | 'checking' | 'unknown' | 'clear' | 'blocked';
 
 export interface StoppedStartLatchInput {
   startNow: boolean;
   instanceId: string;
   instanceIdValid: boolean;
-  statusRequired: boolean;
   statusLoading: boolean;
+  statusUnavailable: boolean;
   desiredState: DesiredStateView | null | undefined;
   startCapability: Pick<
     HostProcessStartCapability,
@@ -141,8 +141,11 @@ export function stoppedStartLatchState(input: StoppedStartLatchInput): StoppedSt
   if (!input.startNow || input.instanceId.trim() === '' || !input.instanceIdValid) {
     return 'not_applicable';
   }
-  if (!input.statusRequired) {
-    return 'clear';
+  if (input.statusLoading) {
+    return 'checking';
+  }
+  if (input.statusUnavailable) {
+    return 'unknown';
   }
   if (
     input.desiredState?.state === 'STOPPED' ||
@@ -151,7 +154,7 @@ export function stoppedStartLatchState(input: StoppedStartLatchInput): StoppedSt
   ) {
     return 'blocked';
   }
-  return input.statusLoading ? 'checking' : 'clear';
+  return 'clear';
 }
 
 function gatesRequireResume(gates: GateResult[]): boolean {

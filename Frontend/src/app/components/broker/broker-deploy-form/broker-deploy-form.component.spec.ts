@@ -102,6 +102,8 @@ function setup(
     accountTruth?: { final_verdict: 'clean' | 'not_proven'; status_label: string; status_detail: string };
     instanceStatus?: LiveInstanceStatus | null;
     instanceStatusPromise?: Promise<LiveInstanceStatus | null>;
+    instanceStatusError?: Error;
+    instanceStatusResolver?: (instanceId: string) => Promise<LiveInstanceStatus | null>;
     strategyValidationCatalog?: StrategyValidationCatalog;
   } = {},
 ) {
@@ -153,10 +155,12 @@ function setup(
         entries: opts.qcEntries ?? ['references/qc-shadow/A.py'],
       }),
     getInstances: vi.fn().mockImplementation(() => opts.instancesPromise ?? Promise.resolve(opts.instances ?? [])),
-    getInstanceStatus: vi.fn().mockImplementation(() => {
+    getInstanceStatus: vi.fn().mockImplementation((instanceId: string) => {
+      if (opts.instanceStatusResolver !== undefined) return opts.instanceStatusResolver(instanceId);
+      if (opts.instanceStatusError !== undefined) return Promise.reject(opts.instanceStatusError);
       if (opts.instanceStatusPromise !== undefined) return opts.instanceStatusPromise;
       if (opts.instanceStatus !== undefined) return Promise.resolve(opts.instanceStatus);
-      return Promise.reject(new Error('instance not found'));
+      return Promise.resolve(clearStartStatus());
     }),
     deployInstance: vi
       .fn()
@@ -226,6 +230,14 @@ async function flush() {
   await Promise.resolve();
   TestBed.flushEffects();
   await Promise.resolve();
+}
+
+async function settleResource(fixture: { detectChanges(): void }) {
+  fixture.detectChanges();
+  await flush();
+  fixture.detectChanges();
+  await flush();
+  fixture.detectChanges();
 }
 
 function fillRequired(component: BrokerDeployFormComponent) {
@@ -743,10 +755,11 @@ describe('BrokerDeployFormComponent', () => {
   });
 
   it('attaches start_options only when "Start now" is checked', async () => {
-    const { svc, component } = setup();
+    const { fixture, svc, component } = setup();
     await flush();
     fillRequired(component);
     component.startNow.set(true);
+    await settleResource(fixture);
 
     await component.submit();
 
@@ -797,8 +810,7 @@ describe('BrokerDeployFormComponent', () => {
     fixture.detectChanges();
     typeText(fixture, 'Signal stream', 'SPY');
     typeText(fixture, 'Deployment name', 'deployment-validation-paper');
-    await flush();
-    fixture.detectChanges();
+    await settleResource(fixture);
 
     expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
       'Ready to deploy.',
@@ -819,8 +831,7 @@ describe('BrokerDeployFormComponent', () => {
     fieldControl(fixture, 'Deployment name').value = 'deployment-validation-paper';
 
     component.syncRenderedFieldValues();
-    await flush();
-    fixture.detectChanges();
+    await settleResource(fixture);
 
     expect(component.strategyKey()).toBe('deployment_validation');
     expect(component.specPath()).toBe(DEPLOYMENT_VALIDATION_SPEC_PATH);
@@ -844,8 +855,7 @@ describe('BrokerDeployFormComponent', () => {
     fieldControl(fixture, 'Deployment name').value = 'june25';
 
     component.syncRenderedFieldValues({ includeEmpty: false, onlyEmptySignals: true });
-    await flush();
-    fixture.detectChanges();
+    await settleResource(fixture);
 
     expect(component.strategyKey()).toBe('deployment_validation');
     expect(component.specPath()).toBe(DEPLOYMENT_VALIDATION_SPEC_PATH);
@@ -1018,7 +1028,7 @@ describe('BrokerDeployFormComponent', () => {
     await flush();
     fillRequired(component);
     component.startNow.set(true);
-    fixture.detectChanges();
+    await settleResource(fixture);
     chooseExecutionCapability(fixture, 'paper_orders');
     fixture.detectChanges();
 
@@ -1159,8 +1169,7 @@ describe('BrokerDeployFormComponent', () => {
     await flush();
     fillRequired(component);
     component.startNow.set(true);
-    await flush();
-    fixture.detectChanges();
+    await settleResource(fixture);
 
     expect(svc.getInstanceStatus).toHaveBeenCalledWith('deployment-validation-paper');
     expect(fixture.nativeElement.textContent).toContain('Deploy only');
@@ -1174,6 +1183,8 @@ describe('BrokerDeployFormComponent', () => {
     const req = svc.deployInstance.mock.calls[0][0];
     expect(req.start).toBe(false);
     expect(req.start_options).toBeUndefined();
+    expect(fieldControl(fixture, 'Daily order limit').disabled).toBe(true);
+    expect(fieldControl(fixture, 'Restore previous state').disabled).toBe(true);
   });
 
   it('does not submit start-now while the durable STOPPED lookup is still loading', async () => {
@@ -1206,48 +1217,70 @@ describe('BrokerDeployFormComponent', () => {
     expect(deployButton(fixture).disabled).toBe(false);
   });
 
-  it('waits for the fleet list, then skips durable STOPPED lookup for a new instance name', async () => {
+  it('checks durable STOPPED state even when the fleet list has not exposed the instance', async () => {
     const pendingInstances = deferred<{ strategy_instance_id: string; process_state: string }[]>();
-    const { fixture, svc, component } = setup({ instancesPromise: pendingInstances.promise });
+    const { fixture, svc, component } = setup({
+      instancesPromise: pendingInstances.promise,
+      instanceStatus: clearStartStatus(),
+    });
     await flush();
     fillRequired(component);
     component.startNow.set(true);
-    fixture.detectChanges();
+    await settleResource(fixture);
 
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'Checking durable desired state',
-    );
-    expect(deployButton(fixture).disabled).toBe(true);
-    expect(svc.getInstanceStatus).not.toHaveBeenCalled();
+    expect(svc.getInstanceStatus).toHaveBeenCalledWith('deployment-validation-paper');
+    expect(deployButton(fixture).disabled).toBe(false);
 
     pendingInstances.resolve([]);
-    await flush();
-    fixture.detectChanges();
+    await settleResource(fixture);
 
-    expect(svc.getInstanceStatus).not.toHaveBeenCalled();
+    expect(svc.getInstanceStatus).toHaveBeenCalledTimes(1);
     expect(deployButton(fixture).disabled).toBe(false);
   });
 
   it('does not carry a prior STOPPED latch onto a new instance name', async () => {
     const { fixture, svc, component } = setup({
       instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
-      instanceStatus: stoppedLatchStatus(),
+      instanceStatusResolver: (instanceId) =>
+        Promise.resolve(
+          instanceId === 'deployment-validation-paper' ? stoppedLatchStatus() : clearStartStatus(),
+        ),
     });
     await flush();
     fillRequired(component);
     component.startNow.set(true);
-    await flush();
-    fixture.detectChanges();
+    await settleResource(fixture);
 
     expect(component.stoppedStartLatch()).toBe(true);
 
     component.instanceId.set('fresh-deployment-name');
-    await flush();
-    fixture.detectChanges();
+    await settleResource(fixture);
 
-    expect(svc.getInstanceStatus).toHaveBeenCalledTimes(1);
+    expect(svc.getInstanceStatus).toHaveBeenCalledTimes(2);
+    expect(svc.getInstanceStatus).toHaveBeenLastCalledWith('fresh-deployment-name');
     expect(component.stoppedStartLatch()).toBe(false);
     expect(deployButton(fixture).disabled).toBe(false);
+  });
+
+  it('fails closed when the durable STOPPED status lookup errors', async () => {
+    const { fixture, svc, component } = setup({
+      instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
+      instanceStatusError: new Error('status lookup failed'),
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    await settleResource(fixture);
+
+    expect(svc.getInstanceStatus).toHaveBeenCalledWith('deployment-validation-paper');
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Could not verify durable desired state',
+    );
+    expect(deployButton(fixture).disabled).toBe(true);
+
+    await component.submit();
+
+    expect(svc.deployInstance).not.toHaveBeenCalled();
   });
 
   it('shows the real deploy blocker when STOPPED latch is present but deploy-only is unavailable', async () => {
@@ -1260,8 +1293,7 @@ describe('BrokerDeployFormComponent', () => {
     fillRequired(component);
     component.accountId.set('');
     component.startNow.set(true);
-    await flush();
-    fixture.detectChanges();
+    await settleResource(fixture);
 
     expect(component.stoppedStartLatch()).toBe(true);
     expect(deployButton(fixture).disabled).toBe(true);
