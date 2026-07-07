@@ -87,6 +87,7 @@ _DEFAULT_IBKR_CLIENT_ID_POOL = "50-99"
 _IBKR_CLIENT_ID_MIN = 1
 _IBKR_CLIENT_ID_MAX = 2**31 - 1
 _IBKR_CLIENT_ID_POOL_MAX_SPAN = 1_000
+_IBKR_CLIENT_ID_IN_USE = "IBKR_CLIENT_ID_IN_USE"
 
 
 def _parse_ibkr_client_id_pool(raw: str) -> tuple[int, ...]:
@@ -281,6 +282,7 @@ class RunnerProcessManager:
         # managed-process registry, so allocate -> spawn -> register must be one
         # critical section; otherwise sibling starts can pick the same free id.
         self._managed_lock = _threading.RLock()
+        self._rejected_ibkr_client_ids: set[int] = set()
         # The git SHA of the code THIS process is running, captured ONCE at
         # launch. The daemon does not reload on `git pull`, so the running code
         # is frozen at startup even as the working tree advances — comparing this
@@ -550,17 +552,6 @@ class RunnerProcessManager:
                     )
 
             self._enforce_crash_retired_recovery(run_dir)
-            account_freeze = self._write_account_registry_binding(
-                run_dir,
-                run_id=run_id,
-                lifecycle_state="ACTIVE",
-                source="host_daemon.start",
-            )
-            if account_freeze is not None:
-                raise HostRunnerError(
-                    status.HTTP_409_CONFLICT,
-                    f"Account is frozen by {account_freeze.source}: {account_freeze.reason}",
-                )
             command = self._build_start_command(
                 run_dir,
                 request,
@@ -573,6 +564,17 @@ class RunnerProcessManager:
             log_handle = log_path.open("a", encoding="utf-8")
 
             try:
+                account_freeze = self._write_account_registry_binding(
+                    run_dir,
+                    run_id=run_id,
+                    lifecycle_state="ACTIVE",
+                    source="host_daemon.start",
+                )
+                if account_freeze is not None:
+                    raise HostRunnerError(
+                        status.HTTP_409_CONFLICT,
+                        f"Account is frozen by {account_freeze.source}: {account_freeze.reason}",
+                    )
                 process = subprocess.Popen(
                     command,
                     cwd=str(self.repo_root),
@@ -582,6 +584,9 @@ class RunnerProcessManager:
                     creationflags=_creation_flags(),
                     start_new_session=(os.name != "nt"),
                 )
+            except HostRunnerError:
+                log_handle.close()
+                raise
             except OSError as exc:
                 log_handle.close()
                 record_spawn_launch_failure(
@@ -1175,6 +1180,7 @@ class RunnerProcessManager:
     def _active_ibkr_client_ids(self, *, exclude_key: str) -> set[int]:
         active: set[int] = set()
         with self._managed_lock:
+            active.update(self._rejected_ibkr_client_ids)
             for key, managed in self._managed.items():
                 if key == exclude_key:
                     continue
@@ -1193,7 +1199,7 @@ class RunnerProcessManager:
             (
                 "No IBKR client IDs are available in LIVE_RUNNER_IBKR_CLIENT_ID_POOL. "
                 "Stop a sibling bot, expand the daemon client-id pool, or restart IB Gateway "
-                "if a stale session is holding a slot."
+                "and the host daemon if a stale session is holding a quarantined slot."
             ),
         )
 
@@ -1245,6 +1251,7 @@ class RunnerProcessManager:
                 ts_ms=recorded_at_ms,
             ):
                 managed.launch_failure_recorded_at_ms = recorded_at_ms
+        self._quarantine_rejected_ibkr_client_id(managed)
         if managed.registry_retired_at_ms is None:
             try:
                 self._write_account_registry_binding(
@@ -1265,6 +1272,25 @@ class RunnerProcessManager:
         if managed.ended_at_ms is None:
             managed.ended_at_ms = _now_ms()
             managed.log_handle.close()
+
+    def _quarantine_rejected_ibkr_client_id(self, managed: ManagedProcess) -> None:
+        if managed.ibkr_client_id is None or managed.ibkr_client_id in self._rejected_ibkr_client_ids:
+            return
+        try:
+            payload = json.loads((managed.run_dir / "run_status.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(payload, dict) or payload.get("exit_error_code") != _IBKR_CLIENT_ID_IN_USE:
+            return
+        self._rejected_ibkr_client_ids.add(managed.ibkr_client_id)
+        logger.warning(
+            "Quarantined IBKR client id after Gateway rejected it",
+            extra={
+                "run_id": managed.run_id,
+                "strategy_instance_id": managed.strategy_instance_id,
+                "ibkr_client_id": managed.ibkr_client_id,
+            },
+        )
 
     @staticmethod
     def _should_record_child_launch_failure(managed: ManagedProcess) -> bool:

@@ -429,9 +429,7 @@ def test_parser_accepts_strategy_instance_id() -> None:
 
 
 @requires_git
-def test_init_ledger_writes_strategy_instance_id(
-    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
-) -> None:
+def test_init_ledger_writes_strategy_instance_id(repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path) -> None:
     """UI-0: --strategy-instance-id is persisted into run_ledger.json at
     init-ledger time, with schema bumped to 1.1, while run_id is keyed off
     the existing identity inputs (not the instance id)."""
@@ -473,9 +471,7 @@ def test_init_ledger_writes_strategy_instance_id(
 
 
 @requires_git
-def test_init_ledger_writes_strategy_key(
-    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
-) -> None:
+def test_init_ledger_writes_strategy_key(repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path) -> None:
     """#416: --strategy-key is persisted into run_ledger.json at init-ledger
     time so the console can default the Start card and 'start' can guard against
     a mismatched algorithm. Not part of the run_id hash."""
@@ -931,28 +927,33 @@ def _write_ledger_with_strategy_key(tmp_path: Path, strategy_key: str) -> Path:
     return run_dir
 
 
-def _write_valid_deployment_validation_spec(path: Path, *, bar_source_descriptor: str) -> None:
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": "1.0",
-                "name": "Deployment Validation",
-                "symbols": ["SPY"],
-                "resolution": {"period_minutes": 1},
-                "indicators": [],
-                "entry": {
-                    "logic": "AND",
-                    "conditions": [],
-                    "size": {"kind": "SetHoldings", "fraction": 1.0},
-                },
-                "position": {"kind": "EQUITY_LONG"},
-                "survival": [],
-                "exit": {"logic": "OR", "conditions": []},
-                "bar_source_descriptor": bar_source_descriptor,
-            }
-        ),
-        encoding="utf-8",
-    )
+def _write_valid_deployment_validation_spec(
+    path: Path,
+    *,
+    bar_source_descriptor: str,
+    submit_mode: str = "live_paper",
+    legacy_client_id: int | None = None,
+) -> None:
+    payload = {
+        "schema_version": "1.0",
+        "name": "Deployment Validation",
+        "symbols": ["SPY"],
+        "resolution": {"period_minutes": 1},
+        "indicators": [],
+        "entry": {
+            "logic": "AND",
+            "conditions": [],
+            "size": {"kind": "SetHoldings", "fraction": 1.0},
+        },
+        "position": {"kind": "EQUITY_LONG"},
+        "survival": [],
+        "exit": {"logic": "OR", "conditions": []},
+        "submit_mode": submit_mode,
+        "bar_source_descriptor": bar_source_descriptor,
+    }
+    if legacy_client_id is not None:
+        payload["client_id"] = legacy_client_id
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def test_start_rejects_strategy_inconsistent_with_ledger_key(
@@ -1029,6 +1030,64 @@ def test_start_refuses_unsupported_bar_source_descriptor(
     assert "unsupported bar source" in err
     assert "bar_source_descriptor" in err
     assert "ibkr_realtime_bars" in err
+
+
+def test_start_uses_submit_mode_from_legacy_spec_with_client_id(tmp_path: Path) -> None:
+    import argparse as _argparse
+    import json as _json
+    from collections.abc import AsyncIterator
+
+    from app.engine.live.run import cmd_start
+    from app.engine.live.run_ledger import build_ledger, write_ledger
+    from tests.engine.live.fixtures.fake_broker import FakeBroker
+
+    spec = tmp_path / "spec.json"
+    _write_valid_deployment_validation_spec(
+        spec,
+        bar_source_descriptor="ibkr_realtime_bars",
+        submit_mode="shadow",
+        legacy_client_id=12,
+    )
+    qc_audit = tmp_path / "qc_audit.py"
+    qc_audit.write_text("# QC audit copy stub\n", encoding="utf-8")
+    ledger = build_ledger(
+        code_sha="deadbeef" * 5,
+        strategy_spec_path=spec,
+        qc_audit_copy_path=qc_audit,
+        qc_cloud_backtest_id="bt-legacy-client-id-1",
+        account_id="DU123",
+        start_date_ms=1714838400000,
+        live_config={"sizing": {"kind": "FixedShares", "value": 1}},
+        strategy_key="deployment_validation",
+        strategy_instance_id="deployment-validation",
+    )
+    run_dir = tmp_path / ledger.run_id
+    write_ledger(run_dir / "run_ledger.json", ledger)
+    artifacts_root = tmp_path / "artifacts"
+    artifacts_root.mkdir()
+
+    async def _empty_bars() -> AsyncIterator:  # type: ignore[override]
+        return
+        yield
+
+    rc = cmd_start(
+        _argparse.Namespace(
+            command="start",
+            run_dir=run_dir,
+            strategy="deployment_validation",
+            readonly=False,
+            max_orders_per_day=4,
+            hydrate_policy="require",
+            artifacts_root=artifacts_root,
+            broker=FakeBroker(),
+            bars=_empty_bars(),
+            client=None,
+        )
+    )
+
+    assert rc == 0
+    status = _json.loads((run_dir / "run_status.json").read_text(encoding="utf-8"))
+    assert status["submit_mode_at_start"] == "shadow"
 
 
 def test_live_config_from_ledger_applies_known_fields() -> None:
