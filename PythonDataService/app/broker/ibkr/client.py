@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import deque
 from pathlib import Path
 
 from app.broker.ibkr.config import IbkrSettings, get_settings
@@ -46,6 +47,8 @@ from app.services.broker_session_events import BrokerSessionEventService
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
+
+OrderErrorEvent = tuple[int, int, str, int]
 
 
 # Sentinel value for ``IBKR_HOST`` that triggers host auto-resolution.
@@ -214,6 +217,12 @@ def _is_paper_account(account_id: str) -> bool:
     return account_id.upper().startswith("DU")
 
 
+def _is_order_rejection_error(req_id: int, error_code: int) -> bool:
+    """True for IBKR order-rejection callbacks that can join by reqId."""
+
+    return req_id >= 0 and error_code == 201
+
+
 class IbkrClient:
     """Lifecycle wrapper around ``ib_async.IB``.
 
@@ -270,6 +279,7 @@ class IbkrClient:
         # timestamp so the wire-level ``last_transition_ms`` is the most
         # recent of either side.
         self._last_event_ms: int = now_ms_utc()
+        self._order_error_events: deque[OrderErrorEvent] = deque()
         # Operator-intended connection state. The AutoReconnectMonitor only
         # acts on observed drops when this is True; ``POST /disconnect`` sets
         # it False so the operator's "off" sticks, and a startup with
@@ -353,6 +363,8 @@ class IbkrClient:
             message=errorString,
             connection_state=self.connection_state,
         )
+        if _is_order_rejection_error(reqId, errorCode):
+            self._order_error_events.append((reqId, errorCode, errorString, now_ms_utc()))
         if errorCode == 326:
             self._client_id_in_use_seen = True
             return
@@ -431,6 +443,13 @@ class IbkrClient:
                     "action": "connection_restored",
                 },
             )
+
+    def drain_order_errors(self) -> list[OrderErrorEvent]:
+        """Return and clear order-scoped IBKR error callbacks."""
+
+        out = list(self._order_error_events)
+        self._order_error_events.clear()
+        return out
 
     # ── lifecycle ───────────────────────────────────────────────────────
 

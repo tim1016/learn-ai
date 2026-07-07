@@ -36,6 +36,7 @@ from app.broker.ibkr.models import (
     IbkrOrderEvent,
     IbkrOrderSpec,
 )
+from app.broker.ibkr.order_error_stream import drain_order_error_events
 from app.broker.ibkr.order_evidence import (
     all_open_orders_request_evidence,
     build_execution_recovery_evidence,
@@ -1093,6 +1094,12 @@ async def stream_order_events(
             # silently missing fills while the engine keeps submitting orders.
             client.require_live()
             trades = list(client.ib.trades())
+            for error_event in drain_order_error_events(
+                client=client,
+                trades=trades,
+                account_id=account_id,
+            ):
+                yield error_event
             for trade in trades:
                 if not order_belongs_to_account(trade, account_id):
                     continue

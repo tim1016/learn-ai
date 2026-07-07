@@ -73,6 +73,12 @@ from app.schemas.broker_activity import (
     ReconciliationTimingPolicy,
     SizingProvenance,
 )
+from app.services.bot_event_rejection_bridge import (
+    append_order_rejection_capture,
+    is_order_rejection_row,
+    join_order_ref_from_req_id,
+)
+from app.services.bot_event_wal import BotEventRawWal, run_bot_event_wal_path
 from app.services.broker_activity_reconciler import (
     EngineIntent,
     ReconciliationContext,
@@ -274,6 +280,7 @@ class BrokerActivityPublisher:
         sweep_lookback_ms: int = DEFAULT_SWEEP_LOOKBACK_MS,
     ) -> None:
         self._strategy_instance_id = strategy_instance_id
+        self._run_dir = run_dir
         self._bot_order_namespace = bot_order_namespace
         self._timing_policy = timing_policy
         self._event_source_factory = event_source_factory
@@ -298,6 +305,7 @@ class BrokerActivityPublisher:
                 target_path=instance_wal_path,
             )
         self._wal = BrokerActivityWal(instance_wal_path)
+        self._bot_event_wal = BotEventRawWal(run_bot_event_wal_path(run_dir))
         self._sidecar = LiveStateSidecarRepo(
             stable_live_state_path(artifacts_root, strategy_instance_id)
         )
@@ -734,6 +742,12 @@ class BrokerActivityPublisher:
 
     async def _handle_event(self, event: IbkrOrderEvent) -> None:
         """Author at most one row from one event; fan out to subscribers."""
+        submitted_orders = self._read_submitted_orders()
+        event = join_order_ref_from_req_id(
+            event,
+            submitted_orders,
+            bot_order_namespace=self._bot_order_namespace,
+        )
         # Filter: only events bearing OUR namespace OR truly foreign
         # events (no parseable order_ref) get authored. An event with a
         # parseable ``order_ref`` whose namespace belongs to a DIFFERENT
@@ -751,7 +765,7 @@ class BrokerActivityPublisher:
             return
         intent_id = match_identity(
             event,
-            submitted_orders=self._read_submitted_orders(),
+            submitted_orders=submitted_orders,
             bot_order_namespace=self._bot_order_namespace,
         )
         if intent_id is None:
@@ -814,6 +828,18 @@ class BrokerActivityPublisher:
                 },
             )
             return None
+
+        if is_order_rejection_row(row):
+            append_order_rejection_capture(
+                bot_event_wal=self._bot_event_wal,
+                incident_store=self._incident_store,
+                logger=logger,
+                strategy_instance_id=self._strategy_instance_id,
+                run_id=self._current_run_id(),
+                event=event,
+                row=row,
+                intent=intent,
+            )
 
         self._persist_and_broadcast(row)
         return row
@@ -985,6 +1011,12 @@ class BrokerActivityPublisher:
                 "couldn't update broker-activity cursor on sidecar",
                 extra={"strategy_instance_id": self._strategy_instance_id},
             )
+
+    def _current_run_id(self) -> str:
+        envelope = self._sidecar.read()
+        if envelope is not None and envelope.run_id:
+            return envelope.run_id
+        return self._run_dir.name or "unknown-run"
 
     # ── periodic sweep (PR 6 / operator-notice §11) ───────────────────
 

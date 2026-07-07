@@ -619,6 +619,32 @@ def test_on_ib_error_records_unknown_code_for_mirror_diagnostics(
     assert payload["connection_state"] == "connected"
 
 
+def test_on_ib_error_buffers_order_rejection_for_order_stream(
+    settings_paper: IbkrSettings,
+) -> None:
+    client = _client_with_fake_ib(settings_paper)
+
+    client._on_ib_error(42, 201, "Order rejected - insufficient buying power", None)
+
+    buffered = client.drain_order_errors()
+    assert [(req_id, code, message) for req_id, code, message, _ts in buffered] == [
+        (42, 201, "Order rejected - insufficient buying power")
+    ]
+    assert buffered[0][3] > 0
+    assert client.drain_order_errors() == []
+
+
+def test_on_ib_error_does_not_buffer_global_errors_for_order_stream(
+    settings_paper: IbkrSettings,
+) -> None:
+    client = _client_with_fake_ib(settings_paper)
+
+    client._on_ib_error(-1, 201, "Global warning shaped like a rejection", None)
+    client._on_ib_error(0, 1100, "Connectivity lost", None)
+
+    assert client.drain_order_errors() == []
+
+
 # ---------------------------------------------------------------------------
 # Rate-limit for broker-event-log write failures (codex D5). First
 # failure per run logs WARNING; subsequent failures suppress the log
