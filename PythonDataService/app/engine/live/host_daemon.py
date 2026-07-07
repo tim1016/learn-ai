@@ -51,6 +51,12 @@ from app.engine.live.deploy import (
     deploy_run,
     git_head_sha,
 )
+from app.engine.live.desired_state import (
+    DesiredState,
+    DesiredStateCorruptError,
+    DesiredStateRepo,
+    stable_desired_state_path,
+)
 from app.engine.live.host_daemon_bot_events import (
     record_child_crash_launch_failure,
     record_spawn_launch_failure,
@@ -551,6 +557,7 @@ class RunnerProcessManager:
                         "Stop it before starting another run for this instance.",
                     )
 
+            self._enforce_desired_state_allows_start(sid)
             self._enforce_crash_retired_recovery(run_dir)
             command = self._build_start_command(
                 run_dir,
@@ -891,6 +898,26 @@ class RunnerProcessManager:
                 "Reconcile or record an audited recovery override before restarting this binding."
             ),
         )
+
+    def _enforce_desired_state_allows_start(self, strategy_instance_id: str | None) -> None:
+        if not strategy_instance_id:
+            return
+        path = stable_desired_state_path(self.artifacts_root, strategy_instance_id)
+        try:
+            desired_state = DesiredStateRepo(path).read_state()
+        except DesiredStateCorruptError as exc:
+            raise HostRunnerError(
+                status.HTTP_409_CONFLICT,
+                f"desired_state sidecar is unreadable for {strategy_instance_id!r}: {exc}",
+            ) from exc
+        if desired_state is DesiredState.STOPPED:
+            raise HostRunnerError(
+                status.HTTP_409_CONFLICT,
+                (
+                    f"{strategy_instance_id} is durably STOPPED. Resume the bot to clear "
+                    "desired_state=STOPPED before starting or using Deploy & start."
+                ),
+            )
 
     def _git_tracked_under(self, subdir: Path) -> list[str]:
         """Repo-relative POSIX paths of git-tracked files under ``subdir``.

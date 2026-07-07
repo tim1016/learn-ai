@@ -155,7 +155,7 @@ Decision 3 named three guards (broker safety verdict, ownership reconciliation, 
 
 - The shared `ResumeGuardState` resolver lives in `app/services/resume_guard_state.py`. It is consumed by the capability projection (`operator_surface.actions.resume / pause / stop`), the desired-state mutation endpoint (`POST /api/live-instances/{sid}/desired-state` re-runs the resolver immediately before the durable write), and the CLI `cmd_resume` (`app/engine/live/run.py`).
 - The closed reason-code vocabulary is documented in `RESUME_REASON_CODES` and pinned by unit tests.
-- The reason-priority order for the single-line tooltip is `STOPPED_REQUIRES_REDEPLOY → BROKER_SAFETY_UNSAFE → BROKER_SAFETY_UNKNOWN → UNRESOLVED_UNCERTAIN_INTENT → UNCERTAIN_INTENT_STATE_UNKNOWN → RECONCILIATION_*  → REDEPLOY_REQUIRED → ALREADY_RUNNING/PAUSED`. The structured response carries the full list.
+- The reason-priority order for the single-line tooltip is `STOPPED_REQUIRES_REDEPLOY → BROKER_SAFETY_UNSAFE → BROKER_SAFETY_UNKNOWN → UNRESOLVED_UNCERTAIN_INTENT → UNCERTAIN_INTENT_STATE_UNKNOWN → RECONCILIATION_*  → REDEPLOY_REQUIRED → ALREADY_RUNNING/PAUSED`. The structured response carries the full list. `STOPPED_REQUIRES_REDEPLOY` applies to Pause while already STOPPED; Resume is now the operator unlatch that clears the STOPPED desired-state latch after the artifact guards pass.
 - Reconciliation receipts surface as `RECONCILIATION_NOT_AVAILABLE` (honest, informational) until the writer is wired downstream — the resolver does not assume `NOT_AVAILABLE` blocks Resume; a future caller can opt in via `relevant_after_ms` at the mutation boundary.
 
 ### A4. CLI `--force` deleted
@@ -164,14 +164,14 @@ The legacy `--force` flag on `cmd_resume` was deleted. The bot control page cann
 
 ### A5. Intent-state-pair rules
 
-The capability evaluator layers four intent-state rules above the artifact guards:
+The capability evaluator layers intent-state rules above the artifact guards:
 
 - `ALREADY_RUNNING` — Resume refused when current intent is RUNNING.
 - `ALREADY_PAUSED` — Pause refused when current intent is PAUSED.
-- `STOPPED_REQUIRES_REDEPLOY` — Resume / Pause refused when current intent is STOPPED. STOPPED is the retirement state; the revival path is Redeploy (Decision 4).
+- `STOPPED_REQUIRES_REDEPLOY` — Pause refused when current intent is STOPPED. Start / Deploy-and-start are blocked by the host-process code `STOPPED_REQUIRES_RESUME`; Resume is the operator unlatch that writes RUNNING after the artifact guards pass.
 - `REDEPLOY_REQUIRED` — Resume / Pause / Stop refused when the run is poisoned. The poisoned binding is dead; revival is Redeploy.
 
-These rules apply at the capability projection only; the artifact guards apply to the mutation endpoint and the CLI as well. The structural separation keeps the "the CLI does not consult the desired-state pair" rule honest — the CLI sets durable intent; the intent-state-pair rules are bot control-affordance presentation rules.
+These rules apply at the capability projection only; the artifact guards apply to the mutation endpoint and the CLI as well. The structural separation keeps the "the CLI does not consult the desired-state pair" rule honest — the CLI sets durable intent; the intent-state-pair rules are bot control-affordance presentation rules. The exception is the durable STOPPED latch: Resume is explicitly allowed to clear it, while automatic Start is refused until that unlatch occurs.
 
 
 ---

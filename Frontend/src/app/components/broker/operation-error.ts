@@ -1,8 +1,9 @@
 // Operation error model for broker operations (handoff: "excellent error
-// messaging"). The wire stays strings-only (FastAPI `HTTPException(detail=...)`);
-// the frontend derives a category + "what to do next" from the pair it already
-// knows for free — the operation the user invoked × the HTTP status — and NEVER
-// by parsing the backend `detail` string (robust to backend wording drift).
+// messaging"). Legacy FastAPI errors use string `detail`, while newer
+// deterministic preconditions may use a structured `detail` object. For string
+// details, the frontend derives category + remediation from operation × status
+// and never parses backend wording. For structured contracts, it renders the
+// server-authored message/remediation.
 //
 // Status-code semantics the backend uses (ADR 0004/0006):
 //   400 validation · 404 not-found · 409 domain/precondition · 503 infra.
@@ -36,9 +37,9 @@ export interface OperationError {
   category: ErrorCategory;
   /** Short, human "what failed" — derived from (operation, status). */
   title: string;
-  /** The backend's literal `detail` string. Rendered as-is, never parsed. */
+  /** Backend-authored detail text, either from string detail or structured message. */
   detail: string;
-  /** "What to do next" — derived from (operation, status), not from `detail`. */
+  /** "What to do next" from operation/status or a structured server contract. */
   remediation: string;
   /** HTTP status when known; null for a transport/connection failure. */
   status: number | null;
@@ -67,6 +68,14 @@ export interface OutcomeUnknownBody {
   runbook_hint: string;
 }
 
+/** Structured 409 body for deterministic domain/precondition blocks. */
+export interface PreconditionBody {
+  reason_code: string;
+  message: string;
+  remediation?: string;
+  gate_id?: string;
+}
+
 const CATEGORY_BY_STATUS: Record<number, ErrorCategory> = {
   400: 'validation',
   404: 'not-found',
@@ -87,7 +96,7 @@ const OPERATION_LABEL: Record<OperationKind, string> = {
 };
 
 // Remediation keyed on (operation, status). Most-specific cell wins; a generic
-// per-status fallback covers the rest. Backend `detail` is never consulted here.
+// per-status fallback covers the rest. Legacy string `detail` is never parsed.
 const REMEDIATION: Partial<Record<OperationKind, Partial<Record<number, string>>>> = {
   deploy: {
     409: 'A run with these inputs already exists, or the working tree is dirty. Commit or stash the listed paths, then deploy again.',
@@ -207,6 +216,32 @@ export function readOutcomeUnknownBody(body: unknown): OutcomeUnknownBody | null
 }
 
 /**
+ * Recognise structured deterministic 409 bodies such as:
+ * ``{detail: {reason_code, message, remediation?, gate_id?}}``.
+ * Unlike the legacy string-detail path, this shape is an explicit server
+ * contract, so the UI may render the server-authored remediation.
+ */
+export function readPreconditionBody(body: unknown): PreconditionBody | null {
+  if (!body || typeof body !== 'object') return null;
+  const detail = (body as { detail?: unknown }).detail;
+  if (!detail || typeof detail !== 'object') return null;
+  const d = detail as Record<string, unknown>;
+  const reasonCode = d['reason_code'];
+  const message = d['message'];
+  const remediation = d['remediation'];
+  const gateId = d['gate_id'];
+  if (typeof reasonCode !== 'string' || typeof message !== 'string') {
+    return null;
+  }
+  return {
+    reason_code: reasonCode,
+    message,
+    remediation: typeof remediation === 'string' ? remediation : undefined,
+    gate_id: typeof gateId === 'string' ? gateId : undefined,
+  };
+}
+
+/**
  * Normalise an unknown thrown value (typically an Angular `HttpErrorResponse`)
  * into an OperationError. Reads the status and the FastAPI `{detail}` body; the
  * detail is the only thing taken from the wire, and only as the literal line.
@@ -220,6 +255,7 @@ export function toOperationError(operation: OperationKind, err: unknown): Operat
   let status: number | null = null;
   let detail: string;
   let outcomeUnknown: OutcomeUnknownBody | null = null;
+  let precondition: PreconditionBody | null = null;
   if (err instanceof HttpErrorResponse) {
     // status 0 means the request never reached the server (connection refused,
     // CORS, offline) — treat as a transport/infra failure, not a real 0.
@@ -234,10 +270,15 @@ export function toOperationError(operation: OperationKind, err: unknown): Operat
     } else if (body && typeof body === 'object' && typeof (body as { detail?: unknown }).detail === 'string') {
       detail = (body as { detail: string }).detail;
     } else if (body && typeof body === 'object') {
-      const nested = (body as { detail?: unknown }).detail;
-      detail = nested && typeof nested === 'object' && typeof (nested as { message?: unknown }).message === 'string'
-        ? (nested as { message: string }).message
-        : err.message;
+      precondition = status === 409 ? readPreconditionBody(body) : null;
+      if (precondition !== null) {
+        detail = precondition.message;
+      } else {
+        const nested = (body as { detail?: unknown }).detail;
+        detail = nested && typeof nested === 'object' && typeof (nested as { message?: unknown }).message === 'string'
+          ? (nested as { message: string }).message
+          : err.message;
+      }
     } else {
       detail = err.message;
     }
@@ -250,6 +291,11 @@ export function toOperationError(operation: OperationKind, err: unknown): Operat
     return describeOperationError(operation, status, detail, {
       category: 'outcome-unknown',
       remediationOverride: outcomeUnknown.runbook_hint,
+    });
+  }
+  if (precondition !== null) {
+    return describeOperationError(operation, status, detail, {
+      remediationOverride: precondition.remediation,
     });
   }
   return describeOperationError(operation, status, detail);

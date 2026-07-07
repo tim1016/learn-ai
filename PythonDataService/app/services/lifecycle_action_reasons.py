@@ -116,7 +116,11 @@ _ACTION_REASON_COPY: dict[str, tuple[str, str]] = {
     ),
     "STOPPED_REQUIRES_REDEPLOY": (
         "Redeploy required",
-        "This run is stopped. Starting or resuming requires a fresh redeploy.",
+        "This run is dead or retired. Recovery requires a fresh redeploy.",
+    ),
+    "STOPPED_REQUIRES_RESUME": (
+        "Resume required",
+        "This bot is stopped. Use Resume to clear the durable stop latch before starting.",
     ),
     "REDEPLOY_REQUIRED": (
         "Redeploy required",

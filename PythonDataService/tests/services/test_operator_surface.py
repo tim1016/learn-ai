@@ -370,8 +370,8 @@ def test_host_process_start_capability_disabled_per_state(daemon_state: str, wan
 
 
 def test_host_process_start_capability_intent_stopped_overrides_state() -> None:
-    # Permanent retirement via durable STOPPED outranks every per-state
-    # guard, even for a process state that would otherwise be startable.
+    # Durable STOPPED is an operator latch. Automatic Start stays blocked
+    # until Resume clears it, even when the process state is otherwise startable.
     surface = _surface(
         process=InstanceProcessView(state="exited"),
         desired_state=_desired("STOPPED"),
@@ -381,7 +381,7 @@ def test_host_process_start_capability_intent_stopped_overrides_state() -> None:
     assert surface.host_process.state == "EXITED"
     cap = surface.host_process.start_capability
     assert cap.enabled is False
-    assert cap.disabled_reason_code == "STOPPED_REQUIRES_REDEPLOY"
+    assert cap.disabled_reason_code == "STOPPED_REQUIRES_RESUME"
 
 
 def test_host_process_start_capability_poisoned_overrides_state() -> None:

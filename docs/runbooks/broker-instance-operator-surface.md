@@ -207,7 +207,7 @@ The full closed set, source of truth on the server:
   / live-effect codes (`NO_LIVE_BINDING`, `NO_OWNED_POSITIONS`,
   `ALREADY_POISONED`, `ALREADY_STOPPED`, `POSTURE_DEMOTED`).
 - `PythonDataService/app/services/resume_guard_state.py` →
-  `RESUME_REASON_CODES` — Resume / Pause / Stop intent-state codes
+  `RESUME_REASON_CODES` — action intent-state codes
   (`ALREADY_RUNNING`, `ALREADY_PAUSED`, `STOPPED_REQUIRES_REDEPLOY`,
   `REDEPLOY_REQUIRED`), the broker safety identity gate
   (`BROKER_SAFETY_UNSAFE`, `BROKER_SAFETY_UNKNOWN`), the
@@ -216,6 +216,11 @@ The full closed set, source of truth on the server:
   the reconciliation-receipt gate (`RECONCILIATION_*`), and the
   uncertain-intent gate
   (`UNRESOLVED_UNCERTAIN_INTENT`, `UNCERTAIN_INTENT_STATE_UNKNOWN`).
+- `PythonDataService/app/schemas/live_runs.py` →
+  `HostProcessStartDisabledReasonCode` — host-process Start blockers,
+  including `STOPPED_REQUIRES_RESUME` for the durable STOPPED latch.
+  Operators clear that latch with Resume; Redeploy is reserved for
+  staging a new run or recovering a dead/poisoned run.
 
 Deliberately removed (pre-PRD #616 vocabulary): `SAFETY_BLOCK_HALT`,
 `RECONCILE_NOT_WIRED`, `BUSY_VERB_IN_FLIGHT`, `NOT_RUNNING`.

@@ -123,7 +123,7 @@ const OPERATOR_REASON_COPY: Record<OperatorReasonCode, string> = {
   ALREADY_RUNNING: 'Bot is already RUNNING.',
   ALREADY_PAUSED: 'Bot is already PAUSED.',
   STOPPED_REQUIRES_REDEPLOY:
-    'Bot is STOPPED. Resume from STOPPED is a Redeploy, not a desired-state write.',
+    'Bot is STOPPED. Use Resume to clear the stop latch before starting; Pause is a no-op while stopped.',
   REDEPLOY_REQUIRED: 'This run is dead (poisoned). Redeploy to recover.',
 };
 

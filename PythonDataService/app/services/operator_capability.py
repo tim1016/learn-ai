@@ -15,9 +15,10 @@ server" design.  Resume, Pause, and Stop now consume the shared
 - ``resume`` is refused when the broker safety verdict is UNSAFE /
   UNKNOWN, when an uncertain intent is present / unknown, when the
   reconciliation receipt has failed / gone stale / is unreadable, OR
-  when the current durable intent is already RUNNING (no-op) or
-  STOPPED (revival requires Redeploy per ADR-0010 §4) or the run is
-  poisoned (``REDEPLOY_REQUIRED``).
+  when the current durable intent is already RUNNING (no-op) or the run
+  is poisoned (``REDEPLOY_REQUIRED``). When durable intent is STOPPED,
+  Resume is the explicit operator unlatch that writes RUNNING after the
+  same artifact guards pass.
 - ``pause`` is refused symmetrically: ``ALREADY_PAUSED`` when current
   intent is PAUSED, ``STOPPED_REQUIRES_REDEPLOY`` when STOPPED.  The
   broker-safety / reconciliation / uncertain-intent guards do NOT
@@ -263,8 +264,6 @@ def evaluate_action(
         # broker / WAL condition.
         if intent == "RUNNING":
             reasons.append("ALREADY_RUNNING")
-        if intent == "STOPPED":
-            reasons.append("STOPPED_REQUIRES_REDEPLOY")
         if poisoned:
             reasons.append("REDEPLOY_REQUIRED")
         # Artifact guards (broker safety verdict, reconciliation,

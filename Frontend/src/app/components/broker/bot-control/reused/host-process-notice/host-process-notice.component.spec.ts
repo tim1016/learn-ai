@@ -194,7 +194,8 @@ describe('HostProcessNoticeComponent — Start bot process button', () => {
     ['ALREADY_RUNNING', 'already running'],
     ['STOPPING', 'shutting down'],
     ['HOST_SERVICE_OFFLINE', 'bot service is offline'],
-    ['STOPPED_REQUIRES_REDEPLOY', 'permanently stopped'],
+    ['STOPPED_REQUIRES_RESUME', 'use resume'],
+    ['STOPPED_REQUIRES_REDEPLOY', 'dead or retired'],
     ['START_SETTINGS_INCOMPLETE', 'saved start settings are incomplete'],
   ] as const)('maps disabled_reason_code %s to trader copy', (code, fragment) => {
     const { el } = render({
@@ -235,6 +236,30 @@ describe('HostProcessNoticeComponent — Start bot process button', () => {
     await new Promise<void>((r) => setTimeout(r, 0));
     const errMsg = el.querySelector('[data-testid="host-process-start-error"]');
     expect(errMsg?.textContent ?? '').toContain('host daemon unreachable');
+  });
+
+  it('shows structured precondition messages when a stale Start click is rejected', async () => {
+    const err = new HttpErrorResponse({
+      error: {
+        detail: {
+          reason_code: 'STOPPED_REQUIRES_RESUME',
+          message: 'spy_ema_paper is durably STOPPED. Resume the bot to clear the stop latch.',
+          remediation: 'Use Resume to set desired_state=RUNNING, then start the bot.',
+          gate_id: 'desired_state.start',
+        },
+      },
+      status: 409,
+    });
+    const { el } = render({
+      hostProcess: host({ start_capability: ENABLED_CAP }),
+      startError: err,
+    });
+    const btn = el.querySelector<HTMLButtonElement>('[data-testid="host-process-start-button"]');
+    btn?.click();
+    await new Promise<void>((r) => setTimeout(r, 0));
+    const errMsg = el.querySelector('[data-testid="host-process-start-error"]');
+    expect(errMsg?.textContent ?? '').toContain('durably STOPPED');
+    expect(errMsg?.textContent ?? '').toContain('Resume the bot');
   });
 
   it('does not call the service when start_capability is disabled', async () => {

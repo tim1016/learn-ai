@@ -1,6 +1,11 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { describe, expect, it } from 'vitest';
-import { describeOperationError, readOutcomeUnknownBody, toOperationError } from './operation-error';
+import {
+  describeOperationError,
+  readOutcomeUnknownBody,
+  readPreconditionBody,
+  toOperationError,
+} from './operation-error';
 
 describe('describeOperationError', () => {
   it('maps a 409 deploy to a precondition with deploy-specific remediation', () => {
@@ -157,6 +162,45 @@ describe('toOperationError', () => {
     });
 
     expect(parsed).toBeNull();
+  });
+
+  it('parses structured deterministic precondition bodies', () => {
+    const parsed = readPreconditionBody({
+      detail: {
+        reason_code: 'STOPPED_REQUIRES_RESUME',
+        message: 'DIagVal6 is durably STOPPED.',
+        remediation: 'Use Resume to clear the stop latch.',
+        gate_id: 'desired_state.start',
+      },
+    });
+
+    expect(parsed).toEqual({
+      reason_code: 'STOPPED_REQUIRES_RESUME',
+      message: 'DIagVal6 is durably STOPPED.',
+      remediation: 'Use Resume to clear the stop latch.',
+      gate_id: 'desired_state.start',
+    });
+  });
+
+  it('uses server-authored remediation for structured precondition bodies', () => {
+    const err = new HttpErrorResponse({
+      status: 409,
+      error: {
+        detail: {
+          reason_code: 'STOPPED_REQUIRES_RESUME',
+          message: 'DIagVal6 is durably STOPPED. Resume the bot to clear the stop latch.',
+          remediation: 'Use Resume to set desired_state=RUNNING, then start the bot.',
+          gate_id: 'desired_state.start',
+        },
+      },
+    });
+
+    const e = toOperationError('deploy', err);
+
+    expect(e.category).toBe('precondition');
+    expect(e.detail).toBe('DIagVal6 is durably STOPPED. Resume the bot to clear the stop latch.');
+    expect(e.remediation).toBe('Use Resume to set desired_state=RUNNING, then start the bot.');
+    expect(e.remediation).not.toContain('working tree is dirty');
   });
 
   it('falls back to the legacy string-detail path when the 409 body is not OUTCOME_UNKNOWN', () => {
