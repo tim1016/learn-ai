@@ -78,6 +78,35 @@ def test_append_multiple_incidents(tmp_path: Path) -> None:
     assert len(files) == 2
 
 
+def test_append_unless_resolved_replaces_unresolved_incident(tmp_path: Path) -> None:
+    store = IncidentStore(tmp_path)
+    store.append(_make_incident("inc-1", started_at_ms=1_700_000_000_000))
+    replacement = _make_incident("inc-1", started_at_ms=1_700_000_100_000)
+
+    authoritative = store.append_unless_resolved(replacement)
+
+    assert authoritative == replacement
+    loaded = store.list_unresolved()
+    assert len(loaded) == 1
+    assert loaded[0].started_at_ms == 1_700_000_100_000
+
+
+def test_append_unless_resolved_preserves_resolved_incident(tmp_path: Path) -> None:
+    store = IncidentStore(tmp_path)
+    resolved = _make_incident(
+        "inc-1",
+        started_at_ms=1_700_000_000_000,
+        resolved_at_ms=1_700_000_050_000,
+    )
+    replacement = _make_incident("inc-1", started_at_ms=1_700_000_100_000)
+    store.append(resolved)
+
+    authoritative = store.append_unless_resolved(replacement)
+
+    assert authoritative == resolved
+    assert store.list_unresolved() == []
+
+
 # ---------------------------------------------------------------------------
 # resolve
 # ---------------------------------------------------------------------------

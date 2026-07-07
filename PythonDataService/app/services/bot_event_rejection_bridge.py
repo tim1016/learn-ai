@@ -2,17 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 
 from app.broker.ibkr.event_codes import IBKR_CODE_MEANINGS
 from app.broker.ibkr.models import IbkrOrderEvent
 from app.operator.incidents.store import IncidentStore
-from app.operator.notices.schema import (
-    OperatorIncident,
-    OperatorNotice,
-    OperatorNoticeAction,
-)
+from app.operator.notices.schema import OperatorIncident
 from app.schemas.bot_events import (
     BotEventIdentity,
     BotEventRaw,
@@ -24,6 +19,11 @@ from app.schemas.bot_events import (
     TerminalErrorSource,
 )
 from app.schemas.broker_activity import BrokerActivityRow, ReasonCode
+from app.services.bot_event_incidents import (
+    append_terminal_incident,
+    build_terminal_incident,
+    terminal_incident_id,
+)
 from app.services.bot_event_wal import BotEventRawWal
 from app.services.broker_activity_reconciler import EngineIntent, parse_order_ref
 
@@ -90,75 +90,22 @@ def append_order_rejection_capture(
             },
         )
         return
-    incident_store.append(build_order_rejected_incident(raw_event))
+    append_terminal_incident(incident_store, raw_event)
 
 
 def build_order_rejected_incident(raw_event: BotEventRaw) -> OperatorIncident:
-    terminal_error = raw_event.terminal_error
-    if terminal_error is None:
-        raise ValueError("order rejection incident requires terminal_error")
-    identity = raw_event.identity
-    incident_id = order_rejected_incident_id(
-        IncidentDedupeKey(
-            strategy_instance_id=raw_event.strategy_instance_id,
-            terminal_code=TerminalErrorCode.ORDER_REJECTED,
-            order_ref=identity.order_ref,
-            evaluation_id=identity.evaluation_id,
-            req_id=identity.req_id,
-            order_id=identity.order_id,
-            perm_id=identity.perm_id,
-        )
-    )
-    external_message = terminal_error.external_message or terminal_error.message
-    return OperatorIncident(
-        incident_id=incident_id,
-        category="order",
-        notice=OperatorNotice(
-            code="order.rejected",
-            tier="critical",
-            title="IBKR rejected the order",
-            message=(
-                "IBKR rejected an order from this bot. Review the broker "
-                f"message before retrying: {external_message}"
-            ),
-            source_codes=[str(terminal_error.external_code)]
-            if terminal_error.external_code is not None
-            else [],
-            forensic_facts={
-                "bot_event_seq": raw_event.seq,
-                "order_ref": identity.order_ref,
-                "req_id": identity.req_id,
-                "order_id": identity.order_id,
-                "perm_id": identity.perm_id,
-                "external_code": terminal_error.external_code,
-                "external_message": terminal_error.external_message,
-            },
-            action=OperatorNoticeAction(
-                kind="external_manual_check",
-                label="Review in IBKR",
-                target="ibkr_order_rejection",
-            ),
-            runbook_slug="ibkr-order-rejection",
-            occurred_at_ms=raw_event.ts_ms,
-        ),
-        started_at_ms=raw_event.ts_ms,
-        evidence={
-            "bot_event_seq": raw_event.seq,
-            "strategy_instance_id": raw_event.strategy_instance_id,
-            "run_id": raw_event.run_id,
-            "order_ref": identity.order_ref,
-            "req_id": identity.req_id,
-            "order_id": identity.order_id,
-            "perm_id": identity.perm_id,
-            "terminal_code": terminal_error.code.value,
-        },
-    )
+    if (
+        raw_event.terminal_error is None
+        or raw_event.terminal_error.code is not TerminalErrorCode.ORDER_REJECTED
+    ):
+        raise ValueError("order rejection incident requires order_rejected terminal_error")
+    return build_terminal_incident(raw_event)
 
 
 def order_rejected_incident_id(key: IncidentDedupeKey) -> str:
-    raw = key.model_dump_json()
-    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
-    return f"order-rejected-{digest}"
+    if key.terminal_code is not TerminalErrorCode.ORDER_REJECTED:
+        raise ValueError("order rejection incident id requires order_rejected terminal code")
+    return terminal_incident_id(key)
 
 
 def _identity(

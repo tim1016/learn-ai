@@ -47,6 +47,23 @@ class IncidentStore:
         path = self._dir / f"{incident.incident_id}.json"
         return _atomic_write(path, incident.model_dump_json())
 
+    def append_unless_resolved(self, incident: OperatorIncident) -> OperatorIncident:
+        """Persist ``incident`` unless a resolved copy already exists.
+
+        Returns the incident that remains authoritative on disk.
+        """
+        self._dir.mkdir(parents=True, exist_ok=True)
+        path = self._dir / f"{incident.incident_id}.json"
+        with _file_lock(path):
+            if path.exists():
+                existing = OperatorIncident.model_validate_json(
+                    path.read_text(encoding="utf-8")
+                )
+                if existing.resolved_at_ms is not None:
+                    return existing
+            _atomic_write_locked(path, incident.model_dump_json())
+        return incident
+
     def resolve(self, incident_id: str, resolved_at_ms: int) -> None:
         """Read, patch ``resolved_at_ms``, and atomically re-write the incident.
 
