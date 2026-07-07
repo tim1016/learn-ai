@@ -7,6 +7,7 @@ import {
   activityProjectionForDisplay,
   activityRefreshKeyForStatus,
   cachedActivityForRequest,
+  openOrderClustersForProjection,
 } from './activity-tab.component';
 
 function controlPlane(
@@ -347,5 +348,69 @@ describe('activityProjectionForDisplay', () => {
       resolution: '1m',
       refreshKey: 123_456,
     })).toBe(nextProjection);
+  });
+});
+
+describe('openOrderClustersForProjection', () => {
+  it('keeps only working/pending order clusters so resolved outcomes do not duplicate the stream tail', () => {
+    const projection = activityProjection({
+      orders_today: [
+        {
+          order_key: 'active',
+          symbol: 'SPY',
+          side: 'BUY',
+          quantity: 1,
+          order_type: 'MKT',
+          status: 'submitted',
+          group: 'active',
+          chart_ts_ms: 1_700_000_000_000,
+          submitted_ts_ms: 1_700_000_000_000,
+          last_update_ts_ms: 1_700_000_001_000,
+          filled_quantity: 0,
+          avg_fill_price: null,
+          position_effect: null,
+          replay_count: 1,
+          evidence: [],
+        },
+        {
+          order_key: 'pending',
+          symbol: 'SPY',
+          side: 'SELL',
+          quantity: 1,
+          order_type: 'MKT',
+          status: 'engine pending',
+          group: 'engine_pending',
+          chart_ts_ms: 1_700_000_002_000,
+          submitted_ts_ms: 1_700_000_002_000,
+          last_update_ts_ms: 1_700_000_002_000,
+          filled_quantity: 0,
+          avg_fill_price: null,
+          position_effect: null,
+          replay_count: 1,
+          evidence: [],
+        },
+        {
+          order_key: 'resolved',
+          symbol: 'SPY',
+          side: 'BUY',
+          quantity: 1,
+          order_type: 'MKT',
+          status: 'filled',
+          group: 'resolved',
+          chart_ts_ms: 1_700_000_003_000,
+          submitted_ts_ms: 1_700_000_003_000,
+          last_update_ts_ms: 1_700_000_004_000,
+          filled_quantity: 1,
+          avg_fill_price: 420,
+          position_effect: 'Open long',
+          replay_count: 1,
+          evidence: [],
+        },
+      ],
+    });
+
+    expect(openOrderClustersForProjection(projection).map((row) => row.order_key))
+      .toEqual(['active', 'pending']);
+    expect(openOrderClustersForProjection(null)).toEqual([]);
   });
 });

@@ -28,7 +28,10 @@ interface GroupedRows {
 }
 
 /**
- * Broker-activity table — the canonical Activity-tab surface per ADR 0014.
+ * Broker-tail projection — the secondary Activity-tab view for broker-side
+ * rows. The Bot event stream owns the historical lifecycle narrative; this
+ * table keeps the CP-Trades-style broker facts available without becoming a
+ * separate lifecycle truth surface.
  *
  * Render-only. Consumes a list of backend-authored ``BrokerActivityRow``
  * records (supplied by the parent, which owns the SSE / REST stream)

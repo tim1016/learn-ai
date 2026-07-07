@@ -8,13 +8,13 @@
     />
   </section>
 
-  <section class="subsection full-row" data-testid="activity-bot-event-stream" aria-label="Bot event stream">
+  <section class="subsection full-row" data-testid="activity-bot-event-stream">
     <app-bot-event-stream [runId]="chartRunId()" />
   </section>
 
   <section
     class="subsection chart-panel"
-    [class.full-row]="ordersToday().length === 0"
+    [class.full-row]="openOrderClusters().length === 0"
     data-testid="activity-trade-chart"
     aria-label="Trade chart"
   >
@@ -27,13 +27,13 @@
     />
   </section>
 
-  @if (ordersToday().length > 0) {
-    <section class="subsection orders-panel" data-testid="activity-orders-today" aria-label="Orders Today">
-      <app-working-pending-orders-section [orders]="ordersToday()" />
+  @if (openOrderClusters().length > 0) {
+    <section class="subsection orders-panel" data-testid="activity-orders-today">
+      <app-working-pending-orders-section [orders]="openOrderClusters()" />
     </section>
   }
 
-  <section class="subsection full-row" data-testid="activity-broker-activity" aria-label="Broker activity">
+  <section class="subsection full-row" data-testid="activity-broker-activity">
     <app-broker-activity-table
       [rows]="[]"
       [eventRows]="brokerEventRows()"

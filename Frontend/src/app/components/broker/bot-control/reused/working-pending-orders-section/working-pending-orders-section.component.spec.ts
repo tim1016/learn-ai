@@ -12,8 +12,8 @@ function order(overrides: Partial<ActivityOrderRow> = {}): ActivityOrderRow {
     side: 'BUY',
     quantity: 1,
     order_type: 'MKT',
-    status: 'filled',
-    group: 'resolved',
+    status: 'submitted',
+    group: 'active',
     chart_ts_ms: 1_700_000_000_000,
     submitted_ts_ms: 1_700_000_000_000,
     last_update_ts_ms: 1_700_000_060_000,
@@ -45,7 +45,7 @@ describe('WorkingPendingOrdersSectionComponent', () => {
     expect(el.querySelector('[data-testid="orders-today"]')).toBeNull();
   });
 
-  it('renders active, engine-pending, and resolved groups from backend-authored group values', () => {
+  it('renders active and engine-pending groups from backend-authored group values', () => {
     const el = render([
       order({ order_key: 'active', group: 'active', status: 'submitted', symbol: 'AAPL' }),
       order({ order_key: 'pending', group: 'engine_pending', status: 'engine pending', symbol: 'SPY' }),
@@ -53,13 +53,21 @@ describe('WorkingPendingOrdersSectionComponent', () => {
     ]);
 
     const text = el.textContent ?? '';
-    expect(text).toContain('ORDERS TODAY');
+    expect(text).toContain('ORDER CLUSTERS');
     expect(text).toContain('Active');
     expect(text).toContain('Engine pending');
-    expect(text).toContain('Resolved');
     expect(text).toContain('AAPL');
     expect(text).toContain('SPY');
-    expect(text).toContain('TSLA');
+    expect(text).not.toContain('Resolved');
+    expect(text).not.toContain('TSLA');
+  });
+
+  it('renders nothing when every order is already resolved into the stream tail', () => {
+    const el = render([
+      order({ order_key: 'resolved', group: 'resolved', status: 'filled', symbol: 'TSLA' }),
+    ]);
+
+    expect(el.querySelector('[data-testid="orders-today"]')).toBeNull();
   });
 
   it('renders position effect and replay count from the projection', () => {
@@ -78,7 +86,7 @@ describe('WorkingPendingOrdersSectionComponent', () => {
     expect(text).toContain('seen 3x');
   });
 
-  it('uses the compact Orders Today columns for the monitor side panel', () => {
+  it('uses the compact open-order columns for the monitor side panel', () => {
     const el = render([order()]);
     const headers = Array.from(el.querySelectorAll('th')).map((th) => th.textContent?.trim());
 

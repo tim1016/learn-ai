@@ -6,7 +6,7 @@ import { fmtNumber, fmtTimestampLocal } from '../../../format';
 
 import type { ActivityOrderRow } from '../bot-trade-chart-card/bot-trade-chart-card.types';
 
-type OrderGroup = 'active' | 'engine_pending' | 'resolved';
+type OrderGroup = 'active' | 'engine_pending';
 
 const QUANTITY = new Intl.NumberFormat('en-US', {
   minimumFractionDigits: 0,
@@ -18,10 +18,14 @@ interface OrderDisplay {
   chartTs: string;
 }
 
+export function isOpenOrderClusterRow(row: ActivityOrderRow): boolean {
+  return row.group === 'active' || row.group === 'engine_pending';
+}
+
 /**
- * Orders Today — same-day broker order blotter rendered from the
- * backend-materialized Activity projection. Active, engine-pending, and
- * resolved orders are separated by server-authored group values.
+ * Open order clusters — same-day working/pending order projection rendered
+ * from the backend-materialized Activity projection. Resolved broker outcomes
+ * belong in the historical stream / broker-tail projection, not this panel.
  *
  * Render-only. The frontend formats numbers/timestamps and groups rows
  * by the backend-provided group; it does not infer order lifecycle state.
@@ -38,6 +42,7 @@ export class WorkingPendingOrdersSectionComponent {
 
   readonly displayRows = computed<OrderDisplay[]>(() =>
     this.orders()
+      .filter(isOpenOrderClusterRow)
       .map((row) => ({
         row,
         chartTs: fmtTimestampLocal(row.chart_ts_ms),
@@ -48,7 +53,6 @@ export class WorkingPendingOrdersSectionComponent {
   readonly hasOrders = computed<boolean>(() => this.displayRows().length > 0);
   readonly activeRows = computed<OrderDisplay[]>(() => this.rowsFor('active'));
   readonly enginePendingRows = computed<OrderDisplay[]>(() => this.rowsFor('engine_pending'));
-  readonly resolvedRows = computed<OrderDisplay[]>(() => this.rowsFor('resolved'));
 
   readonly fmtNumber = fmtNumber;
 
