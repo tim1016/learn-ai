@@ -63,19 +63,16 @@ def _minimal_spec_dict(**overrides) -> dict:
     return base
 
 
-def test_strategy_spec_client_id_rejects_out_of_range() -> None:
-    """spec.client_id is bounded to IbkrSettings' range so a malformed
-    spec fails at load with a clear error rather than constructing an
-    out-of-range IbkrClient that only fails later at Gateway connect
-    (PR #377 Codex P2)."""
+def test_strategy_spec_rejects_client_id() -> None:
+    """IBKR client IDs are runtime infrastructure, not strategy spec state."""
     with pytest.raises(ValidationError):
         StrategySpec.model_validate(_minimal_spec_dict(client_id=-1))
     with pytest.raises(ValidationError):
         StrategySpec.model_validate(_minimal_spec_dict(client_id=2**31))
+    with pytest.raises(ValidationError):
+        StrategySpec.model_validate(_minimal_spec_dict(client_id=11))
 
-    # In-range values and omission both validate.
-    assert StrategySpec.model_validate(_minimal_spec_dict(client_id=11)).client_id == 11
-    assert StrategySpec.model_validate(_minimal_spec_dict()).client_id is None
+    assert StrategySpec.model_validate(_minimal_spec_dict()).model_extra is None
 
 
 def test_strategy_spec_bar_source_defaults_to_live_runtime_source() -> None:

@@ -74,6 +74,13 @@ class RunStatusSidecar(BaseModel):
     # PRD #619-A — capability evidence.
     submit_mode_at_start: Literal["live_paper", "shadow"] | None = None
     readonly_at_start: bool | None = None
+    # Startup/runtime failure evidence. ``exit_reason=exception`` is too coarse
+    # for the cockpit to author a useful remedy; typed fields let the operator
+    # surface say e.g. "IBKR client ID is already in use" instead of collapsing
+    # into a generic reconcile prompt.
+    exit_error_code: str | None = None
+    exit_error_message: str | None = None
+    exit_error_detail: dict[str, Any] = Field(default_factory=dict)
 
 
 class LiveRunSummary(BaseModel):
@@ -265,6 +272,7 @@ class HostRunnerProcessStatus(BaseModel):
     # belongs to. None for legacy runs with no ledger binding.
     strategy_instance_id: str | None = None
     pid: int | None = None
+    ibkr_client_id: int | None = Field(default=None, ge=0)
     started_at_ms: int | None = None
     ended_at_ms: int | None = None
     exit_code: int | None = None
@@ -811,6 +819,7 @@ class InstanceProcessView(BaseModel):
 
     state: str  # running | stopping | exited | idle | unreachable
     pid: int | None = None
+    ibkr_client_id: int | None = Field(default=None, ge=0)
     bound_run_id: str | None = None
     started_at_ms: int | None = None
 
@@ -1012,6 +1021,9 @@ class InstanceLastExit(BaseModel):
     ended_at_ms: int | None = None
     exit_code: int | None = None
     exit_reason: ExitReason | None = None
+    exit_error_code: str | None = None
+    exit_error_message: str | None = None
+    exit_error_detail: dict[str, Any] = Field(default_factory=dict)
     # From indicator_state_hydration.json, when the run wrote one. ``accepted``
     # False with ``failure_reason="missing"`` is the cold-start/seed-day case.
     hydration_accepted: bool | None = None
@@ -1490,6 +1502,12 @@ class OperatorSurfaceHostProcess(BaseModel):
     # transform this string. ADR 0013 amendment 2026-06-22; design doc
     # "Deployment-model decision".
     copyable_command: str | None = None
+    # Typed last-exit evidence promoted from ``run_status.json``. This lets the
+    # operator surface keep broker-startup failures specific after the process
+    # has already exited.
+    last_exit_error_code: str | None = None
+    last_exit_error_message: str | None = None
+    last_exit_error_detail: dict[str, Any] = Field(default_factory=dict)
     # Per-instance Start-bot-process button. Always present so the cockpit
     # can render a disabled state with a server-authored reason.
     start_capability: HostProcessStartCapability

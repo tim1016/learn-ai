@@ -73,6 +73,9 @@ function status(): LiveInstanceStatus {
         state: 'IDLE',
         notice: null,
         copyable_command: null,
+        last_exit_error_code: null,
+        last_exit_error_message: null,
+        last_exit_error_detail: {},
         start_capability: {
           enabled: false,
           run_id: null,

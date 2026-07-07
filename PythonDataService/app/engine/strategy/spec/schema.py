@@ -440,21 +440,16 @@ class StrategySpec(BaseModel):
     diagnostics: Diagnostics = Field(default_factory=Diagnostics)
 
     # ── Live-runtime / deployment fields (PRD-A §16) ──────────────────
-    # All optional with defaults so existing specs validate unchanged and
-    # the spec-driven evaluator (backtests / research) ignores them. They
-    # are consumed only by the live runtime.
+    # All optional with defaults so strategy evaluation remains focused on
+    # signals/positions. They are consumed only by the live runtime.
     #
-    # ``client_id`` pins the IBKR Gateway clientId for this strategy
-    # instance so two strategies never collide on one Gateway (§16.3).
     # ``submit_mode`` enters the hashed live_config, so live_paper and
     # shadow deterministically produce different run_ids — "graduation
     # requires a new ledger" for free (ADR 0002). ``bar_source_descriptor``
     # is stamped on every decision row (Layer B baseline). ``decision_columns``
     # declares the strategy-specific decision-row schema (Resolution 5).
-    # Bounds match IbkrSettings.client_id (config.py) so a malformed spec
-    # is rejected at load time with a clear error, rather than constructing
-    # an out-of-range IbkrClient that only fails later at Gateway connect.
-    client_id: int | None = Field(default=None, ge=0, le=2**31 - 1)
+    # IBKR Gateway clientId is deliberately absent: it is deployment/runtime
+    # infrastructure assigned per process by the host daemon or environment.
     submit_mode: Literal["live_paper", "shadow"] = "live_paper"
     bar_source_descriptor: LiveBarSourceDescriptor = SUPPORTED_LIVE_RUNTIME_BAR_SOURCE
     decision_columns: list[DecisionColumnSpec] = Field(default_factory=list)

@@ -2487,13 +2487,14 @@ def test_connect_failure_writes_terminal_status_and_exits_3(tmp_path: Path) -> N
     import json as _json
     from collections.abc import AsyncIterator
 
+    from app.broker.ibkr.client import IbkrClientIdInUseError
     from app.engine.live.run import cmd_start
     from app.engine.live.run_ledger import build_ledger, write_ledger
     from tests.engine.live.fixtures.fake_broker import FakeBroker
 
     class _ConnectFailsClient:
         async def connect(self) -> None:
-            raise RuntimeError("client id 12 is already in use by another session")
+            raise IbkrClientIdInUseError(client_id=12, host="127.0.0.1", port=4002)
 
         async def disconnect(self) -> None:  # pragma: no cover - never reached
             pass
@@ -2539,6 +2540,12 @@ def test_connect_failure_writes_terminal_status_and_exits_3(tmp_path: Path) -> N
     status = _json.loads((run_dir / "run_status.json").read_text())
     assert status["exit_reason"] == "exception"
     assert status["exit_code"] == 3
+    assert status["exit_error_code"] == "IBKR_CLIENT_ID_IN_USE"
+    assert status["exit_error_detail"] == {
+        "client_id": 12,
+        "host": "127.0.0.1",
+        "port": 4002,
+    }
     # Terminal record written — not blank (stuck 'starting').
     assert status["ended_at_ms"] is not None
 
@@ -2840,22 +2847,17 @@ def test_start_returns_2_when_strategy_module_unknown(tmp_path: Path, capsys: py
     assert "is not registered" in err
 
 
-def test_make_ibkr_client_pins_spec_client_id() -> None:
-    """A spec-declared client_id pins the Gateway clientId so two
-    strategies never collide on one Gateway (PR #376 P2 / §16.3).
-
-    Before the fix, cmd_start created IbkrClient() unconditionally and the
-    spec's client_id was inert — the run used the env/default clientId
-    even though the ledger pinned a different one.
-    """
+def test_make_ibkr_client_uses_runtime_client_id_not_strategy_spec() -> None:
+    """Gateway clientId is runtime infrastructure, not StrategySpec behavior."""
     from app.engine.live.run import _make_ibkr_client
 
-    pinned = _make_ibkr_client(11)
-    assert pinned.settings.client_id == 11
+    runtime_pinned = _make_ibkr_client(73)
+    assert runtime_pinned.settings.client_id == 73
 
-    # Omitted (None) ⇒ fall back to the env/default clientId, not 11.
-    fallback = _make_ibkr_client(None)
-    assert fallback.settings.client_id != 11
+    # Omitted ⇒ fall back to the env/default clientId. StrategySpec loading is
+    # not part of this helper and cannot silently pin the broker session id.
+    fallback = _make_ibkr_client()
+    assert fallback.settings.client_id != 73
 
 
 # ─────────────── Phase 1 / VCR-0001 — cmd_start refusal ──────────────

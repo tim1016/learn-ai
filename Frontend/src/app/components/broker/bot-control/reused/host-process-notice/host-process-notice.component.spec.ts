@@ -53,6 +53,9 @@ function host(overrides: Partial<OperatorSurfaceHostProcess> = {}): OperatorSurf
     copyable_command: null,
     start_capability: DISABLED_CAP_INCOMPLETE,
     ...overrides,
+    last_exit_error_code: overrides.last_exit_error_code ?? null,
+    last_exit_error_message: overrides.last_exit_error_message ?? null,
+    last_exit_error_detail: overrides.last_exit_error_detail ?? {},
   };
 }
 

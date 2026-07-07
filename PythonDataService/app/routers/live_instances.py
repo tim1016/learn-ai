@@ -302,14 +302,31 @@ def _interpret_daemon_process(daemon: dict | None, root: Path) -> tuple[Instance
     run_id = daemon.get("run_id")
     pid = daemon.get("pid")
     started = daemon.get("started_at_ms")
+    raw_client_id = daemon.get("ibkr_client_id")
+    ibkr_client_id = raw_client_id if isinstance(raw_client_id, int) else None
     if state in _LIVE_STATES and run_id:
         run_dir = root / run_id
         binding = LiveBinding(run_id=run_id, run_dir=str(run_dir) if run_dir.is_dir() else None)
-        view = InstanceProcessView(state=state, pid=pid, bound_run_id=run_id, started_at_ms=started)
+        view = InstanceProcessView(
+            state=state,
+            pid=pid,
+            ibkr_client_id=ibkr_client_id,
+            bound_run_id=run_id,
+            started_at_ms=started,
+        )
         return view, binding
     # exited / idle: a run id may be present (the run that just exited) but it is
     # not a live binding.
-    return InstanceProcessView(state=state, pid=pid, bound_run_id=run_id, started_at_ms=started), None
+    return (
+        InstanceProcessView(
+            state=state,
+            pid=pid,
+            ibkr_client_id=ibkr_client_id,
+            bound_run_id=run_id,
+            started_at_ms=started,
+        ),
+        None,
+    )
 
 
 def _visible_live_run_dir(root: Path, live_binding: LiveBinding) -> Path | None:
@@ -1975,6 +1992,9 @@ def _instance_last_exit(runs: list[dict]) -> InstanceLastExit | None:
         ended_at_ms=sidecar.ended_at_ms,
         exit_code=sidecar.exit_code,
         exit_reason=sidecar.exit_reason,
+        exit_error_code=sidecar.exit_error_code,
+        exit_error_message=sidecar.exit_error_message,
+        exit_error_detail=sidecar.exit_error_detail,
         hydration_accepted=hydration_accepted,
         hydration_failure_reason=hydration_failure_reason,
         halt_trigger=halt_trigger,

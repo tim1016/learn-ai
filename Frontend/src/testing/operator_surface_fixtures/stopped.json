@@ -252,6 +252,9 @@
   "execution": null,
   "host_process": {
     "copyable_command": null,
+    "last_exit_error_code": null,
+    "last_exit_error_detail": {},
+    "last_exit_error_message": null,
     "notice": "The host is reachable but this bot has no active process. Start it to resume trading.",
     "start_capability": {
       "disabled_reason_code": "START_SETTINGS_INCOMPLETE",
