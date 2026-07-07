@@ -89,7 +89,7 @@ def _params(repo: Path, spec: Path, qc: Path, run_root: Path, **overrides: objec
 
 def _deployment_validation_spec(repo: Path) -> Path:
     spec = repo / "PythonDataService" / "deployment_validation.spec.json"
-    spec.write_text('{"strategy": "deployment_validation"}', encoding="utf-8")
+    spec.write_text('{"name": "Deployment Validation"}', encoding="utf-8")
     subprocess.run(
         ["git", "add", "PythonDataService/deployment_validation.spec.json"],
         cwd=repo,
@@ -351,6 +351,34 @@ def test_deploy_run_rejects_empty_action_plan_for_deployment_validation(
                 qc,
                 run_root,
                 strategy_key="deployment_validation",
+                live_config={
+                    "symbol": "SPY",
+                    "sizing": {"kind": "FixedShares", "value": 1},
+                    "action": {"on_enter": [], "on_exit": []},
+                },
+            )
+        )
+
+    assert exc_info.value.reason_code == "ACTION_PLAN_EMPTY"
+    assert not run_root.exists()
+
+
+@requires_git
+def test_deploy_run_resolves_action_plan_gate_from_spec_name(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    repo, _spec, qc = repo_with_inputs
+    spec = _deployment_validation_spec(repo)
+    run_root = tmp_path / "live_runs"
+
+    with pytest.raises(ActionPlanReadinessError) as exc_info:
+        deploy_run(
+            _params(
+                repo,
+                spec,
+                qc,
+                run_root,
+                strategy_key="",
                 live_config={
                     "symbol": "SPY",
                     "sizing": {"kind": "FixedShares", "value": 1},

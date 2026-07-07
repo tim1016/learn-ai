@@ -311,9 +311,29 @@ def enforce_supported_strategy_bar_source(strategy_spec_path: Path) -> dict:
     return payload
 
 
+def _registered_strategy_key_for_display_name(display_name: str) -> str:
+    normalized = display_name.strip().casefold()
+    if not normalized:
+        return ""
+    try:
+        from app.routers.engine import _STRATEGY_REGISTRY
+    except Exception:
+        return ""
+    for strategy_key, registration in _STRATEGY_REGISTRY.items():
+        if getattr(registration, "display_name", "").strip().casefold() == normalized:
+            return strategy_key
+    return ""
+
+
 def _strategy_key_from_spec(payload: dict) -> str:
-    strategy = payload.get("strategy")
-    return strategy if isinstance(strategy, str) else ""
+    for key in ("strategy_key", "strategy"):
+        strategy = payload.get(key)
+        if isinstance(strategy, str) and strategy.strip():
+            return strategy.strip()
+    name = payload.get("name")
+    if isinstance(name, str):
+        return _registered_strategy_key_for_display_name(name)
+    return ""
 
 
 def _existing_run_for_strategy_instance(
