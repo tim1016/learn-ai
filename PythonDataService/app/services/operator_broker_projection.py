@@ -50,6 +50,8 @@ _BROKER_DISCONNECTED_STATES: frozenset[BrokerConnectionStateInput] = frozenset(
 def project_broker(
     safety_verdict_final: Literal["paper-only", "unsafe", "unknown"] | None,
     connection_state: BrokerConnectionStateInput | None,
+    *,
+    runtime_bound: bool = True,
 ) -> OperatorSurfaceBroker:
     """Project broker safety and connection evidence into the operator DTO."""
 
@@ -69,12 +71,17 @@ def project_broker(
     return OperatorSurfaceBroker(
         safety_verdict=safety_verdict,
         connection=connection,
-        connection_condition=_broker_connection_condition(connection_state),
+        connection_condition=_broker_connection_condition(
+            connection_state,
+            runtime_bound=runtime_bound,
+        ),
     )
 
 
 def _broker_connection_condition(
     connection_state: BrokerConnectionStateInput | None,
+    *,
+    runtime_bound: bool,
 ) -> OperatorSurfaceNamedCondition:
     match connection_state:
         case "connected":
@@ -148,10 +155,27 @@ def _broker_connection_condition(
                 summary="The data-plane broker client is disabled for this process.",
             )
         case _:
+            if not runtime_bound:
+                return OperatorSurfaceNamedCondition(
+                    code="BROKER_RUNTIME_UNBOUND",
+                    severity="warning",
+                    title="No live bot runtime is bound",
+                    summary=(
+                        "The global data-plane broker may be connected, but this bot has no "
+                        "live runtime bound to publish per-bot broker proof."
+                    ),
+                    remediation=(
+                        "Manually verify IBKR account state, then start or redeploy the bot "
+                        "so a child runtime can record fresh broker evidence."
+                    ),
+                )
             return OperatorSurfaceNamedCondition(
                 code="BROKER_CONNECTION_UNKNOWN",
                 severity="warning",
                 title="Broker connection unproven",
-                summary="The backend does not have enough runtime evidence to prove the broker connection state.",
-                remediation="Start or refresh the live runtime so broker proof can be recorded.",
+                summary=(
+                    "A live bot runtime is bound, but its broker evidence is missing, stale, "
+                    "or not specific enough to prove the per-bot broker session."
+                ),
+                remediation="Refresh the live runtime broker evidence or inspect the runtime freshness notices.",
             )

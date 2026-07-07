@@ -117,11 +117,24 @@ describe('BrokerBannerComponent', () => {
   it('renders hard-down recovery as a degraded broker state', () => {
     const { fixture, brokerHealth } = setup();
     brokerHealth.bannerState.set('degraded');
-    brokerHealth.health.set(health({ connected: false, connection_state: 'hard_down' }));
+    brokerHealth.health.set(
+      health({
+        connected: false,
+        connection_state: 'hard_down',
+        condition: {
+          code: 'DATA_PLANE_BROKER_HARD_DOWN',
+          severity: 'critical',
+          title: 'Data-plane broker session down',
+          summary:
+            'IB Gateway/TWS may be logged in, but the FastAPI data-plane IBKR client is not connected.',
+          remediation: 'Use the IBKR Connect/Reconnect control after confirming Gateway API access is enabled.',
+        },
+      }),
+    );
     fixture.detectChanges();
 
-    expect(fixture.nativeElement.textContent).toContain('Degraded');
-    expect(fixture.nativeElement.textContent).toContain('recovery exhausted');
+    expect(fixture.nativeElement.textContent).toContain('Data-plane broker session down');
+    expect(fixture.nativeElement.textContent).toContain('FastAPI data-plane IBKR client is not connected');
   });
 
   it('renders active bot host-runner warning above the IBKR banner', () => {

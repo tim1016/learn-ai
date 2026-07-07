@@ -67,7 +67,9 @@ const NOTICE_ACTION_TIMEOUT_MS = 15_000;
             <span class="broker-banner-dot" aria-hidden="true"></span>
             {{ state.title }}
           </span>
-          <span class="broker-banner-detail">{{ state.detail }}</span>
+          <span class="broker-banner-detail" [attr.title]="state.detailTitle">
+            {{ state.detail }}
+          </span>
         </div>
         @if (state.toggleLabel; as label) {
           <button
@@ -140,23 +142,26 @@ export class BrokerBannerComponent {
   readonly banner = computed(() => {
     const state = this.healthService.bannerState();
     if (state === null) return null;
+    const h = this.healthService.health();
+    const condition = h?.condition ?? null;
     if (state === 'disabled-host-runner-active') {
       return {
         kind: 'disabled' as const,
-        title: 'Host-owned',
-        detail: 'Paper-run owns IBKR',
-        aria: 'IBKR broker connection disabled — host-venv runner owns IBKR for paper-run',
+        title: condition?.title ?? 'Host-owned',
+        detail: condition?.summary ?? 'Paper-run owns IBKR',
+        detailTitle: condition?.summary ?? 'Paper-run owns IBKR',
+        aria: condition?.summary ?? 'IBKR broker connection disabled — host-venv runner owns IBKR for paper-run',
         connected: false,
         toggleLabel: null,
         toggleAria: null,
       };
     }
-    const h = this.healthService.health();
     if (state === 'paper') {
       return {
         kind: 'paper' as const,
-        title: 'Paper connected',
+        title: condition?.title ?? 'Paper connected',
         detail: h?.account_id ?? 'unknown account',
+        detailTitle: condition?.summary ?? h?.account_id ?? 'unknown account',
         aria: 'Connected to IBKR paper account',
         connected: true,
         toggleLabel: 'Disconnect' as const,
@@ -166,8 +171,9 @@ export class BrokerBannerComponent {
     if (state === 'live') {
       return {
         kind: 'live' as const,
-        title: 'Live connected',
+        title: condition?.title ?? 'Live connected',
         detail: h?.account_id ?? 'unknown account',
+        detailTitle: condition?.summary ?? h?.account_id ?? 'unknown account',
         aria: 'Connected to IBKR LIVE account — real money at risk',
         connected: true,
         toggleLabel: 'Disconnect' as const,
@@ -178,9 +184,10 @@ export class BrokerBannerComponent {
       const label = this.degradedLabel(h?.connection_state);
       return {
         kind: 'degraded' as const,
-        title: 'Degraded',
-        detail: label,
-        aria: `IBKR broker degraded: ${label}`,
+        title: condition?.title ?? 'Degraded',
+        detail: condition?.summary ?? label,
+        detailTitle: condition?.summary ?? label,
+        aria: condition?.summary ?? `IBKR broker degraded: ${label}`,
         connected: true,
         toggleLabel: 'Disconnect' as const,
         toggleAria: 'Disconnect from IB Gateway',
@@ -188,9 +195,10 @@ export class BrokerBannerComponent {
     }
     return {
       kind: 'disconnected' as const,
-      title: 'Disconnected',
-      detail: 'IBKR offline',
-      aria: 'IBKR broker is disconnected',
+      title: condition?.title ?? 'Disconnected',
+      detail: condition?.summary ?? 'IBKR offline',
+      detailTitle: condition?.summary ?? 'IBKR offline',
+      aria: condition?.summary ?? 'IBKR broker is disconnected',
       connected: false,
       toggleLabel: 'Connect' as const,
       toggleAria: 'Connect to IB Gateway',

@@ -309,9 +309,10 @@ def build_submit_readiness_findings(
         )
     if broker.connection != "CONNECTED":
         condition = broker.connection_condition
+        runtime_unbound = condition.code == "BROKER_RUNTIME_UNBOUND"
         connection_remediation: TraderPrimaryRemediation = (
             OpenRunbookAction(kind="open_runbook", slug="broker-reconnect")
-            if host_process.state == "RUNNING"
+            if host_process.state == "RUNNING" and not runtime_unbound
             else NoPrimaryRemediationAction(kind="none", reason="WAITING_FOR_LIVE_RUNTIME")
         )
         findings.append(
@@ -324,9 +325,11 @@ def build_submit_readiness_findings(
                 _broker_connection_detail(condition, host_process.state),
                 (
                     condition.remediation
-                    if host_process.state == "RUNNING"
-                    and condition.remediation is not None
-                    else "Start a bot process only after IBKR positions/executions are manually verified; broker proof cannot refresh while no runtime is bound."
+                    if host_process.state == "RUNNING" and not runtime_unbound and condition.remediation is not None
+                    else (
+                        condition.remediation
+                        or "Start a bot process only after IBKR positions/executions are manually verified; broker proof cannot refresh while no runtime is bound."
+                    )
                 ),
                 connection_remediation,
             )
@@ -813,8 +816,6 @@ def _broker_connection_detail(
     condition: OperatorSurfaceNamedCondition,
     host_state: str = "RUNNING",
 ) -> str:
-    if host_state != "RUNNING" and condition.code == "BROKER_CONNECTION_UNKNOWN":
-        return "Broker connection has not been proven because no live runtime is currently bound."
     return condition.summary
 
 

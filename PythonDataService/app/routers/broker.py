@@ -287,7 +287,9 @@ async def connect_endpoint() -> IbkrConnectionHealth:
         # SHOULD auto-recover from any future drop.
         client.set_desired_connected(True)
         if client.is_connected():
-            return client.health()
+            health = build_broker_health(client, get_monitor())
+            await _warm_account_evidence_after_connect(client, health)
+            return health
         return await _connect_and_install(client)
 
 
@@ -309,7 +311,7 @@ async def disconnect_endpoint() -> IbkrConnectionHealth:
         # design ignored this and re-connected on the next tick).
         client.set_desired_connected(False)
         await _disconnect_with_error_mapping(client)
-        return client.health()
+        return build_broker_health(client, get_monitor())
 
 
 @router.post("/reconnect", response_model=IbkrConnectionHealth)
@@ -346,7 +348,7 @@ def _get_or_create_client() -> IbkrClient:
 async def _connect_and_install(client: IbkrClient) -> IbkrConnectionHealth:
     """Call ``client.connect()``, translate errors to HTTPException, install on success."""
     try:
-        health = await client.connect()
+        await client.connect()
     except ConnectionRefusedDueToSentinelError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
     except IbkrClientIdInUseError as exc:
@@ -359,7 +361,45 @@ async def _connect_and_install(client: IbkrClient) -> IbkrConnectionHealth:
             f"Could not reach IB Gateway: {exc}",
         ) from exc
     set_client(client)
+    health = build_broker_health(client, get_monitor())
+    await _warm_account_evidence_after_connect(client, health)
     return health
+
+
+async def _warm_account_evidence_after_connect(
+    client: IbkrClient,
+    health: IbkrConnectionHealth,
+) -> None:
+    """Refresh account-scoped evidence immediately after a broker connect.
+
+    The background Account Truth loop also refreshes periodically, but a manual
+    Connect should clear stale/blind account evidence before the operator has
+    to infer what happened from unrelated screens.
+    """
+    if not health.connected or health.account_id is None:
+        return
+    from app.services.account_truth_refresh import (
+        account_truth_refresh_session_unavailable,
+        refresh_account_truth_now,
+    )
+
+    if account_truth_refresh_session_unavailable(health):
+        return
+    try:
+        await refresh_account_truth_now(
+            client,
+            context="broker connect initialization",
+            health=health,
+        )
+    except BrokerError as exc:
+        logger.warning(
+            "broker connect account-evidence warm-up failed",
+            extra={
+                "account_id": health.account_id,
+                "connection_state": health.connection_state,
+                "exception": repr(exc),
+            },
+        )
 
 
 async def _disconnect_with_error_mapping(client: IbkrClient) -> None:

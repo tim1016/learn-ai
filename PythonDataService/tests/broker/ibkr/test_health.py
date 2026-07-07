@@ -67,10 +67,10 @@ def _fake_monitor(
     return monitor
 
 
-def test_build_broker_health_without_monitor_returns_client_view_unchanged() -> None:
+def test_build_broker_health_without_monitor_preserves_client_state() -> None:
     """When the monitor singleton hasn't been installed (broker-disabled
-    mode, tests), the composer is a thin pass-through over the client's
-    own ``health()``."""
+    mode, tests), the composer preserves the client's own state while
+    adding backend-authored operator copy."""
     client = _fake_client(_fake_client_health())
 
     out = build_broker_health(client, monitor=None)
@@ -79,6 +79,9 @@ def test_build_broker_health_without_monitor_returns_client_view_unchanged() -> 
     assert out.recovery_state == "HEALTHY"
     assert out.reconnect_attempt is None
     assert out.successful_reconnect_count == 0
+    assert out.condition is not None
+    assert out.condition.code == "DATA_PLANE_BROKER_CONNECTED"
+    assert out.condition.title == "Data-plane paper session connected"
 
 
 def test_build_broker_health_overlays_reconnecting_when_monitor_is_attempting() -> None:
@@ -124,9 +127,7 @@ def test_build_broker_health_preserves_client_state_when_monitor_idle() -> None:
 
 
 def test_build_broker_health_does_not_let_monitor_healthy_hide_stale_client() -> None:
-    client = _fake_client(
-        _fake_client_health(connection_state="subscriptions_stale")
-    )
+    client = _fake_client(_fake_client_health(connection_state="subscriptions_stale"))
     monitor = _fake_monitor(recovery_state="HEALTHY")
 
     out = build_broker_health(client, monitor)
@@ -162,6 +163,11 @@ def test_build_broker_health_overlays_hard_down_after_attempts_exhaust() -> None
     assert out.connection_state == "hard_down"
     assert out.recovery_state == "HARD_DOWN"
     assert out.last_transition_ms == 1_700_000_005_000
+    assert out.condition is not None
+    assert out.condition.code == "DATA_PLANE_BROKER_HARD_DOWN"
+    assert out.condition.title == "Data-plane broker session down"
+    assert "IB Gateway/TWS may be logged in" in out.condition.summary
+    assert "FastAPI data-plane IBKR client is not connected" in out.condition.summary
 
 
 def test_build_broker_health_suppresses_hard_down_after_operator_disconnect() -> None:
@@ -186,6 +192,10 @@ def test_build_broker_health_suppresses_hard_down_after_operator_disconnect() ->
 
     assert out.connection_state == "disconnected"
     assert out.recovery_state == "SOCKET_DOWN"
+    assert out.condition is not None
+    assert out.condition.code == "DATA_PLANE_BROKER_DISCONNECTED"
+    assert out.condition.severity == "info"
+    assert "operator request" in out.condition.summary
 
 
 def test_build_broker_health_last_transition_is_max_of_both_sides() -> None:
@@ -207,22 +217,21 @@ def test_build_broker_health_last_transition_is_max_of_both_sides() -> None:
         ("disabled", True, "IBKR_BROKER_ENABLED=false"),
     ],
 )
-def test_synthetic_disconnected_health_factory_collapses_constructor_duplication(
-    state, disabled, reason
-) -> None:
+def test_synthetic_disconnected_health_factory_collapses_constructor_duplication(state, disabled, reason) -> None:
     """The factory replaces three near-identical inline IbkrConnectionHealth
     constructors in ``routers/broker.py``. The fields the cockpit needs
     (state, disabled flag, reason) must reach the wire without ceremony."""
-    out = synthetic_disconnected_health(
-        state=state, disabled=disabled, reason=reason
-    )
+    out = synthetic_disconnected_health(state=state, disabled=disabled, reason=reason)
 
     assert out.connected is False
     assert out.connection_state == state
-    assert out.recovery_state == (
-        "SOCKET_DOWN" if state == "disconnected" else None
-    )
+    assert out.recovery_state == ("SOCKET_DOWN" if state == "disconnected" else None)
     assert out.disabled is disabled
     assert out.reason == reason
     assert out.last_transition_ms > 0
     assert out.fetched_at_ms > 0
+    assert out.condition is not None
+    if state == "disabled":
+        assert out.condition.code == "DATA_PLANE_BROKER_DISABLED"
+    else:
+        assert out.condition.code == "DATA_PLANE_BROKER_DISCONNECTED"

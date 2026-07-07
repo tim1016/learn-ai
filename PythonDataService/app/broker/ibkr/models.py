@@ -836,6 +836,35 @@ BrokerConnectionState = Literal[
 ``ClientConnectionState`` with the monitor and env-driven values."""
 
 
+BrokerHealthConditionCode = Literal[
+    "DATA_PLANE_BROKER_CONNECTED",
+    "DATA_PLANE_BROKER_DISCONNECTED",
+    "DATA_PLANE_BROKER_SOFT_LOST",
+    "DATA_PLANE_BROKER_SUBSCRIPTIONS_STALE",
+    "DATA_PLANE_BROKER_DATA_FARM_DEGRADED",
+    "DATA_PLANE_BROKER_RECONNECTING",
+    "DATA_PLANE_BROKER_RECOVERING",
+    "DATA_PLANE_BROKER_HARD_DOWN",
+    "DATA_PLANE_BROKER_DISABLED",
+]
+
+
+class BrokerHealthCondition(BaseModel):
+    """Backend-authored operator copy for the data-plane broker session.
+
+    This is intentionally the data-plane altitude, not a per-bot runtime
+    verdict. Per-bot broker proof is authored by ``OperatorSurfaceBroker``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    code: BrokerHealthConditionCode
+    severity: Literal["ok", "info", "warning", "critical"]
+    title: str
+    summary: str
+    remediation: str | None = None
+
+
 class IbkrConnectionHealth(BaseModel):
     """Diagnostic snapshot used by ``GET /api/broker/health``.
 
@@ -863,6 +892,10 @@ class IbkrConnectionHealth(BaseModel):
     server_version: int | None = None
     fetched_at_ms: int
     safety_verdict: BrokerSafetyVerdict | None = None
+    condition: BrokerHealthCondition | None = None
+    """Backend-authored operator copy for this data-plane broker session.
+    Frontend surfaces should render this text rather than inventing their
+    own explanation from ``connection_state``."""
     # ── Connection-state machine fields (auto-reconnect, VCR-broker-stability) ──
     # Required: the cockpit binds the link strip to ``connection_state`` and
     # ``last_transition_ms`` directly; every constructor in the codebase sets
@@ -930,6 +963,8 @@ class IbkrConnectionHealth(BaseModel):
 
 __all__ = [
     "BrokerConnectionState",
+    "BrokerHealthCondition",
+    "BrokerHealthConditionCode",
     "ClientConnectionState",
     "DataPlaneHealth",
     "DataPlaneReloadMode",

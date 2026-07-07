@@ -113,6 +113,20 @@ def installed_fake_client(monkeypatch, reset_settings):
     ibkr_client_module.set_client(fake)  # type: ignore[arg-type]
     # Make the router's factory return THIS fake when get_client() raises.
     monkeypatch.setattr(broker_router, "_ibkr_client_factory", lambda: fake)
+    warm_calls: list[tuple[FakeClient, IbkrConnectionHealth]] = []
+
+    async def fake_warm_account_evidence(
+        client: FakeClient,
+        health: IbkrConnectionHealth,
+    ) -> None:
+        warm_calls.append((client, health))
+
+    monkeypatch.setattr(
+        broker_router,
+        "_warm_account_evidence_after_connect",
+        fake_warm_account_evidence,
+    )
+    fake.warm_calls = warm_calls  # type: ignore[attr-defined]
     yield fake
     ibkr_client_module.set_client(None)
 
@@ -159,6 +173,8 @@ async def test_connect_from_disconnected_invokes_connect_once(installed_fake_cli
     assert body["connected"] is True
     assert body["account_id"] == "DU1234567"
     assert fake.connect_calls == 1
+    assert len(fake.warm_calls) == 1  # type: ignore[attr-defined]
+    assert fake.warm_calls[0][1].account_id == "DU1234567"  # type: ignore[attr-defined]
 
 
 async def test_connect_when_already_connected_is_idempotent(installed_fake_client):
@@ -173,6 +189,7 @@ async def test_connect_when_already_connected_is_idempotent(installed_fake_clien
     assert response.json()["connected"] is True
     # No second connectAsync should have been issued.
     assert fake.connect_calls == 0
+    assert len(fake.warm_calls) == 1  # type: ignore[attr-defined]
 
 
 async def test_disconnect_when_connected_calls_disconnect(installed_fake_client):
@@ -184,7 +201,10 @@ async def test_disconnect_when_connected_calls_disconnect(installed_fake_client)
         response = await client.post("/api/broker/disconnect")
 
     assert response.status_code == 200
-    assert response.json()["connected"] is False
+    body = response.json()
+    assert body["connected"] is False
+    assert body["condition"]["code"] == "DATA_PLANE_BROKER_DISCONNECTED"
+    assert "operator request" in body["condition"]["summary"]
     assert fake.disconnect_calls == 1
     # Codex P1 regression — operator's Disconnect must flip desired
     # state to False so the AutoReconnectMonitor stops auto-reconnecting.
@@ -245,6 +265,7 @@ async def test_reconnect_disconnects_then_connects(installed_fake_client):
     assert response.json()["connected"] is True
     assert fake.disconnect_calls == 1
     assert fake.connect_calls == 1
+    assert len(fake.warm_calls) == 1  # type: ignore[attr-defined]
 
 
 # ─── error translation ────────────────────────────────────────────────

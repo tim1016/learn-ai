@@ -277,9 +277,7 @@ def _project_run_signal(
     )
     title = host_stage.title if host_stage is not None else "Host process"
     detail = (
-        host_stage.summary
-        if host_stage is not None
-        else host_process.notice or "Host-process status is unavailable."
+        host_stage.summary if host_stage is not None else host_process.notice or "Host-process status is unavailable."
     )
     match host_process.state:
         case "RUNNING":
@@ -988,7 +986,11 @@ def compute_operator_surface(
         now_ms=now_ms,
         account_freeze=account_freeze,
     )
-    broker_projection = project_broker(safety_verdict_final, broker_connection_state)
+    broker_projection = project_broker(
+        safety_verdict_final,
+        broker_connection_state,
+        runtime_bound=live_binding is not None or host_process.state == "RUNNING",
+    )
     daily_order_cap = _project_daily_order_cap(readiness)
     actions = _attach_action_gate_results(
         evaluate_all_actions(

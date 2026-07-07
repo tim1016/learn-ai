@@ -111,8 +111,9 @@ export class BrokerConnectivityService {
     if (state === null) return 'Checking…';
     const { baseDetail } = BrokerConnectivityService.STATE_RENDERING[state];
     const h = this.brokerHealth.health();
+    const condition = h?.condition ?? null;
     if (state === 'reconnecting' && h?.reconnect_attempt) {
-      return `Reconnecting (attempt ${h.reconnect_attempt})`;
+      return `${condition?.title ?? baseDetail} (attempt ${h.reconnect_attempt})`;
     }
     if (state === 'recovering') {
       return h?.recovery_error ? `Recovery failed: ${h.recovery_error}` : baseDetail;
@@ -126,7 +127,7 @@ export class BrokerConnectivityService {
     if (state === 'disabled' && h?.reason) {
       return h.reason;
     }
-    return baseDetail;
+    return condition?.title ?? baseDetail;
   });
 
   /** Whether the connected session is the paper account. Paper-only UI
@@ -196,7 +197,13 @@ export class BrokerConnectivityService {
       out.push('Live engine unavailable — start it on this machine, then recheck.');
     }
     const bs = this.brokerConnectionState();
-    if (bs === 'disconnected') {
+    const condition = this.brokerHealth.health()?.condition ?? null;
+    const brokerConditionBlocker = condition?.remediation
+      ? `${condition.summary} ${condition.remediation}`
+      : condition?.summary;
+    if (brokerConditionBlocker !== undefined && bs !== 'connected' && bs !== 'disabled') {
+      out.push(brokerConditionBlocker);
+    } else if (bs === 'disconnected') {
       out.push('Broker disconnected — connect IBKR to act on a live run.');
     } else if (bs === 'reconnecting') {
       out.push('Broker reconnecting — order entry paused until the link is restored.');

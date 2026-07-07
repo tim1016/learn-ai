@@ -2012,9 +2012,7 @@ async def test_bot_catalog_offloads_run_scan(app_with_root, monkeypatch: pytest.
     assert called is True
 
 
-async def test_bot_catalog_reuses_run_scan_for_status_rows(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_bot_catalog_reuses_run_scan_for_status_rows(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-ema-1", "spy_ema_paper", 100)
     _write_ledger(root, "run-vwap-1", "spy_vwap_shadow", 110)
@@ -2206,6 +2204,15 @@ async def test_account_summary_surfaces_broker_evidence_notice_when_positions_un
 
     monkeypatch.setattr(live_instances, "_fetch_net_positions", fake_net)
     monkeypatch.setattr(live_instances, "_fetch_broker_connected_account", fake_account)
+    monkeypatch.setattr(
+        live_instances,
+        "snapshot_data_plane_broker",
+        lambda: SimpleNamespace(
+            client_available=False,
+            connected=False,
+            connection_state=None,
+        ),
+    )
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -2214,7 +2221,24 @@ async def test_account_summary_surfaces_broker_evidence_notice_when_positions_un
     body = response.json()
     assert body["contamination"]["verdict"] == "unknown"
     assert body["notice"]["code"] == "activity.source_blind_to_bot_orders"
+    assert body["notice"]["title"] == "Data-plane broker session is not connected"
     assert "could not fetch broker net positions" in body["notice"]["message"]
+    assert "IB Gateway/TWS may still be logged in" in body["notice"]["message"]
+
+
+def test_account_summary_notice_distinguishes_connected_fetch_failure() -> None:
+    notice = live_instances._account_summary_notice(
+        net_positions_available=False,
+        broker_account_known=True,
+        data_plane_client_available=True,
+        data_plane_connected=True,
+        data_plane_connection_state="connected",
+    )
+
+    assert notice is not None
+    assert notice.title == "Broker evidence fetch failed"
+    assert "data-plane IBKR session is connected" in notice.message
+    assert notice.action.label == "Check positions in IBKR"
 
 
 async def test_instance_commands_returns_bound_run_timeline(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2933,9 +2957,7 @@ async def test_daemon_diagnose_always_200_and_instance_route_projects_report(
                 return report.model_copy(
                     update={
                         "per_instance": [
-                            item
-                            for item in report.per_instance
-                            if item.strategy_instance_id == strategy_instance_id
+                            item for item in report.per_instance if item.strategy_instance_id == strategy_instance_id
                         ]
                     }
                 )
