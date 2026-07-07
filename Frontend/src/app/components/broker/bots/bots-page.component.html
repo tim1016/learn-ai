@@ -322,10 +322,20 @@
             <td class="numeric-cell">{{ formatMoney(row.totalPnl) }}</td>
             <td class="numeric-cell">{{ formatCount(row.errorCount) }}</td>
             <td>
-              <p-tag
-                [severity]="readinessSeverity(row.readinessVerdict)"
-                [value]="row.readinessVerdict"
-              />
+              <div class="readiness-cell">
+                <p-tag
+                  [severity]="readinessSeverity(row.readinessVerdict)"
+                  [value]="row.readinessVerdict"
+                />
+                @if (row.onlyFreshRunAvailable) {
+                  <span
+                    class="fresh-run-chip"
+                    title="All live controls are locked for this run. Use Fresh run."
+                  >
+                    Fresh run only
+                  </span>
+                }
+              </div>
             </td>
             <td
               class="last-run-cell"
@@ -381,10 +391,20 @@
               <div>
                 <dt>Readiness</dt>
                 <dd>
-                  <p-tag
-                    [severity]="readinessSeverity(row.readinessVerdict)"
-                    [value]="row.readinessVerdict"
-                  />
+                  <div class="readiness-cell">
+                    <p-tag
+                      [severity]="readinessSeverity(row.readinessVerdict)"
+                      [value]="row.readinessVerdict"
+                    />
+                    @if (row.onlyFreshRunAvailable) {
+                      <span
+                        class="fresh-run-chip"
+                        title="All live controls are locked for this run. Use Fresh run."
+                      >
+                        Fresh run only
+                      </span>
+                    }
+                  </div>
                 </dd>
               </div>
               <div>

@@ -2646,6 +2646,7 @@ class BotCatalogRow(BaseModel):
     status_label: str
     status_detail: str | None = None
     status_tone: Literal["positive", "warning", "danger", "neutral"] = "neutral"
+    only_fresh_run_available: bool = False
     needs_attention: bool
     trading_mode: Literal["paper", "live", "unknown"] = "unknown"
     symbols: list[str] = Field(default_factory=list)

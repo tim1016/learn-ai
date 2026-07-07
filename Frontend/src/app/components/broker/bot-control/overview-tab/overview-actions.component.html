@@ -4,6 +4,13 @@
     <h3>Lifecycle controls</h3>
   </header>
 
+  @if (onlyFreshRunAvailable()) {
+    <div class="fresh-run-only" role="status" data-testid="fresh-run-only-notice">
+      <strong>Only Fresh run is available</strong>
+      <span>Live controls are locked for this run.</span>
+    </div>
+  }
+
   <div class="action-groups">
     @for (group of actionGroups(); track trackGroup($index, group)) {
       <div class="action-group" [class.danger-group]="group.id === 'danger'">

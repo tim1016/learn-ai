@@ -33,6 +33,7 @@ interface BotTableRow {
   tradingMode: BotCatalogTradingMode;
   symbolsLabel: string;
   readinessVerdict: ReadinessVerdictEnum;
+  onlyFreshRunAvailable: boolean;
   exposure: string;
   openPositions: number | null;
   totalPnl: number | null;
@@ -334,6 +335,7 @@ function toTableRow(bot: BotCatalogRow): BotTableRow {
     tradingMode: bot.trading_mode,
     symbolsLabel,
     readinessVerdict: bot.readiness_verdict,
+    onlyFreshRunAvailable: bot.only_fresh_run_available,
     exposure: bot.metrics.current_exposure,
     openPositions: bot.metrics.open_positions,
     totalPnl: bot.metrics.pnl.total,
@@ -352,6 +354,7 @@ function toTableRow(bot: BotCatalogRow): BotTableRow {
       bot.engine_asset_class,
       bot.desired_state,
       bot.readiness_verdict,
+      bot.only_fresh_run_available ? 'only fresh run available redeploy required' : null,
       bot.last_run_label,
       bot.last_run_result,
       bot.last_run_detail,

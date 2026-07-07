@@ -954,6 +954,7 @@ export interface BotCatalogRow {
   status_label: string;
   status_detail: string | null;
   status_tone: BotCatalogTone;
+  only_fresh_run_available: boolean;
   needs_attention: boolean;
   trading_mode: BotCatalogTradingMode;
   symbols: string[];

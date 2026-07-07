@@ -62,6 +62,10 @@ export class OverviewActionsComponent {
   readonly actionTargetHovered = output<string | null>();
 
   readonly actionsById = computed(() => new Map(this.actions().map((action) => [action.id, action])));
+  readonly onlyFreshRunAvailable = computed(() => {
+    const enabledActions = this.actions().filter((action) => action.enabled);
+    return enabledActions.length === 1 && enabledActions[0].id === 'redeploy';
+  });
   readonly actionGroups = computed<readonly ToolbarGroup[]>(() => {
     const byId = this.actionsById();
     return TOOLBAR_GROUPS
