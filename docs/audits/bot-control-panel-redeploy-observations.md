@@ -71,3 +71,15 @@
 - Exact UI error: None. The UI showed `Ready to deploy` with `Deploy & start` enabled, but the bot row/detail identified `DEPVALJUL1` as MU while the deploy form prefilled `signal_stream=SPY` and the signal stream field value `SPY`.
 - Related UI state: Detail page showed `DEPVALJUL1`, `MU`, flat exposure, `Paper Only`, `SUBMIT Broker state unproven`, no live runtime, and latest signal `ENTER`. Fresh run form showed broker linked to the paper account, account clean, `paper_orders`, `safe_canary`, Start trading immediately checked, and the primary `Deploy & start` button enabled even though the action plan was empty.
 - UX recommendation: Treat strategy instance symbol, signal stream, and action plan symbol as a deploy-time safety invariant. If an MU bot opens a Fresh run form with SPY signal stream, disable `Deploy & start` and explain whether the new run will intentionally become SPY or whether lineage failed. The form should carry symbol provenance from the prior ledger, show the exact inherited source, and keep Legs incomplete until a matching entry/exit plan exists.
+
+## 2026-07-07T19:12:40Z - PrajiDemo
+
+- Bot: `PrajiDemo`
+- Candidate reason: Different from prior attempts; fleet list showed AAPL, flat exposure, `DEGRADED`, and prior status `Exited with error · 2026-07-03 08:57:35`.
+- Action taken: Opened `/broker/bots`, selected `PrajiDemo`, and used the detail-page `Fresh run` action. Did not add an action plan or submit because the detail page and deploy form contradicted each other on exposure/symbol safety.
+- Run id: None created during this attempt.
+- Outcome category: `unclear`
+- Outcome: Stopped before deploy/start. No order/fill observed.
+- Exact UI error: None. The detail page showed `ExposureUnknown` for AAPL, while the Fresh run form showed `Ready to deploy` with `Deploy & start` enabled, `signal_stream=SPY`, and no entry/exit legs declared.
+- Related UI state: The fleet table said `PrajiDemo` was flat, but the detail page said `ExposureUnknown`, `Paper Only`, `SUBMIT Broker state unproven`, no live runtime, and AAPL context. The Fresh run form showed broker/account clean, `paper_orders`, `safe_canary`, Start trading immediately checked, `signal_stream=SPY`, and `LegsComplete` despite empty action plan.
+- UX recommendation: Block Fresh run start when table/detail exposure disagree or exposure is unknown. The deploy form should inherit the bot's visible symbol context, or explicitly label the run as a new SPY deployment and require operator confirmation before Start trading immediately can remain enabled. Empty action plans should make the Legs step incomplete and keep `Deploy & start` disabled.
