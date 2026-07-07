@@ -298,6 +298,60 @@ Resolution: add the code to `OperatorReasonCode` in `disabled-reason-copy.ts` an
 
 Phase 6D (VCR-P3-P/Q closure) re-runs the `halt.flag` pre-flight check at every start, not only at deploy. If a prior run wrote a halt, the runner refuses to start. Inspect the halt cause and decide whether to clear (`rm halt.flag`) or redeploy. Never silently clear a halt for a SUBMIT_UNCERTAIN / cold-start divergence cause — those bear forensic evidence.
 
+### 9.8 Bot event stream terminal outcomes
+
+The Activity tab is stream-first. The **Bot event stream** is the historical lifecycle narrative; the broker-tail table and open order-cluster panel are projections below it. When a terminal row appears, expand the row before taking action. The row carries the authored summary; the drawer carries the exact identity ladder (`evaluation_id`, `intent_id`, `order_ref`, `req_id`, `order_id`, `perm_id`, `exec_id`), gate walk, and terminal error evidence.
+
+Terminal rows also mint a deduped incident headline. Treat the stream row plus the incident as one visible terminal story: do not create a second ad hoc alert or parallel checklist for the same failure.
+
+<!-- terminal-runbook-slug: ibkr-order-rejection -->
+#### IBKR order rejection
+
+Triggered by `order.rejected` / `order_rejected`.
+
+1. Expand the Bot event stream row and capture the IBKR `external_code`, `external_message`, `req_id`, and `order_ref`.
+2. Verify in IBKR / TWS whether the order is absent, cancelled, or still working. Do not retry from the bot until the broker state is known.
+3. If the broker message identifies a fix (buying power, contract qualification, account restriction, order attribute), fix that cause and redeploy or resume only after the cockpit readiness gates are clear.
+4. If the row shows `unmapped` wording or the message is not actionable, keep the raw evidence and add a classifier mapping before teaching the UI new copy.
+
+<!-- terminal-runbook-slug: submit-outcome-uncertain -->
+#### Submit outcome uncertain
+
+Triggered by `submit.uncertain` / `submit_uncertain`.
+
+1. Assume the order may exist until proven otherwise.
+2. Use the row identity (`order_ref`, `req_id`, `order_id`, `perm_id`) to verify order status in IBKR / TWS.
+3. Do not submit a replacement order until the original order is confirmed absent, cancelled, or reconciled into the bot's state.
+4. Preserve the incident evidence if manual reconciliation is required; it is the audit trail for why the bot refused to continue.
+
+<!-- terminal-runbook-slug: bot-halted -->
+#### Bot halted
+
+Triggered by `submit.halted` / `halted`.
+
+1. Expand the row and inspect the blocking gate or fatal halt trigger.
+2. Inspect `halt.flag` in the run directory before clearing anything. A halt caused by broker safety, account truth, AccountOwner, or submit uncertainty must not be silently cleared.
+3. Resolve the underlying gate, then redeploy or resume only if the cockpit readiness verdict agrees.
+
+<!-- terminal-runbook-slug: bot-launch-failed -->
+#### Bot launch failed
+
+Triggered by `submit.launch_failed` / `launch_failed`.
+
+1. Expand the row and inspect the terminal error source (`daemon`, `os`, or `broker_session`).
+2. For daemon or OS failures, inspect the redacted log path and stderr tail in the row evidence.
+3. For broker-session failures, resolve the concrete connection cause (for example, client-id collision or account sentinel refusal) before redeploying.
+4. Prefer redeploy after fixing the cause; do not hand-edit `run_status.json` or `bot_events.jsonl`.
+
+<!-- terminal-runbook-slug: unmapped-terminal-diagnostic -->
+#### Unmapped terminal diagnostic
+
+Triggered by `submit.unmapped_diagnostic` / `unmapped_diagnostic`.
+
+1. Treat the row as a code gap, not as an operator-fixable condition.
+2. Preserve the stream drawer evidence and the run logs.
+3. Add or correct the backend classifier/template so the same failure becomes a mapped terminal outcome with specific operator copy.
+
 ---
 
 ## 10. Known gaps (PRD §9 done definition)
