@@ -21,7 +21,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal, NoReturn
 
-from fastapi import APIRouter, HTTPException, Query, Response, status
+from fastapi import APIRouter, Body, HTTPException, Query, Response, status
 from pydantic import ValidationError
 
 from app.broker.ibkr.api_evidence import get_ibkr_api_evidence_recorder
@@ -94,6 +94,8 @@ from app.schemas.live_runs import (
     ActivityReconciliationWarning,
     AuditCopySizingLookup,
     BotCatalogResponse,
+    BotDeleteRequest,
+    BotDeleteResponse,
     BrokerObservationConsistency,
     ChartSnapshotResponse,
     ChartSnapshotRun,
@@ -158,6 +160,15 @@ from app.services.activity_projection_contract import (
 )
 from app.services.activity_repair_projection import load_activity_repair_projection
 from app.services.bot_catalog_projection import compose_bot_catalog_row, trading_mode_from_configured_mode
+from app.services.bot_deletion import (
+    BotDeletionCorruptError,
+    BotDeletionRecord,
+    bot_has_soft_deletion,
+    bot_run_is_soft_deleted,
+    read_bot_deletion,
+    soft_delete_bot_runs,
+    stable_bot_deletion_path,
+)
 from app.services.bot_lifecycle_chart import compose_bot_lifecycle_chart
 from app.services.bot_lifecycle_projection import (
     account_event_to_lifecycle_event,
@@ -260,7 +271,7 @@ def _validate_instance_id(strategy_instance_id: str) -> str:
     return safe
 
 
-def _scan_runs_by_instance(root: Path) -> dict[str, list[dict]]:
+def _scan_runs_by_instance(root: Path, *, include_deleted: bool = False) -> dict[str, list[dict]]:
     """Group run dirs by ``strategy_instance_id`` from their ledgers, newest first.
 
     Legacy runs with no binding are skipped — they are not instances.
@@ -278,9 +289,12 @@ def _scan_runs_by_instance(root: Path) -> dict[str, list[dict]]:
         sid = ledger.get("strategy_instance_id") or ""
         if not sid:
             continue
+        run_id = str(ledger.get("run_id") or run_dir.name)
+        if not include_deleted and _run_is_soft_deleted(root.parent, str(sid), run_id):
+            continue
         out.setdefault(sid, []).append(
             {
-                "run_id": ledger.get("run_id") or run_dir.name,
+                "run_id": run_id,
                 "run_dir": str(run_dir),
                 "created_at_ms": ledger.get("created_at_ms") or 0,
             }
@@ -288,6 +302,28 @@ def _scan_runs_by_instance(root: Path) -> dict[str, list[dict]]:
     for runs in out.values():
         runs.sort(key=lambda r: r["created_at_ms"], reverse=True)
     return out
+
+
+def _run_is_soft_deleted(artifacts_root: Path, sid: str, run_id: str) -> bool:
+    try:
+        return bot_run_is_soft_deleted(artifacts_root, sid, run_id)
+    except (ValueError, BotDeletionCorruptError) as exc:
+        logger.warning(
+            "failed to read bot deletion marker while scanning runs",
+            extra={"strategy_instance_id": sid, "run_id": run_id, "exception": repr(exc)},
+        )
+        return False
+
+
+def _sid_has_soft_deletion(artifacts_root: Path, sid: str) -> bool:
+    try:
+        return bot_has_soft_deletion(artifacts_root, sid)
+    except (ValueError, BotDeletionCorruptError) as exc:
+        logger.warning(
+            "failed to read bot deletion marker",
+            extra={"strategy_instance_id": sid, "exception": repr(exc)},
+        )
+        return False
 
 
 def _interpret_daemon_process(daemon: dict | None, root: Path) -> tuple[InstanceProcessView, LiveBinding | None]:
@@ -1296,6 +1332,8 @@ async def list_live_instances() -> list[LiveInstanceSummary]:
 
     summaries: list[LiveInstanceSummary] = []
     for sid in sorted(set(by_instance) | set(daemon_by_sid)):
+        if sid not in by_instance and _sid_has_soft_deletion(root.parent, sid):
+            continue
         managed = daemon_by_sid.get(sid)
         runs = by_instance.get(sid, [])
         if managed is not None:
@@ -1595,6 +1633,8 @@ async def list_bot_catalog() -> BotCatalogResponse:
     rows = []
     trading_mode = trading_mode_from_configured_mode(getattr(settings, "mode", None))
     for sid in sorted(set(by_instance) | set(daemon_by_sid)):
+        if sid not in by_instance and _sid_has_soft_deletion(root.parent, sid):
+            continue
         status_view = await _resolve_instance_status_from_process(
             sid,
             root,
@@ -1605,6 +1645,98 @@ async def list_bot_catalog() -> BotCatalogResponse:
         rows.append(compose_bot_catalog_row(status_view, trading_mode))
     rows.sort(key=lambda row: (row.created_at_ms or row.last_run_at_ms or 0, row.name), reverse=True)
     return BotCatalogResponse(bots=rows)
+
+
+@router.delete("/{strategy_instance_id}", response_model=BotDeleteResponse)
+async def delete_instance(
+    strategy_instance_id: str,
+    body: Annotated[BotDeleteRequest | None, Body()] = None,
+) -> BotDeleteResponse:
+    """Soft-delete a stopped bot from operator catalog/control surfaces.
+
+    The deletion marker is durable and run-id scoped. It hides every run that
+    currently belongs to the instance while preserving the artifacts for audit.
+    A later redeploy with a new run id is visible again.
+    """
+    sid = _validate_instance_id(strategy_instance_id)
+    request = body or BotDeleteRequest()
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+
+    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
+    if daemon is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "HOST_SERVICE_OFFLINE",
+                "message": "Cannot delete this bot because the bot service is offline; stopped state is unproven.",
+            },
+        )
+    process, _live_binding = _interpret_daemon_process(daemon, root)
+    if process.state in _LIVE_STATES:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "BOT_PROCESS_ACTIVE",
+                "message": "Stop the bot process before deleting it from the catalog.",
+                "process_state": process.state,
+                "bound_run_id": process.bound_run_id,
+            },
+        )
+
+    runs = _scan_runs_by_instance(root, include_deleted=True).get(sid, [])
+    existing = _read_bot_deletion_for_endpoint(root.parent, sid)
+    if not runs and existing is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail={"reason_code": "BOT_NOT_FOUND", "message": f"No bot exists for {sid}."},
+        )
+
+    run_ids = [str(run["run_id"]) for run in runs]
+    try:
+        record = soft_delete_bot_runs(
+            root.parent,
+            sid,
+            run_ids=run_ids,
+            deleted_by=request.deleted_by,
+            reason=request.reason,
+            now_ms=_now_ms(),
+        )
+    except (ValueError, BotDeletionCorruptError) as exc:
+        logger.warning(
+            "failed to soft-delete bot",
+            extra={"strategy_instance_id": sid, "exception": repr(exc)},
+        )
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="bot deletion marker could not be written",
+        ) from exc
+    return _bot_delete_response(root.parent, record)
+
+
+def _read_bot_deletion_for_endpoint(artifacts_root: Path, sid: str) -> BotDeletionRecord | None:
+    try:
+        return read_bot_deletion(artifacts_root, sid)
+    except (ValueError, BotDeletionCorruptError) as exc:
+        logger.warning(
+            "failed to read bot deletion marker",
+            extra={"strategy_instance_id": sid, "exception": repr(exc)},
+        )
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="bot deletion marker could not be read",
+        ) from exc
+
+
+def _bot_delete_response(artifacts_root: Path, record: BotDeletionRecord) -> BotDeleteResponse:
+    return BotDeleteResponse(
+        strategy_instance_id=record.strategy_instance_id,
+        deleted_at_ms=record.deleted_at_ms,
+        deleted_by=record.deleted_by,
+        reason=record.reason,
+        deleted_run_ids=list(record.deleted_run_ids),
+        marker_path=str(stable_bot_deletion_path(artifacts_root, record.strategy_instance_id)),
+    )
 
 
 async def _host_deploy_request_from_public(
@@ -2401,9 +2533,24 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
     sid = _validate_instance_id(strategy_instance_id)
     settings = get_settings()
     root = Path(settings.live_runs_root)
+    runs_by_instance = _scan_runs_by_instance(root)
+    if sid not in runs_by_instance and _sid_has_soft_deletion(root.parent, sid):
+        raise HTTPException(
+            status.HTTP_410_GONE,
+            detail={
+                "reason_code": "BOT_SOFT_DELETED",
+                "message": f"{sid} has been deleted from the bot catalog.",
+            },
+        )
 
     _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
-    return await _resolve_instance_status_from_process(sid, root, settings, daemon)
+    return await _resolve_instance_status_from_process(
+        sid,
+        root,
+        settings,
+        daemon,
+        runs_by_instance=runs_by_instance,
+    )
 
 
 def _resolve_safety_verdict_final(

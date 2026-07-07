@@ -113,6 +113,78 @@
     <span>{{ visibleBots().length }} total after filters</span>
   </div>
 
+  @if (selectedCount() > 0) {
+    <section class="selection-bar" aria-label="Selected bot actions">
+      <div>
+        <strong>{{ selectedCount() }} selected</strong>
+        <span>{{ selectedNamesLabel() }}</span>
+      </div>
+      <div class="selection-actions">
+        <button
+          pButton
+          type="button"
+          severity="secondary"
+          [outlined]="true"
+          icon="pi pi-times"
+          (click)="clearSelection()"
+        >
+          <span class="p-button-label">Clear</span>
+        </button>
+        <button
+          pButton
+          type="button"
+          severity="danger"
+          icon="pi pi-trash"
+          [disabled]="isDeleting()"
+          (click)="requestDeleteSelected()"
+        >
+          <span class="p-button-label">Soft delete</span>
+        </button>
+      </div>
+    </section>
+  }
+
+  @if (deleteConfirmationOpen()) {
+    <section
+      class="delete-confirmation"
+      role="alertdialog"
+      aria-labelledby="delete-confirm-title"
+      aria-describedby="delete-confirm-detail"
+    >
+      <div>
+        <h2 id="delete-confirm-title">Soft delete selected bots?</h2>
+        <p id="delete-confirm-detail">
+          They will leave the catalog. Audit artifacts stay on disk.
+        </p>
+      </div>
+      <div class="selection-actions">
+        <button
+          pButton
+          type="button"
+          severity="secondary"
+          [outlined]="true"
+          (click)="cancelDeleteSelected()"
+        >
+          <span class="p-button-label">Cancel</span>
+        </button>
+        <button
+          pButton
+          type="button"
+          severity="danger"
+          icon="pi pi-trash"
+          [loading]="isDeleting()"
+          (click)="confirmDeleteSelected()"
+        >
+          <span class="p-button-label">Delete {{ selectedCount() }}</span>
+        </button>
+      </div>
+    </section>
+  }
+
+  @if (deleteErrorMessage(); as message) {
+    <p class="load-error" role="alert">{{ message }}</p>
+  }
+
   <p-tabs
     class="bot-tabs"
     [value]="activeModeTab()"
@@ -179,6 +251,16 @@
       >
         <ng-template #header>
           <tr>
+            <th class="select-cell">
+              <input
+                type="checkbox"
+                aria-label="Select all bots in active tab"
+                [checked]="allActiveRowsSelected()"
+                [indeterminate]="someActiveRowsSelected() && !allActiveRowsSelected()"
+                (click)="$event.stopPropagation()"
+                (change)="setActiveTabSelection($event)"
+              />
+            </th>
             <th pSortableColumn="name" class="col-bot">
               Bot
               <p-sortIcon field="name" />
@@ -222,6 +304,15 @@
             (click)="openBot(row.id)"
             (keydown.enter)="openBot(row.id)"
           >
+            <td class="select-cell" (click)="$event.stopPropagation()">
+              <input
+                type="checkbox"
+                [attr.aria-label]="'Select ' + row.name"
+                [checked]="isSelected(row.id)"
+                (change)="setBotSelection(row.id, $event)"
+                (keydown.enter)="$event.stopPropagation()"
+              />
+            </td>
             <td class="bot-name-cell">
               <strong>{{ row.name }}</strong>
             </td>
@@ -246,7 +337,7 @@
         </ng-template>
         <ng-template #emptymessage>
           <tr>
-            <td [attr.colspan]="8" class="empty-cell">
+            <td [attr.colspan]="9" class="empty-cell">
               @if (isLoading()) {
                 Loading bots...
               } @else {
@@ -270,6 +361,16 @@
             (keydown.enter)="openBot(row.id)"
           >
             <div class="card-topline">
+              <label class="mobile-select">
+                <input
+                  type="checkbox"
+                  [attr.aria-label]="'Select ' + row.name"
+                  [checked]="isSelected(row.id)"
+                  (click)="$event.stopPropagation()"
+                  (change)="setBotSelection(row.id, $event)"
+                  (keydown.enter)="$event.stopPropagation()"
+                />
+              </label>
               <div>
                 <h2>{{ row.name }}</h2>
                 <p>{{ row.symbolsLabel }}</p>

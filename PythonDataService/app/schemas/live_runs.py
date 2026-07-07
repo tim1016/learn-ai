@@ -2669,6 +2669,31 @@ class BotCatalogResponse(BaseModel):
     bots: list[BotCatalogRow] = Field(default_factory=list)
 
 
+class BotDeleteRequest(BaseModel):
+    """Operator request to remove a bot from active catalog/control surfaces."""
+
+    mode: Literal["soft"] = "soft"
+    deleted_by: str = Field(default="operator", min_length=1, max_length=128)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class BotDeleteResponse(BaseModel):
+    """Result of a bot soft delete.
+
+    ``deleted_run_ids`` are hidden from live-instance catalog/list/status
+    projections. The underlying run artifacts stay on disk for audit.
+    """
+
+    strategy_instance_id: str
+    mode: Literal["soft"] = "soft"
+    deleted_at_ms: int = Field(ge=0)
+    deleted_by: str
+    reason: str | None = None
+    deleted_run_ids: list[str] = Field(default_factory=list)
+    marker_path: str
+    hidden_from_catalog: bool = True
+
+
 class FleetExplainedBucket(BaseModel):
     """One instance's contribution to the account's explained position (#399)."""
 

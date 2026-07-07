@@ -68,6 +68,10 @@ export class BotsPageComponent {
   readonly attentionFilter = signal<AttentionFilter>('all');
   readonly readinessFilter = signal<ReadinessFilter>('all');
   readonly activeModeTab = signal<BotModeTab>('paper');
+  readonly selectedBotIds = signal<ReadonlySet<string>>(new Set<string>());
+  readonly deleteConfirmationOpen = signal<boolean>(false);
+  readonly isDeleting = signal<boolean>(false);
+  readonly deleteErrorMessage = signal<string | null>(null);
 
   readonly visibleBots = computed<BotTableRow[]>(() => {
     const query = normalize(this.searchQuery());
@@ -98,15 +102,38 @@ export class BotsPageComponent {
     this.visibleBots().filter((bot) => bot.tradingMode === 'unknown'),
   );
 
-  readonly activeTabCount = computed(() => {
+  readonly activeRows = computed<BotTableRow[]>(() => {
     switch (this.activeModeTab()) {
       case 'live':
-        return this.liveBots().length;
+        return this.liveBots();
       case 'paper':
-        return this.paperBots().length;
+        return this.paperBots();
       case 'unknown':
-        return this.unknownModeBots().length;
+        return this.unknownModeBots();
     }
+  });
+
+  readonly activeTabCount = computed(() => this.activeRows().length);
+
+  readonly selectedRows = computed<BotTableRow[]>(() => {
+    const selected = this.selectedBotIds();
+    return this.visibleBots().filter((row) => selected.has(row.id));
+  });
+
+  readonly selectedNamesLabel = computed(() =>
+    this.selectedRows().map((row) => row.name).join(', '),
+  );
+
+  readonly selectedCount = computed(() => this.selectedBotIds().size);
+
+  readonly allActiveRowsSelected = computed(() => {
+    const rows = this.activeRows();
+    return rows.length > 0 && rows.every((row) => this.selectedBotIds().has(row.id));
+  });
+
+  readonly someActiveRowsSelected = computed(() => {
+    const rows = this.activeRows();
+    return rows.some((row) => this.selectedBotIds().has(row.id));
   });
 
   constructor() {
@@ -119,6 +146,7 @@ export class BotsPageComponent {
     try {
       const catalog = await this.liveRuns.getBotCatalog();
       this.bots.set(catalog.bots);
+      this.retainKnownSelections(catalog.bots);
     } catch (err) {
       this.errorMessage.set(this.humanError(err));
     } finally {
@@ -153,6 +181,88 @@ export class BotsPageComponent {
     this.readinessFilter.set('all');
   }
 
+  isSelected(id: string): boolean {
+    return this.selectedBotIds().has(id);
+  }
+
+  setBotSelection(id: string, event: Event): void {
+    const target = event.target;
+    if (target instanceof HTMLInputElement) {
+      this.toggleBotSelection(id, target.checked);
+    }
+  }
+
+  setActiveTabSelection(event: Event): void {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    const ids = this.activeRows().map((row) => row.id);
+    this.selectedBotIds.update((current) => {
+      const next = new Set(current);
+      for (const id of ids) {
+        if (target.checked) {
+          next.add(id);
+        } else {
+          next.delete(id);
+        }
+      }
+      return next;
+    });
+    this.closeDeleteConfirmation();
+  }
+
+  toggleBotSelection(id: string, selected = !this.isSelected(id)): void {
+    this.selectedBotIds.update((current) => {
+      const next = new Set(current);
+      if (selected) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+    this.closeDeleteConfirmation();
+  }
+
+  clearSelection(): void {
+    this.selectedBotIds.set(new Set<string>());
+    this.closeDeleteConfirmation();
+  }
+
+  requestDeleteSelected(): void {
+    if (this.selectedCount() === 0 || this.isDeleting()) return;
+    this.deleteErrorMessage.set(null);
+    this.deleteConfirmationOpen.set(true);
+  }
+
+  cancelDeleteSelected(): void {
+    this.closeDeleteConfirmation();
+  }
+
+  async confirmDeleteSelected(): Promise<void> {
+    const ids = [...this.selectedBotIds()];
+    if (ids.length === 0 || this.isDeleting()) return;
+    this.isDeleting.set(true);
+    this.deleteErrorMessage.set(null);
+    try {
+      await Promise.all(
+        ids.map((id) =>
+          this.liveRuns.deleteBot(id, {
+            mode: 'soft',
+            deleted_by: 'operator',
+            reason: 'Deleted from Bots page',
+          }),
+        ),
+      );
+      this.selectedBotIds.set(new Set<string>());
+      this.deleteConfirmationOpen.set(false);
+      await this.refresh();
+    } catch (err) {
+      this.deleteErrorMessage.set(this.humanError(err));
+    } finally {
+      this.isDeleting.set(false);
+    }
+  }
+
   async openBot(id: string): Promise<void> {
     await this.router.navigate(['/broker/bots', id]);
   }
@@ -183,6 +293,19 @@ export class BotsPageComponent {
   }
 
   readonly trackByBotId = (_index: number, row: BotTableRow): string => row.id;
+
+  private closeDeleteConfirmation(): void {
+    this.deleteConfirmationOpen.set(false);
+    this.deleteErrorMessage.set(null);
+  }
+
+  private retainKnownSelections(bots: BotCatalogRow[]): void {
+    const knownIds = new Set(bots.map((bot) => bot.strategy_instance_id));
+    this.selectedBotIds.update((current) => {
+      const next = new Set([...current].filter((id) => knownIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }
 
   private humanError(err: unknown): string {
     if (err instanceof Error && err.message) return err.message;
