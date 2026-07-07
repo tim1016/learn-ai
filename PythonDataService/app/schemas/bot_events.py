@@ -1,8 +1,9 @@
 """Bot event stream contracts (ADR 0024 / PRD #928 Slice -1).
 
 These models define the replacement contract for the narrated per-bot
-pipeline stream. They are intentionally not wired to a router or publisher in
-Slice -1; later slices emit and project these shapes.
+pipeline stream. Enforcement points write ``BotEventRaw`` records, and the
+stream router serves authored ``BotEventRow`` projections rebuilt from that
+raw WAL.
 """
 
 from __future__ import annotations
