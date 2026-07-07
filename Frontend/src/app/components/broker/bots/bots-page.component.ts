@@ -244,7 +244,7 @@ export class BotsPageComponent {
     this.isDeleting.set(true);
     this.deleteErrorMessage.set(null);
     try {
-      await Promise.all(
+      const results = await Promise.allSettled(
         ids.map((id) =>
           this.liveRuns.deleteBot(id, {
             mode: 'soft',
@@ -253,8 +253,15 @@ export class BotsPageComponent {
           }),
         ),
       );
-      this.selectedBotIds.set(new Set<string>());
-      this.deleteConfirmationOpen.set(false);
+      const firstFailure = results.find((result) => result.status === 'rejected');
+      if (firstFailure) {
+        if (results.some((result) => result.status === 'fulfilled')) {
+          await this.refresh();
+        }
+        this.deleteErrorMessage.set(this.humanError(firstFailure.reason));
+        return;
+      }
+      this.clearSelection();
       await this.refresh();
     } catch (err) {
       this.deleteErrorMessage.set(this.humanError(err));

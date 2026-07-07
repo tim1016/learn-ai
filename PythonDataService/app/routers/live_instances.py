@@ -271,10 +271,14 @@ def _validate_instance_id(strategy_instance_id: str) -> str:
     return safe
 
 
-def _scan_runs_by_instance(root: Path, *, include_deleted: bool = False) -> dict[str, list[dict]]:
+def _scan_runs_by_instance(root: Path) -> dict[str, list[dict]]:
     """Group run dirs by ``strategy_instance_id`` from their ledgers, newest first.
 
     Legacy runs with no binding are skipped — they are not instances.
+    This shared scan is intentionally inclusive of soft-deleted runs because
+    account attribution and run-addressed start gates still need to see the
+    audit artifacts on disk. Catalog/list/status projections apply deletion
+    filtering at their boundary instead.
     """
     out: dict[str, list[dict]] = {}
     if not root.is_dir():
@@ -290,8 +294,6 @@ def _scan_runs_by_instance(root: Path, *, include_deleted: bool = False) -> dict
         if not sid:
             continue
         run_id = str(ledger.get("run_id") or run_dir.name)
-        if not include_deleted and _run_is_soft_deleted(root.parent, str(sid), run_id):
-            continue
         out.setdefault(sid, []).append(
             {
                 "run_id": run_id,
@@ -324,6 +326,20 @@ def _sid_has_soft_deletion(artifacts_root: Path, sid: str) -> bool:
             extra={"strategy_instance_id": sid, "exception": repr(exc)},
         )
         return False
+
+
+def _visible_runs_by_instance(root: Path, runs_by_instance: dict[str, list[dict]] | None = None) -> dict[str, list[dict]]:
+    source = runs_by_instance if runs_by_instance is not None else _scan_runs_by_instance(root)
+    visible: dict[str, list[dict]] = {}
+    for sid, runs in source.items():
+        kept = [
+            run
+            for run in runs
+            if not _run_is_soft_deleted(root.parent, sid, str(run.get("run_id") or ""))
+        ]
+        if kept:
+            visible[sid] = kept
+    return visible
 
 
 def _interpret_daemon_process(daemon: dict | None, root: Path) -> tuple[InstanceProcessView, LiveBinding | None]:
@@ -1319,7 +1335,7 @@ async def list_live_instances() -> list[LiveInstanceSummary]:
     """Account fleet overview: every known strategy instance, live or not."""
     settings = get_settings()
     root = Path(settings.live_runs_root)
-    by_instance = _scan_runs_by_instance(root)
+    by_instance = _visible_runs_by_instance(root)
 
     _result, daemon = await host_daemon_client.fetch_instances(settings.live_runner_daemon_url)
     daemon_reachable = daemon is not None
@@ -1620,7 +1636,7 @@ async def list_bot_catalog() -> BotCatalogResponse:
     """Server-authored bot catalog cards for the frontend DataView."""
     settings = get_settings()
     root = Path(settings.live_runs_root)
-    by_instance = await asyncio.to_thread(_scan_runs_by_instance, root)
+    by_instance = await asyncio.to_thread(_visible_runs_by_instance, root)
 
     _result, daemon = await host_daemon_client.fetch_instances(settings.live_runner_daemon_url)
     daemon_by_sid: dict[str, dict] = {}
@@ -1684,7 +1700,7 @@ async def delete_instance(
             },
         )
 
-    runs = _scan_runs_by_instance(root, include_deleted=True).get(sid, [])
+    runs = _scan_runs_by_instance(root).get(sid, [])
     existing = _read_bot_deletion_for_endpoint(root.parent, sid)
     if not runs and existing is None:
         raise HTTPException(
@@ -1883,6 +1899,17 @@ def _raise_if_stopped_blocks_start(root: Path, sid: str) -> None:
         )
 
 
+def _bot_soft_deleted_detail(sid: str, run_id: str | None = None) -> dict[str, str]:
+    detail = {
+        "reason_code": "BOT_SOFT_DELETED",
+        "message": f"{sid} has been deleted from the bot catalog.",
+        "strategy_instance_id": sid,
+    }
+    if run_id is not None:
+        detail["run_id"] = run_id
+    return detail
+
+
 async def _assert_start_allowed(run_id: str, settings) -> None:
     """Re-evaluate the start gates before forwarding /runs/{run_id}/start.
 
@@ -1916,6 +1943,12 @@ async def _assert_start_allowed(run_id: str, settings) -> None:
             break
     if sid is None or run_dir is None:
         return  # unknown run_id — daemon will 404; not our gate
+
+    if _run_is_soft_deleted(root.parent, sid, run_id):
+        raise HTTPException(
+            status.HTTP_410_GONE,
+            detail=_bot_soft_deleted_detail(sid, run_id),
+        )
 
     account_freeze = _resolve_account_freeze(
         root.parent,
@@ -2533,15 +2566,9 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
     sid = _validate_instance_id(strategy_instance_id)
     settings = get_settings()
     root = Path(settings.live_runs_root)
-    runs_by_instance = _scan_runs_by_instance(root)
+    runs_by_instance = _visible_runs_by_instance(root)
     if sid not in runs_by_instance and _sid_has_soft_deletion(root.parent, sid):
-        raise HTTPException(
-            status.HTTP_410_GONE,
-            detail={
-                "reason_code": "BOT_SOFT_DELETED",
-                "message": f"{sid} has been deleted from the bot catalog.",
-            },
-        )
+        raise HTTPException(status.HTTP_410_GONE, detail=_bot_soft_deleted_detail(sid))
 
     _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
     return await _resolve_instance_status_from_process(

@@ -52,7 +52,7 @@ def read_bot_deletion(artifacts_root: Path, strategy_instance_id: str) -> BotDel
         return None
     try:
         return BotDeletionRecord.model_validate_json(path.read_text(encoding="utf-8"))
-    except (ValidationError, ValueError) as exc:
+    except (OSError, ValidationError, ValueError) as exc:
         raise BotDeletionCorruptError(path, exc) from exc
 
 
@@ -96,7 +96,7 @@ def _read_locked(path: Path) -> BotDeletionRecord | None:
         return None
     try:
         return BotDeletionRecord.model_validate_json(path.read_text(encoding="utf-8"))
-    except (ValidationError, ValueError) as exc:
+    except (OSError, ValidationError, ValueError) as exc:
         raise BotDeletionCorruptError(path, exc) from exc
 
 
