@@ -975,6 +975,23 @@ export interface BotCatalogResponse {
   bots: BotCatalogRow[];
 }
 
+export interface BotDeleteRequest {
+  mode?: 'soft';
+  deleted_by?: string;
+  reason?: string | null;
+}
+
+export interface BotDeleteResponse {
+  strategy_instance_id: string;
+  mode: 'soft';
+  deleted_at_ms: number;
+  deleted_by: string;
+  reason: string | null;
+  deleted_run_ids: string[];
+  marker_path: string;
+  hidden_from_catalog: boolean;
+}
+
 // --- Single operator intent knob (ADR 0004) ---
 
 export type DesiredStateAction = 'pause' | 'resume' | 'stop';

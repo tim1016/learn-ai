@@ -52,6 +52,7 @@ function bot(overrides: Partial<BotCatalogRow> = {}): BotCatalogRow {
 
 class FakeLiveRunsService {
   getBotCatalog = vi.fn<() => Promise<BotCatalogResponse>>();
+  deleteBot = vi.fn<(instanceId: string, request?: unknown) => Promise<unknown>>();
 }
 
 async function setup() {
@@ -92,6 +93,16 @@ async function setup() {
         status_tone: 'neutral',
       }),
     ],
+  });
+  service.deleteBot.mockResolvedValue({
+    strategy_instance_id: 'paper-msft',
+    mode: 'soft',
+    deleted_at_ms: NEW_RUN,
+    deleted_by: 'operator',
+    reason: 'Deleted from Bots page',
+    deleted_run_ids: ['run-paper-msft'],
+    marker_path: '/tmp/live_state/paper-msft/bot_deletion.json',
+    hidden_from_catalog: true,
   });
 
   TestBed.resetTestingModule();
@@ -181,5 +192,62 @@ describe('BotsPageComponent', () => {
     await settle(fixture);
 
     expect(navigate).toHaveBeenCalledWith(['/broker/bots', 'live-running-aapl']);
+  });
+
+  it('soft deletes selected bots after confirmation', async () => {
+    const { fixture, service } = await setup();
+
+    fixture.componentInstance.toggleBotSelection('paper-msft', true);
+    fixture.detectChanges();
+    fixture.componentInstance.requestDeleteSelected();
+    fixture.detectChanges();
+
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain(
+      'Soft delete selected bots?',
+    );
+
+    await fixture.componentInstance.confirmDeleteSelected();
+    await settle(fixture);
+
+    expect(service.deleteBot).toHaveBeenCalledWith('paper-msft', {
+      mode: 'soft',
+      deleted_by: 'operator',
+      reason: 'Deleted from Bots page',
+    });
+    expect(fixture.componentInstance.selectedCount()).toBe(0);
+    expect(service.getBotCatalog).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes the catalog when a bulk soft delete partially succeeds', async () => {
+    const { fixture, service } = await setup();
+    service.deleteBot.mockImplementation((instanceId: string) => {
+      if (instanceId === 'paper-msft') {
+        return Promise.resolve({});
+      }
+      return Promise.reject(new Error('Bot is still running'));
+    });
+    service.getBotCatalog.mockResolvedValueOnce({
+      bots: [
+        bot({
+          strategy_instance_id: 'live-running-aapl',
+          name: 'live-running-aapl',
+          symbols: ['AAPL'],
+          last_run_at_ms: NEW_RUN,
+        }),
+      ],
+    });
+
+    fixture.componentInstance.toggleBotSelection('paper-msft', true);
+    fixture.componentInstance.toggleBotSelection('live-running-aapl', true);
+    fixture.componentInstance.requestDeleteSelected();
+    await fixture.componentInstance.confirmDeleteSelected();
+    await settle(fixture);
+
+    expect(service.deleteBot).toHaveBeenCalledTimes(2);
+    expect(service.getBotCatalog).toHaveBeenCalledTimes(2);
+    expect(fixture.componentInstance.selectedCount()).toBe(1);
+    expect(fixture.componentInstance.isSelected('paper-msft')).toBe(false);
+    expect(fixture.componentInstance.isSelected('live-running-aapl')).toBe(true);
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain('Bot is still running');
   });
 });

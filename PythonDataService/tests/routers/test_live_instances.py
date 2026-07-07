@@ -2098,6 +2098,124 @@ async def test_bot_catalog_trading_mode_comes_from_configured_mode(
     assert response.json()["bots"][0]["trading_mode"] == "live"
 
 
+async def test_delete_instance_soft_deletes_bot_from_catalog_list_and_status(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-delete", "delete-me", 100)
+    _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1}, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        delete_response = await client.request(
+            "DELETE",
+            "/api/live-instances/delete-me",
+            json={"reason": "bad deploy spec"},
+        )
+        catalog_response = await client.get("/api/live-instances/catalog")
+        list_response = await client.get("/api/live-instances")
+        status_response = await client.get("/api/live-instances/delete-me/status")
+
+    assert delete_response.status_code == 200
+    delete_body = delete_response.json()
+    assert delete_body["mode"] == "soft"
+    assert delete_body["deleted_run_ids"] == ["run-delete"]
+    assert delete_body["reason"] == "bad deploy spec"
+    assert (root.parent / "live_state" / "delete-me" / "bot_deletion.json").is_file()
+    assert live_instances._scan_runs_by_instance(root)["delete-me"][0]["run_id"] == "run-delete"
+    assert catalog_response.json()["bots"] == []
+    assert list_response.json() == []
+    assert status_response.status_code == 410
+    assert status_response.json()["detail"]["reason_code"] == "BOT_SOFT_DELETED"
+
+
+async def test_delete_instance_refuses_active_process(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-active", "active-bot", 100)
+    _set_daemon(monkeypatch, process={"state": "running", "run_id": "run-active", "pid": 42})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.request("DELETE", "/api/live-instances/active-bot")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "BOT_PROCESS_ACTIVE"
+    assert not (root.parent / "live_state" / "active-bot" / "bot_deletion.json").exists()
+
+
+async def test_soft_deleted_instance_reappears_after_new_run_id(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-old", "redeployable-bot", 100)
+    _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1}, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        delete_response = await client.request("DELETE", "/api/live-instances/redeployable-bot")
+
+    assert delete_response.status_code == 200
+    _write_ledger(root, "run-new", "redeployable-bot", 200)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        catalog_response = await client.get("/api/live-instances/catalog")
+        status_response = await client.get("/api/live-instances/redeployable-bot/status")
+
+    assert catalog_response.status_code == 200
+    assert [row["strategy_instance_id"] for row in catalog_response.json()["bots"]] == ["redeployable-bot"]
+    assert status_response.status_code == 200
+    assert status_response.json()["evidence_binding"]["run_id"] == "run-new"
+
+
+async def test_start_run_rejects_soft_deleted_run_before_daemon(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-soft-deleted", "soft-deleted-bot", 100)
+    _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1}, process={"state": "idle"})
+
+    called = False
+
+    async def fake_start(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return {"accepted": True, "process": {}}
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        delete_response = await client.request("DELETE", "/api/live-instances/soft-deleted-bot")
+        start_response = await client.post("/api/live-instances/runs/run-soft-deleted/start", json={})
+
+    assert delete_response.status_code == 200
+    assert start_response.status_code == 410
+    assert start_response.json()["detail"]["reason_code"] == "BOT_SOFT_DELETED"
+    assert start_response.json()["detail"]["run_id"] == "run-soft-deleted"
+    assert called is False
+
+
+async def test_bot_catalog_continues_when_deletion_marker_unreadable(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-unreadable-marker", "marker-bot", 100)
+    marker = root.parent / "live_state" / "marker-bot" / "bot_deletion.json"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("{}", encoding="utf-8")
+    original_read_text = Path.read_text
+
+    def fake_read_text(path: Path, *args, **kwargs):
+        if path == marker:
+            raise OSError("permission denied")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+    _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1}, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/catalog")
+
+    assert response.status_code == 200
+    assert [row["strategy_instance_id"] for row in response.json()["bots"]] == ["marker-bot"]
+
+
 async def test_instance_status_rejects_invalid_id(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _root = app_with_root
     _set_daemon(monkeypatch, process=None)

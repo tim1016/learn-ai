@@ -12,7 +12,10 @@
 .page-header,
 .filters,
 .card-topline,
-.result-summary {
+.result-summary,
+.selection-bar,
+.delete-confirmation,
+.selection-actions {
   display: flex;
   align-items: center;
 }
@@ -134,6 +137,48 @@ h1 {
   font-size: 13px;
 }
 
+.selection-bar,
+.delete-confirmation {
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-surface);
+}
+
+.selection-bar strong,
+.delete-confirmation h2 {
+  display: block;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.selection-bar span,
+.delete-confirmation p {
+  display: block;
+  max-width: min(62vw, 720px);
+  margin: 3px 0 0;
+  overflow: hidden;
+  color: var(--text-subtle);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selection-actions {
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.delete-confirmation {
+  border-color: var(--verdict-blocked);
+  background: var(--verdict-blocked-soft);
+}
+
 .tab-label {
   display: inline-flex;
   align-items: center;
@@ -157,6 +202,19 @@ h1 {
 }
 
 .bot-row {
+  cursor: pointer;
+}
+
+.select-cell {
+  text-align: center;
+  width: 44px;
+}
+
+.select-cell input,
+.mobile-select input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--verdict-blocked);
   cursor: pointer;
 }
 
@@ -292,11 +350,11 @@ dd {
 }
 
 :host ::ng-deep .bot-table th:nth-child(1) {
-  width: 29%;
+  width: 4%;
 }
 
 :host ::ng-deep .bot-table th:nth-child(2) {
-  width: 12%;
+  width: 25%;
 }
 
 :host ::ng-deep .bot-table th:nth-child(3) {
@@ -304,7 +362,7 @@ dd {
 }
 
 :host ::ng-deep .bot-table th:nth-child(4) {
-  width: 8%;
+  width: 11%;
 }
 
 :host ::ng-deep .bot-table th:nth-child(5),
@@ -313,11 +371,15 @@ dd {
 }
 
 :host ::ng-deep .bot-table th:nth-child(7) {
-  width: 10%;
+  width: 7%;
 }
 
 :host ::ng-deep .bot-table th:nth-child(8) {
-  width: 14%;
+  width: 10%;
+}
+
+:host ::ng-deep .bot-table th:nth-child(9) {
+  width: 16%;
 }
 
 :host ::ng-deep .bot-table .p-datatable-tbody > tr > td {
@@ -383,9 +445,20 @@ dd {
 }
 
 @media (max-width: 900px) {
-  .result-summary {
+  .result-summary,
+  .selection-bar,
+  .delete-confirmation {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .selection-bar span,
+  .delete-confirmation p {
+    max-width: 100%;
+  }
+
+  .selection-actions {
+    width: 100%;
   }
 
   .bot-table-wrap {
@@ -423,5 +496,10 @@ dd {
 
   .primary-meta {
     grid-template-columns: 1fr;
+  }
+
+  .selection-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 }

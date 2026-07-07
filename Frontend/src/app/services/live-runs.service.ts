@@ -29,6 +29,8 @@ import type {
   FleetAccountSummary,
   FleetContamination,
   BotCatalogResponse,
+  BotDeleteRequest,
+  BotDeleteResponse,
   InstanceDesiredStateRequest,
   LifecycleChartStatus,
   LifecycleSafetySeverity,
@@ -183,6 +185,15 @@ export class LiveRunsService {
 
   getBotCatalog(): Promise<BotCatalogResponse> {
     return firstValueFrom(this.http.get<BotCatalogResponse>(`${this.instancesBase}/catalog`));
+  }
+
+  deleteBot(instanceId: string, request: BotDeleteRequest = { mode: 'soft' }): Promise<BotDeleteResponse> {
+    return firstValueFrom(
+      this.http.delete<BotDeleteResponse>(
+        `${this.instancesBase}/${encodeURIComponent(instanceId)}`,
+        { body: request },
+      ),
+    );
   }
 
   /** Instance control-room status: live binding (registry) + evidence + intent. */
