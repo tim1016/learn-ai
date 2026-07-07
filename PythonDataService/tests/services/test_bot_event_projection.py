@@ -154,6 +154,55 @@ def test_order_event_promotes_evaluation_cluster_to_order_identity() -> None:
     assert row.gate_steps[0].gate_id == "sizing"
 
 
+def test_order_ref_terminal_event_promotes_existing_evaluation_cluster() -> None:
+    order_ref = "learn-ai/bot-a/v1:intent-1"
+    submitted = _raw(
+        seq=2,
+        event_type=BotEventRawType.ORDER_SUBMITTED,
+        identity=BotEventIdentity(
+            evaluation_id="eval-1",
+            intent_id="intent-1",
+            order_ref=order_ref,
+            order_id=42,
+        ),
+    )
+    rejected = _raw(
+        seq=3,
+        event_type=BotEventRawType.ORDER_REJECTED,
+        identity=BotEventIdentity(
+            order_ref=order_ref,
+            req_id=42,
+            order_id=42,
+        ),
+        source_authority=SourceAuthority.BROKER_SESSION,
+        terminal_error=TerminalError(
+            code=TerminalErrorCode.ORDER_REJECTED,
+            source=TerminalErrorSource.IBKR,
+            message="order rejected",
+            external_code=201,
+            external_message="insufficient buying power",
+        ),
+    )
+
+    rows = project_bot_event_rows(
+        [
+            _gate(1, result=GateStepResult.PASS, gate_id="sizing"),
+            submitted,
+            rejected,
+        ]
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.event_type is BotEventType.ORDER_REJECTED
+    assert row.identity.evaluation_id == "eval-1"
+    assert row.identity.intent_id == "intent-1"
+    assert row.identity.order_ref == order_ref
+    assert row.identity.req_id == 42
+    assert row.gate_steps[0].gate_id == "sizing"
+    assert row.facts["raw_event_types"] == ["order_submitted", "order_rejected"]
+
+
 def test_idle_rows_fold_until_next_visible_event() -> None:
     idle_1 = _raw(
         seq=1,

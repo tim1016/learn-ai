@@ -58,13 +58,13 @@ def project_bot_event_rows(raw_events: Iterable[BotEventRaw]) -> list[BotEventRo
             continue
         _add_to_cluster(clusters, raw)
 
-    rows = [row for cluster in clusters.values() if (row := _cluster_row(cluster)) is not None]
+    rows = [row for cluster in _unique_clusters(clusters) if (row := _cluster_row(cluster)) is not None]
     return _merge_idle_rows(idle_events, rows)
 
 
 def _add_to_cluster(clusters: dict[tuple[str, object], _Cluster], raw: BotEventRaw) -> None:
-    key = _cluster_key(raw)
-    cluster = clusters.get(key)
+    keys = _cluster_keys(raw)
+    cluster = _matching_cluster(clusters, keys)
     if cluster is None:
         cluster = _Cluster(
             first_seq=raw.seq,
@@ -72,6 +72,9 @@ def _add_to_cluster(clusters: dict[tuple[str, object], _Cluster], raw: BotEventR
             identity=raw.identity,
             source_authority=raw.source_authority,
         )
+    else:
+        _merge_matching_clusters(clusters, cluster, keys)
+    for key in keys:
         clusters[key] = cluster
     cluster.identity = _merge_identity(cluster.identity, raw.identity)
     if raw.gate_step is not None:
@@ -85,25 +88,71 @@ def _add_to_cluster(clusters: dict[tuple[str, object], _Cluster], raw: BotEventR
     cluster.facts.update(raw.facts)
 
 
-def _cluster_key(raw: BotEventRaw) -> tuple[str, object]:
+def _unique_clusters(clusters: dict[tuple[str, object], _Cluster]) -> list[_Cluster]:
+    unique: dict[int, _Cluster] = {}
+    for cluster in clusters.values():
+        unique[id(cluster)] = cluster
+    return list(unique.values())
+
+
+def _matching_cluster(
+    clusters: dict[tuple[str, object], _Cluster],
+    keys: list[tuple[str, object]],
+) -> _Cluster | None:
+    for key in keys:
+        cluster = clusters.get(key)
+        if cluster is not None:
+            return cluster
+    return None
+
+
+def _merge_matching_clusters(
+    clusters: dict[tuple[str, object], _Cluster],
+    target: _Cluster,
+    keys: list[tuple[str, object]],
+) -> None:
+    matches = {id(cluster): cluster for key in keys if (cluster := clusters.get(key)) is not None}
+    for cluster in matches.values():
+        if cluster is target:
+            continue
+        target.first_seq = min(target.first_seq, cluster.first_seq)
+        target.first_ts_ms = min(target.first_ts_ms, cluster.first_ts_ms)
+        target.identity = _merge_identity(target.identity, cluster.identity)
+        target.gate_steps.extend(cluster.gate_steps)
+        target.events.extend(cluster.events)
+        target.facts.update(cluster.facts)
+        for existing_key, existing_cluster in list(clusters.items()):
+            if existing_cluster is cluster:
+                clusters[existing_key] = target
+
+
+def _cluster_keys(raw: BotEventRaw) -> list[tuple[str, object]]:
+    keys: list[tuple[str, object]] = []
     if raw.gate_step is not None:
-        return ("evaluation", raw.gate_step.evaluation_id)
+        _append_key(keys, ("evaluation", raw.gate_step.evaluation_id))
     identity = raw.identity
     if identity.evaluation_id:
-        return ("evaluation", identity.evaluation_id)
+        _append_key(keys, ("evaluation", identity.evaluation_id))
     if identity.order_ref:
-        return ("order_ref", identity.order_ref)
+        _append_key(keys, ("order_ref", identity.order_ref))
     if identity.intent_id:
-        return ("intent_id", identity.intent_id)
+        _append_key(keys, ("intent_id", identity.intent_id))
     if identity.req_id is not None:
-        return ("req_id", identity.req_id)
+        _append_key(keys, ("req_id", identity.req_id))
     if identity.order_id is not None:
-        return ("order_id", identity.order_id)
+        _append_key(keys, ("order_id", identity.order_id))
     if identity.perm_id is not None:
-        return ("perm_id", identity.perm_id)
+        _append_key(keys, ("perm_id", identity.perm_id))
     if identity.exec_id:
-        return ("exec_id", identity.exec_id)
-    raise ValueError("raw bot event identity has no cluster key")
+        _append_key(keys, ("exec_id", identity.exec_id))
+    if not keys:
+        raise ValueError("raw bot event identity has no cluster key")
+    return keys
+
+
+def _append_key(keys: list[tuple[str, object]], key: tuple[str, object]) -> None:
+    if key not in keys:
+        keys.append(key)
 
 
 def _cluster_row(cluster: _Cluster) -> BotEventRow | None:
