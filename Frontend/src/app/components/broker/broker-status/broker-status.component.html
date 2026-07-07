@@ -131,7 +131,7 @@
     why="Single place to verify the four-layer paper-safety stack agrees end-to-end before any other broker page can place an order or open a stream."
     [steps]="[
       'Check that Mode is PAPER and Sentinel reads DU prefix matches paper.',
-      'If Disconnected, start IB Gateway against the paper account and click Refresh.',
+      'If the data-plane broker session is disconnected, start IB Gateway against the paper account and click Connect or Reconnect.',
       'Once green, navigate to Options Chain, Account Monitor, or Orders.'
     ]"
     [related]="[
@@ -183,7 +183,16 @@
 
         <dt>Status</dt>
         <dd>
-          @if (h.connection_state === 'connected') {
+          @if (h.condition; as condition) {
+            <span
+              class="status-pill"
+              [class.ok]="condition.severity === 'ok'"
+              [class.status-warn]="condition.severity === 'info' || condition.severity === 'warning'"
+              [class.bad]="condition.severity === 'critical'"
+            >
+              {{ condition.title }}
+            </span>
+          } @else if (h.connection_state === 'connected') {
             <span class="status-pill ok">Connected</span>
           } @else if (h.connected) {
             <span class="status-pill status-warn">{{ h.connection_state }}</span>
@@ -191,6 +200,14 @@
             <span class="status-pill bad">Disconnected</span>
           }
         </dd>
+
+        @if (h.condition; as condition) {
+          <dt>Condition</dt>
+          <dd>{{ condition.summary }}</dd>
+
+          <dt>Remediation</dt>
+          <dd>{{ condition.remediation ?? '—' }}</dd>
+        }
 
         <dt>Broker state</dt>
         <dd class="mono">{{ h.connection_state }}</dd>

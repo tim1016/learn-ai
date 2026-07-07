@@ -129,7 +129,7 @@
         "next_step": "Inspect broker/account safety evidence before any trading action.",
         "reason_codes": [
           "BROKER_SAFETY_UNKNOWN",
-          "BROKER_CONNECTION_UNKNOWN",
+          "BROKER_RUNTIME_UNBOUND",
           "SUBMISSION_CAPABILITY_UNKNOWN"
         ],
         "severity": "critical",
@@ -221,11 +221,11 @@
   "broker": {
     "connection": "UNKNOWN",
     "connection_condition": {
-      "code": "BROKER_CONNECTION_UNKNOWN",
-      "remediation": "Start or refresh the live runtime so broker proof can be recorded.",
+      "code": "BROKER_RUNTIME_UNBOUND",
+      "remediation": "Manually verify IBKR account state, then start or redeploy the bot so a child runtime can record fresh broker evidence.",
       "severity": "warning",
-      "summary": "The backend does not have enough runtime evidence to prove the broker connection state.",
-      "title": "Broker connection unproven"
+      "summary": "The global data-plane broker may be connected, but this bot has no live runtime bound to publish per-bot broker proof.",
+      "title": "No live bot runtime is bound"
     },
     "safety_verdict": "UNKNOWN"
   },
@@ -363,7 +363,7 @@
   "submit_readiness": {
     "blocking_reason_codes": [
       "BROKER_SAFETY_UNKNOWN",
-      "BROKER_CONNECTION_UNKNOWN",
+      "BROKER_RUNTIME_UNBOUND",
       "SUBMISSION_CAPABILITY_UNKNOWN",
       "ACCOUNT_OWNER_GENERATION_UNPROVEN",
       "RECONCILIATION_NOT_AVAILABLE",
@@ -394,8 +394,8 @@
       },
       {
         "code": "broker_connection",
-        "explanation": "Broker connection has not been proven because no live runtime is currently bound.",
-        "headline": "Broker connection unproven",
+        "explanation": "The global data-plane broker may be connected, but this bot has no live runtime bound to publish per-bot broker proof.",
+        "headline": "No live bot runtime is bound",
         "operator_next_step": "Start a bot process only after IBKR positions/executions are manually verified; broker proof cannot refresh while no runtime is bound.",
         "remediation": {
           "kind": "none",
@@ -563,7 +563,7 @@
     },
     "proof_lines": [
       {
-        "detail": "Account safety proof is not recorded. The backend does not have enough runtime evidence to prove the broker connection state.",
+        "detail": "Account safety proof is not recorded. The global data-plane broker may be connected, but this bot has no live runtime bound to publish per-bot broker proof.",
         "id": "broker-proof",
         "label": "Broker",
         "message": "Broker proof is not available yet.",

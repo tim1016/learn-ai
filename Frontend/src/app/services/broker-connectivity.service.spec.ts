@@ -198,27 +198,52 @@ describe('BrokerConnectivityService broker state (auto-reconnect)', () => {
   it('renders DISCONNECTED (down) when the socket is hard-closed', async () => {
     const service = setup({
       instances: [],
-      brokerHealth: { connected: false, connection_state: 'disconnected' },
+      brokerHealth: {
+        connected: false,
+        connection_state: 'disconnected',
+        condition: {
+          code: 'DATA_PLANE_BROKER_DISCONNECTED',
+          severity: 'warning',
+          title: 'Data-plane broker session disconnected',
+          summary:
+            'The FastAPI data-plane IBKR client is disconnected. IB Gateway/TWS may still be logged in.',
+          remediation: 'Use the IBKR Connect control to establish the data-plane session.',
+        },
+      },
     });
     await flush();
 
     expect(service.brokerState()).toBe('down');
     expect(service.brokerConnectionState()).toBe('disconnected');
-    expect(brokerLink(service)?.detail).toBe('Disconnected');
+    expect(brokerLink(service)?.detail).toBe('Data-plane broker session disconnected');
+    expect(service.blockers()).toContain(
+      'The FastAPI data-plane IBKR client is disconnected. IB Gateway/TWS may still be logged in. Use the IBKR Connect control to establish the data-plane session.',
+    );
   });
 
   it('renders HARD_DOWN when auto-recovery exhausts reconnect attempts', async () => {
     const service = setup({
       instances: [],
-      brokerHealth: { connected: false, connection_state: 'hard_down' },
+      brokerHealth: {
+        connected: false,
+        connection_state: 'hard_down',
+        condition: {
+          code: 'DATA_PLANE_BROKER_HARD_DOWN',
+          severity: 'critical',
+          title: 'Data-plane broker session down',
+          summary:
+            'IB Gateway/TWS may be logged in, but the FastAPI data-plane IBKR client is not connected.',
+          remediation: 'Use the IBKR Connect/Reconnect control after confirming Gateway API access is enabled.',
+        },
+      },
     });
     await flush();
 
     expect(service.brokerState()).toBe('down');
     expect(service.brokerConnectionState()).toBe('hard_down');
-    expect(brokerLink(service)?.detail).toBe('Recovery exhausted');
+    expect(brokerLink(service)?.detail).toBe('Data-plane broker session down');
     expect(service.blockers()).toContain(
-      'Broker recovery exhausted — manual reconnect or Gateway intervention required.',
+      'IB Gateway/TWS may be logged in, but the FastAPI data-plane IBKR client is not connected. Use the IBKR Connect/Reconnect control after confirming Gateway API access is enabled.',
     );
   });
 

@@ -26,6 +26,7 @@ from pydantic import ValidationError
 
 from app.broker.ibkr.api_evidence import get_ibkr_api_evidence_recorder
 from app.broker.ibkr.config import IbkrSettings, get_settings
+from app.broker.runtime_snapshot import BrokerRuntimeSnapshot, snapshot_data_plane_broker
 from app.engine.action_plan.parity import parity_diagnostics
 from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import (
@@ -2233,7 +2234,9 @@ def _instance_ledger_account_id(
     return value
 
 
-async def _fetch_broker_connected_account() -> tuple[str | None, bool]:
+async def _fetch_broker_connected_account(
+    snapshot: BrokerRuntimeSnapshot | None = None,
+) -> tuple[str | None, bool]:
     """Return ``(connected_account_id, known)``.
 
     ``known`` distinguishes "queried and got a value or definitive
@@ -2247,9 +2250,7 @@ async def _fetch_broker_connected_account() -> tuple[str | None, bool]:
     read a field that does not exist on the real client and silently
     degraded every call to ``known=False``.
     """
-    from app.broker.runtime_snapshot import snapshot_data_plane_broker
-
-    snapshot = snapshot_data_plane_broker()
+    snapshot = snapshot if snapshot is not None else snapshot_data_plane_broker()
     if not snapshot.client_available or not snapshot.connected:
         return None, False
     account = snapshot.connected_account
@@ -2298,7 +2299,8 @@ async def get_account_summary() -> FleetAccountSummary:
             explained[sid] = broker.owned_positions
         account_ids[sid] = _instance_ledger_account_id(root, sid)
     net = await _fetch_net_positions()
-    broker_account, broker_known = await _fetch_broker_connected_account()
+    data_plane_snapshot = snapshot_data_plane_broker()
+    broker_account, broker_known = await _fetch_broker_connected_account(data_plane_snapshot)
     payload = compute_fleet_account_summary(
         net_positions=net,
         explained_by_instance=explained,
@@ -2311,6 +2313,9 @@ async def get_account_summary() -> FleetAccountSummary:
     payload["notice"] = _account_summary_notice(
         net_positions_available=net is not None,
         broker_account_known=broker_known,
+        data_plane_client_available=data_plane_snapshot.client_available,
+        data_plane_connected=data_plane_snapshot.connected,
+        data_plane_connection_state=data_plane_snapshot.connection_state,
     )
     return FleetAccountSummary(**payload)
 
@@ -2319,6 +2324,9 @@ def _account_summary_notice(
     *,
     net_positions_available: bool,
     broker_account_known: bool,
+    data_plane_client_available: bool,
+    data_plane_connected: bool,
+    data_plane_connection_state: str | None,
 ) -> OperatorNotice | None:
     if net_positions_available and broker_account_known:
         return None
@@ -2328,14 +2336,32 @@ def _account_summary_notice(
     if not broker_account_known:
         missing.append("connected account")
     missing_text = " and ".join(missing)
+    if not data_plane_client_available or not data_plane_connected:
+        state = data_plane_connection_state or "unavailable"
+        return OperatorNotice(
+            code="activity.source_blind_to_bot_orders",
+            tier="warning",
+            title="Data-plane broker session is not connected",
+            message=(
+                f"The data plane could not fetch broker {missing_text} because its "
+                f"IBKR client session is {state}. IB Gateway/TWS may still be logged in; "
+                "use the IBKR Connect/Reconnect control so account evidence can refresh."
+            ),
+            action=OperatorNoticeAction(
+                kind="external_manual_check",
+                label="Check IBKR API connection",
+                target="ibkr_connection",
+            ),
+            runbook_slug="broker-evidence-health",
+        )
     return OperatorNotice(
         code="activity.source_blind_to_bot_orders",
         tier="warning",
-        title="Broker evidence is unavailable",
+        title="Broker evidence fetch failed",
         message=(
-            f"The data plane could not fetch broker {missing_text}. "
-            "Account contamination and identity are not fully proven; verify "
-            "positions in IBKR before trusting an empty or unknown fleet view."
+            f"The data-plane IBKR session is connected, but it could not fetch broker {missing_text}. "
+            "Account contamination and identity are not fully proven; verify positions in IBKR "
+            "before trusting an empty or unknown fleet view."
         ),
         action=OperatorNoticeAction(
             kind="external_manual_check",

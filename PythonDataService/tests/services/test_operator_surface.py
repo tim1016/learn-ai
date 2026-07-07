@@ -991,7 +991,41 @@ def test_trader_guidance_broker_connection_unknown_has_no_action_without_live_ru
         if group.code == "broker_connection"
     )
     assert attention.remediation.kind == "none"
+    assert attention.headline == "No live bot runtime is bound"
     assert "no live runtime" in attention.explanation
+
+
+def test_trader_guidance_disconnected_broker_without_live_runtime_uses_runtime_caution() -> None:
+    surface = _surface(
+        process=InstanceProcessView(state="idle"),
+        safety_verdict_final="paper-only",
+        broker_connection_state="disconnected",
+        guard_state=_guard(),
+        account_owner=_owner(),
+        reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
+    )
+
+    attention = next(
+        group
+        for group in surface.trader_guidance.additional_attention_groups
+        if group.code == "broker_connection"
+    )
+    assert attention.headline == "Broker session disconnected"
+    assert attention.remediation.kind == "none"
+    assert "Start a bot process only after IBKR positions/executions are manually verified" in attention.operator_next_step
+
+
+def test_idle_bot_broker_condition_names_unbound_runtime() -> None:
+    surface = _surface(
+        process=InstanceProcessView(state="idle"),
+        safety_verdict_final="paper-only",
+        broker_connection_state=None,
+    )
+
+    assert surface.broker.connection == "UNKNOWN"
+    assert surface.broker.connection_condition.code == "BROKER_RUNTIME_UNBOUND"
+    assert surface.broker.connection_condition.title == "No live bot runtime is bound"
+    assert "global data-plane broker may be connected" in surface.broker.connection_condition.summary
 
 
 def test_trader_guidance_degraded_broker_preserves_recovering_copy() -> None:

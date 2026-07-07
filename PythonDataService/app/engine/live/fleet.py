@@ -57,8 +57,17 @@ def compute_fleet_contamination(
     if not contaminated:
         summary = "Account clean — every position is explained by a managed instance."
     else:
-        parts = ", ".join(f"{sym} {qty:+d}" for sym, qty in sorted(residual.items()))
-        summary = f"Account residual: {parts} unattributed outside managed namespaces."
+        positive = {symbol: qty for symbol, qty in residual.items() if qty > 0}
+        negative = {symbol: qty for symbol, qty in residual.items() if qty < 0}
+        if positive and not negative:
+            summary = f"Unmanaged broker position(s): {_format_residual(positive)}."
+        elif negative and not positive:
+            summary = (
+                "Managed bot artifacts overstate broker position(s): "
+                f"{_format_residual(negative)}. Refresh reconciliation or retire stale runs."
+            )
+        else:
+            summary = f"Broker and managed bot position evidence disagree: {_format_residual(residual)}."
     return {
         "net_positions": net,
         "explained_total": explained_total,
@@ -68,6 +77,10 @@ def compute_fleet_contamination(
         "policy_blocks_starts": policy_blocks_starts and contaminated,
         "summary": summary,
     }
+
+
+def _format_residual(residual: dict[str, int]) -> str:
+    return ", ".join(f"{sym} {qty:+d}" for sym, qty in sorted(residual.items()))
 
 
 # ---------------------------------------------------------------------------

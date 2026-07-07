@@ -4142,6 +4142,28 @@ export interface components {
             fetched_at_ms: number;
         };
         /**
+         * BrokerHealthCondition
+         * @description Backend-authored operator copy for the data-plane broker session.
+         */
+        BrokerHealthCondition: {
+            /**
+             * Code
+             * @enum {string}
+             */
+            code: "DATA_PLANE_BROKER_CONNECTED" | "DATA_PLANE_BROKER_DISCONNECTED" | "DATA_PLANE_BROKER_SOFT_LOST" | "DATA_PLANE_BROKER_SUBSCRIPTIONS_STALE" | "DATA_PLANE_BROKER_DATA_FARM_DEGRADED" | "DATA_PLANE_BROKER_RECONNECTING" | "DATA_PLANE_BROKER_RECOVERING" | "DATA_PLANE_BROKER_HARD_DOWN" | "DATA_PLANE_BROKER_DISABLED";
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "ok" | "info" | "warning" | "critical";
+            /** Title */
+            title: string;
+            /** Summary */
+            summary: string;
+            /** Remediation */
+            remediation?: string | null;
+        };
+        /**
          * IbkrConnectionHealth
          * @description Diagnostic snapshot used by ``GET /api/broker/health``.
          *
@@ -4183,6 +4205,13 @@ export interface components {
              *     fields are surfaced as expandable detail.
              */
             safety_verdict?: components["schemas"]["BrokerSafetyVerdict"] | null;
+            /**
+             * Condition
+             * @description Backend-authored operator copy for this data-plane broker session.
+             *     Frontend surfaces should render this text rather than inventing their
+             *     own explanation from ``connection_state``.
+             */
+            condition?: components["schemas"]["BrokerHealthCondition"] | null;
             /**
              * Connection State
              * @description Broker-stability hardening. Cockpit binds the link

@@ -24,6 +24,30 @@ def test_residual_flags_foreign_position() -> None:
     assert result["verdict"] == "contaminated"
     assert result["residual"] == {"SPY": 37}
     assert "SPY +37" in result["summary"]
+    assert "Unmanaged broker position" in result["summary"]
+
+
+def test_negative_residual_flags_stale_managed_position() -> None:
+    result = compute_fleet_contamination(
+        net_positions={},
+        explained_by_instance={"old_bot": {"SPY": 1}},
+    )
+
+    assert result["verdict"] == "contaminated"
+    assert result["residual"] == {"SPY": -1}
+    assert "Managed bot artifacts overstate broker position" in result["summary"]
+    assert "SPY -1" in result["summary"]
+
+
+def test_mixed_residual_flags_position_evidence_disagreement() -> None:
+    result = compute_fleet_contamination(
+        net_positions={"SPY": 137, "QQQ": 10},
+        explained_by_instance={"a": {"SPY": 100}, "b": {"QQQ": 50}},
+    )
+
+    assert result["verdict"] == "contaminated"
+    assert result["residual"] == {"QQQ": -40, "SPY": 37}
+    assert "position evidence disagree" in result["summary"]
 
 
 def test_sibling_positions_are_explained_not_contamination() -> None:

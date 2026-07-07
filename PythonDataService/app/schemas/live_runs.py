@@ -1134,6 +1134,7 @@ BrokerConnectionConditionCode = Literal[
     "BROKER_RECONNECTING",
     "BROKER_RECOVERING",
     "BROKER_HARD_DOWN",
+    "BROKER_RUNTIME_UNBOUND",
     "BROKER_CONNECTION_UNKNOWN",
 ]
 ExecutionPosture = Literal["PAPER_EXECUTION", "READ_ONLY", "UNSAFE", "UNKNOWN"]

@@ -15,7 +15,10 @@ Uses httpx.AsyncClient + ASGITransport per repo testing rules.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -113,6 +116,20 @@ def installed_fake_client(monkeypatch, reset_settings):
     ibkr_client_module.set_client(fake)  # type: ignore[arg-type]
     # Make the router's factory return THIS fake when get_client() raises.
     monkeypatch.setattr(broker_router, "_ibkr_client_factory", lambda: fake)
+    warm_calls: list[tuple[FakeClient, IbkrConnectionHealth]] = []
+
+    async def fake_warm_account_evidence(
+        client: FakeClient,
+        health: IbkrConnectionHealth,
+    ) -> None:
+        warm_calls.append((client, health))
+
+    monkeypatch.setattr(
+        broker_router,
+        "_warm_account_evidence_after_connect",
+        fake_warm_account_evidence,
+    )
+    fake.warm_calls = warm_calls  # type: ignore[attr-defined]
     yield fake
     ibkr_client_module.set_client(None)
 
@@ -159,6 +176,35 @@ async def test_connect_from_disconnected_invokes_connect_once(installed_fake_cli
     assert body["connected"] is True
     assert body["account_id"] == "DU1234567"
     assert fake.connect_calls == 1
+    assert len(fake.warm_calls) == 1  # type: ignore[attr-defined]
+    assert fake.warm_calls[0][1].account_id == "DU1234567"  # type: ignore[attr-defined]
+
+
+async def test_connect_warms_account_evidence_from_raw_connected_health_after_hard_down(
+    installed_fake_client,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = installed_fake_client
+    monitor = SimpleNamespace(
+        is_hard_down=True,
+        is_attempting=False,
+        is_recovering=False,
+        current_attempt=0,
+        successful_reconnect_count=0,
+        last_transition_ms=1_700_000_005_000,
+        recovery_state="HARD_DOWN",
+    )
+    from app.routers import broker as broker_router
+
+    monkeypatch.setattr(broker_router, "get_monitor", lambda: monitor)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/broker/connect")
+
+    assert response.status_code == 200
+    assert response.json()["connection_state"] == "hard_down"
+    assert len(fake.warm_calls) == 1  # type: ignore[attr-defined]
+    assert fake.warm_calls[0][1].connection_state == "connected"  # type: ignore[attr-defined]
 
 
 async def test_connect_when_already_connected_is_idempotent(installed_fake_client):
@@ -173,6 +219,7 @@ async def test_connect_when_already_connected_is_idempotent(installed_fake_clien
     assert response.json()["connected"] is True
     # No second connectAsync should have been issued.
     assert fake.connect_calls == 0
+    assert len(fake.warm_calls) == 1  # type: ignore[attr-defined]
 
 
 async def test_disconnect_when_connected_calls_disconnect(installed_fake_client):
@@ -184,7 +231,10 @@ async def test_disconnect_when_connected_calls_disconnect(installed_fake_client)
         response = await client.post("/api/broker/disconnect")
 
     assert response.status_code == 200
-    assert response.json()["connected"] is False
+    body = response.json()
+    assert body["connected"] is False
+    assert body["condition"]["code"] == "DATA_PLANE_BROKER_DISCONNECTED"
+    assert "operator request" in body["condition"]["summary"]
     assert fake.disconnect_calls == 1
     # Codex P1 regression — operator's Disconnect must flip desired
     # state to False so the AutoReconnectMonitor stops auto-reconnecting.
@@ -245,6 +295,29 @@ async def test_reconnect_disconnects_then_connects(installed_fake_client):
     assert response.json()["connected"] is True
     assert fake.disconnect_calls == 1
     assert fake.connect_calls == 1
+    assert len(fake.warm_calls) == 1  # type: ignore[attr-defined]
+
+
+async def test_warm_account_evidence_timeout_is_recoverable(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from app.routers import broker as broker_router
+    from app.services import account_truth_refresh
+
+    async def never_finishes(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(account_truth_refresh, "refresh_account_truth_now", never_finishes)
+    monkeypatch.setattr(broker_router, "_ACCOUNT_EVIDENCE_WARMUP_TIMEOUT_S", 0.001)
+
+    with caplog.at_level(logging.WARNING, logger=broker_router.logger.name):
+        await broker_router._warm_account_evidence_after_connect(
+            FakeClient(starts_connected=True),  # type: ignore[arg-type]
+            _build_health(connected=True),
+        )
+
+    assert "broker connect account-evidence warm-up failed" in caplog.text
 
 
 # ─── error translation ────────────────────────────────────────────────

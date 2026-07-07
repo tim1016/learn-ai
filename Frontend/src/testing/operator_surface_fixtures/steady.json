@@ -216,9 +216,9 @@
     "connection": "UNKNOWN",
     "connection_condition": {
       "code": "BROKER_CONNECTION_UNKNOWN",
-      "remediation": "Start or refresh the live runtime so broker proof can be recorded.",
+      "remediation": "Refresh the live runtime broker evidence or inspect the runtime freshness notices.",
       "severity": "warning",
-      "summary": "The backend does not have enough runtime evidence to prove the broker connection state.",
+      "summary": "A live bot runtime is bound, but its broker evidence is missing, stale, or not specific enough to prove the per-bot broker session.",
       "title": "Broker connection unproven"
     },
     "safety_verdict": "UNKNOWN"
@@ -490,9 +490,9 @@
       },
       {
         "code": "broker_connection",
-        "explanation": "The backend does not have enough runtime evidence to prove the broker connection state.",
+        "explanation": "A live bot runtime is bound, but its broker evidence is missing, stale, or not specific enough to prove the per-bot broker session.",
         "headline": "Broker connection unproven",
-        "operator_next_step": "Start or refresh the live runtime so broker proof can be recorded.",
+        "operator_next_step": "Refresh the live runtime broker evidence or inspect the runtime freshness notices.",
         "remediation": {
           "kind": "open_runbook",
           "slug": "broker-reconnect"
@@ -650,7 +650,7 @@
     },
     "proof_lines": [
       {
-        "detail": "Account safety proof is not recorded. The backend does not have enough runtime evidence to prove the broker connection state.",
+        "detail": "Account safety proof is not recorded. A live bot runtime is bound, but its broker evidence is missing, stale, or not specific enough to prove the per-bot broker session.",
         "id": "broker-proof",
         "label": "Broker",
         "message": "Broker proof is not available yet.",
