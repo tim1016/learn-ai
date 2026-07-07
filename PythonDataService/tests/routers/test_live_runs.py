@@ -591,7 +591,11 @@ async def test_incidents_dedupes_safety_halt_operator_incident_against_log(live_
     )
     _write_log(
         run_dir,
-        "2026-06-09 14:12:58,021 CRITICAL app poison_sentinel.cold_start_divergence foreign_perm_id\n",
+        (
+            "2026-06-09 14:12:58,021 CRITICAL app Safety halt recorded: This run wrote "
+            "poisoned.flag for cold_start_divergence. Reason: foreign_perm_id. Review "
+            "the halt evidence before starting a fresh run.\n"
+        ),
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -601,6 +605,39 @@ async def test_incidents_dedupes_safety_halt_operator_incident_against_log(live_
     rows = response.json()
     assert len([row for row in rows if row["incident_category"] == "cold_start_divergence"]) == 1
     assert rows[0]["dynamic_facts"]["run_id"] == run_id
+
+
+async def test_incidents_preserves_distinct_single_same_time_safety_halt_log_row(live_runs_root):
+    run_id = "run-safety-halt-log-" + "x" * 43
+    run_dir = live_runs_root / run_id
+    run_dir.mkdir()
+    _write_ledger(run_dir, run_id)
+    IncidentStore(run_dir).append(
+        build_safety_halt_incident(
+            strategy_instance_id="spy_ema_paper",
+            run_id=run_id,
+            halt_reason=PoisonedHaltReason(
+                trigger=PoisonedHaltTrigger.COLD_START_DIVERGENCE,
+                halted_at_ms=1_767_279_600_000,
+                last_clean_bar_close_ms=1_767_279_540_000,
+                details={"reason": "first path", "source": "reconciliation_orchestrator"},
+            ),
+            artifact_path=run_dir / "poisoned.flag",
+            log_path=run_dir / "live.log",
+        )
+    )
+    _write_log(
+        run_dir,
+        "2026-01-01 15:00:00,000 ERROR app poison_sentinel.cold_start_divergence traceback path\n",
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-runs/{run_id}/incidents")
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 2
+    assert rows[1]["message"] == "poison_sentinel.cold_start_divergence traceback path"
 
 
 async def test_incidents_preserves_distinct_same_time_safety_halt_log_rows(live_runs_root):

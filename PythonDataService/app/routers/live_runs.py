@@ -98,7 +98,10 @@ def _validate_path_segment(value: str, *, field: str) -> str:
         raise ValueError(f"{field} must not contain path separators or NUL bytes")
     if Path(value).is_absolute():
         raise ValueError(f"{field} must not be an absolute path")
-    return value
+    safe = Path(value).name
+    if safe != value:
+        raise ValueError(f"{field} must be a single path segment")
+    return safe
 
 
 def _confine(root: Path, segment: str) -> Path:
@@ -906,17 +909,11 @@ def _operator_incident_dynamic_facts(incident: OperatorIncident) -> dict[str, st
 
 
 def _dedupe_incident_records(rows: list[IncidentRecord]) -> list[IncidentRecord]:
-    operator_safety_keys = {
-        (row.ts_ms, row.incident_category)
+    operator_safety_rows = [
+        row
         for row in rows
         if row.logger == "operator_incidents" and _is_safety_halt_category(row.incident_category)
-    }
-    log_safety_counts: dict[tuple[int, str], int] = {}
-    for row in rows:
-        if row.logger == "operator_incidents" or not _is_safety_halt_category(row.incident_category):
-            continue
-        key = (row.ts_ms, row.incident_category)
-        log_safety_counts[key] = log_safety_counts.get(key, 0) + 1
+    ]
     deduped: list[IncidentRecord] = []
     seen_operator_safety_identities: set[tuple[str, str, int, str]] = set()
     for row in rows:
@@ -928,10 +925,7 @@ def _dedupe_incident_records(rows: list[IncidentRecord]) -> list[IncidentRecord]
                 seen_operator_safety_identities.add(key)
             deduped.append(row)
             continue
-        if _is_safety_halt_category(row.incident_category) and (
-            row.ts_ms,
-            row.incident_category,
-        ) in operator_safety_keys and log_safety_counts.get((row.ts_ms, row.incident_category)) == 1:
+        if _is_safety_halt_log_echo(row, operator_safety_rows):
             continue
         deduped.append(row)
     return sorted(deduped, key=lambda row: row.ts_ms)
@@ -944,6 +938,20 @@ def _is_safety_halt_category(category: str) -> bool:
         IncidentCategory.OUTSIDE_MUTATION.value,
         IncidentCategory.OPERATOR_HALT.value,
     }
+
+
+def _is_safety_halt_log_echo(row: IncidentRecord, operator_rows: list[IncidentRecord]) -> bool:
+    if row.logger == "operator_incidents" or not _is_safety_halt_category(row.incident_category):
+        return False
+    for operator_row in operator_rows:
+        if (
+            row.ts_ms == operator_row.ts_ms
+            and row.incident_category == operator_row.incident_category
+            and row.message == operator_row.message
+            and row.traceback == operator_row.traceback
+        ):
+            return True
+    return False
 
 
 def _safety_halt_identity_key(row: IncidentRecord) -> tuple[str, str, int, str] | None:
