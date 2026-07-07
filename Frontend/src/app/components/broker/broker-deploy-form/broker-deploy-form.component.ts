@@ -879,8 +879,11 @@ export class BrokerDeployFormComponent {
     const evidenceGaps = (truth.evidence_gaps ?? [])
       .filter((gap) => gap.severity === 'critical' || gap.severity === 'warning')
       .map((gap) => gap.message);
+    const invariantFailures = (truth.invariants ?? [])
+      .filter((invariant) => invariant.status === 'fail' || invariant.severity === 'critical')
+      .map((invariant) => invariant.headline || invariant.narrative || invariant.label);
     const blockers = (truth.blockers ?? []).map((blocker) => blocker.title || blocker.message);
-    return [...new Set([...criticalSources, ...evidenceGaps, ...blockers])]
+    return [...new Set([...criticalSources, ...evidenceGaps, ...invariantFailures, ...blockers])]
       .filter((label) => label.trim() !== '')
       .slice(0, 3);
   }

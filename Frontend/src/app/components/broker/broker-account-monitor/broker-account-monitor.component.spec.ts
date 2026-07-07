@@ -122,6 +122,12 @@ describe('BrokerAccountMonitorComponent', () => {
 
   it('deep-links the account reconciliation action by URL fragment', async () => {
     const broker = new FakeBrokerService();
+    broker.accountTruth.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          window.setTimeout(() => resolve(accountTruthResponse()), 25);
+        }),
+    );
     const focus = vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(() => undefined);
     const scrollIntoView = vi
       .spyOn(HTMLElement.prototype, 'scrollIntoView')

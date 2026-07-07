@@ -18,7 +18,7 @@ const DEPLOYMENT_VALIDATION_SPEC_PATH =
   'PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json';
 const DEPLOYMENT_VALIDATION_QC_BACKTEST_ID = 'd2fe45a7142e88575f6fbd75229f8681';
 type AccountTruthFixture = Pick<AccountTruthResponse, 'final_verdict' | 'status_label' | 'status_detail'> &
-  Partial<Pick<AccountTruthResponse, 'blockers' | 'evidence_gaps' | 'source_freshness'>>;
+  Partial<Pick<AccountTruthResponse, 'blockers' | 'evidence_gaps' | 'invariants' | 'source_freshness'>>;
 const DEFAULT_STRATEGY_VALIDATION_CATALOG: StrategyValidationCatalog = {
   strategies: [
     {
@@ -1110,6 +1110,37 @@ describe('BrokerDeployFormComponent', () => {
     fixture.detectChanges();
 
     expect(deployButton(fixture).disabled).toBe(false);
+  });
+
+  it('includes failing account truth invariants in the account-proof action detail', async () => {
+    const { fixture, component } = setup({
+      accountTruth: {
+        final_verdict: 'not_proven',
+        status_label: 'Not proven',
+        status_detail: 'Run account reconcile before starting.',
+        invariants: [
+          {
+            key: 'all_open_orders_owned',
+            label: 'All open orders owned',
+            status: 'fail',
+            severity: 'critical',
+            headline: 'Open order ownership is not proven.',
+            narrative: 'At least one broker order lacks a bot or manual owner receipt.',
+            checked_at_ms: 1_780_000_001_000,
+            evidence_count: 0,
+          },
+        ],
+      },
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    fixture.detectChanges();
+
+    expect(deployButton(fixture).disabled).toBe(true);
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Missing evidence: Open order ownership is not proven.',
+    );
   });
 
   it('keeps higher-priority blockers ahead of account-proof action links', async () => {

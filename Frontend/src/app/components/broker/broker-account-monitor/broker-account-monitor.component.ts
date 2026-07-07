@@ -166,8 +166,8 @@ export class BrokerAccountMonitorComponent {
 
     effect((onCleanup) => {
       if (this.fragment() !== 'account-reconciliation-action') return;
-      const id = window.setTimeout(() => this.focusAccountReconciliationAction(), 0);
-      onCleanup(() => window.clearTimeout(id));
+      if (this.truthLoading() || this.accountTruth() === null) return;
+      this.scheduleAccountReconciliationFocus(onCleanup);
     });
 
     // Fold per-conId ticks. The stream's ``data`` is a flat list across
@@ -271,12 +271,31 @@ export class BrokerAccountMonitorComponent {
     }
   }
 
-  private focusAccountReconciliationAction(): void {
+  private scheduleAccountReconciliationFocus(onCleanup: (cleanupFn: () => void) => void): void {
+    let timeoutId: number | null = null;
+    let attempts = 0;
+    const focus = () => {
+      timeoutId = null;
+      if (this.focusAccountReconciliationAction()) return;
+      attempts += 1;
+      if (attempts < 12) {
+        timeoutId = window.setTimeout(focus, 50);
+      }
+    };
+    timeoutId = window.setTimeout(focus, 0);
+    onCleanup(() => {
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
+    });
+  }
+
+  private focusAccountReconciliationAction(): boolean {
     const target = this.host.nativeElement.querySelector<HTMLElement>(
       '#account-reconciliation-action',
     );
-    target?.scrollIntoView({ block: 'center' });
-    target?.focus();
+    if (!target) return false;
+    target.scrollIntoView({ block: 'center' });
+    target.focus();
+    return true;
   }
 
   private openStreams(positions: IbkrPosition[]): void {
