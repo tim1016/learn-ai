@@ -34,6 +34,7 @@ from app.engine.engine import EquitySnapshot
 from app.engine.execution.order import Direction, OrderEvent
 from app.engine.execution.order_sizer import OrderSizer, WholeAccountPortfolioValueProvider
 from app.engine.framework.insight_scorer import DefaultInsightScoreFunction
+from app.engine.live import bot_event_spine
 from app.engine.live.artifacts import (
     CORE_DECISION_COLUMNS,
     DECISION_COLUMNS,
@@ -43,7 +44,12 @@ from app.engine.live.artifacts import (
     TradeRow,
 )
 from app.engine.live.bar_adapter import trade_bars_from_ibkr
-from app.engine.live.bot_event_capture import BotEventGateStepRecorder, evaluation_id_for_bar
+from app.engine.live.bot_event_capture import (
+    BotEventGateStepRecorder,
+    BotEventSpineRecorder,
+    bot_event_wal_for_run,
+    evaluation_id_for_bar,
+)
 from app.engine.live.broker_callbacks import (
     BrokerCallbackWal,
 )
@@ -329,7 +335,10 @@ class _OrderMeta:
     tag: str
     signed_qty: int
     submitted_at_ms: int = 0
-
+    evaluation_id: str | None = None
+    intent_id: str | None = None
+    order_ref: str | None = None
+    perm_id: int | None = None
 
 @runtime_checkable
 class ReplayBrokerAdapter(BrokerAdapter, Protocol):
@@ -651,10 +660,22 @@ class LiveEngine:
         if self._broker_callbacks_wal is not None and isinstance(self._broker, IbkrBrokerAdapter):
             self._broker.set_broker_callback_sink(self._append_raw_broker_callback)
             self._broker_callbacks_wal_attached_to_stream = True
+        bot_event_wal = bot_event_wal_for_run(
+            run_dir=output_dir,
+            run_id=run_id,
+            strategy_instance_id=strategy_instance_id,
+        )
         self._bot_event_gate_step_recorder = BotEventGateStepRecorder.for_run(
             run_dir=output_dir,
             run_id=run_id,
             strategy_instance_id=strategy_instance_id,
+            wal=bot_event_wal,
+        )
+        self._bot_event_spine_recorder = BotEventSpineRecorder.for_run(
+            run_dir=output_dir,
+            run_id=run_id,
+            strategy_instance_id=strategy_instance_id,
+            wal=bot_event_wal,
         )
         # Phase 7B / VCR-0010 — broker safety verdict observer.
         self._verdict_provider = verdict_provider
@@ -1064,6 +1085,8 @@ class LiveEngine:
                     # either way the bar loop is done.
                     break
                 last_bar = minute_bar
+                bar_close_ms = int(minute_bar.end_time.timestamp() * 1000)
+                evaluation_id = evaluation_id_for_bar(bar_close_ms)
                 self._raise_if_event_stream_failed()
                 # PRD #619-B B3 — bar-loop heartbeat. ``heartbeat_at_ms``
                 # is loop scheduling (we just woke); ``latest_source_bar_ms``
@@ -1103,6 +1126,7 @@ class LiveEngine:
                     portfolio.record_broker_fill(event)
                     order_events.append(event)
                     strategy.on_order_event(event)
+                    self._record_replay_order_filled(event)
                     if writers is not None:
                         self._write_execution(writers, event)
                         last_written_trade_count = self._flush_new_trades(writers, strategy, last_written_trade_count)
@@ -1131,9 +1155,11 @@ class LiveEngine:
                         writers=writers,
                     )
                 for raw_event in raw_real_events:
+                    self._record_broker_order_cancelled(raw_event)
                     engine_event = self._convert_ibkr_fill(raw_event)
                     if engine_event is None:
                         continue
+                    self._record_broker_order_filled(raw_event)
                     portfolio.record_broker_fill(engine_event)
                     order_events.append(engine_event)
                     strategy.on_order_event(engine_event)
@@ -1237,6 +1263,14 @@ class LiveEngine:
                 # consolidator may be silent on most minute bars).
                 if writers is not None:
                     last_written_decision_ms = self._maybe_write_decision(writers, strategy, last_written_decision_ms)
+                bot_event_spine.record_evaluation_spine_after_strategy(
+                    self._bot_event_spine_recorder,
+                    strategy,
+                    portfolio,
+                    evaluation_id=evaluation_id,
+                    ts_ms=bar_close_ms,
+                    decision_emitted=consolidated_emitted > 0,
+                )
 
                 # § 7.1 trigger B runs BEFORE _submit_pending_with_meta
                 # so any order overdue from a prior bar gates new
@@ -1305,7 +1339,7 @@ class LiveEngine:
                     and pending_count > 0
                     and orders_submitted_today + pending_count > self._max_orders_per_day
                 ):
-                    gate_ts_ms = int(minute_bar.end_time.timestamp() * 1000)
+                    gate_ts_ms = bar_close_ms
                     if self._bot_event_gate_step_recorder is not None:
                         self._bot_event_gate_step_recorder.append(
                             ts_ms=gate_ts_ms,
@@ -1329,14 +1363,14 @@ class LiveEngine:
                     _emit_drop_events_for_pending(
                         portfolio,
                         drop_reason="max_orders_per_day",
-                        ts_ms=int(minute_bar.end_time.timestamp() * 1000),
+                        ts_ms=bar_close_ms,
                     )
                     raise MaxOrdersPerDayExceeded(
                         f"would push total to {orders_submitted_today + pending_count} on "
                         f"{current_session_date} (cap={self._max_orders_per_day}); "
                         f"dropped {pending_count} pending order(s) without submission"
                     )
-                submitted = await self._submit_pending_with_meta(portfolio)
+                submitted = await self._submit_pending_with_meta(portfolio, evaluation_id=evaluation_id)
                 submitted_order_ids.extend(ack.order_id for ack in submitted)
                 orders_submitted_today += len(submitted)
 
@@ -1359,14 +1393,14 @@ class LiveEngine:
                 # resume — and so the recorded cursor never runs ahead of the
                 # durable parquet rows. Cheap no-op when no writer was
                 # configured.
-                self._persist_live_state(portfolio, int(minute_bar.end_time.timestamp() * 1000), writers)
+                self._persist_live_state(portfolio, bar_close_ms, writers)
 
                 # Engine-authored readiness (ADR 0005): emit the consolidated
                 # "can act on the next bar?" vector from the in-loop guard values
                 # each bar. The backend status endpoint transports it verbatim —
                 # the operator console shows exactly what the engine enforces.
                 self._emit_readiness(
-                    as_of_ms=int(minute_bar.end_time.timestamp() * 1000),
+                    as_of_ms=bar_close_ms,
                     orders_used=orders_submitted_today,
                     in_session=True,
                     force_flat_active=(last_force_flat_date == minute_bar.time.date()),
@@ -1394,9 +1428,11 @@ class LiveEngine:
                         writers=writers,
                     )
                 for raw_event in final_raw_events:
+                    self._record_broker_order_cancelled(raw_event)
                     engine_event = self._convert_ibkr_fill(raw_event)
                     if engine_event is None:
                         continue
+                    self._record_broker_order_filled(raw_event)
                     portfolio.record_broker_fill(engine_event)
                     order_events.append(engine_event)
                     strategy.on_order_event(engine_event)
@@ -1535,6 +1571,67 @@ class LiveEngine:
             )
         )
         return snap.bar_close_ms
+
+    def _record_replay_order_filled(self, event: OrderEvent) -> None:
+        recorder = self._bot_event_spine_recorder
+        if recorder is None:
+            return
+        meta = self._order_meta.get(int(event.order_id))
+        recorder.append_order_filled(
+            ts_ms=int(event.time.timestamp() * 1000),
+            identity=bot_event_spine.order_event_identity(
+                order_id=int(event.order_id),
+                evaluation_id=meta.evaluation_id if meta is not None else None,
+                intent_id=meta.intent_id if meta is not None else None,
+                order_ref=meta.order_ref if meta is not None else None,
+                perm_id=meta.perm_id if meta is not None else None,
+                exec_id=event.exec_id,
+            ),
+            facts=bot_event_spine.order_filled_facts(event),
+        )
+
+    def _record_broker_order_filled(self, event: IbkrOrderEvent) -> None:
+        recorder = self._bot_event_spine_recorder
+        if recorder is None or event.event_type != "fill":
+            return
+        meta = self._order_meta.get(int(event.order_id))
+        recorder.append_order_filled(
+            ts_ms=event.ts_ms,
+            identity=bot_event_spine.broker_event_identity(
+                event,
+                evaluation_id=meta.evaluation_id if meta is not None else None,
+                intent_id=meta.intent_id if meta is not None else None,
+                order_ref=meta.order_ref if meta is not None else None,
+                perm_id=meta.perm_id if meta is not None else None,
+            ),
+            source_authority=SourceAuthority.BROKER_SESSION,
+            facts=bot_event_spine.broker_order_event_facts(event),
+        )
+
+    def _record_broker_order_cancelled(self, event: IbkrOrderEvent) -> None:
+        recorder = self._bot_event_spine_recorder
+        if recorder is None or event.event_type != "cancel":
+            return
+        if not bot_event_spine.is_owned_broker_event(
+            event,
+            order_ids=set(self._order_meta),
+            owned_perm_ids=self._owned_perm_ids,
+            strategy_instance_id=self._strategy_instance_id,
+        ):
+            return
+        meta = self._order_meta.get(int(event.order_id))
+        recorder.append_order_cancelled(
+            ts_ms=event.ts_ms,
+            identity=bot_event_spine.broker_event_identity(
+                event,
+                evaluation_id=meta.evaluation_id if meta is not None else None,
+                intent_id=meta.intent_id if meta is not None else None,
+                order_ref=meta.order_ref if meta is not None else None,
+                perm_id=meta.perm_id if meta is not None else None,
+            ),
+            source_authority=SourceAuthority.BROKER_SESSION,
+            facts=bot_event_spine.broker_order_event_facts(event),
+        )
 
     def _write_execution(self, writers: LiveArtifactWriters, event: OrderEvent) -> None:
         """Append one execution row for an engine-converted broker fill.
@@ -1724,7 +1821,12 @@ class LiveEngine:
             )
         return len(trade_log)
 
-    async def _submit_pending_with_meta(self, portfolio: LivePortfolio):
+    async def _submit_pending_with_meta(
+        self,
+        portfolio: LivePortfolio,
+        *,
+        evaluation_id: str | None = None,
+    ):
         """Submit queued orders and remember their per-id metadata.
 
         ``LivePortfolio.submit_pending_orders`` drains pending orders in
@@ -1755,9 +1857,14 @@ class LiveEngine:
         decision row with the reconcile receipt.
         """
         async with self._submit_lock:
-            return await self._submit_pending_with_meta_locked(portfolio)
+            return await self._submit_pending_with_meta_locked(portfolio, evaluation_id=evaluation_id)
 
-    async def _submit_pending_with_meta_locked(self, portfolio: LivePortfolio):
+    async def _submit_pending_with_meta_locked(
+        self,
+        portfolio: LivePortfolio,
+        *,
+        evaluation_id: str | None = None,
+    ):
         """Internal submit path that assumes ``self._submit_lock`` is held.
 
         Split from ``_submit_pending_with_meta`` so callers that already
@@ -1766,6 +1873,14 @@ class LiveEngine:
         and would deadlock the bar loop.
         """
         pending_snapshot = list(portfolio.pending_orders)
+        pending_identities = {
+            order.order_id: bot_event_spine.pending_bot_event_identity(
+                portfolio,
+                order_id=order.order_id,
+                evaluation_id=evaluation_id,
+            )
+            for order in pending_snapshot
+        }
         if self._readonly:
             portfolio.pending_orders.clear()
             return []
@@ -1805,12 +1920,26 @@ class LiveEngine:
         acks = await portfolio.submit_pending_orders()
         submitted_at_ms = now_ms_utc()
         for order, ack in zip(pending_snapshot, acks, strict=True):
+            bot_event_identity = bot_event_spine.submitted_bot_event_identity(
+                ack,
+                pending_identities.get(order.order_id),
+            )
             self._order_meta[int(ack.order_id)] = _OrderMeta(
                 symbol=order.symbol,
                 tag=order.tag,
                 signed_qty=int(order.quantity),
                 submitted_at_ms=submitted_at_ms,
+                evaluation_id=bot_event_identity.evaluation_id,
+                intent_id=bot_event_identity.intent_id,
+                order_ref=bot_event_identity.order_ref,
+                perm_id=bot_event_identity.perm_id,
             )
+            if self._bot_event_spine_recorder is not None:
+                self._bot_event_spine_recorder.append_order_submitted(
+                    ts_ms=submitted_at_ms,
+                    identity=bot_event_identity,
+                    facts=bot_event_spine.order_submitted_facts(order, ack),
+                )
         return acks
 
     # ──────────────────── Operator command channel ───────────────────

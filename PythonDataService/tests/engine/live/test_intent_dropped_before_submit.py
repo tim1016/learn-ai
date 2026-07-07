@@ -465,11 +465,16 @@ async def test_max_orders_drop_writes_wal_event(tmp_path: Path) -> None:
     assert all(e.drop_reason == "max_orders_per_day" for e in drops)
 
     raw_events = BotEventRawWal(run_bot_event_wal_path(run_dir)).read_all()
-    assert len(raw_events) == 1
-    gate_event = raw_events[0]
+    assert len(raw_events) == 2
+    signal_event, gate_event = raw_events
+    assert signal_event.event_type is BotEventRawType.SIGNAL_FIRED
+    assert signal_event.source_authority is SourceAuthority.ENGINE_LOOP
+    assert signal_event.identity.evaluation_id == f"bar:{signal_event.ts_ms}"
+    assert signal_event.facts["pending_count"] == 1
+
     assert gate_event.event_type is BotEventRawType.GATE_STEP
     assert gate_event.source_authority is SourceAuthority.ENGINE_LOOP
-    assert gate_event.identity.evaluation_id == f"bar:{gate_event.ts_ms}"
+    assert gate_event.identity.evaluation_id == signal_event.identity.evaluation_id
     assert gate_event.gate_step is not None
     assert gate_event.gate_step.gate_id == "orders_cap"
     assert gate_event.gate_step.gate_result is GateStepResult.BLOCK

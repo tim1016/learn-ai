@@ -121,14 +121,17 @@ async def test_live_engine_writes_readiness_gate_steps_to_bot_event_wal(tmp_path
 
     readiness = json.loads((tmp_path / "readiness.json").read_text())
     raw_events = BotEventRawWal(run_bot_event_wal_path(tmp_path)).read_all()
-    assert len(raw_events) == len(readiness["gates"])
-    assert [event.gate_step.gate_id for event in raw_events if event.gate_step is not None] == [
+    gate_events = [event for event in raw_events if event.event_type is BotEventRawType.GATE_STEP]
+    idle_events = [event for event in raw_events if event.event_type is BotEventRawType.EVALUATION_IDLE]
+    assert len(gate_events) == len(readiness["gates"])
+    assert len(idle_events) == 1
+    assert [event.gate_step.gate_id for event in gate_events if event.gate_step is not None] == [
         gate["gate_result"]["gate_id"] for gate in readiness["gates"]
     ]
-    assert all(event.event_type is BotEventRawType.GATE_STEP for event in raw_events)
-    assert all(event.source_authority is SourceAuthority.ENGINE_LOOP for event in raw_events)
-    assert all(event.identity.evaluation_id == f"bar:{readiness['as_of_ms']}" for event in raw_events)
-    assert all(event.facts["projection"] == "live_readiness" for event in raw_events)
+    assert all(event.source_authority is SourceAuthority.ENGINE_LOOP for event in gate_events)
+    assert all(event.identity.evaluation_id == f"bar:{readiness['as_of_ms']}" for event in gate_events)
+    assert all(event.facts["projection"] == "live_readiness" for event in gate_events)
+    assert idle_events[0].identity.evaluation_id == f"bar:{readiness['as_of_ms']}"
 
 
 @pytest.mark.asyncio
@@ -187,6 +190,61 @@ async def test_live_engine_writes_executions_when_output_dir_set(tmp_path: Path)
     # PRD-A §16.1 Resolution 5: a real broker fill is tagged broker_fill.
     assert df.iloc[0]["execution_source"] == "broker_fill"
     assert df.iloc[0]["fill_model"] == "NEXT_BAR_OPEN"
+
+
+@pytest.mark.asyncio
+async def test_live_engine_writes_evaluation_order_spine_to_bot_event_wal(tmp_path: Path) -> None:
+    broker = FakeBroker()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        output_dir=tmp_path,
+        account_id="DU123",
+        run_id="run-spine",
+        strategy_instance_id="sid-spine",
+    )
+    bars = [_bar(minute, "500", "500") for minute in range(30, 80)]
+
+    await engine.run(_OneEntryWithDecisionSnapshotStrategy(), iter_bars(bars))
+
+    raw_events = BotEventRawWal(run_bot_event_wal_path(tmp_path)).read_all()
+    spine_events = [
+        event
+        for event in raw_events
+        if event.event_type
+        in {
+            BotEventRawType.SIGNAL_FIRED,
+            BotEventRawType.ORDER_SUBMITTED,
+            BotEventRawType.ORDER_FILLED,
+        }
+    ]
+    assert [event.event_type for event in spine_events] == [
+        BotEventRawType.SIGNAL_FIRED,
+        BotEventRawType.ORDER_SUBMITTED,
+        BotEventRawType.ORDER_FILLED,
+    ]
+    signal, submitted, filled = spine_events
+    assert signal.identity.evaluation_id is not None
+    assert {
+        signal.identity.evaluation_id,
+        submitted.identity.evaluation_id,
+        filled.identity.evaluation_id,
+    } == {signal.identity.evaluation_id}
+    assert submitted.identity.order_id == 1
+    assert filled.identity.order_id == 1
+    assert signal.facts["decision_signal"] == "ENTER"
+    assert signal.facts["pending_count"] == 1
+    assert submitted.facts["client_order_id"] == "live-1"
+    assert filled.facts["fill_quantity"] == 200
+    assert all(event.source_authority is SourceAuthority.ENGINE_LOOP for event in spine_events)
+
+    idle_after_signal = next(
+        event
+        for event in raw_events
+        if event.event_type is BotEventRawType.EVALUATION_IDLE and event.ts_ms > signal.ts_ms
+    )
+    assert "decision_signal" not in idle_after_signal.facts
 
 
 @pytest.mark.asyncio
