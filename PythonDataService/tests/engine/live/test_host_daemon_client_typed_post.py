@@ -2,8 +2,8 @@
 
 Exercises the four mutation forwarders (``deploy`` / ``start_run`` /
 ``stop_run`` / ``emergency_flatten_run``) end-to-end through the typed
-``_typed_post_json`` core. Mocks the daemon HTTP layer with respx so the
-real ``httpx.AsyncClient`` exercises the request/response path.
+POST core. Mocks the daemon HTTP layer with respx so the real
+``httpx.AsyncClient`` exercises the request/response path.
 
 The 619-C5 contract:
 
@@ -185,6 +185,26 @@ async def test_4xx_5xx_propagate_with_daemon_status(status: int) -> None:
 
     assert exc_info.value.status_code == status
     assert exc_info.value.detail == "daemon says no"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_structured_daemon_error_detail_is_preserved() -> None:
+    detail = {
+        "reason_code": "STOPPED_REQUIRES_RESUME",
+        "message": "spy_ema_paper is durably STOPPED.",
+        "remediation": "Use Resume to set desired_state=RUNNING, then start the bot.",
+        "gate_id": "desired_state.start",
+    }
+    respx.post(f"{BASE}/runs/run-A/start").mock(
+        return_value=httpx.Response(409, json={"detail": detail})
+    )
+
+    with pytest.raises(HostDaemonError) as exc_info:
+        await start_run(BASE, "run-A", {})
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == detail
 
 
 # ---------------------------------------------------------------------------

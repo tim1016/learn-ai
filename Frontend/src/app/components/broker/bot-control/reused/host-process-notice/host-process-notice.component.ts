@@ -8,6 +8,7 @@ import type {
   PriorRunClassification,
 } from '../../../../../api/live-instances.types';
 import { LiveRunsService } from '../../../../../services/live-runs.service';
+import { toOperationError } from '../../../operation-error';
 import { canStartHostProcess, startHostProcessFromCapability } from '../../lib/start-host-process';
 
 const HEADING_BY_STATE: Record<HostProcessState, string> = {
@@ -42,8 +43,10 @@ const START_DISABLED_COPY: Record<HostProcessStartDisabledReasonCode, string> = 
   STOPPING: 'The bot is shutting down. Wait for it to finish before starting again.',
   HOST_SERVICE_OFFLINE:
     'The bot service is offline. Start it on the host machine first, then try again.',
+  STOPPED_REQUIRES_RESUME:
+    'This bot is stopped. Use Resume to clear the stop latch before starting.',
   STOPPED_REQUIRES_REDEPLOY:
-    'This run is permanently stopped. Redeploy the bot to trade again.',
+    'This run is dead or retired. Redeploy the bot before starting again.',
   START_SETTINGS_INCOMPLETE:
     "This bot's saved start settings are incomplete. Review Configuration and redeploy.",
   ACCOUNT_FROZEN:
@@ -143,10 +146,7 @@ export class HostProcessNoticeComponent {
   }
 
   private _formatStartError(err: unknown): string {
-    if (err instanceof HttpErrorResponse) {
-      const detail = (err.error as { detail?: string } | null)?.detail;
-      return detail || err.message || 'Failed to start bot process.';
-    }
+    if (err instanceof HttpErrorResponse) return toOperationError('start', err).detail;
     if (err instanceof Error) {
       return err.message;
     }

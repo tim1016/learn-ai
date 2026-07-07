@@ -1660,6 +1660,11 @@ async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -
                 "gate_result": account_freeze.to_gate_result().model_dump(mode="json"),
             },
         )
+    if daemon_request.start and daemon_request.strategy_instance_id:
+        _raise_if_stopped_blocks_start(
+            Path(settings.live_runs_root),
+            daemon_request.strategy_instance_id,
+        )
     try:
         result = await host_daemon_client.deploy(
             settings.live_runner_daemon_url,
@@ -1720,6 +1725,32 @@ _START_DAEMON_STATE_REASON: dict[str, str] = {
 }
 
 
+def _stopped_requires_resume_detail(sid: str) -> dict:
+    return {
+        "reason_code": "STOPPED_REQUIRES_RESUME",
+        "message": (
+            f"{sid} is durably STOPPED. Resume the bot to clear the stop latch "
+            "before starting or using Deploy & start."
+        ),
+        "remediation": (
+            "Use Resume to set desired_state=RUNNING, then start the bot. "
+            "Use Deploy only when you want to stage a new run without starting it."
+        ),
+        "gate_id": "desired_state.start",
+        "desired_state": "STOPPED",
+        "strategy_instance_id": sid,
+    }
+
+
+def _raise_if_stopped_blocks_start(root: Path, sid: str) -> None:
+    desired = _resolve_desired_state(root, sid)
+    if desired.state == "STOPPED":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail=_stopped_requires_resume_detail(sid),
+        )
+
+
 async def _assert_start_allowed(run_id: str, settings) -> None:
     """Re-evaluate the start gates before forwarding /runs/{run_id}/start.
 
@@ -1776,15 +1807,7 @@ async def _assert_start_allowed(run_id: str, settings) -> None:
                 "message": "This run is permanently retired. Redeploy the bot to trade again.",
             },
         )
-    desired = _resolve_desired_state(root, sid)
-    if desired.state == "STOPPED":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "STOPPED_REQUIRES_REDEPLOY",
-                "message": "This run is permanently stopped. Redeploy the bot to trade again.",
-            },
-        )
+    _raise_if_stopped_blocks_start(root, sid)
 
     _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
     if daemon is None:

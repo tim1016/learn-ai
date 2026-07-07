@@ -27,7 +27,13 @@ from app.engine.live.account_registry import (
     write_account_instance_binding,
 )
 from app.engine.live.daemon_auth import TOKEN_HEADER
+from app.engine.live.desired_state import (
+    DesiredState,
+    DesiredStateRepo,
+    stable_desired_state_path,
+)
 from app.engine.live.host_daemon import (
+    HostRunnerError,
     RunnerProcessManager,
     _parse_ibkr_client_id_pool,
     build_parser,
@@ -374,6 +380,114 @@ async def test_start_launches_existing_run_with_host_env(
     assert captured["kwargs"]["env"]["IBKR_HOST"] == "127.0.0.1"
     assert captured["kwargs"]["env"]["IBKR_CLIENT_ID"] == "70"
     assert "PythonDataService" in captured["kwargs"]["env"]["PYTHONPATH"]
+
+
+def test_start_refuses_stopped_desired_state_before_spawn(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, run_dir = daemon_context
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": RUN_ID,
+                "strategy_instance_id": "spy_ema_paper",
+                "account_id": "DU111",
+            }
+        ),
+        encoding="utf-8",
+    )
+    DesiredStateRepo(
+        stable_desired_state_path(manager.artifacts_root, "spy_ema_paper")
+    ).set(
+        DesiredState.STOPPED,
+        updated_by="test",
+        reason="regression",
+        now_ms=1_700_000_000_000,
+    )
+    popen_called = False
+
+    def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
+        nonlocal popen_called
+        popen_called = True
+        return FakeProcess()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    with pytest.raises(HostRunnerError) as exc_info:
+        manager.start(RUN_ID, request=HostRunnerStartRequest())
+
+    assert exc_info.value.status_code == 409
+    assert isinstance(exc_info.value.detail, dict)
+    assert exc_info.value.detail["reason_code"] == "STOPPED_REQUIRES_RESUME"
+    assert exc_info.value.detail["gate_id"] == "desired_state.start"
+    assert popen_called is False
+
+
+def test_start_refuses_invalid_strategy_instance_id_before_desired_state_lookup(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, run_dir = daemon_context
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": RUN_ID,
+                "strategy_instance_id": "../bad",
+                "account_id": "DU111",
+            }
+        ),
+        encoding="utf-8",
+    )
+    popen_called = False
+
+    def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
+        nonlocal popen_called
+        popen_called = True
+        return FakeProcess()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    with pytest.raises(HostRunnerError) as exc_info:
+        manager.start(RUN_ID, request=HostRunnerStartRequest())
+
+    assert exc_info.value.status_code == 409
+    assert "desired_state sidecar is unreadable" in str(exc_info.value.detail)
+    assert popen_called is False
+
+
+def test_start_refuses_unreadable_desired_state_sidecar(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, run_dir = daemon_context
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": RUN_ID,
+                "strategy_instance_id": "spy_ema_paper",
+                "account_id": "DU111",
+            }
+        ),
+        encoding="utf-8",
+    )
+    sidecar_path = stable_desired_state_path(manager.artifacts_root, "spy_ema_paper")
+    sidecar_path.mkdir(parents=True)
+    popen_called = False
+
+    def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
+        nonlocal popen_called
+        popen_called = True
+        return FakeProcess()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    with pytest.raises(HostRunnerError) as exc_info:
+        manager.start(RUN_ID, request=HostRunnerStartRequest())
+
+    assert exc_info.value.status_code == 409
+    assert "desired_state sidecar is unreadable" in str(exc_info.value.detail)
+    assert popen_called is False
 
 
 async def test_start_allocates_distinct_ibkr_client_ids_for_sibling_instances(

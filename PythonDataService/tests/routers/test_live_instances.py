@@ -20,6 +20,7 @@ from app.broker.ibkr.api_evidence import evidence_request, evidence_response, ge
 from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import AccountFreezeEvidence, append_account_event, write_account_freeze
 from app.engine.live.artifacts import ExecutionRow, ExecutionWriter, TradeRow, TradeWriter
+from app.engine.live.desired_state import DesiredState, DesiredStateRepo, stable_desired_state_path
 from app.engine.live.intent_events import IntentEvent, IntentEventType
 from app.engine.live.intent_wal import IntentWal
 from app.engine.live.run_ledger import LiveRunLedger
@@ -2620,6 +2621,41 @@ async def test_deploy_instance_rejects_when_account_is_frozen(app_with_root, mon
     assert called is False
 
 
+async def test_deploy_and_start_rejects_when_desired_state_is_stopped(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _set_connected_broker_account(monkeypatch, "DU111")
+    DesiredStateRepo(
+        stable_desired_state_path(root.parent, "spy_ema_paper")
+    ).set(
+        DesiredState.STOPPED,
+        updated_by="test",
+        reason="regression",
+        now_ms=1_700_000_000_000,
+    )
+    called = False
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        nonlocal called
+        called = True
+        return {"run_id": "run-new", "run_dir": "/runs/run-new", "created": True, "start": None}
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+    body = _deploy_body()
+    body["start"] = True
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=body)
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "STOPPED_REQUIRES_RESUME"
+    assert detail["gate_id"] == "desired_state.start"
+    assert "Resume" in detail["message"]
+    assert called is False
+
+
 async def test_deploy_instance_uses_connected_broker_account_when_request_omits_account(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3099,7 +3135,7 @@ async def test_start_run_rejects_when_desired_state_is_stopped(app_with_root, mo
         response = await client.post("/api/live-instances/runs/run-perma/start", json={})
 
     assert response.status_code == 409
-    assert response.json()["detail"]["reason_code"] == "STOPPED_REQUIRES_REDEPLOY"
+    assert response.json()["detail"]["reason_code"] == "STOPPED_REQUIRES_RESUME"
 
 
 async def test_start_run_rejects_when_account_is_frozen(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -66,6 +66,9 @@ def _auth_headers() -> dict[str, str]:
     return {TOKEN_HEADER: token} if token else {}
 
 
+HostDaemonErrorDetail = str | dict[str, object]
+
+
 class HostDaemonError(Exception):
     """A daemon call that must surface its status to the caller.
 
@@ -82,8 +85,10 @@ class HostDaemonError(Exception):
     response so the operator can refresh state before retrying.
     """
 
-    def __init__(self, status_code: int, detail: str) -> None:
-        super().__init__(detail)
+    def __init__(self, status_code: int, detail: HostDaemonErrorDetail) -> None:
+        super().__init__(
+            detail if isinstance(detail, str) else detail.get("message", str(detail))
+        )
         self.status_code = status_code
         self.detail = detail
 
@@ -197,9 +202,18 @@ async def _post_action(url: str, payload: dict, *, timeout: httpx.Timeout = _TIM
       all) → :class:`HostDaemonError(502, ...)` (the daemon spoke but
       in a way we can't consume).
     """
-    result, body = await _typed_post_json(url, payload, timeout=timeout)
-    if result.kind == "CONNECTED" and body is not None:
-        return body
+    result, response = await _classify_http(
+        url,
+        method="POST",
+        payload=payload,
+        timeout=timeout,
+        keep_error_response=True,
+    )
+    if result.kind == "CONNECTED" and response is not None:
+        parsed_result, body = _parse_json_body(result, response)
+        if parsed_result.kind == "CONNECTED" and body is not None:
+            return body
+        result = parsed_result
 
     if result.kind == "UNREACHABLE":
         if result.outcome_ambiguous:
@@ -214,7 +228,9 @@ async def _post_action(url: str, payload: dict, *, timeout: httpx.Timeout = _TIM
     if result.response_status is not None and result.response_status >= 400:
         raise HostDaemonError(
             result.response_status,
-            result.detail or f"host daemon returned {result.response_status}",
+            _error_detail_of(response)
+            if response is not None
+            else (result.detail or f"host daemon returned {result.response_status}"),
         )
 
     raise HostDaemonError(
@@ -407,6 +423,7 @@ async def _classify_http(
     method: Literal["GET", "POST"],
     payload: dict | None = None,
     timeout: httpx.Timeout = _TIMEOUT,
+    keep_error_response: bool = False,
 ) -> tuple[DaemonResult, httpx.Response | None]:
     """Classify the transport outcome of one daemon HTTP exchange.
 
@@ -437,17 +454,32 @@ async def _classify_http(
             DaemonResult.auth_failed(
                 status=response.status_code, detail=_detail_of(response)
             ),
-            None,
+            response if keep_error_response else None,
         )
     if response.status_code >= 400:
         return (
             DaemonResult.protocol_error(
                 status=response.status_code, detail=_detail_of(response)
             ),
-            None,
+            response if keep_error_response else None,
         )
     # 2xx — body parsing belongs to the caller.
     return DaemonResult.connected(status=response.status_code), response
+
+
+def _error_detail_of(response: httpx.Response) -> HostDaemonErrorDetail:
+    """Extract the daemon-authored error detail, preserving structured contracts."""
+    try:
+        body = response.json()
+    except ValueError:
+        return response.text or f"host daemon returned {response.status_code}"
+    if isinstance(body, dict):
+        detail = body.get("detail")
+        if isinstance(detail, str):
+            return detail
+        if isinstance(detail, dict):
+            return detail
+    return f"host daemon returned {response.status_code}"
 
 
 def _parse_json_body(

@@ -94,6 +94,12 @@ describe('disabledReasonCopy', () => {
     expect(copy).toContain('transport');
   });
 
+  it('keeps redeploy-required STOPPED copy off the Resume path', () => {
+    const copy = disabledReasonCopy('STOPPED_REQUIRES_REDEPLOY');
+    expect(copy).toContain('redeploy');
+    expect(copy).not.toContain('Use Resume');
+  });
+
   it('returns a visibly diagnosable string for an unknown code (run-prompt §9.4)', () => {
     const copy = disabledReasonCopy('SOMETHING_NEW_THE_SERVER_ADDED');
     expect(copy).toBeTruthy();

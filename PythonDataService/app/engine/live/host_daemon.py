@@ -51,6 +51,12 @@ from app.engine.live.deploy import (
     deploy_run,
     git_head_sha,
 )
+from app.engine.live.desired_state import (
+    DesiredState,
+    DesiredStateCorruptError,
+    DesiredStateRepo,
+    stable_desired_state_path,
+)
 from app.engine.live.host_daemon_bot_events import (
     record_child_crash_launch_failure,
     record_spawn_launch_failure,
@@ -203,11 +209,16 @@ def _exit_reason_from_code(returncode: int | None) -> str:
     return f"exited({returncode})"
 
 
+HostRunnerErrorDetail = str | dict[str, object]
+
+
 class HostRunnerError(RuntimeError):
     """Error that should be translated into a daemon HTTP response."""
 
-    def __init__(self, status_code: int, detail: str) -> None:
-        super().__init__(detail)
+    def __init__(self, status_code: int, detail: HostRunnerErrorDetail) -> None:
+        super().__init__(
+            detail if isinstance(detail, str) else detail.get("message", str(detail))
+        )
         self.status_code = status_code
         self.detail = detail
 
@@ -551,6 +562,7 @@ class RunnerProcessManager:
                         "Stop it before starting another run for this instance.",
                     )
 
+            self._enforce_desired_state_allows_start(sid)
             self._enforce_crash_retired_recovery(run_dir)
             command = self._build_start_command(
                 run_dir,
@@ -891,6 +903,36 @@ class RunnerProcessManager:
                 "Reconcile or record an audited recovery override before restarting this binding."
             ),
         )
+
+    def _enforce_desired_state_allows_start(self, strategy_instance_id: str | None) -> None:
+        if not strategy_instance_id:
+            return
+        try:
+            path = stable_desired_state_path(self.artifacts_root, strategy_instance_id)
+            desired_state = DesiredStateRepo(path).read_state()
+        except (DesiredStateCorruptError, OSError, ValueError) as exc:
+            raise HostRunnerError(
+                status.HTTP_409_CONFLICT,
+                f"desired_state sidecar is unreadable for {strategy_instance_id!r}: {exc}",
+            ) from exc
+        if desired_state is DesiredState.STOPPED:
+            raise HostRunnerError(
+                status.HTTP_409_CONFLICT,
+                {
+                    "reason_code": "STOPPED_REQUIRES_RESUME",
+                    "message": (
+                        f"{strategy_instance_id} is durably STOPPED. Resume the bot to clear "
+                        "the stop latch before starting or using Deploy & start."
+                    ),
+                    "remediation": (
+                        "Use Resume to set desired_state=RUNNING, then start the bot. "
+                        "Use Deploy only when you want to stage a new run without starting it."
+                    ),
+                    "gate_id": "desired_state.start",
+                    "desired_state": "STOPPED",
+                    "strategy_instance_id": strategy_instance_id,
+                },
+            )
 
     def _git_tracked_under(self, subdir: Path) -> list[str]:
         """Repo-relative POSIX paths of git-tracked files under ``subdir``.

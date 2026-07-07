@@ -149,9 +149,12 @@ def _project_host_start_capability(
             disabled_reason_code="ACCOUNT_FROZEN",
             gate_results=[account_freeze.to_gate_result()],
         )
-    # Permanent-retirement gates outrank every per-state guard.
-    if poisoned or (desired_state is not None and desired_state.state == "STOPPED"):
+    # Poisoned runs are dead and still require redeploy. Durable STOPPED is
+    # only a Resume-clearable latch when the run is otherwise recoverable.
+    if poisoned:
         reason = "STOPPED_REQUIRES_REDEPLOY"
+    elif desired_state is not None and desired_state.state == "STOPPED":
+        reason = "STOPPED_REQUIRES_RESUME"
     elif state == "RUNNING":
         reason = "ALREADY_RUNNING"
     elif state == "STOPPING":
