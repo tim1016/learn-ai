@@ -8,12 +8,14 @@ import os
 from pathlib import Path
 
 from app.engine.live.bot_event_capture import BotEventTerminalRecorder
+from app.operator.incidents.store import IncidentStore
 from app.schemas.bot_events import (
     FactValue,
     TerminalError,
     TerminalErrorCode,
     TerminalErrorSource,
 )
+from app.services.bot_event_incidents import append_terminal_incident
 
 logger = logging.getLogger(__name__)
 
@@ -148,8 +150,9 @@ def _append_launch_failed_event(
     if recorder is None:
         return False
     try:
-        recorder.append_launch_failed(ts_ms=ts_ms, terminal_error=terminal_error, facts=facts)
-    except (OSError, ValueError):
+        raw_event = recorder.append_launch_failed(ts_ms=ts_ms, terminal_error=terminal_error, facts=facts)
+        append_terminal_incident(IncidentStore(run_dir), raw_event)
+    except Exception:
         logger.exception(
             "Failed to record daemon launch_failed bot event",
             extra={"run_id": run_id, "strategy_instance_id": strategy_instance_id},

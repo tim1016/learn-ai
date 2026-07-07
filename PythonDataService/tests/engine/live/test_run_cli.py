@@ -1439,7 +1439,10 @@ def test_start_submit_gate_block_exits_without_recovery_flatten(
     from app.engine.live import run as run_mod
     from app.engine.live.live_portfolio import AccountTruthBlockError
     from app.engine.live.run_ledger import build_ledger, write_ledger
+    from app.operator.incidents.store import IncidentStore
+    from app.schemas.bot_events import BotEventRawType, SourceAuthority, TerminalErrorCode
     from app.schemas.live_runs import GateResult
+    from app.services.bot_event_wal import BotEventRawWal, run_bot_event_wal_path
     from tests.engine.live.fixtures.fake_broker import FakeBroker
 
     class _GateBlockingEngine:
@@ -1510,6 +1513,17 @@ def test_start_submit_gate_block_exits_without_recovery_flatten(
     assert recovery_flatten_called is False
     assert status["exit_code"] == 1
     assert status["exit_reason"] == "fatal_halt"
+    events = BotEventRawWal(run_bot_event_wal_path(run_dir)).read_all()
+    halted = [event for event in events if event.event_type is BotEventRawType.HALTED]
+    assert len(halted) == 1
+    assert halted[0].source_authority is SourceAuthority.ENGINE_LOOP
+    assert halted[0].identity.evaluation_id == f"halt:{ledger.run_id}"
+    assert halted[0].terminal_error is not None
+    assert halted[0].terminal_error.code is TerminalErrorCode.HALTED
+    assert halted[0].terminal_error.gate_id == "account.truth"
+    assert halted[0].facts["notice_code"] == "submit.halted"
+    incidents = IncidentStore(run_dir).list_unresolved()
+    assert [incident.notice.code for incident in incidents] == ["submit.halted"]
 
 
 def test_start_broker_safety_transition_halt_exits_without_recovery_flatten(

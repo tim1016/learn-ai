@@ -103,6 +103,37 @@ class _IdleReadinessStrategy(Strategy):
         self.ctx.add_equity("SPY")
 
 
+def test_halted_terminal_capture_preserves_submit_uncertain_identity(tmp_path: Path) -> None:
+    from app.engine.live.bot_event_capture import record_halted_terminal_event
+    from app.engine.live.live_portfolio import SubmitUncertainHaltError
+    from app.operator.incidents.store import IncidentStore
+    from app.schemas.bot_events import TerminalErrorCode
+
+    raw_event = record_halted_terminal_event(
+        run_dir=tmp_path,
+        run_id="run-submit-uncertain",
+        strategy_instance_id="sid-submit-uncertain",
+        exc=SubmitUncertainHaltError(
+            intent_id="intent-123",
+            order_ref="learn-ai/sid-submit-uncertain/v1:intent-123",
+            probe_result="NOT_PROVABLE",
+            retry_count=1,
+            reason="probe not provable",
+        ),
+        ts_ms=1_700_000_000_000,
+    )
+
+    assert raw_event is not None
+    assert raw_event.event_type is BotEventRawType.HALTED
+    assert raw_event.identity.evaluation_id is None
+    assert raw_event.identity.intent_id == "intent-123"
+    assert raw_event.identity.order_ref == "learn-ai/sid-submit-uncertain/v1:intent-123"
+    assert raw_event.terminal_error is not None
+    assert raw_event.terminal_error.code is TerminalErrorCode.SUBMIT_UNCERTAIN
+    incidents = IncidentStore(tmp_path).list_unresolved()
+    assert [incident.notice.code for incident in incidents] == ["submit.uncertain"]
+
+
 @pytest.mark.asyncio
 async def test_live_engine_writes_readiness_gate_steps_to_bot_event_wal(tmp_path: Path) -> None:
     broker = FakeBroker()
