@@ -2,11 +2,11 @@
   <section
     class="working-pending"
     data-testid="orders-today"
-    aria-label="Orders Today"
+    aria-label="Open order clusters"
   >
     <header class="head">
-      <h3>ORDERS TODAY</h3>
-      <span class="muted">{{ displayRows().length }} order(s)</span>
+      <h3>ORDER CLUSTERS</h3>
+      <span class="muted">{{ displayRows().length }} open order(s)</span>
     </header>
 
     @if (activeRows().length > 0) {
@@ -21,13 +21,6 @@
       <ng-container
         [ngTemplateOutlet]="ordersTable"
         [ngTemplateOutletContext]="{ rows: enginePendingRows() }"
-      />
-    }
-    @if (resolvedRows().length > 0) {
-      <h4>Resolved</h4>
-      <ng-container
-        [ngTemplateOutlet]="ordersTable"
-        [ngTemplateOutletContext]="{ rows: resolvedRows() }"
       />
     }
   </section>

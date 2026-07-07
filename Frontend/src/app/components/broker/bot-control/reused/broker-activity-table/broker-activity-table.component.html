@@ -1,7 +1,7 @@
-<section class="broker-activity" data-testid="broker-activity-table" aria-label="Broker activity">
+<section class="broker-activity" data-testid="broker-activity-table" aria-label="Broker tail projection">
   @let health = activityHealth();
   <header class="head">
-    <h3>BROKER ACTIVITY</h3>
+    <h3>BROKER TAIL</h3>
     <span class="muted">
       @if (health) {
         @switch (health.state) {
@@ -28,7 +28,7 @@
 
   @if (backfillError(); as err) {
     <div class="error" role="alert" data-testid="broker-activity-backfill-error">
-      Failed to load broker activity: {{ err }}
+      Failed to load broker tail: {{ err }}
     </div>
   }
   @if (sseError(); as err) {
@@ -164,17 +164,17 @@
       </table>
       } @else if (!backfillLoading()) {
         <p class="empty" data-testid="broker-activity-empty">
-          No broker activity yet for this instance.
+          No broker-tail rows yet for this instance.
         </p>
       }
     } @else if (!health && !backfillLoading() && !hasRows()) {
       <p class="empty" data-testid="broker-activity-empty">
-        No broker activity yet for this instance.
+        No broker-tail rows yet for this instance.
       </p>
     }
     @if (health && health.state === 'ready' && !hasRows()) {
       <p class="empty" data-testid="broker-activity-empty">
-        No broker activity yet for this instance.
+        No broker-tail rows yet for this instance.
       </p>
     }
 

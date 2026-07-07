@@ -145,6 +145,12 @@ function render(props: {
 afterEach(() => TestBed.resetTestingModule());
 
 describe('BrokerActivityTableComponent', () => {
+  it('labels the table as the broker-tail projection, not a peer activity surface', () => {
+    const { el } = render({ rows: [] });
+    expect(el.querySelector('[aria-label="Broker tail projection"]')).not.toBeNull();
+    expect(el.textContent ?? '').toContain('BROKER TAIL');
+  });
+
   it('renders the empty state when no executed rows exist', () => {
     const { el } = render({ rows: [] });
     expect(el.querySelector('[data-testid="broker-activity-empty"]')).not.toBeNull();

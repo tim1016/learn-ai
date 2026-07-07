@@ -1,12 +1,12 @@
-// Activity tab (unified projection).
+// Activity tab (stream-first projections).
 // Deprecated with the legacy tab surface. The per-bot lifecycle
 // workbench may embed it temporarily because this tab is read-only; new
 // workbench-specific behavior belongs in workbench-owned components.
 //
-// The backend-owned ``/activity`` projection is the canonical execution
-// view for this tab: chart fill markers, Orders Today, Broker Activity,
-// and attached full-IBKR-API evidence all come from one materialized
-// response so the UI cannot render an order in one surface but not another.
+// The Bot event stream is the canonical historical surface. The
+// backend-owned ``/activity`` response remains only for charting plus
+// secondary projections that need richer broker/order facts: open order
+// clusters and the broker tail.
 
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
@@ -34,7 +34,10 @@ import type { LiveInstanceActivityProjection } from '../reused/bot-trade-chart-c
 import { BrokerActivityTableComponent } from '../reused/broker-activity-table/broker-activity-table.component';
 import { IncidentsPanelComponent } from '../reused/incidents-panel/incidents-panel.component';
 import { LatestSignalStripComponent } from '../reused/latest-signal-strip/latest-signal-strip.component';
-import { WorkingPendingOrdersSectionComponent } from '../reused/working-pending-orders-section/working-pending-orders-section.component';
+import {
+  isOpenOrderClusterRow,
+  WorkingPendingOrdersSectionComponent,
+} from '../reused/working-pending-orders-section/working-pending-orders-section.component';
 
 export function activityRefreshKeyForStatus(status: LiveInstanceStatus): number | null {
   if (!status.live_binding) return 0;
@@ -85,6 +88,12 @@ export function activityProjectionForDisplay(
 ): LiveInstanceActivityProjection | null {
   if (resourceValue !== undefined) return resourceValue;
   return cachedActivityForRequest(cached, params) ?? null;
+}
+
+export function openOrderClustersForProjection(
+  projection: LiveInstanceActivityProjection | null,
+): LiveInstanceActivityProjection['orders_today'] {
+  return projection?.orders_today.filter(isOpenOrderClusterRow) ?? [];
 }
 
 @Component({
@@ -147,7 +156,7 @@ export class ActivityTabComponent {
       this.activityRequestParams(),
     );
   });
-  readonly ordersToday = computed(() => this.activity()?.orders_today ?? []);
+  readonly openOrderClusters = computed(() => openOrderClustersForProjection(this.activity()));
   readonly brokerEventRows = computed(() => this.activity()?.broker_activity_rows ?? []);
   readonly backfillLoading = computed(() => this.activityResource.isLoading());
   readonly backfillError = computed(() => {
