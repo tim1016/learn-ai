@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,8 @@ from app.services.bot_event_incidents import (
     build_terminal_incident,
     terminal_incident_dedupe_key,
 )
+
+RUNBOOK_PATH = Path(__file__).resolve().parents[3] / "docs" / "operator-architecture-and-runbook.md"
 
 
 def _raw_terminal(
@@ -101,6 +104,14 @@ def test_order_rejected_terminal_incident_matches_rejection_contract() -> None:
 def test_terminal_incident_contract_covers_every_terminal_code() -> None:
     assert set(_TEMPLATES) == set(TerminalErrorCode)
     assert set(_INCIDENT_ID_PREFIX) == set(TerminalErrorCode)
+
+
+def test_terminal_incident_runbook_slugs_are_documented() -> None:
+    runbook = RUNBOOK_PATH.read_text(encoding="utf-8")
+    documented = set(re.findall(r"terminal-runbook-slug:\s*([a-z0-9-]+)", runbook))
+    expected = {template.runbook_slug for template in _TEMPLATES.values()}
+
+    assert documented == expected
 
 
 @pytest.mark.parametrize(
