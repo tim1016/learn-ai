@@ -21,6 +21,7 @@ from app.routers import (
     account_reconciliation,
     aggregates,
     baselines,
+    bot_events,
     broker,
     broker_account_truth,
     broker_session,
@@ -388,6 +389,14 @@ app.include_router(
     strategy_validation.router,
     prefix="/api/strategy-validation",
     tags=["strategy-validation"],
+    dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
+)
+# Authored bot-event stream backfill (ADR 0024 / PRD #928). This is run-scoped
+# historical evidence; live delivery comes in a later SSE slice.
+app.include_router(
+    bot_events.router,
+    prefix="/api/live-runs",
+    tags=["bot-events"],
     dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
 )
 # Live paper-trading run observer (read-only). Three-layer caching:
