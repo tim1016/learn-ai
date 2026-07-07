@@ -45,6 +45,12 @@ OperatorNoticeCode = Literal[
     "reconciliation.discovered_execution_not_in_engine_state",
     # Broker session mirror — ADR 0018 orphaned-socket observability.
     "broker_session.orphaned_socket",
+    # PRD #928 / ADR 0024 — order and submit terminal outcomes (reserved).
+    "order.rejected",
+    "submit.uncertain",
+    "submit.halted",
+    "submit.launch_failed",
+    "submit.unmapped_diagnostic",
 ]
 
 # ---------------------------------------------------------------------------
@@ -111,7 +117,7 @@ class OperatorIncident(BaseModel):
 
     schema_version: int = 1
     incident_id: str
-    category: Literal["watchdog", "activity", "reconciliation"]
+    category: Literal["watchdog", "activity", "reconciliation", "order", "submit"]
     notice: OperatorNotice
     started_at_ms: int
     resolved_at_ms: int | None = None

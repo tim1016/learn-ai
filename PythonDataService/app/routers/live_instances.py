@@ -638,7 +638,11 @@ def _resolve_incident_headline(root: Path, live_binding: LiveBinding | None, run
     run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
     if run_dir is None or not run_dir.is_dir():
         return None
-    incidents = [incident for incident in IncidentStore(run_dir).list_unresolved() if incident.category == "watchdog"]
+    incidents = [
+        incident
+        for incident in IncidentStore(run_dir).list_unresolved()
+        if incident.category in {"watchdog", "order", "submit"}
+    ]
     if not incidents:
         return None
     latest = max(incidents, key=lambda incident: incident.started_at_ms)

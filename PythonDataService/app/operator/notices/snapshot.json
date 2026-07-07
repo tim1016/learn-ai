@@ -23,7 +23,12 @@
     "activity.dropped_paused_intent",
     "reconciliation.required_after_uncertain_flatten",
     "reconciliation.discovered_execution_not_in_engine_state",
-    "broker_session.orphaned_socket"
+    "broker_session.orphaned_socket",
+    "order.rejected",
+    "submit.uncertain",
+    "submit.halted",
+    "submit.launch_failed",
+    "submit.unmapped_diagnostic"
   ],
   "schema_version": 1
 }

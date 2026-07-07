@@ -38,6 +38,11 @@ const SNAPSHOT_OPERATOR_NOTICE_CODES: readonly string[] = [
   'reconciliation.required_after_uncertain_flatten',
   'reconciliation.discovered_execution_not_in_engine_state',
   'broker_session.orphaned_socket',
+  'order.rejected',
+  'submit.uncertain',
+  'submit.halted',
+  'submit.launch_failed',
+  'submit.unmapped_diagnostic',
 ];
 
 const TS_OPERATOR_NOTICE_CODES: readonly OperatorNoticeCode[] = [
@@ -65,6 +70,11 @@ const TS_OPERATOR_NOTICE_CODES: readonly OperatorNoticeCode[] = [
   'reconciliation.required_after_uncertain_flatten',
   'reconciliation.discovered_execution_not_in_engine_state',
   'broker_session.orphaned_socket',
+  'order.rejected',
+  'submit.uncertain',
+  'submit.halted',
+  'submit.launch_failed',
+  'submit.unmapped_diagnostic',
 ] as const;
 
 describe('OperatorNoticeCode TS literal vs Python snapshot', () => {

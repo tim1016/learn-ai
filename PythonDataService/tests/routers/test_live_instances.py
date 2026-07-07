@@ -69,6 +69,33 @@ def _append_watchdog_incident(run_dir: Path, *, incident_id: str, message: str, 
     )
 
 
+def _append_operator_incident(
+    run_dir: Path,
+    *,
+    incident_id: str,
+    category: str,
+    code: str,
+    title: str,
+    message: str,
+    started_at_ms: int,
+) -> None:
+    IncidentStore(run_dir).append(
+        OperatorIncident(
+            incident_id=incident_id,
+            category=category,
+            started_at_ms=started_at_ms,
+            notice=OperatorNotice(
+                code=code,
+                tier="critical",
+                title=title,
+                message=message,
+                action=OperatorNoticeAction(kind="none"),
+                occurred_at_ms=started_at_ms,
+            ),
+        )
+    )
+
+
 def test_resolve_symbol_prefers_stock_action_plan_over_signal_stream_and_spec_fixture(tmp_path: Path) -> None:
     """A deployed TSLA action plan must not chart the SPY fixture symbol.
 
@@ -143,6 +170,48 @@ def test_resolve_incident_headline_uses_evidence_run_dir_guard(tmp_path: Path) -
 
     assert notice is not None
     assert notice.message == "Latest evidence incident wins."
+
+
+def test_resolve_incident_headline_includes_order_and_submit_incidents(tmp_path: Path) -> None:
+    root = tmp_path / "live_runs"
+    _write_ledger(root, "run-latest", "spy_ema_paper", 100)
+    run_dir = root / "run-latest"
+    _append_operator_incident(
+        run_dir,
+        incident_id="order",
+        category="order",
+        code="order.rejected",
+        title="Order rejected",
+        message="IBKR rejected the order.",
+        started_at_ms=200,
+    )
+    _append_operator_incident(
+        run_dir,
+        incident_id="submit",
+        category="submit",
+        code="submit.uncertain",
+        title="Submit uncertain",
+        message="Order submission outcome is uncertain.",
+        started_at_ms=300,
+    )
+    _append_operator_incident(
+        run_dir,
+        incident_id="activity",
+        category="activity",
+        code="activity.publisher_degraded",
+        title="Publisher degraded",
+        message="Activity diagnostics are degraded.",
+        started_at_ms=400,
+    )
+
+    notice = live_instances._resolve_incident_headline(
+        root,
+        live_binding=None,
+        runs=[{"run_dir": str(run_dir)}],
+    )
+
+    assert notice is not None
+    assert notice.code == "submit.uncertain"
 
 
 def _write_live_state(root: Path, sid: str, run_id: str, positions: dict[str, int]) -> None:
