@@ -1096,6 +1096,114 @@ describe('BrokerDeployFormComponent', () => {
     expect(deployButton(fixture).disabled).toBe(false);
   });
 
+  it('blocks "Deploy & start" when inherited identity conflicts with the new signal or action plan until confirmed', async () => {
+    const { fixture, svc, component } = setup({
+      queryParams: {
+        inherited_symbol: 'mu',
+        inherited_symbol_source: 'run_ledger.live_config.action stock target',
+        signal_stream: 'spy',
+      },
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    component.actionPlan.set({
+      on_enter: [
+        {
+          leg_id: 'aapl_long',
+          instrument: { kind: 'stock', underlying: 'AAPL' },
+          position: 'long',
+          qty_ratio: 1,
+        },
+      ],
+      on_exit: [{ kind: 'close_leg', entry_leg_id: 'aapl_long' }],
+    });
+    fixture.detectChanges();
+
+    expect(component.identityCoherenceEvidence()?.facts.map((fact) => fact.value)).toEqual([
+      'MU',
+      'SPY',
+      'AAPL',
+    ]);
+    expect(component.blockedReason()).toContain('Inherited bot symbol MU conflicts');
+    expect(component.blockedReason()).toContain('Signal stream SPY and Action plan AAPL');
+    expect(fixture.nativeElement.querySelector('.identity-coherence')?.textContent).toContain(
+      'Confirm new run identity',
+    );
+    expect(deployButton(fixture).disabled).toBe(true);
+
+    component.confirmIdentityCoherence();
+    fixture.detectChanges();
+
+    expect(component.identityCoherenceConfirmed()).toBe(true);
+    expect(component.blockedReason()).toBeNull();
+    expect(fixture.nativeElement.querySelector('.identity-coherence')?.textContent).toContain(
+      'Confirmed for this Deploy & start.',
+    );
+    expect(deployButton(fixture).disabled).toBe(false);
+
+    await component.submit();
+
+    const req = svc.deployInstance.mock.calls[0][0];
+    expect(req.inherited_symbol).toBe('MU');
+    expect(req.inherited_symbol_source).toBe('run_ledger.live_config.action stock target');
+    expect(req.identity_coherence_confirmation).toEqual({
+      inherited_symbol: 'MU',
+      signal_stream: 'SPY',
+      action_plan_symbol: 'AAPL',
+    });
+
+    component.signalStream.set('QQQ');
+    fixture.detectChanges();
+
+    expect(component.identityCoherenceConfirmed()).toBe(false);
+    expect(component.blockedReason()).toContain('Signal stream QQQ');
+    expect(deployButton(fixture).disabled).toBe(true);
+  });
+
+  it('allows deploy-only staging when inherited identity conflicts with the new signal stream', async () => {
+    const { fixture, component } = setup({
+      queryParams: {
+        inherited_symbol: 'MU',
+        inherited_symbol_source: 'run_ledger.live_config.action stock target',
+        signal_stream: 'SPY',
+      },
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(false);
+    fixture.detectChanges();
+
+    expect(component.identityCoherenceEvidence()?.facts.map((fact) => fact.value)).toEqual([
+      'MU',
+      'SPY',
+    ]);
+    expect(component.blockedReason()).toBeNull();
+    expect(fixture.nativeElement.querySelector('.identity-coherence')?.textContent).toContain(
+      'Deploy-only will stage these values without starting.',
+    );
+    expect(deployButton(fixture).disabled).toBe(false);
+  });
+
+  it('does not ask for identity confirmation when the inherited symbol matches the new signal stream', async () => {
+    const { fixture, component } = setup({
+      queryParams: {
+        inherited_symbol: 'SPY',
+        inherited_symbol_source: 'run_ledger.live_config.symbol signal stream',
+        signal_stream: 'SPY',
+      },
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    fixture.detectChanges();
+
+    expect(component.identityCoherenceEvidence()).toBeNull();
+    expect(component.blockedReason()).toBeNull();
+    expect(fixture.nativeElement.querySelector('.identity-coherence')).toBeNull();
+    expect(deployButton(fixture).disabled).toBe(false);
+  });
+
   it('prefills the form from re-deploy deep-link query params', async () => {
     const svc = {
       getEngineStrategies: vi.fn().mockResolvedValue([]),
@@ -1150,7 +1258,8 @@ describe('BrokerDeployFormComponent', () => {
     const component = await harness.navigateByUrl(
       '/broker/deploy?strategy_key=deployment_validation&spec_path=spec%2Fpath.json' +
         '&signal_stream=aapl&account_id=DU777&qc_backtest_id=bt-redeploy' +
-        '&qc_audit_copy_path=audit%2Fcopy.py&instance_id=recovered_inst',
+        '&qc_audit_copy_path=audit%2Fcopy.py&instance_id=recovered_inst' +
+        '&inherited_symbol=mu&inherited_symbol_source=run_ledger.live_config.action%20stock%20target',
       BrokerDeployFormComponent,
     );
     activeFixture = harness.fixture;
@@ -1160,6 +1269,8 @@ describe('BrokerDeployFormComponent', () => {
     expect(component.specPath()).toBe(DEPLOYMENT_VALIDATION_SPEC_PATH);
     expect(component.signalStream()).toBe('AAPL');
     expect(component.resolvedSignalStream()).toBe('AAPL');
+    expect(component.inheritedSymbol()).toBe('MU');
+    expect(component.inheritedSymbolSource()).toBe('run_ledger.live_config.action stock target');
     expect(component.qcBacktestId()).toBe(DEPLOYMENT_VALIDATION_QC_BACKTEST_ID);
     expect(component.qcAuditCopyPath()).toBe(DEPLOYMENT_VALIDATION_AUDIT_COPY);
     expect(component.instanceId()).toBe('recovered_inst');

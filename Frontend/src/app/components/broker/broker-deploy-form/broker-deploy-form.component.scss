@@ -574,6 +574,57 @@ small code {
   color: var(--text-primary);
 }
 
+.identity-coherence {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--border));
+  border-radius: var(--radius-md);
+  background: var(--warn-soft);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+}
+
+.identity-coherence.confirmed {
+  border-color: color-mix(in srgb, var(--bull) 45%, var(--border));
+  background: var(--bull-soft);
+}
+
+.identity-coherence strong,
+.identity-coherence p,
+.identity-coherence dl {
+  margin: 0;
+}
+
+.identity-coherence dl {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.identity-coherence div {
+  display: grid;
+  grid-template-columns: minmax(7rem, 0.75fr) minmax(0, 1fr);
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.identity-coherence dt {
+  color: var(--text-subtle);
+}
+
+.identity-coherence dd {
+  display: grid;
+  gap: 0.05rem;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-weight: var(--fw-bold);
+}
+
+.identity-coherence dd small {
+  font-weight: var(--fw-regular);
+}
+
 .deployed {
   padding: var(--space-3) var(--space-4);
   border-left: 3px solid var(--bull);
