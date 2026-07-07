@@ -209,11 +209,16 @@ def _exit_reason_from_code(returncode: int | None) -> str:
     return f"exited({returncode})"
 
 
+HostRunnerErrorDetail = str | dict[str, object]
+
+
 class HostRunnerError(RuntimeError):
     """Error that should be translated into a daemon HTTP response."""
 
-    def __init__(self, status_code: int, detail: str) -> None:
-        super().__init__(detail)
+    def __init__(self, status_code: int, detail: HostRunnerErrorDetail) -> None:
+        super().__init__(
+            detail if isinstance(detail, str) else detail.get("message", str(detail))
+        )
         self.status_code = status_code
         self.detail = detail
 
@@ -902,10 +907,10 @@ class RunnerProcessManager:
     def _enforce_desired_state_allows_start(self, strategy_instance_id: str | None) -> None:
         if not strategy_instance_id:
             return
-        path = stable_desired_state_path(self.artifacts_root, strategy_instance_id)
         try:
+            path = stable_desired_state_path(self.artifacts_root, strategy_instance_id)
             desired_state = DesiredStateRepo(path).read_state()
-        except DesiredStateCorruptError as exc:
+        except (DesiredStateCorruptError, OSError, ValueError) as exc:
             raise HostRunnerError(
                 status.HTTP_409_CONFLICT,
                 f"desired_state sidecar is unreadable for {strategy_instance_id!r}: {exc}",
@@ -913,10 +918,20 @@ class RunnerProcessManager:
         if desired_state is DesiredState.STOPPED:
             raise HostRunnerError(
                 status.HTTP_409_CONFLICT,
-                (
-                    f"{strategy_instance_id} is durably STOPPED. Resume the bot to clear "
-                    "desired_state=STOPPED before starting or using Deploy & start."
-                ),
+                {
+                    "reason_code": "STOPPED_REQUIRES_RESUME",
+                    "message": (
+                        f"{strategy_instance_id} is durably STOPPED. Resume the bot to clear "
+                        "the stop latch before starting or using Deploy & start."
+                    ),
+                    "remediation": (
+                        "Use Resume to set desired_state=RUNNING, then start the bot. "
+                        "Use Deploy only when you want to stage a new run without starting it."
+                    ),
+                    "gate_id": "desired_state.start",
+                    "desired_state": "STOPPED",
+                    "strategy_instance_id": strategy_instance_id,
+                },
             )
 
     def _git_tracked_under(self, subdir: Path) -> list[str]:

@@ -396,6 +396,19 @@ def test_host_process_start_capability_poisoned_overrides_state() -> None:
     assert cap.disabled_reason_code == "STOPPED_REQUIRES_REDEPLOY"
 
 
+def test_host_process_start_capability_poisoned_overrides_stopped_latch() -> None:
+    surface = _surface(
+        process=InstanceProcessView(state="exited"),
+        desired_state=_desired("STOPPED"),
+        poisoned=True,
+        start_run_id=_START_RUN,
+        start_defaults=_defaults(),
+    )
+    cap = surface.host_process.start_capability
+    assert cap.enabled is False
+    assert cap.disabled_reason_code == "STOPPED_REQUIRES_REDEPLOY"
+
+
 @pytest.mark.parametrize(
     ("start_run_id", "start_defaults"),
     [

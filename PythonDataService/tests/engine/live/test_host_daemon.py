@@ -418,7 +418,75 @@ def test_start_refuses_stopped_desired_state_before_spawn(
         manager.start(RUN_ID, request=HostRunnerStartRequest())
 
     assert exc_info.value.status_code == 409
-    assert "durably STOPPED" in exc_info.value.detail
+    assert isinstance(exc_info.value.detail, dict)
+    assert exc_info.value.detail["reason_code"] == "STOPPED_REQUIRES_RESUME"
+    assert exc_info.value.detail["gate_id"] == "desired_state.start"
+    assert popen_called is False
+
+
+def test_start_refuses_invalid_strategy_instance_id_before_desired_state_lookup(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, run_dir = daemon_context
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": RUN_ID,
+                "strategy_instance_id": "../bad",
+                "account_id": "DU111",
+            }
+        ),
+        encoding="utf-8",
+    )
+    popen_called = False
+
+    def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
+        nonlocal popen_called
+        popen_called = True
+        return FakeProcess()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    with pytest.raises(HostRunnerError) as exc_info:
+        manager.start(RUN_ID, request=HostRunnerStartRequest())
+
+    assert exc_info.value.status_code == 409
+    assert "desired_state sidecar is unreadable" in str(exc_info.value.detail)
+    assert popen_called is False
+
+
+def test_start_refuses_unreadable_desired_state_sidecar(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, run_dir = daemon_context
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": RUN_ID,
+                "strategy_instance_id": "spy_ema_paper",
+                "account_id": "DU111",
+            }
+        ),
+        encoding="utf-8",
+    )
+    sidecar_path = stable_desired_state_path(manager.artifacts_root, "spy_ema_paper")
+    sidecar_path.mkdir(parents=True)
+    popen_called = False
+
+    def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
+        nonlocal popen_called
+        popen_called = True
+        return FakeProcess()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    with pytest.raises(HostRunnerError) as exc_info:
+        manager.start(RUN_ID, request=HostRunnerStartRequest())
+
+    assert exc_info.value.status_code == 409
+    assert "desired_state sidecar is unreadable" in str(exc_info.value.detail)
     assert popen_called is False
 
 

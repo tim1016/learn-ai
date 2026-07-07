@@ -149,12 +149,12 @@ def _project_host_start_capability(
             disabled_reason_code="ACCOUNT_FROZEN",
             gate_results=[account_freeze.to_gate_result()],
         )
-    # Durable STOPPED is an operator latch: automatic Start is blocked until
-    # Resume clears it. Poisoned runs are dead and still require redeploy.
-    if desired_state is not None and desired_state.state == "STOPPED":
-        reason = "STOPPED_REQUIRES_RESUME"
-    elif poisoned:
+    # Poisoned runs are dead and still require redeploy. Durable STOPPED is
+    # only a Resume-clearable latch when the run is otherwise recoverable.
+    if poisoned:
         reason = "STOPPED_REQUIRES_REDEPLOY"
+    elif desired_state is not None and desired_state.state == "STOPPED":
+        reason = "STOPPED_REQUIRES_RESUME"
     elif state == "RUNNING":
         reason = "ALREADY_RUNNING"
     elif state == "STOPPING":
