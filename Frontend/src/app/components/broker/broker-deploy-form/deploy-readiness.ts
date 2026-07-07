@@ -1,4 +1,6 @@
 import type { AccountTruthResponse } from '../../../api/broker-models';
+import type { GateResult, HostProcessStartCapability } from '../../../api/live-instances.types';
+import type { DesiredStateView } from '../../../api/live-runs-controls.types';
 import type {
   DaemonFreshness,
   LinkState,
@@ -40,6 +42,23 @@ export interface NowChecksInput {
   fieldsReady: boolean;
   fleetState: LinkState;
   nothingDeployed: boolean;
+}
+
+export const STOPPED_REQUIRES_RESUME = 'STOPPED_REQUIRES_RESUME';
+
+export type StoppedStartLatchState = 'not_applicable' | 'checking' | 'clear' | 'blocked';
+
+export interface StoppedStartLatchInput {
+  startNow: boolean;
+  instanceId: string;
+  instanceIdValid: boolean;
+  statusRequired: boolean;
+  statusLoading: boolean;
+  desiredState: DesiredStateView | null | undefined;
+  startCapability: Pick<
+    HostProcessStartCapability,
+    'disabled_reason_code' | 'gate_results'
+  > | null | undefined;
 }
 
 export function buildDeployReadinessFacts(input: DeployReadinessInput): DeployReadinessFact[] {
@@ -116,6 +135,27 @@ export function buildDeployChecks(errorStatus: number | null | undefined): Deplo
         : 'Checked when you deploy',
     },
   ];
+}
+
+export function stoppedStartLatchState(input: StoppedStartLatchInput): StoppedStartLatchState {
+  if (!input.startNow || input.instanceId.trim() === '' || !input.instanceIdValid) {
+    return 'not_applicable';
+  }
+  if (!input.statusRequired) {
+    return 'clear';
+  }
+  if (
+    input.desiredState?.state === 'STOPPED' ||
+    input.startCapability?.disabled_reason_code === STOPPED_REQUIRES_RESUME ||
+    gatesRequireResume(input.startCapability?.gate_results ?? [])
+  ) {
+    return 'blocked';
+  }
+  return input.statusLoading ? 'checking' : 'clear';
+}
+
+function gatesRequireResume(gates: GateResult[]): boolean {
+  return gates.some((gate) => gate.operator_next_step === STOPPED_REQUIRES_RESUME);
 }
 
 function engineReadinessFact(

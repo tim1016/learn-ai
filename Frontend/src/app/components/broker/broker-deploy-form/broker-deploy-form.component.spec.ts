@@ -3,6 +3,7 @@ import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { LiveInstanceStatus } from '../../../api/live-instances.types';
 import { BrokerService } from '../../../services/broker.service';
 import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
@@ -75,6 +76,7 @@ function setup(
     fleetBlocks?: boolean;
     qcEntries?: string[];
     instances?: { strategy_instance_id: string; process_state: string }[];
+    instancesPromise?: Promise<{ strategy_instance_id: string; process_state: string }[]>;
     parityGate?: {
       verdict: 'proven_match' | 'proven_mismatch' | 'cannot_prove';
       detail: string;
@@ -98,6 +100,8 @@ function setup(
     }[];
     accountPromise?: Promise<{ account_id: string } | null>;
     accountTruth?: { final_verdict: 'clean' | 'not_proven'; status_label: string; status_detail: string };
+    instanceStatus?: LiveInstanceStatus | null;
+    instanceStatusPromise?: Promise<LiveInstanceStatus | null>;
     strategyValidationCatalog?: StrategyValidationCatalog;
   } = {},
 ) {
@@ -148,7 +152,12 @@ function setup(
         scope_root: 'references/qc-shadow',
         entries: opts.qcEntries ?? ['references/qc-shadow/A.py'],
       }),
-    getInstances: vi.fn().mockResolvedValue(opts.instances ?? []),
+    getInstances: vi.fn().mockImplementation(() => opts.instancesPromise ?? Promise.resolve(opts.instances ?? [])),
+    getInstanceStatus: vi.fn().mockImplementation(() => {
+      if (opts.instanceStatusPromise !== undefined) return opts.instanceStatusPromise;
+      if (opts.instanceStatus !== undefined) return Promise.resolve(opts.instanceStatus);
+      return Promise.reject(new Error('instance not found'));
+    }),
     deployInstance: vi
       .fn()
       .mockResolvedValue({ run_id: 'run-new', run_dir: '/runs/run-new', created: true, start: null }),
@@ -229,6 +238,71 @@ function fillRequired(component: BrokerDeployFormComponent) {
   component.instanceId.set('deployment-validation-paper');
   component.startNow.set(false);
   activeFixture?.detectChanges();
+}
+
+function stoppedLatchStatus(): LiveInstanceStatus {
+  return {
+    desired_state: {
+      state: 'STOPPED',
+      updated_at_ms: 1_781_000_000_000,
+      updated_by: 'operator',
+      reason: 'stop_command',
+      version: 3,
+      path_status: 'ok',
+    },
+    operator_surface: {
+      host_process: {
+        start_capability: {
+          enabled: false,
+          run_id: null,
+          request: null,
+          disabled_reason_code: 'STOPPED_REQUIRES_RESUME',
+          gate_results: [
+            {
+              gate_id: 'desired_state.start',
+              status: 'block',
+              source: 'desired_state',
+              operator_reason: 'STOPPED',
+              operator_next_step: 'STOPPED_REQUIRES_RESUME',
+              evidence_at_ms: 1_781_000_000_000,
+            },
+          ],
+        },
+      },
+    },
+  } as unknown as LiveInstanceStatus;
+}
+
+function clearStartStatus(): LiveInstanceStatus {
+  return {
+    desired_state: {
+      state: 'RUNNING',
+      updated_at_ms: 1_781_000_000_000,
+      updated_by: 'operator',
+      reason: null,
+      version: 4,
+      path_status: 'ok',
+    },
+    operator_surface: {
+      host_process: {
+        start_capability: {
+          enabled: true,
+          run_id: 'run-minute',
+          request: null,
+          disabled_reason_code: null,
+          gate_results: [],
+        },
+      },
+    },
+  } as unknown as LiveInstanceStatus;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }
 
 function deployButton(fixture: { nativeElement: HTMLElement }): HTMLButtonElement {
@@ -1077,6 +1151,128 @@ describe('BrokerDeployFormComponent', () => {
     expect(deployButton(fixture).disabled).toBe(false);
   });
 
+  it('switches a durable STOPPED start-now request to deploy-only before submit', async () => {
+    const { fixture, svc, component } = setup({
+      instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
+      instanceStatus: stoppedLatchStatus(),
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    await flush();
+    fixture.detectChanges();
+
+    expect(svc.getInstanceStatus).toHaveBeenCalledWith('deployment-validation-paper');
+    expect(fixture.nativeElement.textContent).toContain('Deploy only');
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Durable STOPPED latch is set',
+    );
+    expect(deployButton(fixture).disabled).toBe(false);
+
+    await component.submit();
+
+    const req = svc.deployInstance.mock.calls[0][0];
+    expect(req.start).toBe(false);
+    expect(req.start_options).toBeUndefined();
+  });
+
+  it('does not submit start-now while the durable STOPPED lookup is still loading', async () => {
+    const pending = deferred<LiveInstanceStatus | null>();
+    const { fixture, svc, component } = setup({
+      instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
+      instanceStatusPromise: pending.promise,
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Checking durable desired state',
+    );
+    expect(deployButton(fixture).disabled).toBe(true);
+
+    await component.submit();
+
+    expect(svc.deployInstance).not.toHaveBeenCalled();
+
+    pending.resolve(stoppedLatchStatus());
+    await flush();
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Durable STOPPED latch is set',
+    );
+    expect(deployButton(fixture).disabled).toBe(false);
+  });
+
+  it('waits for the fleet list, then skips durable STOPPED lookup for a new instance name', async () => {
+    const pendingInstances = deferred<{ strategy_instance_id: string; process_state: string }[]>();
+    const { fixture, svc, component } = setup({ instancesPromise: pendingInstances.promise });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Checking durable desired state',
+    );
+    expect(deployButton(fixture).disabled).toBe(true);
+    expect(svc.getInstanceStatus).not.toHaveBeenCalled();
+
+    pendingInstances.resolve([]);
+    await flush();
+    fixture.detectChanges();
+
+    expect(svc.getInstanceStatus).not.toHaveBeenCalled();
+    expect(deployButton(fixture).disabled).toBe(false);
+  });
+
+  it('does not carry a prior STOPPED latch onto a new instance name', async () => {
+    const { fixture, svc, component } = setup({
+      instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
+      instanceStatus: stoppedLatchStatus(),
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    await flush();
+    fixture.detectChanges();
+
+    expect(component.stoppedStartLatch()).toBe(true);
+
+    component.instanceId.set('fresh-deployment-name');
+    await flush();
+    fixture.detectChanges();
+
+    expect(svc.getInstanceStatus).toHaveBeenCalledTimes(1);
+    expect(component.stoppedStartLatch()).toBe(false);
+    expect(deployButton(fixture).disabled).toBe(false);
+  });
+
+  it('shows the real deploy blocker when STOPPED latch is present but deploy-only is unavailable', async () => {
+    const { fixture, component } = setup({
+      instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
+      instanceStatus: stoppedLatchStatus(),
+      accountPromise: Promise.reject(new Error('broker account unavailable')),
+    });
+    await flush();
+    fillRequired(component);
+    component.accountId.set('');
+    component.startNow.set(true);
+    await flush();
+    fixture.detectChanges();
+
+    expect(component.stoppedStartLatch()).toBe(true);
+    expect(deployButton(fixture).disabled).toBe(true);
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Connected broker account unavailable',
+    );
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).not.toContain(
+      'This submit will deploy only',
+    );
+  });
+
   it('blocks "Deploy & start" onto an already-running instance, but allows deploy-only', async () => {
     const { fixture, component } = setup({ instances: [{ strategy_instance_id: 'Minute', process_state: 'running' }] });
     await flush();
@@ -1102,6 +1298,7 @@ describe('BrokerDeployFormComponent', () => {
       getSpecStrategyFixtures: vi.fn().mockResolvedValue([]),
       getQcAuditCopies: vi.fn().mockResolvedValue({ scope_root: 'references/qc-shadow', entries: [] }),
       getInstances: vi.fn().mockResolvedValue([]),
+      getInstanceStatus: vi.fn().mockRejectedValue(new Error('instance not found')),
       deployInstance: vi.fn(),
       getAuditCopySizingLookup: vi.fn().mockResolvedValue({
         verdict: 'cannot_prove',
@@ -1169,13 +1366,20 @@ describe('BrokerDeployFormComponent', () => {
   });
 
   it('allows "Deploy & start" when the instance exists but is not live', async () => {
-    const { fixture, component } = setup({ instances: [{ strategy_instance_id: 'Minute', process_state: 'exited' }] });
+    const { fixture, component } = setup({
+      instances: [{ strategy_instance_id: 'Minute', process_state: 'exited' }],
+      instanceStatus: clearStartStatus(),
+    });
     await flush();
     fillRequired(component);
     component.instanceId.set('Minute');
     component.startNow.set(true);
     fixture.detectChanges();
+    await fixture.whenStable();
+    await flush();
+    fixture.detectChanges();
 
+    expect(component.blockedReason()).toBeNull();
     expect(deployButton(fixture).disabled).toBe(false);
   });
 });

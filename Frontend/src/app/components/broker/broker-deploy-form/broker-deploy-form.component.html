@@ -60,14 +60,13 @@
     <aside class="readiness" aria-label="Deployment command">
       <section class="command-panel">
         <p class="eyebrow">Deploy command</p>
-        <h2>{{ startNow() ? 'Deploy & start' : 'Deploy only' }}</h2>
+        <h2>{{ commandTitle() }}</h2>
         <p>{{ selectedValidation()?.display_name ?? 'Select a validated strategy before deploying.' }}</p>
         <button type="button" class="primary" [disabled]="!canSubmit()" (click)="submit()">
           <i class="pi pi-send" aria-hidden="true"></i>
-          {{ startNow() ? 'Deploy & start' : 'Deploy' }}
+          {{ commandButtonLabel() }}
         </button>
-        @let reason = blockedReason();
-        <p class="blocked" role="status">{{ reason ?? 'Ready to deploy.' }}</p>
+        <p class="blocked" role="status">{{ commandStatus() }}</p>
       </section>
 
       <section>
