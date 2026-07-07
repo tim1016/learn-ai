@@ -2199,7 +2199,16 @@ async def test_account_summary_surfaces_broker_evidence_notice_when_positions_un
     async def fake_net() -> None:
         return None
 
-    async def fake_account() -> tuple[None, bool]:
+    data_plane_snapshot = SimpleNamespace(
+        client_available=False,
+        connected=False,
+        connection_state=None,
+    )
+    snapshot_calls: list[object] = []
+    account_snapshots: list[object] = []
+
+    async def fake_account(snapshot: object) -> tuple[None, bool]:
+        account_snapshots.append(snapshot)
         return None, False
 
     monkeypatch.setattr(live_instances, "_fetch_net_positions", fake_net)
@@ -2207,11 +2216,7 @@ async def test_account_summary_surfaces_broker_evidence_notice_when_positions_un
     monkeypatch.setattr(
         live_instances,
         "snapshot_data_plane_broker",
-        lambda: SimpleNamespace(
-            client_available=False,
-            connected=False,
-            connection_state=None,
-        ),
+        lambda: snapshot_calls.append(data_plane_snapshot) or data_plane_snapshot,
     )
     _set_daemon(monkeypatch, process={"state": "idle"})
 
@@ -2224,6 +2229,8 @@ async def test_account_summary_surfaces_broker_evidence_notice_when_positions_un
     assert body["notice"]["title"] == "Data-plane broker session is not connected"
     assert "could not fetch broker net positions" in body["notice"]["message"]
     assert "IB Gateway/TWS may still be logged in" in body["notice"]["message"]
+    assert snapshot_calls == [data_plane_snapshot]
+    assert account_snapshots == [data_plane_snapshot]
 
 
 def test_account_summary_notice_distinguishes_connected_fetch_failure() -> None:

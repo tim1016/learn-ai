@@ -342,14 +342,11 @@ def build_submit_readiness_findings(
                 "broker_connection",
                 _attention_severity_from_condition(condition),
                 condition.title,
-                _broker_connection_detail(condition, host_process.state),
+                _broker_connection_detail(condition),
                 (
                     condition.remediation
                     if host_process.state == "RUNNING" and not runtime_unbound and condition.remediation is not None
-                    else (
-                        condition.remediation
-                        or "Start a bot process only after IBKR positions/executions are manually verified; broker proof cannot refresh while no runtime is bound."
-                    )
+                    else "Start a bot process only after IBKR positions/executions are manually verified; broker proof cannot refresh while no runtime is bound."
                 ),
                 connection_remediation,
             )
@@ -832,10 +829,7 @@ def _attention_severity_from_condition(
     return "info"
 
 
-def _broker_connection_detail(
-    condition: OperatorSurfaceNamedCondition,
-    host_state: str = "RUNNING",
-) -> str:
+def _broker_connection_detail(condition: OperatorSurfaceNamedCondition) -> str:
     return condition.summary
 
 

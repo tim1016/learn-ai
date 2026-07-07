@@ -102,6 +102,7 @@ from app.utils.throttle import TokenBucket, TtlCache
 
 router = APIRouter(prefix="/api/broker", tags=["broker"])
 logger = logging.getLogger(__name__)
+_ACCOUNT_EVIDENCE_WARMUP_TIMEOUT_S = 5.0
 
 # Computed once at module import — stable for the lifetime of the process.
 # Used by DiagnosticReportDisabled.since_ms so each request doesn't generate
@@ -288,7 +289,7 @@ async def connect_endpoint() -> IbkrConnectionHealth:
         client.set_desired_connected(True)
         if client.is_connected():
             health = build_broker_health(client, get_monitor())
-            await _warm_account_evidence_after_connect(client, health)
+            await _warm_account_evidence_after_connect(client, client.health())
             return health
         return await _connect_and_install(client)
 
@@ -362,7 +363,7 @@ async def _connect_and_install(client: IbkrClient) -> IbkrConnectionHealth:
         ) from exc
     set_client(client)
     health = build_broker_health(client, get_monitor())
-    await _warm_account_evidence_after_connect(client, health)
+    await _warm_account_evidence_after_connect(client, client.health())
     return health
 
 
@@ -386,12 +387,15 @@ async def _warm_account_evidence_after_connect(
     if account_truth_refresh_session_unavailable(health):
         return
     try:
-        await refresh_account_truth_now(
-            client,
-            context="broker connect initialization",
-            health=health,
+        await asyncio.wait_for(
+            refresh_account_truth_now(
+                client,
+                context="broker connect initialization",
+                health=health,
+            ),
+            timeout=_ACCOUNT_EVIDENCE_WARMUP_TIMEOUT_S,
         )
-    except BrokerError as exc:
+    except (BrokerError, TimeoutError) as exc:
         logger.warning(
             "broker connect account-evidence warm-up failed",
             extra={

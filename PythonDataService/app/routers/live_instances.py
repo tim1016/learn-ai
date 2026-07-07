@@ -26,7 +26,7 @@ from pydantic import ValidationError
 
 from app.broker.ibkr.api_evidence import get_ibkr_api_evidence_recorder
 from app.broker.ibkr.config import IbkrSettings, get_settings
-from app.broker.runtime_snapshot import snapshot_data_plane_broker
+from app.broker.runtime_snapshot import BrokerRuntimeSnapshot, snapshot_data_plane_broker
 from app.engine.action_plan.parity import parity_diagnostics
 from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import (
@@ -2234,7 +2234,9 @@ def _instance_ledger_account_id(
     return value
 
 
-async def _fetch_broker_connected_account() -> tuple[str | None, bool]:
+async def _fetch_broker_connected_account(
+    snapshot: BrokerRuntimeSnapshot | None = None,
+) -> tuple[str | None, bool]:
     """Return ``(connected_account_id, known)``.
 
     ``known`` distinguishes "queried and got a value or definitive
@@ -2248,9 +2250,7 @@ async def _fetch_broker_connected_account() -> tuple[str | None, bool]:
     read a field that does not exist on the real client and silently
     degraded every call to ``known=False``.
     """
-    from app.broker.runtime_snapshot import snapshot_data_plane_broker
-
-    snapshot = snapshot_data_plane_broker()
+    snapshot = snapshot if snapshot is not None else snapshot_data_plane_broker()
     if not snapshot.client_available or not snapshot.connected:
         return None, False
     account = snapshot.connected_account
@@ -2299,7 +2299,8 @@ async def get_account_summary() -> FleetAccountSummary:
             explained[sid] = broker.owned_positions
         account_ids[sid] = _instance_ledger_account_id(root, sid)
     net = await _fetch_net_positions()
-    broker_account, broker_known = await _fetch_broker_connected_account()
+    data_plane_snapshot = snapshot_data_plane_broker()
+    broker_account, broker_known = await _fetch_broker_connected_account(data_plane_snapshot)
     payload = compute_fleet_account_summary(
         net_positions=net,
         explained_by_instance=explained,
@@ -2309,7 +2310,6 @@ async def get_account_summary() -> FleetAccountSummary:
         policy_blocks_starts=settings.fleet_dirty_blocks_starts,
     )
     payload["contamination"] = FleetContamination(**payload["contamination"])
-    data_plane_snapshot = snapshot_data_plane_broker()
     payload["notice"] = _account_summary_notice(
         net_positions_available=net is not None,
         broker_account_known=broker_known,

@@ -396,7 +396,7 @@
         "code": "broker_connection",
         "explanation": "The global data-plane broker may be connected, but this bot has no live runtime bound to publish per-bot broker proof.",
         "headline": "No live bot runtime is bound",
-        "operator_next_step": "Manually verify IBKR account state, then start or redeploy the bot so a child runtime can record fresh broker evidence.",
+        "operator_next_step": "Start a bot process only after IBKR positions/executions are manually verified; broker proof cannot refresh while no runtime is bound.",
         "remediation": {
           "kind": "none",
           "reason": "WAITING_FOR_LIVE_RUNTIME"
