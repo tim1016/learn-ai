@@ -62,7 +62,7 @@
       "disabled_reasons": [
         "BROKER_SAFETY_UNKNOWN",
         "SUBMISSION_CAPABILITY_UNKNOWN",
-        "ALREADY_RUNNING"
+        "DESIRED_STATE_DEFAULT_RUNNING"
       ],
       "effect": "DURABLE_ONLY",
       "enabled": false,

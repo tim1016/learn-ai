@@ -69,7 +69,8 @@ RESUME_REASON_CODES: frozenset[str] = frozenset(
         "UNRESOLVED_UNCERTAIN_INTENT",
         "UNCERTAIN_INTENT_STATE_UNKNOWN",
         # Intent-state pair rules
-        "ALREADY_RUNNING",
+        "DESIRED_STATE_ALREADY_RUNNING",
+        "DESIRED_STATE_DEFAULT_RUNNING",
         "ALREADY_PAUSED",
         "STOPPED_REQUIRES_REDEPLOY",
         "REDEPLOY_REQUIRED",
@@ -202,10 +203,11 @@ class ResumeGuardState(BaseModel):
 # ---------------------------------------------------------------------------
 # Priority order for the tooltip (PRD #616).  Highest priority first; the
 # structured response carries the full list, the tooltip renders the head.
-# Intent-state-pair codes (``STOPPED_REQUIRES_REDEPLOY``, ``ALREADY_RUNNING``,
-# ``ALREADY_PAUSED``, ``REDEPLOY_REQUIRED``) are layered above the artifact
-# guards in the action evaluator because they short-circuit before the
-# artifact guards run.
+# Intent-state-pair codes (``STOPPED_REQUIRES_REDEPLOY``,
+# ``DESIRED_STATE_ALREADY_RUNNING``, ``DESIRED_STATE_DEFAULT_RUNNING``,
+# ``ALREADY_PAUSED``,
+# ``REDEPLOY_REQUIRED``) are layered above the artifact guards in the
+# action evaluator because they short-circuit before the artifact guards run.
 # ---------------------------------------------------------------------------
 
 _REASON_PRIORITY: tuple[str, ...] = (
@@ -225,7 +227,8 @@ _REASON_PRIORITY: tuple[str, ...] = (
     "RECONCILIATION_NOT_AVAILABLE",
     "RECONCILIATION_UNKNOWN",
     "REDEPLOY_REQUIRED",
-    "ALREADY_RUNNING",
+    "DESIRED_STATE_ALREADY_RUNNING",
+    "DESIRED_STATE_DEFAULT_RUNNING",
     "ALREADY_PAUSED",
 )
 
