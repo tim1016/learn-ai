@@ -312,6 +312,7 @@ describe('BotControlPageComponent', () => {
     };
     const { element: el } = await setupBotControlPage({ status });
     const actionButton = el.querySelector<HTMLButtonElement>('[aria-label="Flatten and pause"]');
+    expect(actionButton?.disabled).toBe(true);
     expect(actionButton?.getAttribute('title')).toContain('No live binding');
     expect(actionButton?.getAttribute('title')).toContain(
       'The lifecycle action contract says the runner is not bound.',

@@ -47,6 +47,7 @@ describe('OverviewActionsComponent', () => {
     expect(el.querySelector('[aria-label="Mark poisoned"]')).not.toBeNull();
     for (const button of Array.from(el.querySelectorAll<HTMLButtonElement>('.chart-action'))) {
       expect(button.getAttribute('title')).toBeTruthy();
+      expect(button.disabled).toBe(false);
       expect(button.classList.contains('is-on')).toBe(true);
       expect(button.classList.contains('is-off')).toBe(false);
     }
@@ -76,6 +77,7 @@ describe('OverviewActionsComponent', () => {
       '[aria-label="Flatten and pause"]',
     );
     expect(button?.getAttribute('aria-disabled')).toBe('true');
+    expect(button?.disabled).toBe(true);
     expect(button?.classList.contains('is-off')).toBe(true);
     expect(button?.classList.contains('is-on')).toBe(false);
     expect(button?.getAttribute('title')).toContain('Flatten and pause Off');
@@ -84,12 +86,11 @@ describe('OverviewActionsComponent', () => {
     expect(button?.getAttribute('title')).not.toContain('NO_LIVE_BINDING');
   });
 
-  it('keeps disabled actions selectable for lifecycle-node focus', () => {
+  it('semantically disables unavailable actions and suppresses dispatch', () => {
     TestBed.configureTestingModule({
       providers: [provideZonelessChangeDetection()],
     });
     const fixture = TestBed.createComponent(OverviewActionsComponent);
-    const disabledSelected = vi.spyOn(fixture.componentInstance.disabledActionSelected, 'emit');
     const invoked = vi.spyOn(fixture.componentInstance.actionInvoked, 'emit');
     fixture.componentRef.setInput('actions', [
       action({
@@ -104,9 +105,9 @@ describe('OverviewActionsComponent', () => {
     const button = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>(
       '[aria-label="Flatten and pause"]',
     );
+    expect(button?.disabled).toBe(true);
     button?.click();
 
-    expect(disabledSelected).toHaveBeenCalledWith('recovery');
     expect(invoked).not.toHaveBeenCalled();
   });
 });

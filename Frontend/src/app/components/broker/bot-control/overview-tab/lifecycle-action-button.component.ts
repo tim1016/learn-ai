@@ -30,7 +30,6 @@ export class LifecycleActionButtonComponent {
   readonly busyAction = input<string | null>(null);
 
   readonly actionInvoked = output<LifecycleChartActionId>();
-  readonly disabledActionSelected = output<string>();
   readonly actionTargetHovered = output<string | null>();
 
   readonly isBackendDisabled = computed(() => !this.action().enabled);
@@ -57,13 +56,10 @@ export class LifecycleActionButtonComponent {
   });
 
   activateAction(): void {
-    const action = this.action();
     if (this.isDisabled()) {
-      if (action.target_node_id) {
-        this.disabledActionSelected.emit(action.target_node_id);
-      }
       return;
     }
+    const action = this.action();
     this.actionInvoked.emit(action.id);
   }
 

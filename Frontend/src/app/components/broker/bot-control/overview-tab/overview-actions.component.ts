@@ -58,7 +58,6 @@ export class OverviewActionsComponent {
   readonly actions = input.required<LifecycleChartAction[]>();
   readonly busyAction = input<string | null>(null);
   readonly actionInvoked = output<LifecycleChartActionId>();
-  readonly disabledActionSelected = output<string>();
   readonly actionTargetHovered = output<string | null>();
 
   readonly actionsById = computed(() => new Map(this.actions().map((action) => [action.id, action])));
