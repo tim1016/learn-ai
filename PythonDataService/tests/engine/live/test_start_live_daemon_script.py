@@ -17,6 +17,7 @@ def test_start_live_daemon_print_launch_env_passes_env_file_to_policy(tmp_path: 
             [
                 "IBKR_HOST_ALLOWLIST=192.168.1.50,192.168.1.51",
                 "IBKR_HOST=192.168.1.50",
+                "LIVE_RUNNER_IBKR_CLIENT_ID_POOL=70-80",
             ]
         ),
         encoding="utf-8",
@@ -27,6 +28,7 @@ def test_start_live_daemon_print_launch_env_passes_env_file_to_policy(tmp_path: 
     }
     env.pop("IBKR_HOST_ALLOWLIST", None)
     env.pop("IBKR_HOST", None)
+    env.pop("LIVE_RUNNER_IBKR_CLIENT_ID_POOL", None)
     env_file_arg = os.path.relpath(env_file, repo_root)
 
     result = subprocess.run(
@@ -48,6 +50,7 @@ def test_start_live_daemon_print_launch_env_passes_env_file_to_policy(tmp_path: 
 
     assert payload["IBKR_HOST_ALLOWLIST"] == "192.168.1.50,192.168.1.51"
     assert payload["IBKR_HOST"] == "192.168.1.50"
+    assert payload["LIVE_RUNNER_IBKR_CLIENT_ID_POOL"] == "70-80"
     allowed_hosts = set(payload["allowed_ibkr_hosts"])
     assert {"192.168.1.50", "192.168.1.51"}.issubset(allowed_hosts)
     assert payload["env_file"] == str(repo_root / env_file_arg)
@@ -61,6 +64,7 @@ def test_start_live_daemon_print_launch_env_preserves_process_override(tmp_path:
         **os.environ,
         "PYTHON_EXE": sys.executable,
         "IBKR_HOST_ALLOWLIST": "192.168.1.53",
+        "LIVE_RUNNER_IBKR_CLIENT_ID_POOL": "90-99",
     }
     env.pop("IBKR_HOST", None)
 
@@ -82,6 +86,7 @@ def test_start_live_daemon_print_launch_env_preserves_process_override(tmp_path:
     payload = json.loads(result.stdout)
 
     assert payload["IBKR_HOST_ALLOWLIST"] == "192.168.1.53"
+    assert payload["LIVE_RUNNER_IBKR_CLIENT_ID_POOL"] == "90-99"
     allowed_hosts = set(payload["allowed_ibkr_hosts"])
     assert "192.168.1.53" in allowed_hosts
     assert "192.168.1.52" not in allowed_hosts

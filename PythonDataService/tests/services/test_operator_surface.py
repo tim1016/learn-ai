@@ -886,6 +886,72 @@ def test_trader_guidance_reconciliation_waits_for_live_runtime_when_process_exit
     assert "runtime reconciliation cannot run" in attention.explanation
 
 
+def test_trader_guidance_client_id_collision_is_louder_than_reconcile() -> None:
+    last_exit = InstanceLastExit(
+        run_id="run-client-id",
+        ended_at_ms=_NOW_MS - 1_000,
+        exit_code=3,
+        exit_reason="exception",
+        exit_error_code="IBKR_CLIENT_ID_IN_USE",
+        exit_error_message="IbkrClientIdInUseError: IBKR clientId 12 is already in use on Gateway at 127.0.0.1:4002.",
+        exit_error_detail={"client_id": 12, "host": "127.0.0.1", "port": 4002},
+    )
+
+    surface = _surface(
+        process=InstanceProcessView(state="exited"),
+        last_exit=last_exit,
+        safety_verdict_final="paper-only",
+        broker_connection_state="connected",
+        guard_state=_guard(),
+        account_owner=_owner(),
+        reconciliation_receipt=None,
+    )
+
+    assert surface.host_process.notice is not None
+    assert "clientId 12 is already in use" in surface.host_process.notice
+    assert surface.submit_readiness.code == "blocked_before_submit"
+    assert surface.submit_readiness.blocking_reason_codes[0] == "IBKR_CLIENT_ID_IN_USE"
+    attention = next(
+        group
+        for group in surface.trader_guidance.additional_attention_groups
+        if group.code == "host_process"
+    )
+    assert attention.severity == "critical"
+    assert attention.headline == "IBKR client ID is already in use"
+    assert "LIVE_RUNNER_IBKR_CLIENT_ID_POOL" in attention.operator_next_step
+    host_stage = next(stage for stage in surface.blockage_ladder.stages if stage.id == "host_process")
+    assert surface.blockage_ladder.current_stage_id == "host_process"
+    assert host_stage.state == "danger"
+    assert host_stage.reason_codes == ["IBKR_CLIENT_ID_IN_USE"]
+
+
+def test_host_process_client_id_collision_notice_survives_idle_state() -> None:
+    last_exit = InstanceLastExit(
+        run_id="run-client-id",
+        ended_at_ms=_NOW_MS - 1_000,
+        exit_code=3,
+        exit_reason="exception",
+        exit_error_code="IBKR_CLIENT_ID_IN_USE",
+        exit_error_message="IbkrClientIdInUseError: IBKR clientId 12 is already in use on Gateway at 127.0.0.1:4002.",
+        exit_error_detail={"client_id": 12, "host": "127.0.0.1", "port": 4002},
+    )
+
+    surface = _surface(
+        process=InstanceProcessView(state="idle"),
+        last_exit=last_exit,
+        safety_verdict_final="paper-only",
+        broker_connection_state="connected",
+        guard_state=_guard(),
+        account_owner=_owner(),
+        reconciliation_receipt=None,
+    )
+
+    assert surface.host_process.state == "IDLE"
+    assert surface.host_process.notice is not None
+    assert "clientId 12 is already in use" in surface.host_process.notice
+    assert surface.submit_readiness.blocking_reason_codes[0] == "IBKR_CLIENT_ID_IN_USE"
+
+
 def test_trader_guidance_disconnected_broker_reconnects_before_reconcile() -> None:
     surface = _surface(
         safety_verdict_final="paper-only",

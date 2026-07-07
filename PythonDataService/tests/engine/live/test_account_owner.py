@@ -408,7 +408,7 @@ async def test_account_owner_reconnect_rotates_on_production_client_id_error(tmp
     async def reconnect(client_id: int) -> None:
         attempts.append(client_id)
         if len(attempts) == 1:
-            raise IbkrClientIdInUseError("client id already in use")
+            raise IbkrClientIdInUseError(client_id=client_id, host="127.0.0.1", port=4002)
 
     await owner.handle_reconnect(
         reconnect=reconnect,

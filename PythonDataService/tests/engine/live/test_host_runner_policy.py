@@ -46,6 +46,7 @@ def test_policy_env_file_loads_only_documented_daemon_keys(tmp_path: Path) -> No
                 "POLYGON_API_KEY=not-for-daemon",
                 "IBKR_HOST_ALLOWLIST=192.168.1.50,gateway.example.com",
                 "IBKR_HOST=192.168.1.50",
+                "LIVE_RUNNER_IBKR_CLIENT_ID_POOL=70-80",
             ]
         ),
         encoding="utf-8",
@@ -54,10 +55,11 @@ def test_policy_env_file_loads_only_documented_daemon_keys(tmp_path: Path) -> No
 
     loaded = load_policy_env_file(env_file, environ=env)
 
-    assert loaded == ("IBKR_HOST_ALLOWLIST", "IBKR_HOST")
+    assert loaded == ("IBKR_HOST_ALLOWLIST", "IBKR_HOST", "LIVE_RUNNER_IBKR_CLIENT_ID_POOL")
     assert env == {
         "IBKR_HOST_ALLOWLIST": "192.168.1.50,gateway.example.com",
         "IBKR_HOST": "192.168.1.50",
+        "LIVE_RUNNER_IBKR_CLIENT_ID_POOL": "70-80",
     }
     assert validate_ibkr_host_allowed("192.168.1.50", environ=env) == "192.168.1.50"
 
@@ -69,12 +71,14 @@ def test_policy_env_file_does_not_override_process_env(tmp_path: Path) -> None:
             [
                 "IBKR_HOST_ALLOWLIST=file-host.example.com",
                 "IBKR_HOST=file-host.example.com",
+                "LIVE_RUNNER_IBKR_CLIENT_ID_POOL=70-80",
             ]
         ),
         encoding="utf-8",
     )
     env = {
         "IBKR_HOST_ALLOWLIST": "process-host.example.com",
+        "LIVE_RUNNER_IBKR_CLIENT_ID_POOL": "90-99",
     }
 
     loaded = load_policy_env_file(env_file, environ=env)
@@ -82,4 +86,5 @@ def test_policy_env_file_does_not_override_process_env(tmp_path: Path) -> None:
     assert loaded == ("IBKR_HOST",)
     assert env["IBKR_HOST_ALLOWLIST"] == "process-host.example.com"
     assert env["IBKR_HOST"] == "file-host.example.com"
+    assert env["LIVE_RUNNER_IBKR_CLIENT_ID_POOL"] == "90-99"
     assert validate_ibkr_host_allowed("process-host.example.com", environ=env) == "process-host.example.com"

@@ -72,6 +72,9 @@ export function makeStatus(options: {
         state: hostState,
         notice: hostNotice,
         copyable_command: hostState === 'UNREACHABLE' ? 'make broker-runner' : null,
+        last_exit_error_code: null,
+        last_exit_error_message: null,
+        last_exit_error_detail: {},
         start_capability: options.startCapabilityEnabled
           ? {
               enabled: true,

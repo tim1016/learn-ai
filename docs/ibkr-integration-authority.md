@@ -96,10 +96,10 @@ Host-runner start requests have a separate authority split. The browser-facing
 data plane validates only `ibkr_host` shape (bare host name or IP address, no
 URL/path/userinfo). The host daemon enforces the configured connection policy
 at start time. Its launcher contract is `--env-file <path>` (default
-`<repo-root>/.env`), from which it loads only `IBKR_HOST_ALLOWLIST` and
-`IBKR_HOST`; exported process env values take precedence. This keeps policy in
-the process that spawns the runner while avoiding shell-sourcing the full env
-file.
+`<repo-root>/.env`), from which it loads only `IBKR_HOST_ALLOWLIST`,
+`IBKR_HOST`, and `LIVE_RUNNER_IBKR_CLIENT_ID_POOL`; exported process env
+values take precedence. This keeps policy in the process that spawns the
+runner while avoiding shell-sourcing the full env file.
 
 | Field | Default | Notes |
 |---|---|---|
@@ -413,7 +413,7 @@ Run these in order before turning the runner loose:
 4. **`GET /api/broker/health`** returns `connected: true, is_paper: true` and the account ID begins with `DU`.
 5. **`GET /api/broker/diagnose`** returns `overall_status: pass` (or click the **Diagnose** button on `/broker`).
 6. **Project-scope tests** green: `pytest PythonDataService/tests/ -k "not slow"`. 1797+ pass; the replay parity test must skip with the `lean-cache` message on a clean CI runner or pass locally where the cache is materialized.
-7. **Operator path** runs entirely from the **host venv** (PR #230). The `start` subcommand cannot be run inside the `polygon-data-service` container — IBKR error 420 ("Trading TWS session is connected from a different IP address") rejects `reqRealTimeBars` whenever the API client's source IP differs from the Gateway's login IP, and the container always fails this check from the WSL bridge subnet. Stop the container before Step 3 to free `client_id=42` for the dry-run client. End-to-end operator steps are in [`docs/runbooks/ibkr-paper-dry-run.md`](runbooks/ibkr-paper-dry-run.md). Tail `live.log` for the per-minute `[BAR]` heartbeat to confirm bars are flowing — `decisions.parquet` stays empty during the ≥ 3 h 45 m indicator warmup window, but `[BAR]` lines appearing every minute prove the engine is alive (PR #229; see issue #228 / #227 for the misdiagnosis this prevents).
+7. **Operator path** runs entirely from the **host venv** (PR #230). The `start` subcommand cannot be run inside the `polygon-data-service` container — IBKR error 420 ("Trading TWS session is connected from a different IP address") rejects `reqRealTimeBars` whenever the API client's source IP differs from the Gateway's login IP, and the container always fails this check from the WSL bridge subnet. Manual one-off CLI starts must avoid colliding with the data-plane `IBKR_CLIENT_ID`; UI-launched children get distinct ids from `LIVE_RUNNER_IBKR_CLIENT_ID_POOL`. End-to-end operator steps are in [`docs/runbooks/ibkr-paper-dry-run.md`](runbooks/ibkr-paper-dry-run.md). Tail `live.log` for the per-minute `[BAR]` heartbeat to confirm bars are flowing — `decisions.parquet` stays empty during the ≥ 3 h 45 m indicator warmup window, but `[BAR]` lines appearing every minute prove the engine is alive (PR #229; see issue #228 / #227 for the misdiagnosis this prevents).
 
 If any of these fails, fix it before running. The diagnostic endpoint will tell you which layer is the blocker.
 

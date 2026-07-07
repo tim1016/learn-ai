@@ -34,6 +34,7 @@ from app.services.account_truth_snapshot import AccountTruthAssessment
 from app.services.resume_guard_state import ResumeGuardState
 
 _READY_RECONCILIATION_STATES: frozenset[ReconciliationState] = frozenset({"CLEAN", "ADOPTED"})
+IBKR_CLIENT_ID_IN_USE = "IBKR_CLIENT_ID_IN_USE"
 
 _SUBMIT_READINESS_COPY: dict[SubmitReadinessCode, tuple[str, str]] = {
     "safe_to_submit": (
@@ -265,6 +266,25 @@ def build_submit_readiness_findings(
                 account_freeze.reason,
                 "Open the freeze/runbook evidence and clear the account only after broker exposure is proven.",
                 OpenRunbookAction(kind="open_runbook", slug="watchdog-halt"),
+            )
+        )
+    if host_process.state != "RUNNING" and host_process.last_exit_error_code == IBKR_CLIENT_ID_IN_USE:
+        detail = host_process.last_exit_error_message or (
+            "IBKR Gateway rejected this bot because the requested client ID is already in use."
+        )
+        findings.append(
+            _finding(
+                "blocked_before_submit",
+                IBKR_CLIENT_ID_IN_USE,
+                "host_process",
+                "critical",
+                "IBKR client ID is already in use",
+                detail,
+                (
+                    "Stop the sibling session using that client ID, expand LIVE_RUNNER_IBKR_CLIENT_ID_POOL, "
+                    "or restart IB Gateway if a stale session is holding the slot."
+                ),
+                OpenRunbookAction(kind="open_runbook", slug="broker-instance-operator-surface"),
             )
         )
     if guard_state.uncertain_intent.state == "PRESENT":
@@ -896,6 +916,14 @@ def _submit_readiness_evidence(
         ),
         _fact("trading_session.phase", trading_session.phase, source="operator_surface", ts_ms=trading_session.as_of_ms),
     ]
+    if host_process.last_exit_error_code is not None:
+        facts.append(
+            _fact(
+                "host_process.last_exit_error_code",
+                host_process.last_exit_error_code,
+                source="run_status",
+            )
+        )
     if daily_order_cap.used is not None or daily_order_cap.limit is not None:
         facts.append(
             _fact(

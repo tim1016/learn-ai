@@ -24,7 +24,6 @@
   "diagnostics": {
     "snapshot_at_entry": []
   },
-  "client_id": 12,
   "submit_mode": "live_paper",
   "bar_source_descriptor": "ibkr_realtime_bars",
   "decision_columns": []

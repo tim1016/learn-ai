@@ -118,11 +118,12 @@ def test_build_child_env_sets_daemon_boot_id_env(tmp_path: Path) -> None:
         ibkr_host="127.0.0.1",
     )
 
-    env = mgr._build_child_env(request)
+    env = mgr._build_child_env(request, ibkr_client_id=70)
 
     assert env["LIVE_RUNNER_DAEMON_BOOT_ID"] == "boot-XYZ"
     # Existing fields preserved.
     assert env["IBKR_HOST"] == "127.0.0.1"
+    assert env["IBKR_CLIENT_ID"] == "70"
     assert "PYTHONPATH" in env
 
 
@@ -143,7 +144,7 @@ def test_build_child_env_propagates_ibkr_live_runs_root(tmp_path: Path) -> None:
         ibkr_host="127.0.0.1",
     )
 
-    env = mgr._build_child_env(request)
+    env = mgr._build_child_env(request, ibkr_client_id=70)
 
     assert env["IBKR_LIVE_RUNS_ROOT"] == str(mgr.live_runs_root)
 
