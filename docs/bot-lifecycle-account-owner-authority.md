@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-07-03 (Account Truth source-freshness and data-plane bounds update: Bot Control submit readiness and `LivePortfolio.submit_pending_orders` now consume the cached Account Truth projection and fail closed when the cached verdict is missing, stale, not clean, or backed by stale/missing critical source evidence. Account-level reconciliation consumes the same source-freshness contract. Account Truth broker calls and data-plane shutdown paths are bounded.)
+> **Last reviewed:** 2026-07-07 (Bot Control operation-error alert copy update: alert announcements preserve authored operation title, backend detail, and remediation as separated prose so blocked deploy messages do not concatenate the category with the bot-scoped detail.)
 
 ---
 
@@ -109,6 +109,12 @@ snapshot detail, and authoritative P&L. Account identity and broker observation
 consistency may be folded only from Python-authored status/readiness facts; the
 Frontend must not join `/status` to account-summary or other side channels to
 manufacture lifecycle meaning.
+
+Bot Control operation-error alerts render the operation title, backend detail,
+and remediation as separate authored clauses in the alert announcement. The
+Frontend may control layout, but it must not concatenate the title/category
+with bot-scoped detail text; backend-authored detail and remediation remain the
+literal operator evidence shown by the alert.
 
 | Canonical node id | Meaning | Primary source of truth |
 |---|---|---|
