@@ -51,6 +51,12 @@ from app.engine.live.deploy import (
     deploy_run,
     git_head_sha,
 )
+from app.engine.live.host_daemon_bot_events import (
+    record_child_crash_launch_failure,
+    record_spawn_launch_failure,
+    redacted_daemon_path,
+    should_record_child_launch_failure,
+)
 from app.engine.live.host_runner_policy import load_policy_env_file, validate_ibkr_host_allowed
 from app.engine.strategy.spec.schema import load_spec_from_path
 from app.schemas.broker_session import GatewaySocketsSnapshot
@@ -107,7 +113,7 @@ def _orphan_candidate_payload(candidate: object) -> dict[str, object]:
     sidecar = getattr(candidate, "sidecar", None)
     return {
         "run_id": getattr(candidate, "run_id", None),
-        "run_dir": _redacted_daemon_path(run_dir),
+        "run_dir": redacted_daemon_path(run_dir),
         "state": getattr(candidate, "state", None),
         "sidecar_age_ms": getattr(candidate, "sidecar_age_ms", None),
         "reason": getattr(candidate, "reason", None),
@@ -118,20 +124,6 @@ def _orphan_candidate_payload(candidate: object) -> dict[str, object]:
             else None
         ),
     }
-
-
-def _redacted_daemon_path(value: object) -> str | None:
-    if value is None:
-        return None
-    text = str(value).replace("\\", "/")
-    parts = [part for part in text.split("/") if part]
-    if "PythonDataService" in parts:
-        idx = parts.index("PythonDataService")
-        return "/".join(parts[idx:])
-    if "artifacts" in parts:
-        idx = parts.index("artifacts")
-        return "/".join(parts[idx:])
-    return Path(text).name or None
 
 
 def _exit_reason_from_code(returncode: int | None) -> str:
@@ -181,6 +173,7 @@ class ManagedProcess:
     stopping: bool = False
     ended_at_ms: int | None = None
     registry_retired_at_ms: int | None = None
+    launch_failure_recorded_at_ms: int | None = None
 
 
 class RunnerProcessManager:
@@ -525,6 +518,15 @@ class RunnerProcessManager:
                 )
             except OSError as exc:
                 log_handle.close()
+                record_spawn_launch_failure(
+                    run_dir,
+                    run_id=run_id,
+                    strategy_instance_id=sid or run_id,
+                    command=command,
+                    log_path=log_path,
+                    exc=exc,
+                    ts_ms=_now_ms(),
+                )
                 try:
                     self._write_account_registry_binding(
                         run_dir,
@@ -1119,6 +1121,19 @@ class RunnerProcessManager:
         and close its log handle exactly once."""
         if managed.process.poll() is None:
             return
+        if self._should_record_child_launch_failure(managed) and managed.launch_failure_recorded_at_ms is None:
+            recorded_at_ms = _now_ms()
+            if record_child_crash_launch_failure(
+                managed.run_dir,
+                run_id=managed.run_id,
+                strategy_instance_id=managed.strategy_instance_id or managed.run_id,
+                command=managed.command,
+                log_path=managed.log_path,
+                pid=managed.process.pid,
+                returncode=managed.process.returncode,
+                ts_ms=recorded_at_ms,
+            ):
+                managed.launch_failure_recorded_at_ms = recorded_at_ms
         if managed.registry_retired_at_ms is None:
             try:
                 self._write_account_registry_binding(
@@ -1139,6 +1154,14 @@ class RunnerProcessManager:
         if managed.ended_at_ms is None:
             managed.ended_at_ms = _now_ms()
             managed.log_handle.close()
+
+    @staticmethod
+    def _should_record_child_launch_failure(managed: ManagedProcess) -> bool:
+        return should_record_child_launch_failure(
+            managed.run_dir,
+            returncode=managed.process.returncode,
+            stopping=managed.stopping,
+        )
 
     @staticmethod
     def _account_registry_retirement_source(managed: ManagedProcess) -> str:

@@ -28,13 +28,23 @@ from app.engine.live.account_registry import (
 from app.engine.live.daemon_auth import TOKEN_HEADER
 from app.engine.live.host_daemon import RunnerProcessManager, build_parser, create_app
 from app.engine.live.host_runner_policy import validate_ibkr_host_allowed
+from app.engine.live.run_status import write_run_status
+from app.schemas.bot_events import (
+    BotEventRawType,
+    SourceAuthority,
+    TerminalErrorCode,
+    TerminalErrorSource,
+)
 from app.schemas.broker_session import GatewaySocketRow
 from app.schemas.live_runs import (
+    ExitReason,
     HostRunnerActionResponse,
     HostRunnerProcessState,
     HostRunnerProcessStatus,
     HostRunnerStartRequest,
+    RunStatusSidecar,
 )
+from app.services.bot_event_wal import BotEventRawWal, run_bot_event_wal_path
 
 RUN_ID = "run-daemon-" + "a" * 53
 # Every protected route requires the shared secret (ADR 0007); tests pin a known
@@ -419,6 +429,20 @@ async def test_start_retires_account_registry_binding_when_spawn_fails(
     bindings = read_account_instance_registry(manager.artifacts_root, "DU111")
     assert [binding.lifecycle_state for binding in bindings[-2:]] == ["ACTIVE", "RETIRED"]
     assert bindings[-1].source == "host_daemon.start_failed"
+    events = BotEventRawWal(run_bot_event_wal_path(run_dir)).read_all()
+    assert len(events) == 1
+    event = events[0]
+    assert event.event_type is BotEventRawType.LAUNCH_FAILED
+    assert event.source_authority is SourceAuthority.DAEMON_LAUNCHER
+    assert event.strategy_instance_id == "spy_ema_paper"
+    assert event.run_id == RUN_ID
+    assert event.identity.evaluation_id == f"launch:{RUN_ID}"
+    assert event.terminal_error is not None
+    assert event.terminal_error.code is TerminalErrorCode.LAUNCH_FAILED
+    assert event.terminal_error.source is TerminalErrorSource.OS
+    assert event.terminal_error.gate_id == "daemon.spawn"
+    assert event.terminal_error.external_message == "spawn failed"
+    assert event.facts["failure_stage"] == "spawn"
 
 
 async def test_child_crash_retires_account_registry_binding_when_observed(
@@ -436,6 +460,10 @@ async def test_child_crash_retires_account_registry_binding_when_observed(
         ),
         encoding="utf-8",
     )
+    (run_dir / "host_daemon.log").write_text(
+        "Traceback (most recent call last):\nRuntimeError: boot boom\n",
+        encoding="utf-8",
+    )
     fake_process = FakeProcess()
     monkeypatch.setattr(subprocess, "Popen", lambda command, **kwargs: fake_process)
 
@@ -449,12 +477,68 @@ async def test_child_crash_retires_account_registry_binding_when_observed(
     bindings = read_account_instance_registry(manager.artifacts_root, "DU111")
     assert [binding.lifecycle_state for binding in bindings[-2:]] == ["ACTIVE", "RETIRED"]
     assert bindings[-1].source == "host_daemon.process_crashed"
+    events = BotEventRawWal(run_bot_event_wal_path(run_dir)).read_all()
+    assert len(events) == 1
+    event = events[0]
+    assert event.event_type is BotEventRawType.LAUNCH_FAILED
+    assert event.source_authority is SourceAuthority.DAEMON_LAUNCHER
+    assert event.strategy_instance_id == "spy_ema_paper"
+    assert event.identity.evaluation_id == f"launch:{RUN_ID}"
+    assert event.terminal_error is not None
+    assert event.terminal_error.code is TerminalErrorCode.LAUNCH_FAILED
+    assert event.terminal_error.source is TerminalErrorSource.DAEMON
+    assert event.terminal_error.gate_id == "daemon.child_process"
+    assert event.terminal_error.external_code == -9
+    assert "RuntimeError: boot boom" in str(event.terminal_error.external_message)
+    assert event.facts["failure_stage"] == "child_process"
+    # A second status refresh must not duplicate the visible terminal story.
+    manager.process_status(RUN_ID)
+    assert len(BotEventRawWal(run_bot_event_wal_path(run_dir)).read_all()) == 1
     _owned, siblings = compute_reconcile_namespaces(
         artifacts_root=manager.artifacts_root,
         account_id="DU111",
         current_namespace="learn-ai/other_bot/v1",
     )
     assert "learn-ai/spy_ema_paper/v1" not in siblings
+
+
+async def test_child_controlled_halt_does_not_emit_launch_failed_event(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, run_dir = daemon_context
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": RUN_ID,
+                "strategy_instance_id": "spy_ema_paper",
+                "account_id": "DU111",
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_run_status(
+        run_dir,
+        RunStatusSidecar(
+            run_id=RUN_ID,
+            started_at_ms=1_700_000_000_000,
+            last_update_ms=1_700_000_010_000,
+            ended_at_ms=1_700_000_010_000,
+            exit_code=1,
+            exit_reason=ExitReason.fatal_halt,
+            host_pid=4242,
+        ),
+    )
+    fake_process = FakeProcess()
+    monkeypatch.setattr(subprocess, "Popen", lambda command, **kwargs: fake_process)
+
+    manager.start(RUN_ID, request=HostRunnerStartRequest())
+    fake_process.returncode = 1
+
+    status = manager.process_status(RUN_ID)
+
+    assert status.state == HostRunnerProcessState.exited
+    assert BotEventRawWal(run_bot_event_wal_path(run_dir)).read_all() == []
 
 
 async def test_start_blocks_after_crash_retire_until_later_recovery_proof(
