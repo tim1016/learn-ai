@@ -62,6 +62,7 @@ if TYPE_CHECKING:
     )
     from app.engine.live.account_owner import AccountOwner
     from app.engine.live.live_state_sidecar import LiveStateEnvelope
+    from app.engine.strategy.spec.schema import StrategySpec
 
 from app.broker.runtime_snapshot import make_live_engine_verdict_provider
 from app.engine.live.account_recovery_cli import (
@@ -895,6 +896,21 @@ def _make_ibkr_client(runtime_client_id: int | None = None) -> IbkrClient:
     return IbkrClient(settings)
 
 
+def _load_spec_for_live_start(path: Path) -> StrategySpec:
+    from app.engine.strategy.spec import load_spec_from_path
+    from app.engine.strategy.spec.schema import StrategySpec
+
+    try:
+        return load_spec_from_path(path)
+    except ValueError as original_exc:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or "client_id" not in payload:
+            raise original_exc
+        payload = dict(payload)
+        payload.pop("client_id", None)
+        return StrategySpec.model_validate(payload)
+
+
 def _build_live_state_writer(
     *,
     strategy_instance_id: str,
@@ -1224,7 +1240,6 @@ def cmd_start(args: argparse.Namespace) -> int:
     _AccountIdentityError = (AccountIdentityMismatchError, InvalidAccountIdError)
     from app.engine.live.run_logging import configure_run_logging
     from app.engine.live.run_status import now_ms, write_run_status
-    from app.engine.strategy.spec import load_spec_from_path
     from app.engine.strategy.spec.schema import SUPPORTED_LIVE_RUNTIME_BAR_SOURCE
     from app.schemas.live_runs import ExitReason, RunStatusSidecar
 
@@ -1583,10 +1598,9 @@ def cmd_start(args: argparse.Namespace) -> int:
     # the ledger pins (PRD-A §16.1 Resolution 5). The spec is authoritative for
     # strategy behavior: decision columns, submit_mode, and bar_source. IBKR
     # Gateway clientId is deployment/runtime infrastructure and comes from the
-    # host daemon / environment, not the StrategySpec.
-    # If the spec can't be loaded at runtime (path moved since init-ledger,
-    # parse error), fall back to the default EMA schema so a decisions.parquet
-    # is still produced — and log it.
+    # host daemon / environment, not the StrategySpec. Runtime start tolerates
+    # that one removed legacy field so already-deployed specs keep their real
+    # submit_mode instead of falling through to the defaults below.
     decision_columns = DECISION_COLUMNS
     run_mode = "live_paper"
     bar_source = SUPPORTED_LIVE_RUNTIME_BAR_SOURCE
@@ -1598,7 +1612,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     except (DeployIOError, SpecOrAuditMissingError):
         pass
     try:
-        spec = load_spec_from_path(Path(ledger.strategy_spec_path))
+        spec = _load_spec_for_live_start(Path(ledger.strategy_spec_path))
         decision_columns = resolve_decision_columns(spec)
         run_mode = spec.submit_mode
         bar_source = spec.bar_source_descriptor
