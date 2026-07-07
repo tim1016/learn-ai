@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # Pydantic 2.5 in the service image does not generate schemas for PEP 695
 # type aliases reliably, so keep the older spelling until the runtime moves.
-FactValue: TypeAlias = str | int | float | bool | None | list[str] | list[int] | list[float] | list[bool]  # noqa: UP040
+FactValue: TypeAlias = str | int | float | bool | None | list[object] | dict[str, object]  # noqa: UP040
 
 
 class SourceAuthority(StrEnum):
@@ -178,8 +178,12 @@ class BotEventRaw(BaseModel):
     def _required_child_matches_event_type(self) -> BotEventRaw:
         if self.event_type is BotEventRawType.GATE_STEP and self.gate_step is None:
             raise ValueError("gate_step raw events require gate_step")
+        if self.event_type is not BotEventRawType.GATE_STEP and self.gate_step is not None:
+            raise ValueError("gate_step child is only valid for gate_step raw events")
         if self.event_type in _TERMINAL_RAW_TYPES and self.terminal_error is None:
             raise ValueError(f"{self.event_type.value} raw events require terminal_error")
+        if self.event_type not in _TERMINAL_RAW_TYPES and self.terminal_error is not None:
+            raise ValueError("terminal_error child is only valid for terminal raw events")
         return self
 
 
@@ -205,6 +209,12 @@ class BotEventRow(BaseModel):
     def _terminal_rows_require_error(self) -> BotEventRow:
         if self.event_type in _TERMINAL_ROW_TYPES and self.terminal_error is None:
             raise ValueError(f"{self.event_type.value} rows require terminal_error")
+        if self.event_type not in _TERMINAL_ROW_TYPES and self.terminal_error is not None:
+            raise ValueError("terminal_error child is only valid for terminal rows")
+        if self.event_type is BotEventType.BLOCKED and not any(
+            step.gate_result is GateStepResult.BLOCK for step in self.gate_steps
+        ):
+            raise ValueError("blocked rows require at least one blocking gate_step")
         return self
 
 

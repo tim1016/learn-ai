@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.schemas.bot_events import BotEventSeverity, BotEventType, TerminalErrorCode
+from app.schemas.bot_events import BotEventSeverity, BotEventType, SourceAuthority, TerminalErrorCode
 from app.schemas.broker_activity import (
     BrokerActivityRow,
     EngineOverlay,
@@ -45,6 +45,7 @@ def test_normal_fill_maps_to_order_filled_tail_row() -> None:
     mapped = broker_activity_row_to_bot_event_row(_row())
 
     assert mapped.event_type is BotEventType.ORDER_FILLED
+    assert mapped.source_authority is SourceAuthority.BROKER_SESSION
     assert mapped.severity is BotEventSeverity.INFO
     assert mapped.headline == "Filled 100 SPY"
     assert mapped.narrative == "Market order filled."
@@ -54,6 +55,9 @@ def test_normal_fill_maps_to_order_filled_tail_row() -> None:
     assert mapped.identity.exec_id == "exec-1"
     assert mapped.facts["legacy_schema"] == "BrokerActivityRow"
     assert mapped.facts["legacy_reason_codes"] == ["normal_fill"]
+    assert mapped.facts["broker"]["symbol"] == "SPY"
+    assert mapped.facts["broker"]["quantity"] == 100.0
+    assert mapped.facts["engine_overlay"]["intent_id"] == "intent-1"
 
 
 def test_pending_acknowledgement_maps_to_order_submitted() -> None:
@@ -74,8 +78,23 @@ def test_pending_acknowledgement_maps_to_order_submitted() -> None:
     mapped = broker_activity_row_to_bot_event_row(row)
 
     assert mapped.event_type is BotEventType.ORDER_SUBMITTED
+    assert mapped.source_authority is SourceAuthority.ENGINE_LOOP
     assert mapped.severity is BotEventSeverity.INFO
     assert mapped.terminal_error is None
+
+
+def test_expected_with_caveat_maps_to_warning_severity() -> None:
+    row = _row(
+        verdict=Verdict.EXPECTED_WITH_CAVEAT,
+        reason_codes=(ReasonCode.PARTIAL_FILL,),
+        template_key="partial_fill",
+        headline="Partial fill",
+        narrative="The order partially filled.",
+    )
+
+    mapped = broker_activity_row_to_bot_event_row(row)
+
+    assert mapped.severity is BotEventSeverity.WARNING
 
 
 def test_rejection_maps_to_terminal_order_rejected_not_expected_row() -> None:
@@ -119,3 +138,12 @@ def test_cancellation_maps_to_order_cancelled_without_terminal_error() -> None:
     assert mapped.event_type is BotEventType.ORDER_CANCELLED
     assert mapped.severity is BotEventSeverity.INFO
     assert mapped.terminal_error is None
+
+
+def test_legacy_row_without_durable_identity_uses_explicit_fallback() -> None:
+    row = _row(order_ref=None, perm_id=None, exec_id=None, engine_overlay=None)
+
+    mapped = broker_activity_row_to_bot_event_row(row)
+
+    assert mapped.identity.evaluation_id == "legacy-broker-activity-seq:1"
+    assert mapped.facts["legacy_identity_fallback"] is True

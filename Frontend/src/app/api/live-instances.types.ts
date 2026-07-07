@@ -577,7 +577,9 @@ export type OperatorNoticeCode =
   // PR 6 — reconciliation (reserved).
   | 'reconciliation.required_after_uncertain_flatten'
   | 'reconciliation.discovered_execution_not_in_engine_state'
+  // Broker session mirror — ADR 0018 orphaned-socket observability.
   | 'broker_session.orphaned_socket'
+  // PRD #928 / ADR 0024 — order and submit terminal outcomes (reserved).
   | 'order.rejected'
   | 'submit.uncertain'
   | 'submit.halted'
