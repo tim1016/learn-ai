@@ -16,6 +16,10 @@ Verdict rules:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
+from app.schemas.bot_events import GateStep, GateStepResult, SourceAuthority
+
 PASS = "pass"
 FAIL = "fail"
 UNKNOWN = "unknown"
@@ -26,6 +30,14 @@ READY = "READY"
 BLOCKED = "BLOCKED"
 DEGRADED = "DEGRADED"
 VERDICT_UNKNOWN = "UNKNOWN"
+
+
+@dataclass(frozen=True)
+class ReadinessEmission:
+    """One gate evaluation projected as current readiness plus raw gate-steps."""
+
+    vector: dict
+    gate_steps: tuple[GateStep, ...]
 
 
 def gate(name: str, status: str, severity: str, detail: str) -> dict:
@@ -40,6 +52,14 @@ def _gate_result_status(status: str) -> str:
     if status == UNKNOWN:
         return "unknown"
     return "unknown"
+
+
+def _step_result_from_readiness(*, status: str, severity: str) -> GateStepResult:
+    if status == PASS:
+        return GateStepResult.PASS
+    if status == FAIL and severity == HARD:
+        return GateStepResult.BLOCK
+    return GateStepResult.SKIP
 
 
 def _with_gate_results(gates: list[dict], *, source: str, as_of_ms: int) -> list[dict]:
@@ -63,6 +83,45 @@ def _with_gate_results(gates: list[dict], *, source: str, as_of_ms: int) -> list
             }
         )
     return out
+
+
+def _gate_steps_from_gates(
+    gates: list[dict],
+    *,
+    evaluation_id: str,
+    readiness_kind: str,
+    readiness_source: str,
+    source_authority: SourceAuthority = SourceAuthority.ENGINE_LOOP,
+) -> tuple[GateStep, ...]:
+    steps: list[GateStep] = []
+    for item in gates:
+        gate_result = item.get("gate_result") or {}
+        gate_id = str(gate_result.get("gate_id") or item.get("name") or "")
+        status = str(item.get("status") or UNKNOWN)
+        severity = str(item.get("severity") or HARD)
+        detail = str(item.get("detail") or "")
+        facts = {
+            "readiness_kind": readiness_kind,
+            "readiness_source": readiness_source,
+            "readiness_status": status,
+            "readiness_severity": severity,
+            "detail": detail,
+            "operator_reason": str(gate_result.get("operator_reason") or detail),
+            "operator_next_step": str(gate_result.get("operator_next_step") or ""),
+        }
+        evidence_at_ms = gate_result.get("evidence_at_ms")
+        if isinstance(evidence_at_ms, int):
+            facts["evidence_at_ms"] = evidence_at_ms
+        steps.append(
+            GateStep(
+                evaluation_id=evaluation_id,
+                gate_id=gate_id,
+                gate_result=_step_result_from_readiness(status=status, severity=severity),
+                source_authority=source_authority,
+                facts=facts,
+            )
+        )
+    return tuple(steps)
 
 
 def derive_verdict(gates: list[dict]) -> str:
@@ -111,6 +170,80 @@ def build_live_readiness(
     account_registry_gate_result: dict | None = None,
 ) -> dict:
     """Engine-authored live readiness from in-loop guard values."""
+    vector, _gates = _build_live_readiness_projection(
+        as_of_ms=as_of_ms,
+        paused=paused,
+        broker_connected=broker_connected,
+        submit_mode=submit_mode,
+        orders_used=orders_used,
+        orders_cap=orders_cap,
+        in_session=in_session,
+        force_flat_active=force_flat_active,
+        poisoned=poisoned,
+        bar_source=bar_source,
+        expected_bar_source=expected_bar_source,
+        account_registry_gate_result=account_registry_gate_result,
+    )
+    return vector
+
+
+def build_live_readiness_emission(
+    *,
+    as_of_ms: int,
+    paused: bool,
+    broker_connected: bool,
+    submit_mode: str,
+    orders_used: int,
+    orders_cap: int | None,
+    in_session: bool,
+    force_flat_active: bool,
+    poisoned: bool,
+    bar_source: str,
+    expected_bar_source: str,
+    evaluation_id: str,
+    account_registry_gate_result: dict | None = None,
+) -> ReadinessEmission:
+    """Build current readiness and raw gate-steps from one gate payload."""
+    vector, gates = _build_live_readiness_projection(
+        as_of_ms=as_of_ms,
+        paused=paused,
+        broker_connected=broker_connected,
+        submit_mode=submit_mode,
+        orders_used=orders_used,
+        orders_cap=orders_cap,
+        in_session=in_session,
+        force_flat_active=force_flat_active,
+        poisoned=poisoned,
+        bar_source=bar_source,
+        expected_bar_source=expected_bar_source,
+        account_registry_gate_result=account_registry_gate_result,
+    )
+    return ReadinessEmission(
+        vector=vector,
+        gate_steps=_gate_steps_from_gates(
+            gates,
+            evaluation_id=evaluation_id,
+            readiness_kind="live_readiness",
+            readiness_source="engine",
+        ),
+    )
+
+
+def _build_live_readiness_projection(
+    *,
+    as_of_ms: int,
+    paused: bool,
+    broker_connected: bool,
+    submit_mode: str,
+    orders_used: int,
+    orders_cap: int | None,
+    in_session: bool,
+    force_flat_active: bool,
+    poisoned: bool,
+    bar_source: str,
+    expected_bar_source: str,
+    account_registry_gate_result: dict | None = None,
+) -> tuple[dict, list[dict]]:
     gates: list[dict] = [
         gate("desired_state", FAIL if paused else PASS, HARD, "PAUSED" if paused else "RUNNING"),
         gate(
@@ -162,7 +295,7 @@ def build_live_readiness(
     # ``orders_cap`` gate ``detail`` prose.  The cockpit's
     # ``operator_surface.daily_order_cap`` projection consumes the
     # structured fields; the gate prose stays for human readability.
-    return {
+    vector = {
         "kind": "live_readiness",
         "as_of_ms": as_of_ms,
         "source": "engine",
@@ -172,6 +305,7 @@ def build_live_readiness(
         "orders_used": orders_used,
         "orders_cap": orders_cap,
     }
+    return vector, gates
 
 
 def build_start_readiness(
