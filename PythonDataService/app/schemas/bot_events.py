@@ -148,20 +148,24 @@ class IncidentDedupeKey(BaseModel):
     strategy_instance_id: str = Field(min_length=1)
     terminal_code: TerminalErrorCode
     evaluation_id: str | None = Field(default=None, min_length=1)
+    intent_id: str | None = Field(default=None, min_length=1)
     order_ref: str | None = Field(default=None, min_length=1)
     req_id: int | None = None
     order_id: int | None = None
     perm_id: int | None = None
+    exec_id: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def _requires_evaluation_or_order(self) -> IncidentDedupeKey:
         if not any(
             (
                 self.evaluation_id,
+                self.intent_id,
                 self.order_ref,
                 self.req_id is not None,
                 self.order_id is not None,
                 self.perm_id is not None,
+                self.exec_id,
             )
         ):
             raise ValueError("IncidentDedupeKey requires evaluation, order, or broker identity")

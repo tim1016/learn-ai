@@ -15,12 +15,14 @@ from app.operator.notices.schema import (
 )
 from app.schemas.bot_events import (
     BotEventRaw,
+    FactValue,
     IncidentDedupeKey,
     TerminalError,
     TerminalErrorCode,
 )
 
 IncidentCategory = Literal["order", "submit"]
+NoticeFactValue = str | int | float | bool | None
 
 
 @dataclass(frozen=True)
@@ -53,8 +55,7 @@ def append_terminal_incident(
     """
 
     incident = build_terminal_incident(raw_event)
-    incident_store.append(incident)
-    return incident
+    return incident_store.append_unless_resolved(incident)
 
 
 def build_terminal_incident(raw_event: BotEventRaw) -> OperatorIncident:
@@ -62,7 +63,6 @@ def build_terminal_incident(raw_event: BotEventRaw) -> OperatorIncident:
     if terminal_error is None:
         raise ValueError("terminal incident requires terminal_error")
     template = _template_for(terminal_error)
-    identity = raw_event.identity
     return OperatorIncident(
         incident_id=terminal_incident_id(terminal_incident_dedupe_key(raw_event)),
         category=template.category,
@@ -74,37 +74,13 @@ def build_terminal_incident(raw_event: BotEventRaw) -> OperatorIncident:
             source_codes=[str(terminal_error.external_code)]
             if terminal_error.external_code is not None
             else [],
-            forensic_facts={
-                "bot_event_seq": raw_event.seq,
-                "evaluation_id": identity.evaluation_id,
-                "intent_id": identity.intent_id,
-                "order_ref": identity.order_ref,
-                "req_id": identity.req_id,
-                "order_id": identity.order_id,
-                "perm_id": identity.perm_id,
-                "exec_id": identity.exec_id,
-                "terminal_code": terminal_error.code.value,
-                "terminal_source": terminal_error.source.value,
-                "gate_id": terminal_error.gate_id,
-                "external_code": terminal_error.external_code,
-                "external_message": terminal_error.external_message,
-            },
+            forensic_facts=_notice_forensic_facts(raw_event, terminal_error),
             action=template.build_action(),
             runbook_slug=template.runbook_slug,
             occurred_at_ms=raw_event.ts_ms,
         ),
         started_at_ms=raw_event.ts_ms,
-        evidence={
-            "bot_event_seq": raw_event.seq,
-            "strategy_instance_id": raw_event.strategy_instance_id,
-            "run_id": raw_event.run_id,
-            "evaluation_id": identity.evaluation_id,
-            "order_ref": identity.order_ref,
-            "req_id": identity.req_id,
-            "order_id": identity.order_id,
-            "perm_id": identity.perm_id,
-            "terminal_code": terminal_error.code.value,
-        },
+        evidence=_incident_evidence(raw_event, terminal_error),
     )
 
 
@@ -112,14 +88,37 @@ def terminal_incident_dedupe_key(raw_event: BotEventRaw) -> IncidentDedupeKey:
     if raw_event.terminal_error is None:
         raise ValueError("terminal dedupe key requires terminal_error")
     identity = raw_event.identity
+    evaluation_id: str | None = None
+    intent_id: str | None = None
+    order_ref: str | None = None
+    req_id: int | None = None
+    order_id: int | None = None
+    perm_id: int | None = None
+    exec_id: str | None = None
+    if identity.evaluation_id is not None:
+        evaluation_id = identity.evaluation_id
+    elif identity.intent_id is not None:
+        intent_id = identity.intent_id
+    elif identity.order_ref is not None:
+        order_ref = identity.order_ref
+    elif identity.req_id is not None:
+        req_id = identity.req_id
+    elif identity.order_id is not None:
+        order_id = identity.order_id
+    elif identity.perm_id is not None:
+        perm_id = identity.perm_id
+    elif identity.exec_id is not None:
+        exec_id = identity.exec_id
     return IncidentDedupeKey(
         strategy_instance_id=raw_event.strategy_instance_id,
         terminal_code=raw_event.terminal_error.code,
-        evaluation_id=identity.evaluation_id,
-        order_ref=identity.order_ref,
-        req_id=identity.req_id,
-        order_id=identity.order_id,
-        perm_id=identity.perm_id,
+        evaluation_id=evaluation_id,
+        intent_id=intent_id,
+        order_ref=order_ref,
+        req_id=req_id,
+        order_id=order_id,
+        perm_id=perm_id,
+        exec_id=exec_id,
     )
 
 
@@ -136,12 +135,13 @@ def _template_for(error: TerminalError) -> _IncidentTemplate:
 
 
 def _message_for(error: TerminalError) -> str:
-    detail = error.external_message or error.detail or error.message
     if error.code is TerminalErrorCode.ORDER_REJECTED:
+        detail = error.external_message or error.detail or error.message
         return (
             "IBKR rejected an order from this bot. Review the broker "
             f"message before retrying: {detail}"
         )
+    detail = error.detail or error.message
     if error.code is TerminalErrorCode.SUBMIT_UNCERTAIN:
         return f"The bot could not prove whether the submitted order exists: {detail}"
     if error.code is TerminalErrorCode.LAUNCH_FAILED:
@@ -151,6 +151,60 @@ def _message_for(error: TerminalError) -> str:
     if error.code is TerminalErrorCode.HALTED:
         return f"The bot halted before it could continue trading: {detail}"
     raise ValueError(f"unmapped terminal incident message for {error.code.value}")
+
+
+def _notice_forensic_facts(
+    raw_event: BotEventRaw,
+    terminal_error: TerminalError,
+) -> dict[str, NoticeFactValue]:
+    identity = raw_event.identity
+    facts: dict[str, NoticeFactValue] = {
+        "bot_event_seq": raw_event.seq,
+        "evaluation_id": identity.evaluation_id,
+        "intent_id": identity.intent_id,
+        "order_ref": identity.order_ref,
+        "req_id": identity.req_id,
+        "order_id": identity.order_id,
+        "perm_id": identity.perm_id,
+        "exec_id": identity.exec_id,
+        "terminal_code": terminal_error.code.value,
+        "terminal_source": terminal_error.source.value,
+        "gate_id": terminal_error.gate_id,
+        "external_code": terminal_error.external_code,
+        "external_message": terminal_error.external_message,
+    }
+    for key, value in terminal_error.forensic_facts.items():
+        if _is_notice_fact_value(value) and key not in facts:
+            facts[key] = value
+    return facts
+
+
+def _incident_evidence(
+    raw_event: BotEventRaw,
+    terminal_error: TerminalError,
+) -> dict[str, object]:
+    identity = raw_event.identity
+    return {
+        "bot_event_seq": raw_event.seq,
+        "strategy_instance_id": raw_event.strategy_instance_id,
+        "run_id": raw_event.run_id,
+        "evaluation_id": identity.evaluation_id,
+        "intent_id": identity.intent_id,
+        "order_ref": identity.order_ref,
+        "req_id": identity.req_id,
+        "order_id": identity.order_id,
+        "perm_id": identity.perm_id,
+        "exec_id": identity.exec_id,
+        "terminal_code": terminal_error.code.value,
+        "external_code": terminal_error.external_code,
+        "external_message": terminal_error.external_message,
+        "cause_chain": list(terminal_error.cause_chain),
+        "terminal_forensic_facts": terminal_error.forensic_facts,
+    }
+
+
+def _is_notice_fact_value(value: FactValue) -> bool:
+    return value is None or isinstance(value, str | int | float | bool)
 
 
 _INCIDENT_ID_PREFIX: dict[TerminalErrorCode, str] = {

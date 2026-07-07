@@ -233,6 +233,26 @@ def test_incident_dedupe_key_accepts_broker_identity() -> None:
     assert key.req_id == 42
 
 
+def test_incident_dedupe_key_accepts_intent_identity() -> None:
+    key = IncidentDedupeKey(
+        strategy_instance_id="bot-a",
+        terminal_code=TerminalErrorCode.ORDER_REJECTED,
+        intent_id="intent-1",
+    )
+
+    assert key.intent_id == "intent-1"
+
+
+def test_incident_dedupe_key_accepts_execution_identity() -> None:
+    key = IncidentDedupeKey(
+        strategy_instance_id="bot-a",
+        terminal_code=TerminalErrorCode.ORDER_REJECTED,
+        exec_id="exec-1",
+    )
+
+    assert key.exec_id == "exec-1"
+
+
 def test_incident_dedupe_key_round_trips() -> None:
     key = IncidentDedupeKey(
         strategy_instance_id="bot-a",
