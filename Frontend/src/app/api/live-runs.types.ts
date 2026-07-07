@@ -195,6 +195,100 @@ export interface LogLine {
   snapshot_set: string | null;
 }
 
+export type BotEventType =
+  | 'evaluation_idle'
+  | 'signal_fired'
+  | 'order_submitted'
+  | 'order_filled'
+  | 'order_cancelled'
+  | 'order_rejected'
+  | 'blocked'
+  | 'halted'
+  | 'launch_failed';
+
+export type BotEventSeverity = 'info' | 'warning' | 'critical';
+
+export type SourceAuthority =
+  | 'engine_loop'
+  | 'daemon_launcher'
+  | 'broker_session'
+  | 'account_owner';
+
+export type GateStepResult = 'pass' | 'skip' | 'block';
+
+export type TerminalErrorCode =
+  | 'order_rejected'
+  | 'submit_uncertain'
+  | 'halted'
+  | 'launch_failed'
+  | 'unmapped_diagnostic';
+
+export type TerminalErrorSource =
+  | 'engine'
+  | 'ibkr'
+  | 'daemon'
+  | 'os'
+  | 'broker_session'
+  | 'unknown';
+
+export type BotEventFactValue =
+  | string
+  | number
+  | boolean
+  | null
+  | unknown[]
+  | Record<string, unknown>;
+
+export interface BotEventIdentity {
+  evaluation_id: string | null;
+  intent_id: string | null;
+  order_ref: string | null;
+  req_id: number | null;
+  order_id: number | null;
+  perm_id: number | null;
+  exec_id: string | null;
+}
+
+export interface GateStep {
+  evaluation_id: string;
+  gate_id: string;
+  gate_result: GateStepResult;
+  source_authority: SourceAuthority;
+  facts: Record<string, BotEventFactValue>;
+}
+
+export interface TerminalError {
+  code: TerminalErrorCode;
+  source: TerminalErrorSource;
+  gate_id: string | null;
+  message: string;
+  detail: string | null;
+  external_code: string | number | null;
+  external_message: string | null;
+  cause_chain: string[];
+  forensic_facts: Record<string, BotEventFactValue>;
+}
+
+export interface BotEventRow {
+  schema_version: number;
+  seq: number;
+  ts_ms: number;
+  event_type: BotEventType;
+  source_authority: SourceAuthority;
+  identity: BotEventIdentity;
+  severity: BotEventSeverity;
+  headline: string;
+  narrative: string;
+  gate_steps: GateStep[];
+  terminal_error: TerminalError | null;
+  facts: Record<string, BotEventFactValue>;
+}
+
+export interface BotEventPage {
+  rows: BotEventRow[];
+  next_seq: number | null;
+}
+
 export type HydratePolicy = 'require' | 'optional' | 'disabled';
 
 export type HostRunnerProcessState = 'idle' | 'running' | 'exited' | 'stopping';

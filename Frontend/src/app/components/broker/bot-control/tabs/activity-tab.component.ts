@@ -23,6 +23,7 @@ import { firstValueFrom } from 'rxjs';
 
 import type { BrokerActivityHealth, LiveInstanceStatus } from '../../../../api/live-instances.types';
 
+import { BotEventStreamComponent } from '../reused/bot-event-stream/bot-event-stream.component';
 import {
   BotTradeChartCardComponent,
   type ChartResolution,
@@ -90,6 +91,7 @@ export function activityProjectionForDisplay(
   selector: 'app-activity-tab',
   imports: [
     CommonModule,
+    BotEventStreamComponent,
     BotTradeChartCardComponent,
     BrokerActivityTableComponent,
     IncidentsPanelComponent,
