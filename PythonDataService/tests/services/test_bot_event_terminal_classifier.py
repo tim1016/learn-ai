@@ -105,7 +105,7 @@ def test_known_halts_map_to_halted_terminal_notice(exc: BaseException, gate_id: 
 
 
 def test_launch_broker_session_error_maps_to_launch_failed_notice() -> None:
-    result = classify_terminal_exception(IbkrClientIdInUseError("client id already in use"))
+    result = classify_terminal_exception(IbkrClientIdInUseError(client_id=12, host="127.0.0.1", port=4002))
 
     assert result.notice_code == "submit.launch_failed"
     assert result.action_kind == "redeploy"

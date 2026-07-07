@@ -427,6 +427,32 @@ def test_parse_ibkr_client_id_pool_rejects_zero_and_huge_ranges() -> None:
         _parse_ibkr_client_id_pool("1-5000")
 
 
+def test_start_does_not_write_active_binding_when_client_id_pool_invalid(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live.host_daemon import HostRunnerError
+
+    manager, run_dir = daemon_context
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": RUN_ID,
+                "strategy_instance_id": "spy_ema_paper",
+                "account_id": "DU111",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LIVE_RUNNER_IBKR_CLIENT_ID_POOL", "1-5000")
+
+    with pytest.raises(HostRunnerError) as exc_info:
+        manager.start(RUN_ID, request=HostRunnerStartRequest())
+
+    assert exc_info.value.status_code == 503
+    assert read_account_instance_registry(manager.artifacts_root, "DU111") == []
+
+
 def test_concurrent_starts_cannot_allocate_same_ibkr_client_id(
     daemon_context: tuple[RunnerProcessManager, Path],
     monkeypatch: pytest.MonkeyPatch,
@@ -490,6 +516,34 @@ def test_concurrent_starts_cannot_allocate_same_ibkr_client_id(
     assert not second.is_alive()
     assert errors == []
     assert captured_ids == ["90", "91"]
+
+
+def test_retry_skips_ibkr_client_id_rejected_by_gateway(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, run_dir = daemon_context
+    monkeypatch.setenv("LIVE_RUNNER_IBKR_CLIENT_ID_POOL", "50-51")
+    processes = [FakeProcess(), FakeProcess()]
+    captured_ids: list[str] = []
+
+    def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
+        del command
+        captured_ids.append(kwargs["env"]["IBKR_CLIENT_ID"])
+        return processes[len(captured_ids) - 1]
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    manager.start(RUN_ID, request=HostRunnerStartRequest())
+    processes[0].returncode = 3
+    (run_dir / "run_status.json").write_text(
+        json.dumps({"exit_error_code": "IBKR_CLIENT_ID_IN_USE"}),
+        encoding="utf-8",
+    )
+    manager.process_status(RUN_ID)
+
+    manager.start(RUN_ID, request=HostRunnerStartRequest())
+
+    assert captured_ids == ["50", "51"]
 
 
 async def test_start_writes_account_registry_before_spawn(
