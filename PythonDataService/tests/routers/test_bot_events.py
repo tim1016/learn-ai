@@ -8,6 +8,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
+from app.routers.bot_events import bot_event_stream
 from app.schemas.bot_events import (
     BotEventIdentity,
     BotEventRaw,
@@ -16,6 +17,7 @@ from app.schemas.bot_events import (
     GateStepResult,
     SourceAuthority,
 )
+from app.services.bot_event_stream_service import BotEventStreamService
 from app.services.bot_event_wal import BotEventRawWal
 
 pytestmark = pytest.mark.asyncio
@@ -223,3 +225,46 @@ async def test_bot_events_backfill_reports_unprojectable_history(
 
     assert response.status_code == 503
     assert response.json()["detail"] == "bot-event stream history cannot be projected"
+
+
+async def test_bot_events_stream_404s_unknown_run(live_runs_root: Path) -> None:
+    async with _client() as client:
+        response = await client.get(f"/api/live-runs/{RUN_ID}/bot-events/stream")
+
+    assert response.status_code == 404
+
+
+async def test_bot_events_stream_rejects_invalid_run_id(
+    live_runs_root: Path,
+) -> None:
+    async with _client() as client:
+        response = await client.get("/api/live-runs/bad%20run/bot-events/stream")
+
+    assert response.status_code == 400
+
+
+async def test_bot_events_stream_response_uses_sse_headers(
+    live_runs_root: Path,
+) -> None:
+    _run_dir(live_runs_root)
+
+    response = await bot_event_stream(RUN_ID, service=BotEventStreamService())
+
+    assert response.media_type == "text/event-stream"
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.headers["x-accel-buffering"] == "no"
+
+
+async def test_bot_events_stream_reports_projection_error_without_exception_detail(
+    live_runs_root: Path,
+) -> None:
+    run_dir = _run_dir(live_runs_root)
+    (run_dir / "bot_events.jsonl").write_text("{not-json}\n", encoding="utf-8")
+
+    response = await bot_event_stream(RUN_ID, service=BotEventStreamService())
+    chunk = await anext(response.body_iterator)
+    text = chunk.decode() if isinstance(chunk, bytes) else chunk
+
+    assert "event: error" in text
+    assert "bot-event stream history cannot be projected" in text
+    assert "not-json" not in text
