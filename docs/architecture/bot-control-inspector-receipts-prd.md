@@ -1,5 +1,7 @@
 # PRD — Bot Control Dashboard: node-scoped trader-friendly receipts
 
+> **SUPERSEDED in layout (2026-07-07)** by `bot-control-stream-primary-prd.md` (issue #951): the right-pane node inspector is **deleted** — node-scoped receipts render inside the chart nodes themselves, and the side panel becomes the Bot event stream. Do not implement Slice S1 as written. The verified sourcing facts and the honest-empty spine in this document remain binding and carry forward.
+
 - **Surface:** `broker/bots/:id` → `bot-control-page.component`, specifically the right-pane node inspector.
 - **Builds on:** PRD #718 (Bot Lifecycle Workbench), PR #751 (Bot Control Dashboard redesign), and the existing `operator_surface` / `lifecycle_chart` / `LifecycleChartReceipt` contracts.
 - **Design source:** Trader review of the shipped dashboard, cross-checked against the live backend code paths (Codex).
