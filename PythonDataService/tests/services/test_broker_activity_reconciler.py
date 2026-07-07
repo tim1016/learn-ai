@@ -40,6 +40,7 @@ from app.services.broker_activity_reconciler import (
     author_row_from_event,
     classify_verdict,
     compute_lag_breakdown,
+    event_with_submitted_order_facts,
     match_identity,
     parse_order_ref,
     select_template,
@@ -170,6 +171,73 @@ def test_match_identity_rejects_missing_intent_in_submitted_orders() -> None:
         )
         is None
     )
+
+
+def test_match_identity_joins_req_id_when_order_ref_missing() -> None:
+    event = _fill_event(order_ref=None, event_type="error", req_id=42)
+
+    intent_id = match_identity(
+        event,
+        submitted_orders={
+            INTENT_ID: {
+                "order_id": 42,
+                "bot_order_namespace": NS,
+            }
+        },
+        bot_order_namespace=NS,
+    )
+
+    assert intent_id == INTENT_ID
+
+
+def test_match_identity_rejects_req_id_for_foreign_namespace() -> None:
+    event = _fill_event(order_ref=None, event_type="error", req_id=42)
+
+    assert (
+        match_identity(
+            event,
+            submitted_orders={
+                INTENT_ID: {
+                    "order_id": 42,
+                    "bot_order_namespace": "learn-ai/other/v1",
+                }
+            },
+            bot_order_namespace=NS,
+        )
+        is None
+    )
+
+
+def test_event_with_submitted_order_facts_enriches_req_id_error_without_order_ref() -> None:
+    event = _fill_event(
+        order_ref=None,
+        event_type="error",
+        req_id=42,
+        symbol=None,
+        side=None,
+        order_type=None,
+        fill_quantity=None,
+        cumulative_filled=None,
+        remaining=None,
+    )
+
+    enriched = event_with_submitted_order_facts(
+        event,
+        {
+            "symbol": "SPY",
+            "action": "BUY",
+            "quantity": 100.0,
+            "order_type": "MKT",
+        },
+    )
+
+    assert enriched.order_ref is None
+    assert enriched.symbol == "SPY"
+    assert enriched.side == "BUY"
+    assert enriched.order_type == "MKT"
+    assert enriched.fill_quantity == 0.0
+    assert enriched.cumulative_filled == 0.0
+    assert enriched.remaining == 100.0
 
 
 # ── classify_verdict ladder ────────────────────────────────────────────

@@ -78,6 +78,7 @@ def _client(
         is_connected=lambda: True,
         require_connected=lambda: None,
         require_live=lambda: None,
+        order_errors_after=lambda _seq: [],
     )
 
 

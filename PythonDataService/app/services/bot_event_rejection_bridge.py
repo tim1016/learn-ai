@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from collections.abc import Mapping
-from typing import Any
 
 from app.broker.ibkr.event_codes import IBKR_CODE_MEANINGS
 from app.broker.ibkr.models import IbkrOrderEvent
@@ -29,29 +27,7 @@ from app.schemas.broker_activity import BrokerActivityRow, ReasonCode
 from app.services.bot_event_wal import BotEventRawWal
 from app.services.broker_activity_reconciler import EngineIntent, parse_order_ref
 
-
-def join_order_ref_from_req_id(
-    event: IbkrOrderEvent,
-    submitted_orders: Mapping[str, Mapping[str, Any]],
-    *,
-    bot_order_namespace: str,
-) -> IbkrOrderEvent:
-    """Return ``event`` with ``order_ref`` joined from reqId/orderId if needed."""
-
-    if event.order_ref or event.event_type != "error":
-        return event
-    req_id = event.req_id if event.req_id is not None else event.order_id
-    for intent_id, submitted in submitted_orders.items():
-        if not intent_id:
-            continue
-        order_id = _as_int(submitted.get("order_id"))
-        if order_id != req_id:
-            continue
-        order_ref = submitted.get("order_ref")
-        if not isinstance(order_ref, str) or not order_ref:
-            order_ref = f"{bot_order_namespace}:{intent_id}"
-        return event.model_copy(update={"order_ref": order_ref})
-    return event
+logger = logging.getLogger(__name__)
 
 
 def is_order_rejection_row(row: BrokerActivityRow) -> bool:
@@ -78,7 +54,6 @@ def build_order_rejected_raw_event(
         identity=_identity(event=event, row=row, intent=intent),
         terminal_error=terminal_error,
         facts={
-            "broker_activity_seq": row.seq,
             "symbol": row.symbol,
             "side": row.side,
             "quantity": row.quantity,
@@ -91,7 +66,6 @@ def append_order_rejection_capture(
     *,
     bot_event_wal: BotEventRawWal,
     incident_store: IncidentStore | None,
-    logger: logging.Logger,
     strategy_instance_id: str,
     run_id: str,
     event: IbkrOrderEvent,
@@ -124,17 +98,15 @@ def build_order_rejected_incident(raw_event: BotEventRaw) -> OperatorIncident:
     if terminal_error is None:
         raise ValueError("order rejection incident requires terminal_error")
     identity = raw_event.identity
-    fallback_evaluation_id = (
-        None
-        if identity.order_ref
-        else f"ibkr-req-{identity.req_id or identity.order_id or 'unknown'}"
-    )
     incident_id = order_rejected_incident_id(
         IncidentDedupeKey(
             strategy_instance_id=raw_event.strategy_instance_id,
             terminal_code=TerminalErrorCode.ORDER_REJECTED,
             order_ref=identity.order_ref,
-            evaluation_id=identity.evaluation_id or fallback_evaluation_id,
+            evaluation_id=identity.evaluation_id,
+            req_id=identity.req_id,
+            order_id=identity.order_id,
+            perm_id=identity.perm_id,
         )
     )
     external_message = terminal_error.external_message or terminal_error.message
@@ -224,18 +196,8 @@ def _terminal_error(*, event: IbkrOrderEvent, row: BrokerActivityRow) -> Termina
             "req_id": event.req_id if event.req_id is not None else event.order_id,
             "order_id": event.order_id,
             "perm_id": event.perm_id,
-            "broker_activity_seq": row.seq,
         },
     )
-
-
-def _as_int(value: object) -> int | None:
-    if isinstance(value, bool):
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
 
 
 __all__ = [
@@ -243,6 +205,5 @@ __all__ = [
     "build_order_rejected_incident",
     "build_order_rejected_raw_event",
     "is_order_rejection_row",
-    "join_order_ref_from_req_id",
     "order_rejected_incident_id",
 ]

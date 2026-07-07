@@ -123,6 +123,20 @@ def test_read_tolerates_single_trailing_partial_line(tmp_path: Path) -> None:
     assert [r.seq for r in rows] == [1]
 
 
+def test_append_truncates_tolerated_tail_before_new_row(tmp_path: Path) -> None:
+    path = tmp_path / "wal.jsonl"
+    wal = BrokerActivityWal(path)
+    wal.allocate_seq()
+    wal.append_row(_row(1))
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write('{"seq": 2, "ts_ms": 17000')
+
+    wal.append_row(_row(wal.allocate_seq()))
+
+    rows = BrokerActivityWal(path).read_all()
+    assert [row.seq for row in rows] == [1, 2]
+
+
 def test_read_raises_on_torn_line_followed_by_complete_lines(tmp_path: Path) -> None:
     """Tear in the middle of the file (not the tail) is corruption — a
     complete line after a torn line means the torn line is not just an

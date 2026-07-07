@@ -39,7 +39,6 @@ from app.schemas.bot_events import (
 )
 from app.schemas.broker_activity import (
     BrokerActivityRow,
-    ReasonCode,
     ReconciliationTimingPolicy,
     Verdict,
 )
@@ -142,6 +141,10 @@ def _rejection_event(
     order_ref: str | None = ORDER_REF,
     req_id: int | None = 42,
     order_id: int = 42,
+    symbol: str | None = "SPY",
+    side: str | None = "BUY",
+    order_type: str | None = "MKT",
+    remaining: float | None = 100.0,
     error_code: int = 201,
     error_message: str = "Order rejected - insufficient buying power",
 ) -> IbkrOrderEvent:
@@ -153,12 +156,12 @@ def _rejection_event(
         event_type="error",
         status="Inactive",
         order_ref=order_ref,
-        symbol="SPY",
-        side="BUY",
-        order_type="MKT",
+        symbol=symbol,
+        side=side,  # type: ignore[arg-type]
+        order_type=order_type,
         fill_quantity=0.0,
         cumulative_filled=0.0,
-        remaining=100.0,
+        remaining=remaining,
         error_code=error_code,
         error_message=error_message,
         ts_ms=1_700_000_000_000,
@@ -312,12 +315,6 @@ async def test_rejection_event_writes_bot_event_and_incident(tmp_path: Path) -> 
 
     publisher.start()
     try:
-        rows = await _wait_for_rows(
-            instance_broker_activity_wal_path(artifacts, SID), want=1
-        )
-        assert rows[0].order_ref == ORDER_REF
-        assert ReasonCode.REJECTION in rows[0].reason_codes
-
         raw_events = await _wait_for_bot_events(
             run_bot_event_wal_path(run_dir), want=1
         )
@@ -332,6 +329,8 @@ async def test_rejection_event_writes_bot_event_and_incident(tmp_path: Path) -> 
         assert raw.terminal_error.code is TerminalErrorCode.ORDER_REJECTED
         assert raw.terminal_error.external_code == 201
         assert raw.terminal_error.external_message == "Order rejected - insufficient buying power"
+        assert "broker_activity_seq" not in raw.facts
+        assert BrokerActivityWal(instance_broker_activity_wal_path(artifacts, SID)).read_all() == []
 
         incidents = await _wait_for_incidents(incident_store, want=1)
         incident = incidents[0]
@@ -343,25 +342,57 @@ async def test_rejection_event_writes_bot_event_and_incident(tmp_path: Path) -> 
         await publisher.stop()
 
 
-async def test_rejection_event_joins_order_ref_from_req_id(tmp_path: Path) -> None:
-    publisher, run_dir, artifacts = _build_publisher(
-        tmp_path,
-        [_rejection_event(order_ref=None, req_id=42, order_id=42)],
+async def test_rejection_event_matches_req_id_and_enriches_order_facts(tmp_path: Path) -> None:
+    artifacts = tmp_path / "artifacts"
+    run_dir = tmp_path / "run-dir"
+    _seed_envelope(
+        artifacts,
+        submitted_orders={
+            INTENT_ID: {
+                "order_id": 42,
+                "status": "Submitted",
+                "symbol": "SPY",
+                "action": "BUY",
+                "quantity": 100.0,
+                "order_type": "MKT",
+            }
+        },
+    )
+    publisher = BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=run_dir,
+        artifacts_root=artifacts,
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=_make_event_source(
+            [
+                _rejection_event(
+                    order_ref=None,
+                    req_id=42,
+                    order_id=42,
+                    symbol=None,
+                    side=None,
+                    order_type=None,
+                    remaining=None,
+                )
+            ]
+        ),
     )
 
     publisher.start()
     try:
-        rows = await _wait_for_rows(
-            instance_broker_activity_wal_path(artifacts, SID), want=1
-        )
-        assert rows[0].order_ref == ORDER_REF
-        assert ReasonCode.REJECTION in rows[0].reason_codes
-
         raw_events = await _wait_for_bot_events(
             run_bot_event_wal_path(run_dir), want=1
         )
-        assert raw_events[0].identity.order_ref == ORDER_REF
-        assert raw_events[0].identity.req_id == 42
+        raw = raw_events[0]
+        assert raw.identity.intent_id == INTENT_ID
+        assert raw.identity.order_ref is None
+        assert raw.identity.req_id == 42
+        assert raw.facts["symbol"] == "SPY"
+        assert raw.facts["side"] == "BUY"
+        assert raw.facts["quantity"] == 100.0
+        assert raw.facts["order_type"] == "MKT"
+        assert BrokerActivityWal(instance_broker_activity_wal_path(artifacts, SID)).read_all() == []
     finally:
         await publisher.stop()
 

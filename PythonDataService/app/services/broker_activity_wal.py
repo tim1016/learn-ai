@@ -25,11 +25,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from pydantic import ValidationError
-
 from app.engine.live.identity import _INSTANCE_ID_RE, validate_strategy_instance_id
-from app.engine.live.live_state_sidecar import _fsync_parent_dir
 from app.schemas.broker_activity import BrokerActivityRow
+from app.services.jsonl_wal import JsonlWal
 
 
 class BrokerActivityWalCorruptError(RuntimeError):
@@ -126,12 +124,17 @@ class BrokerActivityWal:
     """Append-only WAL writer/reader scoped to one strategy-instance run dir."""
 
     def __init__(self, path: Path) -> None:
-        self._path = path
-        self._next_seq: int | None = None
+        self._wal = JsonlWal(
+            path,
+            record_model=BrokerActivityRow,
+            corrupt_error=BrokerActivityWalCorruptError,
+            seq_of=lambda row: row.seq,
+            label="broker-activity",
+        )
 
     @property
     def path(self) -> Path:
-        return self._path
+        return self._wal.path
 
     def allocate_seq(self) -> int:
         """Return the next ``seq`` the publisher should stamp on a row.
@@ -141,30 +144,21 @@ class BrokerActivityWal:
         within a single process; ``append_row`` consumes the seq and
         advances internal state.
         """
-        return self._allocate_seq()
+        return self._wal.allocate_seq()
 
     def append_row(self, row: BrokerActivityRow) -> None:
         """Persist one row. The row's ``seq`` must equal the value last
         returned by ``allocate_seq`` (we don't re-stamp here — the
         publisher constructed the row with that seq already)."""
-        expected_seq = self._allocate_seq()
-        if row.seq != expected_seq:
+        try:
+            self._wal.append(row)
+        except ValueError as exc:
             raise ValueError(
                 f"broker-activity WAL append got row.seq={row.seq} but the next "
-                f"available seq is {expected_seq} (the publisher must construct "
+                "available seq is "
+                f"{self._wal.allocate_seq()} (the publisher must construct "
                 "the row with the seq returned by allocate_seq)"
-            )
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        line = row.model_dump_json() + "\n"
-        with open(self._path, "a", encoding="utf-8") as fh:
-            fh.write(line)
-            # Advance the seq before flush/fsync so a partial-write retry
-            # uses seq+1 (cold-start tolerates one trailing torn line).
-            # Mirrors IntentWal's discipline.
-            self._next_seq = row.seq + 1
-            fh.flush()
-            os.fsync(fh.fileno())
-        _fsync_parent_dir(self._path)
+            ) from exc
 
     def read_all(self) -> list[BrokerActivityRow]:
         """Read every complete row in seq order.
@@ -172,7 +166,7 @@ class BrokerActivityWal:
         Used by cold-start (publisher fold) and by the REST backfill
         endpoint when no ``after_seq`` cursor is supplied.
         """
-        return self._read_range(after_seq=0, limit=None)
+        return self._wal.read_all()
 
     def read_from(
         self, *, after_seq: int, limit: int | None = None
@@ -182,9 +176,7 @@ class BrokerActivityWal:
         Drives the REST paginated backfill: client passes the highest
         seq they have, we return the next page.
         """
-        if after_seq < 0:
-            raise ValueError(f"after_seq must be >= 0; got {after_seq}")
-        return self._read_range(after_seq=after_seq, limit=limit)
+        return self._wal.read_from(after_seq=after_seq, limit=limit)
 
     def last_seq(self) -> int:
         """Return the highest seq currently persisted, or ``0`` if empty.
@@ -193,54 +185,7 @@ class BrokerActivityWal:
         and the SSE handoff cursor for clients backfilling via REST then
         switching to SSE.
         """
-        rows = self._read_range(after_seq=0, limit=None)
-        return rows[-1].seq if rows else 0
-
-    # ── internals ──────────────────────────────────────────────────
-
-    def _read_range(
-        self, *, after_seq: int, limit: int | None
-    ) -> list[BrokerActivityRow]:
-        if not self._path.exists():
-            return []
-        raw = self._path.read_bytes()
-        if not raw:
-            return []
-        ends_with_newline = raw.endswith(b"\n")
-        byte_lines = raw.split(b"\n")
-        if byte_lines and byte_lines[-1] == b"":
-            byte_lines.pop()  # the empty tail produced by a final newline
-
-        rows: list[BrokerActivityRow] = []
-        last_seq = 0
-        n = len(byte_lines)
-        for idx, bline in enumerate(byte_lines):
-            if idx == n - 1 and not ends_with_newline:
-                break  # tolerated: single trailing un-fsynced partial line
-            try:
-                row = BrokerActivityRow.model_validate_json(bline)
-            except (ValidationError, ValueError) as exc:
-                raise BrokerActivityWalCorruptError(
-                    self._path, f"unparseable line {idx + 1}: {exc}"
-                ) from exc
-            if row.seq <= last_seq:
-                raise BrokerActivityWalCorruptError(
-                    self._path,
-                    f"non-monotonic seq at line {idx + 1}: "
-                    f"{row.seq} after {last_seq}",
-                )
-            last_seq = row.seq
-            if row.seq > after_seq:
-                rows.append(row)
-                if limit is not None and len(rows) >= limit:
-                    break
-        return rows
-
-    def _allocate_seq(self) -> int:
-        if self._next_seq is None:
-            existing = self.read_all()
-            self._next_seq = (existing[-1].seq + 1) if existing else 1
-        return self._next_seq
+        return self._wal.last_seq()
 
 
 __all__ = [

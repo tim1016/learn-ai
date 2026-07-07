@@ -626,12 +626,14 @@ def test_on_ib_error_buffers_order_rejection_for_order_stream(
 
     client._on_ib_error(42, 201, "Order rejected - insufficient buying power", None)
 
-    buffered = client.drain_order_errors()
-    assert [(req_id, code, message) for req_id, code, message, _ts in buffered] == [
+    buffered = client.order_errors_after(0)
+    assert [(event.req_id, event.error_code, event.error_message) for event in buffered] == [
         (42, 201, "Order rejected - insufficient buying power")
     ]
-    assert buffered[0][3] > 0
-    assert client.drain_order_errors() == []
+    assert buffered[0].seq == 1
+    assert buffered[0].ts_ms > 0
+    assert client.order_errors_after(0) == buffered
+    assert client.order_errors_after(buffered[0].seq) == []
 
 
 def test_on_ib_error_does_not_buffer_global_errors_for_order_stream(
@@ -642,7 +644,7 @@ def test_on_ib_error_does_not_buffer_global_errors_for_order_stream(
     client._on_ib_error(-1, 201, "Global warning shaped like a rejection", None)
     client._on_ib_error(0, 1100, "Connectivity lost", None)
 
-    assert client.drain_order_errors() == []
+    assert client.order_errors_after(0) == []
 
 
 # ---------------------------------------------------------------------------

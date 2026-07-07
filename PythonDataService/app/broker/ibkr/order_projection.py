@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from app.broker.ibkr.models import OrderEventType
 
@@ -29,6 +29,30 @@ def event_order_type(trade: object | None) -> str | None:
         return None
     order_type = getattr(getattr(trade, "order", None), "orderType", None)
     return str(order_type) if order_type else None
+
+
+def trade_order_event_fields(trade: object, account_id: str) -> dict[str, Any]:
+    """Fields shared by status/error order events sourced from an IBKR Trade."""
+
+    order = getattr(trade, "order", None)
+    contract = getattr(trade, "contract", None)
+    order_status = getattr(trade, "orderStatus", None)
+    order_ref = getattr(order, "orderRef", "") if order is not None else ""
+    if order is None:
+        raise AttributeError("trade has no order")
+    return {
+        "account_id": account_id,
+        "order_id": int(order.orderId),
+        "perm_id": int(order.permId) if order.permId else None,
+        "con_id": int(contract.conId) if contract else None,
+        "status": getattr(order_status, "status", None),
+        "order_ref": order_ref or None,
+        "symbol": event_symbol(trade),
+        "side": event_side(trade),
+        "order_type": event_order_type(trade),
+        "cumulative_filled": float(getattr(order_status, "filled", 0.0) or 0.0),
+        "remaining": float(getattr(order_status, "remaining", 0.0) or 0.0),
+    }
 
 
 def order_belongs_to_account(trade: object, account_id: str) -> bool:
