@@ -229,6 +229,27 @@ class BotEventRow(BaseModel):
         return self
 
 
+class BotEventPage(BaseModel):
+    """Paginated REST response for authored bot-event rows.
+
+    ``after_seq`` / ``next_seq`` operate on visible authored row sequence,
+    not raw WAL line sequence. Invisible raw captures such as pass-only
+    gate steps never force clients to advance a cursor.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    rows: list[BotEventRow]
+    next_seq: int | None = Field(
+        default=None,
+        description=(
+            "Cursor for the next page: pass verbatim as ``after_seq`` "
+            "on the next call (equal to the highest visible row ``seq`` "
+            "returned). ``None`` when the page drained visible rows."
+        ),
+    )
+
+
 _TERMINAL_RAW_TYPES = frozenset(
     {
         BotEventRawType.ORDER_REJECTED,
