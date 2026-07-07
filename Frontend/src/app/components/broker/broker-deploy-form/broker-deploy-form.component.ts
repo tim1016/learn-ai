@@ -33,6 +33,7 @@ import { BrokerConnectivityStripComponent } from '../broker-connectivity-strip/b
 import { BrokerOperationResultComponent } from '../broker-operation-result/broker-operation-result.component';
 import { type OperationError, toOperationError } from '../operation-error';
 import {
+  actionPlanDeployReadiness,
   buildDeployChecks,
   buildDeployReadinessFacts,
   buildNowChecks,
@@ -263,6 +264,9 @@ export class BrokerDeployFormComponent {
   readonly actionPlanTradeSymbol = computed<string | null>(() =>
     BrokerDeployFormComponent.singleLongStockActionSymbol(this.actionPlan()),
   );
+  readonly actionPlanReadiness = computed(() =>
+    actionPlanDeployReadiness(this.strategyKey(), this.actionPlan()),
+  );
 
   readonly deployTabs = computed<DeployTab[]>(() => [
     {
@@ -291,7 +295,7 @@ export class BrokerDeployFormComponent {
       key: 'legs',
       label: 'Legs',
       target: 'action-plan-picker-heading',
-      complete: true,
+      complete: this.actionPlanReadiness().canDeploy,
     },
     {
       key: 'launch',
@@ -505,6 +509,8 @@ export class BrokerDeployFormComponent {
       return 'Strategy must be validated before deployment. Open Strategy Validation to promote it.';
     }
     if (!this.required()) return 'Missing: ' + this.missingRequiredFields().join(', ') + '.';
+    const actionPlanReadiness = this.actionPlanReadiness();
+    if (!actionPlanReadiness.canDeploy) return actionPlanReadiness.message;
     // PR4 reviewer fix: surface invalid Custom sizing here so the deploy
     // button disables BEFORE submit() runs; throwing inside submit() would
     // leave busy=true and the form wedged.

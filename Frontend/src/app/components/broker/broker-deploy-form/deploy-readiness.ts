@@ -1,3 +1,4 @@
+import type { ActionPlan } from '../../../api/action-plan.types';
 import type { AccountTruthResponse } from '../../../api/broker-models';
 import type {
   DaemonFreshness,
@@ -41,6 +42,25 @@ export interface NowChecksInput {
   fleetState: LinkState;
   nothingDeployed: boolean;
 }
+
+export type ActionPlanDeployReasonCode =
+  | 'ACTION_PLAN_EMPTY'
+  | 'ACTION_PLAN_ENTRY_LEG_REQUIRED'
+  | 'ACTION_PLAN_UNSUPPORTED'
+  | 'ACTION_PLAN_CLOSE_LEG_REQUIRED';
+
+export interface ActionPlanDeployReadiness {
+  canDeploy: boolean;
+  reasonCode: ActionPlanDeployReasonCode | null;
+  message: string;
+}
+
+const ACTION_PLAN_REQUIRED_STRATEGIES = new Set(['deployment_validation']);
+const ACTION_PLAN_READY: ActionPlanDeployReadiness = {
+  canDeploy: true,
+  reasonCode: null,
+  message: 'Action plan is ready for deployment.',
+};
 
 export function buildDeployReadinessFacts(input: DeployReadinessInput): DeployReadinessFact[] {
   return [
@@ -95,6 +115,58 @@ export function buildNowChecks(input: NowChecksInput): DeployStatusCheck[] {
             : 'Clear',
     },
   ];
+}
+
+export function actionPlanDeployReadiness(
+  strategyKey: string,
+  actionPlan: ActionPlan | null | undefined,
+): ActionPlanDeployReadiness {
+  if (!ACTION_PLAN_REQUIRED_STRATEGIES.has(strategyKey.trim())) {
+    return ACTION_PLAN_READY;
+  }
+  if (!actionPlan) {
+    return {
+      canDeploy: false,
+      reasonCode: 'ACTION_PLAN_EMPTY',
+      message: 'Deployment Validation requires an action plan with one long stock entry leg and a matching close leg before deployment.',
+    };
+  }
+  const hasEntries = actionPlan.on_enter.length > 0;
+  const hasExits = actionPlan.on_exit.length > 0;
+  if (!hasEntries && !hasExits) {
+    return {
+      canDeploy: false,
+      reasonCode: 'ACTION_PLAN_EMPTY',
+      message: 'Deployment Validation requires an action plan; ON ENTER and ON EXIT are both empty.',
+    };
+  }
+  if (!hasEntries) {
+    return {
+      canDeploy: false,
+      reasonCode: 'ACTION_PLAN_ENTRY_LEG_REQUIRED',
+      message: 'Deployment Validation requires at least one ON ENTER entry leg.',
+    };
+  }
+  if (
+    actionPlan.on_enter.length !== 1 ||
+    actionPlan.on_enter[0].instrument.kind !== 'stock' ||
+    actionPlan.on_enter[0].position !== 'long'
+  ) {
+    return {
+      canDeploy: false,
+      reasonCode: 'ACTION_PLAN_UNSUPPORTED',
+      message: 'Deployment Validation currently supports exactly one long stock entry leg. Option, short, and multi-leg plans are not deployable on this runtime path yet.',
+    };
+  }
+  const entryLegId = actionPlan.on_enter[0].leg_id;
+  if (!actionPlan.on_exit.some((exit) => exit.entry_leg_id === entryLegId)) {
+    return {
+      canDeploy: false,
+      reasonCode: 'ACTION_PLAN_CLOSE_LEG_REQUIRED',
+      message: `Deployment Validation requires an ON EXIT close leg for the entry leg '${entryLegId}'.`,
+    };
+  }
+  return ACTION_PLAN_READY;
 }
 
 export function buildDeployChecks(errorStatus: number | null | undefined): DeployStatusCheck[] {

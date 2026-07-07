@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import time
 from pathlib import Path
+from typing import Literal
 
 from app.engine.execution.order_sizer import SizingPolicy
 from app.engine.live.order_identity import DEFAULT_ORDER_REF_MAX_LENGTH
@@ -121,3 +122,93 @@ def stock_symbol_from_action_plan(action: object) -> str | None:
     if len(symbols) != 1 or len(on_enter) != 1:
         return None
     return next(iter(symbols))
+
+
+ActionPlanDeployReasonCode = Literal[
+    "ACTION_PLAN_EMPTY",
+    "ACTION_PLAN_ENTRY_LEG_REQUIRED",
+    "ACTION_PLAN_UNSUPPORTED",
+    "ACTION_PLAN_CLOSE_LEG_REQUIRED",
+]
+
+
+@dataclass(frozen=True)
+class ActionPlanDeployReadiness:
+    reason_code: ActionPlanDeployReasonCode | None = None
+    message: str = "Action plan is ready for deployment."
+
+    @property
+    def can_deploy(self) -> bool:
+        return self.reason_code is None
+
+
+_ACTION_PLAN_REQUIRED_STRATEGIES = frozenset({"deployment_validation"})
+
+
+def action_plan_deploy_readiness(
+    *,
+    strategy_key: str,
+    live_config: dict,
+) -> ActionPlanDeployReadiness:
+    """Return the deploy-time action-plan verdict for strategies that consume it.
+
+    Today the live runtime consumes a stock-only action plan for
+    ``deployment_validation``: exactly one long stock entry leg plus a close-leg
+    exit for that entry. Other strategies remain non-blocking until they declare
+    a deploy-time action-plan contract, which keeps valid future entry-only/roll
+    plans from being rejected by this deployment-validation-specific gate.
+    """
+
+    if strategy_key.strip() not in _ACTION_PLAN_REQUIRED_STRATEGIES:
+        return ActionPlanDeployReadiness()
+    action = live_config.get("action") if isinstance(live_config, dict) else None
+    if not isinstance(action, dict):
+        return ActionPlanDeployReadiness(
+            reason_code="ACTION_PLAN_EMPTY",
+            message=(
+                "Deployment Validation requires an action plan with one long stock "
+                "entry leg and a matching close leg before deployment."
+            ),
+        )
+    on_enter = action.get("on_enter")
+    on_exit = action.get("on_exit")
+    has_entries = isinstance(on_enter, list) and len(on_enter) > 0
+    has_exits = isinstance(on_exit, list) and len(on_exit) > 0
+    if not has_entries and not has_exits:
+        return ActionPlanDeployReadiness(
+            reason_code="ACTION_PLAN_EMPTY",
+            message=("Deployment Validation requires an action plan; ON ENTER and ON EXIT are both empty."),
+        )
+    if not has_entries:
+        return ActionPlanDeployReadiness(
+            reason_code="ACTION_PLAN_ENTRY_LEG_REQUIRED",
+            message="Deployment Validation requires at least one ON ENTER entry leg.",
+        )
+    try:
+        from app.schemas.action_plan import ActionPlan
+
+        plan = ActionPlan.model_validate(action)
+    except ValueError:
+        return ActionPlanDeployReadiness(
+            reason_code="ACTION_PLAN_UNSUPPORTED",
+            message=(
+                "Deployment Validation cannot consume this action-plan shape. "
+                "Use one long stock entry leg with a close-leg exit."
+            ),
+        )
+    if stock_symbol_from_action_plan(action) is None:
+        return ActionPlanDeployReadiness(
+            reason_code="ACTION_PLAN_UNSUPPORTED",
+            message=(
+                "Deployment Validation currently supports exactly one long stock "
+                "entry leg. Option, short, and multi-leg plans are not deployable "
+                "on this runtime path yet."
+            ),
+        )
+    entry_leg_id = plan.on_enter[0].leg_id
+    if not any(exit_entry.entry_leg_id == entry_leg_id for exit_entry in plan.on_exit):
+        return ActionPlanDeployReadiness(
+            reason_code="ACTION_PLAN_CLOSE_LEG_REQUIRED",
+            message=(f"Deployment Validation requires an ON EXIT close leg for the entry leg {entry_leg_id!r}."),
+        )
+    return ActionPlanDeployReadiness()

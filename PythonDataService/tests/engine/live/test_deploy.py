@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from app.engine.live.deploy import (
+    ActionPlanReadinessError,
     DeployIOError,
     DeployParams,
     DirtyTreeError,
@@ -84,6 +85,36 @@ def _params(repo: Path, spec: Path, qc: Path, run_root: Path, **overrides: objec
     }
     base.update(overrides)
     return DeployParams(**base)  # type: ignore[arg-type]
+
+
+def _deployment_validation_spec(repo: Path) -> Path:
+    spec = repo / "PythonDataService" / "deployment_validation.spec.json"
+    spec.write_text('{"strategy": "deployment_validation"}', encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "PythonDataService/deployment_validation.spec.json"],
+        cwd=repo,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "add deployment validation spec", "--no-gpg-sign"],
+        cwd=repo,
+        check=True,
+    )
+    return spec
+
+
+def _deployment_validation_action(entry_leg_id: str = "spy_long") -> dict[str, object]:
+    return {
+        "on_enter": [
+            {
+                "leg_id": entry_leg_id,
+                "instrument": {"kind": "stock", "underlying": "SPY"},
+                "position": "long",
+                "qty_ratio": 1,
+            },
+        ],
+        "on_exit": [{"kind": "close_leg", "entry_leg_id": entry_leg_id}],
+    }
 
 
 @requires_git
@@ -299,6 +330,199 @@ def test_deploy_run_rejects_unsupported_bar_source_descriptor(
     with pytest.raises(UnsupportedBarSourceDescriptorError, match=r"ibkr_realtime_bars"):
         deploy_run(_params(repo, spec, qc, tmp_path / "live_runs"))
     assert not (tmp_path / "live_runs").exists()
+
+
+# ────────────────── Bot control stream-primary — action-plan readiness ───
+
+
+@requires_git
+def test_deploy_run_rejects_empty_action_plan_for_deployment_validation(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    repo, _spec, qc = repo_with_inputs
+    spec = _deployment_validation_spec(repo)
+    run_root = tmp_path / "live_runs"
+
+    with pytest.raises(ActionPlanReadinessError) as exc_info:
+        deploy_run(
+            _params(
+                repo,
+                spec,
+                qc,
+                run_root,
+                strategy_key="deployment_validation",
+                live_config={
+                    "symbol": "SPY",
+                    "sizing": {"kind": "FixedShares", "value": 1},
+                    "action": {"on_enter": [], "on_exit": []},
+                },
+            )
+        )
+
+    assert exc_info.value.reason_code == "ACTION_PLAN_EMPTY"
+    assert not run_root.exists()
+
+
+@requires_git
+def test_deploy_run_rejects_missing_entry_leg_for_deployment_validation(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    repo, _spec, qc = repo_with_inputs
+    spec = _deployment_validation_spec(repo)
+    run_root = tmp_path / "live_runs"
+
+    with pytest.raises(ActionPlanReadinessError) as exc_info:
+        deploy_run(
+            _params(
+                repo,
+                spec,
+                qc,
+                run_root,
+                strategy_key="deployment_validation",
+                live_config={
+                    "symbol": "SPY",
+                    "sizing": {"kind": "FixedShares", "value": 1},
+                    "action": {
+                        "on_enter": [],
+                        "on_exit": [{"kind": "close_leg", "entry_leg_id": "spy_long"}],
+                    },
+                },
+            )
+        )
+
+    assert exc_info.value.reason_code == "ACTION_PLAN_ENTRY_LEG_REQUIRED"
+    assert not run_root.exists()
+
+
+@requires_git
+def test_deploy_run_rejects_unsupported_action_plan_for_deployment_validation(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    repo, _spec, qc = repo_with_inputs
+    spec = _deployment_validation_spec(repo)
+    run_root = tmp_path / "live_runs"
+
+    with pytest.raises(ActionPlanReadinessError) as exc_info:
+        deploy_run(
+            _params(
+                repo,
+                spec,
+                qc,
+                run_root,
+                strategy_key="deployment_validation",
+                live_config={
+                    "symbol": "SPY",
+                    "sizing": {"kind": "FixedShares", "value": 1},
+                    "action": {
+                        "on_enter": [
+                            {
+                                "leg_id": "spy_short",
+                                "instrument": {"kind": "stock", "underlying": "SPY"},
+                                "position": "short",
+                                "qty_ratio": 1,
+                            },
+                        ],
+                        "on_exit": [{"kind": "close_leg", "entry_leg_id": "spy_short"}],
+                    },
+                },
+            )
+        )
+
+    assert exc_info.value.reason_code == "ACTION_PLAN_UNSUPPORTED"
+    assert not run_root.exists()
+
+
+@requires_git
+def test_deploy_run_requires_close_leg_for_deployment_validation(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    repo, _spec, qc = repo_with_inputs
+    spec = _deployment_validation_spec(repo)
+    run_root = tmp_path / "live_runs"
+
+    with pytest.raises(ActionPlanReadinessError) as exc_info:
+        deploy_run(
+            _params(
+                repo,
+                spec,
+                qc,
+                run_root,
+                strategy_key="deployment_validation",
+                live_config={
+                    "symbol": "SPY",
+                    "sizing": {"kind": "FixedShares", "value": 1},
+                    "action": {
+                        "on_enter": [
+                            {
+                                "leg_id": "spy_long",
+                                "instrument": {"kind": "stock", "underlying": "SPY"},
+                                "position": "long",
+                                "qty_ratio": 1,
+                            },
+                        ],
+                        "on_exit": [],
+                    },
+                },
+            )
+        )
+
+    assert exc_info.value.reason_code == "ACTION_PLAN_CLOSE_LEG_REQUIRED"
+    assert not run_root.exists()
+
+
+@requires_git
+def test_deploy_run_accepts_deployment_validation_action_plan(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    repo, _spec, qc = repo_with_inputs
+    spec = _deployment_validation_spec(repo)
+    run_root = tmp_path / "live_runs"
+
+    result = deploy_run(
+        _params(
+            repo,
+            spec,
+            qc,
+            run_root,
+            live_config={
+                "symbol": "SPY",
+                "sizing": {"kind": "FixedShares", "value": 1},
+                "action": _deployment_validation_action(),
+            },
+        )
+    )
+
+    ledger = json.loads((result.run_dir / "run_ledger.json").read_text(encoding="utf-8"))
+    assert ledger["strategy_key"] == "deployment_validation"
+    assert ledger["live_config"]["action"] == _deployment_validation_action()
+
+
+@requires_git
+def test_deploy_run_does_not_overblock_entry_only_plans_for_other_strategies(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    repo, spec, qc = repo_with_inputs
+    run_root = tmp_path / "live_runs"
+    action = _deployment_validation_action()
+    action["on_exit"] = []
+
+    result = deploy_run(
+        _params(
+            repo,
+            spec,
+            qc,
+            run_root,
+            strategy_key="spy_ema_crossover",
+            live_config={
+                "symbol": "SPY",
+                "sizing": {"kind": "FixedShares", "value": 1},
+                "action": action,
+            },
+        )
+    )
+
+    ledger = json.loads((result.run_dir / "run_ledger.json").read_text(encoding="utf-8"))
+    assert ledger["live_config"]["action"]["on_exit"] == []
 
 
 @requires_git
