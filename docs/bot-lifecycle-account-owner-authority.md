@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-07-03 (Account Truth source-freshness and data-plane bounds update: Bot Control submit readiness and `LivePortfolio.submit_pending_orders` now consume the cached Account Truth projection and fail closed when the cached verdict is missing, stale, not clean, or backed by stale/missing critical source evidence. Account-level reconciliation consumes the same source-freshness contract. Account Truth broker calls and data-plane shutdown paths are bounded.)
+> **Last reviewed:** 2026-07-07 (Safety-halt incident bridge update: cold-start reconciliation poison writes now mint a `safety-halt` OperatorIncident alongside `poisoned.flag`; the run incidents endpoint projects safety-halt incidents into the existing Recent Incidents contract; Bot Control incident headlines include safety-halt incidents.)
 
 ---
 
@@ -70,7 +70,7 @@ This is **not** R3. The current process-local `_submit_lock` in `LiveEngine` ser
 | Start recheck | Data plane blocks stale starts for poisoned runs, durable STOPPED, offline daemon, running/stopping daemon state. | `routers/live_instances.py::_assert_start_allowed` |
 | Host spawn | Host daemon starts `python -m app.engine.live.run start` as a subprocess keyed by `strategy_instance_id`. | `RunnerProcessManager.start` |
 | Run pre-flight | Runner validates run state, sizing, dirty tree policy, halt flags, unexpected positions, coexistence, and prior artifacts. | `engine/live/pre_flight.py`, `engine/live/run.py` |
-| Cold-start reconcile | Runner writes `reconciliation_receipt.json` as `in_progress`, probes broker, classifies broker state, then writes pass/fail. | `reconciliation_orchestrator.py`, `reconciliation_classifier.py` |
+| Cold-start reconcile | Runner writes `reconciliation_receipt.json` as `in_progress`, probes broker, classifies broker state, then writes pass/fail. Poison outcomes write `poisoned.flag` and mint a deduplicated safety-halt OperatorIncident. | `reconciliation_orchestrator.py`, `reconciliation_classifier.py`, `operator/incidents/safety_halt_notices.py` |
 | Activate | Live engine constructs portfolio/context, starts broker event stream, publishes runtime/readiness blocks, and enters bar loop. | `live_engine.py`, `readiness.py` |
 | Submit | Strategy queues orders; `LivePortfolio.submit_pending_orders` writes intent WAL events and calls broker adapter. | `live_portfolio.py`, `intent_wal.py`, `submit_state_machine.py` |
 | Low-level broker write | Paper safety checks run, `order_ref` is required, contract is qualified, then `client.ib.placeOrder(...)` is called. | `broker/ibkr/orders.py::place_paper_order` |
@@ -159,7 +159,8 @@ state to guess around.
 | `intent_events.jsonl` | run | Legacy/direct-submit append-only submit WAL. Source of truth for run-scoped intent lifecycle events when a runner submits directly; AccountOwner submit mode does not write this file. |
 | `live_state.json` | instance | Stable projection used by reconciliation/readiness. |
 | `reconciliation_receipt.json` | run | Cold-start/runtime reconcile outcome. |
-| `poisoned.flag` | run | Run-level permanent unsafe state. |
+| `poisoned.flag` | run | Run-level permanent unsafe state. New cold-start poison writes also mint a `safety-halt` OperatorIncident keyed by instance, run, halt trigger, evidence time, and artifact ref. |
+| `operator_incidents/*.json` | run | Durable operator-visible incidents. Watchdog/order/submit incidents feed the cockpit headline; `safety-halt` incidents also feed Recent Incidents through the run incidents endpoint. |
 | `control_plane_lease_lost.json` / incidents | run | Watchdog lease-loss evidence. |
 | `broker_callbacks.jsonl` | run | Raw broker callback evidence when attached. |
 | `fleet_baselines/<account_id>.json` | account-adjacent partial | Existing fleet-reset baseline used to ignore completed unknown historical executions under strict conditions. |

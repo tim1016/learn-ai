@@ -590,7 +590,8 @@ export type OperatorNoticeCode =
   | 'submit.uncertain'
   | 'submit.halted'
   | 'submit.launch_failed'
-  | 'submit.unmapped_diagnostic';
+  | 'submit.unmapped_diagnostic'
+  | 'safety_halt.poisoned';
 
 export type OperatorNoticeActionKind =
   | 'none'
@@ -622,7 +623,7 @@ export interface OperatorNotice {
 export interface OperatorIncident {
   schema_version: number;
   incident_id: string;
-  category: 'watchdog' | 'activity' | 'reconciliation' | 'order' | 'submit';
+  category: 'watchdog' | 'activity' | 'reconciliation' | 'order' | 'submit' | 'safety-halt';
   notice: OperatorNotice;
   started_at_ms: number;
   resolved_at_ms: number | null;

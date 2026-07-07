@@ -28,7 +28,8 @@
     "submit.uncertain",
     "submit.halted",
     "submit.launch_failed",
-    "submit.unmapped_diagnostic"
+    "submit.unmapped_diagnostic",
+    "safety_halt.poisoned"
   ],
   "schema_version": 1
 }

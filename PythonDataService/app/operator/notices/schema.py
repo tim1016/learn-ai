@@ -51,6 +51,8 @@ OperatorNoticeCode = Literal[
     "submit.halted",
     "submit.launch_failed",
     "submit.unmapped_diagnostic",
+    # Stream-primary PRD — safety-halt incident bridge.
+    "safety_halt.poisoned",
 ]
 
 # ---------------------------------------------------------------------------
@@ -117,7 +119,7 @@ class OperatorIncident(BaseModel):
 
     schema_version: int = 1
     incident_id: str
-    category: Literal["watchdog", "activity", "reconciliation", "order", "submit"]
+    category: Literal["watchdog", "activity", "reconciliation", "order", "submit", "safety-halt"]
     notice: OperatorNotice
     started_at_ms: int
     resolved_at_ms: int | None = None

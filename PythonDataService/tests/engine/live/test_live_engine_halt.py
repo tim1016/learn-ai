@@ -42,6 +42,7 @@ from app.engine.live.halt import (
 )
 from app.engine.live.live_engine import LiveEngine
 from app.engine.strategy.base import Strategy
+from app.operator.incidents.store import IncidentStore
 
 # ──────────────────────────── Fake event broker ──────────────────────
 
@@ -334,6 +335,8 @@ async def test_fatal_halt_on_lost_fill(tmp_path: Path) -> None:
         output_dir=tmp_path,
         account_id="DU123",
         fill_window_ms=1,  # Tiny window — any order is "lost" by the next bar.
+        run_id="run-lost-fill",
+        strategy_instance_id="lost-fill-bot",
     )
 
     bars = [_bar(m) for m in range(30, 90)]
@@ -346,6 +349,13 @@ async def test_fatal_halt_on_lost_fill(tmp_path: Path) -> None:
     assert exc_info.value.reason.trigger == PoisonedHaltTrigger.LOST_FILL
     assert exc_info.value.reason.details["client_order_id"].startswith("live-")
     assert (tmp_path / POISONED_FLAG_FILENAME).exists()
+    incidents = IncidentStore(tmp_path).list_unresolved()
+    assert len(incidents) == 1
+    assert incidents[0].category == "safety-halt"
+    assert incidents[0].notice.code == "safety_halt.poisoned"
+    assert incidents[0].evidence["run_id"] == "run-lost-fill"
+    assert incidents[0].evidence["strategy_instance_id"] == "lost-fill-bot"
+    assert incidents[0].evidence["halt_trigger"] == "lost_fill"
 
 
 # ──────────────────────────── Cleanup invariants ─────────────────────

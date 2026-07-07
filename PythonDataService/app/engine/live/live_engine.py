@@ -65,11 +65,13 @@ from app.engine.live.command_channel import (
 from app.engine.live.config import LiveConfig
 from app.engine.live.desired_state import DesiredState
 from app.engine.live.halt import (
+    POISONED_FLAG_FILENAME,
     FatalHaltError,
     PoisonedHaltReason,
     PoisonedHaltTrigger,
     check_lost_fill,
     check_outside_mutation,
+    read_poisoned_flag,
     write_poisoned_flag,
 )
 from app.engine.live.live_context import LiveContext
@@ -91,6 +93,8 @@ from app.engine.live.runtime_producer import (
 )
 from app.engine.strategy.base import LoggedTrade, Strategy
 from app.engine.strategy.spec.schema import SUPPORTED_LIVE_RUNTIME_BAR_SOURCE
+from app.operator.incidents.safety_halt_notices import build_safety_halt_incident
+from app.operator.incidents.store import IncidentStore
 from app.schemas.bot_events import GateStep, GateStepResult, SourceAuthority
 from app.utils.timestamps import now_ms_utc
 
@@ -2397,6 +2401,37 @@ class LiveEngine:
                 reason,
             )
 
+    def _poisoned_reason_for_incident(
+        self,
+        run_dir: Path,
+        fallback: PoisonedHaltReason,
+    ) -> PoisonedHaltReason:
+        try:
+            existing = read_poisoned_flag(run_dir)
+        except ValueError:
+            logger.exception("could not parse existing poisoned.flag for safety-halt incident")
+            return fallback
+        return existing or fallback
+
+    def _record_safety_halt_incident(
+        self,
+        run_dir: Path,
+        halt_reason: PoisonedHaltReason,
+        artifact_path: Path,
+    ) -> None:
+        try:
+            IncidentStore(run_dir).append_unless_resolved(
+                build_safety_halt_incident(
+                    strategy_instance_id=self._strategy_instance_id,
+                    run_id=self._run_id or run_dir.name,
+                    halt_reason=halt_reason,
+                    artifact_path=artifact_path,
+                    log_path=run_dir / "live.log",
+                )
+            )
+        except Exception:
+            logger.exception("could not record safety-halt operator incident")
+
     def _write_operator_poisoned_flag(self, run_dir: Path, reason: str) -> str:
         """Write a structured operator-declared poisoned.flag.
 
@@ -2418,10 +2453,17 @@ class LiveEngine:
             details={"source": "operator_command", "reason": reason},
         )
         try:
-            write_poisoned_flag(run_dir, reason_payload)
+            artifact_path = write_poisoned_flag(run_dir, reason_payload)
+            self._record_safety_halt_incident(run_dir, reason_payload, artifact_path)
             return "poisoned_flag_written"
         except FileExistsError:
             logger.info("poisoned.flag already exists; operator MARK_POISONED preserved prior cause")
+            existing_reason = self._poisoned_reason_for_incident(run_dir, reason_payload)
+            self._record_safety_halt_incident(
+                run_dir,
+                existing_reason,
+                run_dir / POISONED_FLAG_FILENAME,
+            )
             return "poisoned_flag_already_present"
         except OSError:
             logger.exception("could not write operator-declared poisoned.flag")
@@ -2689,11 +2731,18 @@ class LiveEngine:
                 logger.exception("writers.flush_all failed during fatal halt")
         if self._output_dir is not None:
             try:
-                write_poisoned_flag(self._output_dir, reason)
+                artifact_path = write_poisoned_flag(self._output_dir, reason)
+                self._record_safety_halt_incident(self._output_dir, reason, artifact_path)
             except FileExistsError:
                 # First halt already wrote it; preserve the original
                 # cause per spec § 7 first-halt-wins invariant.
                 logger.info("poisoned.flag already exists; preserving original halt cause")
+                existing_reason = self._poisoned_reason_for_incident(self._output_dir, reason)
+                self._record_safety_halt_incident(
+                    self._output_dir,
+                    existing_reason,
+                    self._output_dir / POISONED_FLAG_FILENAME,
+                )
             except Exception:
                 logger.exception("write_poisoned_flag failed during fatal halt")
         raise FatalHaltError(reason)
@@ -3195,8 +3244,6 @@ class LiveEngine:
                 WatchdogHaltExecutor,
                 WatchdogTimeouts,
             )
-            from app.operator.incidents.store import IncidentStore
-
             _engine_ref = self
 
             class _ControllerAdapter:

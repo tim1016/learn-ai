@@ -711,7 +711,7 @@ def _resolve_incident_headline(root: Path, live_binding: LiveBinding | None, run
     incidents = [
         incident
         for incident in IncidentStore(run_dir).list_unresolved()
-        if incident.category in {"watchdog", "order", "submit"}
+        if incident.category in {"watchdog", "order", "submit", "safety-halt"}
     ]
     if not incidents:
         return None

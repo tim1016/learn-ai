@@ -19,14 +19,17 @@ a receipt-write failure as fatal: "no submit without a durable receipt."
 from __future__ import annotations
 
 import contextlib
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
 
 from app.engine.live.halt import (
+    POISONED_FLAG_FILENAME,
     PoisonedHaltReason,
     PoisonedHaltTrigger,
+    read_poisoned_flag,
     write_poisoned_flag,
 )
 from app.engine.live.intent_events import IntentEvent, IntentEventType, IntentKind
@@ -44,7 +47,11 @@ from app.engine.live.reconciliation_classifier import (
     classify,
 )
 from app.engine.live.reconciliation_receipt import write_receipt
+from app.operator.incidents.safety_halt_notices import build_safety_halt_incident
+from app.operator.incidents.store import IncidentStore
 from app.schemas.live_runs import ReconciliationReceipt
+
+logger = logging.getLogger(__name__)
 
 # Events from the prior run's WAL that may still need resolution against the
 # broker on this boot. SUBMIT_UNCERTAIN_HALTED is intentionally excluded — by
@@ -311,8 +318,32 @@ def _poison_and_record(
     # Already poisoned (e.g. by a prior boot or another fatal-halt source)
     # is tolerated: the first halt's reason wins per the flag's contract,
     # but the receipt must still land for the cockpit to read.
-    with contextlib.suppress(FileExistsError):
-        write_poisoned_flag(run_dir, halt_reason)
+    poisoned_flag_path = run_dir / POISONED_FLAG_FILENAME
+    incident_reason = halt_reason
+    try:
+        poisoned_flag_path = write_poisoned_flag(run_dir, halt_reason)
+    except FileExistsError:
+        with contextlib.suppress(ValueError):
+            existing_reason = read_poisoned_flag(run_dir)
+            if existing_reason is not None:
+                incident_reason = existing_reason
+    try:
+        IncidentStore(run_dir).append_unless_resolved(
+            build_safety_halt_incident(
+                strategy_instance_id=base_receipt.strategy_instance_id,
+                run_id=base_receipt.run_id,
+                halt_reason=incident_reason,
+                artifact_path=poisoned_flag_path,
+                log_path=run_dir / "live.log",
+            )
+        )
+    except Exception as exc:
+        logger.warning(
+            "failed to persist safety-halt incident for %s/%s: %s",
+            base_receipt.strategy_instance_id,
+            base_receipt.run_id,
+            exc,
+        )
 
     completed_at_ms = now_ms()
     failed = base_receipt.model_copy(
