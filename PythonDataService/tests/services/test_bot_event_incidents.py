@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from app.operator.incidents.store import INCIDENTS_DIR, IncidentStore
@@ -13,6 +15,8 @@ from app.schemas.bot_events import (
     TerminalErrorSource,
 )
 from app.services.bot_event_incidents import (
+    _INCIDENT_ID_PREFIX,
+    _TEMPLATES,
     append_terminal_incident,
     build_terminal_incident,
 )
@@ -85,15 +89,8 @@ def test_order_rejected_terminal_incident_matches_rejection_contract() -> None:
 
 
 def test_terminal_incident_contract_covers_every_terminal_code() -> None:
-    covered_codes = {
-        TerminalErrorCode.ORDER_REJECTED,
-        TerminalErrorCode.SUBMIT_UNCERTAIN,
-        TerminalErrorCode.HALTED,
-        TerminalErrorCode.LAUNCH_FAILED,
-        TerminalErrorCode.UNMAPPED_DIAGNOSTIC,
-    }
-
-    assert covered_codes == set(TerminalErrorCode)
+    assert set(_TEMPLATES) == set(TerminalErrorCode)
+    assert set(_INCIDENT_ID_PREFIX) == set(TerminalErrorCode)
 
 
 @pytest.mark.parametrize(
@@ -148,7 +145,9 @@ def test_terminal_incident_id_is_stable_for_repeated_observations() -> None:
     assert first.incident_id == second.incident_id
 
 
-def test_append_terminal_incident_dedupes_to_one_unresolved_file(tmp_path) -> None:
+def test_append_terminal_incident_dedupes_to_one_unresolved_file(
+    tmp_path: Path,
+) -> None:
     run_dir = tmp_path / "run-1"
     store = IncidentStore(run_dir)
     identity = BotEventIdentity(evaluation_id="eval-1", order_ref="bot:sid:intent-1")

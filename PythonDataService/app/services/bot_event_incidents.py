@@ -125,7 +125,10 @@ def terminal_incident_dedupe_key(raw_event: BotEventRaw) -> IncidentDedupeKey:
 
 def terminal_incident_id(key: IncidentDedupeKey) -> str:
     digest = hashlib.sha256(key.model_dump_json().encode("utf-8")).hexdigest()[:16]
-    return f"{_INCIDENT_ID_PREFIX[key.terminal_code]}-{digest}"
+    prefix = _INCIDENT_ID_PREFIX.get(key.terminal_code)
+    if prefix is None:
+        raise ValueError(f"unmapped terminal incident id prefix for {key.terminal_code.value}")
+    return f"{prefix}-{digest}"
 
 
 def _template_for(error: TerminalError) -> _IncidentTemplate:
