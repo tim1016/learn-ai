@@ -2774,6 +2774,124 @@ async def test_deploy_and_start_rejects_when_desired_state_is_stopped(
     assert called is False
 
 
+async def test_deploy_and_start_rejects_unconfirmed_nonflat_exposure(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _set_connected_broker_account(monkeypatch, "DU111")
+    _write_ledger(root, "run-exposure", "spy_ema_paper", 1_700_000_000_000)
+    _write_live_state(root, "spy_ema_paper", "run-exposure", {"SPY": 5})
+    called = False
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        nonlocal called
+        called = True
+        return {"run_id": "run-new", "run_dir": "/runs/run-new", "created": True, "start": None}
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+    body = _deploy_body()
+    body["start"] = True
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=body)
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "EXPOSURE_COHERENCE_UNCONFIRMED"
+    assert detail["gate_id"] == "deploy.exposure_coherence"
+    assert detail["evidence"] == {
+        "posture": "LONG",
+        "pending_order_count": 0,
+        "owned_positions": {"SPY": 5},
+        "source": "live_state.expected_position_by_symbol",
+        "strategy_instance_id": "spy_ema_paper",
+        "run_id": "run-exposure",
+    }
+    assert called is False
+
+
+async def test_deploy_and_start_allows_confirmed_nonflat_exposure(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _set_connected_broker_account(monkeypatch, "DU111")
+    _write_ledger(root, "run-exposure", "spy_ema_paper", 1_700_000_000_000)
+    _write_live_state(root, "spy_ema_paper", "run-exposure", {"SPY": -3})
+    captured: dict = {}
+
+    async def fake_deploy(_base_url: str, payload: dict) -> dict:
+        captured.update(payload)
+        return {"run_id": "run-new", "run_dir": "/runs/run-new", "created": True, "start": None}
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+    body = _deploy_body()
+    body["start"] = True
+    body["exposure_coherence_confirmation"] = {
+        "posture": "SHORT",
+        "pending_order_count": 0,
+        "owned_positions": {"SPY": -3},
+        "strategy_instance_id": "spy_ema_paper",
+        "run_id": "run-exposure",
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=body)
+
+    assert response.status_code == 201
+    assert captured["account_id"] == "DU111"
+    assert "exposure_coherence_confirmation" not in captured
+
+
+async def test_deploy_and_start_rejects_unknown_existing_exposure(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _set_connected_broker_account(monkeypatch, "DU111")
+    _write_ledger(root, "run-exposure", "spy_ema_paper", 1_700_000_000_000)
+    called = False
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        nonlocal called
+        called = True
+        return {"run_id": "run-new", "run_dir": "/runs/run-new", "created": True, "start": None}
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+    body = _deploy_body()
+    body["start"] = True
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=body)
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "EXPOSURE_COHERENCE_UNCONFIRMED"
+    assert detail["evidence"]["posture"] == "UNKNOWN"
+    assert detail["evidence"]["owned_positions"] == {}
+    assert detail["evidence"]["run_id"] == "run-exposure"
+    assert called is False
+
+
+async def test_deploy_and_start_allows_flat_existing_exposure(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _set_connected_broker_account(monkeypatch, "DU111")
+    _write_ledger(root, "run-exposure", "spy_ema_paper", 1_700_000_000_000)
+    _write_live_state(root, "spy_ema_paper", "run-exposure", {"SPY": 0})
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        return {"run_id": "run-new", "run_dir": "/runs/run-new", "created": True, "start": None}
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+    body = _deploy_body()
+    body["start"] = True
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=body)
+
+    assert response.status_code == 201
+
+
 async def test_deploy_instance_uses_connected_broker_account_when_request_omits_account(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:

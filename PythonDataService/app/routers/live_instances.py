@@ -106,6 +106,8 @@ from app.schemas.live_runs import (
     EmergencyFlattenRequest,
     EnqueueCommandRequest,
     EvidenceBinding,
+    ExposureCoherenceConfirmation,
+    ExposureCoherenceFacts,
     FleetAccountSummary,
     FleetContamination,
     HostRunnerActionResponse,
@@ -194,7 +196,11 @@ from app.services.mutation_attempt import (
     transition_attempt,
 )
 from app.services.operator_capability import evaluate_action
-from app.services.operator_surface import compute_operator_surface
+from app.services.operator_surface import (
+    compose_exposure_coherence_facts,
+    compute_operator_surface,
+    normalize_exposure_positions,
+)
 from app.services.resume_guard_state import (
     ResumeGuardState,
     empty_guard_state,
@@ -1755,6 +1761,86 @@ def _bot_delete_response(artifacts_root: Path, record: BotDeletionRecord) -> Bot
     )
 
 
+def _deploy_exposure_confirmation_matches(
+    confirmation: ExposureCoherenceConfirmation | None,
+    *,
+    facts: ExposureCoherenceFacts,
+) -> bool:
+    if confirmation is None:
+        return False
+    return (
+        confirmation.posture == facts.posture
+        and confirmation.pending_order_count == facts.pending_order_count
+        and confirmation.owned_positions == facts.owned_positions
+        and confirmation.strategy_instance_id == facts.strategy_instance_id
+        and confirmation.run_id == facts.run_id
+    )
+
+
+def _deploy_exposure_facts(
+    live_runs_root: Path,
+    body: LiveInstanceDeployRequest,
+) -> ExposureCoherenceFacts | None:
+    sid = body.strategy_instance_id.strip()
+    runs = _scan_runs_by_instance(live_runs_root).get(sid, []) if sid else []
+    if sid and runs:
+        broker = _instance_broker(live_runs_root, sid)
+        return compose_exposure_coherence_facts(
+            broker,
+            source="live_state.expected_position_by_symbol",
+            strategy_instance_id=sid,
+            run_id=str(runs[0].get("run_id") or ""),
+        )
+    if body.inherited_exposure_posture is not None:
+        return ExposureCoherenceFacts(
+            posture=body.inherited_exposure_posture,
+            pending_order_count=body.inherited_exposure_pending_order_count,
+            owned_positions=normalize_exposure_positions(body.inherited_exposure_positions),
+            source=body.inherited_exposure_source or "request inherited exposure",
+            strategy_instance_id=sid or None,
+            run_id=body.parent_run_id,
+        )
+    return None
+
+
+def _raise_if_exposure_coherence_blocks_start(
+    live_runs_root: Path,
+    body: LiveInstanceDeployRequest,
+) -> None:
+    if not body.start:
+        return
+    facts = _deploy_exposure_facts(live_runs_root, body)
+    if facts is None:
+        return
+    exposure_blocks = facts.posture != "FLAT" or facts.pending_order_count not in (0, None)
+    unknown_blocks = facts.posture == "UNKNOWN" or facts.pending_order_count is None
+    if not exposure_blocks and not unknown_blocks:
+        return
+    if _deploy_exposure_confirmation_matches(
+        body.exposure_coherence_confirmation,
+        facts=facts,
+    ):
+        return
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        detail={
+            "reason_code": "EXPOSURE_COHERENCE_UNCONFIRMED",
+            "gate_id": "deploy.exposure_coherence",
+            "message": (
+                "Deploy & start is blocked because existing exposure is not "
+                f"proven flat (posture={facts.posture}, pending_order_count={facts.pending_order_count}). "
+                "Confirm the exposure state, or deploy without starting."
+            ),
+            "evidence": facts.model_dump(mode="json"),
+            "remediation": (
+                "Review the bot's current risk and account reconciliation. "
+                "Then submit an exposure_coherence_confirmation matching the "
+                "current values, or turn off start."
+            ),
+        },
+    )
+
+
 async def _host_deploy_request_from_public(
     body: LiveInstanceDeployRequest,
 ) -> HostRunnerDeployRequest:
@@ -1776,6 +1862,11 @@ async def _host_deploy_request_from_public(
         )
     payload = body.model_dump()
     payload.pop("account_id", None)
+    payload.pop("inherited_exposure_posture", None)
+    payload.pop("inherited_exposure_pending_order_count", None)
+    payload.pop("inherited_exposure_positions", None)
+    payload.pop("inherited_exposure_source", None)
+    payload.pop("exposure_coherence_confirmation", None)
     return HostRunnerDeployRequest.model_validate({**payload, "account_id": broker_account})
 
 
@@ -1808,6 +1899,10 @@ async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -
                 "gate_result": account_freeze.to_gate_result().model_dump(mode="json"),
             },
         )
+    _raise_if_exposure_coherence_blocks_start(
+        Path(settings.live_runs_root),
+        body,
+    )
     if daemon_request.start and daemon_request.strategy_instance_id:
         _raise_if_stopped_blocks_start(
             Path(settings.live_runs_root),

@@ -408,6 +408,16 @@ export type SizingProvenance = 'reference_native' | 'live_override' | 'spec_defa
  * to the daemon (ADR 0006). The QC anchor (`qc_cloud_backtest_id` +
  * `qc_audit_copy_path`) is mandatory by design. `start: true` chains a launch
  * using `start_options`. */
+export type ExposureCoherencePosture = 'FLAT' | 'LONG' | 'SHORT' | 'MIXED' | 'UNKNOWN';
+
+export interface ExposureCoherenceConfirmation {
+  posture: ExposureCoherencePosture;
+  pending_order_count?: number | null;
+  owned_positions: Record<string, number>;
+  strategy_instance_id?: string | null;
+  run_id?: string | null;
+}
+
 export interface HostRunnerDeployRequest {
   strategy_spec_path: string;
   qc_audit_copy_path: string;
@@ -427,6 +437,11 @@ export interface HostRunnerDeployRequest {
    * ``run_id``. */
   parent_run_id?: string;
   redeploy_reason?: string;
+  inherited_exposure_posture?: ExposureCoherencePosture;
+  inherited_exposure_pending_order_count?: number | null;
+  inherited_exposure_positions?: Record<string, number>;
+  inherited_exposure_source?: string;
+  exposure_coherence_confirmation?: ExposureCoherenceConfirmation;
 }
 
 export interface HostRunnerDeployResponse {

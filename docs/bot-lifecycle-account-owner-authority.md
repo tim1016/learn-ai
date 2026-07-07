@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-07-03 (Account Truth source-freshness and data-plane bounds update: Bot Control submit readiness and `LivePortfolio.submit_pending_orders` now consume the cached Account Truth projection and fail closed when the cached verdict is missing, stale, not clean, or backed by stale/missing critical source evidence. Account-level reconciliation consumes the same source-freshness contract. Account Truth broker calls and data-plane shutdown paths are bounded.)
+> **Last reviewed:** 2026-07-07 (Fresh-run exposure-coherence update: the public deploy endpoint blocks Deploy & start for existing bots when inherited exposure is unknown, non-flat, or has pending orders unless the operator confirms the exact exposure facts. Deploy-only staging remains available.)
 
 ---
 
@@ -76,6 +76,19 @@ This is **not** R3. The current process-local `_submit_lock` in `LiveEngine` ser
 | Low-level broker write | Paper safety checks run, `order_ref` is required, contract is qualified, then `client.ib.placeOrder(...)` is called. | `broker/ibkr/orders.py::place_paper_order` |
 | Operator actions | Resume/Pause/Stop/Flatten-and-pause/Mark-poisoned use shared capability evaluator. Start has separate recheck. | `services/operator_capability.py`, `routers/live_instances.py` |
 | Watchdog lease loss | Child watchdog detects daemon lease loss and delegates typed halt sequence. | `child_watchdog.py`, `watchdog_controller.py` |
+
+Fresh-run start is exposure-gated at the public deploy endpoint. For an
+existing strategy instance, the endpoint reads the instance `live_state`
+sidecar and derives exposure posture plus pending-order count from
+`expected_position_by_symbol` / `pending_intents`. The normalized non-zero
+positions map is part of the exposure fact, not merely display copy. `Deploy &
+start` is blocked with `EXPOSURE_COHERENCE_UNCONFIRMED` when that exposure is
+unknown, non-flat, or has pending orders unless the request carries an
+`exposure_coherence_confirmation` matching the current positions map, pending
+count, strategy instance, and source run exactly. The confirmation is unhashed
+admission evidence and is stripped before forwarding to the host daemon.
+Deploy-only requests remain allowed so operators can stage a new run without
+launching it.
 
 ### 3.1 Canonical Lifecycle Observability Model
 

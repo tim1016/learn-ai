@@ -106,6 +106,7 @@ export function makeStatus(options: {
       configuration: { verdict: 'UNKNOWN', reason_codes: [] },
       current_risk: {
         posture: 'UNKNOWN',
+        owned_positions: {},
         pending_order_count: null,
         verdict: 'UNKNOWN',
         unrealized_pnl: null,

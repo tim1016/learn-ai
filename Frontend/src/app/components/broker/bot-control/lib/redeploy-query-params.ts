@@ -24,5 +24,14 @@ export function redeployQueryParamsForStatus(
   if (status.start_defaults?.strategy) {
     params['strategy_key'] = status.start_defaults.strategy;
   }
+  const currentRisk = status.operator_surface?.current_risk;
+  if (currentRisk) {
+    params['inherited_exposure_posture'] = currentRisk.posture;
+    params['inherited_exposure_positions'] = JSON.stringify(currentRisk.owned_positions ?? {});
+    if (typeof currentRisk.pending_order_count === 'number') {
+      params['inherited_exposure_pending_order_count'] = String(currentRisk.pending_order_count);
+    }
+    params['inherited_exposure_source'] = 'operator_surface.current_risk';
+  }
   return params;
 }

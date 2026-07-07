@@ -17,6 +17,13 @@ describe('redeployQueryParamsForStatus', () => {
       start_defaults: {
         strategy: 'deployment_validation',
       },
+      operator_surface: {
+        current_risk: {
+          posture: 'LONG',
+          owned_positions: { DIA: 5 },
+          pending_order_count: 2,
+        },
+      },
     } as unknown as LiveInstanceStatus;
 
     expect(redeployQueryParamsForStatus(status)).toEqual({
@@ -27,6 +34,10 @@ describe('redeployQueryParamsForStatus', () => {
       parent_run_id: 'parent-run',
       instance_id: 'DEPVAL-DIA-20260626',
       strategy_key: 'deployment_validation',
+      inherited_exposure_posture: 'LONG',
+      inherited_exposure_positions: '{"DIA":5}',
+      inherited_exposure_pending_order_count: '2',
+      inherited_exposure_source: 'operator_surface.current_risk',
     });
   });
 

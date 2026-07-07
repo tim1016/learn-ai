@@ -14,6 +14,8 @@ import { ActivatedRoute, RouterLink } from '@angular/router';
 import { InputTextModule } from 'primeng/inputtext';
 import {
   DEFAULT_MAX_ORDERS_PER_DAY,
+  type ExposureCoherenceConfirmation,
+  type ExposureCoherencePosture,
   type HostRunnerDeployRequest,
   type HostRunnerDeployResponse,
   type HydratePolicy,
@@ -52,6 +54,16 @@ interface DeployTab {
   label: string;
   target: string;
   complete: boolean;
+}
+
+interface ExposureCoherenceConflict {
+  posture: ExposureCoherencePosture;
+  pendingOrderCount: number | null;
+  ownedPositions: Record<string, number>;
+  positionsLabel: string;
+  source: string;
+  summary: string;
+  signature: string;
 }
 
 // ADR 0009 § 3 — Reference parity preset's policy. Pinned here as a constant
@@ -116,6 +128,10 @@ export class BrokerDeployFormComponent {
   readonly qcBacktestId = signal<string>('');
   readonly qcAuditCopyPath = signal<string>('');
   readonly instanceId = signal<string>('');
+  readonly inheritedExposurePosture = signal<ExposureCoherencePosture | ''>('');
+  readonly inheritedExposurePendingOrderCount = signal<number | null>(null);
+  readonly inheritedExposurePositions = signal<Record<string, number>>({});
+  readonly inheritedExposureSource = signal<string>('');
   readonly executionMode = signal<ExecutionMode>('paper_orders');
   readonly hydratePolicy = signal<HydratePolicy>('require');
   readonly maxOrdersPerDay = signal<number>(DEFAULT_MAX_ORDERS_PER_DAY);
@@ -263,6 +279,48 @@ export class BrokerDeployFormComponent {
   readonly actionPlanTradeSymbol = computed<string | null>(() =>
     BrokerDeployFormComponent.singleLongStockActionSymbol(this.actionPlan()),
   );
+  private readonly exposureCoherenceConfirmedSignature = signal<string | null>(null);
+  readonly exposureCoherenceEvidence = computed<ExposureCoherenceConflict | null>(() => {
+    const posture = this.inheritedExposurePosture();
+    if (!posture) return null;
+    const pending = this.inheritedExposurePendingOrderCount();
+    const positions = this.inheritedExposurePositions();
+    const positionsLabel = BrokerDeployFormComponent.exposurePositionsLabel(positions);
+    const blocks = posture === 'UNKNOWN' || posture !== 'FLAT' || pending === null || pending !== 0;
+    if (!blocks) return null;
+    const pendingLabel = pending === null ? 'unknown' : String(pending);
+    return {
+      posture,
+      pendingOrderCount: pending,
+      ownedPositions: positions,
+      positionsLabel,
+      source: this.inheritedExposureSource().trim() || 'request inherited exposure',
+      summary: `Inherited exposure is ${posture} with ${pendingLabel} pending order(s). Confirm exposure before Deploy & start.`,
+      signature: `${this.instanceId().trim()}:${this.parentRunId() ?? ''}:${posture}:${pendingLabel}:${JSON.stringify(positions)}`,
+    };
+  });
+  readonly exposureCoherenceConfirmed = computed<boolean>(() => {
+    const evidence = this.exposureCoherenceEvidence();
+    return evidence !== null && this.exposureCoherenceConfirmedSignature() === evidence.signature;
+  });
+  readonly exposureCoherenceConfirmation = computed<ExposureCoherenceConfirmation | null>(() => {
+    const evidence = this.exposureCoherenceEvidence();
+    if (evidence === null || !this.exposureCoherenceConfirmed()) return null;
+    return {
+      posture: evidence.posture,
+      pending_order_count: evidence.pendingOrderCount,
+      owned_positions: evidence.ownedPositions,
+      strategy_instance_id: this.instanceId().trim() || null,
+      run_id: this.parentRunId(),
+    };
+  });
+  readonly exposureCoherenceBlock = computed<ExposureCoherenceConflict | null>(() => {
+    const evidence = this.exposureCoherenceEvidence();
+    if (evidence === null || !this.startNow() || this.exposureCoherenceConfirmed()) {
+      return null;
+    }
+    return evidence;
+  });
 
   readonly deployTabs = computed<DeployTab[]>(() => [
     {
@@ -378,6 +436,23 @@ export class BrokerDeployFormComponent {
     if (seedAuditCopy) this.qcAuditCopyPath.set(seedAuditCopy);
     const seedInstanceId = qp.get('instance_id');
     if (seedInstanceId) this.instanceId.set(seedInstanceId);
+    const seedExposurePosture = qp.get('inherited_exposure_posture');
+    if (BrokerDeployFormComponent.isExposurePosture(seedExposurePosture)) {
+      this.inheritedExposurePosture.set(seedExposurePosture);
+    }
+    const seedExposurePending = qp.get('inherited_exposure_pending_order_count');
+    if (seedExposurePending !== null && BrokerDeployFormComponent.NON_NEGATIVE_INTEGER_RE.test(seedExposurePending)) {
+      const pending = Number.parseInt(seedExposurePending, 10);
+      this.inheritedExposurePendingOrderCount.set(pending);
+    }
+    const seedExposurePositions = BrokerDeployFormComponent.parseExposurePositions(
+      qp.get('inherited_exposure_positions'),
+    );
+    if (seedExposurePositions !== null) {
+      this.inheritedExposurePositions.set(seedExposurePositions);
+    }
+    const seedExposureSource = qp.get('inherited_exposure_source');
+    if (seedExposureSource) this.inheritedExposureSource.set(seedExposureSource.trim());
     const seedParent = qp.get('parent_run_id');
     if (seedParent) this.parentRunId.set(seedParent);
     const seedSignalStream = qp.get('signal_stream');
@@ -505,6 +580,8 @@ export class BrokerDeployFormComponent {
       return 'Strategy must be validated before deployment. Open Strategy Validation to promote it.';
     }
     if (!this.required()) return 'Missing: ' + this.missingRequiredFields().join(', ') + '.';
+    const exposureConflict = this.exposureCoherenceBlock();
+    if (exposureConflict !== null) return exposureConflict.summary;
     // PR4 reviewer fix: surface invalid Custom sizing here so the deploy
     // button disables BEFORE submit() runs; throwing inside submit() would
     // leave busy=true and the form wedged.
@@ -539,6 +616,18 @@ export class BrokerDeployFormComponent {
     };
     const parent = this.parentRunId();
     if (parent) request.parent_run_id = parent;
+    const exposurePosture = this.inheritedExposurePosture();
+    if (exposurePosture) {
+      request.inherited_exposure_posture = exposurePosture;
+      request.inherited_exposure_pending_order_count = this.inheritedExposurePendingOrderCount();
+      request.inherited_exposure_positions = this.inheritedExposurePositions();
+      const source = this.inheritedExposureSource().trim();
+      if (source) request.inherited_exposure_source = source;
+    }
+    const exposureConfirmation = this.exposureCoherenceConfirmation();
+    if (exposureConfirmation !== null) {
+      request.exposure_coherence_confirmation = exposureConfirmation;
+    }
     // Only attach launch knobs when actually starting — otherwise a deploy-only
     // request carries irrelevant start_options that still get validated (and a
     // cleared "max orders" field would serialize NaN → null and fail).
@@ -720,6 +809,13 @@ export class BrokerDeployFormComponent {
     }
   }
 
+  confirmExposureCoherence(): void {
+    const evidence = this.exposureCoherenceEvidence();
+    if (evidence !== null) {
+      this.exposureCoherenceConfirmedSignature.set(evidence.signature);
+    }
+  }
+
   setActiveDeployTab(key: DeployTabKey): void {
     this.activeDeployTab.set(key);
   }
@@ -742,6 +838,7 @@ export class BrokerDeployFormComponent {
    * (which `Number.parseInt` happily truncates to 1 or 25) are rejected at
    * the form boundary, not silently truncated into a live order. */
   private static readonly FIXED_SHARES_INTEGER_RE = /^[1-9]\d*$/;
+  private static readonly NON_NEGATIVE_INTEGER_RE = /^\d+$/;
   /** PR4 reviewer fix — strict positive-decimal regex for FixedNotional. The
    * value travels to Python as a decimal string (no float on the wire), so we
    * only need to enforce a positive decimal shape here. */
@@ -821,6 +918,46 @@ export class BrokerDeployFormComponent {
     if (leg.position !== 'long' || leg.instrument.kind !== 'stock') return null;
     const symbol = normalizedSymbol(leg.instrument.underlying);
     return symbol || null;
+  }
+
+  private static isExposurePosture(value: string | null): value is ExposureCoherencePosture {
+    return (
+      value === 'FLAT' ||
+      value === 'LONG' ||
+      value === 'SHORT' ||
+      value === 'MIXED' ||
+      value === 'UNKNOWN'
+    );
+  }
+
+  private static parseExposurePositions(value: string | null): Record<string, number> | null {
+    if (value === null) return null;
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+      const out: Record<string, number> = {};
+      for (const [symbol, rawQuantity] of Object.entries(parsed)) {
+        const normalized = symbol.trim().toUpperCase();
+        if (!normalized || typeof rawQuantity !== 'number' || !Number.isInteger(rawQuantity)) {
+          return null;
+        }
+        if (rawQuantity !== 0) {
+          out[normalized] = rawQuantity;
+        }
+      }
+      return Object.fromEntries(Object.entries(out).sort(([left], [right]) => left.localeCompare(right)));
+    } catch {
+      return null;
+    }
+  }
+
+  private static exposurePositionsLabel(positions: Record<string, number>): string {
+    const entries = Object.entries(positions).filter(([, quantity]) => quantity !== 0);
+    if (!entries.length) return 'Flat';
+    return entries
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([symbol, quantity]) => `${symbol} ${quantity}`)
+      .join(', ');
   }
 
 }

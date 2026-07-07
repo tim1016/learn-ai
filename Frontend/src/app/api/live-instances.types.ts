@@ -386,6 +386,7 @@ export interface OperatorSurfaceTradingSession {
 
 export interface OperatorSurfaceCurrentRisk {
   posture: RiskPosture;
+  owned_positions: Record<string, number>;
   /** ``null`` when broker state is unavailable; ``0`` only when known empty. */
   pending_order_count: number | null;
   verdict: OperatorVerdict;
