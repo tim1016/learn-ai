@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["bot-events"])
 
+_BOT_EVENT_PROJECTION_ERROR = "bot-event stream history cannot be projected"
+_BOT_EVENT_STREAM_ERROR = "bot-event stream unavailable"
 _RUN_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{1,127}$")
 
 
@@ -109,7 +111,7 @@ async def bot_event_backfill(
         )
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="bot-event stream history cannot be projected",
+            detail=_BOT_EVENT_PROJECTION_ERROR,
         ) from exc
     return BotEventPage(rows=page.rows, next_seq=page.next_seq)
 
@@ -161,19 +163,19 @@ async def bot_event_stream(
                 yield _row_sse(row)
         except asyncio.CancelledError:
             raise
-        except BotEventStreamUnavailableError as exc:
+        except BotEventStreamUnavailableError:
             logger.warning(
                 "Could not stream bot-event rows",
                 extra={"run_id": run_id, "run_dir": str(run_dir)},
                 exc_info=True,
             )
-            yield _error_sse(str(exc))
-        except Exception as exc:
+            yield _error_sse(_BOT_EVENT_PROJECTION_ERROR)
+        except Exception:
             logger.exception(
                 "bot-event SSE stream error",
                 extra={"run_id": run_id, "run_dir": str(run_dir)},
             )
-            yield _error_sse(str(exc))
+            yield _error_sse(_BOT_EVENT_STREAM_ERROR)
 
     return StreamingResponse(
         event_source(),
