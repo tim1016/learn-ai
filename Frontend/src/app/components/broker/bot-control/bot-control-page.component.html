@@ -185,16 +185,12 @@
         />
       </section>
 
-      <section class="inspector-pane" aria-label="Lifecycle action and evidence inspector">
-        @if (rightPaneNode(); as node) {
-          <app-node-inspector
-            [node]="node"
-            [status]="s"
-            [hasExplicitSelection]="selectedLifecycleNodeId() !== null"
-            (redeployRequested)="onGateRedeploy()"
-          />
-        }
-      </section>
+      <app-bot-control-side-panel
+        [status]="s"
+        [node]="rightPaneNode()"
+        [hasExplicitSelection]="selectedLifecycleNodeId() !== null"
+        (freshRunRequested)="onGateRedeploy()"
+      />
     </div>
 
     <!-- ── INLINE WORKBENCH ── -->

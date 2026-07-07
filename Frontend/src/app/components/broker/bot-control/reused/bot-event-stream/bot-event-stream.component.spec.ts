@@ -113,6 +113,12 @@ describe('BotEventStreamComponent', () => {
     expect(screen.getByText('Order rejected - insufficient buying power')).toBeTruthy();
     expect(screen.getByText('Order Rejected')).toBeTruthy();
     expect(screen.getByText('Broker Session')).toBeTruthy();
+    expect(screen.getByText('Time')).toBeTruthy();
+    expect(screen.getByText('Severity')).toBeTruthy();
+    expect(screen.getByText('Event')).toBeTruthy();
+    expect(screen.getByText('Source')).toBeTruthy();
+    expect(screen.getByText('Gates')).toBeTruthy();
+    expect(screen.getAllByText('1').length).toBeGreaterThan(0);
   });
 
   it('expands gate and terminal evidence', async () => {
@@ -124,7 +130,7 @@ describe('BotEventStreamComponent', () => {
     emitRow(ROW);
     await screen.findByText('IBKR rejected the order');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Toggle bot event row 7' }));
+    fireEvent.click(screen.getByRole('button', { name: /Toggle details for bot event 7/ }));
 
     await waitFor(() => {
       expect(screen.getAllByText('Broker Place Order').length).toBeGreaterThan(0);
@@ -134,15 +140,16 @@ describe('BotEventStreamComponent', () => {
     expect(screen.getAllByText('201').length).toBeGreaterThan(0);
   });
 
-  it('renders empty state without a run id', async () => {
+  it('renders empty state for a bound run with no event rows yet', async () => {
     await render(BotEventStreamComponent, {
-      inputs: { runId: null },
+      inputs: { runId: 'run-empty' },
       providers: [provideZonelessChangeDetection()],
     });
+    await waitFor(() => expect(eventSources.length).toBe(1));
+    eventSources[0].dispatch('open');
 
     await screen.findByTestId('bot-event-stream-empty');
     expect(screen.getByText('No bot events yet for this run.')).toBeTruthy();
-    expect(eventSources.length).toBe(0);
   });
 
   it('renders server-side SSE errors', async () => {

@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-07-03 (Account Truth source-freshness and data-plane bounds update: Bot Control submit readiness and `LivePortfolio.submit_pending_orders` now consume the cached Account Truth projection and fail closed when the cached verdict is missing, stale, not clean, or backed by stale/missing critical source evidence. Account-level reconciliation consumes the same source-freshness contract. Account Truth broker calls and data-plane shutdown paths are bounded.)
+> **Last reviewed:** 2026-07-07 (Bot Control stream-primary side-panel update: the run-scoped Bot event stream is the persistent side-panel surface, binds to the live run or evidence run, and renders an honest no-run state with a Fresh run route when neither binding exists.)
 
 ---
 
@@ -109,6 +109,13 @@ snapshot detail, and authoritative P&L. Account identity and broker observation
 consistency may be folded only from Python-authored status/readiness facts; the
 Frontend must not join `/status` to account-summary or other side channels to
 manufacture lifecycle meaning.
+
+The Bot event stream is the persistent run-history surface beside the lifecycle
+chart. It binds only to `live_binding.run_id` or, when no live binding exists,
+`evidence_binding.run_id`; if neither exists, the side panel must say no run is
+bound yet and route the operator to Fresh run rather than borrowing rows from
+another run. The old activity workbench no longer owns a second copy of the
+stream.
 
 | Canonical node id | Meaning | Primary source of truth |
 |---|---|---|

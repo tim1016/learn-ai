@@ -1,0 +1,37 @@
+<section
+  class="stream-pane"
+  data-testid="bot-event-stream-side-panel"
+  aria-labelledby="bot-event-stream-side-panel-heading"
+>
+  <section class="stream-primary" aria-labelledby="bot-event-stream-side-panel-heading">
+    <header class="side-panel-head">
+      <p class="eyebrow">Run history</p>
+      <h2 id="bot-event-stream-side-panel-heading">Bot event stream</h2>
+    </header>
+    @if (runId(); as boundRunId) {
+      <div class="stream-scroll">
+        <app-bot-event-stream [runId]="boundRunId" />
+      </div>
+    } @else {
+      <div class="stream-empty-state" data-testid="bot-event-stream-no-run">
+        <p class="stream-empty-title">No run bound yet</p>
+        <p>
+          This bot has no live or evidence run for the stream to read.
+          Start with a Fresh run so new events have a run id to attach to.
+        </p>
+        <button type="button" class="stream-fresh-run" (click)="freshRunRequested.emit()">Fresh run</button>
+      </div>
+    }
+  </section>
+
+  @if (node(); as currentNode) {
+    <section class="stream-secondary" aria-label="Lifecycle evidence reference">
+      <app-node-inspector
+        [node]="currentNode"
+        [status]="status()"
+        [hasExplicitSelection]="hasExplicitSelection()"
+        (redeployRequested)="freshRunRequested.emit()"
+      />
+    </section>
+  }
+</section>

@@ -17,134 +17,128 @@
   }
 
   @if (rows().length > 0) {
-    <table>
-      <thead>
-        <tr>
-          <th scope="col" class="toggle-col" aria-label="Details"></th>
-          <th scope="col">DATE / TIME</th>
-          <th scope="col">SEVERITY</th>
-          <th scope="col">EVENT</th>
-          <th scope="col">SOURCE</th>
-          <th scope="col">SUMMARY</th>
-          <th scope="col" class="num">GATES</th>
-        </tr>
-      </thead>
-      <tbody>
-        @for (display of rows(); track trackRow($index, display)) {
-          @let row = display.row;
-          <tr class="data-row" [class.expanded]="isExpanded(row.seq)" [attr.data-testid]="'bot-event-row-' + row.seq">
-            <td class="toggle-col">
-              <button
-                type="button"
-                class="icon-button"
-                [attr.aria-label]="'Toggle bot event row ' + row.seq"
-                [attr.aria-expanded]="isExpanded(row.seq)"
-                (click)="toggle(row.seq)"
-              >
-                <span class="pi" [class.pi-chevron-down]="isExpanded(row.seq)" [class.pi-chevron-right]="!isExpanded(row.seq)"></span>
-              </button>
-            </td>
-            <td class="ts">{{ display.localTime }}</td>
-            <td><span class="chip" [class]="severityClass(row.severity)">{{ display.severityLabel }}</span></td>
-            <td>{{ display.eventLabel }}</td>
-            <td>{{ display.sourceLabel }}</td>
-            <td>
-              <strong>{{ row.headline }}</strong>
-              <span class="narrative">{{ row.narrative }}</span>
-            </td>
-            <td class="num">{{ row.gate_steps.length }}</td>
-          </tr>
+    <ol class="event-feed" aria-label="Bot event rows">
+      @for (display of rows(); track trackRow($index, display)) {
+        @let row = display.row;
+        <li class="event-card" [class.expanded]="isExpanded(row.seq)" [attr.data-testid]="'bot-event-row-' + row.seq">
+          <div class="event-head">
+            <button
+              type="button"
+              class="icon-button"
+              [attr.aria-label]="'Toggle details for bot event ' + row.seq + ': ' + row.headline"
+              [attr.aria-expanded]="isExpanded(row.seq)"
+              [attr.aria-controls]="'bot-event-drawer-' + row.seq"
+              (click)="toggle(row.seq)"
+            >
+              <span class="pi" [class.pi-chevron-down]="isExpanded(row.seq)" [class.pi-chevron-right]="!isExpanded(row.seq)"></span>
+            </button>
+            <span class="chip" [class]="severityClass(row.severity)">{{ display.severityLabel }}</span>
+            <time class="ts" [attr.datetime]="display.isoTime">{{ display.localTime }}</time>
+          </div>
+          <div class="event-body">
+            <dl class="event-meta">
+              <div><dt>Time</dt><dd><time [attr.datetime]="display.isoTime">{{ display.localTime }}</time></dd></div>
+              <div><dt>Severity</dt><dd>{{ display.severityLabel }}</dd></div>
+              <div><dt>Event</dt><dd>{{ display.eventLabel }}</dd></div>
+              <div><dt>Source</dt><dd>{{ display.sourceLabel }}</dd></div>
+              <div><dt>Gates</dt><dd>{{ row.gate_steps.length }}</dd></div>
+            </dl>
+            <strong>{{ row.headline }}</strong>
+            <p class="narrative">{{ row.narrative }}</p>
+          </div>
           @if (isExpanded(row.seq)) {
-            <tr class="drawer-row" [attr.data-testid]="'bot-event-drawer-' + row.seq">
-              <td colspan="7">
-                <div class="detail-grid">
+            <div
+              class="drawer"
+              [id]="'bot-event-drawer-' + row.seq"
+              [attr.data-testid]="'bot-event-drawer-' + row.seq"
+            >
+              <div class="detail-grid">
+                <section>
+                  <h4>Identity</h4>
+                  @if (display.identity.length > 0) {
+                    <dl>
+                      @for (entry of display.identity; track trackFact($index, entry)) {
+                        <div><dt>{{ entry.label }}</dt><dd>{{ entry.value }}</dd></div>
+                      }
+                    </dl>
+                  } @else {
+                    <p>-</p>
+                  }
+                </section>
+
+                @if (row.gate_steps.length > 0) {
                   <section>
-                    <h4>Identity</h4>
-                    @if (display.identity.length > 0) {
+                    <h4>Gate walk</h4>
+                    <ol class="gate-list">
+                      @for (step of row.gate_steps; track trackGate($index, step)) {
+                        <li [attr.data-gate-result]="step.gate_result">
+                          <div class="gate-line">
+                            <strong>{{ step.gate_id | receiptLabel }}</strong>
+                            <span>{{ step.gate_result | receiptLabel }}</span>
+                            <small>{{ step.source_authority | receiptLabel }}</small>
+                          </div>
+                          @if (gateFacts(step).length > 0) {
+                            <dl>
+                              @for (entry of gateFacts(step); track trackFact($index, entry)) {
+                                <div><dt>{{ entry.label }}</dt><dd>{{ entry.value }}</dd></div>
+                              }
+                            </dl>
+                          }
+                        </li>
+                      }
+                    </ol>
+                  </section>
+                }
+
+                @if (row.terminal_error; as terminal) {
+                  <section>
+                    <h4>Terminal error</h4>
+                    <dl>
+                      <div><dt>Message</dt><dd>{{ terminal.message }}</dd></div>
+                      @if (terminal.detail) {
+                        <div><dt>Detail</dt><dd>{{ terminal.detail }}</dd></div>
+                      }
+                      <div><dt>Code</dt><dd>{{ terminal.code | receiptLabel }}</dd></div>
+                      <div><dt>Source</dt><dd>{{ terminal.source | receiptLabel }}</dd></div>
+                      @if (terminal.gate_id) {
+                        <div><dt>Gate</dt><dd>{{ terminal.gate_id | receiptLabel }}</dd></div>
+                      }
+                      @if (display.terminalExternalCode) {
+                        <div><dt>External code</dt><dd>{{ display.terminalExternalCode }}</dd></div>
+                      }
+                      @if (terminal.external_message) {
+                        <div><dt>External message</dt><dd>{{ terminal.external_message }}</dd></div>
+                      }
+                      @if (display.terminalCauseChain) {
+                        <div><dt>Cause chain</dt><dd>{{ display.terminalCauseChain }}</dd></div>
+                      }
+                    </dl>
+                    @if (display.terminalFacts.length > 0) {
                       <dl>
-                        @for (entry of display.identity; track trackFact($index, entry)) {
+                        @for (entry of display.terminalFacts; track trackFact($index, entry)) {
                           <div><dt>{{ entry.label }}</dt><dd>{{ entry.value }}</dd></div>
                         }
                       </dl>
-                    } @else {
-                      <p>-</p>
                     }
                   </section>
+                }
 
-                  @if (row.gate_steps.length > 0) {
-                    <section>
-                      <h4>Gate walk</h4>
-                      <ol class="gate-list">
-                        @for (step of row.gate_steps; track trackGate($index, step)) {
-                          <li [attr.data-gate-result]="step.gate_result">
-                            <div class="gate-line">
-                              <strong>{{ step.gate_id | receiptLabel }}</strong>
-                              <span>{{ step.gate_result | receiptLabel }}</span>
-                              <small>{{ step.source_authority | receiptLabel }}</small>
-                            </div>
-                            @if (gateFacts(step).length > 0) {
-                              <dl>
-                                @for (entry of gateFacts(step); track trackFact($index, entry)) {
-                                  <div><dt>{{ entry.label }}</dt><dd>{{ entry.value }}</dd></div>
-                                }
-                              </dl>
-                            }
-                          </li>
-                        }
-                      </ol>
-                    </section>
-                  }
-
-                  @if (row.terminal_error; as terminal) {
-                    <section>
-                      <h4>Terminal error</h4>
-                      <dl>
-                        <div><dt>Message</dt><dd>{{ terminal.message }}</dd></div>
-                        @if (terminal.detail) {
-                          <div><dt>Detail</dt><dd>{{ terminal.detail }}</dd></div>
-                        }
-                        <div><dt>Code</dt><dd>{{ terminal.code | receiptLabel }}</dd></div>
-                        <div><dt>Source</dt><dd>{{ terminal.source | receiptLabel }}</dd></div>
-                        @if (terminal.gate_id) {
-                          <div><dt>Gate</dt><dd>{{ terminal.gate_id | receiptLabel }}</dd></div>
-                        }
-                        @if (display.terminalExternalCode) {
-                          <div><dt>External code</dt><dd>{{ display.terminalExternalCode }}</dd></div>
-                        }
-                        @if (terminal.external_message) {
-                          <div><dt>External message</dt><dd>{{ terminal.external_message }}</dd></div>
-                        }
-                        @if (display.terminalCauseChain) {
-                          <div><dt>Cause chain</dt><dd>{{ display.terminalCauseChain }}</dd></div>
-                        }
-                      </dl>
-                      @if (display.terminalFacts.length > 0) {
-                        <dl>
-                          @for (entry of display.terminalFacts; track trackFact($index, entry)) {
-                            <div><dt>{{ entry.label }}</dt><dd>{{ entry.value }}</dd></div>
-                          }
-                        </dl>
+                @if (display.facts.length > 0) {
+                  <section>
+                    <h4>Facts</h4>
+                    <dl>
+                      @for (entry of display.facts; track trackFact($index, entry)) {
+                        <div><dt>{{ entry.label }}</dt><dd>{{ entry.value }}</dd></div>
                       }
-                    </section>
-                  }
-
-                  @if (display.facts.length > 0) {
-                    <section>
-                      <h4>Facts</h4>
-                      <dl>
-                        @for (entry of display.facts; track trackFact($index, entry)) {
-                          <div><dt>{{ entry.label }}</dt><dd>{{ entry.value }}</dd></div>
-                        }
-                      </dl>
-                    </section>
-                  }
-                </div>
-              </td>
-            </tr>
+                    </dl>
+                  </section>
+                }
+              </div>
+            </div>
           }
+        </li>
         }
-      </tbody>
-    </table>
+    </ol>
   } @else if (!isLoading() && !errorMessage()) {
     <p class="empty" data-testid="bot-event-stream-empty">No bot events yet for this run.</p>
   }
