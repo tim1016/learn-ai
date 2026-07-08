@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
 from collections import OrderedDict, deque
@@ -107,13 +108,15 @@ def _confine(root: Path, segment: str) -> Path:
     literal, resolve it, and verify containment so the dataflow is
     obviously safe to the scanner.
     """
-    root_resolved = root.resolve()
-    resolved = (root_resolved / segment).resolve()
+    root_resolved = os.path.realpath(root)
+    resolved = os.path.realpath(os.path.join(root_resolved, segment))
     try:
-        resolved.relative_to(root_resolved)
+        common = os.path.commonpath([root_resolved, resolved])
     except ValueError as exc:
         raise ValueError(f"path traversal detected for segment {segment!r}") from exc
-    return resolved
+    if common != root_resolved:
+        raise ValueError(f"path traversal detected for segment {segment!r}")
+    return Path(resolved)
 
 
 def _validate_run_id(run_id: str, root: Path) -> Path:
