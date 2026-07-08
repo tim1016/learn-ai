@@ -3,10 +3,7 @@ import { TestBed } from '@angular/core/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { BrokerActivityHealth, OperatorNotice } from '../../../../../api/live-instances.types';
-import type {
-  ActivityBrokerCategorySummary,
-  ActivityBrokerEventRow,
-} from '../bot-trade-chart-card/bot-trade-chart-card.types';
+import type { ActivityBrokerCategorySummary } from '../bot-trade-chart-card/bot-trade-chart-card.types';
 import { BrokerActivityTableComponent } from './broker-activity-table.component';
 import type { BrokerActivityRow } from './broker-activity.types';
 
@@ -33,34 +30,6 @@ function row(overrides: Partial<BrokerActivityRow> = {}): BrokerActivityRow {
     reason_codes: ['normal_fill'],
     engine_overlay: null,
     divergence_facts: null,
-    ...overrides,
-  };
-}
-
-function eventRow(overrides: Partial<ActivityBrokerEventRow> = {}): ActivityBrokerEventRow {
-  return {
-    id: 'evidence:1',
-    visible_row_id: 'fold:evidence:reqPositionsAsync:position',
-    ts_ms: 1_700_000_000_000,
-    row_type: 'broker_evidence',
-    display_type: 'Broker positions refreshed',
-    source: 'account.fetch_positions',
-    source_label: 'IBKR API evidence',
-    symbol: null,
-    side: null,
-    quantity: null,
-    price: null,
-    status: 'Positions refreshed',
-    summary: 'The bot refreshed broker-held positions for the connected account.',
-    verdict: 'evidence',
-    replay_count: 1,
-    fold_key: 'evidence:reqPositionsAsync:position',
-    fold_count: 1,
-    cluster_key: null,
-    cluster_label: null,
-    child_evidence_ids: ['evidence:1'],
-    constituent_fill_ids: [],
-    evidence: [],
     ...overrides,
   };
 }
@@ -116,7 +85,6 @@ function health(
 function renderFixture(props: {
   rows?: BrokerActivityRow[];
   eventSummary?: ActivityBrokerCategorySummary[];
-  eventRows?: ActivityBrokerEventRow[] | null;
   backfillLoading?: boolean;
   backfillError?: string | null;
   sseStatus?: string;
@@ -130,7 +98,6 @@ function renderFixture(props: {
   const fixture = TestBed.createComponent(BrokerActivityTableComponent);
   fixture.componentRef.setInput('rows', props.rows ?? []);
   fixture.componentRef.setInput('eventSummary', props.eventSummary ?? []);
-  fixture.componentRef.setInput('eventRows', props.eventRows ?? null);
   fixture.componentRef.setInput('backfillLoading', props.backfillLoading ?? false);
   fixture.componentRef.setInput('backfillError', props.backfillError ?? null);
   fixture.componentRef.setInput('sseStatus', props.sseStatus ?? 'open');
@@ -149,10 +116,9 @@ function render(props: Parameters<typeof renderFixture>[0]) {
 afterEach(() => TestBed.resetTestingModule());
 
 describe('BrokerActivityTableComponent', () => {
-  it('renders broker-tail category cards with linked drill-down rows', () => {
+  it('renders broker-tail category cards without row drill-downs', () => {
     const el = render({
       eventSummary: [summary()],
-      eventRows: [eventRow()],
       sseStatus: 'projection',
     });
 
@@ -161,11 +127,13 @@ describe('BrokerActivityTableComponent', () => {
     expect(el.textContent ?? '').toContain('Broker positions refreshed');
     expect(el.textContent ?? '').toContain('3 events');
     expect(el.querySelector('table')).toBeNull();
-    expect(el.textContent ?? '').toContain('The bot refreshed broker-held positions');
+    expect(el.querySelector('.event-drilldown')).toBeNull();
+    expect(el.querySelector('.event-row-main')).toBeNull();
+    expect(el.querySelector('.category-summary button')).toBeNull();
   });
 
-  it('filters drill-down rows by selected category', () => {
-    const fixture = renderFixture({
+  it('renders all broker-tail categories as static cards', () => {
+    const el = render({
       eventSummary: [
         summary(),
         summary({
@@ -175,64 +143,11 @@ describe('BrokerActivityTableComponent', () => {
           row_ids: ['fill:exec-1'],
         }),
       ],
-      eventRows: [
-        eventRow(),
-        eventRow({
-          id: 'exec:exec-1',
-          visible_row_id: 'fill:exec-1',
-          row_type: 'fill',
-          display_type: 'Broker fill',
-          source_label: 'Broker activity stream',
-          symbol: 'SPY',
-          side: 'BUY',
-          quantity: 1,
-          price: 735.72,
-          status: 'Open long',
-          summary: 'BUY 1 SPY @ 735.72',
-        }),
-      ],
     });
-    const el = fixture.nativeElement as HTMLElement;
 
-    expect(el.textContent ?? '').toContain('The bot refreshed broker-held positions');
-    expect(el.textContent ?? '').not.toContain('BUY 1 SPY @ 735.72');
-
-    el.querySelectorAll<HTMLButtonElement>('.category-card')[1]?.click();
-    fixture.detectChanges();
-
-    expect(el.textContent ?? '').not.toContain('The bot refreshed broker-held positions');
-    expect(el.textContent ?? '').toContain('BUY 1 SPY @ 735.72');
-  });
-
-  it('expands a drill-down row to show source and evidence details', () => {
-    const fixture = renderFixture({
-      eventSummary: [summary()],
-      eventRows: [
-        eventRow({
-          evidence: [
-            {
-              seq: 7,
-              ts_ms: 1_700_000_000_000,
-              source: 'account.fetch_positions',
-              request_call: 'reqPositionsAsync',
-              response_callback: 'position',
-              order_ref: null,
-              order_id: null,
-              perm_id: null,
-              exec_id: null,
-              symbol: null,
-            },
-          ],
-        }),
-      ],
-    });
-    const el = fixture.nativeElement as HTMLElement;
-
-    expect(el.textContent ?? '').not.toContain('reqPositionsAsync');
-    el.querySelector<HTMLButtonElement>('.event-row-main')?.click();
-    fixture.detectChanges();
-    expect(el.textContent ?? '').toContain('IBKR API evidence');
-    expect(el.textContent ?? '').toContain('reqPositionsAsync');
+    expect(el.textContent ?? '').toContain('Broker positions refreshed');
+    expect(el.textContent ?? '').toContain('Broker fills');
+    expect(el.querySelectorAll('.category-card')).toHaveLength(2);
   });
 
   it('updates the rendered card values from the latest backend summary input', () => {
@@ -243,7 +158,6 @@ describe('BrokerActivityTableComponent', () => {
     const fixture = TestBed.createComponent(BrokerActivityTableComponent);
     fixture.componentRef.setInput('rows', []);
     fixture.componentRef.setInput('eventSummary', [summary({ event_count: 1 })]);
-    fixture.componentRef.setInput('eventRows', [eventRow()]);
     fixture.detectChanges();
     expect((fixture.nativeElement as HTMLElement).textContent ?? '').toContain('1 event');
 

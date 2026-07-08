@@ -157,7 +157,6 @@ export class ActivityTabComponent {
     );
   });
   readonly openOrderClusters = computed(() => openOrderClustersForProjection(this.activity()));
-  readonly brokerEventRows = computed(() => this.activity()?.broker_activity_rows ?? []);
   readonly brokerEventSummary = computed(() => this.activity()?.broker_activity_summary ?? []);
   readonly backfillLoading = computed(() => this.activityResource.isLoading());
   readonly backfillError = computed(() => {
