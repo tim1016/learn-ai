@@ -52,13 +52,21 @@ def stable_live_state_path(artifacts_root: Path, strategy_instance_id: str) -> P
             f"strategy_instance_id rejected on second check: {strategy_instance_id!r}"
         )
     safe_sid = match.group(0)
-    live_state_root = (artifacts_root / "live_state").resolve()
-    sidecar_dir = (live_state_root / safe_sid).resolve(strict=False)
-    if not sidecar_dir.is_relative_to(live_state_root):
+    live_state_root = os.path.realpath(
+        os.path.join(os.fspath(artifacts_root), "live_state")
+    )
+    sidecar_dir = os.path.realpath(os.path.join(live_state_root, safe_sid))
+    try:
+        common = os.path.commonpath([sidecar_dir, live_state_root])
+    except ValueError as exc:
+        raise ValueError(
+            f"live-state sidecar path {sidecar_dir} cannot share a root with {live_state_root}"
+        ) from exc
+    if common != live_state_root:
         raise ValueError(
             f"live-state sidecar path {sidecar_dir} escapes {live_state_root}"
         )
-    return sidecar_dir / "live_state.json"
+    return Path(sidecar_dir) / "live_state.json"
 
 
 class LiveStateEnvelope(BaseModel):
