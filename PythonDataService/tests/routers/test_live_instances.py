@@ -3930,6 +3930,60 @@ async def test_crash_recovery_override_records_later_audited_override(
     )
 
 
+async def test_crash_recovery_override_survives_post_commit_receipt_failure(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    sid = "spy_crash_override_degraded"
+    account_id = "DU123456"
+    run_id = "run-crash-override-degraded"
+    crash_recorded_at_ms = 1_700_000_000_000
+    _write_ledger(root, run_id, sid, 100, account_id=account_id)
+    _write_crash_retired_binding(
+        root.parent,
+        account_id=account_id,
+        sid=sid,
+        run_id=run_id,
+        recorded_at_ms=crash_recorded_at_ms,
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async def _boom(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("daemon unreachable while resolving receipt")
+
+    monkeypatch.setattr(live_instances, "_mutation_rung_receipts_for_instance", _boom)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/live-instances/{sid}/crash-recovery-override",
+            json={"confirm_account_flat": True, "approved_by": "operator"},
+        )
+
+    # The durable override succeeded; the receipt projection failed. Degrade to a
+    # receipt-less 200 rather than 500-ing a completed mutation whose retry 409s.
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is True
+    assert body["rung_receipt"] is None
+    assert body["rung_receipt_warnings"] == []
+
+    override_events = [
+        event
+        for event in read_account_events(root.parent, account_id)
+        if event["event_type"] == "account_audited_override_recorded"
+    ]
+    assert override_events
+    assert (
+        crash_retired_restart_blocking_binding(
+            root.parent,
+            account_id=account_id,
+            strategy_instance_id=sid,
+        )
+        is None
+    )
+
+
 async def test_start_run_rejects_when_daemon_already_running(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-live", "spy_ema_paper", 100)

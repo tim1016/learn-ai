@@ -2807,12 +2807,25 @@ async def record_crash_recovery_override(
                 "remediation": "Refresh Bot Control and use the currently enabled action.",
             },
         ) from exc
-    receipt, warnings = await _mutation_rung_receipts_for_instance(
-        sid,
-        root,
-        settings,
-        mutation_key="crash_recovery_override",
-    )
+    # The audited override is already durably recorded above. The receipt is a
+    # convenience projection off the fresh ladder; if resolving it fails (daemon
+    # unreachable, artifact read error) the mutation still succeeded, so degrade
+    # to a receipt-less 200 rather than 500-ing a request whose retry would hit
+    # CrashRecoveryNotRequiredError → 409 and never report success.
+    try:
+        receipt, warnings = await _mutation_rung_receipts_for_instance(
+            sid,
+            root,
+            settings,
+            mutation_key="crash_recovery_override",
+        )
+    except Exception as exc:
+        # Post-commit projection must not mask the durable write.
+        logger.warning(
+            "crash-recovery override recorded, but post-commit receipt resolution failed",
+            extra={"strategy_instance_id": sid, "override_id": override.override_id, "exception": repr(exc)},
+        )
+        return override
     return override.model_copy(
         update={
             "rung_receipt": receipt,

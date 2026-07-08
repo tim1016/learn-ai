@@ -339,8 +339,10 @@ export interface CrashRecoveryOverrideResponse {
   recorded_at_ms: number;
   blocking_recorded_at_ms: number;
   event_type: 'account_audited_override_recorded';
+  // Backend always serializes warnings (default []); only the receipt itself is
+  // nullable (absent when post-commit projection degrades — see the override endpoint).
   rung_receipt?: MutationRungReceipt | null;
-  rung_receipt_warnings?: MutationRungReceipt[];
+  rung_receipt_warnings: MutationRungReceipt[];
 }
 
 /** Server-authored per-instance Start-bot-process affordance

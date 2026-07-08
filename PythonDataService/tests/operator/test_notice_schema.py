@@ -226,7 +226,9 @@ def test_notice_rejects_routed_without_target():
         )
 
 
-def test_notice_rejects_no_remedy_without_remedy_status():
+def test_notice_rejects_no_remedy_code_missing_pinned_remedy_status():
+    # fleet.sibling_liveness_unproven pins remedy_status="unbuilt"; omitting it
+    # trips the contract-pinning check (not the pairing branch) for OperatorNotice.
     with pytest.raises(ValueError, match="remedy_status='unbuilt'"):
         OperatorNotice(
             code="fleet.sibling_liveness_unproven",

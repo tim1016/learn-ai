@@ -693,6 +693,7 @@ describe('BotControlPageComponent', () => {
       recorded_at_ms: 1_700_000_000_001,
       blocking_recorded_at_ms: 1_700_000_000_000,
       event_type: 'account_audited_override_recorded',
+      rung_receipt_warnings: [],
     };
     const { fixture, component, liveRuns, element } = await setupBotControlPage({
       statusSequence: [initial, refreshed],
@@ -753,6 +754,7 @@ describe('BotControlPageComponent', () => {
       recorded_at_ms: 1_700_000_000_001,
       blocking_recorded_at_ms: 1_700_000_000_000,
       event_type: 'account_audited_override_recorded',
+      rung_receipt_warnings: [],
     };
     const { fixture, component, liveRuns, element } = await setupBotControlPage({
       statusSequence: [initial, refreshed, refreshed],

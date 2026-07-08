@@ -165,6 +165,7 @@ describe('LiveRunsService start/stop proxy', () => {
       recorded_at_ms: 1_700_000_000_001,
       blocking_recorded_at_ms: 1_700_000_000_000,
       event_type: 'account_audited_override_recorded',
+      rung_receipt_warnings: [],
     };
     const promise = service.recordCrashRecoveryOverride('sid/x', {
       confirm_account_flat: true,

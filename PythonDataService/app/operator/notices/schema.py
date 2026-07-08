@@ -212,7 +212,9 @@ class OperatorNotice(BaseModel):
 
     @model_validator(mode="after")
     def _truthfulness_contract(self) -> OperatorNotice:
-        contract = NOTICE_CODE_CONTRACTS[str(self.code)]
+        contract = NOTICE_CODE_CONTRACTS.get(str(self.code))
+        if contract is None:
+            raise ValueError(f"{self.code} is missing a NOTICE_CODE_CONTRACTS entry")
         if self.tier != contract.tier:
             raise ValueError(f"{self.code} must use tier={contract.tier}")
         if self.actionability != contract.actionability:

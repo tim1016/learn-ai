@@ -1030,8 +1030,8 @@ def _compose_notice_placement(
             notices.append(runtime_freshness.headline)
         notices.extend(runtime_freshness.additional_reasons)
     if broker_activity_health is not None:
-        if broker_activity_health.headline is not None:
-            notices.append(broker_activity_health.headline)
+        # headline (when set) is always the first element of notices, so extending
+        # from notices alone is sufficient — no separate headline append needed.
         notices.extend(broker_activity_health.notices)
 
     ordered = sorted(_dedupe_notices(notices), key=_notice_sort_key)
