@@ -110,11 +110,12 @@ describe('OverviewActionsComponent', () => {
     expect(invoked).not.toHaveBeenCalled();
   });
 
-  it('calls out when Fresh run is the only enabled lifecycle action', () => {
+  it('calls out when the backend marks Fresh run as the only available action', () => {
     TestBed.configureTestingModule({
       providers: [provideZonelessChangeDetection()],
     });
     const fixture = TestBed.createComponent(OverviewActionsComponent);
+    fixture.componentRef.setInput('onlyFreshRunAvailable', true);
     fixture.componentRef.setInput('actions', [
       action({
         id: 'start_process',
@@ -149,5 +150,28 @@ describe('OverviewActionsComponent', () => {
       .toBe(true);
     expect(el.querySelector<HTMLButtonElement>('[aria-label="Start bot process"]')?.classList.contains('is-off'))
       .toBe(true);
+  });
+
+  it('does not infer the Fresh-run-only notice from enabled actions', () => {
+    TestBed.configureTestingModule({
+      providers: [provideZonelessChangeDetection()],
+    });
+    const fixture = TestBed.createComponent(OverviewActionsComponent);
+    fixture.componentRef.setInput('onlyFreshRunAvailable', false);
+    fixture.componentRef.setInput('actions', [
+      action({
+        id: 'start_process',
+        label: 'Start bot process',
+        enabled: false,
+        reason_headline: 'Stopped',
+        reason_detail: 'Resume is required first.',
+      }),
+      action({ id: 'redeploy', label: 'Redeploy' }),
+    ]);
+    fixture.detectChanges();
+
+    expect(
+      (fixture.nativeElement as HTMLElement).querySelector('[data-testid="fresh-run-only-notice"]'),
+    ).toBeNull();
   });
 });

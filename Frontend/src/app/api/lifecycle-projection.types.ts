@@ -90,6 +90,7 @@ export interface BotLifecycleChartView {
   global_graph: LifecycleChartGraph;
   subgraphs: Record<string, LifecycleChartGraph>;
   actions: LifecycleChartAction[];
+  only_fresh_run_available: boolean;
 }
 
 export type LifecycleEventSeverity = 'info' | 'warning' | 'critical';

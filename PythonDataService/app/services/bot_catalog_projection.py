@@ -30,7 +30,7 @@ def compose_bot_catalog_row(status: LiveInstanceStatus, trading_mode: TradingMod
         status_label=_status_label(status),
         status_detail=_status_detail(status),
         status_tone=_status_tone(readiness_verdict, error_count),
-        only_fresh_run_available=_only_fresh_run_available(status),
+        only_fresh_run_available=status.lifecycle_chart.only_fresh_run_available,
         needs_attention=error_count > 0 or readiness_verdict in ("BLOCKED", "DEGRADED"),
         trading_mode=trading_mode,
         symbols=_symbols(status),
@@ -58,11 +58,6 @@ def compose_bot_catalog_row(status: LiveInstanceStatus, trading_mode: TradingMod
 
 def trading_mode_from_configured_mode(value: object) -> TradingMode:
     return value if value in ("paper", "live") else "unknown"
-
-
-def _only_fresh_run_available(status: LiveInstanceStatus) -> bool:
-    enabled_actions = [action.id for action in status.lifecycle_chart.actions if action.enabled]
-    return len(enabled_actions) == 1 and enabled_actions[0] == "redeploy"
 
 
 def _symbols(status: LiveInstanceStatus) -> list[str]:

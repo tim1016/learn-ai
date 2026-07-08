@@ -2087,11 +2087,14 @@ async def test_bot_catalog_marks_when_only_fresh_run_is_available(
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/api/live-instances/catalog")
+        status_response = await client.get("/api/live-instances/stopped_bot/status")
 
     assert response.status_code == 200
     row = response.json()["bots"][0]
     assert row["strategy_instance_id"] == "stopped_bot"
     assert row["only_fresh_run_available"] is True
+    assert status_response.status_code == 200
+    assert status_response.json()["lifecycle_chart"]["only_fresh_run_available"] is True
 
 
 async def test_bot_catalog_does_not_fallback_unknown_symbol_to_instance_id(

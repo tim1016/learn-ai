@@ -2188,6 +2188,7 @@ class BotLifecycleChartView(BaseModel):
     global_graph: LifecycleChartGraph
     subgraphs: dict[str, LifecycleChartGraph] = Field(default_factory=dict)
     actions: list[LifecycleChartAction] = Field(default_factory=list)
+    only_fresh_run_available: bool = False
 
 
 class LiveInstanceStatus(BaseModel):
