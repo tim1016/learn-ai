@@ -504,6 +504,33 @@ class IdentityCoherenceConfirmation(BaseModel):
     action_plan_symbol: str | None = None
 
 
+ExposureCoherencePosture = Literal["FLAT", "LONG", "SHORT", "MIXED", "UNKNOWN"]
+
+
+class ExposureCoherenceFacts(BaseModel):
+    posture: ExposureCoherencePosture
+    pending_order_count: int | None = Field(default=None, ge=0)
+    owned_positions: dict[str, int] = Field(default_factory=dict)
+    source: str
+    strategy_instance_id: str | None = None
+    run_id: str | None = None
+
+
+class ExposureCoherenceConfirmation(BaseModel):
+    """Operator confirmation for starting despite inherited exposure evidence.
+
+    This is unhashed deploy-admission evidence, not run identity. The public
+    deploy endpoint compares it with the current instance exposure facts before
+    allowing ``Deploy & start`` through a non-flat or unknown exposure state.
+    """
+
+    posture: ExposureCoherencePosture
+    pending_order_count: int | None = Field(default=None, ge=0)
+    owned_positions: dict[str, int] = Field(default_factory=dict)
+    strategy_instance_id: str | None = None
+    run_id: str | None = None
+
+
 class HostRunnerDeployBaseRequest(BaseModel):
     """Common deploy request fields shared by public API and host daemon.
 
@@ -608,6 +635,11 @@ class LiveInstanceDeployRequest(HostRunnerDeployBaseRequest):
     inherited_symbol: str | None = None
     inherited_symbol_source: str | None = None
     identity_coherence_confirmation: IdentityCoherenceConfirmation | None = None
+    inherited_exposure_posture: ExposureCoherencePosture | None = None
+    inherited_exposure_pending_order_count: int | None = Field(default=None, ge=0)
+    inherited_exposure_positions: dict[str, int] = Field(default_factory=dict)
+    inherited_exposure_source: str | None = None
+    exposure_coherence_confirmation: ExposureCoherenceConfirmation | None = None
 
     @model_validator(mode="after")
     def _validate_legacy_extras(self) -> LiveInstanceDeployRequest:
@@ -1193,6 +1225,7 @@ class OperatorSurfaceCurrentRisk(BaseModel):
     """
 
     posture: RiskPosture
+    owned_positions: dict[str, int] = Field(default_factory=dict)
     # ``None`` when broker state is unavailable; ``0`` only when broker
     # state is known and empty.  The Frontend renders ``—`` for ``None``
     # and ``0`` for ``0`` (#612 §"Rendering rules").

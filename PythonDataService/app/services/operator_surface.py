@@ -16,6 +16,7 @@ for the operator-surface inclusion boundary.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime, time
 from typing import Literal, assert_never
 from zoneinfo import ZoneInfo
@@ -34,6 +35,7 @@ from app.schemas.live_runs import (
     BrokerActivityHealth,
     BrokerObservationConsistency,
     DesiredStateView,
+    ExposureCoherenceFacts,
     FocusAction,
     GateResult,
     HostProcessStartCapability,
@@ -374,7 +376,19 @@ def _trader_execution_posture(posture: EngineEffectivePosture) -> TraderExecutio
 # ---------------------------------------------------------------------------
 
 
-def _derive_posture(owned_positions: dict[str, int]) -> str:
+def normalize_exposure_positions(owned_positions: Mapping[str, object]) -> dict[str, int]:
+    normalized: dict[str, int] = {}
+    for symbol, quantity in owned_positions.items():
+        name = str(symbol).strip().upper()
+        if not name:
+            continue
+        qty = int(quantity)
+        if qty != 0:
+            normalized[name] = normalized.get(name, 0) + qty
+    return {symbol: qty for symbol, qty in sorted(normalized.items()) if qty != 0}
+
+
+def _derive_posture(owned_positions: Mapping[str, int]) -> str:
     non_zero = {sym: qty for sym, qty in owned_positions.items() if qty != 0}
     if not non_zero:
         return "FLAT"
@@ -384,22 +398,47 @@ def _derive_posture(owned_positions: dict[str, int]) -> str:
     return next(iter(sides))
 
 
-def _project_current_risk(broker: InstanceBrokerView | None) -> OperatorSurfaceCurrentRisk:
+def compose_exposure_coherence_facts(
+    broker: InstanceBrokerView | None,
+    *,
+    source: str,
+    strategy_instance_id: str | None = None,
+    run_id: str | None = None,
+) -> ExposureCoherenceFacts:
     if broker is None:
-        return OperatorSurfaceCurrentRisk(
+        return ExposureCoherenceFacts(
             posture="UNKNOWN",
             pending_order_count=None,
-            verdict="UNKNOWN",
-            unrealized_pnl=None,
+            owned_positions={},
+            source=source,
+            strategy_instance_id=strategy_instance_id,
+            run_id=run_id,
         )
-    posture = _derive_posture(broker.owned_positions)
-    pending = broker.pending_order_count
-    verdict = "READY" if posture == "FLAT" and pending == 0 else "ATTENTION"
+    owned_positions = normalize_exposure_positions(broker.owned_positions)
+    return ExposureCoherenceFacts(
+        posture=_derive_posture(owned_positions),  # type: ignore[arg-type]
+        pending_order_count=broker.pending_order_count,
+        owned_positions=owned_positions,
+        source=source,
+        strategy_instance_id=strategy_instance_id,
+        run_id=run_id,
+    )
+
+
+def _project_current_risk(broker: InstanceBrokerView | None) -> OperatorSurfaceCurrentRisk:
+    facts = compose_exposure_coherence_facts(
+        broker,
+        source="live_state.expected_position_by_symbol",
+    )
+    posture = facts.posture
+    pending = facts.pending_order_count
+    verdict = "UNKNOWN" if broker is None else ("READY" if posture == "FLAT" and pending == 0 else "ATTENTION")
     return OperatorSurfaceCurrentRisk(
-        posture=posture,  # type: ignore[arg-type]
+        posture=posture,
+        owned_positions=facts.owned_positions,
         pending_order_count=pending,
         verdict=verdict,
-        unrealized_pnl=broker.unrealized_pnl,
+        unrealized_pnl=broker.unrealized_pnl if broker is not None else None,
     )
 
 

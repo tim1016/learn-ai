@@ -538,7 +538,7 @@ describe('BrokerDeployFormComponent', () => {
     await flush();
     fillRequired(component);
     component.startNow.set(true);
-    fixture.detectChanges();
+    await settleResource(fixture);
 
     await component.submit();
     await flush();
@@ -1513,7 +1513,7 @@ describe('BrokerDeployFormComponent', () => {
       ],
       on_exit: [{ kind: 'close_leg', entry_leg_id: 'aapl_long' }],
     });
-    fixture.detectChanges();
+    await settleResource(fixture);
 
     expect(component.identityCoherenceEvidence()?.facts.map((fact) => fact.value)).toEqual([
       'MU',
@@ -1556,12 +1556,58 @@ describe('BrokerDeployFormComponent', () => {
     expect(deployButton(fixture).disabled).toBe(true);
   });
 
+  it('blocks "Deploy & start" when inherited exposure is not proven flat until confirmed', async () => {
+    const { fixture, svc, component } = setup({
+      queryParams: {
+        inherited_exposure_posture: 'LONG',
+        inherited_exposure_positions: '{"SPY":5}',
+        inherited_exposure_pending_order_count: '2',
+        inherited_exposure_source: 'operator_surface.current_risk',
+      },
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    await settleResource(fixture);
+
+    expect(component.exposureCoherenceEvidence()?.posture).toBe('LONG');
+    expect(component.exposureCoherenceEvidence()?.ownedPositions).toEqual({ SPY: 5 });
+    expect(component.blockedReason()).toContain('Inherited exposure is LONG');
+    expect(fixture.nativeElement.querySelector('.exposure-coherence')?.textContent).toContain('SPY 5');
+    expect(fixture.nativeElement.querySelector('.exposure-coherence')?.textContent).toContain(
+      'Confirm exposure state',
+    );
+    expect(deployButton(fixture).disabled).toBe(true);
+
+    component.confirmExposureCoherence();
+    fixture.detectChanges();
+
+    expect(component.exposureCoherenceConfirmed()).toBe(true);
+    expect(component.blockedReason()).toBeNull();
+    expect(deployButton(fixture).disabled).toBe(false);
+
+    await component.submit();
+
+    const req = svc.deployInstance.mock.calls[0][0];
+    expect(req.inherited_exposure_posture).toBe('LONG');
+    expect(req.inherited_exposure_positions).toEqual({ SPY: 5 });
+    expect(req.inherited_exposure_pending_order_count).toBe(2);
+    expect(req.inherited_exposure_source).toBe('operator_surface.current_risk');
+    expect(req.exposure_coherence_confirmation).toEqual({
+      posture: 'LONG',
+      pending_order_count: 2,
+      owned_positions: { SPY: 5 },
+      strategy_instance_id: 'deployment-validation-paper',
+      run_id: null,
+    });
+  });
+
   it('uses backend identity-coherence evidence after an unconfirmed submit is rejected', async () => {
     const { fixture, svc, component } = setup();
     await flush();
     fillRequired(component);
     component.startNow.set(true);
-    fixture.detectChanges();
+    await settleResource(fixture);
     svc.deployInstance.mockRejectedValueOnce(
       new HttpErrorResponse({
         status: 409,
@@ -1594,6 +1640,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(component.identityCoherenceEvidence()?.facts.map((fact) => fact.value)).toEqual([
       'MU',
       'SPY',
+      'SPY',
     ]);
     expect(fixture.nativeElement.querySelector('.identity-coherence')?.textContent).toContain(
       'Confirm new run identity',
@@ -1608,7 +1655,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(retry.identity_coherence_confirmation).toEqual({
       inherited_symbol: 'MU',
       signal_stream: 'SPY',
-      action_plan_symbol: null,
+      action_plan_symbol: 'SPY',
     });
   });
 
@@ -1628,9 +1675,29 @@ describe('BrokerDeployFormComponent', () => {
     expect(component.identityCoherenceEvidence()?.facts.map((fact) => fact.value)).toEqual([
       'MU',
       'SPY',
+      'SPY',
     ]);
     expect(component.blockedReason()).toBeNull();
     expect(fixture.nativeElement.querySelector('.identity-coherence')?.textContent).toContain(
+      'Deploy-only will stage these values without starting.',
+    );
+    expect(deployButton(fixture).disabled).toBe(false);
+  });
+
+  it('allows deploy-only staging when inherited exposure is unproven', async () => {
+    const { fixture, component } = setup({
+      queryParams: {
+        inherited_exposure_posture: 'UNKNOWN',
+        inherited_exposure_source: 'operator_surface.current_risk',
+      },
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(false);
+    fixture.detectChanges();
+
+    expect(component.blockedReason()).toBeNull();
+    expect(fixture.nativeElement.querySelector('.exposure-coherence')?.textContent).toContain(
       'Deploy-only will stage these values without starting.',
     );
     expect(deployButton(fixture).disabled).toBe(false);
@@ -1647,11 +1714,31 @@ describe('BrokerDeployFormComponent', () => {
     await flush();
     fillRequired(component);
     component.startNow.set(true);
-    fixture.detectChanges();
+    await settleResource(fixture);
 
     expect(component.identityCoherenceEvidence()).toBeNull();
     expect(component.blockedReason()).toBeNull();
     expect(fixture.nativeElement.querySelector('.identity-coherence')).toBeNull();
+    expect(deployButton(fixture).disabled).toBe(false);
+  });
+
+  it('does not ask for exposure confirmation when inherited exposure is flat with no pending orders', async () => {
+    const { fixture, component } = setup({
+      queryParams: {
+        inherited_exposure_posture: 'FLAT',
+        inherited_exposure_positions: '{}',
+        inherited_exposure_pending_order_count: '0',
+        inherited_exposure_source: 'operator_surface.current_risk',
+      },
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    await settleResource(fixture);
+
+    expect(component.exposureCoherenceEvidence()).toBeNull();
+    expect(component.blockedReason()).toBeNull();
+    expect(fixture.nativeElement.querySelector('.exposure-coherence')).toBeNull();
     expect(deployButton(fixture).disabled).toBe(false);
   });
 

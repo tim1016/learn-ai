@@ -85,6 +85,7 @@ function status(
       configuration: { verdict: 'READY', reason_codes: [] },
       current_risk: {
         posture: 'FLAT',
+        owned_positions: {},
         pending_order_count: 0,
         verdict: 'READY',
         unrealized_pnl: null,

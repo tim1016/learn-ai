@@ -99,6 +99,40 @@
             }
           </div>
         }
+        @if (exposureCoherenceEvidence(); as exposure) {
+          <div class="exposure-coherence" [class.confirmed]="exposureCoherenceConfirmed()" role="group" aria-label="Exposure confirmation">
+            <strong>Inherited exposure</strong>
+            <dl>
+              <div>
+                <dt>Posture</dt>
+                <dd>{{ exposure.posture }}</dd>
+              </div>
+              <div>
+                <dt>Positions</dt>
+                <dd>{{ exposure.positionsLabel }}</dd>
+              </div>
+              <div>
+                <dt>Pending orders</dt>
+                <dd>{{ exposure.pendingOrderCount ?? 'unknown' }}</dd>
+              </div>
+              <div>
+                <dt>Source</dt>
+                <dd>{{ exposure.source | receiptLabel }}</dd>
+              </div>
+            </dl>
+            @if (effectiveStartNow()) {
+              @if (exposureCoherenceConfirmed()) {
+                <p>Confirmed for this Deploy & start.</p>
+              } @else {
+                <button type="button" class="text-button" (click)="confirmExposureCoherence()">
+                  Confirm exposure state
+                </button>
+              }
+            } @else {
+              <p>Deploy-only will stage these values without starting.</p>
+            }
+          </div>
+        }
       </section>
 
       <section>

@@ -1174,6 +1174,9 @@ def test_current_risk_broker_none_renders_unknown_with_nulls() -> None:
 def test_current_risk_posture_derived_from_owned_positions(owned, expected_posture) -> None:
     surface = _surface(broker=_broker(owned_positions=owned))
     assert surface.current_risk.posture == expected_posture
+    assert surface.current_risk.owned_positions == {
+        symbol: qty for symbol, qty in sorted(owned.items()) if qty != 0
+    }
 
 
 @pytest.mark.parametrize(

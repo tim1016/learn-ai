@@ -414,6 +414,16 @@ export interface IdentityCoherenceConfirmation {
   action_plan_symbol?: string | null;
 }
 
+export type ExposureCoherencePosture = 'FLAT' | 'LONG' | 'SHORT' | 'MIXED' | 'UNKNOWN';
+
+export interface ExposureCoherenceConfirmation {
+  posture: ExposureCoherencePosture;
+  pending_order_count?: number | null;
+  owned_positions: Record<string, number>;
+  strategy_instance_id?: string | null;
+  run_id?: string | null;
+}
+
 export interface HostRunnerDeployRequest {
   strategy_spec_path: string;
   qc_audit_copy_path: string;
@@ -436,6 +446,11 @@ export interface HostRunnerDeployRequest {
   inherited_symbol?: string;
   inherited_symbol_source?: string;
   identity_coherence_confirmation?: IdentityCoherenceConfirmation;
+  inherited_exposure_posture?: ExposureCoherencePosture;
+  inherited_exposure_pending_order_count?: number | null;
+  inherited_exposure_positions?: Record<string, number>;
+  inherited_exposure_source?: string;
+  exposure_coherence_confirmation?: ExposureCoherenceConfirmation;
 }
 
 export interface HostRunnerDeployResponse {

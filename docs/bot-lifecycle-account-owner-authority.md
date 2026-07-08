@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-07-07 (Safety-halt incidents now bridge cold-start poison into Recent Incidents and Bot Control headlines; the deploy form pre-detects durable STOPPED before start-now submissions and switches to deploy-only; deploy now fails closed before ledger creation when a strategy with a deploy-time action-plan contract, currently `deployment_validation`, is missing required legs or submits a plan shape the runtime path cannot consume; not-proven Account Truth start blockers name missing/stale evidence and link directly to Account Monitor's account reconciliation action, while deploy-only staging remains available; Bot Control carries the status symbol into the deploy form as inherited identity evidence and blocks Deploy & start when the inherited symbol disagrees with the new signal stream or declared stock action-plan symbol until the operator explicitly confirms the exact symbol set.)
+> **Last reviewed:** 2026-07-07 (Safety-halt incidents now bridge cold-start poison into Recent Incidents and Bot Control headlines; the deploy form pre-detects durable STOPPED before start-now submissions and switches to deploy-only; deploy now fails closed before ledger creation when a strategy with a deploy-time action-plan contract, currently `deployment_validation`, is missing required legs or submits a plan shape the runtime path cannot consume; not-proven Account Truth start blockers name missing/stale evidence and link directly to Account Monitor's account reconciliation action, while deploy-only staging remains available; Bot Control carries inherited identity and exposure evidence into the deploy form and blocks Deploy & start until any symbol mismatch or non-flat/unknown exposure facts are explicitly confirmed.)
 
 ---
 
@@ -90,6 +90,19 @@ declared, the action-plan trade symbol. A disagreement returns
 values; deploy-only staging remains available. The host daemon still owns the
 canonical run ledger and does not treat URL query params as authoritative run
 identity.
+
+Fresh-run start is exposure-gated at the public deploy endpoint. For an
+existing strategy instance, the endpoint reads the instance `live_state`
+sidecar and derives exposure posture plus pending-order count from
+`expected_position_by_symbol` / `pending_intents`. The normalized non-zero
+positions map is part of the exposure fact, not merely display copy. `Deploy &
+start` is blocked with `EXPOSURE_COHERENCE_UNCONFIRMED` when that exposure is
+unknown, non-flat, or has pending orders unless the request carries an
+`exposure_coherence_confirmation` matching the current positions map, pending
+count, strategy instance, and source run exactly. The confirmation is unhashed
+admission evidence and is stripped before forwarding to the host daemon.
+Deploy-only requests remain allowed so operators can stage a new run without
+launching it.
 
 ### 3.1 Canonical Lifecycle Observability Model
 

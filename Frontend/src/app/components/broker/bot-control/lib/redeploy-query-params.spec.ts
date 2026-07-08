@@ -18,6 +18,13 @@ describe('redeployQueryParamsForStatus', () => {
         strategy: 'deployment_validation',
       },
       symbol: 'dia',
+      operator_surface: {
+        current_risk: {
+          posture: 'LONG',
+          owned_positions: { DIA: 5 },
+          pending_order_count: 2,
+        },
+      },
     } as unknown as LiveInstanceStatus;
 
     expect(redeployQueryParamsForStatus(status)).toEqual({
@@ -30,6 +37,10 @@ describe('redeployQueryParamsForStatus', () => {
       inherited_symbol: 'DIA',
       inherited_symbol_source: 'run_ledger.live_config.symbol signal stream',
       strategy_key: 'deployment_validation',
+      inherited_exposure_posture: 'LONG',
+      inherited_exposure_positions: '{"DIA":5}',
+      inherited_exposure_pending_order_count: '2',
+      inherited_exposure_source: 'operator_surface.current_risk',
     });
   });
 
