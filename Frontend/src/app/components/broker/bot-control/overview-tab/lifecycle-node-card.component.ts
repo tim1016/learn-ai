@@ -45,9 +45,8 @@ export class LifecycleNodeCardComponent {
 
   selectLabel(): string {
     const node = this.node();
-    const action = node.expandable ? 'Select' : 'Select';
     const callout = this.blocking() ? ' Blocking step.' : this.primary() ? ' Current step.' : '';
-    return `${action} ${node.label}. Status: ${node.status_label}.${callout}`;
+    return `Select ${node.label}. Status: ${node.status_label}.${callout}`;
   }
 
   openSubgraphLabel(): string {

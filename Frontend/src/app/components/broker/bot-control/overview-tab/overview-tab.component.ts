@@ -1,4 +1,3 @@
-import { CommonModule } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
 
 import type {
@@ -22,7 +21,7 @@ interface LifecycleFlowRow {
 
 @Component({
   selector: 'app-overview-tab',
-  imports: [CommonModule, LifecycleNodeCardComponent],
+  imports: [LifecycleNodeCardComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './overview-tab.component.html',
   styleUrl: './overview-tab.component.scss',
@@ -111,16 +110,6 @@ export class OverviewTabComponent {
 
   nodeHeadingId(node: LifecycleChartNode): string {
     return `lifecycle-node-heading-${this.currentGraph().graph_id}-${node.id}`;
-  }
-
-  nodeReceiptToggleLabel(node: LifecycleChartNode): string {
-    const action = this.isNodeReceiptsExpanded(node) ? 'Hide' : 'Show';
-    const callout = this.isBlockingNode(node)
-      ? ' Blocking step.'
-      : this.isPrimaryNode(node)
-        ? ' Current step.'
-        : '';
-    return `${action} receipts for ${node.label}. Status: ${node.status_label}.${callout}`;
   }
 
   nodeReceiptKey(node: LifecycleChartNode): string {

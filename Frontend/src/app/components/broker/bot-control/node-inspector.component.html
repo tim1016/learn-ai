@@ -21,13 +21,6 @@
   @if (actionabilityBanner(currentNode); as banner) {
     <p class="actionability-banner" data-trader-copy>{{ banner }}</p>
   }
-  @if (currentNode.receipts.length > 0) {
-    <app-node-receipts-pane [receipts]="currentNode.receipts" />
-  } @else {
-    <p class="empty-node-receipts" data-trader-copy>
-      No node-scoped receipts have been emitted for this lifecycle step yet.
-    </p>
-  }
 </section>
 
 @if (currentNode.id === 'deploy') {

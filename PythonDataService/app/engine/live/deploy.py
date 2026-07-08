@@ -27,8 +27,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
-from app.engine.live.config import action_plan_deploy_readiness
+from app.engine.live.config import stock_symbol_from_action_plan
 from app.engine.live.identity import validate_strategy_instance_id
 from app.engine.live.order_identity import validate_broker_owned_instance_id
 from app.engine.live.pre_flight import check_clean_tree
@@ -38,6 +39,7 @@ from app.engine.live.run_ledger import (
     read_ledger,
     write_ledger,
 )
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.spec.schema import SUPPORTED_LIVE_RUNTIME_BAR_SOURCE
 
 # Default paths included in the dirty-tree gate. Mirrors the CLI default so the
@@ -197,6 +199,96 @@ class DeployResult:
     ledger: LiveRunLedger
 
 
+ActionPlanDeployReasonCode = Literal[
+    "ACTION_PLAN_EMPTY",
+    "ACTION_PLAN_ENTRY_LEG_REQUIRED",
+    "ACTION_PLAN_UNSUPPORTED",
+    "ACTION_PLAN_CLOSE_LEG_REQUIRED",
+]
+
+
+@dataclass(frozen=True)
+class ActionPlanDeployReadiness:
+    reason_code: ActionPlanDeployReasonCode | None = None
+    message: str = "Action plan is ready for deployment."
+
+    @property
+    def can_deploy(self) -> bool:
+        return self.reason_code is None
+
+
+_ACTION_PLAN_REQUIRED_STRATEGIES = frozenset({"deployment_validation"})
+
+
+def action_plan_deploy_readiness(
+    *,
+    strategy_key: str,
+    live_config: dict,
+) -> ActionPlanDeployReadiness:
+    """Return the deploy-time action-plan verdict for strategies that consume it.
+
+    Today the live runtime consumes a stock-only action plan for
+    ``deployment_validation``: exactly one long stock entry leg plus a close-leg
+    exit for that entry. Other strategies remain non-blocking until they declare
+    a deploy-time action-plan contract, which keeps valid future entry-only/roll
+    plans from being rejected by this deployment-validation-specific gate.
+    """
+
+    if strategy_key.strip() not in _ACTION_PLAN_REQUIRED_STRATEGIES:
+        return ActionPlanDeployReadiness()
+    action = live_config.get("action") if isinstance(live_config, dict) else None
+    if not isinstance(action, dict):
+        return ActionPlanDeployReadiness(
+            reason_code="ACTION_PLAN_EMPTY",
+            message=(
+                "Deployment Validation requires an action plan with one long stock "
+                "entry leg and a matching close leg before deployment."
+            ),
+        )
+    on_enter = action.get("on_enter")
+    on_exit = action.get("on_exit")
+    has_entries = isinstance(on_enter, list) and len(on_enter) > 0
+    has_exits = isinstance(on_exit, list) and len(on_exit) > 0
+    if not has_entries and not has_exits:
+        return ActionPlanDeployReadiness(
+            reason_code="ACTION_PLAN_EMPTY",
+            message=("Deployment Validation requires an action plan; ON ENTER and ON EXIT are both empty."),
+        )
+    if not has_entries:
+        return ActionPlanDeployReadiness(
+            reason_code="ACTION_PLAN_ENTRY_LEG_REQUIRED",
+            message="Deployment Validation requires at least one ON ENTER entry leg.",
+        )
+    try:
+        from app.schemas.action_plan import ActionPlan
+
+        plan = ActionPlan.model_validate(action)
+    except ValueError:
+        return ActionPlanDeployReadiness(
+            reason_code="ACTION_PLAN_UNSUPPORTED",
+            message=(
+                "Deployment Validation cannot consume this action-plan shape. "
+                "Use one long stock entry leg with a close-leg exit."
+            ),
+        )
+    if stock_symbol_from_action_plan(action) is None:
+        return ActionPlanDeployReadiness(
+            reason_code="ACTION_PLAN_UNSUPPORTED",
+            message=(
+                "Deployment Validation currently supports exactly one long stock "
+                "entry leg. Option, short, and multi-leg plans are not deployable "
+                "on this runtime path yet."
+            ),
+        )
+    entry_leg_id = plan.on_enter[0].leg_id
+    if not any(exit_entry.entry_leg_id == entry_leg_id for exit_entry in plan.on_exit):
+        return ActionPlanDeployReadiness(
+            reason_code="ACTION_PLAN_CLOSE_LEG_REQUIRED",
+            message=(f"Deployment Validation requires an ON EXIT close leg for the entry leg {entry_leg_id!r}."),
+        )
+    return ActionPlanDeployReadiness()
+
+
 def _enforce_sizing_policy_present(live_config: dict) -> dict:
     """VCR-0001 / Phase 1 — refuse a new deploy whose ``live_config`` does not
     name an explicit sizing policy or whose siblings the ledger reader cannot
@@ -257,20 +349,15 @@ def _enforce_explicit_surface_policy(strategy_key: str, live_config: dict) -> No
     """ADR 0009 § 6 — refuse a policy-style ``live_config.sizing`` for a
     strategy registered with ``sizing_surface="explicit"``.
 
-    Looks up the strategy in ``_STRATEGY_REGISTRY`` (re-using the same module-
-    name → registry-key fallback as ``_lookup_sizing_surface`` in ``run.py``).
-    A strategy that is unregistered, registered as ``policy``, or registered
-    without a ``sizing_surface`` attribute is silently allowed — the runtime
-    fail-fast remains the backstop for those cases.
+    Looks up the strategy in the engine-level strategy registry. A strategy
+    that is unregistered, registered as ``policy``, or registered without a
+    ``sizing_surface`` attribute is allowed — the runtime fail-fast remains the
+    backstop for those cases.
     """
     if not isinstance(live_config, dict):
         return
     sizing = live_config.get("sizing")
     if not isinstance(sizing, dict):
-        return
-    try:
-        from app.routers.engine import _STRATEGY_REGISTRY
-    except Exception:
         return
     # VCR-0004 / Phase 2 — the registry is keyed by module name now, so the
     # legacy ``removeprefix("spy_")`` workaround is gone.
@@ -311,28 +398,11 @@ def enforce_supported_strategy_bar_source(strategy_spec_path: Path) -> dict:
     return payload
 
 
-def _registered_strategy_key_for_display_name(display_name: str) -> str:
-    normalized = display_name.strip().casefold()
-    if not normalized:
-        return ""
-    try:
-        from app.routers.engine import _STRATEGY_REGISTRY
-    except Exception:
-        return ""
-    for strategy_key, registration in _STRATEGY_REGISTRY.items():
-        if getattr(registration, "display_name", "").strip().casefold() == normalized:
-            return strategy_key
-    return ""
-
-
 def _strategy_key_from_spec(payload: dict) -> str:
     for key in ("strategy_key", "strategy"):
         strategy = payload.get(key)
         if isinstance(strategy, str) and strategy.strip():
             return strategy.strip()
-    name = payload.get("name")
-    if isinstance(name, str):
-        return _registered_strategy_key_for_display_name(name)
     return ""
 
 

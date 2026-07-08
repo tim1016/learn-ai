@@ -7,6 +7,23 @@ import {
   buildNowChecks,
   stoppedStartLatchState,
 } from './deploy-readiness';
+import snapshotJson from './action-plan-deploy-readiness.snapshot.json';
+
+interface ActionPlanDeployReadinessSnapshot {
+  readonly $comment: string;
+  readonly generated_by: string;
+  readonly source_files: readonly string[];
+  readonly cases: readonly {
+    readonly id: string;
+    readonly strategy_key: string;
+    readonly action_plan: unknown;
+    readonly can_deploy: boolean;
+    readonly reason_code: string | null;
+    readonly message: string;
+  }[];
+}
+
+const actionPlanSnapshot = snapshotJson satisfies ActionPlanDeployReadinessSnapshot;
 
 describe('deploy readiness helpers', () => {
   it('blocks deployment-validation while required action-plan legs are missing', () => {
@@ -94,6 +111,17 @@ describe('deploy readiness helpers', () => {
       }),
     ).toEqual(expect.objectContaining({ canDeploy: true }));
   });
+
+  it.each(actionPlanSnapshot.cases)(
+    'matches backend action-plan deploy readiness snapshot: $id',
+    (scenario) => {
+      expect(actionPlanDeployReadiness(scenario.strategy_key, scenario.action_plan)).toEqual({
+        canDeploy: scenario.can_deploy,
+        reasonCode: scenario.reason_code,
+        message: scenario.message,
+      });
+    },
+  );
 
   it('maps stale engine code and account truth into named readiness facts', () => {
     const facts = buildDeployReadinessFacts({

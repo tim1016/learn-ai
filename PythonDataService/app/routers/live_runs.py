@@ -70,7 +70,12 @@ from app.schemas.live_runs import (
     SetDesiredStateRequest,
     TradesSummary,
 )
-from app.services.live_log_failures import IncidentCategory, IncidentSource, parse_failures, parse_incidents
+from app.services.live_log_failures import (
+    IncidentCategory,
+    classify_source,
+    parse_failures,
+    parse_incidents,
+)
 from app.services.live_log_parser import BarEvent, parse_log_tail
 from app.services.live_run_state import infer_state
 
@@ -877,14 +882,6 @@ _SAFETY_HALT_CATEGORY_BY_TRIGGER: dict[str, IncidentCategory] = {
     "operator_declared": IncidentCategory.OPERATOR_HALT,
 }
 
-_SAFETY_HALT_SOURCE_BY_TRIGGER: dict[str, IncidentSource] = {
-    "cold_start_divergence": IncidentSource.APP,
-    "lost_fill": IncidentSource.BROKER,
-    "outside_mutation": IncidentSource.BROKER,
-    "operator_declared": IncidentSource.OPERATOR,
-}
-
-
 def _operator_incident_records(run_dir: Path) -> list[IncidentRecord]:
     records: list[IncidentRecord] = []
     for incident in IncidentStore(run_dir).list_unresolved():
@@ -899,7 +896,11 @@ def _safety_halt_incident_record(incident: OperatorIncident) -> IncidentRecord |
         return None
     trigger = str(incident.evidence.get("halt_trigger") or "")
     category = _SAFETY_HALT_CATEGORY_BY_TRIGGER.get(trigger, IncidentCategory.UNKNOWN)
-    source = _SAFETY_HALT_SOURCE_BY_TRIGGER.get(trigger, IncidentSource.UNKNOWN)
+    source = classify_source(
+        category,
+        "operator_incidents",
+        incident.notice.message,
+    )
     ts_ms = incident.notice.occurred_at_ms or incident.started_at_ms
     level: Literal["WARNING", "CRITICAL"] = (
         "CRITICAL" if incident.notice.tier == "critical" else "WARNING"
@@ -929,23 +930,18 @@ def _operator_incident_dynamic_facts(incident: OperatorIncident) -> dict[str, st
 
 
 def _dedupe_incident_records(rows: list[IncidentRecord]) -> list[IncidentRecord]:
-    operator_safety_rows = [
-        row
+    operator_safety_categories = {
+        row.incident_category
         for row in rows
         if row.logger == "operator_incidents" and _is_safety_halt_category(row.incident_category)
-    ]
+    }
     deduped: list[IncidentRecord] = []
-    seen_operator_safety_identities: set[tuple[str, str, int, str]] = set()
     for row in rows:
-        if row.logger == "operator_incidents" and _is_safety_halt_category(row.incident_category):
-            key = _safety_halt_identity_key(row)
-            if key is not None:
-                if key in seen_operator_safety_identities:
-                    continue
-                seen_operator_safety_identities.add(key)
-            deduped.append(row)
-            continue
-        if _is_safety_halt_log_echo(row, operator_safety_rows):
+        if (
+            row.logger != "operator_incidents"
+            and row.incident_category in operator_safety_categories
+            and _is_safety_halt_category(row.incident_category)
+        ):
             continue
         deduped.append(row)
     return sorted(deduped, key=lambda row: row.ts_ms)
@@ -958,35 +954,6 @@ def _is_safety_halt_category(category: str) -> bool:
         IncidentCategory.OUTSIDE_MUTATION.value,
         IncidentCategory.OPERATOR_HALT.value,
     }
-
-
-def _is_safety_halt_log_echo(row: IncidentRecord, operator_rows: list[IncidentRecord]) -> bool:
-    if row.logger == "operator_incidents" or not _is_safety_halt_category(row.incident_category):
-        return False
-    for operator_row in operator_rows:
-        if (
-            row.ts_ms == operator_row.ts_ms
-            and row.incident_category == operator_row.incident_category
-            and row.message == operator_row.message
-            and row.traceback == operator_row.traceback
-        ):
-            return True
-    return False
-
-
-def _safety_halt_identity_key(row: IncidentRecord) -> tuple[str, str, int, str] | None:
-    facts = row.dynamic_facts or {}
-    run_id = facts.get("run_id")
-    halt_trigger = facts.get("halt_trigger")
-    evidence_time_ms = facts.get("evidence_time_ms")
-    artifact_ref = facts.get("artifact_path") or facts.get("source_flag")
-    if (
-        isinstance(run_id, str)
-        and isinstance(halt_trigger, str)
-        and isinstance(evidence_time_ms, int)
-    ):
-        return (run_id, halt_trigger, evidence_time_ms, str(artifact_ref or ""))
-    return None
 
 
 def _raw_ts_from_ms(ts_ms: int) -> str:

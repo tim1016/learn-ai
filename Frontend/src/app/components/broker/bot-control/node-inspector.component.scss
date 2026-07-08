@@ -56,21 +56,13 @@
   font-weight: 700;
 }
 
-.actionability-banner,
-.empty-node-receipts {
+.actionability-banner {
   padding: 0.55rem 0.65rem;
   border: 1px solid var(--border-light);
   border-radius: 4px;
   background: var(--bg-surface);
-}
-
-.actionability-banner {
   color: var(--text-primary);
   font-weight: 700;
-}
-
-.empty-node-receipts {
-  color: var(--text-muted);
 }
 
 .inspector-section {

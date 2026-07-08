@@ -37,7 +37,6 @@ from app.engine.live.account_artifacts import (
     read_account_owner_generation,
 )
 from app.engine.live.command_channel import CommandChannel, CommandVerb
-from app.engine.live.config import stock_symbol_from_action_plan
 from app.engine.live.daemon_connectivity_monitor import (
     get_monitor as get_daemon_connectivity_monitor,
 )
@@ -106,8 +105,6 @@ from app.schemas.live_runs import (
     EmergencyFlattenRequest,
     EnqueueCommandRequest,
     EvidenceBinding,
-    ExposureCoherenceConfirmation,
-    ExposureCoherenceFacts,
     FleetAccountSummary,
     FleetContamination,
     HostRunnerActionResponse,
@@ -116,7 +113,6 @@ from app.schemas.live_runs import (
     HostRunnerHealth,
     HostRunnerStartRequest,
     HostRunnerStopRequest,
-    IdentityCoherenceConfirmation,
     InstanceBrokerView,
     InstanceLastExit,
     InstanceProcessView,
@@ -187,6 +183,11 @@ from app.services.daemon_diagnostics import (
     project_daemon_diagnostic_report,
     redact_host_runner_health,
 )
+from app.services.deploy_admission import (
+    SymbolResolution,
+    evaluate_deploy_start_admission,
+    resolve_symbol_from_ledger,
+)
 from app.services.instance_context import InstanceContext, load_instance_context
 from app.services.mutation_attempt import (
     TERMINAL_STATES,
@@ -198,9 +199,7 @@ from app.services.mutation_attempt import (
 )
 from app.services.operator_capability import evaluate_action
 from app.services.operator_surface import (
-    compose_exposure_coherence_facts,
     compute_operator_surface,
-    normalize_exposure_positions,
 )
 from app.services.resume_guard_state import (
     ResumeGuardState,
@@ -918,6 +917,21 @@ def _start_defaults(
     )
 
 
+def _resolve_symbol_resolution(
+    root: Path,
+    live_binding: LiveBinding | None,
+    runs: list[dict],
+) -> SymbolResolution | None:
+    run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
+    if run_dir is None:
+        return None
+    try:
+        ledger = _read_ledger(run_dir)
+    except (OSError, ValueError, KeyError):
+        return None
+    return resolve_symbol_from_ledger(ledger, _container_resolve_repo_path)
+
+
 def _resolve_symbol(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> str | None:
     """Monitor/chart symbol for the instance.
 
@@ -946,39 +960,8 @@ def _resolve_symbol(root: Path, live_binding: LiveBinding | None, runs: list[dic
     here and resolving the symbol from the run(s) that overlap that date,
     returning ``None`` on a mixed-symbol day.
     """
-    run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
-    if run_dir is None:
-        return None
-    try:
-        ledger = _read_ledger(run_dir)
-    except (OSError, ValueError, KeyError):
-        return None
-    live_config = ledger.get("live_config") or {}
-    if isinstance(live_config, dict):
-        symbol = stock_symbol_from_action_plan(live_config.get("action"))
-        if symbol is not None:
-            return symbol
-        symbol = live_config.get("symbol")
-        if isinstance(symbol, str) and symbol:
-            return symbol
-    # Spec fallback — read the strategy spec the ledger pins and pick the
-    # first symbol. A multi-symbol strategy (none in the fleet today) would
-    # surface here as the first one; the per-day TODO above lays out the
-    # eventual generalization.
-    spec_path = ledger.get("strategy_spec_path")
-    if isinstance(spec_path, str) and spec_path:
-        for candidate in _container_resolve_repo_path(spec_path):
-            try:
-                spec = json.loads(candidate.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            symbols = spec.get("symbols")
-            if isinstance(symbols, list) and symbols:
-                first = symbols[0]
-                if isinstance(first, str) and first:
-                    return first
-            break
-    return None
+    resolution = _resolve_symbol_resolution(root, live_binding, runs)
+    return resolution.value if resolution is not None else None
 
 
 def _container_resolve_repo_path(path: str) -> list[Path]:
@@ -1296,7 +1279,7 @@ def _resolve_instrument_surface(
     strategy_key = ledger.get("strategy_key")
     if not isinstance(strategy_key, str) or not strategy_key:
         return None
-    from app.routers.engine import _STRATEGY_REGISTRY
+    from app.engine.strategy.registry import _STRATEGY_REGISTRY
 
     reg = _STRATEGY_REGISTRY.get(strategy_key)
     if reg is None:
@@ -1762,211 +1745,25 @@ def _bot_delete_response(artifacts_root: Path, record: BotDeletionRecord) -> Bot
     )
 
 
-def _deploy_symbol(value: object) -> str:
-    return value.strip().upper() if isinstance(value, str) else ""
-
-
-def _deploy_identity_confirmation_matches(
-    confirmation: IdentityCoherenceConfirmation | None,
-    *,
-    inherited_symbol: str,
-    signal_stream: str,
-    action_plan_symbol: str,
-) -> bool:
-    if confirmation is None:
-        return False
-    return (
-        _deploy_symbol(confirmation.inherited_symbol) == inherited_symbol
-        and _deploy_symbol(confirmation.signal_stream) == signal_stream
-        and _deploy_symbol(confirmation.action_plan_symbol) == action_plan_symbol
-    )
-
-
-def _deploy_inherited_symbol(root: Path, runs: list[dict]) -> tuple[str, str]:
-    run_dir = _resolve_evidence_run_dir(root, None, runs)
-    if run_dir is None:
-        return "", ""
-    try:
-        ledger = _read_ledger(run_dir)
-    except (OSError, ValueError, KeyError):
-        return "", ""
-    live_config = ledger.get("live_config") or {}
-    if isinstance(live_config, dict):
-        symbol = _deploy_symbol(stock_symbol_from_action_plan(live_config.get("action")))
-        if symbol:
-            return symbol, "run_ledger.live_config.action stock target"
-        symbol = _deploy_symbol(live_config.get("symbol"))
-        if symbol:
-            return symbol, "run_ledger.live_config.symbol signal stream"
-    spec_path = ledger.get("strategy_spec_path")
-    if isinstance(spec_path, str) and spec_path:
-        for candidate in _container_resolve_repo_path(spec_path):
-            try:
-                spec = json.loads(candidate.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            symbols = spec.get("symbols")
-            if isinstance(symbols, list) and symbols:
-                first = _deploy_symbol(symbols[0])
-                if first:
-                    return first, "strategy_spec.symbols fallback"
-            break
-    return "", ""
-
-
-def _raise_if_identity_coherence_blocks_start(
+def _raise_if_deploy_admission_blocks_start(
     live_runs_root: Path,
     body: LiveInstanceDeployRequest,
 ) -> None:
     if not body.start:
         return
     sid = body.strategy_instance_id.strip()
-    inherited_symbol = ""
-    inherited_symbol_source = ""
-    visible_runs: list[dict] = []
-    if sid:
-        visible_runs = _visible_runs_by_instance(live_runs_root).get(sid, [])
-        inherited_symbol, inherited_symbol_source = _deploy_inherited_symbol(live_runs_root, visible_runs)
-    if not inherited_symbol and (not sid or visible_runs):
-        inherited_symbol = _deploy_symbol(body.inherited_symbol)
-        inherited_symbol_source = body.inherited_symbol_source or "request inherited symbol"
-    if not inherited_symbol:
-        return
-
-    live_config = body.live_config if isinstance(body.live_config, dict) else {}
-    signal_stream = _deploy_symbol(live_config.get("symbol"))
-    action_plan_symbol = _deploy_symbol(stock_symbol_from_action_plan(live_config.get("action")))
-    facts = [
-        {
-            "label": "inherited_symbol",
-            "value": inherited_symbol,
-            "source": inherited_symbol_source,
-        },
-    ]
-    if signal_stream:
-        facts.append(
-            {
-                "label": "signal_stream",
-                "value": signal_stream,
-                "source": "live_config.symbol",
-            }
-        )
-    if action_plan_symbol:
-        facts.append(
-            {
-                "label": "action_plan_symbol",
-                "value": action_plan_symbol,
-                "source": "live_config.action",
-            }
-        )
-    if len(facts) < 2 or len({fact["value"] for fact in facts}) == 1:
-        return
-    if _deploy_identity_confirmation_matches(
-        body.identity_coherence_confirmation,
+    visible_runs = _visible_runs_by_instance(live_runs_root).get(sid, []) if sid else []
+    inherited_symbol = _resolve_symbol_resolution(live_runs_root, None, visible_runs) if sid else None
+    broker = _instance_broker(live_runs_root, sid) if sid and visible_runs else None
+    block = evaluate_deploy_start_admission(
+        body=body,
+        sid=sid,
+        visible_runs=visible_runs,
         inherited_symbol=inherited_symbol,
-        signal_stream=signal_stream,
-        action_plan_symbol=action_plan_symbol,
-    ):
-        return
-    compared = ", ".join(f"{fact['label']}={fact['value']}" for fact in facts)
-    raise HTTPException(
-        status.HTTP_409_CONFLICT,
-        detail={
-            "reason_code": "IDENTITY_COHERENCE_UNCONFIRMED",
-            "gate_id": "deploy.identity_coherence",
-            "message": (
-                "Deploy & start is blocked because the inherited bot symbol "
-                f"does not match the new run identity ({compared}). Confirm "
-                "the new run identity, or deploy without starting."
-            ),
-            "evidence": facts,
-            "remediation": (
-                "Review the inherited symbol, signal stream, and action plan. "
-                "Then submit an identity_coherence_confirmation matching the "
-                "current values, or turn off start."
-            ),
-        },
+        broker=broker,
     )
-
-
-def _deploy_exposure_confirmation_matches(
-    confirmation: ExposureCoherenceConfirmation | None,
-    *,
-    facts: ExposureCoherenceFacts,
-) -> bool:
-    if confirmation is None:
-        return False
-    return (
-        confirmation.posture == facts.posture
-        and confirmation.pending_order_count == facts.pending_order_count
-        and confirmation.owned_positions == facts.owned_positions
-        and confirmation.strategy_instance_id == facts.strategy_instance_id
-        and confirmation.run_id == facts.run_id
-    )
-
-
-def _deploy_exposure_facts(
-    live_runs_root: Path,
-    body: LiveInstanceDeployRequest,
-) -> ExposureCoherenceFacts | None:
-    sid = body.strategy_instance_id.strip()
-    runs = _visible_runs_by_instance(live_runs_root).get(sid, []) if sid else []
-    if sid and runs:
-        broker = _instance_broker(live_runs_root, sid)
-        return compose_exposure_coherence_facts(
-            broker,
-            source="live_state.expected_position_by_symbol",
-            strategy_instance_id=sid,
-            run_id=str(runs[0].get("run_id") or ""),
-        )
-    if body.inherited_exposure_posture is not None:
-        return ExposureCoherenceFacts(
-            posture=body.inherited_exposure_posture,
-            pending_order_count=body.inherited_exposure_pending_order_count,
-            owned_positions=normalize_exposure_positions(body.inherited_exposure_positions),
-            source=body.inherited_exposure_source or "request inherited exposure",
-            strategy_instance_id=sid or None,
-            run_id=body.parent_run_id,
-        )
-    return None
-
-
-def _raise_if_exposure_coherence_blocks_start(
-    live_runs_root: Path,
-    body: LiveInstanceDeployRequest,
-) -> None:
-    if not body.start:
-        return
-    facts = _deploy_exposure_facts(live_runs_root, body)
-    if facts is None:
-        return
-    exposure_blocks = facts.posture != "FLAT" or facts.pending_order_count not in (0, None)
-    unknown_blocks = facts.posture == "UNKNOWN" or facts.pending_order_count is None
-    if not exposure_blocks and not unknown_blocks:
-        return
-    if _deploy_exposure_confirmation_matches(
-        body.exposure_coherence_confirmation,
-        facts=facts,
-    ):
-        return
-    raise HTTPException(
-        status.HTTP_409_CONFLICT,
-        detail={
-            "reason_code": "EXPOSURE_COHERENCE_UNCONFIRMED",
-            "gate_id": "deploy.exposure_coherence",
-            "message": (
-                "Deploy & start is blocked because existing exposure is not "
-                f"proven flat (posture={facts.posture}, pending_order_count={facts.pending_order_count}). "
-                "Confirm the exposure state, or deploy without starting."
-            ),
-            "evidence": facts.model_dump(mode="json"),
-            "remediation": (
-                "Review the bot's current risk and account reconciliation. "
-                "Then submit an exposure_coherence_confirmation matching the "
-                "current values, or turn off start."
-            ),
-        },
-    )
+    if block is not None:
+        raise HTTPException(block.status_code, detail=block.detail)
 
 
 async def _host_deploy_request_from_public(
@@ -1988,16 +1785,19 @@ async def _host_deploy_request_from_public(
                 "Refresh broker state and deploy again."
             ),
         )
-    payload = body.model_dump()
-    payload.pop("account_id", None)
-    payload.pop("inherited_symbol", None)
-    payload.pop("inherited_symbol_source", None)
-    payload.pop("identity_coherence_confirmation", None)
-    payload.pop("inherited_exposure_posture", None)
-    payload.pop("inherited_exposure_pending_order_count", None)
-    payload.pop("inherited_exposure_positions", None)
-    payload.pop("inherited_exposure_source", None)
-    payload.pop("exposure_coherence_confirmation", None)
+    payload = body.model_dump(
+        exclude={
+            "account_id",
+            "inherited_symbol",
+            "inherited_symbol_source",
+            "identity_coherence_confirmation",
+            "inherited_exposure_posture",
+            "inherited_exposure_pending_order_count",
+            "inherited_exposure_positions",
+            "inherited_exposure_source",
+            "exposure_coherence_confirmation",
+        },
+    )
     return HostRunnerDeployRequest.model_validate({**payload, "account_id": broker_account})
 
 
@@ -2030,11 +1830,7 @@ async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -
                 "gate_result": account_freeze.to_gate_result().model_dump(mode="json"),
             },
         )
-    _raise_if_identity_coherence_blocks_start(
-        Path(settings.live_runs_root),
-        body,
-    )
-    _raise_if_exposure_coherence_blocks_start(
+    _raise_if_deploy_admission_blocks_start(
         Path(settings.live_runs_root),
         body,
     )

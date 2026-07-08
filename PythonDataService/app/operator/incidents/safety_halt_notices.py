@@ -4,9 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+from dataclasses import dataclass
 from pathlib import Path
 
-from app.engine.live.halt import PoisonedHaltReason
+from app.engine.live.halt import (
+    POISONED_FLAG_FILENAME,
+    PoisonedHaltReason,
+    read_poisoned_flag,
+    write_poisoned_flag,
+)
+from app.operator.incidents.store import IncidentStore
 from app.operator.notices.schema import (
     OperatorIncident,
     OperatorNotice,
@@ -91,4 +99,71 @@ def build_safety_halt_incident(
         ),
         started_at_ms=halt_reason.halted_at_ms,
         evidence=evidence,
+    )
+
+
+@dataclass(frozen=True)
+class PoisonedIncidentRecordResult:
+    artifact_path: Path
+    halt_reason: PoisonedHaltReason
+    flag_created: bool
+
+
+def poison_and_record_incident(
+    *,
+    run_dir: Path,
+    halt_reason: PoisonedHaltReason,
+    strategy_instance_id: str,
+    run_id: str,
+    log_path: Path | None,
+    logger: logging.Logger,
+) -> PoisonedIncidentRecordResult:
+    """Write ``poisoned.flag`` and persist the operator incident.
+
+    Existing flags keep the first halt's reason. If that existing flag is
+    corrupted, log it loudly and use the current halt reason for the incident;
+    the flag's presence still keeps the run poisoned at the start gate.
+    """
+
+    artifact_path = run_dir / POISONED_FLAG_FILENAME
+    incident_reason = halt_reason
+    flag_created = False
+    try:
+        artifact_path = write_poisoned_flag(run_dir, halt_reason)
+        flag_created = True
+    except FileExistsError:
+        try:
+            existing_reason = read_poisoned_flag(run_dir)
+        except ValueError:
+            logger.exception(
+                "could not parse existing poisoned.flag for safety-halt incident",
+                extra={"run_dir": str(run_dir)},
+            )
+        else:
+            if existing_reason is not None:
+                incident_reason = existing_reason
+
+    try:
+        IncidentStore(run_dir).append_unless_resolved(
+            build_safety_halt_incident(
+                strategy_instance_id=strategy_instance_id,
+                run_id=run_id,
+                halt_reason=incident_reason,
+                artifact_path=artifact_path,
+                log_path=log_path,
+            )
+        )
+    except Exception:
+        logger.exception(
+            "could not record safety-halt operator incident",
+            extra={
+                "run_dir": str(run_dir),
+                "strategy_instance_id": strategy_instance_id,
+                "run_id": run_id,
+            },
+        )
+    return PoisonedIncidentRecordResult(
+        artifact_path=artifact_path,
+        halt_reason=incident_reason,
+        flag_created=flag_created,
     )

@@ -1,0 +1,156 @@
+{
+  "$comment": "Snapshot of the backend deploy action-plan readiness contract. PythonDataService/tests/engine/live/test_action_plan_deploy_readiness_snapshot.py asserts these cases match app.engine.live.deploy.action_plan_deploy_readiness. Frontend/src/app/components/broker/broker-deploy-form/deploy-readiness.spec.ts asserts the Angular preflight mirror returns the same reason_code/message for each case. Regenerate both copies with PythonDataService/scripts/regenerate_action_plan_deploy_readiness_snapshot.py.",
+  "generated_by": "PythonDataService/scripts/regenerate_action_plan_deploy_readiness_snapshot.py",
+  "source_files": [
+    "PythonDataService/app/engine/live/deploy.py (action_plan_deploy_readiness)"
+  ],
+  "cases": [
+    {
+      "id": "other_strategy_entry_only_is_ready",
+      "strategy_key": "spy_ema_crossover",
+      "action_plan": {
+        "on_enter": [
+          {
+            "leg_id": "spy_long",
+            "instrument": {
+              "kind": "stock",
+              "underlying": "SPY"
+            },
+            "position": "long",
+            "qty_ratio": 1
+          }
+        ],
+        "on_exit": []
+      },
+      "can_deploy": true,
+      "reason_code": null,
+      "message": "Action plan is ready for deployment."
+    },
+    {
+      "id": "missing_action_envelope",
+      "strategy_key": "deployment_validation",
+      "action_plan": null,
+      "can_deploy": false,
+      "reason_code": "ACTION_PLAN_EMPTY",
+      "message": "Deployment Validation requires an action plan with one long stock entry leg and a matching close leg before deployment."
+    },
+    {
+      "id": "empty_action_plan",
+      "strategy_key": "deployment_validation",
+      "action_plan": {
+        "on_enter": [],
+        "on_exit": []
+      },
+      "can_deploy": false,
+      "reason_code": "ACTION_PLAN_EMPTY",
+      "message": "Deployment Validation requires an action plan; ON ENTER and ON EXIT are both empty."
+    },
+    {
+      "id": "missing_entry_leg",
+      "strategy_key": "deployment_validation",
+      "action_plan": {
+        "on_enter": [],
+        "on_exit": [
+          {
+            "kind": "close_leg",
+            "entry_leg_id": "spy_long"
+          }
+        ]
+      },
+      "can_deploy": false,
+      "reason_code": "ACTION_PLAN_ENTRY_LEG_REQUIRED",
+      "message": "Deployment Validation requires at least one ON ENTER entry leg."
+    },
+    {
+      "id": "malformed_entry_shape",
+      "strategy_key": "deployment_validation",
+      "action_plan": {
+        "on_enter": [
+          {}
+        ],
+        "on_exit": [
+          {
+            "kind": "close_leg",
+            "entry_leg_id": "spy_long"
+          }
+        ]
+      },
+      "can_deploy": false,
+      "reason_code": "ACTION_PLAN_UNSUPPORTED",
+      "message": "Deployment Validation cannot consume this action-plan shape. Use one long stock entry leg with a close-leg exit."
+    },
+    {
+      "id": "unsupported_short_stock",
+      "strategy_key": "deployment_validation",
+      "action_plan": {
+        "on_enter": [
+          {
+            "leg_id": "spy_short",
+            "instrument": {
+              "kind": "stock",
+              "underlying": "SPY"
+            },
+            "position": "short",
+            "qty_ratio": 1
+          }
+        ],
+        "on_exit": [
+          {
+            "kind": "close_leg",
+            "entry_leg_id": "spy_short"
+          }
+        ]
+      },
+      "can_deploy": false,
+      "reason_code": "ACTION_PLAN_UNSUPPORTED",
+      "message": "Deployment Validation currently supports exactly one long stock entry leg. Option, short, and multi-leg plans are not deployable on this runtime path yet."
+    },
+    {
+      "id": "missing_close_leg",
+      "strategy_key": "deployment_validation",
+      "action_plan": {
+        "on_enter": [
+          {
+            "leg_id": "spy_long",
+            "instrument": {
+              "kind": "stock",
+              "underlying": "SPY"
+            },
+            "position": "long",
+            "qty_ratio": 1
+          }
+        ],
+        "on_exit": []
+      },
+      "can_deploy": false,
+      "reason_code": "ACTION_PLAN_CLOSE_LEG_REQUIRED",
+      "message": "Deployment Validation requires an ON EXIT close leg for the entry leg 'spy_long'."
+    },
+    {
+      "id": "ready_deployment_validation_stock",
+      "strategy_key": "deployment_validation",
+      "action_plan": {
+        "on_enter": [
+          {
+            "leg_id": "spy_long",
+            "instrument": {
+              "kind": "stock",
+              "underlying": "SPY"
+            },
+            "position": "long",
+            "qty_ratio": 1
+          }
+        ],
+        "on_exit": [
+          {
+            "kind": "close_leg",
+            "entry_leg_id": "spy_long"
+          }
+        ]
+      },
+      "can_deploy": true,
+      "reason_code": null,
+      "message": "Action plan is ready for deployment."
+    }
+  ]
+}

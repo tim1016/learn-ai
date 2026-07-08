@@ -1,0 +1,76 @@
+@let displayRow = display();
+@let row = displayRow.row;
+<div class="drawer" [id]="drawerId()" [attr.data-testid]="drawerId()">
+  <div class="detail-grid">
+    <section>
+      <h4>Identity</h4>
+      @if (displayRow.identity.length > 0) {
+        <dl>
+          @for (entry of displayRow.identity; track trackFact($index, entry)) {
+            <div><dt>{{ entry.label }}</dt><dd>{{ entry.value }}</dd></div>
+          }
+        </dl>
+      } @else {
+        <p>-</p>
+      }
+    </section>
+
+    @if (row.gate_steps.length > 0) {
+      <section>
+        <h4>Gate walk</h4>
+        <ol class="gate-list">
+          @for (step of row.gate_steps; track trackGate($index, step)) {
+            <li [attr.data-gate-result]="step.gate_result">
+              <div class="gate-line">
+                <strong>{{ step.gate_id | receiptLabel }}</strong>
+                <span>{{ step.gate_result | receiptLabel }}</span>
+                <small>{{ step.source_authority | receiptLabel }}</small>
+              </div>
+              @if (gateFacts(step).length > 0) {
+                <dl>
+                  @for (entry of gateFacts(step); track trackFact($index, entry)) {
+                    <div><dt>{{ entry.label }}</dt><dd>{{ entry.value }}</dd></div>
+                  }
+                </dl>
+              }
+            </li>
+          }
+        </ol>
+      </section>
+    }
+
+    @if (row.terminal_error; as terminal) {
+      <section>
+        <h4>Terminal error</h4>
+        <dl>
+          <div><dt>Message</dt><dd>{{ terminal.message }}</dd></div>
+          @if (terminal.detail) { <div><dt>Detail</dt><dd>{{ terminal.detail }}</dd></div> }
+          <div><dt>Code</dt><dd>{{ terminal.code | receiptLabel }}</dd></div>
+          <div><dt>Source</dt><dd>{{ terminal.source | receiptLabel }}</dd></div>
+          @if (terminal.gate_id) { <div><dt>Gate</dt><dd>{{ terminal.gate_id | receiptLabel }}</dd></div> }
+          @if (displayRow.terminalExternalCode) { <div><dt>External code</dt><dd>{{ displayRow.terminalExternalCode }}</dd></div> }
+          @if (terminal.external_message) { <div><dt>External message</dt><dd>{{ terminal.external_message }}</dd></div> }
+          @if (displayRow.terminalCauseChain) { <div><dt>Cause chain</dt><dd>{{ displayRow.terminalCauseChain }}</dd></div> }
+        </dl>
+        @if (displayRow.terminalFacts.length > 0) {
+          <dl>
+            @for (entry of displayRow.terminalFacts; track trackFact($index, entry)) {
+              <div><dt>{{ entry.label }}</dt><dd>{{ entry.value }}</dd></div>
+            }
+          </dl>
+        }
+      </section>
+    }
+
+    @if (displayRow.facts.length > 0) {
+      <section>
+        <h4>Facts</h4>
+        <dl>
+          @for (entry of displayRow.facts; track trackFact($index, entry)) {
+            <div><dt>{{ entry.label }}</dt><dd>{{ entry.value }}</dd></div>
+          }
+        </dl>
+      </section>
+    }
+  </div>
+</div>

@@ -223,9 +223,10 @@ class IncidentRecord(BaseModel):
     log text. A missing or unrecognised category is rendered as
     ``unknown`` on the frontend for rollout safety.
 
-    Same ``raw_ts`` / ``ts_ms`` semantics as :class:`FailureRecord`:
-    ``raw_ts`` is the verbatim UTC timestamp string from the log;
-    ``ts_ms`` is the same instant as canonical ``int64`` ms UTC.
+    Same ``raw_ts`` / ``ts_ms`` semantics as :class:`FailureRecord` for
+    log-parsed rows. Durable operator incidents synthesize ``raw_ts`` from
+    their canonical ``occurred_at_ms`` because they do not originate as a
+    verbatim ``live.log`` line. ``ts_ms`` is always canonical ``int64`` ms UTC.
 
     ``dynamic_facts`` carries the typed hybrid-C named values the
     frontend may interpolate into its category template (codex D1).

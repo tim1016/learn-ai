@@ -1,4 +1,3 @@
-import { CommonModule } from '@angular/common';
 import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 
 import type { LifecycleChartReceipt } from '../../../api/live-instances.types';
@@ -10,7 +9,6 @@ import { fmtTimestampNy } from '../format';
 
 @Component({
   selector: 'app-node-receipts-list',
-  imports: [CommonModule],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './node-receipts-list.component.html',
   styleUrl: './node-receipts-list.component.scss',

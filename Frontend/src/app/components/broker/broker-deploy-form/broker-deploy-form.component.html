@@ -75,63 +75,27 @@
         } @else {
           <p class="blocked" role="status">{{ commandStatus() }}</p>
         }
-        @if (identityCoherenceEvidence(); as identity) {
-          <div class="identity-coherence" [class.confirmed]="identityCoherenceConfirmed()" role="group" aria-label="Run identity confirmation">
-            <strong>Run identity</strong>
-            <dl>
-              @for (fact of identity.facts; track fact.label) {
-                <div>
-                  <dt>{{ fact.label }}</dt>
-                  <dd>{{ fact.value }} <small>{{ fact.source | receiptLabel }}</small></dd>
-                </div>
-              }
-            </dl>
-            @if (effectiveStartNow()) {
-              @if (identityCoherenceConfirmed()) {
-                <p>Confirmed for this Deploy & start.</p>
-              } @else {
-                <button type="button" class="text-button" (click)="confirmIdentityCoherence()">
-                  Confirm new run identity
-                </button>
-              }
-            } @else {
-              <p>Deploy-only will stage these values without starting.</p>
-            }
-          </div>
+        @if (identityCoherenceEvidence()) {
+          <app-deploy-coherence-card
+            title="Run identity"
+            ariaLabel="Run identity confirmation"
+            [facts]="identityCoherenceFacts()"
+            [confirmed]="identityCoherenceConfirmed()"
+            [startNow]="effectiveStartNow()"
+            confirmLabel="Confirm new run identity"
+            (confirmationRequested)="confirmIdentityCoherence()"
+          />
         }
-        @if (exposureCoherenceEvidence(); as exposure) {
-          <div class="exposure-coherence" [class.confirmed]="exposureCoherenceConfirmed()" role="group" aria-label="Exposure confirmation">
-            <strong>Inherited exposure</strong>
-            <dl>
-              <div>
-                <dt>Posture</dt>
-                <dd>{{ exposure.posture }}</dd>
-              </div>
-              <div>
-                <dt>Positions</dt>
-                <dd>{{ exposure.positionsLabel }}</dd>
-              </div>
-              <div>
-                <dt>Pending orders</dt>
-                <dd>{{ exposure.pendingOrderCount ?? 'unknown' }}</dd>
-              </div>
-              <div>
-                <dt>Source</dt>
-                <dd>{{ exposure.source | receiptLabel }}</dd>
-              </div>
-            </dl>
-            @if (effectiveStartNow()) {
-              @if (exposureCoherenceConfirmed()) {
-                <p>Confirmed for this Deploy & start.</p>
-              } @else {
-                <button type="button" class="text-button" (click)="confirmExposureCoherence()">
-                  Confirm exposure state
-                </button>
-              }
-            } @else {
-              <p>Deploy-only will stage these values without starting.</p>
-            }
-          </div>
+        @if (exposureCoherenceEvidence()) {
+          <app-deploy-coherence-card
+            title="Inherited exposure"
+            ariaLabel="Exposure confirmation"
+            [facts]="exposureCoherenceFacts()"
+            [confirmed]="exposureCoherenceConfirmed()"
+            [startNow]="effectiveStartNow()"
+            confirmLabel="Confirm exposure state"
+            (confirmationRequested)="confirmExposureCoherence()"
+          />
         }
       </section>
 

@@ -607,7 +607,7 @@ async def test_incidents_dedupes_safety_halt_operator_incident_against_log(live_
     assert rows[0]["dynamic_facts"]["run_id"] == run_id
 
 
-async def test_incidents_preserves_distinct_single_same_time_safety_halt_log_row(live_runs_root):
+async def test_incidents_drops_safety_halt_log_rows_when_operator_incident_exists(live_runs_root):
     run_id = "run-safety-halt-log-" + "x" * 43
     run_dir = live_runs_root / run_id
     run_dir.mkdir()
@@ -636,11 +636,11 @@ async def test_incidents_preserves_distinct_single_same_time_safety_halt_log_row
 
     assert response.status_code == 200
     rows = response.json()
-    assert len(rows) == 2
-    assert rows[1]["message"] == "poison_sentinel.cold_start_divergence traceback path"
+    assert len(rows) == 1
+    assert rows[0]["logger"] == "operator_incidents"
 
 
-async def test_incidents_preserves_distinct_same_time_safety_halt_log_rows(live_runs_root):
+async def test_incidents_drops_multiple_safety_halt_log_rows_when_operator_incident_exists(live_runs_root):
     run_id = "run-safety-halt-logs-" + "y" * 42
     run_dir = live_runs_root / run_id
     run_dir.mkdir()
@@ -672,11 +672,8 @@ async def test_incidents_preserves_distinct_same_time_safety_halt_log_rows(live_
 
     assert response.status_code == 200
     rows = response.json()
-    assert len(rows) == 3
-    assert [row["message"] for row in rows[1:]] == [
-        "poison_sentinel.cold_start_divergence first path",
-        "poison_sentinel.cold_start_divergence second path",
-    ]
+    assert len(rows) == 1
+    assert rows[0]["logger"] == "operator_incidents"
 
 
 async def test_incidents_returns_warning_error_critical_with_categories(live_runs_root):
