@@ -450,6 +450,7 @@ class IbkrMinuteBar(BaseModel):
     close: Decimal
     volume: int
     fetched_at_ms: int
+    source: Literal["ibkr", "polygon", "mixed"] = "ibkr"
 
 
 class IbkrBarsSnapshot(BaseModel):

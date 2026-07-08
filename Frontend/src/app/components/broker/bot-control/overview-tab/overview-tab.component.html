@@ -43,6 +43,17 @@
         </article>
       }
     </div>
+    @if (attentionGroups().length > 0) {
+      <div class="ladder-attention" aria-label="Attention details">
+        @for (group of attentionGroups(); track group.code) {
+          <article [class]="'attention-item severity-' + group.severity">
+            <strong>{{ group.headline }}</strong>
+            <span>{{ group.explanation }}</span>
+            <span>{{ group.operator_next_step }}</span>
+          </article>
+        }
+      </div>
+    }
   </section>
 
   <section class="flow-panel" aria-label="Lifecycle gates">

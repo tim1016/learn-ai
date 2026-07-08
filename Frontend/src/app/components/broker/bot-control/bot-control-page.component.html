@@ -72,15 +72,6 @@
 
       <div class="toolbar-spacer"></div>
 
-      @if (traderGuidance(); as guidance) {
-        <app-attention-dropdown
-          [guidance]="guidance"
-          [groups]="attentionGroups()"
-          [(open)]="attentionOpen"
-          (remediationSelected)="handleTraderRemediation($event)"
-        />
-      }
-
       @if (renderedPrimaryRemediation(); as action) {
         <button
           type="button"

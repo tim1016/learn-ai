@@ -13,7 +13,10 @@ import { fmtCurrency, fmtNumber, fmtTimestampLocal } from '../../../format';
 import { OperatorNoticeComponent } from '../../../../operator-notice/operator-notice.component';
 
 import { BrokerActivityRowDetailComponent } from '../broker-activity-row-detail/broker-activity-row-detail.component';
-import type { ActivityBrokerEventRow } from '../bot-trade-chart-card/bot-trade-chart-card.types';
+import type {
+  ActivityBrokerCategorySummary,
+  ActivityBrokerEventRow,
+} from '../bot-trade-chart-card/bot-trade-chart-card.types';
 import type {
   BrokerActivityRow,
   Verdict,
@@ -62,6 +65,7 @@ interface GroupedRows {
 })
 export class BrokerActivityTableComponent {
   readonly rows = input.required<BrokerActivityRow[]>();
+  readonly eventSummary = input<ActivityBrokerCategorySummary[]>([]);
   readonly eventRows = input<ActivityBrokerEventRow[] | null>(null);
   readonly backfillLoading = input<boolean>(false);
   readonly backfillError = input<string | null>(null);
@@ -113,6 +117,17 @@ export class BrokerActivityTableComponent {
 
   readonly hasRows = computed<boolean>(() => this.executedRows().length > 0);
   readonly hasEventRows = computed<boolean>(() => (this.eventRows()?.length ?? 0) > 0);
+  readonly hasEventSummary = computed<boolean>(() => this.eventSummary().length > 0);
+  readonly selectedCategoryId = signal<string | null>(null);
+  readonly displayedEventRows = computed<ActivityBrokerEventRow[]>(() => {
+    const rows = this.eventRows() ?? [];
+    const selected = this.selectedCategoryId();
+    if (selected === null) return rows;
+    const summary = this.eventSummary().find((item) => item.category_id === selected);
+    if (!summary) return rows;
+    const ids = new Set(summary.row_ids);
+    return rows.filter((row) => ids.has(row.visible_row_id));
+  });
 
   private readonly expanded = signal<Set<number>>(new Set());
   private readonly expandedEvents = signal<Set<string>>(new Set());
@@ -141,6 +156,14 @@ export class BrokerActivityTableComponent {
       else next.add(row.visible_row_id);
       return next;
     });
+  }
+
+  selectCategory(categoryId: string): void {
+    this.selectedCategoryId.update((current) => current === categoryId ? null : categoryId);
+  }
+
+  isCategorySelected(summary: ActivityBrokerCategorySummary): boolean {
+    return this.selectedCategoryId() === summary.category_id;
   }
 
   evidenceIdentity(ref: ActivityBrokerEventRow['evidence'][number]): string {
@@ -195,5 +218,6 @@ export class BrokerActivityTableComponent {
   trackGroup = (_i: number, g: GroupedRows): string => g.key;
   trackRow = (_i: number, r: BrokerActivityRow): number => r.seq;
   trackEventRow = (_i: number, r: ActivityBrokerEventRow): string => r.visible_row_id;
+  trackSummary = (_i: number, r: ActivityBrokerCategorySummary): string => r.category_id;
   trackEvidence = (_i: number, r: ActivityBrokerEventRow['evidence'][number]): number => r.seq;
 }

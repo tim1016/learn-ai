@@ -22,6 +22,7 @@ export interface IbkrMinuteBar {
   close: string;
   volume: number;
   fetched_at_ms: number;
+  source: 'ibkr' | 'polygon' | 'mixed';
 }
 
 export type BarsSubscriptionStatus =
@@ -84,15 +85,27 @@ export interface ChartSnapshotRun {
   executions: ExecutionRow[];
 }
 
+export interface ChartOverlayNotice {
+  code: string;
+  message: string;
+  session_date: string | null;
+  source: 'polygon';
+}
+
 /** Slice 5 — aggregated chart payload for one (instance, date, resolution). */
 export interface ChartSnapshotResponse {
   date: string;
   symbol: string;
   resolution: '1m' | '5s';
+  timeframe: ChartTimeframe;
+  from_ms: number | null;
+  to_ms: number | null;
   has_bars: boolean;
+  is_streaming: boolean;
   now_ms: number;
   bars: IbkrMinuteBar[];
   runs: ChartSnapshotRun[];
+  overlay_notices: ChartOverlayNotice[];
 }
 
 export interface ActivityEvidenceRef {
@@ -187,6 +200,15 @@ export interface ActivityBrokerEventRow {
   evidence: ActivityEvidenceRef[];
 }
 
+export interface ActivityBrokerCategorySummary {
+  category_id: string;
+  label: string;
+  kind: 'order' | 'heartbeat' | 'evidence';
+  event_count: number;
+  last_event_ts_ms: number | null;
+  row_ids: string[];
+}
+
 export interface ActivityPositionSnapshot {
   symbol: string;
   quantity: number;
@@ -214,11 +236,15 @@ export interface LiveInstanceActivityProjection {
   position_annotations: ActivityPositionAnnotation[];
   order_overlays: ActivityOrderOverlay[];
   orders_today: ActivityOrderRow[];
+  broker_activity_summary: ActivityBrokerCategorySummary[];
   broker_activity_rows: ActivityBrokerEventRow[];
   position_snapshot: ActivityPositionSnapshot[];
   reconciliation_warnings: ActivityReconciliationWarning[];
   evidence: ActivityEvidenceRef[];
 }
+
+export type ChartTimeframe = '5s' | '1m' | '5m' | '15m' | '1h' | '1d';
+export type ChartBaseResolution = '1m' | '5s';
 
 /** One parsed ERROR/CRITICAL block from live.log. ``raw_ts`` is the
  * verbatim UTC log string (the engine logger pins ``time.gmtime``);

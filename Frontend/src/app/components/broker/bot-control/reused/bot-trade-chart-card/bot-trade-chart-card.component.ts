@@ -33,10 +33,11 @@ import {
 import { firstValueFrom } from 'rxjs';
 import { AssetIdentityComponent } from '../../../../../shared/asset-identity';
 import type {
-  ActiveDateEntry,
   ActivityFillMarker,
+  ChartBaseResolution,
   ChartSnapshotResponse,
   ChartSnapshotRun,
+  ChartTimeframe,
   IbkrMinuteBar,
   LiveInstanceActivityProjection,
 } from './bot-trade-chart-card.types';
@@ -77,6 +78,26 @@ export function localDateString(now = new Date()): string {
     String(now.getMonth() + 1).padStart(2, '0'),
     String(now.getDate()).padStart(2, '0'),
   ].join('-');
+}
+
+function addDays(date: Date, days: number): Date {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function localDateStartMs(value: string): number {
+  return new Date(`${value}T00:00:00`).getTime();
+}
+
+function localDateEndMs(value: string): number {
+  return new Date(`${value}T00:00:00`).getTime() + 86_400_000;
+}
+
+function clampDateString(value: string, min: string, max: string): string {
+  if (value < min) return min;
+  if (value > max) return max;
+  return value;
 }
 
 /** True when the chart's right-edge is showing the latest bar — i.e. the
@@ -140,19 +161,20 @@ export function markerTimeForActivityFill(
   return markerTimeForEventMs(marker.chart_ts_ms, bars);
 }
 
-export type ChartResolution = '1m' | '5s';
-
 export interface ChartSelection {
   readonly sessionDate: string;
-  readonly resolution: ChartResolution;
+  readonly timeframe: ChartTimeframe;
+  readonly activityResolution: ChartBaseResolution;
+  readonly fromMs: number;
+  readonly toMs: number;
 }
 
 // Per-run color palette. Old runs darker, current run is the green pulse
 // used elsewhere on the panel — keeps the eye drawn to the live session.
 const RUN_COLORS = ['#60a5fa', '#a78bfa', '#f472b6', '#fbbf24', '#fb923c'];
 
-const RESOLUTION_META: Record<
-  ChartResolution,
+const TIMEFRAME_META: Record<
+  ChartTimeframe,
   {
     secondsVisible: boolean;
     label: string;
@@ -162,7 +184,27 @@ const RESOLUTION_META: Record<
   '1m': {
     secondsVisible: false,
     label: '1m',
-    subtitle: "1-minute candles from the broker feed; markers show the bot's trades.",
+    subtitle: "1-minute candles from the broker feed with Polygon overlay for missing history.",
+  },
+  '5m': {
+    secondsVisible: false,
+    label: '5m',
+    subtitle: '5-minute candles aggregated from the 1-minute chart base.',
+  },
+  '15m': {
+    secondsVisible: false,
+    label: '15m',
+    subtitle: '15-minute candles aggregated from the 1-minute chart base.',
+  },
+  '1h': {
+    secondsVisible: false,
+    label: '1h',
+    subtitle: 'Hourly candles aggregated from the 1-minute chart base.',
+  },
+  '1d': {
+    secondsVisible: false,
+    label: '1d',
+    subtitle: 'Daily candles aggregated from regular-session 1-minute bars.',
   },
   '5s': {
     secondsVisible: true,
@@ -173,7 +215,7 @@ const RESOLUTION_META: Record<
 };
 
 const CHART_HEIGHT_PX = 380;
-const RESOLUTION_OPTIONS: ChartResolution[] = ['1m', '5s'];
+const TIMEFRAME_OPTIONS: ChartTimeframe[] = ['1m', '5m', '15m', '1h', '1d'];
 
 @Component({
   selector: 'app-bot-trade-chart-card',
@@ -199,19 +241,21 @@ export class BotTradeChartCardComponent {
    * broker-confirmed fills in this backend-owned ledger instead of from
    * trades.parquet. */
   readonly activity = input<LiveInstanceActivityProjection | null>(null);
-  /** Initial bar resolution shown when the card mounts. */
-  readonly initialResolution = input<ChartResolution>('1m');
+  /** Initial chart timeframe shown when the card mounts. */
+  readonly initialTimeframe = input<ChartTimeframe>('1m');
   readonly selectionChange = output<ChartSelection>();
 
-  /** The date currently being displayed. Owned by the card's own selector
-   * (Slice 6) — defaults to today and stops live polling when the user
-   * picks a past date. */
-  protected readonly chartDate = signal<string>(localDateString());
   protected readonly todayDate = signal<string>(localDateString());
+  protected readonly minRangeDate = computed<string>(() =>
+    localDateString(addDays(new Date(`${this.todayDate()}T00:00:00`), -6)),
+  );
+  protected readonly rangeStartDate = signal<string>(localDateString(addDays(new Date(), -6)));
+  protected readonly rangeEndDate = signal<string>(localDateString());
+  private readonly nowMs = signal<number>(Date.now());
 
-  protected readonly resolution = signal<ChartResolution>('1m');
-  protected readonly resolutionOptions = RESOLUTION_OPTIONS;
-  protected readonly meta = computed(() => RESOLUTION_META[this.resolution()]);
+  protected readonly timeframe = signal<ChartTimeframe>('1m');
+  protected readonly timeframeOptions = TIMEFRAME_OPTIONS;
+  protected readonly meta = computed(() => TIMEFRAME_META[this.timeframe()]);
   protected readonly chartHeightPx = CHART_HEIGHT_PX;
 
   /** False once the user has scrolled back from the live edge; the LIVE pill
@@ -231,80 +275,70 @@ export class BotTradeChartCardComponent {
   private resizeObserver: ResizeObserver | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
 
+  protected readonly windowFromMs = computed<number>(() => localDateStartMs(this.rangeStartDate()));
+  protected readonly windowToMs = computed<number>(() => {
+    if (this.rangeEndDate() >= this.todayDate()) return this.nowMs();
+    return localDateEndMs(this.rangeEndDate());
+  });
+  protected readonly selectedSessionDate = computed<string>(() => this.rangeEndDate());
+  protected readonly isLiveRange = computed<boolean>(() => this.rangeEndDate() >= this.todayDate());
+  protected readonly activityResolution = computed<ChartBaseResolution>(() =>
+    this.timeframe() === '5s' ? '5s' : '1m',
+  );
+
   protected readonly snapshotResource = resource<
     ChartSnapshotResponse | null,
-    { instanceId: string | null; date: string | null; resolution: ChartResolution }
+    {
+      instanceId: string | null;
+      fromMs: number;
+      toMs: number;
+      timeframe: ChartTimeframe;
+    }
   >({
     params: () => ({
       instanceId: this.strategyInstanceId(),
-      date: this.chartDate(),
-      resolution: this.resolution(),
+      fromMs: this.windowFromMs(),
+      toMs: this.windowToMs(),
+      timeframe: this.timeframe(),
     }),
-    loader: ({ params }) => this.loadSnapshot(params.instanceId, params.date, params.resolution),
+    loader: ({ params }) =>
+      this.loadSnapshot(params.instanceId, params.fromMs, params.toMs, params.timeframe),
   });
 
   protected readonly bars = computed<IbkrMinuteBar[]>(
-    () => this.activity()?.bars ?? this.snapshotResource.value()?.bars ?? [],
+    () => this.snapshotResource.value()?.bars ?? [],
   );
 
   protected readonly runs = computed<ChartSnapshotRun[]>(
     () => this.snapshotResource.value()?.runs ?? [],
   );
 
-  /** Date picker source (Slice 6) — every date the instance has touched.
-   * The picker shows ``has_bars=false`` dates greyed out so the operator
-   * sees them but knows the chart will surface a "bars unavailable" badge. */
-  protected readonly activeDatesResource = resource<
-    ActiveDateEntry[],
-    string | null
-  >({
-    params: () => this.strategyInstanceId(),
-    loader: ({ params }) => this.loadActiveDates(params),
-  });
-
-  protected readonly activeDates = computed<ActiveDateEntry[]>(
-    () => this.activeDatesResource.value() ?? [],
+  protected readonly overlayBarCount = computed<number>(() =>
+    this.bars().filter((bar) => bar.source === 'polygon').length,
   );
-  protected readonly pickerDates = computed<ActiveDateEntry[]>(() =>
-    this.activeDates().filter((d) => d.date !== this.todayDate()),
+  protected readonly mixedBarCount = computed<number>(() =>
+    this.bars().filter((bar) => bar.source === 'mixed').length,
   );
-
-  /** True for the currently-displayed date when persistence has no bars for
-   * it — the "bars unavailable" badge case (Slice 6). */
-  protected readonly missingBarsForSelectedDate = computed<boolean>(() => {
-    const date = this.chartDate();
-    const entry = this.activeDates().find((d) => d.date === date);
-    return entry !== undefined && !entry.has_bars;
-  });
-
-  protected readonly isPastDate = computed<boolean>(() => {
-    return this.chartDate() < this.todayDate();
-  });
+  protected readonly overlayNotices = computed(() => this.snapshotResource.value()?.overlay_notices ?? []);
+  protected readonly liveStreaming = computed<boolean>(() => this.snapshotResource.value()?.is_streaming ?? false);
 
   protected readonly statusLabel = computed<string>(() => {
     if (this.strategyInstanceId() === null) return 'No instance selected';
     if (this.symbol() === null) return 'No symbol resolved yet';
     const snap = this.snapshotResource.value();
-    const activity = this.activity();
-    if (activity) {
-      return activity.has_bars ? `Session ${activity.session_date}` : 'Bars unavailable for this date';
-    }
     if (!snap) return this.snapshotResource.isLoading() ? 'Loading…' : '';
-    if (this.isPastDate()) {
-      return snap.has_bars ? `Static — ${snap.date}` : 'Bars unavailable for this date';
-    }
-    return snap.has_bars ? 'Streaming' : 'Waiting for first bar…';
+    if (!snap.has_bars) return 'No bars in selected range';
+    if (snap.is_streaming) return 'Streaming';
+    return `${this.rangeStartDate()} to ${this.rangeEndDate()}`;
   });
 
   protected readonly statusTone = computed<'ok' | 'warn' | 'bad' | 'idle'>(() => {
     const snap = this.snapshotResource.value();
-    const activity = this.activity();
-    if (activity) return activity.has_bars ? 'ok' : 'warn';
     if (snap === null || snap === undefined) {
       return this.snapshotResource.isLoading() ? 'warn' : 'idle';
     }
-    if (this.isPastDate()) return snap.has_bars ? 'ok' : 'warn';
-    return snap.has_bars ? 'ok' : 'warn';
+    if (!snap.has_bars) return 'warn';
+    return snap.is_streaming || this.overlayNotices().length === 0 ? 'ok' : 'warn';
   });
 
   protected readonly tradeCount = computed<number>(() =>
@@ -315,18 +349,22 @@ export class BotTradeChartCardComponent {
   protected readonly activityFillMarkers = computed(() => {
     const activity = this.activity();
     if (!activity) return null;
-    return filterActivityItemsForSymbol(activity.symbol, activity.fill_markers);
+    return filterActivityItemsForSymbol(activity.symbol, activity.fill_markers)
+      .filter((marker) => this.windowFromMs() <= marker.chart_ts_ms && marker.chart_ts_ms < this.windowToMs());
   });
 
   constructor() {
     effect(() => {
-      this.resolution.set(this.initialResolution());
+      this.timeframe.set(this.initialTimeframe());
     });
 
     effect(() => {
       this.selectionChange.emit({
-        sessionDate: this.chartDate(),
-        resolution: this.resolution(),
+        sessionDate: this.selectedSessionDate(),
+        timeframe: this.timeframe(),
+        activityResolution: this.activityResolution(),
+        fromMs: this.windowFromMs(),
+        toMs: this.windowToMs(),
       });
     });
 
@@ -348,26 +386,28 @@ export class BotTradeChartCardComponent {
 
     // Rebuild the chart's seconds-axis when the toggle flips.
     effect(() => {
-      const r = this.resolution();
+      const r = this.timeframe();
       if (this.chart) {
         this.chart.applyOptions({
-          timeScale: { secondsVisible: RESOLUTION_META[r].secondsVisible },
+          timeScale: { secondsVisible: TIMEFRAME_META[r].secondsVisible },
         });
       }
       this.liveAtEdge.set(true);
     });
 
-    // Live polling only on today's view; past dates are static.
+    // Live polling only when the range ends today; past ranges are static.
     this.pollTimer = setInterval(() => {
+      this.nowMs.set(Date.now());
       const priorToday = this.todayDate();
       const nextToday = localDateString();
       if (nextToday !== priorToday) {
         this.todayDate.set(nextToday);
-        if (this.chartDate() === priorToday) {
-          this.chartDate.set(nextToday);
+        if (this.rangeEndDate() === priorToday) {
+          this.rangeEndDate.set(nextToday);
         }
+        this.rangeStartDate.set(clampDateString(this.rangeStartDate(), this.minRangeDate(), nextToday));
       }
-      if (!this.isPastDate()) {
+      if (this.isLiveRange()) {
         this.snapshotResource.reload();
       }
     }, POLL_INTERVAL_MS);
@@ -380,9 +420,9 @@ export class BotTradeChartCardComponent {
     });
   }
 
-  protected setResolution(next: ChartResolution): void {
-    if (this.resolution() === next) return;
-    this.resolution.set(next);
+  protected setTimeframe(next: ChartTimeframe): void {
+    if (this.timeframe() === next) return;
+    this.timeframe.set(next);
   }
 
   /** Click handler on the LIVE pill — scrolls the chart back to real-time. */
@@ -398,12 +438,16 @@ export class BotTradeChartCardComponent {
 
   private async loadSnapshot(
     instanceId: string | null,
-    date: string | null,
-    resolution: ChartResolution,
+    fromMs: number,
+    toMs: number,
+    timeframe: ChartTimeframe,
   ): Promise<ChartSnapshotResponse | null> {
     if (!instanceId) return null;
-    const params: Record<string, string> = { resolution };
-    if (date) params['date'] = date;
+    const params: Record<string, string> = {
+      from_ms: String(fromMs),
+      to_ms: String(toMs),
+      timeframe,
+    };
     return firstValueFrom(
       this.http.get<ChartSnapshotResponse>(
         `/api/live-instances/${encodeURIComponent(instanceId)}/chart-snapshot`,
@@ -412,20 +456,23 @@ export class BotTradeChartCardComponent {
     );
   }
 
-  private async loadActiveDates(instanceId: string | null): Promise<ActiveDateEntry[]> {
-    if (!instanceId) return [];
-    return firstValueFrom(
-      this.http.get<ActiveDateEntry[]>(
-        `/api/live-instances/${encodeURIComponent(instanceId)}/active-dates`,
-      ),
-    );
+  protected onRangeStartSelected(date: string): void {
+    const clamped = clampDateString(date, this.minRangeDate(), this.rangeEndDate());
+    this.liveAtEdge.set(clamped === this.minRangeDate() && this.rangeEndDate() === this.todayDate());
+    this.rangeStartDate.set(clamped);
   }
 
-  /** Date-picker change handler (Slice 6). Setting a date triggers the
-   * snapshot resource to refetch via its params dependency. */
-  protected onDateSelected(date: string): void {
+  protected onRangeEndSelected(date: string): void {
+    const max = this.todayDate();
+    const clamped = clampDateString(date, this.rangeStartDate(), max);
     this.liveAtEdge.set(true);
-    this.chartDate.set(date);
+    this.rangeEndDate.set(clamped);
+  }
+
+  protected jumpToLiveRange(): void {
+    this.rangeEndDate.set(this.todayDate());
+    this.rangeStartDate.set(this.minRangeDate());
+    this.resumeLive();
   }
 
   private initChart(): void {
@@ -514,13 +561,34 @@ export class BotTradeChartCardComponent {
     );
     const bars = this.bars();
     this.candles.setData(
-      bars.map((b) => ({
-        time: (b.start_ms / 1000) as UTCTimestamp,
-        open: Number(b.open),
-        high: Number(b.high),
-        low: Number(b.low),
-        close: Number(b.close),
-      })),
+      bars.map((b) => {
+        const open = Number(b.open);
+        const close = Number(b.close);
+        const base = {
+          time: (b.start_ms / 1000) as UTCTimestamp,
+          open,
+          high: Number(b.high),
+          low: Number(b.low),
+          close,
+        };
+        if (b.source === 'polygon') {
+          const color = close >= open ? 'rgba(96, 165, 250, 0.36)' : 'rgba(248, 113, 113, 0.34)';
+          return {
+            ...base,
+            color,
+            borderColor: '#60a5fa',
+            wickColor: '#60a5fa',
+          };
+        }
+        if (b.source === 'mixed') {
+          return {
+            ...base,
+            borderColor: '#facc15',
+            wickColor: '#facc15',
+          };
+        }
+        return base;
+      }),
     );
     if (restoreRange !== null) {
       timeScale?.setVisibleLogicalRange(restoreRange);

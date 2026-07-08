@@ -48,7 +48,16 @@
   flex-wrap: wrap;
 }
 
-.date-picker {
+.range-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text-secondary, #94a3b8);
+  font-size: 0.74rem;
+}
+
+.range-picker input,
+.range-now {
   appearance: auto;
   background: rgba(15, 23, 42, 0.4);
   border: 1px solid var(--border-subtle, rgba(148, 163, 184, 0.25));
@@ -62,6 +71,11 @@
     outline: 2px solid #6366f1;
     outline-offset: 2px;
   }
+}
+
+.range-now {
+  appearance: none;
+  font-weight: 700;
 }
 
 .resolution-toggle {
@@ -185,6 +199,10 @@
   &.bad {
     background: rgba(239, 68, 68, 0.18);
     color: #fca5a5;
+  }
+  &.overlay {
+    background: rgba(96, 165, 250, 0.16);
+    color: #93c5fd;
   }
 }
 

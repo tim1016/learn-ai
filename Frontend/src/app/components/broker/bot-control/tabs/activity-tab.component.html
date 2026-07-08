@@ -32,6 +32,7 @@
   <section class="subsection full-row" data-testid="activity-broker-activity">
     <app-broker-activity-table
       [rows]="[]"
+      [eventSummary]="brokerEventSummary()"
       [eventRows]="brokerEventRows()"
       [backfillLoading]="backfillLoading()"
       [backfillError]="backfillError()"
