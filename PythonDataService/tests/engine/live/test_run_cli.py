@@ -512,6 +512,54 @@ def test_init_ledger_writes_strategy_key(repo_with_inputs: tuple[Path, Path, Pat
 
 
 @requires_git
+def test_init_ledger_maps_action_plan_readiness_to_operator_error(
+    repo_with_inputs: tuple[Path, Path, Path],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    repo, spec, qc = repo_with_inputs
+    spec.write_text('{"name": "Deployment Validation"}', encoding="utf-8")
+    subprocess.run(["git", "add", "PythonDataService/spec.json"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "deployment validation spec", "--no-gpg-sign"],
+        cwd=repo,
+        check=True,
+    )
+
+    rc = main(
+        [
+            "init-ledger",
+            "--repo-root",
+            str(repo),
+            "--clean-tree-scope",
+            "PythonDataService",
+            "references/qc-shadow",
+            "--strategy-spec-path",
+            str(spec),
+            "--qc-audit-copy-path",
+            str(qc),
+            "--qc-cloud-backtest-id",
+            "bt-1",
+            "--account-id",
+            "DU111",
+            "--start-date-ms",
+            "1700000000000",
+            "--live-config-json",
+            '{"symbol": "SPY", "sizing": {"kind": "FixedShares", "value": 1}, "action": {"on_enter": [], "on_exit": []}}',
+            "--run-root",
+            str(tmp_path / "live_runs"),
+        ]
+    )
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "action plan not ready" in err
+    assert "ACTION_PLAN_EMPTY" in err
+    assert "Traceback" not in err
+    assert not (tmp_path / "live_runs").exists()
+
+
+@requires_git
 def test_init_ledger_refuses_dirty_tree(
     repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path, capsys: pytest.CaptureFixture
 ) -> None:

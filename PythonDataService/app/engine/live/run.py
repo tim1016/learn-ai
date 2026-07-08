@@ -72,6 +72,7 @@ from app.engine.live.account_recovery_cli import (
     cmd_resume as _account_recovery_cmd_resume,
 )
 from app.engine.live.deploy import (
+    ActionPlanReadinessError,
     DeployIOError,
     DeployParams,
     DirtyTreeError,
@@ -228,6 +229,12 @@ def cmd_init_ledger(args: argparse.Namespace) -> int:
         return 2
     except UnsupportedBarSourceDescriptorError as exc:
         print(f"[INIT-LEDGER] unsupported bar source: {exc}", file=sys.stderr)
+        return 2
+    except ActionPlanReadinessError as exc:
+        print(
+            f"[INIT-LEDGER] action plan not ready ({exc.reason_code}): {exc.message}",
+            file=sys.stderr,
+        )
         return 2
     except DeployIOError as exc:
         print(f"[INIT-LEDGER] filesystem error: {exc}", file=sys.stderr)

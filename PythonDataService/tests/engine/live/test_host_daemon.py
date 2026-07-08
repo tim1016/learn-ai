@@ -1368,6 +1368,18 @@ def _deploy_body(**overrides: Any) -> dict[str, Any]:
     return body
 
 
+def _add_deployment_validation_spec(repo: Path) -> str:
+    relative_path = Path("PythonDataService") / "deployment_validation.spec.json"
+    (repo / relative_path).write_text('{"strategy": "deployment_validation"}', encoding="utf-8")
+    subprocess.run(["git", "add", str(relative_path)], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "add deployment validation spec", "--no-gpg-sign"],
+        cwd=repo,
+        check=True,
+    )
+    return relative_path.as_posix()
+
+
 @requires_git
 async def test_deploy_creates_run(git_daemon_context: tuple[RunnerProcessManager, Path]) -> None:
     manager, repo = git_daemon_context
@@ -1382,6 +1394,36 @@ async def test_deploy_creates_run(git_daemon_context: tuple[RunnerProcessManager
     assert body["start"] is None
     run_dir = repo / "PythonDataService" / "artifacts" / "live_runs" / body["run_id"]
     assert (run_dir / "run_ledger.json").is_file()
+
+
+@requires_git
+async def test_deploy_rejects_empty_deployment_validation_plan_with_gate_detail(
+    git_daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    manager, repo = git_daemon_context
+    spec_path = _add_deployment_validation_spec(repo)
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+    body = _deploy_body(
+        strategy_spec_path=spec_path,
+        qc_audit_copy_path="references/qc-shadow/DeploymentValidationAlgorithm.py",
+        strategy_key="deployment_validation",
+        strategy_instance_id="dep-val-empty",
+        live_config={
+            "symbol": "SPY",
+            "sizing": {"kind": "FixedShares", "value": 1},
+            "action": {"on_enter": [], "on_exit": []},
+        },
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
+        response = await client.post("/deploy", json=body)
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "ACTION_PLAN_EMPTY"
+    assert detail["gate_id"] == "deploy.action_plan"
+    assert "Action plan" in detail["remediation"]
+    assert not manager.live_runs_root.exists()
 
 
 @requires_git

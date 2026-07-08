@@ -9,6 +9,7 @@ import { BrokerConnectivityService } from '../../../services/broker-connectivity
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { StrategyValidationService } from '../../../services/strategy-validation.service';
 import type { StrategyValidationCatalog } from '../../../services/strategy-validation.types';
+import type { ActionPlan } from '../../../api/action-plan.types';
 import { BrokerDeployFormComponent } from './broker-deploy-form.component';
 
 let activeFixture: { destroy(): void; detectChanges(): void } | null = null;
@@ -240,6 +241,20 @@ async function settleResource(fixture: { detectChanges(): void }) {
   fixture.detectChanges();
 }
 
+function validDeploymentValidationActionPlan(): ActionPlan {
+  return {
+    on_enter: [
+      {
+        leg_id: 'spy_long',
+        instrument: { kind: 'stock', underlying: 'SPY' },
+        position: 'long',
+        qty_ratio: 1,
+      },
+    ],
+    on_exit: [{ kind: 'close_leg', entry_leg_id: 'spy_long' }],
+  };
+}
+
 function fillRequired(component: BrokerDeployFormComponent) {
   component.strategyKey.set('deployment_validation');
   component.specPath.set(DEPLOYMENT_VALIDATION_SPEC_PATH);
@@ -248,6 +263,7 @@ function fillRequired(component: BrokerDeployFormComponent) {
   component.qcBacktestId.set(DEPLOYMENT_VALIDATION_QC_BACKTEST_ID);
   component.qcAuditCopyPath.set(DEPLOYMENT_VALIDATION_AUDIT_COPY);
   component.instanceId.set('deployment-validation-paper');
+  component.actionPlan.set(validDeploymentValidationActionPlan());
   component.startNow.set(false);
   activeFixture?.detectChanges();
 }
@@ -566,15 +582,19 @@ describe('BrokerDeployFormComponent', () => {
 
   // PRD #593 Slice 1B (#595) — the deploy form carries the operator-
   // declared action plan into ``live_config.action``.
-  it('submits an empty action plan when the operator declared no legs', async () => {
-    const { svc, component } = setup();
+  it('blocks deployment-validation submit when the operator declared no legs', async () => {
+    const { fixture, svc, component } = setup();
     await flush();
     fillRequired(component);
+    component.actionPlan.set({ on_enter: [], on_exit: [] });
+    fixture.detectChanges();
 
     await component.submit();
 
-    const req = svc.deployInstance.mock.calls[0][0];
-    expect(req.live_config?.action).toEqual({ on_enter: [], on_exit: [] });
+    expect(component.blockedReason()).toContain('ON ENTER and ON EXIT are both empty');
+    expect(component.deployTabs().find((tab) => tab.key === 'legs')?.complete).toBe(false);
+    expect(deployButton(fixture).disabled).toBe(true);
+    expect(svc.deployInstance).not.toHaveBeenCalled();
   });
 
   it('submits the operator-built stock plan via live_config.action', async () => {
@@ -620,7 +640,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(req.live_config).toEqual({
       symbol: 'SPY',
       sizing: { kind: 'FixedShares', value: 1 },
-      action: { on_enter: [], on_exit: [] },
+      action: validDeploymentValidationActionPlan(),
     });
     expect(component.sizingPreset()).toBe('safe_canary');
   });
@@ -705,7 +725,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(req.live_config).toEqual({
       symbol: 'SPY',
       sizing: { kind: 'FixedShares', value: 25 },
-      action: { on_enter: [], on_exit: [] },
+      action: validDeploymentValidationActionPlan(),
     });
   });
 
@@ -723,7 +743,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(req.live_config).toEqual({
       symbol: 'SPY',
       sizing: { kind: 'FixedNotional', value: '1500.50' },
-      action: { on_enter: [], on_exit: [] },
+      action: validDeploymentValidationActionPlan(),
     });
   });
 
@@ -846,7 +866,7 @@ describe('BrokerDeployFormComponent', () => {
   });
 
   it('clears the missing-fields message when required fields are filled through the rendered controls', async () => {
-    const { fixture } = setup({ qcEntries: [] });
+    const { fixture, component } = setup({ qcEntries: [] });
     await flush();
     fixture.detectChanges();
 
@@ -855,6 +875,7 @@ describe('BrokerDeployFormComponent', () => {
     fixture.detectChanges();
     typeText(fixture, 'Signal stream', 'SPY');
     typeText(fixture, 'Deployment name', 'deployment-validation-paper');
+    component.actionPlan.set(validDeploymentValidationActionPlan());
     await settleResource(fixture);
 
     expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
@@ -876,6 +897,7 @@ describe('BrokerDeployFormComponent', () => {
     fieldControl(fixture, 'Deployment name').value = 'deployment-validation-paper';
 
     component.syncRenderedFieldValues();
+    component.actionPlan.set(validDeploymentValidationActionPlan());
     await settleResource(fixture);
 
     expect(component.strategyKey()).toBe('deployment_validation');
@@ -900,6 +922,7 @@ describe('BrokerDeployFormComponent', () => {
     fieldControl(fixture, 'Deployment name').value = 'june25';
 
     component.syncRenderedFieldValues({ includeEmpty: false, onlyEmptySignals: true });
+    component.actionPlan.set(validDeploymentValidationActionPlan());
     await settleResource(fixture);
 
     expect(component.strategyKey()).toBe('deployment_validation');

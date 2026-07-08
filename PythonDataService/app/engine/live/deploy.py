@@ -28,6 +28,7 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from app.engine.live.config import action_plan_deploy_readiness
 from app.engine.live.identity import validate_strategy_instance_id
 from app.engine.live.order_identity import validate_broker_owned_instance_id
 from app.engine.live.pre_flight import check_clean_tree
@@ -138,6 +139,15 @@ class UnsupportedBarSourceDescriptorError(DeployError):
         )
         self.strategy_spec_path = strategy_spec_path
         self.actual = actual
+
+
+class ActionPlanReadinessError(DeployError):
+    """The selected strategy cannot safely deploy the submitted action plan."""
+
+    def __init__(self, reason_code: str, message: str) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+        self.message = message
 
 
 class RunAlreadyExistsError(DeployError):
@@ -277,7 +287,7 @@ def _enforce_explicit_surface_policy(strategy_key: str, live_config: dict) -> No
         )
 
 
-def enforce_supported_strategy_bar_source(strategy_spec_path: Path) -> None:
+def enforce_supported_strategy_bar_source(strategy_spec_path: Path) -> dict:
     """Reject specs that advertise a bar source the runtime cannot produce.
 
     The StrategySpec schema owns the default, but deploy tests and older
@@ -298,6 +308,32 @@ def enforce_supported_strategy_bar_source(strategy_spec_path: Path) -> None:
     descriptor = payload.get("bar_source_descriptor", SUPPORTED_LIVE_RUNTIME_BAR_SOURCE)
     if descriptor != SUPPORTED_LIVE_RUNTIME_BAR_SOURCE:
         raise UnsupportedBarSourceDescriptorError(strategy_spec_path, descriptor)
+    return payload
+
+
+def _registered_strategy_key_for_display_name(display_name: str) -> str:
+    normalized = display_name.strip().casefold()
+    if not normalized:
+        return ""
+    try:
+        from app.routers.engine import _STRATEGY_REGISTRY
+    except Exception:
+        return ""
+    for strategy_key, registration in _STRATEGY_REGISTRY.items():
+        if getattr(registration, "display_name", "").strip().casefold() == normalized:
+            return strategy_key
+    return ""
+
+
+def _strategy_key_from_spec(payload: dict) -> str:
+    for key in ("strategy_key", "strategy"):
+        strategy = payload.get(key)
+        if isinstance(strategy, str) and strategy.strip():
+            return strategy.strip()
+    name = payload.get("name")
+    if isinstance(name, str):
+        return _registered_strategy_key_for_display_name(name)
+    return ""
 
 
 def _existing_run_for_strategy_instance(
@@ -441,6 +477,12 @@ def deploy_run(params: DeployParams) -> DeployResult:
     # so the CLI path produces the same hashed ``run_id`` the API path would.
     canonical_live_config = _enforce_sizing_policy_present(params.live_config)
 
+    # The runtime's bar loop uses IBKR reqRealTimeBars today. Fail at deploy
+    # if the spec advertises any other source so a bot cannot launch with
+    # misleading decision-row provenance or a false "delayed data" assumption.
+    strategy_spec = enforce_supported_strategy_bar_source(params.strategy_spec_path)
+    resolved_strategy_key = params.strategy_key.strip() or _strategy_key_from_spec(strategy_spec)
+
     # ADR 0009 § 6 / PR7 reviewer fix — explicit-surface strategies size
     # themselves via internal accounting; the deploy boundary must refuse a
     # policy-style ``live_config.sizing`` for them so the ledger never
@@ -449,12 +491,20 @@ def deploy_run(params: DeployParams) -> DeployResult:
     # daemon caller could submit ``FixedShares(1)`` for ``ema_crossover_options``
     # and we'd hash a misleading run_id before the engine refuses on the
     # first set_holdings call.)
-    _enforce_explicit_surface_policy(params.strategy_key, canonical_live_config)
+    _enforce_explicit_surface_policy(resolved_strategy_key, canonical_live_config)
 
-    # The runtime's bar loop uses IBKR reqRealTimeBars today. Fail at deploy
-    # if the spec advertises any other source so a bot cannot launch with
-    # misleading decision-row provenance or a false "delayed data" assumption.
-    enforce_supported_strategy_bar_source(params.strategy_spec_path)
+    action_plan_readiness = action_plan_deploy_readiness(
+        strategy_key=resolved_strategy_key,
+        live_config=canonical_live_config,
+    )
+    if not action_plan_readiness.can_deploy:
+        reason_code = action_plan_readiness.reason_code
+        if reason_code is None:
+            raise DeployIOError("action-plan readiness failed without a reason code")
+        raise ActionPlanReadinessError(
+            reason_code,
+            action_plan_readiness.message,
+        )
 
     # ADR 0009 — record the audit copy path relative to the repo so a
     # later read (the start gate, the cockpit) can re-verify against the
@@ -471,7 +521,7 @@ def deploy_run(params: DeployParams) -> DeployResult:
             start_date_ms=params.start_date_ms,
             live_config=canonical_live_config,
             strategy_instance_id=params.strategy_instance_id,
-            strategy_key=params.strategy_key,
+            strategy_key=resolved_strategy_key,
             audit_copy_allow_list_root=repo_root,
         )
     except FileNotFoundError as exc:

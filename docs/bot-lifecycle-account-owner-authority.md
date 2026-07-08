@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-07-07 (Safety-halt incident bridge update: cold-start reconciliation poison writes now mint a `safety-halt` OperatorIncident alongside `poisoned.flag`; the run incidents endpoint projects safety-halt incidents into the existing Recent Incidents contract; Bot Control incident headlines include safety-halt incidents. Bot deploy form now pre-detects the durable STOPPED start latch for start-now submissions from `desired_state` and `host_process.start_capability`, switches the primary path to deploy-only, and leaves the backend submit/start gates authoritative.)
+> **Last reviewed:** 2026-07-07 (Safety-halt incidents now bridge cold-start poison into Recent Incidents and Bot Control headlines; the deploy form pre-detects durable STOPPED before start-now submissions and switches to deploy-only; deploy now fails closed before ledger creation when a strategy with a deploy-time action-plan contract, currently `deployment_validation`, is missing required legs or submits a plan shape the runtime path cannot consume.)
 
 ---
 
@@ -66,7 +66,7 @@ This is **not** R3. The current process-local `_submit_lock` in `LiveEngine` ser
 
 | Phase | Current authority | Code |
 |---|---|---|
-| Deploy | Data-plane deploy endpoint derives broker account from the connected session, then forwards to host daemon. Host daemon writes run ledger. The deploy form pre-detects durable STOPPED for start-now and submits deploy-only rather than promising a start the backend will reject. | `routers/live_instances.py`, `engine/live/host_daemon.py`, `engine/live/deploy.py`, `Frontend/src/app/components/broker/broker-deploy-form/broker-deploy-form.component.ts` |
+| Deploy | Data-plane deploy endpoint derives broker account from the connected session, then forwards to host daemon. Host daemon validates deploy-time action-plan contracts, then writes the run ledger. The deploy form pre-detects durable STOPPED for start-now and submits deploy-only rather than promising a start the backend will reject. | `routers/live_instances.py`, `engine/live/host_daemon.py`, `engine/live/deploy.py`, `engine/live/config.py`, `Frontend/src/app/components/broker/broker-deploy-form/broker-deploy-form.component.ts` |
 | Start recheck | Data plane blocks stale starts for poisoned runs, durable STOPPED, offline daemon, running/stopping daemon state. | `routers/live_instances.py::_assert_start_allowed` |
 | Host spawn | Host daemon starts `python -m app.engine.live.run start` as a subprocess keyed by `strategy_instance_id`. | `RunnerProcessManager.start` |
 | Run pre-flight | Runner validates run state, sizing, dirty tree policy, halt flags, unexpected positions, coexistence, and prior artifacts. | `engine/live/pre_flight.py`, `engine/live/run.py` |
@@ -554,6 +554,7 @@ This is a reproducibility receipt, not a new text-authoring engine or frontend t
 | Desired state | `PythonDataService/app/engine/live/desired_state.py` |
 | Operator action gates | `PythonDataService/app/services/operator_capability.py`, `resume_guard_state.py`, `operator_surface.py`, `operator_trader_guidance.py` |
 | Start/deploy/instance API | `PythonDataService/app/routers/live_instances.py` |
+| Action-plan deploy readiness | `PythonDataService/app/engine/live/config.py`, `PythonDataService/app/engine/live/deploy.py`, `Frontend/src/app/components/broker/broker-deploy-form/deploy-readiness.ts`, `Frontend/src/app/components/broker/broker-deploy-form/broker-deploy-form.component.ts` |
 | Watchdog lease loss | `PythonDataService/app/engine/live/child_watchdog.py`, `watchdog_controller.py` |
 | Account artifacts, recovery, override, and restart intensity | `PythonDataService/app/engine/live/account_artifacts.py` |
 | Account classifier | `PythonDataService/app/engine/live/account_classifier.py` |
