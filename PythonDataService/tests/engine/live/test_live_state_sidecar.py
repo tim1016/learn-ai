@@ -260,6 +260,14 @@ def test_stable_path_keys_directory_on_strategy_instance_id(tmp_path: Path) -> N
     assert ema.parent != vwap.parent
 
 
+@pytest.mark.parametrize("bad_sid", ["../escape", "nested/id", "", " spy", ".", ".."])
+def test_stable_live_state_path_rejects_unsafe_strategy_instance_id(
+    tmp_path: Path, bad_sid: str
+) -> None:
+    with pytest.raises(ValueError):
+        stable_live_state_path(tmp_path / "artifacts", bad_sid)
+
+
 def test_update_after_flush_holds_lock_across_full_rmw(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

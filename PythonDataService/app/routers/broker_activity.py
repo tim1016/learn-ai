@@ -37,12 +37,13 @@ from app.broker.ibkr.orders import (
     executions_for_reconnect_recovery,
     stream_order_events,
 )
+from app.engine.live.identity import _INSTANCE_ID_RE
 from app.engine.live.live_state_sidecar import (
     LiveStateSidecarCorruptError,
     LiveStateSidecarRepo,
-    stable_live_state_path,
 )
 from app.operator.incidents.store import IncidentStore
+from app.routers.live_runs import _confine, _validate_path_segment
 from app.schemas.broker_activity import (
     BrokerActivityPage,
     ReconciliationTimingPolicy,
@@ -74,6 +75,24 @@ router = APIRouter(
 )
 
 
+def _validate_strategy_instance_id_for_path(strategy_instance_id: str) -> str:
+    safe = _validate_path_segment(
+        strategy_instance_id, field="strategy_instance_id"
+    )
+    if _INSTANCE_ID_RE.fullmatch(safe) is None:
+        raise ValueError(f"invalid strategy_instance_id: {strategy_instance_id!r}")
+    return safe
+
+
+def _live_state_path_for_request(
+    artifacts_root: FsPath, strategy_instance_id: str
+) -> FsPath:
+    """Build a CodeQL-visible confined live-state sidecar path."""
+    safe_sid = _validate_strategy_instance_id_for_path(strategy_instance_id)
+    sidecar_dir = _confine(artifacts_root / "live_state", safe_sid)
+    return sidecar_dir / "live_state.json"
+
+
 async def bootstrap_publisher_for_instance(
     strategy_instance_id: str,
 ) -> BrokerActivityPublisher:
@@ -98,18 +117,29 @@ async def bootstrap_publisher_for_instance(
     wraps ``IB.reqExecutionsAsync`` into ``IbkrOrderEvent``s the
     publisher's sweep authors with ``reconnect_recovery_active=True``).
     """
+    try:
+        safe_strategy_instance_id = _validate_strategy_instance_id_for_path(
+            strategy_instance_id
+        )
+    except ValueError as exc:
+        raise PublisherBootstrapError(
+            "invalid_instance_id", "invalid strategy_instance_id"
+        ) from exc
+
     registry = get_publisher_registry()
-    existing = registry.get(strategy_instance_id)
+    existing = registry.get(safe_strategy_instance_id)
     if existing is not None and existing.is_running:
         return existing
 
     settings = get_settings()
     artifacts_root = FsPath(settings.live_runs_root).parent
-    envelope_path = stable_live_state_path(artifacts_root, strategy_instance_id)
+    envelope_path = _live_state_path_for_request(
+        artifacts_root, safe_strategy_instance_id
+    )
     if not envelope_path.is_file():
         raise PublisherBootstrapError(
             "no_envelope",
-            f"no live envelope for strategy_instance_id={strategy_instance_id!r}",
+            f"no live envelope for strategy_instance_id={safe_strategy_instance_id!r}",
         )
     try:
         envelope = LiveStateSidecarRepo(envelope_path).read()
@@ -120,7 +150,7 @@ async def bootstrap_publisher_for_instance(
     if envelope is None:
         raise PublisherBootstrapError(
             "no_envelope",
-            f"live envelope empty for {strategy_instance_id!r}",
+            f"live envelope empty for {safe_strategy_instance_id!r}",
         )
 
     try:
@@ -138,10 +168,10 @@ async def bootstrap_publisher_for_instance(
 
     from app.engine.live.run_lookup import latest_run_dir_for_instance
 
-    run_dir = latest_run_dir_for_instance(artifacts_root, strategy_instance_id)
+    run_dir = latest_run_dir_for_instance(artifacts_root, safe_strategy_instance_id)
     if run_dir is None:
         raise PublisherBootstrapError(
-            "no_run_dir", f"no run directory for {strategy_instance_id!r}"
+            "no_run_dir", f"no run directory for {safe_strategy_instance_id!r}"
         )
 
     timing_policy_dict = (
@@ -156,7 +186,7 @@ async def bootstrap_publisher_for_instance(
     )
 
     publisher = BrokerActivityPublisher(
-        strategy_instance_id=strategy_instance_id,
+        strategy_instance_id=safe_strategy_instance_id,
         bot_order_namespace=envelope.bot_order_namespace,
         run_dir=run_dir,
         artifacts_root=artifacts_root,
@@ -166,7 +196,7 @@ async def bootstrap_publisher_for_instance(
         incident_store=IncidentStore(run_dir),
     )
     return await registry.register(
-        publisher, strategy_instance_id=strategy_instance_id
+        publisher, strategy_instance_id=safe_strategy_instance_id
     )
 
 
@@ -174,6 +204,7 @@ async def bootstrap_publisher_for_instance(
 # path. ``broker_disconnected`` and ``broker_disabled`` are both 503;
 # ``no_envelope`` / ``no_run_dir`` are 404; ``envelope_corrupt`` is 503.
 _BOOTSTRAP_ERROR_STATUS: dict[str, int] = {
+    "invalid_instance_id": status.HTTP_400_BAD_REQUEST,
     "no_envelope": status.HTTP_404_NOT_FOUND,
     "envelope_corrupt": status.HTTP_503_SERVICE_UNAVAILABLE,
     "broker_disconnected": status.HTTP_503_SERVICE_UNAVAILABLE,

@@ -19,6 +19,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from app.engine.live.identity import strategy_instance_artifact_dir
+
 
 class LiveStateSidecarCorruptError(RuntimeError):
     """Raised by ``LiveStateSidecarRepo.read`` when the on-disk bytes
@@ -43,7 +45,9 @@ def stable_live_state_path(artifacts_root: Path, strategy_instance_id: str) -> P
     stable_global_path so both sidecars sit side-by-side under the same
     per-strategy directory.
     """
-    return artifacts_root / "live_state" / strategy_instance_id / "live_state.json"
+    return strategy_instance_artifact_dir(
+        artifacts_root, "live_state", strategy_instance_id
+    ) / "live_state.json"
 
 
 class LiveStateEnvelope(BaseModel):

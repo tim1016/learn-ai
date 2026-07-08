@@ -15,10 +15,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Annotated, Literal, NoReturn, TypedDict
 
 from fastapi import APIRouter, Body, HTTPException, Query, Response, status
@@ -1025,17 +1026,42 @@ def _container_resolve_repo_path(path: str) -> list[Path]:
     sub-roots — the same path eventually resolves under one of them. The
     caller stops at the first existing file.
     """
-    candidates = [Path(path)]
+    candidates: list[Path] = []
+
+    def existing_confined_file(root: Path, relative_path: str) -> Path | None:
+        if not relative_path or "\x00" in relative_path:
+            return None
+        rel = PurePosixPath(relative_path)
+        if rel.is_absolute() or any(part in ("", ".", "..") for part in rel.parts):
+            return None
+        root_resolved = os.path.realpath(root)
+        resolved = os.path.realpath(os.path.join(root_resolved, *rel.parts))
+        try:
+            common = os.path.commonpath([root_resolved, resolved])
+        except ValueError:
+            return None
+        if common != root_resolved:
+            return None
+        candidate = Path(resolved)
+        return candidate if candidate.is_file() else None
+
+    repo_root = Path(__file__).resolve().parents[3]
+    pds_root = repo_root / "PythonDataService"
+    app_root = pds_root / "app"
     for marker, container_root in (
-        ("PythonDataService/app/", "/app/app/"),
-        ("PythonDataService/", "/app/"),
-        ("references/", "/app/references/"),
+        ("PythonDataService/app/", app_root),
+        ("PythonDataService/", pds_root),
+        ("references/", repo_root / "references"),
+        ("PythonDataService/app/", Path("/app/app")),
+        ("PythonDataService/", Path("/app")),
+        ("references/", Path("/app/references")),
     ):
         idx = path.find(marker)
         if idx >= 0:
-            translated = container_root + path[idx + len(marker) :]
-            candidates.append(Path(translated))
-    return [c for c in candidates if c.is_file()] or candidates
+            candidate = existing_confined_file(container_root, path[idx + len(marker) :])
+            if candidate is not None and candidate not in candidates:
+                candidates.append(candidate)
+    return candidates
 
 
 def _sizing_audit_rows(strategy_instance_id: str) -> list[dict]:

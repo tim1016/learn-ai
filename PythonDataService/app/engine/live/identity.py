@@ -12,7 +12,9 @@ import between ``desired_state`` and ``live_state_sidecar``.
 
 from __future__ import annotations
 
+import os
 import re
+from pathlib import Path
 
 # Canonical single-segment id pattern. Kept byte-identical to
 # ``live_instances._INSTANCE_ID_RE`` (the operate-endpoint guard that keeps the
@@ -64,3 +66,52 @@ def validate_strategy_instance_id(value: str) -> str:
             f"(no spaces): {value!r}"
         )
     return value
+
+
+def safe_strategy_instance_path_segment(value: str) -> str:
+    """Return a regex-captured, single-segment strategy instance id.
+
+    Path builders use the returned value, not the raw caller input, so the
+    filesystem boundary is both runtime-confined and visible to CodeQL's
+    path-injection dataflow.
+    """
+    validate_strategy_instance_id(value)
+    match = _INSTANCE_ID_RE.fullmatch(value)
+    if match is None:
+        raise ValueError(
+            f"strategy_instance_id rejected on second check: {value!r}"
+        )
+    safe = match.group(0)
+    if Path(safe).name != safe:
+        raise ValueError(f"strategy_instance_id must be a single path segment: {value!r}")
+    return safe
+
+
+def strategy_instance_artifact_dir(
+    artifacts_root: Path, namespace: str, strategy_instance_id: str
+) -> Path:
+    """Return a confined per-instance directory below ``artifacts_root``.
+
+    ``namespace`` is a trusted literal such as ``live_state`` or
+    ``live_instances``. ``strategy_instance_id`` is caller/operator input and
+    is reconstructed through :func:`safe_strategy_instance_path_segment` before
+    joining. The realpath/commonpath check catches symlink escapes.
+    """
+    if not namespace or namespace != Path(namespace).name:
+        raise ValueError(f"artifact namespace must be a single path segment: {namespace!r}")
+    safe_sid = safe_strategy_instance_path_segment(strategy_instance_id)
+    namespace_root = os.path.realpath(
+        os.path.join(os.fspath(artifacts_root), namespace)
+    )
+    candidate = os.path.realpath(os.path.join(namespace_root, safe_sid))
+    try:
+        common = os.path.commonpath([namespace_root, candidate])
+    except ValueError as exc:
+        raise ValueError(
+            f"strategy instance artifact path {candidate} cannot share a root with {namespace_root}"
+        ) from exc
+    if common != namespace_root:
+        raise ValueError(
+            f"strategy instance artifact path {candidate} escapes {namespace_root}"
+        )
+    return Path(candidate)

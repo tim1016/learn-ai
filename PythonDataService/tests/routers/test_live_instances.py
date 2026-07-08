@@ -204,6 +204,29 @@ def test_resolve_symbol_prefers_stock_action_plan_over_signal_stream_and_spec_fi
     assert symbol == "TSLA"
 
 
+def test_container_resolve_repo_path_rejects_marker_traversal() -> None:
+    assert (
+        live_instances._container_resolve_repo_path(
+            "PythonDataService/app/../../pyproject.toml"
+        )
+        == []
+    )
+
+
+def test_container_resolve_repo_path_maps_repo_fixture() -> None:
+    from app.engine.strategy.spec import schema as spec_schema
+
+    fixture = (
+        Path(spec_schema.__file__).parent
+        / "fixtures"
+        / "spy_ema_crossover.spec.json"
+    )
+
+    assert fixture.resolve() in live_instances._container_resolve_repo_path(
+        str(fixture)
+    )
+
+
 def test_resolve_incident_headline_uses_evidence_run_dir_guard(tmp_path: Path) -> None:
     root = tmp_path / "live_runs"
     _write_ledger(root, "run-live", "spy_ema_paper", 200)
