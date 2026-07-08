@@ -61,7 +61,7 @@
             [attr.aria-pressed]="isSelected(summary)"
             (click)="selectCategory(summary)"
           >
-            <span class="category-kind">{{ summary.kind }}</span>
+            <span class="category-kind">{{ summary.kind | receiptLabel }}</span>
             <strong>{{ summary.label }}</strong>
             <span>{{ summary.event_count }} event{{ summary.event_count === 1 ? '' : 's' }}</span>
             @if (summary.last_event_ts_ms !== null) {

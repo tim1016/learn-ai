@@ -10,6 +10,7 @@ import type { BrokerActivityHealth } from '../../../../../api/live-instances.typ
 import { fmtTimestampLocal } from '../../../format';
 import { OperatorNoticeComponent } from '../../../../operator-notice/operator-notice.component';
 import { AssetIdentityComponent } from '../../../../../shared/asset-identity';
+import { ReceiptLabelPipe } from '../../../../../shared/pipes/receipt-label.pipe';
 
 import type {
   ActivityBrokerCategorySummary,
@@ -25,7 +26,7 @@ import type { BrokerActivityRow } from './broker-activity.types';
 @Component({
   selector: 'app-broker-activity-table',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AssetIdentityComponent, OperatorNoticeComponent],
+  imports: [AssetIdentityComponent, OperatorNoticeComponent, ReceiptLabelPipe],
   templateUrl: './broker-activity-table.component.html',
   styleUrl: './broker-activity-table.component.scss',
 })
