@@ -447,6 +447,18 @@ describe('BrokerDeployFormComponent', () => {
     expect(component.commandState().kind).toBe('accepted');
     expect(component.blockedReason()).toBeNull();
     expect(deployButton(fixture).disabled).toBe(true);
+
+    component.startNow.set(false);
+    fixture.detectChanges();
+
+    expect(component.commandState().kind).toBe('ready');
+    expect(deployButton(fixture).disabled).toBe(false);
+
+    await component.submit();
+
+    const deployOnlyRetry = svc.deployInstance.mock.calls[1][0];
+    expect(deployOnlyRetry.start).toBe(false);
+    expect(deployOnlyRetry.start_options).toBeUndefined();
   });
 
   // PRD #593 Slice 1E (#598) — query-param-deep-linked redeploy carries

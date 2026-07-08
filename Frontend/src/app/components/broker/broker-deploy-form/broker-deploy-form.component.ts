@@ -195,6 +195,7 @@ export class BrokerDeployFormComponent {
   readonly postSubmitCommandStatus = computed<string | null>(() => {
     const deployed = this.deployed();
     if (!deployed?.start?.accepted) return null;
+    if (!this.startNow()) return null;
     if (this.deployedInstanceId() !== this.instanceId().trim()) return null;
     return `Start accepted for run ${deployed.run_id}. View deployment to monitor the live run.`;
   });
