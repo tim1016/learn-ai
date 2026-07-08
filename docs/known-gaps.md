@@ -46,8 +46,12 @@ IntentWal truncates its tolerated tail before append). The following P1s were
 **not** re-verified and are carried forward:
 
 - Account-truth verdict gates nothing — the reconciliation verdict is
-  observational, not enforced at submit.
+  observational, not enforced at submit. Reserved operator-notice code:
+  `reconciliation.divergence_while_submitting` (`critical`,
+  `no_remedy(unbuilt)` — ADR-0015 § Amendment 2026-07-08).
 - Crashed-sibling-stays-`ACTIVE` liveness leak (fleet trust leak).
+  Reserved operator-notice code: `fleet.sibling_liveness_unproven`
+  (`critical`, `no_remedy(unbuilt)` — ADR-0015 § Amendment 2026-07-08).
 - Non-atomic ledger / parquet writes (crash mid-write can self-poison).
 - No R3 recovery daemon.
 - Residual: committed dev-default control secret `local-dev-control-secret`
