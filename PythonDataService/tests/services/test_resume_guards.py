@@ -377,7 +377,8 @@ def test_resume_reason_codes_vocabulary_pinned() -> None:
                 "RECONCILIATION_UNKNOWN",
                 "UNRESOLVED_UNCERTAIN_INTENT",
                 "UNCERTAIN_INTENT_STATE_UNKNOWN",
-                "ALREADY_RUNNING",
+                "DESIRED_STATE_ALREADY_RUNNING",
+                "DESIRED_STATE_DEFAULT_RUNNING",
                 "ALREADY_PAUSED",
                 "STOPPED_REQUIRES_REDEPLOY",
                 "REDEPLOY_REQUIRED",
@@ -412,7 +413,8 @@ def test_evaluate_action_stop_requires_live_binding_for_actuation_effect() -> No
 
 def test_evaluate_action_unknown_intent_does_not_block() -> None:
     # Intent of None (sidecar absent / never deployed) is treated as
-    # effective-RUNNING so Pause is permitted; resume gets ALREADY_RUNNING.
+    # effective-RUNNING so Pause is permitted; resume gets
+    # DESIRED_STATE_DEFAULT_RUNNING.
     cap_resume = evaluate_action(
         "resume",
         process=InstanceProcessView(state="idle"),
@@ -421,7 +423,7 @@ def test_evaluate_action_unknown_intent_does_not_block() -> None:
         guard_state=empty_guard_state(),
     )
     assert cap_resume.enabled is False
-    assert cap_resume.disabled_reasons == ["ALREADY_RUNNING"]
+    assert cap_resume.disabled_reasons == ["DESIRED_STATE_DEFAULT_RUNNING"]
 
 
 def test_resume_guard_state_carries_artifact_diagnostics() -> None:

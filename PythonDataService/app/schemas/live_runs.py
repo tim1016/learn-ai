@@ -223,9 +223,10 @@ class IncidentRecord(BaseModel):
     log text. A missing or unrecognised category is rendered as
     ``unknown`` on the frontend for rollout safety.
 
-    Same ``raw_ts`` / ``ts_ms`` semantics as :class:`FailureRecord`:
-    ``raw_ts`` is the verbatim UTC timestamp string from the log;
-    ``ts_ms`` is the same instant as canonical ``int64`` ms UTC.
+    Same ``raw_ts`` / ``ts_ms`` semantics as :class:`FailureRecord` for
+    log-parsed rows. Durable operator incidents synthesize ``raw_ts`` from
+    their canonical ``occurred_at_ms`` because they do not originate as a
+    verbatim ``live.log`` line. ``ts_ms`` is always canonical ``int64`` ms UTC.
 
     ``dynamic_facts`` carries the typed hybrid-C named values the
     frontend may interpolate into its category template (codex D1).
@@ -491,6 +492,46 @@ class HostRunnerActionResponse(BaseModel):
     exit_reason: str | None = None
 
 
+class IdentityCoherenceConfirmation(BaseModel):
+    """Operator confirmation for a Fresh-run symbol identity change.
+
+    Unhashed deploy-admission evidence: the backend compares these symbols to
+    the current request and the inherited instance symbol before allowing an
+    immediate start through an incoherent redeploy.
+    """
+
+    inherited_symbol: str = Field(min_length=1)
+    signal_stream: str | None = None
+    action_plan_symbol: str | None = None
+
+
+ExposureCoherencePosture = Literal["FLAT", "LONG", "SHORT", "MIXED", "UNKNOWN"]
+
+
+class ExposureCoherenceFacts(BaseModel):
+    posture: ExposureCoherencePosture
+    pending_order_count: int | None = Field(default=None, ge=0)
+    owned_positions: dict[str, int] = Field(default_factory=dict)
+    source: str
+    strategy_instance_id: str | None = None
+    run_id: str | None = None
+
+
+class ExposureCoherenceConfirmation(BaseModel):
+    """Operator confirmation for starting despite inherited exposure evidence.
+
+    This is unhashed deploy-admission evidence, not run identity. The public
+    deploy endpoint compares it with the current instance exposure facts before
+    allowing ``Deploy & start`` through a non-flat or unknown exposure state.
+    """
+
+    posture: ExposureCoherencePosture
+    pending_order_count: int | None = Field(default=None, ge=0)
+    owned_positions: dict[str, int] = Field(default_factory=dict)
+    strategy_instance_id: str | None = None
+    run_id: str | None = None
+
+
 class HostRunnerDeployBaseRequest(BaseModel):
     """Common deploy request fields shared by public API and host daemon.
 
@@ -591,6 +632,15 @@ class LiveInstanceDeployRequest(HostRunnerDeployBaseRequest):
     """
 
     model_config = ConfigDict(extra="allow")
+
+    inherited_symbol: str | None = None
+    inherited_symbol_source: str | None = None
+    identity_coherence_confirmation: IdentityCoherenceConfirmation | None = None
+    inherited_exposure_posture: ExposureCoherencePosture | None = None
+    inherited_exposure_pending_order_count: int | None = Field(default=None, ge=0)
+    inherited_exposure_positions: dict[str, int] = Field(default_factory=dict)
+    inherited_exposure_source: str | None = None
+    exposure_coherence_confirmation: ExposureCoherenceConfirmation | None = None
 
     @model_validator(mode="after")
     def _validate_legacy_extras(self) -> LiveInstanceDeployRequest:
@@ -1176,6 +1226,7 @@ class OperatorSurfaceCurrentRisk(BaseModel):
     """
 
     posture: RiskPosture
+    owned_positions: dict[str, int] = Field(default_factory=dict)
     # ``None`` when broker state is unavailable; ``0`` only when broker
     # state is known and empty.  The Frontend renders ``—`` for ``None``
     # and ``0`` for ``0`` (#612 §"Rendering rules").
@@ -2188,6 +2239,7 @@ class BotLifecycleChartView(BaseModel):
     global_graph: LifecycleChartGraph
     subgraphs: dict[str, LifecycleChartGraph] = Field(default_factory=dict)
     actions: list[LifecycleChartAction] = Field(default_factory=list)
+    only_fresh_run_available: bool = False
 
 
 class LiveInstanceStatus(BaseModel):
@@ -2646,6 +2698,7 @@ class BotCatalogRow(BaseModel):
     status_label: str
     status_detail: str | None = None
     status_tone: Literal["positive", "warning", "danger", "neutral"] = "neutral"
+    only_fresh_run_available: bool = False
     needs_attention: bool
     trading_mode: Literal["paper", "live", "unknown"] = "unknown"
     symbols: list[str] = Field(default_factory=list)

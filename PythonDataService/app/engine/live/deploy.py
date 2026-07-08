@@ -27,7 +27,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
+from app.engine.live.config import stock_symbol_from_action_plan
 from app.engine.live.identity import validate_strategy_instance_id
 from app.engine.live.order_identity import validate_broker_owned_instance_id
 from app.engine.live.pre_flight import check_clean_tree
@@ -37,6 +39,7 @@ from app.engine.live.run_ledger import (
     read_ledger,
     write_ledger,
 )
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.engine.strategy.spec.schema import SUPPORTED_LIVE_RUNTIME_BAR_SOURCE
 
 # Default paths included in the dirty-tree gate. Mirrors the CLI default so the
@@ -140,6 +143,15 @@ class UnsupportedBarSourceDescriptorError(DeployError):
         self.actual = actual
 
 
+class ActionPlanReadinessError(DeployError):
+    """The selected strategy cannot safely deploy the submitted action plan."""
+
+    def __init__(self, reason_code: str, message: str) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+        self.message = message
+
+
 class RunAlreadyExistsError(DeployError):
     """The content-addressed run directory already exists.
 
@@ -185,6 +197,98 @@ class DeployResult:
     run_dir: Path
     created: bool
     ledger: LiveRunLedger
+
+
+ActionPlanDeployReasonCode = Literal[
+    "ACTION_PLAN_EMPTY",
+    "ACTION_PLAN_ENTRY_LEG_REQUIRED",
+    "ACTION_PLAN_UNSUPPORTED",
+    "ACTION_PLAN_CLOSE_LEG_REQUIRED",
+]
+
+
+@dataclass(frozen=True)
+class ActionPlanDeployReadiness:
+    reason_code: ActionPlanDeployReasonCode | None = None
+    message: str = "Action plan is ready for deployment."
+    normalized_action: dict[str, object] | None = None
+
+    @property
+    def can_deploy(self) -> bool:
+        return self.reason_code is None
+
+
+_ACTION_PLAN_REQUIRED_STRATEGIES = frozenset({"deployment_validation"})
+
+
+def action_plan_deploy_readiness(
+    *,
+    strategy_key: str,
+    live_config: dict,
+) -> ActionPlanDeployReadiness:
+    """Return the deploy-time action-plan verdict for strategies that consume it.
+
+    Today the live runtime consumes a stock-only action plan for
+    ``deployment_validation``: exactly one long stock entry leg plus a close-leg
+    exit for that entry. Other strategies remain non-blocking until they declare
+    a deploy-time action-plan contract, which keeps valid future entry-only/roll
+    plans from being rejected by this deployment-validation-specific gate.
+    """
+
+    if strategy_key.strip() not in _ACTION_PLAN_REQUIRED_STRATEGIES:
+        return ActionPlanDeployReadiness()
+    action = live_config.get("action") if isinstance(live_config, dict) else None
+    if not isinstance(action, dict):
+        return ActionPlanDeployReadiness(
+            reason_code="ACTION_PLAN_EMPTY",
+            message=(
+                "Deployment Validation requires an action plan with one long stock "
+                "entry leg and a matching close leg before deployment."
+            ),
+        )
+    on_enter = action.get("on_enter")
+    on_exit = action.get("on_exit")
+    has_entries = isinstance(on_enter, list) and len(on_enter) > 0
+    has_exits = isinstance(on_exit, list) and len(on_exit) > 0
+    if not has_entries and not has_exits:
+        return ActionPlanDeployReadiness(
+            reason_code="ACTION_PLAN_EMPTY",
+            message=("Deployment Validation requires an action plan; ON ENTER and ON EXIT are both empty."),
+        )
+    if not has_entries:
+        return ActionPlanDeployReadiness(
+            reason_code="ACTION_PLAN_ENTRY_LEG_REQUIRED",
+            message="Deployment Validation requires at least one ON ENTER entry leg.",
+        )
+    try:
+        from app.schemas.action_plan import ActionPlan
+
+        plan = ActionPlan.model_validate(action)
+        normalized_action = plan.model_dump(mode="json")
+    except ValueError:
+        return ActionPlanDeployReadiness(
+            reason_code="ACTION_PLAN_UNSUPPORTED",
+            message=(
+                "Deployment Validation cannot consume this action-plan shape. "
+                "Use one long stock entry leg with a close-leg exit."
+            ),
+        )
+    if stock_symbol_from_action_plan(normalized_action) is None:
+        return ActionPlanDeployReadiness(
+            reason_code="ACTION_PLAN_UNSUPPORTED",
+            message=(
+                "Deployment Validation currently supports exactly one long stock "
+                "entry leg. Option, short, and multi-leg plans are not deployable "
+                "on this runtime path yet."
+            ),
+        )
+    entry_leg_id = plan.on_enter[0].leg_id
+    if not any(exit_entry.entry_leg_id == entry_leg_id for exit_entry in plan.on_exit):
+        return ActionPlanDeployReadiness(
+            reason_code="ACTION_PLAN_CLOSE_LEG_REQUIRED",
+            message=(f"Deployment Validation requires an ON EXIT close leg for the entry leg {entry_leg_id!r}."),
+        )
+    return ActionPlanDeployReadiness(normalized_action=normalized_action)
 
 
 def _enforce_sizing_policy_present(live_config: dict) -> dict:
@@ -247,20 +351,15 @@ def _enforce_explicit_surface_policy(strategy_key: str, live_config: dict) -> No
     """ADR 0009 § 6 — refuse a policy-style ``live_config.sizing`` for a
     strategy registered with ``sizing_surface="explicit"``.
 
-    Looks up the strategy in ``_STRATEGY_REGISTRY`` (re-using the same module-
-    name → registry-key fallback as ``_lookup_sizing_surface`` in ``run.py``).
-    A strategy that is unregistered, registered as ``policy``, or registered
-    without a ``sizing_surface`` attribute is silently allowed — the runtime
-    fail-fast remains the backstop for those cases.
+    Looks up the strategy in the engine-level strategy registry. A strategy
+    that is unregistered, registered as ``policy``, or registered without a
+    ``sizing_surface`` attribute is allowed — the runtime fail-fast remains the
+    backstop for those cases.
     """
     if not isinstance(live_config, dict):
         return
     sizing = live_config.get("sizing")
     if not isinstance(sizing, dict):
-        return
-    try:
-        from app.routers.engine import _STRATEGY_REGISTRY
-    except Exception:
         return
     # VCR-0004 / Phase 2 — the registry is keyed by module name now, so the
     # legacy ``removeprefix("spy_")`` workaround is gone.
@@ -277,7 +376,7 @@ def _enforce_explicit_surface_policy(strategy_key: str, live_config: dict) -> No
         )
 
 
-def enforce_supported_strategy_bar_source(strategy_spec_path: Path) -> None:
+def enforce_supported_strategy_bar_source(strategy_spec_path: Path) -> dict:
     """Reject specs that advertise a bar source the runtime cannot produce.
 
     The StrategySpec schema owns the default, but deploy tests and older
@@ -298,6 +397,21 @@ def enforce_supported_strategy_bar_source(strategy_spec_path: Path) -> None:
     descriptor = payload.get("bar_source_descriptor", SUPPORTED_LIVE_RUNTIME_BAR_SOURCE)
     if descriptor != SUPPORTED_LIVE_RUNTIME_BAR_SOURCE:
         raise UnsupportedBarSourceDescriptorError(strategy_spec_path, descriptor)
+    return payload
+
+
+def _strategy_key_from_spec(payload: dict) -> str:
+    for key in ("strategy_key", "strategy"):
+        strategy = payload.get(key)
+        if isinstance(strategy, str) and strategy.strip():
+            return strategy.strip()
+    display_name = payload.get("name")
+    if isinstance(display_name, str) and display_name.strip():
+        normalized_display_name = display_name.strip().casefold()
+        for strategy_key, registration in _STRATEGY_REGISTRY.items():
+            if registration.display_name.casefold() == normalized_display_name:
+                return strategy_key
+    return ""
 
 
 def _existing_run_for_strategy_instance(
@@ -441,6 +555,12 @@ def deploy_run(params: DeployParams) -> DeployResult:
     # so the CLI path produces the same hashed ``run_id`` the API path would.
     canonical_live_config = _enforce_sizing_policy_present(params.live_config)
 
+    # The runtime's bar loop uses IBKR reqRealTimeBars today. Fail at deploy
+    # if the spec advertises any other source so a bot cannot launch with
+    # misleading decision-row provenance or a false "delayed data" assumption.
+    strategy_spec = enforce_supported_strategy_bar_source(params.strategy_spec_path)
+    resolved_strategy_key = params.strategy_key.strip() or _strategy_key_from_spec(strategy_spec)
+
     # ADR 0009 § 6 / PR7 reviewer fix — explicit-surface strategies size
     # themselves via internal accounting; the deploy boundary must refuse a
     # policy-style ``live_config.sizing`` for them so the ledger never
@@ -449,12 +569,23 @@ def deploy_run(params: DeployParams) -> DeployResult:
     # daemon caller could submit ``FixedShares(1)`` for ``ema_crossover_options``
     # and we'd hash a misleading run_id before the engine refuses on the
     # first set_holdings call.)
-    _enforce_explicit_surface_policy(params.strategy_key, canonical_live_config)
+    _enforce_explicit_surface_policy(resolved_strategy_key, canonical_live_config)
 
-    # The runtime's bar loop uses IBKR reqRealTimeBars today. Fail at deploy
-    # if the spec advertises any other source so a bot cannot launch with
-    # misleading decision-row provenance or a false "delayed data" assumption.
-    enforce_supported_strategy_bar_source(params.strategy_spec_path)
+    action_plan_readiness = action_plan_deploy_readiness(
+        strategy_key=resolved_strategy_key,
+        live_config=canonical_live_config,
+    )
+    if not action_plan_readiness.can_deploy:
+        reason_code = action_plan_readiness.reason_code
+        if reason_code is None:
+            raise DeployIOError("action-plan readiness failed without a reason code")
+        raise ActionPlanReadinessError(
+            reason_code,
+            action_plan_readiness.message,
+        )
+    if action_plan_readiness.normalized_action is not None:
+        canonical_live_config = dict(canonical_live_config)
+        canonical_live_config["action"] = action_plan_readiness.normalized_action
 
     # ADR 0009 — record the audit copy path relative to the repo so a
     # later read (the start gate, the cockpit) can re-verify against the
@@ -471,7 +602,7 @@ def deploy_run(params: DeployParams) -> DeployResult:
             start_date_ms=params.start_date_ms,
             live_config=canonical_live_config,
             strategy_instance_id=params.strategy_instance_id,
-            strategy_key=params.strategy_key,
+            strategy_key=resolved_strategy_key,
             audit_copy_allow_list_root=repo_root,
         )
     except FileNotFoundError as exc:

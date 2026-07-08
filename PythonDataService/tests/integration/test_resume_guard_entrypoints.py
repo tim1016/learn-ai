@@ -203,7 +203,9 @@ async def test_entrypoint_mutation_endpoint(tmp_path: Path, monkeypatch, case: G
     intent = case.current_intent
     expected_codes: list[str] = []
     if intent == "RUNNING":
-        expected_codes.append("ALREADY_RUNNING")
+        expected_codes.append("DESIRED_STATE_ALREADY_RUNNING")
+    elif intent is None:
+        expected_codes.append("DESIRED_STATE_DEFAULT_RUNNING")
     if case.poisoned:
         expected_codes.append("REDEPLOY_REQUIRED")
     expected_codes.extend(actual_state.reason_codes)

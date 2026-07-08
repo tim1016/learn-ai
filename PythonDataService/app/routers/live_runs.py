@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, status
 
@@ -42,6 +43,8 @@ from app.engine.live.live_artifact_io import (
     read_parquet_tail,
 )
 from app.engine.live.run_ledger import read_ledger
+from app.operator.incidents.store import IncidentStore
+from app.operator.notices.schema import OperatorIncident
 from app.schemas.live_runs import (
     ArtifactFile,
     ArtifactsSummary,
@@ -67,7 +70,12 @@ from app.schemas.live_runs import (
     SetDesiredStateRequest,
     TradesSummary,
 )
-from app.services.live_log_failures import parse_failures, parse_incidents
+from app.services.live_log_failures import (
+    IncidentCategory,
+    classify_source,
+    parse_failures,
+    parse_incidents,
+)
 from app.services.live_log_parser import BarEvent, parse_log_tail
 from app.services.live_run_state import infer_state
 
@@ -96,7 +104,10 @@ def _validate_path_segment(value: str, *, field: str) -> str:
         raise ValueError(f"{field} must not contain path separators or NUL bytes")
     if Path(value).is_absolute():
         raise ValueError(f"{field} must not be an absolute path")
-    return value
+    safe = Path(value).name
+    if safe != value:
+        raise ValueError(f"{field} must be a single path segment")
+    return safe
 
 
 def _confine(root: Path, segment: str) -> Path:
@@ -107,13 +118,15 @@ def _confine(root: Path, segment: str) -> Path:
     literal, resolve it, and verify containment so the dataflow is
     obviously safe to the scanner.
     """
-    root_resolved = root.resolve()
-    resolved = (root_resolved / segment).resolve()
+    root_resolved = os.path.realpath(root)
+    resolved = os.path.realpath(os.path.join(root_resolved, segment))
     try:
-        resolved.relative_to(root_resolved)
+        common = os.path.commonpath([root_resolved, resolved])
     except ValueError as exc:
         raise ValueError(f"path traversal detected for segment {segment!r}") from exc
-    return resolved
+    if common != root_resolved:
+        raise ValueError(f"path traversal detected for segment {segment!r}")
+    return Path(resolved)
 
 
 def _validate_run_id(run_id: str, root: Path) -> Path:
@@ -124,6 +137,28 @@ def _validate_run_id(run_id: str, root: Path) -> Path:
     # Use the validated literal — regex + confinement breaks the CodeQL
     # py/path-injection taint chain.
     return _confine(root, safe)
+
+
+def _existing_run_dir_from_listing(root: Path, run_id: str) -> Path:
+    """Return a run dir by selecting from the server-owned directory listing.
+
+    CodeQL's path-injection query does not always treat custom path validators
+    as sanitizers. This path is stronger anyway for artifact-read endpoints:
+    the returned ``Path`` comes from ``root.iterdir()``, not from joining the
+    request parameter into a filesystem path.
+    """
+    safe = _validate_path_segment(run_id, field="run_id")
+    if _RUN_ID_RE.fullmatch(safe) is None:
+        raise ValueError(f"Invalid run_id format: {run_id!r}")
+    for run_dir in _get_run_dirs(root):
+        if run_dir.name == safe:
+            return run_dir
+    # The list endpoint intentionally caches directory scans for the cockpit,
+    # but artifact endpoints need to see a just-created run immediately.
+    for run_dir in _refresh_run_dirs(root):
+        if run_dir.name == safe:
+            return run_dir
+    raise FileNotFoundError(safe)
 
 
 # Whitelist of artifact filenames any operator-facing endpoint may read out
@@ -174,14 +209,9 @@ _DIR_TTL_S: float = 15.0
 _dir_cache: dict[str, tuple[float, list[Path]]] = {}
 
 
-def _get_run_dirs(root: Path) -> list[Path]:
-    """Return sorted list of run directories, newest first. 15 s TTL cache."""
-    now = time.monotonic()
-    key = str(root)
-    cached = _dir_cache.get(key)
-    if cached is not None and now < cached[0]:
-        return cached[1]
-    dirs: list[Path] = (
+def _read_run_dirs(root: Path) -> list[Path]:
+    """Read sorted run directories directly from disk, newest first."""
+    return (
         sorted(
             (d for d in root.iterdir() if d.is_dir()),
             key=lambda p: p.stat().st_mtime,
@@ -190,7 +220,24 @@ def _get_run_dirs(root: Path) -> list[Path]:
         if root.exists()
         else []
     )
-    _dir_cache[key] = (now + _DIR_TTL_S, dirs)
+
+
+def _refresh_run_dirs(root: Path, *, now: float | None = None) -> list[Path]:
+    """Refresh and return the cached run-directory listing."""
+    dirs = _read_run_dirs(root)
+    refreshed_at = now if now is not None else time.monotonic()
+    _dir_cache[str(root)] = (refreshed_at + _DIR_TTL_S, dirs)
+    return dirs
+
+
+def _get_run_dirs(root: Path) -> list[Path]:
+    """Return sorted list of run directories, newest first. 15 s TTL cache."""
+    now = time.monotonic()
+    key = str(root)
+    cached = _dir_cache.get(key)
+    if cached is not None and now < cached[0]:
+        return cached[1]
+    dirs = _refresh_run_dirs(root, now=now)
     return dirs
 
 
@@ -822,28 +869,113 @@ async def get_incidents(
     """
     root = Path(get_settings().live_runs_root)
     try:
-        run_dir = _validate_run_id(run_id, root)
+        run_dir = _existing_run_dir_from_listing(root, run_id)
     except ValueError:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
-    if not run_dir.is_dir():
+    except FileNotFoundError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
 
+    rows = _operator_incident_records(run_dir)
     log_path = _artifact_path(run_dir, "live.log")
-    if not log_path.exists():
-        return []
-
-    try:
-        text = log_path.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        logger.warning("Could not read %s: %s", log_path, exc)
-        return []
-
-    rows = [IncidentRecord.model_validate(r.model_dump()) for r in parse_incidents(text)]
+    if log_path.exists():
+        try:
+            text = log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            logger.warning("Could not read %s: %s", log_path, exc)
+        else:
+            rows.extend(IncidentRecord.model_validate(r.model_dump()) for r in parse_incidents(text))
+    rows = _dedupe_incident_records(rows)
     if since_ms is not None:
         rows = [r for r in rows if r.ts_ms > since_ms]
     if len(rows) > limit:
         rows = rows[-limit:]
     return rows
+
+
+_SAFETY_HALT_CATEGORY_BY_TRIGGER: dict[str, IncidentCategory] = {
+    "cold_start_divergence": IncidentCategory.COLD_START_DIVERGENCE,
+    "lost_fill": IncidentCategory.LOST_FILL,
+    "outside_mutation": IncidentCategory.OUTSIDE_MUTATION,
+    "operator_declared": IncidentCategory.OPERATOR_HALT,
+}
+
+def _operator_incident_records(run_dir: Path) -> list[IncidentRecord]:
+    records: list[IncidentRecord] = []
+    for incident in IncidentStore(run_dir).list_unresolved():
+        record = _safety_halt_incident_record(incident)
+        if record is not None:
+            records.append(record)
+    return records
+
+
+def _safety_halt_incident_record(incident: OperatorIncident) -> IncidentRecord | None:
+    if incident.category != "safety-halt":
+        return None
+    trigger = str(incident.evidence.get("halt_trigger") or "")
+    category = _SAFETY_HALT_CATEGORY_BY_TRIGGER.get(trigger, IncidentCategory.UNKNOWN)
+    source = classify_source(
+        category,
+        "operator_incidents",
+        incident.notice.message,
+    )
+    ts_ms = incident.notice.occurred_at_ms or incident.started_at_ms
+    level: Literal["WARNING", "CRITICAL"] = (
+        "CRITICAL" if incident.notice.tier == "critical" else "WARNING"
+    )
+    return IncidentRecord(
+        ts_ms=ts_ms,
+        raw_ts=_raw_ts_from_ms(ts_ms),
+        level=level,
+        logger="operator_incidents",
+        message=f"{incident.notice.title}: {incident.notice.message}",
+        traceback=None,
+        incident_category=category.value,
+        incident_source=source.value,
+        dynamic_facts=_operator_incident_dynamic_facts(incident),
+    )
+
+
+def _operator_incident_dynamic_facts(incident: OperatorIncident) -> dict[str, str | int]:
+    facts: dict[str, str | int] = {}
+    for source in (incident.notice.forensic_facts, incident.evidence):
+        for key, value in source.items():
+            if isinstance(value, bool):
+                facts[key] = str(value).lower()
+            elif isinstance(value, (int, str)):
+                facts[key] = value
+    return facts
+
+
+def _dedupe_incident_records(rows: list[IncidentRecord]) -> list[IncidentRecord]:
+    operator_safety_categories = {
+        row.incident_category
+        for row in rows
+        if row.logger == "operator_incidents" and _is_safety_halt_category(row.incident_category)
+    }
+    deduped: list[IncidentRecord] = []
+    for row in rows:
+        if (
+            row.logger != "operator_incidents"
+            and row.incident_category in operator_safety_categories
+            and _is_safety_halt_category(row.incident_category)
+        ):
+            continue
+        deduped.append(row)
+    return sorted(deduped, key=lambda row: row.ts_ms)
+
+
+def _is_safety_halt_category(category: str) -> bool:
+    return category in {
+        IncidentCategory.COLD_START_DIVERGENCE.value,
+        IncidentCategory.LOST_FILL.value,
+        IncidentCategory.OUTSIDE_MUTATION.value,
+        IncidentCategory.OPERATOR_HALT.value,
+    }
+
+
+def _raw_ts_from_ms(ts_ms: int) -> str:
+    dt = datetime.fromtimestamp(ts_ms // 1000, UTC)
+    return f"{dt:%Y-%m-%d %H:%M:%S}.{ts_ms % 1000:03d}"
 
 
 def _status_sid(run_dir: Path) -> str:

@@ -14,6 +14,7 @@ Covers the contract:
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -45,6 +46,7 @@ from app.engine.live.reconciliation_orchestrator import (
     reconcile,
 )
 from app.engine.live.reconciliation_receipt import RECEIPT_FILENAME
+from app.operator.incidents.store import IncidentStore
 from app.schemas.live_runs import ReconciliationReceipt
 
 NS = build_bot_order_namespace("test-strategy")
@@ -233,6 +235,12 @@ async def test_foreign_perm_id_poisons(tmp_path: Path) -> None:
     assert halt is not None
     assert halt.details["reason"] == "foreign_perm_id"
     assert halt.details["source"] == "reconciliation_orchestrator"
+    incidents = IncidentStore(run_dir).list_unresolved()
+    assert len(incidents) == 1
+    assert incidents[0].category == "safety-halt"
+    assert incidents[0].notice.code == "safety_halt.poisoned"
+    assert incidents[0].evidence["halt_trigger"] == "cold_start_divergence"
+    assert incidents[0].evidence["run_id"] == RUN_ID
 
 
 @pytest.mark.asyncio
@@ -474,3 +482,36 @@ async def test_existing_poisoned_flag_does_not_block_receipt(tmp_path: Path) -> 
     halt = read_poisoned_flag(run_dir)
     assert halt is not None
     assert halt.details["reason"] == "already_poisoned_from_prior_boot"
+
+
+@pytest.mark.asyncio
+async def test_corrupted_existing_poisoned_flag_logs_and_lands_receipt(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    repo = _make_envelope(run_dir)
+    (run_dir / POISONED_FLAG_FILENAME).write_text("{not json", encoding="utf-8")
+
+    async def probe() -> BrokerSnapshot:
+        return BrokerSnapshot(
+            open_orders=(BrokerOrderView(order_ref=None, perm_id=42),)
+        )
+
+    caplog.set_level(logging.ERROR, logger="app.engine.live.reconciliation_orchestrator")
+
+    result = await reconcile(
+        run_dir=run_dir,
+        sidecar=repo,
+        broker_probe=probe,
+        owned_namespaces=ALLOWED,
+        now_ms=_clock(),
+    )
+
+    assert result.receipt.status == "failed"
+    assert "could not parse existing poisoned.flag for safety-halt incident" in caplog.text
+    with pytest.raises(ValueError):
+        read_poisoned_flag(run_dir)
+    [incident] = IncidentStore(run_dir).list_unresolved()
+    assert incident.evidence["halt_trigger"] == "cold_start_divergence"

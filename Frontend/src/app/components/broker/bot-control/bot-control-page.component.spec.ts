@@ -30,6 +30,26 @@ describe('BotControlPageComponent', () => {
     window.localStorage.clear();
   });
 
+  function openLifecycleReceipts(
+    fixture: { detectChanges(): void },
+    element: HTMLElement,
+    graphId: string,
+    nodeId: string,
+  ): HTMLElement {
+    const toggle = element.querySelector<HTMLButtonElement>(
+      `[aria-controls="lifecycle-node-receipts-${graphId}-${nodeId}"]`,
+    );
+    expect(toggle).not.toBeNull();
+    if (!toggle) throw new Error(`Expected receipts toggle for ${graphId}/${nodeId}.`);
+    toggle.click();
+    fixture.detectChanges();
+
+    const receipts = element.querySelector<HTMLElement>(`[data-testid="lifecycle-node-receipts-${nodeId}"]`);
+    expect(receipts).not.toBeNull();
+    if (!receipts) throw new Error(`Expected receipts region for ${nodeId}.`);
+    return receipts;
+  }
+
   it('renders compact broker evidence and control-plane warning panels before the bot tabs', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const { element: el } = await setupBotControlPage();
@@ -546,18 +566,18 @@ describe('BotControlPageComponent', () => {
     component.selectLifecycleNode(reconcile);
     fixture.detectChanges();
 
-    const receipts = element.querySelector('[data-testid="bot-control-node-receipts"]');
+    const receipts = openLifecycleReceipts(fixture, element, 'global', 'reconcile');
     expect(element.textContent).toContain('Evidence checked');
     expect(element.textContent).toContain('ET');
-    expect(receipts?.textContent).toContain('Node receipt details');
-    expect(receipts?.textContent).toContain('Reconciliation failed.');
-    expect(receipts?.textContent).toContain('Reconciliation State is Failed.');
-    expect(receipts?.textContent).toContain('Failure Reason is Broker snapshot disagrees with the intent WAL.');
-    expect(receipts?.textContent).toContain('Reconciliation Projection');
-    expect(receipts?.querySelector('[title*="Reconciliation Projection"]')).toBeTruthy();
-    expect(receipts?.textContent).toContain('Intent ID is intent-7.');
-    expect(receipts?.textContent).not.toContain('Intent 7');
-    expect(receipts?.textContent).not.toContain('timestamp unresolved');
+    expect(receipts.querySelector('app-node-receipts-list')).not.toBeNull();
+    expect(receipts.textContent).toContain('Reconciliation failed.');
+    expect(receipts.textContent).toContain('Reconciliation State is Failed.');
+    expect(receipts.textContent).toContain('Failure Reason is Broker snapshot disagrees with the intent WAL.');
+    expect(receipts.textContent).toContain('Reconciliation Projection');
+    expect(receipts.querySelector('[title*="Reconciliation Projection"]')).toBeTruthy();
+    expect(receipts.textContent).toContain('Intent ID is intent-7.');
+    expect(receipts.textContent).not.toContain('Intent 7');
+    expect(receipts.textContent).not.toContain('timestamp unresolved');
   });
 
   it('keeps lifecycle node codes out of trader copy and formats them in receipts', async () => {
@@ -585,6 +605,9 @@ describe('BotControlPageComponent', () => {
     const { fixture, component, element: el } = await setupBotControlPage({ status });
     component.selectLifecycleNode(hostState);
     fixture.detectChanges();
+    el.querySelector<HTMLButtonElement>('[aria-label^="Open Deploy or start details"]')?.click();
+    fixture.detectChanges();
+    openLifecycleReceipts(fixture, el, 'deploy', 'host_state');
 
     const traderCopy = Array.from(el.querySelectorAll('[data-trader-copy]'))
       .map((node) => node.textContent ?? '')

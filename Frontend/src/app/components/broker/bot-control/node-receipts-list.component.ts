@@ -1,4 +1,3 @@
-import { CommonModule } from '@angular/common';
 import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 
 import type { LifecycleChartReceipt } from '../../../api/live-instances.types';
@@ -9,13 +8,12 @@ import {
 import { fmtTimestampNy } from '../format';
 
 @Component({
-  selector: 'app-node-receipts-pane',
-  imports: [CommonModule],
+  selector: 'app-node-receipts-list',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  templateUrl: './node-receipts-pane.component.html',
-  styleUrl: './node-receipts-pane.component.scss',
+  templateUrl: './node-receipts-list.component.html',
+  styleUrl: './node-receipts-list.component.scss',
 })
-export class NodeReceiptsPaneComponent {
+export class NodeReceiptsListComponent {
   readonly receipts = input<LifecycleChartReceipt[]>([]);
 
   receiptHeadline(receipt: LifecycleChartReceipt): string {

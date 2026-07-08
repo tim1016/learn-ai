@@ -60,14 +60,43 @@
     <aside class="readiness" aria-label="Deployment command">
       <section class="command-panel">
         <p class="eyebrow">Deploy command</p>
-        <h2>{{ startNow() ? 'Deploy & start' : 'Deploy only' }}</h2>
+        <h2>{{ commandTitle() }}</h2>
         <p>{{ selectedValidation()?.display_name ?? 'Select a validated strategy before deploying.' }}</p>
         <button type="button" class="primary" [disabled]="!canSubmit()" (click)="submit()">
           <i class="pi pi-send" aria-hidden="true"></i>
-          {{ startNow() ? 'Deploy & start' : 'Deploy' }}
+          {{ commandButtonLabel() }}
         </button>
-        @let reason = blockedReason();
-        <p class="blocked" role="status">{{ reason ?? 'Ready to deploy.' }}</p>
+        @let blocker = activeBlocker();
+        @if (blocker?.actionLink; as actionLink) {
+          <p class="blocked" role="status">
+            <span>{{ blocker?.message }}</span>
+            <a [routerLink]="actionLink.route" [fragment]="actionLink.fragment">{{ actionLink.linkText }}</a>
+          </p>
+        } @else {
+          <p class="blocked" role="status">{{ commandStatus() }}</p>
+        }
+        @if (identityCoherenceEvidence()) {
+          <app-deploy-coherence-card
+            title="Run identity"
+            ariaLabel="Run identity confirmation"
+            [facts]="identityCoherenceFacts()"
+            [confirmed]="identityCoherenceConfirmed()"
+            [startNow]="effectiveStartNow()"
+            confirmLabel="Confirm new run identity"
+            (confirmationRequested)="confirmIdentityCoherence()"
+          />
+        }
+        @if (exposureCoherenceEvidence()) {
+          <app-deploy-coherence-card
+            title="Inherited exposure"
+            ariaLabel="Exposure confirmation"
+            [facts]="exposureCoherenceFacts()"
+            [confirmed]="exposureCoherenceConfirmed()"
+            [startNow]="effectiveStartNow()"
+            confirmLabel="Confirm exposure state"
+            (confirmationRequested)="confirmExposureCoherence()"
+          />
+        }
       </section>
 
       <section>
@@ -293,11 +322,11 @@
       <section class="group" [class.step-hidden]="activeDeployTab() !== 'launch'" aria-labelledby="launch-section">
         <div class="group-head">
           <h2 id="launch-section">Launch options</h2>
-          @if (!startNow()) {
+          @if (!effectiveStartNow()) {
             <span class="scope-note">Applies only when starting now</span>
           }
         </div>
-        <fieldset class="mode" [class.orders-selected]="executionCapability() === 'paper_orders'" [class.live-selected]="executionCapability() === 'live'" [disabled]="!startNow()">
+        <fieldset class="mode" [class.orders-selected]="executionCapability() === 'paper_orders'" [class.live-selected]="executionCapability() === 'live'" [disabled]="!effectiveStartNow()">
           <legend>Execution capability</legend>
           <label>
             <input type="radio" name="launch-mode" value="read_only" [checked]="executionCapability() === 'read_only'" (change)="setExecutionMode($event)" />
@@ -321,22 +350,22 @@
             </span>
           </label>
         </fieldset>
-        <p class="capability-proof" [class.dimmed]="!startNow()">{{ executionCapabilityProof() }}</p>
-        @if (startNow() && executionCapability() === 'paper_orders') {
+        <p class="capability-proof" [class.dimmed]="!effectiveStartNow()">{{ executionCapabilityProof() }}</p>
+        @if (effectiveStartNow() && executionCapability() === 'paper_orders') {
           <p class="launch-warning" role="status">
             Paper orders are enabled for launch. Guardrail limit: {{ maxOrdersPerDay() }} orders/day.
           </p>
         }
 
-        <div class="launch-fields" [class.dimmed]="!startNow()">
+        <div class="launch-fields" [class.dimmed]="!effectiveStartNow()">
           <label class="field inline">
             <span>Daily order limit</span>
-            <input type="number" min="0" max="100000" [value]="maxOrdersPerDay()" (input)="setMaxOrders($event)" />
+            <input type="number" min="0" max="100000" [value]="maxOrdersPerDay()" [disabled]="!effectiveStartNow()" (input)="setMaxOrders($event)" />
           </label>
 
           <label class="field inline">
             <span>Restore previous state <span class="hint" title="Controls whether the engine must load yesterday's saved indicator state before it starts.">ⓘ</span></span>
-            <select [value]="hydratePolicy()" (change)="setHydratePolicy($event)">
+            <select [value]="hydratePolicy()" [disabled]="!effectiveStartNow()" (change)="setHydratePolicy($event)">
               <option value="require">Required</option>
               <option value="optional">Optional</option>
               <option value="disabled">Off</option>

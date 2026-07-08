@@ -72,6 +72,7 @@ from app.engine.live.account_recovery_cli import (
     cmd_resume as _account_recovery_cmd_resume,
 )
 from app.engine.live.deploy import (
+    ActionPlanReadinessError,
     DeployIOError,
     DeployParams,
     DirtyTreeError,
@@ -228,6 +229,12 @@ def cmd_init_ledger(args: argparse.Namespace) -> int:
         return 2
     except UnsupportedBarSourceDescriptorError as exc:
         print(f"[INIT-LEDGER] unsupported bar source: {exc}", file=sys.stderr)
+        return 2
+    except ActionPlanReadinessError as exc:
+        print(
+            f"[INIT-LEDGER] action plan not ready ({exc.reason_code}): {exc.message}",
+            file=sys.stderr,
+        )
         return 2
     except DeployIOError as exc:
         print(f"[INIT-LEDGER] filesystem error: {exc}", file=sys.stderr)
@@ -747,12 +754,10 @@ def _lookup_sizing_surface(strategy_key: str) -> str | None:
     extended.
 
     Tolerates an unregistered ``strategy_key`` (returns ``None`` so the
-    fail-fast in LivePortfolio doesn't fire on legacy/test runs).
+    fail-fast in LivePortfolio doesn't fire on legacy/test runs). Registry
+    import failures are deploy bugs and should fail loudly.
     """
-    try:
-        from app.routers.engine import _STRATEGY_REGISTRY  # local import: lazy
-    except Exception:
-        return None
+    from app.engine.strategy.registry import _STRATEGY_REGISTRY
     # VCR-0004 / Phase 2 — the registry is keyed by module name now, so the
     # legacy ``removeprefix("spy_")`` workaround is gone.
     reg = _STRATEGY_REGISTRY.get(strategy_key)
@@ -1385,7 +1390,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     # importable-but-unregistered module (``buy_and_hold``,
     # ``spy_vwap_reversion``) is intentionally non-deployable.
     try:
-        from app.routers.engine import _STRATEGY_REGISTRY
+        from app.engine.strategy.registry import _STRATEGY_REGISTRY
     except Exception as exc:  # pragma: no cover - registry import crash is a deploy bug
         print(f"[START] could not load strategy registry: {exc}", file=sys.stderr)
         return 2

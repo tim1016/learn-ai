@@ -3,7 +3,6 @@ import { ChangeDetectionStrategy, Component, computed, input, output } from '@an
 import type { LifecycleChartNode, LiveInstanceStatus } from '../../../api/live-instances.types';
 import { fmtTimestampNy } from '../format';
 import { bucketHelp, nodeHelp } from './concept-help.registry';
-import { NodeReceiptsPaneComponent } from './node-receipts-pane.component';
 import {
   buildChangeForNextRunFields,
   type RedeploySettingField,
@@ -17,7 +16,6 @@ const ACTIONABILITY_BANNERS: Record<LifecycleChartNode['operator_actionability']
 
 @Component({
   selector: 'app-node-inspector',
-  imports: [NodeReceiptsPaneComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './node-inspector.component.html',
   styleUrl: './node-inspector.component.scss',

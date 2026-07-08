@@ -2,22 +2,12 @@
   display: block;
 }
 
-.context-receipts {
-  margin-top: 0.25rem;
-
-  summary {
-    cursor: pointer;
-    color: var(--text-primary);
-    font-weight: 700;
-  }
-
-  ul {
-    display: grid;
-    gap: 0.45rem;
-    margin: 0.55rem 0 0;
-    padding: 0;
-    list-style: none;
-  }
+.context-receipts-list {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 
   li {
     display: grid;

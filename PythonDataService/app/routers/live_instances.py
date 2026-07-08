@@ -37,7 +37,6 @@ from app.engine.live.account_artifacts import (
     read_account_owner_generation,
 )
 from app.engine.live.command_channel import CommandChannel, CommandVerb
-from app.engine.live.config import stock_symbol_from_action_plan
 from app.engine.live.daemon_connectivity_monitor import (
     get_monitor as get_daemon_connectivity_monitor,
 )
@@ -184,6 +183,11 @@ from app.services.daemon_diagnostics import (
     project_daemon_diagnostic_report,
     redact_host_runner_health,
 )
+from app.services.deploy_admission import (
+    SymbolResolution,
+    evaluate_deploy_start_admission,
+    resolve_symbol_from_ledger,
+)
 from app.services.instance_context import InstanceContext, load_instance_context
 from app.services.mutation_attempt import (
     TERMINAL_STATES,
@@ -194,7 +198,9 @@ from app.services.mutation_attempt import (
     transition_attempt,
 )
 from app.services.operator_capability import evaluate_action
-from app.services.operator_surface import compute_operator_surface
+from app.services.operator_surface import (
+    compute_operator_surface,
+)
 from app.services.resume_guard_state import (
     ResumeGuardState,
     empty_guard_state,
@@ -711,7 +717,7 @@ def _resolve_incident_headline(root: Path, live_binding: LiveBinding | None, run
     incidents = [
         incident
         for incident in IncidentStore(run_dir).list_unresolved()
-        if incident.category in {"watchdog", "order", "submit"}
+        if incident.category in {"watchdog", "order", "submit", "safety-halt"}
     ]
     if not incidents:
         return None
@@ -911,6 +917,21 @@ def _start_defaults(
     )
 
 
+def _resolve_symbol_resolution(
+    root: Path,
+    live_binding: LiveBinding | None,
+    runs: list[dict],
+) -> SymbolResolution | None:
+    run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
+    if run_dir is None:
+        return None
+    try:
+        ledger = _read_ledger(run_dir)
+    except (OSError, ValueError, KeyError):
+        return None
+    return resolve_symbol_from_ledger(ledger, _container_resolve_repo_path)
+
+
 def _resolve_symbol(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> str | None:
     """Monitor/chart symbol for the instance.
 
@@ -939,39 +960,8 @@ def _resolve_symbol(root: Path, live_binding: LiveBinding | None, runs: list[dic
     here and resolving the symbol from the run(s) that overlap that date,
     returning ``None`` on a mixed-symbol day.
     """
-    run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
-    if run_dir is None:
-        return None
-    try:
-        ledger = _read_ledger(run_dir)
-    except (OSError, ValueError, KeyError):
-        return None
-    live_config = ledger.get("live_config") or {}
-    if isinstance(live_config, dict):
-        symbol = stock_symbol_from_action_plan(live_config.get("action"))
-        if symbol is not None:
-            return symbol
-        symbol = live_config.get("symbol")
-        if isinstance(symbol, str) and symbol:
-            return symbol
-    # Spec fallback — read the strategy spec the ledger pins and pick the
-    # first symbol. A multi-symbol strategy (none in the fleet today) would
-    # surface here as the first one; the per-day TODO above lays out the
-    # eventual generalization.
-    spec_path = ledger.get("strategy_spec_path")
-    if isinstance(spec_path, str) and spec_path:
-        for candidate in _container_resolve_repo_path(spec_path):
-            try:
-                spec = json.loads(candidate.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                continue
-            symbols = spec.get("symbols")
-            if isinstance(symbols, list) and symbols:
-                first = symbols[0]
-                if isinstance(first, str) and first:
-                    return first
-            break
-    return None
+    resolution = _resolve_symbol_resolution(root, live_binding, runs)
+    return resolution.value if resolution is not None else None
 
 
 def _container_resolve_repo_path(path: str) -> list[Path]:
@@ -1289,7 +1279,7 @@ def _resolve_instrument_surface(
     strategy_key = ledger.get("strategy_key")
     if not isinstance(strategy_key, str) or not strategy_key:
         return None
-    from app.routers.engine import _STRATEGY_REGISTRY
+    from app.engine.strategy.registry import _STRATEGY_REGISTRY
 
     reg = _STRATEGY_REGISTRY.get(strategy_key)
     if reg is None:
@@ -1755,6 +1745,27 @@ def _bot_delete_response(artifacts_root: Path, record: BotDeletionRecord) -> Bot
     )
 
 
+def _raise_if_deploy_admission_blocks_start(
+    live_runs_root: Path,
+    body: LiveInstanceDeployRequest,
+) -> None:
+    if not body.start:
+        return
+    sid = body.strategy_instance_id.strip()
+    visible_runs = _visible_runs_by_instance(live_runs_root).get(sid, []) if sid else []
+    inherited_symbol = _resolve_symbol_resolution(live_runs_root, None, visible_runs) if sid else None
+    broker = _instance_broker(live_runs_root, sid) if sid and visible_runs else None
+    block = evaluate_deploy_start_admission(
+        body=body,
+        sid=sid,
+        visible_runs=visible_runs,
+        inherited_symbol=inherited_symbol,
+        broker=broker,
+    )
+    if block is not None:
+        raise HTTPException(block.status_code, detail=block.detail)
+
+
 async def _host_deploy_request_from_public(
     body: LiveInstanceDeployRequest,
 ) -> HostRunnerDeployRequest:
@@ -1774,8 +1785,19 @@ async def _host_deploy_request_from_public(
                 "Refresh broker state and deploy again."
             ),
         )
-    payload = body.model_dump()
-    payload.pop("account_id", None)
+    payload = body.model_dump(
+        exclude={
+            "account_id",
+            "inherited_symbol",
+            "inherited_symbol_source",
+            "identity_coherence_confirmation",
+            "inherited_exposure_posture",
+            "inherited_exposure_pending_order_count",
+            "inherited_exposure_positions",
+            "inherited_exposure_source",
+            "exposure_coherence_confirmation",
+        },
+    )
     return HostRunnerDeployRequest.model_validate({**payload, "account_id": broker_account})
 
 
@@ -1808,6 +1830,10 @@ async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -
                 "gate_result": account_freeze.to_gate_result().model_dump(mode="json"),
             },
         )
+    _raise_if_deploy_admission_blocks_start(
+        Path(settings.live_runs_root),
+        body,
+    )
     if daemon_request.start and daemon_request.strategy_instance_id:
         _raise_if_stopped_blocks_start(
             Path(settings.live_runs_root),

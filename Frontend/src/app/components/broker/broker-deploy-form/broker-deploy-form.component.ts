@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import {
   afterEveryRender,
   ChangeDetectionStrategy,
@@ -12,8 +13,10 @@ import {
 } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { InputTextModule } from 'primeng/inputtext';
+import type { LiveInstanceStatus } from '../../../api/live-instances.types';
 import {
   DEFAULT_MAX_ORDERS_PER_DAY,
+  type ExposureCoherencePosture,
   type HostRunnerDeployRequest,
   type HostRunnerDeployResponse,
   type HydratePolicy,
@@ -33,15 +36,35 @@ import { BrokerConnectivityStripComponent } from '../broker-connectivity-strip/b
 import { BrokerOperationResultComponent } from '../broker-operation-result/broker-operation-result.component';
 import { type OperationError, toOperationError } from '../operation-error';
 import {
+  deployPrefillParamsFromQuery,
+  isExposurePosture,
+  normalizeExposurePositionsRecord,
+  normalizedSymbol,
+  singleLongStockActionSymbol,
+} from '../lib/deploy-prefill-params';
+import {
+  buildExposureCoherenceConfirmation,
+  buildExposureCoherenceEvidence,
+  buildIdentityCoherenceConfirmation,
+  buildIdentityCoherenceEvidence,
+  exposureCoherenceCardFacts,
+  type ExposureCoherenceConflict,
+  identityCoherenceCardFacts,
+  type IdentityCoherenceConflict,
+} from './deploy-coherence';
+import { DeployCoherenceCardComponent } from './deploy-coherence-card.component';
+import {
+  type AccountProofBlock,
+  actionPlanDeployReadiness,
   buildDeployChecks,
   buildDeployReadinessFacts,
   buildNowChecks,
+  type DeployBlocker,
+  deployBlocker,
+  stoppedStartLatchState,
 } from './deploy-readiness';
 
-// Kept in lockstep with the backend guard `identity._INSTANCE_ID_RE`
-// (and `live_instances._INSTANCE_ID_RE`): a deployment name the operate
-// endpoints reject (e.g. one with a space) must be caught here too, so the
-// operator sees the reason inline instead of a created-but-unusable instance.
+// Mirror the backend single-segment deployment name guard.
 const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
 type DeployTabKey = 'strategy' | 'signal' | 'sizing' | 'legs' | 'launch';
@@ -54,20 +77,16 @@ interface DeployTab {
   complete: boolean;
 }
 
-// ADR 0009 § 3 — Reference parity preset's policy. Pinned here as a constant
-// so the gate lookup and the submit path use the *same* shape; a future change
-// to the preset's all-in fraction needs to land in exactly one place.
-const REFERENCE_PARITY_POLICY: SizingPolicy = { kind: 'SetHoldings', fraction: '1.0' };
-
-function normalizedSymbol(value: string | null | undefined): string {
-  return value?.trim().toUpperCase() ?? '';
+interface DeployCommandState {
+  kind: 'busy' | 'accepted' | 'blocked' | 'ready';
+  message: string;
+  canSubmit: boolean;
+  actionLink?: AccountProofBlock;
 }
 
-/**
- * Deploy form for a live strategy instance. The UI uses plain operator words,
- * while the request still maps exactly to ADR 0006: create the run on the host,
- * bind it to a QC backtest receipt, and optionally start it immediately.
- */
+// ADR 0009 § 3: gate lookup and submit share the same Reference parity policy.
+const REFERENCE_PARITY_POLICY: SizingPolicy = { kind: 'SetHoldings', fraction: '1.0' };
+
 @Component({
   selector: 'app-broker-deploy-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -78,6 +97,7 @@ function normalizedSymbol(value: string | null | undefined): string {
     ActionPlanPickerComponent,
     InputTextModule,
     ReceiptLabelPipe,
+    DeployCoherenceCardComponent,
   ],
   templateUrl: './broker-deploy-form.component.html',
   styleUrl: './broker-deploy-form.component.scss',
@@ -94,20 +114,19 @@ export class BrokerDeployFormComponent {
   readonly strategies = resource({ loader: () => this.svc.getEngineStrategies() });
   readonly strategyValidations = resource({ loader: () => this.strategyValidation.getCatalog() });
   readonly specFixtures = resource({ loader: () => this.svc.getSpecStrategyFixtures() });
-  // Used only to pre-empt the daemon's "already active" 409: a start-immediately
-  // deploy onto an instance that already has a live runner is rejected.
   readonly instances = resource({ loader: () => this.svc.getInstances() });
-  // Display-only: the deploy boundary derives this from the connected broker
-  // session and rejects deployment while broker identity is unavailable.
+  readonly instanceStatus = resource<LiveInstanceStatus | null, string | null>({
+    params: () => {
+      const id = this.instanceId().trim();
+      return this.startNow() && id !== '' && INSTANCE_ID_RE.test(id) ? id : null;
+    },
+    loader: ({ params }) => this.loadInstanceStatus(params),
+  });
   readonly account = resource({ loader: () => this.broker.account() });
   readonly accountTruth = resource({ loader: () => this.broker.accountTruth() });
-  // ADR 0009 § 9 — broker positions for the symbol-scoped all-in coexistence
-  // guard (Decision 13). Loaded once on form open; the guard only consults it
-  // when Reference parity is selected, so a broker outage doesn't block other
-  // presets.
+  // ADR 0009 § 9: symbol-scoped all-in coexistence guard.
   readonly positions = resource({ loader: () => this.broker.positions() });
 
-  // Form fields.
   readonly strategyKey = signal<string>('');
   readonly specPath = signal<string>('');
   readonly signalStream = signal<string>('');
@@ -116,38 +135,22 @@ export class BrokerDeployFormComponent {
   readonly qcBacktestId = signal<string>('');
   readonly qcAuditCopyPath = signal<string>('');
   readonly instanceId = signal<string>('');
+  readonly inheritedSymbol = signal<string>('');
+  readonly inheritedSymbolSource = signal<string>('');
+  readonly inheritedExposurePosture = signal<ExposureCoherencePosture | ''>('');
+  readonly inheritedExposurePendingOrderCount = signal<number | null>(null);
+  readonly inheritedExposurePositions = signal<Record<string, number>>({});
+  readonly inheritedExposureSource = signal<string>('');
   readonly executionMode = signal<ExecutionMode>('paper_orders');
   readonly hydratePolicy = signal<HydratePolicy>('require');
   readonly maxOrdersPerDay = signal<number>(DEFAULT_MAX_ORDERS_PER_DAY);
   readonly startNow = signal<boolean>(true);
-  // PRD #593 Slice 1B (#595) — operator-declared action plan. Empty by
-  // default; the picker mutates it in place. The submitted ``live_config``
-  // always carries a plan (empty or otherwise) so ``run_id`` honestly
-  // attests to declared intent; ADR 0012 §"Scope" says the engine
-  // doesn't consume it until Slice 4.
   readonly actionPlan = signal<ActionPlan>({ on_enter: [], on_exit: [] });
-  // PRD #593 Slice 1E (#598) — unhashed redeploy lineage. Seeded from
-  // the cockpit's "Redeploy with changes" deep-link query param;
-  // forwarded at the top level of the submit payload (NOT inside
-  // ``live_config`` — lineage is unhashed; ADR 0012 §7).
   readonly parentRunId = signal<string | null>(null);
-  // ADR 0009 § 7 — position-sizing preset. Defaults to Safe canary
-  // (FixedShares(1)); the $250k surprise from the first deployment-validation
-  // run is opt-in. Reference parity is gated by the audit-copy allow-list
-  // (ADR § 3); Custom ships in PR4.
   readonly sizingPreset = signal<SizingPreset>('safe_canary');
   readonly activeDeployTab = signal<DeployTabKey>('strategy');
   private readonly signalStreamManuallyEdited = signal<boolean>(false);
 
-  // ADR 0009 § 3 — Reference parity gate. Refetched whenever the chosen audit
-  // copy changes; surfaces the verdict (`proven_match` / `proven_mismatch` /
-  // `cannot_prove`) inline so the operator sees *why* Reference parity is
-  // available or not before clicking. **Crucially**, the lookup passes the
-  // actual Reference parity policy (`SetHoldings(1.0)`) so the backend
-  // compares the registered rule against the preset the operator would
-  // submit; an audit copy registered as `SetHoldings(0.5)` would otherwise
-  // pass the bare informational lookup and silently enable a Reference
-  // parity click that submits `SetHoldings(1.0)`.
   readonly referenceParityGate = resource({
     params: () => ({ auditCopyPath: this.qcAuditCopyPath().trim() }),
     loader: async ({ params }) => {
@@ -171,11 +174,7 @@ export class BrokerDeployFormComponent {
     return gate.detail;
   });
 
-  // PR4 — Custom expansion. The operator picks a kind (FixedShares or
-  // FixedNotional) and a value. The kind dropdown is the canonical name; the
-  // value field accepts plain numbers (FixedShares) or decimal-string-friendly
-  // numbers (FixedNotional). Decimal-on-the-wire is enforced at submit time so
-  // the operator never sees a float at the API boundary.
+  // PR4: Custom values stay decimal-string-friendly until submit.
   readonly customKind = signal<'FixedShares' | 'FixedNotional'>('FixedShares');
   readonly customValue = signal<string>('1');
   readonly busy = signal<boolean>(false);
@@ -186,11 +185,43 @@ export class BrokerDeployFormComponent {
     const id = this.deployedInstanceId();
     return id ? ['/broker/bots', id] : ['/broker/bots'];
   });
+  readonly postSubmitCommandStatus = computed<string | null>(() => {
+    const deployed = this.deployed();
+    if (!deployed?.start?.accepted) return null;
+    if (!this.startNow()) return null;
+    if (this.deployedInstanceId() !== this.instanceId().trim()) return null;
+    return `Start accepted for run ${deployed.run_id}. View deployment to monitor the live run.`;
+  });
+  readonly commandState = computed<DeployCommandState>(() => {
+    if (this.busy()) {
+      return { kind: 'busy', message: 'Submitting deployment.', canSubmit: false };
+    }
+    const accepted = this.postSubmitCommandStatus();
+    if (accepted !== null) {
+      return { kind: 'accepted', message: accepted, canSubmit: false };
+    }
+    const blocked = this.preSubmitBlocker();
+    if (blocked !== null) {
+      return {
+        kind: 'blocked',
+        message: blocked.message,
+        canSubmit: false,
+        actionLink: blocked.actionLink,
+      };
+    }
+    if (this.stoppedStartLatch()) {
+      return {
+        kind: 'ready',
+        message:
+          'Durable STOPPED latch is set. This submit will deploy only; use Resume on the bot page to clear the latch before starting.',
+        canSubmit: true,
+      };
+    }
+    return { kind: 'ready', message: 'Ready to deploy.', canSubmit: true };
+  });
+  readonly commandStatus = computed<string>(() => this.commandState().message);
 
-  // Captured once when the form opens, NOT per-submit: start_date_ms is part of
-  // the content-addressed run_id hash, so a retry with identical inputs must
-  // reuse the same value to hit the backend's idempotent no-op (created=false)
-  // rather than minting a new run_id off the current clock.
+  // Captured once so identical retries can hit the backend idempotent no-op.
   private readonly startDateMs = Date.now();
 
   readonly validatedStrategies = computed<StrategyValidationSummary[]>(() =>
@@ -261,8 +292,76 @@ export class BrokerDeployFormComponent {
   });
 
   readonly actionPlanTradeSymbol = computed<string | null>(() =>
-    BrokerDeployFormComponent.singleLongStockActionSymbol(this.actionPlan()),
+    singleLongStockActionSymbol(this.actionPlan()) || null,
   );
+  readonly actionPlanReadiness = computed(() =>
+    actionPlanDeployReadiness(this.strategyKey(), this.actionPlan()),
+  );
+  private readonly identityCoherenceConfirmedSignature = signal<string | null>(null);
+  readonly identityCoherenceEvidence = computed<IdentityCoherenceConflict | null>(() =>
+    buildIdentityCoherenceEvidence({
+      inheritedSymbol: this.inheritedSymbol(),
+      inheritedSymbolSource: this.inheritedSymbolSource(),
+      signalStream: this.resolvedSignalStream(),
+      actionPlanSymbol: this.actionPlanTradeSymbol(),
+    }),
+  );
+  readonly identityCoherenceConfirmed = computed<boolean>(() => {
+    const evidence = this.identityCoherenceEvidence();
+    return evidence !== null && this.identityCoherenceConfirmedSignature() === evidence.signature;
+  });
+  readonly identityCoherenceConfirmation = computed(() =>
+    buildIdentityCoherenceConfirmation({
+      confirmed: this.identityCoherenceConfirmed(),
+      inheritedSymbol: this.inheritedSymbol(),
+      signalStream: this.resolvedSignalStream(),
+      actionPlanSymbol: this.actionPlanTradeSymbol(),
+    }),
+  );
+  readonly identityCoherenceFacts = computed(() =>
+    identityCoherenceCardFacts(this.identityCoherenceEvidence()),
+  );
+  readonly identityCoherenceBlock = computed<IdentityCoherenceConflict | null>(() => {
+    const evidence = this.identityCoherenceEvidence();
+    if (evidence === null || !this.effectiveStartNow() || this.identityCoherenceConfirmed()) {
+      return null;
+    }
+    return evidence;
+  });
+
+  private readonly exposureCoherenceConfirmedSignature = signal<string | null>(null);
+  readonly exposureCoherenceEvidence = computed<ExposureCoherenceConflict | null>(() =>
+    buildExposureCoherenceEvidence({
+      posture: this.inheritedExposurePosture(),
+      pendingOrderCount: this.inheritedExposurePendingOrderCount(),
+      ownedPositions: this.inheritedExposurePositions(),
+      source: this.inheritedExposureSource(),
+      instanceId: this.instanceId().trim(),
+      parentRunId: this.parentRunId(),
+    }),
+  );
+  readonly exposureCoherenceConfirmed = computed<boolean>(() => {
+    const evidence = this.exposureCoherenceEvidence();
+    return evidence !== null && this.exposureCoherenceConfirmedSignature() === evidence.signature;
+  });
+  readonly exposureCoherenceConfirmation = computed(() =>
+    buildExposureCoherenceConfirmation({
+      evidence: this.exposureCoherenceEvidence(),
+      confirmed: this.exposureCoherenceConfirmed(),
+      instanceId: this.instanceId().trim(),
+      parentRunId: this.parentRunId(),
+    }),
+  );
+  readonly exposureCoherenceFacts = computed(() =>
+    exposureCoherenceCardFacts(this.exposureCoherenceEvidence()),
+  );
+  readonly exposureCoherenceBlock = computed<ExposureCoherenceConflict | null>(() => {
+    const evidence = this.exposureCoherenceEvidence();
+    if (evidence === null || !this.effectiveStartNow() || this.exposureCoherenceConfirmed()) {
+      return null;
+    }
+    return evidence;
+  });
 
   readonly deployTabs = computed<DeployTab[]>(() => [
     {
@@ -291,7 +390,7 @@ export class BrokerDeployFormComponent {
       key: 'legs',
       label: 'Legs',
       target: 'action-plan-picker-heading',
-      complete: true,
+      complete: this.actionPlanReadiness().canDeploy,
     },
     {
       key: 'launch',
@@ -314,10 +413,6 @@ export class BrokerDeployFormComponent {
     }),
   );
 
-  /** True when the typed deployment name already has a live host runner. A
-   * start-immediately deploy onto it would hit the daemon's 409 "Host runner
-   * already active for … (instance …)"; deploy-only is unaffected. Matches the
-   * backend's live set (running | stopping). */
   readonly instanceAlreadyRunning = computed<boolean>(() => {
     const id = this.instanceId().trim();
     if (id === '') return false;
@@ -325,9 +420,6 @@ export class BrokerDeployFormComponent {
     return match?.process_state === 'running' || match?.process_state === 'stopping';
   });
 
-  /** True when a deployment name is typed but is not a valid single-segment id
-   * (e.g. contains a space). Empty is "missing", not "invalid", so the
-   * missing-fields message handles it. */
   readonly instanceIdInvalid = computed<boolean>(() => {
     const id = this.instanceId().trim();
     return id !== '' && !INSTANCE_ID_RE.test(id);
@@ -357,33 +449,52 @@ export class BrokerDeployFormComponent {
   );
 
   readonly deployChecks = computed(() => buildDeployChecks(this.error()?.status));
-
+  readonly stoppedStartLatchStatus = computed(() => {
+    const statusUnavailable = this.instanceStatus.error() !== undefined;
+    const status = statusUnavailable ? null : this.instanceStatus.value();
+    const id = this.instanceId().trim();
+    return stoppedStartLatchState({
+      startNow: this.startNow(),
+      instanceId: id,
+      instanceIdValid: id !== '' && INSTANCE_ID_RE.test(id),
+      statusLoading: this.instanceStatus.isLoading(),
+      statusUnavailable,
+      desiredState: status?.desired_state,
+      startCapability: status?.operator_surface.host_process.start_capability,
+    });
+  });
+  readonly stoppedStartLatch = computed<boolean>(() => this.stoppedStartLatchStatus() === 'blocked');
+  readonly effectiveStartNow = computed<boolean>(() => this.startNow() && !this.stoppedStartLatch());
+  readonly commandTitle = computed<string>(() =>
+    this.effectiveStartNow() ? 'Deploy & start' : 'Deploy only',
+  );
+  readonly commandButtonLabel = computed<string>(() =>
+    this.effectiveStartNow() ? 'Deploy & start' : 'Deploy',
+  );
   constructor() {
-    // Re-deploy prefill: query params seed operator/runtime fields from the
-    // prior run. Validated-strategy provenance below still wins for settings,
-    // QC backtest, and audit copy; deploy does not let stale URLs re-author
-    // technical evidence.
-    const qp = this.route.snapshot.queryParamMap;
-    const seedStrategy = qp.get('strategy_key');
-    if (seedStrategy) this.strategyKey.set(seedStrategy);
-    const seedSpecPath = qp.get('spec_path');
-    if (seedSpecPath) {
+    // Re-deploy URLs seed operator/runtime fields; validation receipts still win.
+    const prefill = deployPrefillParamsFromQuery(this.route.snapshot.queryParamMap);
+    if (prefill.strategyKey) this.strategyKey.set(prefill.strategyKey);
+    if (prefill.specPath) {
       // Preserved only until the selected strategy's validation receipt loads.
       this.manualSpecPath.set(true);
-      this.specPath.set(seedSpecPath);
+      this.specPath.set(prefill.specPath);
     }
-    const seedBacktestId = qp.get('qc_backtest_id');
-    if (seedBacktestId) this.qcBacktestId.set(seedBacktestId);
-    const seedAuditCopy = qp.get('qc_audit_copy_path');
-    if (seedAuditCopy) this.qcAuditCopyPath.set(seedAuditCopy);
-    const seedInstanceId = qp.get('instance_id');
-    if (seedInstanceId) this.instanceId.set(seedInstanceId);
-    const seedParent = qp.get('parent_run_id');
-    if (seedParent) this.parentRunId.set(seedParent);
-    const seedSignalStream = qp.get('signal_stream');
-    if (seedSignalStream) {
+    if (prefill.qcBacktestId) this.qcBacktestId.set(prefill.qcBacktestId);
+    if (prefill.qcAuditCopyPath) this.qcAuditCopyPath.set(prefill.qcAuditCopyPath);
+    if (prefill.instanceId) this.instanceId.set(prefill.instanceId);
+    if (prefill.inheritedSymbol) this.inheritedSymbol.set(prefill.inheritedSymbol);
+    if (prefill.inheritedSymbolSource) this.inheritedSymbolSource.set(prefill.inheritedSymbolSource);
+    if (prefill.inheritedExposurePosture) this.inheritedExposurePosture.set(prefill.inheritedExposurePosture);
+    if (prefill.inheritedExposurePendingOrderCount !== null) {
+      this.inheritedExposurePendingOrderCount.set(prefill.inheritedExposurePendingOrderCount);
+    }
+    this.inheritedExposurePositions.set(prefill.inheritedExposurePositions);
+    if (prefill.inheritedExposureSource) this.inheritedExposureSource.set(prefill.inheritedExposureSource);
+    if (prefill.parentRunId) this.parentRunId.set(prefill.parentRunId);
+    if (prefill.signalStream) {
       this.signalStreamManuallyEdited.set(true);
-      this.signalStream.set(normalizedSymbol(seedSignalStream));
+      this.signalStream.set(prefill.signalStream);
     }
 
     effect(() => {
@@ -419,10 +530,7 @@ export class BrokerDeployFormComponent {
     effect(() => {
       this.accountId.set(this.brokerAccountId());
     });
-    // Reference parity must not silently downgrade — if the audit-copy choice
-    // changes such that the gate is no longer proven_match, reset the preset to
-    // Safe canary so the operator re-confirms the choice (ADR 0009 § 3 "the
-    // preset's name is a promise, breaking it silently is bad audit UX").
+    // ADR 0009 § 3: Reference parity cannot silently downgrade.
     effect(() => {
       if (this.sizingPreset() === 'reference_parity' && !this.referenceParityAvailable()) {
         this.sizingPreset.set('safe_canary');
@@ -449,14 +557,7 @@ export class BrokerDeployFormComponent {
       this.instanceId().trim() !== '',
   );
 
-  /** ADR 0009 § 9 / Decision 13 — symbol-scoped all-in coexistence guard
-   * surfaced client-side from the broker positions snapshot. Refuses
-   * Reference parity (the only all-in preset) when the strategy's symbol
-   * carries any exposure on the connected broker account. Cross-symbol
-   * all-in concurrency is permitted-but-unsafe (the capital-sleeve layer
-   * closes it later), so this guard intentionally only blocks the trade
-   * symbol's own exposure.
-   */
+  /** Symbol-scoped Reference parity exposure guard. */
   readonly allInCoexistenceBlock = computed<string | null>(() => {
     if (this.sizingPreset() !== 'reference_parity') return null;
     const symbol = this.actionPlanTradeSymbol() ?? this.resolvedSignalStream();
@@ -472,48 +573,40 @@ export class BrokerDeployFormComponent {
     );
   });
 
-  /** Why Deploy can't be submitted, sourced from the connectivity strip + form.
-   * Null = ready. */
-  readonly blockedReason = computed<string | null>(() => {
-    if (this.connectivity.daemonDown()) {
-      return 'Live engine unavailable. Start it on this machine, then recheck.';
-    }
-    if (this.startNow() && this.executionMode() === 'live') {
-      return 'Live execution is not available from Deploy yet. Pick read-only or paper orders.';
-    }
-    const coexistence = this.allInCoexistenceBlock();
-    if (coexistence !== null) return coexistence;
-    if (this.startNow() && this.connectivity.fleetBlocksStarts()) {
-      return 'Fleet state blocks new starts. Turn off "Start trading immediately" to deploy only, or clear the account state.';
-    }
-    if (this.startNow() && this.instanceAlreadyRunning()) {
-      return `"${this.instanceId().trim()}" is already running. Stop it first, or turn off "Start trading immediately" to deploy without starting.`;
-    }
-    if (!this.brokerAccountAvailable()) {
-      return 'Connected broker account unavailable. Connect the broker session before deploying.';
-    }
-    const accountProof = this.accountTruth.value();
-    if (this.startNow()) {
-      if (!accountProof) {
-        return 'Account proof is still loading. Wait for account readiness, or turn off "Start trading immediately" to deploy only.';
-      }
-      if (accountProof.final_verdict === 'not_proven') {
-        return 'Account NOT_PROVEN. Reconcile account before starting, or turn off "Start trading immediately" to deploy only.';
-      }
-    }
-    if (this.strategyKey().trim() !== '' && this.selectedValidation() === null) {
-      return 'Strategy must be validated before deployment. Open Strategy Validation to promote it.';
-    }
-    if (!this.required()) return 'Missing: ' + this.missingRequiredFields().join(', ') + '.';
-    // PR4 reviewer fix: surface invalid Custom sizing here so the deploy
-    // button disables BEFORE submit() runs; throwing inside submit() would
-    // leave busy=true and the form wedged.
-    const customError = this.customSizingError();
-    if (customError !== null) return customError;
-    return null;
+  private readonly preSubmitBlocker = computed<DeployBlocker | null>(() =>
+    deployBlocker({
+      daemonDown: this.connectivity.daemonDown(),
+      effectiveStartNow: this.effectiveStartNow(),
+      executionMode: this.executionMode(),
+      allInCoexistenceBlock: this.allInCoexistenceBlock(),
+      fleetBlocksStarts: this.connectivity.fleetBlocksStarts(),
+      instanceAlreadyRunning: this.instanceAlreadyRunning(),
+      instanceId: this.instanceId().trim(),
+      brokerAccountAvailable: this.brokerAccountAvailable(),
+      accountTruth: this.accountTruth.value(),
+      strategyKey: this.strategyKey(),
+      strategySelected: this.selectedValidation() !== null,
+      required: this.required(),
+      missingRequiredFields: this.missingRequiredFields(),
+      identityConflictSummary: this.identityCoherenceBlock()?.summary ?? null,
+      exposureConflictSummary: this.exposureCoherenceBlock()?.summary ?? null,
+      actionPlanReadiness: this.actionPlanReadiness(),
+      customSizingError: this.customSizingError(),
+      stoppedStartLatchState: this.stoppedStartLatchStatus(),
+    }),
+  );
+
+  readonly activeBlocker = computed<DeployBlocker | null>(() => {
+    const state = this.commandState();
+    if (state.kind !== 'blocked') return null;
+    return { message: state.message, actionLink: state.actionLink };
   });
 
-  readonly canSubmit = computed<boolean>(() => !this.busy() && this.blockedReason() === null);
+  readonly blockedReason = computed<string | null>(() => {
+    return this.activeBlocker()?.message ?? null;
+  });
+
+  readonly canSubmit = computed<boolean>(() => this.commandState().canSubmit);
 
   async submit(): Promise<void> {
     this.syncRenderedFieldValues();
@@ -535,14 +628,36 @@ export class BrokerDeployFormComponent {
         sizing: this.resolveSizingPolicy(),
         action: this.actionPlan(),
       },
-      start: this.startNow(),
+      start: this.effectiveStartNow(),
     };
     const parent = this.parentRunId();
     if (parent) request.parent_run_id = parent;
+    const inheritedSymbol = normalizedSymbol(this.inheritedSymbol());
+    if (inheritedSymbol) {
+      request.inherited_symbol = inheritedSymbol;
+      const source = this.inheritedSymbolSource().trim();
+      if (source) request.inherited_symbol_source = source;
+    }
+    const identityConfirmation = this.identityCoherenceConfirmation();
+    if (identityConfirmation !== null) {
+      request.identity_coherence_confirmation = identityConfirmation;
+    }
+    const exposurePosture = this.inheritedExposurePosture();
+    if (exposurePosture) {
+      request.inherited_exposure_posture = exposurePosture;
+      request.inherited_exposure_pending_order_count = this.inheritedExposurePendingOrderCount();
+      request.inherited_exposure_positions = this.inheritedExposurePositions();
+      const source = this.inheritedExposureSource().trim();
+      if (source) request.inherited_exposure_source = source;
+    }
+    const exposureConfirmation = this.exposureCoherenceConfirmation();
+    if (exposureConfirmation !== null) {
+      request.exposure_coherence_confirmation = exposureConfirmation;
+    }
     // Only attach launch knobs when actually starting — otherwise a deploy-only
     // request carries irrelevant start_options that still get validated (and a
     // cleared "max orders" field would serialize NaN → null and fail).
-    if (this.startNow()) {
+    if (this.effectiveStartNow()) {
       const maxOrders = this.maxOrdersPerDay();
       request.start_options = {
         readonly: this.readonlyFlag(),
@@ -560,10 +675,72 @@ export class BrokerDeployFormComponent {
       // guard blocks an immediate second start rather than waiting on a 409.
       this.instances.reload();
     } catch (err) {
+      this.seedIdentityCoherenceEvidence(err);
+      this.seedExposureCoherenceEvidence(err);
       this.error.set(toOperationError('deploy', err));
     } finally {
       this.busy.set(false);
     }
+  }
+
+  private deployErrorDetail(err: unknown): Record<string, unknown> | null {
+    if (!(err instanceof HttpErrorResponse)) return null;
+    const detail = (err.error as { detail?: unknown } | null | undefined)?.detail;
+    if (!detail || typeof detail !== 'object') return null;
+    return detail as Record<string, unknown>;
+  }
+
+  private seedIdentityCoherenceEvidence(err: unknown): void {
+    const payload = this.deployErrorDetail(err);
+    if (payload === null) return;
+    if (payload['reason_code'] !== 'IDENTITY_COHERENCE_UNCONFIRMED') return;
+    const evidence = payload['evidence'];
+    if (!Array.isArray(evidence)) return;
+    const inherited = evidence.find(
+      (fact): fact is Record<string, unknown> =>
+        Boolean(fact) &&
+        typeof fact === 'object' &&
+        (fact as Record<string, unknown>)['label'] === 'inherited_symbol',
+    );
+    const inheritedSymbol = normalizedSymbol(
+      typeof inherited?.['value'] === 'string' ? inherited['value'] : '',
+    );
+    if (!inheritedSymbol) return;
+    this.inheritedSymbol.set(inheritedSymbol);
+    this.inheritedSymbolSource.set(
+      typeof inherited?.['source'] === 'string' ? inherited['source'] : '',
+    );
+    this.identityCoherenceConfirmedSignature.set(null);
+  }
+
+  private seedExposureCoherenceEvidence(err: unknown): void {
+    const payload = this.deployErrorDetail(err);
+    if (payload === null) return;
+    if (payload['reason_code'] !== 'EXPOSURE_COHERENCE_UNCONFIRMED') return;
+    const evidence = payload['evidence'];
+    if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) return;
+    const facts = evidence as Record<string, unknown>;
+    const posture = facts['posture'];
+    if (typeof posture !== 'string' || !isExposurePosture(posture)) return;
+
+    const pendingOrderCount = facts['pending_order_count'];
+    const ownedPositions = normalizeExposurePositionsRecord(facts['owned_positions']) ?? {};
+    const source = facts['source'];
+    const runId = facts['run_id'];
+    const normalizedPendingOrderCount =
+      typeof pendingOrderCount === 'number' &&
+      Number.isInteger(pendingOrderCount) &&
+      pendingOrderCount >= 0
+        ? pendingOrderCount
+        : null;
+    this.inheritedExposurePosture.set(posture);
+    this.inheritedExposurePendingOrderCount.set(normalizedPendingOrderCount);
+    this.inheritedExposurePositions.set(ownedPositions);
+    this.inheritedExposureSource.set(typeof source === 'string' ? source : '');
+    if (typeof runId === 'string' && runId.trim()) {
+      this.parentRunId.set(runId.trim());
+    }
+    this.exposureCoherenceConfirmedSignature.set(null);
   }
 
   // Event readers that narrow without a type assertion.
@@ -571,6 +748,11 @@ export class BrokerDeployFormComponent {
     return e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement
       ? e.target.value
       : '';
+  }
+
+  private async loadInstanceStatus(instanceId: string | null): Promise<LiveInstanceStatus | null> {
+    if (instanceId === null) return null;
+    return this.svc.getInstanceStatus(instanceId);
   }
   private renderedFieldValue(
     field:
@@ -720,6 +902,20 @@ export class BrokerDeployFormComponent {
     }
   }
 
+  confirmIdentityCoherence(): void {
+    const evidence = this.identityCoherenceEvidence();
+    if (evidence !== null) {
+      this.identityCoherenceConfirmedSignature.set(evidence.signature);
+    }
+  }
+
+  confirmExposureCoherence(): void {
+    const evidence = this.exposureCoherenceEvidence();
+    if (evidence !== null) {
+      this.exposureCoherenceConfirmedSignature.set(evidence.signature);
+    }
+  }
+
   setActiveDeployTab(key: DeployTabKey): void {
     this.activeDeployTab.set(key);
   }
@@ -813,14 +1009,6 @@ export class BrokerDeployFormComponent {
     if (e.target instanceof HTMLInputElement) {
       this.customValue.set(e.target.value);
     }
-  }
-
-  private static singleLongStockActionSymbol(action: ActionPlan): string | null {
-    if (action.on_enter.length !== 1) return null;
-    const [leg] = action.on_enter;
-    if (leg.position !== 'long' || leg.instrument.kind !== 'stock') return null;
-    const symbol = normalizedSymbol(leg.instrument.underlying);
-    return symbol || null;
   }
 
 }

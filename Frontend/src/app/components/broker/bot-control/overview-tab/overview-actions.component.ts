@@ -56,6 +56,7 @@ const TOOLBAR_GROUPS: readonly ToolbarGroupDefinition[] = [
 })
 export class OverviewActionsComponent {
   readonly actions = input.required<LifecycleChartAction[]>();
+  readonly onlyFreshRunAvailable = input(false);
   readonly busyAction = input<string | null>(null);
   readonly actionInvoked = output<LifecycleChartActionId>();
   readonly actionTargetHovered = output<string | null>();

@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-07-03 (Account Truth source-freshness and data-plane bounds update: Bot Control submit readiness and `LivePortfolio.submit_pending_orders` now consume the cached Account Truth projection and fail closed when the cached verdict is missing, stale, not clean, or backed by stale/missing critical source evidence. Account-level reconciliation consumes the same source-freshness contract. Account Truth broker calls and data-plane shutdown paths are bounded.)
+> **Last reviewed:** 2026-07-07 (Safety-halt incidents now bridge cold-start poison into Recent Incidents and Bot Control headlines; the deploy form pre-detects durable STOPPED before start-now submissions and switches to deploy-only; deploy now fails closed before ledger creation when a strategy with a deploy-time action-plan contract, currently `deployment_validation`, is missing required legs or submits a plan shape the runtime path cannot consume; not-proven Account Truth start blockers name missing/stale evidence and link directly to Account Monitor's account reconciliation action, while deploy-only staging remains available; Bot Control carries inherited identity and exposure evidence into the deploy form and blocks Deploy & start until any symbol mismatch or non-flat/unknown exposure facts are explicitly confirmed; operation-error alert announcements preserve authored operation title, backend detail, and remediation as separated prose so blocked deploy messages do not concatenate the category with bot-scoped detail; the run-scoped Bot event stream is the persistent side-panel surface, binds to the live run or evidence run, and renders an honest no-run state with a Fresh run route when neither binding exists; lifecycle chart nodes are non-interactive containers with a dedicated receipts button and one expanded node-scoped receipt region at a time.)
 
 ---
 
@@ -66,16 +66,43 @@ This is **not** R3. The current process-local `_submit_lock` in `LiveEngine` ser
 
 | Phase | Current authority | Code |
 |---|---|---|
-| Deploy | Data-plane deploy endpoint derives broker account from the connected session, then forwards to host daemon. Host daemon writes run ledger. | `routers/live_instances.py`, `engine/live/host_daemon.py`, `engine/live/deploy.py` |
+| Deploy | Data-plane deploy endpoint derives broker account from the connected session, then forwards to host daemon. Host daemon validates deploy-time action-plan contracts, then writes the run ledger. The deploy form pre-detects durable STOPPED for start-now and submits deploy-only rather than promising a start the backend will reject. | `routers/live_instances.py`, `engine/live/host_daemon.py`, `engine/live/deploy.py`, `engine/live/config.py`, `Frontend/src/app/components/broker/broker-deploy-form/broker-deploy-form.component.ts` |
 | Start recheck | Data plane blocks stale starts for poisoned runs, durable STOPPED, offline daemon, running/stopping daemon state. | `routers/live_instances.py::_assert_start_allowed` |
 | Host spawn | Host daemon starts `python -m app.engine.live.run start` as a subprocess keyed by `strategy_instance_id`. | `RunnerProcessManager.start` |
 | Run pre-flight | Runner validates run state, sizing, dirty tree policy, halt flags, unexpected positions, coexistence, and prior artifacts. | `engine/live/pre_flight.py`, `engine/live/run.py` |
-| Cold-start reconcile | Runner writes `reconciliation_receipt.json` as `in_progress`, probes broker, classifies broker state, then writes pass/fail. | `reconciliation_orchestrator.py`, `reconciliation_classifier.py` |
+| Cold-start reconcile | Runner writes `reconciliation_receipt.json` as `in_progress`, probes broker, classifies broker state, then writes pass/fail. Poison outcomes write `poisoned.flag` and mint a deduplicated safety-halt OperatorIncident. | `reconciliation_orchestrator.py`, `reconciliation_classifier.py`, `operator/incidents/safety_halt_notices.py` |
 | Activate | Live engine constructs portfolio/context, starts broker event stream, publishes runtime/readiness blocks, and enters bar loop. | `live_engine.py`, `readiness.py` |
 | Submit | Strategy queues orders; `LivePortfolio.submit_pending_orders` writes intent WAL events and calls broker adapter. | `live_portfolio.py`, `intent_wal.py`, `submit_state_machine.py` |
 | Low-level broker write | Paper safety checks run, `order_ref` is required, contract is qualified, then `client.ib.placeOrder(...)` is called. | `broker/ibkr/orders.py::place_paper_order` |
 | Operator actions | Resume/Pause/Stop/Flatten-and-pause/Mark-poisoned use shared capability evaluator. Start has separate recheck. | `services/operator_capability.py`, `routers/live_instances.py` |
 | Watchdog lease loss | Child watchdog detects daemon lease loss and delegates typed halt sequence. | `child_watchdog.py`, `watchdog_controller.py` |
+
+Fresh-run links carry `LiveInstanceStatus.symbol` to Deploy as inherited
+identity evidence with its source label (`run_ledger.live_config.action`,
+`run_ledger.live_config.symbol`, or strategy-spec fallback). The deploy form
+mirrors the admission policy and submits an unhashed
+`identity_coherence_confirmation` only after the operator confirms the current
+symbol set. The public deploy endpoint is authoritative: for `Deploy & start`
+it compares the backend-derived inherited symbol with the new
+`live_config.symbol` signal stream and, when a single long stock entry is
+declared, the action-plan trade symbol. A disagreement returns
+`IDENTITY_COHERENCE_UNCONFIRMED` until the confirmation matches those exact
+values; deploy-only staging remains available. The host daemon still owns the
+canonical run ledger and does not treat URL query params as authoritative run
+identity.
+
+Fresh-run start is exposure-gated at the public deploy endpoint. For an
+existing strategy instance, the endpoint reads the instance `live_state`
+sidecar and derives exposure posture plus pending-order count from
+`expected_position_by_symbol` / `pending_intents`. The normalized non-zero
+positions map is part of the exposure fact, not merely display copy. `Deploy &
+start` is blocked with `EXPOSURE_COHERENCE_UNCONFIRMED` when that exposure is
+unknown, non-flat, or has pending orders unless the request carries an
+`exposure_coherence_confirmation` matching the current positions map, pending
+count, strategy instance, and source run exactly. The confirmation is unhashed
+admission evidence and is stripped before forwarding to the host daemon.
+Deploy-only requests remain allowed so operators can stage a new run without
+launching it.
 
 ### 3.1 Canonical Lifecycle Observability Model
 
@@ -94,10 +121,14 @@ Each lifecycle node carries its own receipt list plus an
 or `no-action-needed`. Receipt rows are backend-authored operator copy with
 `headline` and optional `detail` fields. Raw receipt ids, source/gate ids,
 reason codes, values, and timestamps remain audit payload, not primary trader
-instructions. The bot control page right-pane inspector is selected-node scoped: it may
-show only the selected node's backend receipts and the node actionability
-banner. Whole-bot proof lines and advanced diagnostics belong in the lower
-audit panel so they do not imply that every selected node has direct evidence.
+instructions. The lifecycle chart renders those receipts in the node itself:
+the node card is a non-interactive container, a dedicated header button toggles
+one expanded receipt region at a time, and nodes without emitted receipts say so
+inside the node rather than borrowing whole-status evidence. The bot control
+page right-pane inspector is selected-node scoped: it may show only the
+selected node's backend receipts and the node actionability banner. Whole-bot
+proof lines and advanced diagnostics belong in the lower audit panel so they do
+not imply that every selected node has direct evidence.
 
 When the backend does not yet fold an evidence family into a node, it must say
 so honestly with a node-scoped receipt rather than borrowing a whole-status or
@@ -109,6 +140,19 @@ snapshot detail, and authoritative P&L. Account identity and broker observation
 consistency may be folded only from Python-authored status/readiness facts; the
 Frontend must not join `/status` to account-summary or other side channels to
 manufacture lifecycle meaning.
+
+Bot Control operation-error alerts render the operation title, backend detail,
+and remediation as separate authored clauses in the alert announcement. The
+Frontend may control layout, but it must not concatenate the title/category
+with bot-scoped detail text; backend-authored detail and remediation remain the
+literal operator evidence shown by the alert.
+
+The Bot event stream is the persistent run-history surface beside the lifecycle
+chart. It binds only to `live_binding.run_id` or, when no live binding exists,
+`evidence_binding.run_id`; if neither exists, the side panel must say no run is
+bound yet and route the operator to Fresh run rather than borrowing rows from
+another run. The old activity workbench no longer owns a second copy of the
+stream.
 
 | Canonical node id | Meaning | Primary source of truth |
 |---|---|---|
@@ -159,7 +203,8 @@ state to guess around.
 | `intent_events.jsonl` | run | Legacy/direct-submit append-only submit WAL. Source of truth for run-scoped intent lifecycle events when a runner submits directly; AccountOwner submit mode does not write this file. |
 | `live_state.json` | instance | Stable projection used by reconciliation/readiness. |
 | `reconciliation_receipt.json` | run | Cold-start/runtime reconcile outcome. |
-| `poisoned.flag` | run | Run-level permanent unsafe state. |
+| `poisoned.flag` | run | Run-level permanent unsafe state. New cold-start poison writes also mint a `safety-halt` OperatorIncident keyed by instance, run, halt trigger, evidence time, and artifact ref. |
+| `operator_incidents/*.json` | run | Durable operator-visible incidents. Watchdog/order/submit incidents feed the cockpit headline; `safety-halt` incidents also feed Recent Incidents through the run incidents endpoint. |
 | `control_plane_lease_lost.json` / incidents | run | Watchdog lease-loss evidence. |
 | `broker_callbacks.jsonl` | run | Raw broker callback evidence when attached. |
 | `fleet_baselines/<account_id>.json` | account-adjacent partial | Existing fleet-reset baseline used to ignore completed unknown historical executions under strict conditions. |
@@ -172,6 +217,8 @@ state to guess around.
 Account Truth reads `instance_registry.jsonl` as its bot ownership source. Its attribution namespace view includes every namespace ever recorded for the account, including retired bindings, so stopped bots keep ownership of terminal completed orders and historical executions. Its active-known/current-risk namespace view is limited to currently-bound `DEPLOYED` or `ACTIVE` bindings; a live working order or current position under a retired binding is emitted as `retired_owner_live_exposure`, not as clean bot-owned exposure and not as `foreign_or_unclaimed`.
 
 `GET /api/broker/account-truth` now stores the latest composed projection in the process-local Account Truth snapshot cache (`PythonDataService/app/services/account_truth_snapshot.py`). Bot status reads consume only that cache; they do not sweep IBKR. `operator_surface.submit_readiness` maps a missing, stale, or `not_proven` cached projection to `broker_state_unproven` with `ACCOUNT_TRUTH_*` blocking reason codes. `LivePortfolio.submit_pending_orders` consumes the same cache through the `account.account_truth` `GateResult` and refuses non-pass results before any broker call or AccountOwner handoff; `LiveEngine` wires that provider for durable-submit broker adapters. The gate is a pure cached predicate: it performs no IBKR sweep, writes no freeze artifact, and remains separate from the broker-snapshot classifier.
+
+The Fresh run form consumes the same Account Truth projection for pre-submit start actionability. When `final_verdict=not_proven`, the start-immediate blocker names the missing or stale Account Truth evidence from `source_freshness`, `evidence_gaps`, and blocker rows, and links to Account Monitor's account reconciliation receipt action. Deploy-only staging remains available because the Account Truth blocker is a start/submit proof, not a ledger-creation proof.
 
 Account Truth source freshness is now part of the authoritative verdict, not an annotation. `compose_account_truth_source_freshness(...)` emits one backend-authored freshness row for broker connection, account summary, positions, open orders, completed orders, and executions. Critical sources are broker connection, account summary, positions, and open orders. `critical_source_freshness_blocks(...)` re-evaluates hard TTL at read time; any critical `missing` or `stale` row forces `AccountTruthResponse.final_verdict = not_proven` and `final_severity = critical`. The same check is consumed by the cached submit gate and by `AccountReconciliationService.compose_receipt(...)`, so a once-clean truth snapshot cannot remain clean after critical source evidence ages out.
 
@@ -553,6 +600,7 @@ This is a reproducibility receipt, not a new text-authoring engine or frontend t
 | Desired state | `PythonDataService/app/engine/live/desired_state.py` |
 | Operator action gates | `PythonDataService/app/services/operator_capability.py`, `resume_guard_state.py`, `operator_surface.py`, `operator_trader_guidance.py` |
 | Start/deploy/instance API | `PythonDataService/app/routers/live_instances.py` |
+| Action-plan deploy readiness | `PythonDataService/app/engine/live/config.py`, `PythonDataService/app/engine/live/deploy.py`, `Frontend/src/app/components/broker/broker-deploy-form/deploy-readiness.ts`, `Frontend/src/app/components/broker/broker-deploy-form/broker-deploy-form.component.ts` |
 | Watchdog lease loss | `PythonDataService/app/engine/live/child_watchdog.py`, `watchdog_controller.py` |
 | Account artifacts, recovery, override, and restart intensity | `PythonDataService/app/engine/live/account_artifacts.py` |
 | Account classifier | `PythonDataService/app/engine/live/account_classifier.py` |
@@ -561,6 +609,7 @@ This is a reproducibility receipt, not a new text-authoring engine or frontend t
 | Broker activity vs writer authority charting | `PythonDataService/app/services/bot_lifecycle_chart.py`, `PythonDataService/app/services/bot_lifecycle_projection.py` |
 | Lifecycle chart node receipts | `PythonDataService/app/schemas/live_runs.py`, `PythonDataService/app/services/bot_lifecycle_chart.py`, `PythonDataService/app/services/bot_lifecycle_receipts.py`, `Frontend/src/app/api/lifecycle-projection.types.ts`, `Frontend/src/app/components/broker/bot-control/node-receipts-pane.component.*` |
 | Lifecycle projection timeline pane | `PythonDataService/app/routers/lifecycle_projection.py`, `Frontend/src/app/services/live-runs.service.ts`, `Frontend/src/app/components/broker/bot-control/bot-control-page.component.ts`, `Frontend/src/app/components/broker/bot-control/overview-tab/trader-guidance-pane.component.*`, `Frontend/src/app/components/broker/bot-control/overview-tab/trader-guidance-timeline.component.*` |
+| Deploy form pre-submit gates | `Frontend/src/app/components/broker/broker-deploy-form/broker-deploy-form.component.*`, `Frontend/src/app/components/broker/broker-deploy-form/deploy-readiness.ts` |
 | Lifecycle chart layout geometry | `Frontend/src/app/components/broker/bot-control/overview-tab/overview-tab.component.ts`, `Frontend/src/app/components/broker/bot-control/overview-tab/overview-tab.component.html` |
 | Lifecycle Postgres projection read model | `Backend/Migrations/20260630023000_AddLifecycleProjectionReadModel.cs`, `PythonDataService/app/services/lifecycle_projection_store.py`, `PythonDataService/app/services/lifecycle_projection_replay.py`, `PythonDataService/app/services/lifecycle_projection_tailer.py`, `PythonDataService/app/routers/lifecycle_projection.py` |
 | Activity/lifecycle consistency diagnostics | `PythonDataService/app/services/activity_lifecycle_consistency.py`, `PythonDataService/app/routers/live_instances.py` |

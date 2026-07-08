@@ -1,0 +1,35 @@
+<div class="coherence-confirmation" [class.confirmed]="confirmed()" role="group" [attr.aria-label]="ariaLabel()">
+  <strong>{{ title() }}</strong>
+  <dl>
+    @for (fact of facts(); track fact.label) {
+      <div>
+        <dt>{{ fact.label }}</dt>
+        <dd>
+          @if (fact.valueReceiptLabel) {
+            {{ fact.value | receiptLabel }}
+          } @else {
+            {{ fact.value }}
+          }
+          @if (fact.source) {
+            <small>
+              @if (fact.sourceReceiptLabel) {
+                {{ fact.source | receiptLabel }}
+              } @else {
+                {{ fact.source }}
+              }
+            </small>
+          }
+        </dd>
+      </div>
+    }
+  </dl>
+  @if (startNow()) {
+    @if (confirmed()) {
+      <p>{{ confirmedText() }}</p>
+    } @else {
+      <button type="button" class="text-button" (click)="confirm()">{{ confirmLabel() }}</button>
+    }
+  } @else {
+    <p>{{ deployOnlyText() }}</p>
+  }
+</div>

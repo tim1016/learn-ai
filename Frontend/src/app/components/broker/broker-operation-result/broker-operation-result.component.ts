@@ -14,11 +14,14 @@ import type { OperationError } from '../operation-error';
   template: `
     @if (error(); as e) {
       <div class="op-result" [class]="'cat-' + e.category" role="alert">
-        <p class="op-title">{{ e.title }}</p>
+        <span class="sr-only">{{ alertText(e) }}</span>
+        <p class="op-title" aria-hidden="true">{{ e.title }}</p>
         @if (e.detail) {
-          <p class="op-detail">{{ e.detail }}</p>
+          {{ ' ' }}
+          <p class="op-detail" aria-hidden="true">{{ e.detail }}</p>
         }
-        <p class="op-remediation">{{ e.remediation }}</p>
+        {{ ' ' }}
+        <p class="op-remediation" aria-hidden="true">{{ e.remediation }}</p>
       </div>
     }
   `,
@@ -26,4 +29,8 @@ import type { OperationError } from '../operation-error';
 })
 export class BrokerOperationResultComponent {
   readonly error = input<OperationError | null>(null);
+
+  alertText(error: OperationError): string {
+    return [error.title, error.detail, error.remediation].filter(Boolean).join(' ');
+  }
 }

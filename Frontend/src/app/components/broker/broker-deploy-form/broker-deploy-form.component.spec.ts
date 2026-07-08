@@ -3,11 +3,14 @@ import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { AccountTruthResponse } from '../../../api/broker-models';
+import type { LiveInstanceStatus } from '../../../api/live-instances.types';
 import { BrokerService } from '../../../services/broker.service';
 import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { StrategyValidationService } from '../../../services/strategy-validation.service';
 import type { StrategyValidationCatalog } from '../../../services/strategy-validation.types';
+import type { ActionPlan } from '../../../api/action-plan.types';
 import { BrokerDeployFormComponent } from './broker-deploy-form.component';
 
 let activeFixture: { destroy(): void; detectChanges(): void } | null = null;
@@ -16,6 +19,17 @@ const DEPLOYMENT_VALIDATION_AUDIT_COPY = 'references/qc-shadow/DeploymentValidat
 const DEPLOYMENT_VALIDATION_SPEC_PATH =
   'PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json';
 const DEPLOYMENT_VALIDATION_QC_BACKTEST_ID = 'd2fe45a7142e88575f6fbd75229f8681';
+
+function identityCoherenceCard(fixture: { nativeElement: HTMLElement }): HTMLElement | null {
+  return fixture.nativeElement.querySelector('[aria-label="Run identity confirmation"]');
+}
+
+function exposureCoherenceCard(fixture: { nativeElement: HTMLElement }): HTMLElement | null {
+  return fixture.nativeElement.querySelector('[aria-label="Exposure confirmation"]');
+}
+
+type AccountTruthFixture = Pick<AccountTruthResponse, 'final_verdict' | 'status_label' | 'status_detail'> &
+  Partial<Pick<AccountTruthResponse, 'blockers' | 'evidence_gaps' | 'invariants' | 'source_freshness'>>;
 const DEFAULT_STRATEGY_VALIDATION_CATALOG: StrategyValidationCatalog = {
   strategies: [
     {
@@ -75,6 +89,7 @@ function setup(
     fleetBlocks?: boolean;
     qcEntries?: string[];
     instances?: { strategy_instance_id: string; process_state: string }[];
+    instancesPromise?: Promise<{ strategy_instance_id: string; process_state: string }[]>;
     parityGate?: {
       verdict: 'proven_match' | 'proven_mismatch' | 'cannot_prove';
       detail: string;
@@ -97,7 +112,11 @@ function setup(
       description: string | null;
     }[];
     accountPromise?: Promise<{ account_id: string } | null>;
-    accountTruth?: { final_verdict: 'clean' | 'not_proven'; status_label: string; status_detail: string };
+    accountTruth?: AccountTruthFixture;
+    instanceStatus?: LiveInstanceStatus | null;
+    instanceStatusPromise?: Promise<LiveInstanceStatus | null>;
+    instanceStatusError?: Error;
+    instanceStatusResolver?: (instanceId: string) => Promise<LiveInstanceStatus | null>;
     strategyValidationCatalog?: StrategyValidationCatalog;
   } = {},
 ) {
@@ -148,7 +167,14 @@ function setup(
         scope_root: 'references/qc-shadow',
         entries: opts.qcEntries ?? ['references/qc-shadow/A.py'],
       }),
-    getInstances: vi.fn().mockResolvedValue(opts.instances ?? []),
+    getInstances: vi.fn().mockImplementation(() => opts.instancesPromise ?? Promise.resolve(opts.instances ?? [])),
+    getInstanceStatus: vi.fn().mockImplementation((instanceId: string) => {
+      if (opts.instanceStatusResolver !== undefined) return opts.instanceStatusResolver(instanceId);
+      if (opts.instanceStatusError !== undefined) return Promise.reject(opts.instanceStatusError);
+      if (opts.instanceStatusPromise !== undefined) return opts.instanceStatusPromise;
+      if (opts.instanceStatus !== undefined) return Promise.resolve(opts.instanceStatus);
+      return Promise.resolve(clearStartStatus());
+    }),
     deployInstance: vi
       .fn()
       .mockResolvedValue({ run_id: 'run-new', run_dir: '/runs/run-new', created: true, start: null }),
@@ -219,6 +245,28 @@ async function flush() {
   await Promise.resolve();
 }
 
+async function settleResource(fixture: { detectChanges(): void }) {
+  fixture.detectChanges();
+  await flush();
+  fixture.detectChanges();
+  await flush();
+  fixture.detectChanges();
+}
+
+function validDeploymentValidationActionPlan(): ActionPlan {
+  return {
+    on_enter: [
+      {
+        leg_id: 'spy_long',
+        instrument: { kind: 'stock', underlying: 'SPY' },
+        position: 'long',
+        qty_ratio: 1,
+      },
+    ],
+    on_exit: [{ kind: 'close_leg', entry_leg_id: 'spy_long' }],
+  };
+}
+
 function fillRequired(component: BrokerDeployFormComponent) {
   component.strategyKey.set('deployment_validation');
   component.specPath.set(DEPLOYMENT_VALIDATION_SPEC_PATH);
@@ -227,8 +275,74 @@ function fillRequired(component: BrokerDeployFormComponent) {
   component.qcBacktestId.set(DEPLOYMENT_VALIDATION_QC_BACKTEST_ID);
   component.qcAuditCopyPath.set(DEPLOYMENT_VALIDATION_AUDIT_COPY);
   component.instanceId.set('deployment-validation-paper');
+  component.actionPlan.set(validDeploymentValidationActionPlan());
   component.startNow.set(false);
   activeFixture?.detectChanges();
+}
+
+function stoppedLatchStatus(): LiveInstanceStatus {
+  return {
+    desired_state: {
+      state: 'STOPPED',
+      updated_at_ms: 1_781_000_000_000,
+      updated_by: 'operator',
+      reason: 'stop_command',
+      version: 3,
+      path_status: 'ok',
+    },
+    operator_surface: {
+      host_process: {
+        start_capability: {
+          enabled: false,
+          run_id: null,
+          request: null,
+          disabled_reason_code: 'STOPPED_REQUIRES_RESUME',
+          gate_results: [
+            {
+              gate_id: 'desired_state.start',
+              status: 'block',
+              source: 'desired_state',
+              operator_reason: 'STOPPED',
+              operator_next_step: 'STOPPED_REQUIRES_RESUME',
+              evidence_at_ms: 1_781_000_000_000,
+            },
+          ],
+        },
+      },
+    },
+  } as unknown as LiveInstanceStatus;
+}
+
+function clearStartStatus(): LiveInstanceStatus {
+  return {
+    desired_state: {
+      state: 'RUNNING',
+      updated_at_ms: 1_781_000_000_000,
+      updated_by: 'operator',
+      reason: null,
+      version: 4,
+      path_status: 'ok',
+    },
+    operator_surface: {
+      host_process: {
+        start_capability: {
+          enabled: true,
+          run_id: 'run-minute',
+          request: null,
+          disabled_reason_code: null,
+          gate_results: [],
+        },
+      },
+    },
+  } as unknown as LiveInstanceStatus;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }
 
 function deployButton(fixture: { nativeElement: HTMLElement }): HTMLButtonElement {
@@ -416,6 +530,51 @@ describe('BrokerDeployFormComponent', () => {
     );
   });
 
+  it('shows a coherent accepted-start state after the submitted instance becomes running', async () => {
+    const { fixture, svc, component } = setup();
+    svc.deployInstance.mockResolvedValueOnce({
+      run_id: 'run-started',
+      run_dir: '/runs/run-started',
+      created: true,
+      start: {
+        accepted: true,
+        process: { state: 'running', message: 'Host runner process is active.' },
+      },
+    });
+    svc.getInstances.mockResolvedValueOnce([
+      { strategy_instance_id: 'deployment-validation-paper', process_state: 'running' },
+    ]);
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    await settleResource(fixture);
+
+    await component.submit();
+    await flush();
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('Deployment created');
+    expect(text).toContain('Start accepted: Host runner process is active.');
+    expect(text).toContain('Start accepted for run run-started. View deployment to monitor the live run.');
+    expect(text).not.toContain('"deployment-validation-paper" is already running');
+    expect(component.commandState().kind).toBe('accepted');
+    expect(component.blockedReason()).toBeNull();
+    expect(deployButton(fixture).disabled).toBe(true);
+
+    component.startNow.set(false);
+    fixture.detectChanges();
+
+    expect(component.commandState().kind).toBe('ready');
+    expect(deployButton(fixture).disabled).toBe(false);
+
+    await component.submit();
+
+    const deployOnlyRetry = svc.deployInstance.mock.calls[1][0];
+    expect(deployOnlyRetry.start).toBe(false);
+    expect(deployOnlyRetry.start_options).toBeUndefined();
+  });
+
   // PRD #593 Slice 1E (#598) — query-param-deep-linked redeploy carries
   // the parent_run_id at the top level of the submit payload (NOT
   // inside live_config — lineage is unhashed).
@@ -435,15 +594,19 @@ describe('BrokerDeployFormComponent', () => {
 
   // PRD #593 Slice 1B (#595) — the deploy form carries the operator-
   // declared action plan into ``live_config.action``.
-  it('submits an empty action plan when the operator declared no legs', async () => {
-    const { svc, component } = setup();
+  it('blocks deployment-validation submit when the operator declared no legs', async () => {
+    const { fixture, svc, component } = setup();
     await flush();
     fillRequired(component);
+    component.actionPlan.set({ on_enter: [], on_exit: [] });
+    fixture.detectChanges();
 
     await component.submit();
 
-    const req = svc.deployInstance.mock.calls[0][0];
-    expect(req.live_config?.action).toEqual({ on_enter: [], on_exit: [] });
+    expect(component.blockedReason()).toContain('ON ENTER and ON EXIT are both empty');
+    expect(component.deployTabs().find((tab) => tab.key === 'legs')?.complete).toBe(false);
+    expect(deployButton(fixture).disabled).toBe(true);
+    expect(svc.deployInstance).not.toHaveBeenCalled();
   });
 
   it('submits the operator-built stock plan via live_config.action', async () => {
@@ -489,7 +652,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(req.live_config).toEqual({
       symbol: 'SPY',
       sizing: { kind: 'FixedShares', value: 1 },
-      action: { on_enter: [], on_exit: [] },
+      action: validDeploymentValidationActionPlan(),
     });
     expect(component.sizingPreset()).toBe('safe_canary');
   });
@@ -574,7 +737,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(req.live_config).toEqual({
       symbol: 'SPY',
       sizing: { kind: 'FixedShares', value: 25 },
-      action: { on_enter: [], on_exit: [] },
+      action: validDeploymentValidationActionPlan(),
     });
   });
 
@@ -592,7 +755,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(req.live_config).toEqual({
       symbol: 'SPY',
       sizing: { kind: 'FixedNotional', value: '1500.50' },
-      action: { on_enter: [], on_exit: [] },
+      action: validDeploymentValidationActionPlan(),
     });
   });
 
@@ -669,10 +832,11 @@ describe('BrokerDeployFormComponent', () => {
   });
 
   it('attaches start_options only when "Start now" is checked', async () => {
-    const { svc, component } = setup();
+    const { fixture, svc, component } = setup();
     await flush();
     fillRequired(component);
     component.startNow.set(true);
+    await settleResource(fixture);
 
     await component.submit();
 
@@ -714,7 +878,7 @@ describe('BrokerDeployFormComponent', () => {
   });
 
   it('clears the missing-fields message when required fields are filled through the rendered controls', async () => {
-    const { fixture } = setup({ qcEntries: [] });
+    const { fixture, component } = setup({ qcEntries: [] });
     await flush();
     fixture.detectChanges();
 
@@ -723,8 +887,8 @@ describe('BrokerDeployFormComponent', () => {
     fixture.detectChanges();
     typeText(fixture, 'Signal stream', 'SPY');
     typeText(fixture, 'Deployment name', 'deployment-validation-paper');
-    await flush();
-    fixture.detectChanges();
+    component.actionPlan.set(validDeploymentValidationActionPlan());
+    await settleResource(fixture);
 
     expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
       'Ready to deploy.',
@@ -745,8 +909,8 @@ describe('BrokerDeployFormComponent', () => {
     fieldControl(fixture, 'Deployment name').value = 'deployment-validation-paper';
 
     component.syncRenderedFieldValues();
-    await flush();
-    fixture.detectChanges();
+    component.actionPlan.set(validDeploymentValidationActionPlan());
+    await settleResource(fixture);
 
     expect(component.strategyKey()).toBe('deployment_validation');
     expect(component.specPath()).toBe(DEPLOYMENT_VALIDATION_SPEC_PATH);
@@ -770,8 +934,8 @@ describe('BrokerDeployFormComponent', () => {
     fieldControl(fixture, 'Deployment name').value = 'june25';
 
     component.syncRenderedFieldValues({ includeEmpty: false, onlyEmptySignals: true });
-    await flush();
-    fixture.detectChanges();
+    component.actionPlan.set(validDeploymentValidationActionPlan());
+    await settleResource(fixture);
 
     expect(component.strategyKey()).toBe('deployment_validation');
     expect(component.specPath()).toBe(DEPLOYMENT_VALIDATION_SPEC_PATH);
@@ -944,7 +1108,7 @@ describe('BrokerDeployFormComponent', () => {
     await flush();
     fillRequired(component);
     component.startNow.set(true);
-    fixture.detectChanges();
+    await settleResource(fixture);
     chooseExecutionCapability(fixture, 'paper_orders');
     fixture.detectChanges();
 
@@ -1059,6 +1223,30 @@ describe('BrokerDeployFormComponent', () => {
         final_verdict: 'not_proven',
         status_label: 'Not proven',
         status_detail: 'Run account reconcile before starting.',
+        source_freshness: [
+          {
+            source: 'positions',
+            label: 'Positions',
+            status: 'missing',
+            severity: 'critical',
+            fetched_at_ms: null,
+            age_ms: null,
+            hard_ttl_ms: 60_000,
+            reason_code: 'ACCOUNT_TRUTH_SOURCE_MISSING',
+            message: 'Positions source is missing.',
+          },
+          {
+            source: 'open_orders',
+            label: 'Open orders',
+            status: 'stale',
+            severity: 'critical',
+            fetched_at_ms: 1700000000000,
+            age_ms: 120_000,
+            hard_ttl_ms: 60_000,
+            reason_code: 'ACCOUNT_TRUTH_SOURCE_STALE',
+            message: 'Open orders source is stale.',
+          },
+        ],
       },
     });
     await flush();
@@ -1068,13 +1256,229 @@ describe('BrokerDeployFormComponent', () => {
 
     expect(deployButton(fixture).disabled).toBe(true);
     expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'Account NOT_PROVEN',
+      'Account proof is not proven',
+    );
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Missing evidence: Positions source is missing. Open orders source is stale.',
+    );
+    const reconcileLink = fixture.nativeElement.querySelector('.blocked a');
+    expect(reconcileLink?.textContent).toContain('Run account reconcile');
+    expect(reconcileLink?.getAttribute('href')).toBe(
+      '/broker/account-monitor#account-reconciliation-action',
     );
 
     component.startNow.set(false);
     fixture.detectChanges();
 
     expect(deployButton(fixture).disabled).toBe(false);
+  });
+
+  it('switches a durable STOPPED start-now request to deploy-only before submit', async () => {
+    const { fixture, svc, component } = setup({
+      instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
+      instanceStatus: stoppedLatchStatus(),
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    await settleResource(fixture);
+
+    expect(svc.getInstanceStatus).toHaveBeenCalledWith('deployment-validation-paper');
+    expect(fixture.nativeElement.textContent).toContain('Deploy only');
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Durable STOPPED latch is set',
+    );
+    expect(deployButton(fixture).disabled).toBe(false);
+
+    await component.submit();
+
+    const req = svc.deployInstance.mock.calls[0][0];
+    expect(req.start).toBe(false);
+    expect(req.start_options).toBeUndefined();
+    expect(fieldControl(fixture, 'Daily order limit').disabled).toBe(true);
+    expect(fieldControl(fixture, 'Restore previous state').disabled).toBe(true);
+  });
+
+  it('does not submit start-now while the durable STOPPED lookup is still loading', async () => {
+    const pending = deferred<LiveInstanceStatus | null>();
+    const { fixture, svc, component } = setup({
+      instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
+      instanceStatusPromise: pending.promise,
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Checking durable desired state',
+    );
+    expect(deployButton(fixture).disabled).toBe(true);
+
+    await component.submit();
+
+    expect(svc.deployInstance).not.toHaveBeenCalled();
+
+    pending.resolve(stoppedLatchStatus());
+    await flush();
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Durable STOPPED latch is set',
+    );
+    expect(deployButton(fixture).disabled).toBe(false);
+  });
+
+  it('checks durable STOPPED state even when the fleet list has not exposed the instance', async () => {
+    const pendingInstances = deferred<{ strategy_instance_id: string; process_state: string }[]>();
+    const { fixture, svc, component } = setup({
+      instancesPromise: pendingInstances.promise,
+      instanceStatus: clearStartStatus(),
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    await settleResource(fixture);
+
+    expect(svc.getInstanceStatus).toHaveBeenCalledWith('deployment-validation-paper');
+    expect(deployButton(fixture).disabled).toBe(false);
+
+    pendingInstances.resolve([]);
+    await settleResource(fixture);
+
+    expect(svc.getInstanceStatus).toHaveBeenCalledTimes(1);
+    expect(deployButton(fixture).disabled).toBe(false);
+  });
+
+  it('does not carry a prior STOPPED latch onto a new instance name', async () => {
+    const { fixture, svc, component } = setup({
+      instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
+      instanceStatusResolver: (instanceId) =>
+        Promise.resolve(
+          instanceId === 'deployment-validation-paper' ? stoppedLatchStatus() : clearStartStatus(),
+        ),
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    await settleResource(fixture);
+
+    expect(component.stoppedStartLatch()).toBe(true);
+
+    component.instanceId.set('fresh-deployment-name');
+    await settleResource(fixture);
+
+    expect(svc.getInstanceStatus).toHaveBeenCalledTimes(2);
+    expect(svc.getInstanceStatus).toHaveBeenLastCalledWith('fresh-deployment-name');
+    expect(component.stoppedStartLatch()).toBe(false);
+    expect(deployButton(fixture).disabled).toBe(false);
+  });
+
+  it('fails closed when the durable STOPPED status lookup errors', async () => {
+    const { fixture, svc, component } = setup({
+      instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
+      instanceStatusError: new Error('status lookup failed'),
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    await settleResource(fixture);
+
+    expect(svc.getInstanceStatus).toHaveBeenCalledWith('deployment-validation-paper');
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Could not verify durable desired state',
+    );
+    expect(deployButton(fixture).disabled).toBe(true);
+
+    await component.submit();
+
+    expect(svc.deployInstance).not.toHaveBeenCalled();
+  });
+
+  it('shows the real deploy blocker when STOPPED latch is present but deploy-only is unavailable', async () => {
+    const { fixture, component } = setup({
+      instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
+      instanceStatus: stoppedLatchStatus(),
+      accountPromise: Promise.reject(new Error('broker account unavailable')),
+    });
+    await flush();
+    fillRequired(component);
+    component.accountId.set('');
+    component.startNow.set(true);
+    await settleResource(fixture);
+
+    expect(component.stoppedStartLatch()).toBe(true);
+    expect(deployButton(fixture).disabled).toBe(true);
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Connected broker account unavailable',
+    );
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).not.toContain(
+      'This submit will deploy only',
+    );
+  });
+
+  it('includes failing account truth invariants in the account-proof action detail', async () => {
+    const { fixture, component } = setup({
+      accountTruth: {
+        final_verdict: 'not_proven',
+        status_label: 'Not proven',
+        status_detail: 'Run account reconcile before starting.',
+        invariants: [
+          {
+            key: 'all_open_orders_owned',
+            label: 'All open orders owned',
+            status: 'fail',
+            severity: 'critical',
+            headline: 'Open order ownership is not proven.',
+            narrative: 'At least one broker order lacks a bot or manual owner receipt.',
+            checked_at_ms: 1_780_000_001_000,
+            evidence_count: 0,
+          },
+        ],
+      },
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    fixture.detectChanges();
+
+    expect(deployButton(fixture).disabled).toBe(true);
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Missing evidence: Open order ownership is not proven.',
+    );
+  });
+
+  it('keeps higher-priority blockers ahead of account-proof action links', async () => {
+    const { fixture, component } = setup({
+      daemonDown: true,
+      accountTruth: {
+        final_verdict: 'not_proven',
+        status_label: 'Not proven',
+        status_detail: 'Run account reconcile before starting.',
+        source_freshness: [
+          {
+            source: 'positions',
+            label: 'Positions',
+            status: 'missing',
+            severity: 'critical',
+            fetched_at_ms: null,
+            age_ms: null,
+            hard_ttl_ms: 60_000,
+            reason_code: 'ACCOUNT_TRUTH_SOURCE_MISSING',
+            message: 'Positions source is missing.',
+          },
+        ],
+      },
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Live engine unavailable',
+    );
+    expect(fixture.nativeElement.querySelector('.blocked a')).toBeNull();
   });
 
   it('blocks "Deploy & start" onto an already-running instance, but allows deploy-only', async () => {
@@ -1096,12 +1500,354 @@ describe('BrokerDeployFormComponent', () => {
     expect(deployButton(fixture).disabled).toBe(false);
   });
 
+  it('blocks "Deploy & start" when inherited identity conflicts with the new signal or action plan until confirmed', async () => {
+    const { fixture, svc, component } = setup({
+      queryParams: {
+        inherited_symbol: 'mu',
+        inherited_symbol_source: 'run_ledger.live_config.action stock target',
+        signal_stream: 'spy',
+      },
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    component.actionPlan.set({
+      on_enter: [
+        {
+          leg_id: 'aapl_long',
+          instrument: { kind: 'stock', underlying: 'AAPL' },
+          position: 'long',
+          qty_ratio: 1,
+        },
+      ],
+      on_exit: [{ kind: 'close_leg', entry_leg_id: 'aapl_long' }],
+    });
+    await settleResource(fixture);
+
+    expect(component.identityCoherenceEvidence()?.facts.map((fact) => fact.value)).toEqual([
+      'MU',
+      'SPY',
+      'AAPL',
+    ]);
+    expect(component.blockedReason()).toContain('Inherited bot symbol MU conflicts');
+    expect(component.blockedReason()).toContain('Signal stream SPY and Action plan AAPL');
+    expect(identityCoherenceCard(fixture)?.textContent).toContain(
+      'Confirm new run identity',
+    );
+    expect(deployButton(fixture).disabled).toBe(true);
+
+    component.confirmIdentityCoherence();
+    fixture.detectChanges();
+
+    expect(component.identityCoherenceConfirmed()).toBe(true);
+    expect(component.blockedReason()).toBeNull();
+    expect(identityCoherenceCard(fixture)?.textContent).toContain(
+      'Confirmed for this Deploy & start.',
+    );
+    expect(deployButton(fixture).disabled).toBe(false);
+
+    await component.submit();
+
+    const req = svc.deployInstance.mock.calls[0][0];
+    expect(req.inherited_symbol).toBe('MU');
+    expect(req.inherited_symbol_source).toBe('run_ledger.live_config.action stock target');
+    expect(req.identity_coherence_confirmation).toEqual({
+      inherited_symbol: 'MU',
+      signal_stream: 'SPY',
+      action_plan_symbol: 'AAPL',
+    });
+
+    component.signalStream.set('QQQ');
+    fixture.detectChanges();
+
+    expect(component.identityCoherenceConfirmed()).toBe(false);
+    expect(component.blockedReason()).toContain('Signal stream QQQ');
+    expect(deployButton(fixture).disabled).toBe(true);
+  });
+
+  it('lists only inherited-symbol disagreements in the identity confirmation', async () => {
+    const { fixture, component } = setup({
+      queryParams: {
+        inherited_symbol: 'SPY',
+        inherited_symbol_source: 'run_ledger.live_config.symbol signal stream',
+        signal_stream: 'spy',
+      },
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    component.actionPlan.set({
+      on_enter: [
+        {
+          leg_id: 'aapl_long',
+          instrument: { kind: 'stock', underlying: 'AAPL' },
+          position: 'long',
+          qty_ratio: 1,
+        },
+      ],
+      on_exit: [{ kind: 'close_leg', entry_leg_id: 'aapl_long' }],
+    });
+    await settleResource(fixture);
+
+    expect(component.identityCoherenceEvidence()?.facts.map((fact) => fact.value)).toEqual([
+      'SPY',
+      'AAPL',
+    ]);
+    expect(component.blockedReason()).toContain('Action plan AAPL');
+    expect(component.blockedReason()).not.toContain('Signal stream SPY');
+    expect(identityCoherenceCard(fixture)?.textContent).not.toContain('Signal stream');
+    expect(deployButton(fixture).disabled).toBe(true);
+  });
+
+  it('blocks "Deploy & start" when inherited exposure is not proven flat until confirmed', async () => {
+    const { fixture, svc, component } = setup({
+      queryParams: {
+        inherited_exposure_posture: 'LONG',
+        inherited_exposure_positions: '{"SPY":5}',
+        inherited_exposure_pending_order_count: '2',
+        inherited_exposure_source: 'operator_surface.current_risk',
+      },
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    await settleResource(fixture);
+
+    expect(component.exposureCoherenceEvidence()?.posture).toBe('LONG');
+    expect(component.exposureCoherenceEvidence()?.ownedPositions).toEqual({ SPY: 5 });
+    expect(component.blockedReason()).toContain('Inherited exposure is Long');
+    expect(exposureCoherenceCard(fixture)?.textContent).toContain('SPY 5');
+    expect(exposureCoherenceCard(fixture)?.textContent).toContain(
+      'Confirm exposure state',
+    );
+    expect(deployButton(fixture).disabled).toBe(true);
+
+    component.confirmExposureCoherence();
+    fixture.detectChanges();
+
+    expect(component.exposureCoherenceConfirmed()).toBe(true);
+    expect(component.blockedReason()).toBeNull();
+    expect(deployButton(fixture).disabled).toBe(false);
+
+    await component.submit();
+
+    const req = svc.deployInstance.mock.calls[0][0];
+    expect(req.inherited_exposure_posture).toBe('LONG');
+    expect(req.inherited_exposure_positions).toEqual({ SPY: 5 });
+    expect(req.inherited_exposure_pending_order_count).toBe(2);
+    expect(req.inherited_exposure_source).toBe('operator_surface.current_risk');
+    expect(req.exposure_coherence_confirmation).toEqual({
+      posture: 'LONG',
+      pending_order_count: 2,
+      owned_positions: { SPY: 5 },
+      strategy_instance_id: 'deployment-validation-paper',
+      run_id: null,
+    });
+  });
+
+  it('uses backend identity-coherence evidence after an unconfirmed submit is rejected', async () => {
+    const { fixture, svc, component } = setup();
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    await settleResource(fixture);
+    svc.deployInstance.mockRejectedValueOnce(
+      new HttpErrorResponse({
+        status: 409,
+        error: {
+          detail: {
+            reason_code: 'IDENTITY_COHERENCE_UNCONFIRMED',
+            gate_id: 'deploy.identity_coherence',
+            message: 'Confirm the new run identity.',
+            evidence: [
+              {
+                label: 'inherited_symbol',
+                value: 'MU',
+                source: 'run_ledger.live_config.action stock target',
+              },
+              { label: 'signal_stream', value: 'SPY', source: 'live_config.symbol' },
+            ],
+            remediation: 'Confirm the current values, or turn off start.',
+          },
+        },
+      }),
+    );
+
+    expect(component.identityCoherenceEvidence()).toBeNull();
+
+    await component.submit();
+    fixture.detectChanges();
+
+    expect(component.inheritedSymbol()).toBe('MU');
+    expect(component.inheritedSymbolSource()).toBe('run_ledger.live_config.action stock target');
+    expect(component.identityCoherenceEvidence()?.facts.map((fact) => fact.value)).toEqual([
+      'MU',
+      'SPY',
+      'SPY',
+    ]);
+    expect(identityCoherenceCard(fixture)?.textContent).toContain(
+      'Confirm new run identity',
+    );
+    expect(deployButton(fixture).disabled).toBe(true);
+
+    component.confirmIdentityCoherence();
+    fixture.detectChanges();
+    await component.submit();
+
+    const retry = svc.deployInstance.mock.calls[1][0];
+    expect(retry.identity_coherence_confirmation).toEqual({
+      inherited_symbol: 'MU',
+      signal_stream: 'SPY',
+      action_plan_symbol: 'SPY',
+    });
+  });
+
+  it('uses backend exposure-coherence evidence after an unconfirmed submit is rejected', async () => {
+    const { fixture, svc, component } = setup();
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    await settleResource(fixture);
+    svc.deployInstance.mockRejectedValueOnce(
+      new HttpErrorResponse({
+        status: 409,
+        error: {
+          detail: {
+            reason_code: 'EXPOSURE_COHERENCE_UNCONFIRMED',
+            gate_id: 'deploy.exposure_coherence',
+            message: 'Confirm the current exposure.',
+            evidence: {
+              posture: 'LONG',
+              pending_order_count: 1,
+              owned_positions: { spy: 5 },
+              source: 'live_state.expected_position_by_symbol',
+              strategy_instance_id: 'deployment-validation-paper',
+              run_id: 'run-prev',
+            },
+            remediation: 'Confirm the current values, or turn off start.',
+          },
+        },
+      }),
+    );
+
+    expect(component.exposureCoherenceEvidence()).toBeNull();
+
+    await component.submit();
+    fixture.detectChanges();
+
+    expect(component.inheritedExposurePosture()).toBe('LONG');
+    expect(component.inheritedExposurePendingOrderCount()).toBe(1);
+    expect(component.inheritedExposurePositions()).toEqual({ SPY: 5 });
+    expect(component.inheritedExposureSource()).toBe('live_state.expected_position_by_symbol');
+    expect(component.parentRunId()).toBe('run-prev');
+    expect(exposureCoherenceCard(fixture)?.textContent).toContain('SPY 5');
+    expect(deployButton(fixture).disabled).toBe(true);
+
+    component.confirmExposureCoherence();
+    fixture.detectChanges();
+    await component.submit();
+
+    const retry = svc.deployInstance.mock.calls[1][0];
+    expect(retry.parent_run_id).toBe('run-prev');
+    expect(retry.exposure_coherence_confirmation).toEqual({
+      posture: 'LONG',
+      pending_order_count: 1,
+      owned_positions: { SPY: 5 },
+      strategy_instance_id: 'deployment-validation-paper',
+      run_id: 'run-prev',
+    });
+  });
+
+  it('allows deploy-only staging when inherited identity conflicts with the new signal stream', async () => {
+    const { fixture, component } = setup({
+      queryParams: {
+        inherited_symbol: 'MU',
+        inherited_symbol_source: 'run_ledger.live_config.action stock target',
+        signal_stream: 'SPY',
+      },
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(false);
+    fixture.detectChanges();
+
+    expect(component.identityCoherenceEvidence()?.facts.map((fact) => fact.value)).toEqual([
+      'MU',
+      'SPY',
+      'SPY',
+    ]);
+    expect(component.blockedReason()).toBeNull();
+    expect(identityCoherenceCard(fixture)?.textContent).toContain(
+      'Deploy-only will stage these values without starting.',
+    );
+    expect(deployButton(fixture).disabled).toBe(false);
+  });
+
+  it('allows deploy-only staging when inherited exposure is unproven', async () => {
+    const { fixture, component } = setup({
+      queryParams: {
+        inherited_exposure_posture: 'UNKNOWN',
+        inherited_exposure_source: 'operator_surface.current_risk',
+      },
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(false);
+    fixture.detectChanges();
+
+    expect(component.blockedReason()).toBeNull();
+    expect(exposureCoherenceCard(fixture)?.textContent).toContain(
+      'Deploy-only will stage these values without starting.',
+    );
+    expect(deployButton(fixture).disabled).toBe(false);
+  });
+
+  it('does not ask for identity confirmation when the inherited symbol matches the new signal stream', async () => {
+    const { fixture, component } = setup({
+      queryParams: {
+        inherited_symbol: 'SPY',
+        inherited_symbol_source: 'run_ledger.live_config.symbol signal stream',
+        signal_stream: 'SPY',
+      },
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    await settleResource(fixture);
+
+    expect(component.identityCoherenceEvidence()).toBeNull();
+    expect(component.blockedReason()).toBeNull();
+    expect(identityCoherenceCard(fixture)).toBeNull();
+    expect(deployButton(fixture).disabled).toBe(false);
+  });
+
+  it('does not ask for exposure confirmation when inherited exposure is flat with no pending orders', async () => {
+    const { fixture, component } = setup({
+      queryParams: {
+        inherited_exposure_posture: 'FLAT',
+        inherited_exposure_positions: '{}',
+        inherited_exposure_pending_order_count: '0',
+        inherited_exposure_source: 'operator_surface.current_risk',
+      },
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    await settleResource(fixture);
+
+    expect(component.exposureCoherenceEvidence()).toBeNull();
+    expect(component.blockedReason()).toBeNull();
+    expect(exposureCoherenceCard(fixture)).toBeNull();
+    expect(deployButton(fixture).disabled).toBe(false);
+  });
+
   it('prefills the form from re-deploy deep-link query params', async () => {
     const svc = {
       getEngineStrategies: vi.fn().mockResolvedValue([]),
       getSpecStrategyFixtures: vi.fn().mockResolvedValue([]),
       getQcAuditCopies: vi.fn().mockResolvedValue({ scope_root: 'references/qc-shadow', entries: [] }),
       getInstances: vi.fn().mockResolvedValue([]),
+      getInstanceStatus: vi.fn().mockRejectedValue(new Error('instance not found')),
       deployInstance: vi.fn(),
       getAuditCopySizingLookup: vi.fn().mockResolvedValue({
         verdict: 'cannot_prove',
@@ -1150,7 +1896,8 @@ describe('BrokerDeployFormComponent', () => {
     const component = await harness.navigateByUrl(
       '/broker/deploy?strategy_key=deployment_validation&spec_path=spec%2Fpath.json' +
         '&signal_stream=aapl&account_id=DU777&qc_backtest_id=bt-redeploy' +
-        '&qc_audit_copy_path=audit%2Fcopy.py&instance_id=recovered_inst',
+        '&qc_audit_copy_path=audit%2Fcopy.py&instance_id=recovered_inst' +
+        '&inherited_symbol=mu&inherited_symbol_source=run_ledger.live_config.action%20stock%20target',
       BrokerDeployFormComponent,
     );
     activeFixture = harness.fixture;
@@ -1160,6 +1907,8 @@ describe('BrokerDeployFormComponent', () => {
     expect(component.specPath()).toBe(DEPLOYMENT_VALIDATION_SPEC_PATH);
     expect(component.signalStream()).toBe('AAPL');
     expect(component.resolvedSignalStream()).toBe('AAPL');
+    expect(component.inheritedSymbol()).toBe('MU');
+    expect(component.inheritedSymbolSource()).toBe('run_ledger.live_config.action stock target');
     expect(component.qcBacktestId()).toBe(DEPLOYMENT_VALIDATION_QC_BACKTEST_ID);
     expect(component.qcAuditCopyPath()).toBe(DEPLOYMENT_VALIDATION_AUDIT_COPY);
     expect(component.instanceId()).toBe('recovered_inst');
@@ -1169,13 +1918,20 @@ describe('BrokerDeployFormComponent', () => {
   });
 
   it('allows "Deploy & start" when the instance exists but is not live', async () => {
-    const { fixture, component } = setup({ instances: [{ strategy_instance_id: 'Minute', process_state: 'exited' }] });
+    const { fixture, component } = setup({
+      instances: [{ strategy_instance_id: 'Minute', process_state: 'exited' }],
+      instanceStatus: clearStartStatus(),
+    });
     await flush();
     fillRequired(component);
     component.instanceId.set('Minute');
     component.startNow.set(true);
     fixture.detectChanges();
+    await fixture.whenStable();
+    await flush();
+    fixture.detectChanges();
 
+    expect(component.blockedReason()).toBeNull();
     expect(deployButton(fixture).disabled).toBe(false);
   });
 });

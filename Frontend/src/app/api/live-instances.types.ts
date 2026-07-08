@@ -386,6 +386,7 @@ export interface OperatorSurfaceTradingSession {
 
 export interface OperatorSurfaceCurrentRisk {
   posture: RiskPosture;
+  owned_positions: Record<string, number>;
   /** ``null`` when broker state is unavailable; ``0`` only when known empty. */
   pending_order_count: number | null;
   verdict: OperatorVerdict;
@@ -590,7 +591,8 @@ export type OperatorNoticeCode =
   | 'submit.uncertain'
   | 'submit.halted'
   | 'submit.launch_failed'
-  | 'submit.unmapped_diagnostic';
+  | 'submit.unmapped_diagnostic'
+  | 'safety_halt.poisoned';
 
 export type OperatorNoticeActionKind =
   | 'none'
@@ -622,7 +624,7 @@ export interface OperatorNotice {
 export interface OperatorIncident {
   schema_version: number;
   incident_id: string;
-  category: 'watchdog' | 'activity' | 'reconciliation' | 'order' | 'submit';
+  category: 'watchdog' | 'activity' | 'reconciliation' | 'order' | 'submit' | 'safety-halt';
   notice: OperatorNotice;
   started_at_ms: number;
   resolved_at_ms: number | null;
@@ -954,6 +956,7 @@ export interface BotCatalogRow {
   status_label: string;
   status_detail: string | null;
   status_tone: BotCatalogTone;
+  only_fresh_run_available: boolean;
   needs_attention: boolean;
   trading_mode: BotCatalogTradingMode;
   symbols: string[];

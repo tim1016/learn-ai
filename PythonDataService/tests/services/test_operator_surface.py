@@ -1174,6 +1174,9 @@ def test_current_risk_broker_none_renders_unknown_with_nulls() -> None:
 def test_current_risk_posture_derived_from_owned_positions(owned, expected_posture) -> None:
     surface = _surface(broker=_broker(owned_positions=owned))
     assert surface.current_risk.posture == expected_posture
+    assert surface.current_risk.owned_positions == {
+        symbol: qty for symbol, qty in sorted(owned.items()) if qty != 0
+    }
 
 
 @pytest.mark.parametrize(
@@ -1387,11 +1390,9 @@ def test_configuration_sizing_entirely_missing_flags_both_sizing_codes() -> None
 
 def test_resume_pause_under_clean_guards_and_paused_intent() -> None:
     # PRD #616 — Resume/Pause now consult the shared ``ResumeGuardState``
-    # resolver AND the intent-state pair rules.  Under the
-    # nothing-ever-deployed default (empty guard state, no desired
-    # state sidecar), Resume is refused with ``ALREADY_RUNNING``
-    # because absence is the effective-RUNNING default; Pause is
-    # permitted.
+    # resolver AND the intent-state pair rules.  Durable PAUSED makes
+    # Resume meaningful and Pause a no-op, regardless of whether the
+    # effect is live actuation or a durable-only write.
     for binding in (None, _LIVE):
         surface = _surface(live_binding=binding, desired_state=_desired("PAUSED"))
         assert surface.actions.resume.enabled is True
@@ -1406,6 +1407,49 @@ def test_resume_pause_under_clean_guards_and_paused_intent() -> None:
         assert surface.actions.pause.gate_results[0].operator_reason == "ALREADY_PAUSED"
         assert surface.actions.pause.gate_results[0].operator_next_step == "ALREADY_PAUSED"
         assert surface.actions.pause.gate_results[0].evidence_at_ms == _NOW_MS
+
+
+def test_resume_disabled_reason_names_desired_state_axis_without_live_runtime() -> None:
+    # Stream-primary PRD story 33: the operator surface must not claim
+    # "already running" when the same response shows no live runtime.
+    surface = _surface(
+        process=_IDLE_PROC,
+        live_binding=None,
+        desired_state=_desired("RUNNING"),
+        start_run_id=_START_RUN,
+        start_defaults=_defaults(),
+    )
+
+    assert surface.host_process.state == "WAITING_FOR_HOST"
+    assert surface.host_process.start_capability.enabled is True
+    assert surface.actions.resume.enabled is False
+    assert surface.actions.resume.disabled_reason_code == "DESIRED_STATE_ALREADY_RUNNING"
+    assert surface.actions.resume.disabled_reasons == ["DESIRED_STATE_ALREADY_RUNNING"]
+    gate = surface.actions.resume.gate_results[0]
+    assert gate.operator_reason == "DESIRED_STATE_ALREADY_RUNNING"
+    assert gate.operator_next_step == "DESIRED_STATE_ALREADY_RUNNING"
+
+
+def test_resume_disabled_reason_names_default_running_when_desired_state_absent() -> None:
+    # Same semantic family as story 33: absent durable desired-state
+    # evidence behaves like RUNNING, but the reason must not claim the
+    # sidecar explicitly recorded RUNNING.
+    surface = _surface(
+        process=_IDLE_PROC,
+        live_binding=None,
+        desired_state=None,
+        start_run_id=_START_RUN,
+        start_defaults=_defaults(),
+    )
+
+    assert surface.host_process.state == "IDLE"
+    assert surface.host_process.start_capability.enabled is True
+    assert surface.actions.resume.enabled is False
+    assert surface.actions.resume.disabled_reason_code == "DESIRED_STATE_DEFAULT_RUNNING"
+    assert surface.actions.resume.disabled_reasons == ["DESIRED_STATE_DEFAULT_RUNNING"]
+    gate = surface.actions.resume.gate_results[0]
+    assert gate.operator_reason == "DESIRED_STATE_DEFAULT_RUNNING"
+    assert gate.operator_next_step == "DESIRED_STATE_DEFAULT_RUNNING"
 
 
 def test_account_freeze_blocks_start_and_resume() -> None:
@@ -1706,7 +1750,8 @@ def test_reason_code_vocabulary_lists_documented_codes() -> None:
         "RECONCILIATION_UNKNOWN",
         "UNRESOLVED_UNCERTAIN_INTENT",
         "UNCERTAIN_INTENT_STATE_UNKNOWN",
-        "ALREADY_RUNNING",
+        "DESIRED_STATE_ALREADY_RUNNING",
+        "DESIRED_STATE_DEFAULT_RUNNING",
         "ALREADY_PAUSED",
         "STOPPED_REQUIRES_REDEPLOY",
         "REDEPLOY_REQUIRED",

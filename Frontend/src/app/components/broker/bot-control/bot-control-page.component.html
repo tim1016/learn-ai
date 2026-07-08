@@ -64,6 +64,7 @@
       <app-overview-actions
         class="top-action-banner"
         [actions]="s.lifecycle_chart.actions"
+        [onlyFreshRunAvailable]="s.lifecycle_chart.only_fresh_run_available"
         [busyAction]="busyAction()"
         (actionInvoked)="dispatchOverviewAction($event)"
         (actionTargetHovered)="setHighlightedLifecycleNode($event)"
@@ -185,16 +186,12 @@
         />
       </section>
 
-      <section class="inspector-pane" aria-label="Lifecycle action and evidence inspector">
-        @if (rightPaneNode(); as node) {
-          <app-node-inspector
-            [node]="node"
-            [status]="s"
-            [hasExplicitSelection]="selectedLifecycleNodeId() !== null"
-            (redeployRequested)="onGateRedeploy()"
-          />
-        }
-      </section>
+      <app-bot-control-side-panel
+        [status]="s"
+        [node]="rightPaneNode()"
+        [hasExplicitSelection]="selectedLifecycleNodeId() !== null"
+        (freshRunRequested)="onGateRedeploy()"
+      />
     </div>
 
     <!-- ── INLINE WORKBENCH ── -->

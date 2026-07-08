@@ -36,6 +36,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.engine.live.broker_socket_probe import BrokerSocketProbeError, LsofSocketEnumerator
 from app.engine.live.daemon_auth import TOKEN_HEADER, ensure_daemon_token, token_file_path
 from app.engine.live.deploy import (
+    ActionPlanReadinessError,
     DeployIOError,
     DeployParams,
     DirtyTreeError,
@@ -777,6 +778,19 @@ class RunnerProcessManager:
             raise HostRunnerError(status.HTTP_400_BAD_REQUEST, f"Unknown live_config key: {exc}") from exc
         except UnsupportedBarSourceDescriptorError as exc:
             raise HostRunnerError(status.HTTP_400_BAD_REQUEST, f"Unsupported bar source: {exc}") from exc
+        except ActionPlanReadinessError as exc:
+            raise HostRunnerError(
+                status.HTTP_409_CONFLICT,
+                {
+                    "reason_code": exc.reason_code,
+                    "message": exc.message,
+                    "remediation": (
+                        "Open the Action plan step and add the required entry/exit legs, "
+                        "or choose a strategy/runtime path that supports this plan shape."
+                    ),
+                    "gate_id": "deploy.action_plan",
+                },
+            ) from exc
         except SpecOrAuditMissingError as exc:
             raise HostRunnerError(status.HTTP_400_BAD_REQUEST, f"Missing input: {exc}") from exc
         except GitUnavailableError as exc:

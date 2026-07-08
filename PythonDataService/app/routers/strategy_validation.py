@@ -4,7 +4,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.routers.engine import _STRATEGY_REGISTRY
+from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.schemas.strategy_validation import (
     StrategyValidationCatalog,
     StrategyValidationDetail,

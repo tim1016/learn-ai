@@ -18,7 +18,7 @@ a receipt-write failure as fatal: "no submit without a durable receipt."
 
 from __future__ import annotations
 
-import contextlib
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -27,7 +27,6 @@ from types import MappingProxyType
 from app.engine.live.halt import (
     PoisonedHaltReason,
     PoisonedHaltTrigger,
-    write_poisoned_flag,
 )
 from app.engine.live.intent_events import IntentEvent, IntentEventType, IntentKind
 from app.engine.live.intent_ledger import LedgerView, SubmittedOrderView, fold, projection_from_envelope
@@ -44,7 +43,10 @@ from app.engine.live.reconciliation_classifier import (
     classify,
 )
 from app.engine.live.reconciliation_receipt import write_receipt
+from app.operator.incidents.safety_halt_notices import poison_and_record_incident
 from app.schemas.live_runs import ReconciliationReceipt
+
+logger = logging.getLogger(__name__)
 
 # Events from the prior run's WAL that may still need resolution against the
 # broker on this boot. SUBMIT_UNCERTAIN_HALTED is intentionally excluded — by
@@ -298,9 +300,9 @@ def _poison_and_record(
     ``envelope_last_bar_ms`` is the last clean bar from the sidecar when we
     could read it; ``None`` (or a synthesized 1) when the sidecar itself is
     the source of the poison and there is no clean bar to anchor on.
-    ``write_poisoned_flag`` refuses to overwrite an existing flag — a prior
-    boot may have already poisoned this run_dir — which we tolerate so the
-    receipt still lands.
+    ``poison_and_record_incident`` refuses to overwrite an existing flag — a
+    prior boot may have already poisoned this run_dir — which we tolerate so
+    the receipt still lands while preserving the first halt's reason.
     """
     halt_reason = PoisonedHaltReason(
         trigger=PoisonedHaltTrigger.COLD_START_DIVERGENCE,
@@ -308,11 +310,14 @@ def _poison_and_record(
         last_clean_bar_close_ms=envelope_last_bar_ms or 1,
         details={"reason": reason, "source": "reconciliation_orchestrator"},
     )
-    # Already poisoned (e.g. by a prior boot or another fatal-halt source)
-    # is tolerated: the first halt's reason wins per the flag's contract,
-    # but the receipt must still land for the cockpit to read.
-    with contextlib.suppress(FileExistsError):
-        write_poisoned_flag(run_dir, halt_reason)
+    poison_and_record_incident(
+        run_dir=run_dir,
+        halt_reason=halt_reason,
+        strategy_instance_id=base_receipt.strategy_instance_id,
+        run_id=base_receipt.run_id,
+        log_path=run_dir / "live.log",
+        logger=logger,
+    )
 
     completed_at_ms = now_ms()
     failed = base_receipt.model_copy(

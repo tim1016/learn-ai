@@ -70,7 +70,6 @@ from app.engine.live.halt import (
     PoisonedHaltTrigger,
     check_lost_fill,
     check_outside_mutation,
-    write_poisoned_flag,
 )
 from app.engine.live.live_context import LiveContext
 from app.engine.live.live_portfolio import (
@@ -91,6 +90,8 @@ from app.engine.live.runtime_producer import (
 )
 from app.engine.strategy.base import LoggedTrade, Strategy
 from app.engine.strategy.spec.schema import SUPPORTED_LIVE_RUNTIME_BAR_SOURCE
+from app.operator.incidents.safety_halt_notices import poison_and_record_incident
+from app.operator.incidents.store import IncidentStore
 from app.schemas.bot_events import GateStep, GateStepResult, SourceAuthority
 from app.utils.timestamps import now_ms_utc
 
@@ -2418,9 +2419,16 @@ class LiveEngine:
             details={"source": "operator_command", "reason": reason},
         )
         try:
-            write_poisoned_flag(run_dir, reason_payload)
-            return "poisoned_flag_written"
-        except FileExistsError:
+            result = poison_and_record_incident(
+                run_dir=run_dir,
+                halt_reason=reason_payload,
+                strategy_instance_id=self._strategy_instance_id,
+                run_id=self._run_id or run_dir.name,
+                log_path=run_dir / "live.log",
+                logger=logger,
+            )
+            if result.flag_created:
+                return "poisoned_flag_written"
             logger.info("poisoned.flag already exists; operator MARK_POISONED preserved prior cause")
             return "poisoned_flag_already_present"
         except OSError:
@@ -2689,11 +2697,18 @@ class LiveEngine:
                 logger.exception("writers.flush_all failed during fatal halt")
         if self._output_dir is not None:
             try:
-                write_poisoned_flag(self._output_dir, reason)
-            except FileExistsError:
-                # First halt already wrote it; preserve the original
-                # cause per spec § 7 first-halt-wins invariant.
-                logger.info("poisoned.flag already exists; preserving original halt cause")
+                result = poison_and_record_incident(
+                    run_dir=self._output_dir,
+                    halt_reason=reason,
+                    strategy_instance_id=self._strategy_instance_id,
+                    run_id=self._run_id or self._output_dir.name,
+                    log_path=self._output_dir / "live.log",
+                    logger=logger,
+                )
+                if not result.flag_created:
+                    # First halt already wrote it; preserve the original
+                    # cause per spec § 7 first-halt-wins invariant.
+                    logger.info("poisoned.flag already exists; preserving original halt cause")
             except Exception:
                 logger.exception("write_poisoned_flag failed during fatal halt")
         raise FatalHaltError(reason)
@@ -3195,8 +3210,6 @@ class LiveEngine:
                 WatchdogHaltExecutor,
                 WatchdogTimeouts,
             )
-            from app.operator.incidents.store import IncidentStore
-
             _engine_ref = self
 
             class _ControllerAdapter:

@@ -48,12 +48,13 @@ import {
 import { toOperationError, type OperationKind } from '../operation-error';
 import { operatorPillTone, type OperatorPillTone } from '../operator-severity';
 import { AttentionDropdownComponent } from './attention-dropdown.component';
-import { NodeInspectorComponent } from './node-inspector.component';
 import { OverviewActionsComponent } from './overview-tab/overview-actions.component';
 import { OverviewTabComponent } from './overview-tab/overview-tab.component';
 import { RuntimeBannerComponent } from './runtime-banner/runtime-banner.component';
 import { TraderGuidanceTimelineComponent } from './overview-tab/trader-guidance-timeline.component';
 import { WorkbenchAuditPanelComponent } from './workbench-audit-panel.component';
+import { BotControlSidePanelComponent } from './bot-control-side-panel.component';
+import { boundRunIdForStatus } from './lib/bound-run-id';
 
 const POLL_INTERVAL_MS = 4_000;
 const TIMELINE_LIMIT = 5;
@@ -128,9 +129,9 @@ const EMPTY_TIMELINE_STATE: LifecycleTimelinePaneState = {
     OverviewActionsComponent,
     AttentionDropdownComponent,
     TraderGuidanceTimelineComponent,
-    NodeInspectorComponent,
     RuntimeBannerComponent,
     WorkbenchAuditPanelComponent,
+    BotControlSidePanelComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './bot-control-page.component.html',
@@ -270,7 +271,6 @@ export class BotControlPageComponent {
     const graph = status.lifecycle_chart.global_graph;
     return graph.nodes.find((node) => node.id === graph.primary_node_id) ?? null;
   });
-
   readonly traderGuidance = computed(() => this.status()?.operator_surface.trader_guidance ?? null);
   readonly attentionGroups = computed(
     () => this.traderGuidance()?.additional_attention_groups ?? [],
@@ -738,7 +738,7 @@ export class BotControlPageComponent {
 
   private lifecycleTimelineContext(status: LiveInstanceStatus): LifecycleTimelineRequestContext {
     const accountId = status.operator_surface.account_owner?.account_id ?? null;
-    const runId = status.live_binding?.run_id ?? status.evidence_binding?.run_id ?? null;
+    const runId = boundRunIdForStatus(status);
     return {
       statusKey: [
         status.strategy_instance_id,
