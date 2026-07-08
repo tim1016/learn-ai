@@ -37,13 +37,13 @@ from app.broker.ibkr.orders import (
     executions_for_reconnect_recovery,
     stream_order_events,
 )
-from app.engine.live.identity import _INSTANCE_ID_RE
+from app.engine.live.identity import safe_strategy_instance_path_segment
 from app.engine.live.live_state_sidecar import (
     LiveStateSidecarCorruptError,
     LiveStateSidecarRepo,
+    stable_live_state_path,
 )
 from app.operator.incidents.store import IncidentStore
-from app.routers.live_runs import _confine, _validate_path_segment
 from app.schemas.broker_activity import (
     BrokerActivityPage,
     ReconciliationTimingPolicy,
@@ -76,21 +76,7 @@ router = APIRouter(
 
 
 def _validate_strategy_instance_id_for_path(strategy_instance_id: str) -> str:
-    safe = _validate_path_segment(
-        strategy_instance_id, field="strategy_instance_id"
-    )
-    if _INSTANCE_ID_RE.fullmatch(safe) is None:
-        raise ValueError(f"invalid strategy_instance_id: {strategy_instance_id!r}")
-    return safe
-
-
-def _live_state_path_for_request(
-    artifacts_root: FsPath, strategy_instance_id: str
-) -> FsPath:
-    """Build a CodeQL-visible confined live-state sidecar path."""
-    safe_sid = _validate_strategy_instance_id_for_path(strategy_instance_id)
-    sidecar_dir = _confine(artifacts_root / "live_state", safe_sid)
-    return sidecar_dir / "live_state.json"
+    return safe_strategy_instance_path_segment(strategy_instance_id)
 
 
 async def bootstrap_publisher_for_instance(
@@ -133,17 +119,7 @@ async def bootstrap_publisher_for_instance(
 
     settings = get_settings()
     artifacts_root = FsPath(settings.live_runs_root).parent
-    envelope_path = _live_state_path_for_request(
-        artifacts_root, safe_strategy_instance_id
-    )
-    # _live_state_path_for_request validates the URL segment, confines it
-    # below artifacts/live_state, and returns the confined path directly.
-    # codeql[py/path-injection]
-    if not envelope_path.is_file():
-        raise PublisherBootstrapError(
-            "no_envelope",
-            f"no live envelope for strategy_instance_id={safe_strategy_instance_id!r}",
-        )
+    envelope_path = stable_live_state_path(artifacts_root, safe_strategy_instance_id)
     try:
         envelope = LiveStateSidecarRepo(envelope_path).read()
     except LiveStateSidecarCorruptError as exc:

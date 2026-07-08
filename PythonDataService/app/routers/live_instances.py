@@ -15,11 +15,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import re
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal, NoReturn, TypedDict
 
 from fastapi import APIRouter, Body, HTTPException, Query, Response, status
@@ -60,7 +59,12 @@ from app.engine.live.live_artifact_io import (
     read_parquet_rows,
     read_parquet_tail,
 )
-from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarCorruptError, LiveStateSidecarRepo
+from app.engine.live.live_state_sidecar import (
+    LiveStateEnvelope,
+    LiveStateSidecarCorruptError,
+    LiveStateSidecarRepo,
+    stable_live_state_path,
+)
 from app.engine.live.order_identity import mint_intent_id
 from app.engine.live.readiness import build_start_readiness
 from app.engine.live.readiness_sidecar import read_readiness
@@ -1026,47 +1030,17 @@ def _container_resolve_repo_path(path: str) -> list[Path]:
     sub-roots — the same path eventually resolves under one of them. The
     caller stops at the first existing file.
     """
-    candidates: list[Path] = []
-
-    def existing_confined_file(root: Path, relative_path: str) -> Path | None:
-        if not relative_path or "\x00" in relative_path:
-            return None
-        rel = PurePosixPath(relative_path)
-        if rel.is_absolute() or any(part in ("", ".", "..") for part in rel.parts):
-            return None
-        root_resolved = os.path.realpath(root)
-        # relative_path is rejected when absolute or containing traversal
-        # segments, then commonpath confines the materialized candidate below root.
-        # codeql[py/path-injection]
-        resolved = os.path.realpath(os.path.join(root_resolved, *rel.parts))
-        try:
-            common = os.path.commonpath([root_resolved, resolved])
-        except ValueError:
-            return None
-        if common != root_resolved:
-            return None
-        # resolved is the confined commonpath-checked candidate above.
-        # codeql[py/path-injection]
-        candidate = Path(resolved)
-        return candidate if candidate.is_file() else None
-
-    repo_root = Path(__file__).resolve().parents[3]
-    pds_root = repo_root / "PythonDataService"
-    app_root = pds_root / "app"
+    candidates = [Path(path)]
     for marker, container_root in (
-        ("PythonDataService/app/", app_root),
-        ("PythonDataService/", pds_root),
-        ("references/", repo_root / "references"),
-        ("PythonDataService/app/", Path("/app/app")),
-        ("PythonDataService/", Path("/app")),
-        ("references/", Path("/app/references")),
+        ("PythonDataService/app/", "/app/app/"),
+        ("PythonDataService/", "/app/"),
+        ("references/", "/app/references/"),
     ):
         idx = path.find(marker)
         if idx >= 0:
-            candidate = existing_confined_file(container_root, path[idx + len(marker) :])
-            if candidate is not None and candidate not in candidates:
-                candidates.append(candidate)
-    return candidates
+            translated = container_root + path[idx + len(marker) :]
+            candidates.append(Path(translated))
+    return [c for c in candidates if c.is_file()] or candidates
 
 
 def _sizing_audit_rows(strategy_instance_id: str) -> list[dict]:
@@ -1092,8 +1066,9 @@ def _sizing_audit_rows(strategy_instance_id: str) -> list[dict]:
         if wal_rows:
             return wal_rows
 
-    sidecar_path = artifacts_root / "live_state" / strategy_instance_id / "live_state.json"
-    if not sidecar_path.is_file():
+    try:
+        sidecar_path = stable_live_state_path(artifacts_root, strategy_instance_id)
+    except ValueError:
         return []
     try:
         envelope = LiveStateSidecarRepo(sidecar_path).read()

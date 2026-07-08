@@ -19,7 +19,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.engine.live.identity import strategy_instance_artifact_dir
+from app.engine.live.identity import _INSTANCE_ID_RE, validate_strategy_instance_id
 
 
 class LiveStateSidecarCorruptError(RuntimeError):
@@ -45,9 +45,20 @@ def stable_live_state_path(artifacts_root: Path, strategy_instance_id: str) -> P
     stable_global_path so both sidecars sit side-by-side under the same
     per-strategy directory.
     """
-    return strategy_instance_artifact_dir(
-        artifacts_root, "live_state", strategy_instance_id
-    ) / "live_state.json"
+    validate_strategy_instance_id(strategy_instance_id)
+    match = _INSTANCE_ID_RE.fullmatch(strategy_instance_id)
+    if match is None:
+        raise ValueError(
+            f"strategy_instance_id rejected on second check: {strategy_instance_id!r}"
+        )
+    safe_sid = match.group(0)
+    live_state_root = (artifacts_root / "live_state").resolve()
+    sidecar_dir = (live_state_root / safe_sid).resolve(strict=False)
+    if not sidecar_dir.is_relative_to(live_state_root):
+        raise ValueError(
+            f"live-state sidecar path {sidecar_dir} escapes {live_state_root}"
+        )
+    return sidecar_dir / "live_state.json"
 
 
 class LiveStateEnvelope(BaseModel):
@@ -200,9 +211,6 @@ def _fsync_parent_dir(child_path: Path) -> None:
     """
     if sys.platform == "win32":
         return
-    # Paths reaching this helper are produced by confined sidecar builders
-    # (see identity.strategy_instance_artifact_dir and its regression tests).
-    # codeql[py/path-injection]
     dir_fd = os.open(child_path.parent, os.O_RDONLY)
     try:
         os.fsync(dir_fd)
