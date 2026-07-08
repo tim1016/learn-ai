@@ -63,7 +63,6 @@
     background: var(--bg-surface);
     color: var(--text-secondary);
     text-align: left;
-    cursor: pointer;
 
     strong,
     span {
@@ -81,15 +80,6 @@
     span {
       font-size: 0.72rem;
     }
-
-    &:hover,
-    &.selected {
-      border-color: var(--accent, #7dd3fc);
-    }
-
-    &.selected {
-      background: var(--bg-elevated, rgba(125, 211, 252, 0.08));
-    }
   }
 
   .category-kind {
@@ -99,138 +89,6 @@
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-  }
-
-  .event-drilldown {
-    display: grid;
-    gap: 0.35rem;
-    padding: 0.75rem 0.875rem;
-  }
-
-  .event-row {
-    border: 1px solid var(--border-light, rgba(255, 255, 255, 0.08));
-    border-radius: 6px;
-    background: var(--bg-surface);
-    overflow: hidden;
-
-    &.expanded {
-      border-color: var(--accent, #7dd3fc);
-    }
-  }
-
-  .event-row-main {
-    display: grid;
-    grid-template-columns: minmax(7rem, auto) minmax(8rem, 0.8fr) auto auto auto auto minmax(12rem, 2fr);
-    align-items: center;
-    gap: 0.45rem;
-    width: 100%;
-    padding: 0.5rem 0.65rem;
-    border: 0;
-    background: transparent;
-    color: var(--text-secondary);
-    text-align: left;
-    cursor: pointer;
-
-    span {
-      min-width: 0;
-    }
-  }
-
-  .event-time,
-  .event-pill {
-    font-family: var(--font-mono);
-    font-size: 0.68rem;
-  }
-
-  .event-type {
-    color: var(--text-primary);
-    font-size: 0.78rem;
-    font-weight: 650;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .event-asset {
-    min-width: 0;
-  }
-
-  .event-pill {
-    justify-self: start;
-    padding: 0.08rem 0.34rem;
-    border: 1px solid var(--border-light, rgba(255, 255, 255, 0.08));
-    border-radius: 999px;
-    color: var(--text-muted);
-  }
-
-  .event-summary {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 0.76rem;
-  }
-
-  .event-detail {
-    display: grid;
-    gap: 0.5rem;
-    padding: 0.55rem 0.65rem 0.7rem;
-    border-top: 1px solid var(--border-light, rgba(255, 255, 255, 0.08));
-    color: var(--text-secondary);
-    font-size: 0.74rem;
-
-    dl {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
-      gap: 0.45rem;
-      margin: 0;
-    }
-
-    dl > div {
-      min-width: 0;
-    }
-
-    dt {
-      color: var(--text-subtle);
-      font-family: var(--font-mono);
-      font-size: 0.62rem;
-      text-transform: uppercase;
-    }
-
-    dd {
-      margin: 0.12rem 0 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    ul {
-      display: grid;
-      gap: 0.25rem;
-      margin: 0;
-      padding: 0;
-      list-style: none;
-    }
-
-    li {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.35rem;
-      align-items: center;
-    }
-
-    code {
-      color: var(--text-primary);
-    }
-  }
-
-  @media (max-width: 760px) {
-    .event-row-main {
-      grid-template-columns: 1fr;
-    }
-
-    .event-summary {
-      white-space: normal;
-    }
   }
 
 }
