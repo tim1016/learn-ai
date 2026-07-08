@@ -19,7 +19,7 @@ import re
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Literal, NoReturn
+from typing import TYPE_CHECKING, Annotated, Literal, NoReturn, TypedDict
 
 from fastapi import APIRouter, Body, HTTPException, Query, Response, status
 from pydantic import ValidationError
@@ -27,6 +27,7 @@ from pydantic import ValidationError
 from app.broker.ibkr.api_evidence import get_ibkr_api_evidence_recorder
 from app.broker.ibkr.config import IbkrSettings, get_settings
 from app.broker.runtime_snapshot import BrokerRuntimeSnapshot, snapshot_data_plane_broker
+from app.config import settings as app_settings
 from app.engine.action_plan.parity import parity_diagnostics
 from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import (
@@ -84,6 +85,7 @@ from app.schemas.action_plan import ActionPlan, ActionPlanPreviewResponse
 from app.schemas.daemon_diagnostics import DaemonDiagnosticReport
 from app.schemas.live_runs import (
     ActiveDateEntry,
+    ActivityBrokerCategorySummary,
     ActivityBrokerEventRow,
     ActivityEvidenceRef,
     ActivityFillMarker,
@@ -96,6 +98,7 @@ from app.schemas.live_runs import (
     BotDeleteRequest,
     BotDeleteResponse,
     BrokerObservationConsistency,
+    ChartOverlayNotice,
     ChartSnapshotResponse,
     ChartSnapshotRun,
     CommandsTimeline,
@@ -189,6 +192,11 @@ from app.services.deploy_admission import (
     resolve_symbol_from_ledger,
 )
 from app.services.instance_context import InstanceContext, load_instance_context
+from app.services.live_chart_window import (
+    ChartWindowError,
+    coerce_chart_timeframe,
+    resolve_chart_window,
+)
 from app.services.mutation_attempt import (
     TERMINAL_STATES,
     MutationAttempt,
@@ -2817,6 +2825,11 @@ def _filter_rows_to_utc_day(rows: list[dict], day: date, key: str = "ts_ms") -> 
     return [r for r in rows if day_start_ms <= int(r.get(key, -1)) < day_end_ms]
 
 
+def _filter_rows_to_window(rows: list[dict], start_ms: int, end_ms: int, key: str = "ts_ms") -> list[dict]:
+    """Keep only rows whose ``key`` (int64 ms UTC) falls in ``[start_ms, end_ms)``."""
+    return [r for r in rows if start_ms <= int(r.get(key, -1)) < end_ms]
+
+
 def _runs_active_on(runs: list[dict], day: date, *, live_binding: LiveBinding | None) -> list[dict]:
     """Subset of ``runs`` whose session overlaps the given UTC date.
 
@@ -2843,6 +2856,31 @@ def _runs_active_on(runs: list[dict], day: date, *, live_binding: LiveBinding | 
     return out
 
 
+def _runs_active_in_window(
+    runs: list[dict],
+    start_ms: int,
+    end_ms: int,
+    *,
+    live_binding: LiveBinding | None,
+    now_ms: int,
+) -> list[dict]:
+    """Subset of ``runs`` whose lifecycle overlaps an explicit UTC-ms window."""
+    out: list[dict] = []
+    for run in runs:
+        run_dir = Path(run["run_dir"])
+        sidecar = _read_sidecar(run_dir)
+        started = sidecar.started_at_ms if sidecar is not None else None
+        ended = sidecar.ended_at_ms if sidecar is not None else None
+        if started is None:
+            started = int(run.get("created_at_ms") or 0)
+        effective_end = ended if ended is not None else now_ms
+        if started < end_ms and effective_end >= start_ms:
+            out.append({**run, "started_at_ms": started, "ended_at_ms": ended, "sidecar_started": sidecar is not None})
+        elif live_binding is not None and run.get("run_id") == live_binding.run_id and start_ms <= now_ms < end_ms:
+            out.append({**run, "started_at_ms": started, "ended_at_ms": None, "sidecar_started": False})
+    return out
+
+
 # VCR-P3-I — Trading-day boundaries are America/New_York, not UTC. At
 # the UTC boundary (00:00 UTC = 19:00 ET in winter / 20:00 ET in summer)
 # bars from the ET trading session could fall on the wrong UTC date,
@@ -2862,47 +2900,6 @@ def _today_ny() -> date:
     date, not the UTC calendar date.
     """
     return datetime.now(_NY_TZ).date()
-
-
-def _bar_to_dict(bar) -> dict:
-    """Serialize an ``IbkrMinuteBar`` for the chart payload (Decimal → str)."""
-    return bar.model_dump(mode="json")
-
-
-def _resolve_chart_bars(
-    *,
-    symbol: str | None,
-    resolution: str,
-    day: date,
-    is_today: bool,
-) -> list[dict]:
-    """Resolve the bars for a chart snapshot.
-
-    Today's path consults the live aggregator (which itself replays from
-    persistence on subscribe) for the freshest buffer, then falls back to
-    persistence when the buffer is empty. Past-date paths consult
-    persistence only — they ignore the aggregator entirely so a stopped
-    daemon doesn't make yesterday's chart disappear.
-    """
-    if symbol is None:
-        return []
-    from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
-
-    if is_today:
-        bars = LIVE_BAR_AGGREGATOR.snapshot(symbol) if resolution == "1m" else LIVE_BAR_AGGREGATOR.snapshot_5s(symbol)
-        if bars:
-            return [_bar_to_dict(b) for b in bars]
-
-    persistence = LIVE_BAR_AGGREGATOR._persistence
-    if persistence is None:
-        return []
-    # Past dates: prefer compacted Parquet; fall back to JSONL when the
-    # day's first compaction hasn't run yet (still streaming or the
-    # nightly compaction job hasn't fired).
-    bars = persistence.read_parquet(symbol, resolution, day)
-    if not bars:
-        bars = persistence.replay(symbol, resolution, day)
-    return [_bar_to_dict(b) for b in bars]
 
 
 def _ny_session_bounds_ms(day: date) -> tuple[int, int]:
@@ -3004,7 +3001,6 @@ def _build_activity_projection(
     day: date,
     symbol: str | None,
     resolution: str,
-    bars: list[dict],
     wal_rows: list,
     evidence_refs: list[ActivityEvidenceRef],
 ) -> LiveInstanceActivityProjection:
@@ -3249,13 +3245,14 @@ def _build_activity_projection(
         session_date=day.isoformat(),
         symbol=symbol or "",
         resolution=resolution,
-        has_bars=bool(bars),
+        has_bars=False,
         now_ms=_now_ms(),
-        bars=bars,
+        bars=[],
         fill_markers=fill_markers,
         position_annotations=annotations,
         order_overlays=[],
         orders_today=orders_today,
+        broker_activity_summary=_broker_activity_summary(broker_events),
         broker_activity_rows=broker_events,
         position_snapshot=[
             ActivityPositionSnapshot(
@@ -3388,6 +3385,70 @@ def _group_rows_by_order_key(rows: list) -> dict[str, list]:
     return groups
 
 
+class _BrokerActivitySummaryBucket(TypedDict):
+    label: str
+    kind: Literal["order", "heartbeat", "evidence"]
+    event_count: int
+    last_event_ts_ms: int | None
+    row_ids: list[str]
+
+
+def _broker_activity_summary(rows: list[ActivityBrokerEventRow]) -> list[ActivityBrokerCategorySummary]:
+    groups: dict[str, _BrokerActivitySummaryBucket] = {}
+    for row in rows:
+        category_id, label, kind = _broker_activity_category(row)
+        bucket = groups.setdefault(
+            category_id,
+            {
+                "label": label,
+                "kind": kind,
+                "event_count": 0,
+                "last_event_ts_ms": None,
+                "row_ids": [],
+            },
+        )
+        bucket["event_count"] += max(1, int(row.fold_count))
+        last_event_ts_ms = bucket["last_event_ts_ms"]
+        if last_event_ts_ms is None or row.ts_ms > last_event_ts_ms:
+            bucket["last_event_ts_ms"] = row.ts_ms
+        bucket["row_ids"].append(row.visible_row_id or row.id)
+
+    kind_rank = {"order": 0, "heartbeat": 1, "evidence": 2}
+    out = [
+        ActivityBrokerCategorySummary(
+            category_id=category_id,
+            label=bucket["label"],
+            kind=bucket["kind"],
+            event_count=bucket["event_count"],
+            last_event_ts_ms=bucket["last_event_ts_ms"],
+            row_ids=bucket["row_ids"],
+        )
+        for category_id, bucket in groups.items()
+    ]
+    return sorted(
+        out,
+        key=lambda item: (
+            kind_rank[item.kind],
+            -(item.last_event_ts_ms or 0),
+            item.label,
+        ),
+    )
+
+
+def _broker_activity_category(row: ActivityBrokerEventRow) -> tuple[str, str, Literal["order", "heartbeat", "evidence"]]:
+    if row.row_type == "fill":
+        return "order_fill", "Broker fills", "order"
+    if row.row_type == "order_intent":
+        return "order_intent", "Order intents", "order"
+    if row.row_type == "order_terminal":
+        return "order_terminal", "Terminal order states", "order"
+    display = row.display_type or row.row_type.replace("_", " ").title()
+    text = f"{display} {row.source_label or row.source} {row.summary}".lower()
+    kind: Literal["order", "heartbeat", "evidence"] = "heartbeat" if "heartbeat" in text else "evidence"
+    category_id = re.sub(r"[^a-z0-9]+", "_", display.lower()).strip("_") or "broker_evidence"
+    return f"evidence_{category_id}", display, kind
+
+
 @router.get(
     "/{strategy_instance_id}/chart-snapshot",
     response_model=ChartSnapshotResponse,
@@ -3396,6 +3457,9 @@ async def get_chart_snapshot(
     strategy_instance_id: str,
     date_str: Annotated[str | None, Query(alias="date")] = None,
     resolution: Annotated[str, Query()] = "1m",
+    timeframe: Annotated[str | None, Query()] = None,
+    from_ms: Annotated[int | None, Query()] = None,
+    to_ms: Annotated[int | None, Query()] = None,
 ) -> ChartSnapshotResponse:
     """Aggregated chart payload for one (instance, date, resolution) — Slice 5.
 
@@ -3410,55 +3474,90 @@ async def get_chart_snapshot(
     unavailable" badge for pre-persistence dates (Slice 6).
     """
     sid = _validate_instance_id(strategy_instance_id)
-    if resolution not in ("1m", "5s"):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="resolution must be '1m' or '5s'")
+    try:
+        requested_timeframe = coerce_chart_timeframe(timeframe or resolution)
+    except ChartWindowError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
 
     settings = get_settings()
     root = Path(settings.live_runs_root)
+    now_ms = _now_ms()
 
-    try:
-        day = date.fromisoformat(date_str) if date_str else _today_ny()
-    except ValueError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid date") from None
+    explicit_window = from_ms is not None or to_ms is not None
+    if explicit_window:
+        if from_ms is None or to_ms is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="from_ms and to_ms must be provided together")
+        window_from_ms = int(from_ms)
+        window_to_ms = min(int(to_ms), now_ms)
+        day = datetime.fromtimestamp(window_from_ms / 1000, tz=UTC).astimezone(_NY_TZ).date()
+    else:
+        try:
+            day = date.fromisoformat(date_str) if date_str else _today_ny()
+        except ValueError:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid date") from None
+        window_from_ms, fallback_to_ms = _ny_session_bounds_ms(day)
+        window_to_ms = min(fallback_to_ms, now_ms) if day == _today_ny() else fallback_to_ms
 
     _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
     _process, live_binding = _interpret_daemon_process(daemon, root)
     runs = _scan_runs_by_instance(root).get(sid, [])
 
     symbol = _resolve_symbol(root, live_binding, runs)
-    is_today = day == _today_ny()
 
-    # Today's path: nudge the live aggregator so a fresh operator session
-    # after a deploy/restart starts the IBKR stream — the chart card no
-    # longer hits the legacy /api/broker/bars*/snapshot endpoints that
-    # used to lazily call ensure_subscribed (PR #483 review).
-    if is_today and symbol is not None:
-        from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
+    from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
 
+    # Nudge the live stream only when the requested window is at the live edge.
+    live_edge_threshold_ms = 30_000 if requested_timeframe == "5s" else 180_000
+    if symbol is not None and window_from_ms <= now_ms and window_to_ms >= now_ms - live_edge_threshold_ms:
         try:
-            if resolution == "1m":
-                await LIVE_BAR_AGGREGATOR.ensure_subscribed(symbol)
-            else:
+            if requested_timeframe == "5s":
                 await LIVE_BAR_AGGREGATOR.ensure_subscribed_5s(symbol)
+            else:
+                await LIVE_BAR_AGGREGATOR.ensure_subscribed(symbol)
         except Exception as exc:
             # The stream may legitimately be unavailable (broker offline,
             # subsystem disabled). Surface as a log; the response still
             # carries has_bars=false from persistence.
-            logger.info("ensure_subscribed for %s/%s declined: %s", symbol, resolution, exc)
+            logger.info("ensure_subscribed for %s/%s declined: %s", symbol, requested_timeframe, exc)
 
-    bars = _resolve_chart_bars(symbol=symbol, resolution=resolution, day=day, is_today=is_today)
+    try:
+        chart_window = await resolve_chart_window(
+            symbol=symbol,
+            timeframe=requested_timeframe,
+            from_ms=window_from_ms,
+            to_ms=window_to_ms,
+            now_ms=now_ms,
+            polygon_api_key=app_settings.POLYGON_API_KEY,
+            live_aggregator=LIVE_BAR_AGGREGATOR,
+        )
+    except ChartWindowError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from None
 
-    runs_today = _runs_active_on(runs, day, live_binding=live_binding)
+    runs_in_window = _runs_active_in_window(
+        runs,
+        window_from_ms,
+        window_to_ms,
+        live_binding=live_binding,
+        now_ms=now_ms,
+    )
     snapshot_runs: list[ChartSnapshotRun] = []
     # Color index is assigned by sort order (oldest run first) so a fresh
     # deployment doesn't shift the color of older runs.
-    for color_index, run in enumerate(sorted(runs_today, key=lambda r: r.get("started_at_ms") or 0)):
+    for color_index, run in enumerate(sorted(runs_in_window, key=lambda r: r.get("started_at_ms") or 0)):
         run_dir = Path(run["run_dir"])
         is_current = live_binding is not None and run["run_id"] == live_binding.run_id
-        # Filter to the requested UTC day — a multi-day run otherwise leaks
-        # other days' markers onto every per-date response (PR #483 review).
-        trades = _filter_rows_to_utc_day(_read_parquet_rows(run_dir / "trades.parquet"), day, key="entry_time_ms")
-        executions = _filter_rows_to_utc_day(_read_parquet_rows(run_dir / "executions.parquet"), day, key="ts_ms")
+        trades = _filter_rows_to_window(
+            _read_parquet_rows(run_dir / "trades.parquet"),
+            window_from_ms,
+            window_to_ms,
+            key="entry_time_ms",
+        )
+        executions = _filter_rows_to_window(
+            _read_parquet_rows(run_dir / "executions.parquet"),
+            window_from_ms,
+            window_to_ms,
+            key="ts_ms",
+        )
         snapshot_runs.append(
             ChartSnapshotRun(
                 run_id=run["run_id"],
@@ -3477,11 +3576,24 @@ async def get_chart_snapshot(
         # (legacy ledger, nothing deployed). The frontend treats both `null`
         # and empty as "unknown" with a single `||` fallback (PR #483 review).
         symbol=symbol or "",
-        resolution=resolution,
-        has_bars=bool(bars),
-        now_ms=_now_ms(),
-        bars=bars,
+        resolution=chart_window.resolution,
+        timeframe=chart_window.timeframe,
+        from_ms=window_from_ms,
+        to_ms=window_to_ms,
+        has_bars=bool(chart_window.bars),
+        is_streaming=chart_window.is_streaming,
+        now_ms=now_ms,
+        bars=chart_window.bars,
         runs=snapshot_runs,
+        overlay_notices=[
+            ChartOverlayNotice(
+                code=notice.code,
+                message=notice.message,
+                session_date=notice.session_date,
+                source=notice.source,
+            )
+            for notice in chart_window.overlay_notices
+        ],
     )
 
 
@@ -3529,20 +3641,7 @@ async def get_instance_activity(
     _process, live_binding = _interpret_daemon_process(daemon, root)
     runs = _scan_runs_by_instance(root).get(sid, [])
     symbol = _resolve_symbol(root, live_binding, runs)
-    is_today = day == _today_ny()
 
-    if is_today and symbol is not None:
-        from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
-
-        try:
-            if resolution == "1m":
-                await LIVE_BAR_AGGREGATOR.ensure_subscribed(symbol)
-            else:
-                await LIVE_BAR_AGGREGATOR.ensure_subscribed_5s(symbol)
-        except Exception as exc:
-            logger.info("ensure_subscribed for activity %s/%s declined: %s", symbol, resolution, exc)
-
-    bars = _resolve_chart_bars(symbol=symbol, resolution=resolution, day=day, is_today=is_today)
     start_ms, end_ms = _ny_session_bounds_ms(day)
     wal_rows = _read_activity_wal_rows(
         artifacts_root=artifacts_root,
@@ -3570,7 +3669,6 @@ async def get_instance_activity(
         day=day,
         symbol=symbol,
         resolution=resolution,
-        bars=bars,
         wal_rows=activity_rows,
         evidence_refs=evidence_refs,
     )
@@ -3586,14 +3684,16 @@ async def get_instance_activity(
         projection = projection.model_copy(
             update={"reconciliation_warnings": [*projection.reconciliation_warnings, *consistency_warnings]}
         )
+    broker_rows = fold_activity_event_rows(
+        [
+            *projection.broker_activity_rows,
+            *repair_projection.closed_trade_rows,
+        ]
+    )
     return projection.model_copy(
         update={
-            "broker_activity_rows": fold_activity_event_rows(
-                [
-                    *projection.broker_activity_rows,
-                    *repair_projection.closed_trade_rows,
-                ]
-            )
+            "broker_activity_summary": _broker_activity_summary(broker_rows),
+            "broker_activity_rows": broker_rows,
         }
     )
 

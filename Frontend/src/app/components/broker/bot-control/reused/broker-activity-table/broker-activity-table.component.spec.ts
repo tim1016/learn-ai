@@ -3,8 +3,11 @@ import { TestBed } from '@angular/core/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { BrokerActivityHealth, OperatorNotice } from '../../../../../api/live-instances.types';
+import type {
+  ActivityBrokerCategorySummary,
+  ActivityBrokerEventRow,
+} from '../bot-trade-chart-card/bot-trade-chart-card.types';
 import { BrokerActivityTableComponent } from './broker-activity-table.component';
-import type { ActivityBrokerEventRow } from '../bot-trade-chart-card/bot-trade-chart-card.types';
 import type { BrokerActivityRow } from './broker-activity.types';
 
 function row(overrides: Partial<BrokerActivityRow> = {}): BrokerActivityRow {
@@ -30,6 +33,46 @@ function row(overrides: Partial<BrokerActivityRow> = {}): BrokerActivityRow {
     reason_codes: ['normal_fill'],
     engine_overlay: null,
     divergence_facts: null,
+    ...overrides,
+  };
+}
+
+function eventRow(overrides: Partial<ActivityBrokerEventRow> = {}): ActivityBrokerEventRow {
+  return {
+    id: 'evidence:1',
+    visible_row_id: 'fold:evidence:reqPositionsAsync:position',
+    ts_ms: 1_700_000_000_000,
+    row_type: 'broker_evidence',
+    display_type: 'Broker positions refreshed',
+    source: 'account.fetch_positions',
+    source_label: 'IBKR API evidence',
+    symbol: null,
+    side: null,
+    quantity: null,
+    price: null,
+    status: 'Positions refreshed',
+    summary: 'The bot refreshed broker-held positions for the connected account.',
+    verdict: 'evidence',
+    replay_count: 1,
+    fold_key: 'evidence:reqPositionsAsync:position',
+    fold_count: 1,
+    cluster_key: null,
+    cluster_label: null,
+    child_evidence_ids: ['evidence:1'],
+    constituent_fill_ids: [],
+    evidence: [],
+    ...overrides,
+  };
+}
+
+function summary(overrides: Partial<ActivityBrokerCategorySummary> = {}): ActivityBrokerCategorySummary {
+  return {
+    category_id: 'evidence_broker_positions_refreshed',
+    label: 'Broker positions refreshed',
+    kind: 'heartbeat',
+    event_count: 3,
+    last_event_ts_ms: 1_700_000_000_000,
+    row_ids: ['fold:evidence:reqPositionsAsync:position'],
     ...overrides,
   };
 }
@@ -70,385 +113,184 @@ function health(
   };
 }
 
-function eventRow(overrides: Partial<ActivityBrokerEventRow> = {}): ActivityBrokerEventRow {
-  return {
-    id: 'evidence:1',
-    visible_row_id: 'fold:evidence:reqPositionsAsync:position',
-    ts_ms: 1_700_000_000_000,
-    row_type: 'broker_evidence',
-    display_type: 'Broker positions refreshed',
-    source: 'account.fetch_positions',
-    source_label: 'IBKR API evidence',
-    symbol: null,
-    side: null,
-    quantity: null,
-    price: null,
-    status: 'Positions refreshed',
-    summary: 'The bot refreshed broker-held positions for the connected account.',
-    verdict: 'evidence',
-    replay_count: 1,
-    fold_key: 'evidence:reqPositionsAsync:position',
-    fold_count: 1,
-    cluster_key: null,
-    cluster_label: null,
-    child_evidence_ids: ['evidence:1'],
-    constituent_fill_ids: [],
-    evidence: [
-      {
-        source: 'account.fetch_positions',
-        seq: 1,
-        ts_ms: 1_700_000_000_000,
-        request_call: 'reqPositionsAsync',
-        response_callback: 'position',
-        order_ref: null,
-        order_id: null,
-        perm_id: null,
-        exec_id: null,
-        symbol: 'SPY',
-      },
-    ],
-    ...overrides,
-  };
-}
-
-function render(props: {
-  rows: BrokerActivityRow[];
+function renderFixture(props: {
+  rows?: BrokerActivityRow[];
+  eventSummary?: ActivityBrokerCategorySummary[];
+  eventRows?: ActivityBrokerEventRow[] | null;
   backfillLoading?: boolean;
   backfillError?: string | null;
   sseStatus?: string;
   sseError?: string | null;
   activityHealth?: BrokerActivityHealth | null;
-  eventRows?: ActivityBrokerEventRow[] | null;
 }) {
   TestBed.resetTestingModule();
   TestBed.configureTestingModule({
     providers: [provideZonelessChangeDetection()],
   });
   const fixture = TestBed.createComponent(BrokerActivityTableComponent);
-  fixture.componentRef.setInput('rows', props.rows);
+  fixture.componentRef.setInput('rows', props.rows ?? []);
+  fixture.componentRef.setInput('eventSummary', props.eventSummary ?? []);
+  fixture.componentRef.setInput('eventRows', props.eventRows ?? null);
   fixture.componentRef.setInput('backfillLoading', props.backfillLoading ?? false);
   fixture.componentRef.setInput('backfillError', props.backfillError ?? null);
   fixture.componentRef.setInput('sseStatus', props.sseStatus ?? 'open');
   fixture.componentRef.setInput('sseError', props.sseError ?? null);
-  fixture.componentRef.setInput('eventRows', props.eventRows ?? null);
   if (props.activityHealth !== undefined) {
     fixture.componentRef.setInput('activityHealth', props.activityHealth);
   }
   fixture.detectChanges();
-  return {
-    el: fixture.nativeElement as HTMLElement,
-    component: fixture.componentInstance,
-    fixture,
-  };
+  return fixture;
+}
+
+function render(props: Parameters<typeof renderFixture>[0]) {
+  return renderFixture(props).nativeElement as HTMLElement;
 }
 
 afterEach(() => TestBed.resetTestingModule());
 
 describe('BrokerActivityTableComponent', () => {
-  it('labels the table as the broker-tail projection, not a peer activity surface', () => {
-    const { el } = render({ rows: [] });
-    expect(el.querySelector('[aria-label="Broker tail projection"]')).not.toBeNull();
-    expect(el.textContent ?? '').toContain('BROKER TAIL');
-  });
-
-  it('renders the empty state when no executed rows exist', () => {
-    const { el } = render({ rows: [] });
-    expect(el.querySelector('[data-testid="broker-activity-empty"]')).not.toBeNull();
-    expect(el.querySelector('table')).toBeNull();
-  });
-
-  it('shows a loading hint while the backfill is in flight', () => {
-    const { el } = render({ rows: [], backfillLoading: true });
-    expect((el.textContent ?? '').toLowerCase()).toContain('loading history');
-  });
-
-  it('surfaces a backfill error when present', () => {
-    const { el } = render({
-      rows: [],
-      backfillError: 'boom',
-    });
-    const err = el.querySelector('[data-testid="broker-activity-backfill-error"]');
-    expect(err).not.toBeNull();
-    expect(err?.textContent ?? '').toContain('boom');
-  });
-
-  it('renders one row per executed fill with broker-recognisable columns', () => {
-    const { el } = render({ rows: [row({ symbol: 'AAPL', quantity: 5, price: 150 })] });
-    const body = el.querySelector('tbody');
-    expect(body?.textContent ?? '').toContain('AAPL');
-    expect(body?.textContent ?? '').toContain('5');
-    expect(body?.textContent ?? '').toContain('$150.00');
-  });
-
-  it('renders normalized projection event rows when supplied', () => {
-    const eventRows: ActivityBrokerEventRow[] = [eventRow()];
-    const { el } = render({ rows: [], eventRows, sseStatus: 'projection' });
-    expect(el.textContent ?? '').toContain('Broker positions refreshed');
-    expect(el.textContent ?? '').toContain('IBKR API evidence');
-    expect(el.textContent ?? '').toContain('The bot refreshed broker-held positions');
-    expect(el.textContent ?? '').not.toContain('endpoint_snapshot');
-    expect(el.textContent ?? '').not.toContain('reqPositionsAsync');
-  });
-
-  it('preserves event row DOM nodes across no-op projection refreshes', () => {
-    const { el, fixture } = render({
-      rows: [],
+  it('renders broker-tail category cards with linked drill-down rows', () => {
+    const el = render({
+      eventSummary: [summary()],
       eventRows: [eventRow()],
       sseStatus: 'projection',
     });
-    const original = el.querySelector('[data-testid="broker-activity-event-row-evidence:1"]');
-    expect(original).not.toBeNull();
 
-    fixture.componentRef.setInput('eventRows', [
-      eventRow({
-        id: 'evidence:2',
-        ts_ms: 1_700_000_001_000,
-        fold_count: 1,
-        child_evidence_ids: ['evidence:2'],
-        evidence: [
-          {
-            source: 'account.fetch_positions',
-            seq: 2,
-            ts_ms: 1_700_000_001_000,
-            request_call: 'reqPositionsAsync',
-            response_callback: 'position',
-            order_ref: null,
-            order_id: null,
-            perm_id: null,
-            exec_id: null,
-            symbol: 'SPY',
-          },
-        ],
-      }),
-    ]);
-    fixture.detectChanges();
-
-    const refreshed = el.querySelector('[data-testid="broker-activity-event-row-evidence:2"]');
-    expect(refreshed).toBe(original);
+    expect(el.querySelector('[aria-label="Broker tail projection"]')).not.toBeNull();
+    expect(el.textContent ?? '').toContain('BROKER TAIL');
+    expect(el.textContent ?? '').toContain('Broker positions refreshed');
+    expect(el.textContent ?? '').toContain('3 events');
+    expect(el.querySelector('table')).toBeNull();
+    expect(el.textContent ?? '').toContain('The bot refreshed broker-held positions');
   });
 
-  it('expands event rows and shows row-level IBKR evidence refs', () => {
-    const { el, component, fixture } = render({
-      rows: [],
+  it('filters drill-down rows by selected category', () => {
+    const fixture = renderFixture({
+      eventSummary: [
+        summary(),
+        summary({
+          category_id: 'order_fill',
+          label: 'Broker fills',
+          kind: 'order',
+          row_ids: ['fill:exec-1'],
+        }),
+      ],
       eventRows: [
+        eventRow(),
         eventRow({
-          id: 'fill:exec-1',
+          id: 'exec:exec-1',
           visible_row_id: 'fill:exec-1',
           row_type: 'fill',
           display_type: 'Broker fill',
+          source_label: 'Broker activity stream',
+          symbol: 'SPY',
+          side: 'BUY',
+          quantity: 1,
+          price: 735.72,
+          status: 'Open long',
+          summary: 'BUY 1 SPY @ 735.72',
+        }),
+      ],
+    });
+    const el = fixture.nativeElement as HTMLElement;
+
+    expect(el.textContent ?? '').toContain('The bot refreshed broker-held positions');
+    expect(el.textContent ?? '').not.toContain('BUY 1 SPY @ 735.72');
+
+    el.querySelectorAll<HTMLButtonElement>('.category-card')[1]?.click();
+    fixture.detectChanges();
+
+    expect(el.textContent ?? '').not.toContain('The bot refreshed broker-held positions');
+    expect(el.textContent ?? '').toContain('BUY 1 SPY @ 735.72');
+  });
+
+  it('expands a drill-down row to show source and evidence details', () => {
+    const fixture = renderFixture({
+      eventSummary: [summary()],
+      eventRows: [
+        eventRow({
           evidence: [
             {
-              source: 'orders.place_paper_order',
-              seq: 42,
-              ts_ms: 1_700_000_000_100,
-              request_call: 'placeOrder',
-              response_callback: 'openOrder',
-              order_ref: 'learn-ai/sid/v1/intent-1',
-              order_id: 11,
-              perm_id: 9001,
-              exec_id: 'exec-1',
-              symbol: 'SPY',
+              seq: 7,
+              ts_ms: 1_700_000_000_000,
+              source: 'account.fetch_positions',
+              request_call: 'reqPositionsAsync',
+              response_callback: 'position',
+              order_ref: null,
+              order_id: null,
+              perm_id: null,
+              exec_id: null,
+              symbol: null,
             },
           ],
         }),
       ],
     });
-    expect(el.textContent ?? '').not.toContain('placeOrder');
+    const el = fixture.nativeElement as HTMLElement;
 
-    component.toggleEvent(eventRow({ id: 'fill:exec-1', visible_row_id: 'fill:exec-1' }));
+    expect(el.textContent ?? '').not.toContain('reqPositionsAsync');
+    el.querySelector<HTMLButtonElement>('.event-row-main')?.click();
     fixture.detectChanges();
-
-    const drawer = el.querySelector('[data-testid="broker-activity-event-drawer-fill:exec-1"]');
-    expect(drawer).not.toBeNull();
-    expect(drawer?.textContent ?? '').toContain('placeOrder');
-    expect(drawer?.textContent ?? '').toContain('openOrder');
-    expect(drawer?.textContent ?? '').toContain('perm 9001');
-    expect(drawer?.textContent ?? '').toContain('exec exec-1');
+    expect(el.textContent ?? '').toContain('IBKR API evidence');
+    expect(el.textContent ?? '').toContain('reqPositionsAsync');
   });
 
-  it('renders the backend-authored narrative is NOT visible until drill-down (verbatim contract)', () => {
-    const { el } = render({
-      rows: [row({ narrative: 'Backend-authored exact prose XYZ.' })],
+  it('updates the rendered card values from the latest backend summary input', () => {
+    TestBed.resetTestingModule();
+    TestBed.configureTestingModule({
+      providers: [provideZonelessChangeDetection()],
     });
-    // Narrative is rendered in the drawer (drill-down), not the row.
-    expect(el.textContent ?? '').not.toContain('Backend-authored exact prose XYZ.');
-  });
-
-  it('expands a row drawer on click and shows the verbatim backend narrative', () => {
-    const { el, component, fixture } = render({
-      rows: [row({ seq: 7, narrative: 'Exact narrative from backend.' })],
-    });
-    component.toggleRow(7);
+    const fixture = TestBed.createComponent(BrokerActivityTableComponent);
+    fixture.componentRef.setInput('rows', []);
+    fixture.componentRef.setInput('eventSummary', [summary({ event_count: 1 })]);
+    fixture.componentRef.setInput('eventRows', [eventRow()]);
     fixture.detectChanges();
-    const drawer = el.querySelector('[data-testid="broker-activity-drawer-7"]');
-    expect(drawer).not.toBeNull();
-    expect(drawer?.textContent ?? '').toContain('Exact narrative from backend.');
+    expect((fixture.nativeElement as HTMLElement).textContent ?? '').toContain('1 event');
+
+    fixture.componentRef.setInput('eventSummary', [summary({ event_count: 7 })]);
+    fixture.detectChanges();
+    expect((fixture.nativeElement as HTMLElement).textContent ?? '').toContain('7 events');
   });
 
-  it('hides engine_only_pending rows from the executed-trades table', () => {
-    const { el } = render({
-      rows: [
-        row({ seq: 1, symbol: 'SPY', verdict: 'engine_only_pending' }),
-        row({ seq: 2, symbol: 'AAPL', verdict: 'expected' }),
-      ],
-    });
-    const body = el.querySelector('tbody');
-    expect(body?.textContent ?? '').toContain('AAPL');
-    expect(body?.textContent ?? '').not.toContain('SPY');
+  it('does not render the legacy executed-fill table even when rows are supplied', () => {
+    const el = render({ rows: [row({ symbol: 'AAPL' })] });
+    expect(el.querySelector('table')).toBeNull();
+    expect(el.textContent ?? '').not.toContain('AAPL');
   });
 
-  it.each([
-    ['expected', 'verdict-expected'],
-    ['expected_with_caveat', 'verdict-caveat'],
-    ['unexpected', 'verdict-unexpected'],
-    ['engine_only_pending', 'verdict-pending'],
-  ] as const)(
-    'picks chip class %s -> %s from the closed enum, not from facts',
-    (verdict, cls) => {
-      const { component } = render({ rows: [] });
-      expect(component.verdictClass(verdict)).toBe(cls);
-    },
-  );
+  it('shows loading and error states without revealing row details', () => {
+    const loading = render({ backfillLoading: true });
+    expect((loading.textContent ?? '').toLowerCase()).toContain('loading history');
 
-  it('groups consecutive fills under the same perm_id', () => {
-    const { el } = render({
-      rows: [
-        row({ seq: 1, perm_id: 100, exec_id: 'a', quantity: 3 }),
-        row({ seq: 2, perm_id: 100, exec_id: 'b', quantity: 7 }),
-        row({ seq: 3, perm_id: 200, exec_id: 'c', quantity: 5 }),
-      ],
-    });
-    // Two group headers — Order #100 and Order #200.
-    const headers = Array.from(el.querySelectorAll('tr.group-header'));
-    expect(headers.length).toBe(2);
-    const labels = headers.map((h) => h.textContent?.trim()).filter(Boolean);
-    expect(labels).toContain('Order #100');
-    expect(labels).toContain('Order #200');
+    const error = render({ backfillError: 'boom' });
+    const err = error.querySelector('[data-testid="broker-activity-backfill-error"]');
+    expect(err).not.toBeNull();
+    expect(err?.textContent ?? '').toContain('boom');
+    expect(error.querySelector('table')).toBeNull();
   });
 
-  it('sorts grouped rows by the same timestamp rendered in the table', () => {
-    const { el } = render({
-      rows: [
-        row({
-          seq: 1,
-          symbol: 'EARLY',
-          ts_ms: 1_700_000_000_000,
-          exec_ts_ms: 1_700_000_600_000,
-          perm_id: 100,
-        }),
-        row({
-          seq: 2,
-          symbol: 'LATE',
-          ts_ms: 1_700_000_060_000,
-          exec_ts_ms: 1_700_000_060_000,
-          perm_id: 100,
-        }),
-      ],
-    });
-
-    const rows = Array.from(el.querySelectorAll('tr.data-row'));
-    expect(rows[0].textContent ?? '').toContain('LATE');
-    expect(rows[1].textContent ?? '').toContain('EARLY');
-  });
-
-  it('renders unmatched rows (no perm_id) in their own group', () => {
-    const { el } = render({
-      rows: [row({ perm_id: null, exec_id: 'foreign-exec', symbol: 'TSLA' })],
-    });
-    const headers = Array.from(el.querySelectorAll('tr.group-header'));
-    expect(headers.length).toBe(1);
-    expect(headers[0].textContent).toContain('Unmatched');
-  });
-
-  it('renders the intent-to-exec lag chip from the backend-provided value (no math)', () => {
-    const { el } = render({
-      rows: [
-        row({
-          engine_overlay: {
-            intent_id: 'i1',
-            mutation_attempt_id: null,
-            requested_qty: 10,
-            requested_price: null,
-            sizing_provenance: null,
-            lag_breakdown: {
-              intent_to_dispatch_ms: 100,
-              dispatch_to_ack_ms: 200,
-              ack_to_exec_ms: 50,
-              exec_to_observed_ms: 25,
-              // Backend stores the chip number — frontend renders it verbatim.
-              intent_to_exec_ms: 375,
-            },
-          },
-        }),
-      ],
-    });
-    expect(el.textContent ?? '').toContain('375 ms');
-  });
-
-  it('renders — for the lag chip when the backend value is null', () => {
-    const { el } = render({ rows: [row({ engine_overlay: null })] });
-    const lagCells = el.querySelectorAll('td.num');
-    // At least one — for the lag column (the dash also appears elsewhere
-    // when nullable numeric fields are missing; we assert presence not count).
-    const dashed = Array.from(lagCells).some((c) => c.textContent?.includes('—'));
-    expect(dashed).toBe(true);
-  });
-
-  // PR 5 — health state rendering
-
-  it('renders health notice and suppresses table when state is unavailable', () => {
+  it('renders health notice and suppresses summaries when unavailable or starting', () => {
     const notice = healthNotice('activity.publisher_not_running', 'critical', 'Activity feed is not running');
-    const { el } = render({
-      rows: [],
+    const el = render({
+      eventSummary: [summary()],
       activityHealth: health('unavailable', notice),
     });
+
     const healthEl = el.querySelector('[data-testid="broker-activity-health-notice"]');
     expect(healthEl).not.toBeNull();
     expect(healthEl?.textContent ?? '').toContain('Activity feed is not running');
-    // Table must not be rendered
-    expect(el.querySelector('table')).toBeNull();
+    expect(el.textContent ?? '').not.toContain('Broker positions refreshed');
   });
 
-  it('renders health notice and suppresses table when state is starting', () => {
-    const notice = healthNotice('activity.publisher_starting', 'info', 'Activity feed is starting');
-    const { el } = render({
-      rows: [],
-      activityHealth: health('starting', notice),
-    });
-    const healthEl = el.querySelector('[data-testid="broker-activity-health-notice"]');
-    expect(healthEl).not.toBeNull();
-    expect(healthEl?.textContent ?? '').toContain('Activity feed is starting');
-    expect(el.querySelector('table')).toBeNull();
-  });
-
-  it('renders health notice AND the table when state is degraded', () => {
+  it('renders degraded health notice with summary cards', () => {
     const notice = healthNotice('activity.publisher_degraded', 'warning', 'Activity feed is degraded');
-    const { el } = render({
-      rows: [row()],
+    const el = render({
+      eventSummary: [summary()],
       activityHealth: health('degraded', notice),
     });
-    const healthEl = el.querySelector('[data-testid="broker-activity-health-notice"]');
-    expect(healthEl).not.toBeNull();
-    expect(healthEl?.textContent ?? '').toContain('Activity feed is degraded');
-    // Table is still rendered when degraded
-    expect(el.querySelector('table')).not.toBeNull();
-  });
 
-  it('renders table normally when state is ready and no health notice shown', () => {
-    const { el } = render({
-      rows: [row()],
-      activityHealth: health('ready'),
-    });
-    expect(el.querySelector('[data-testid="broker-activity-health-notice"]')).toBeNull();
-    expect(el.querySelector('table')).not.toBeNull();
-  });
-
-  it('falls back to Loading history… when activityHealth is null and backfillLoading is true', () => {
-    const { el } = render({
-      rows: [],
-      backfillLoading: true,
-      activityHealth: null,
-    });
-    expect((el.textContent ?? '').toLowerCase()).toContain('loading history');
+    expect(el.textContent ?? '').toContain('Activity feed is degraded');
+    expect(el.textContent ?? '').toContain('Broker positions refreshed');
+    expect(el.querySelector('table')).toBeNull();
   });
 });

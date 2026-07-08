@@ -2333,6 +2333,15 @@ class ChartSnapshotRun(BaseModel):
     executions: list[dict] = Field(default_factory=list)
 
 
+class ChartOverlayNotice(BaseModel):
+    """Non-persistent market-data overlay warning for the chart window."""
+
+    code: str
+    message: str
+    session_date: str | None = None
+    source: Literal["polygon"] = "polygon"
+
+
 class ChartSnapshotResponse(BaseModel):
     """Aggregated chart payload for one (instance, date, resolution).
 
@@ -2345,10 +2354,15 @@ class ChartSnapshotResponse(BaseModel):
     date: str = Field(..., description="YYYY-MM-DD UTC date the snapshot covers.")
     symbol: str
     resolution: str
+    timeframe: str = "1m"
+    from_ms: int | None = None
+    to_ms: int | None = None
     has_bars: bool
+    is_streaming: bool = False
     now_ms: int
     bars: list[IbkrMinuteBar] = Field(default_factory=list)
     runs: list[ChartSnapshotRun] = Field(default_factory=list)
+    overlay_notices: list[ChartOverlayNotice] = Field(default_factory=list)
 
 
 class ActivityEvidenceRef(BaseModel):
@@ -2468,6 +2482,17 @@ class ActivityBrokerEventRow(BaseModel):
         if self.source_label is None:
             self.source_label = self.source.replace("_", " ").title()
         return self
+
+
+class ActivityBrokerCategorySummary(BaseModel):
+    """Grouped broker-tail category rendered before row-level drill-down."""
+
+    category_id: str
+    label: str
+    kind: Literal["order", "heartbeat", "evidence"]
+    event_count: int = Field(ge=0)
+    last_event_ts_ms: int | None = None
+    row_ids: list[str] = Field(default_factory=list)
 
 
 class ActivityPositionSnapshot(BaseModel):
@@ -2598,9 +2623,10 @@ class LifecycleNodeDetail(BaseModel):
 class LiveInstanceActivityProjection(BaseModel):
     """Backend-materialized Activity tab view for one exchange/session date.
 
-    The chart, Orders Today panel, Broker Activity table, and raw evidence
-    drill-downs all read this one contract so no chart marker can exist
-    without a matching ledger row.
+    Broker-confirmed chart markers, the Orders Today panel, Broker Activity
+    table, and raw evidence drill-downs all read this one contract so no
+    activity marker can exist without a matching ledger row. Chart bars are
+    resolved by ``/chart-snapshot``.
     """
 
     schema_version: int = 1
@@ -2616,6 +2642,7 @@ class LiveInstanceActivityProjection(BaseModel):
     position_annotations: list[ActivityPositionAnnotation] = Field(default_factory=list)
     order_overlays: list[ActivityOrderOverlay] = Field(default_factory=list)
     orders_today: list[ActivityOrderRow] = Field(default_factory=list)
+    broker_activity_summary: list[ActivityBrokerCategorySummary] = Field(default_factory=list)
     broker_activity_rows: list[ActivityBrokerEventRow] = Field(default_factory=list)
     position_snapshot: list[ActivityPositionSnapshot] = Field(default_factory=list)
     reconciliation_warnings: list[ActivityReconciliationWarning] = Field(default_factory=list)

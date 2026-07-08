@@ -31,6 +31,7 @@ from app.operator.notices.schema import OperatorIncident, OperatorNotice, Operat
 from app.routers import live_instances
 from app.schemas.broker_activity import BrokerActivityRow
 from app.schemas.live_runs import LiveBinding
+from app.services.live_chart_window import ChartTimeframe, ChartWindowResult
 from tests._fixtures.daemon_transport import as_typed_get
 
 
@@ -924,31 +925,79 @@ async def test_chart_snapshot_today_returns_bars_and_runs(app_with_root, monkeyp
 
 
 async def test_chart_snapshot_rejects_invalid_resolution(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Slice 5: only ``1m`` and ``5s`` resolutions are accepted; anything else
-    is a 400, not a silent default."""
+    """Slice 5: unsupported chart timeframes are a 400, not a silent default."""
     app, _root = app_with_root
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_chart/chart-snapshot", params={"resolution": "15m"})
+        response = await client.get("/api/live-instances/spy_chart/chart-snapshot", params={"resolution": "2m"})
     assert response.status_code == 400
 
 
-async def test_chart_snapshot_past_date_omits_live_buffer(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Slice 5: a past-date request ignores the live aggregator buffer. With
+async def test_chart_snapshot_historical_window_omits_live_buffer(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Slice 5: a historical window request ignores the live aggregator buffer. With
     no persistence data and no runs touching that day, ``has_bars`` is
     False and ``runs`` is empty — the frontend renders the "bars
     unavailable" badge from this state."""
     app, _root = app_with_root
+    window_from_ms, window_to_ms = live_instances._ny_session_bounds_ms(date(2026, 1, 5))
+    monkeypatch.setattr(live_instances, "_now_ms", lambda: window_to_ms + 60_000)
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_chart/chart-snapshot", params={"date": "2025-01-01"})
+        response = await client.get(
+            "/api/live-instances/spy_chart/chart-snapshot",
+            params={"from_ms": window_from_ms, "to_ms": window_to_ms},
+        )
     assert response.status_code == 200
     body = response.json()
-    assert body["date"] == "2025-01-01"
+    assert body["date"] == "2026-01-05"
     assert body["has_bars"] is False
     assert body["runs"] == []
+
+
+async def test_chart_snapshot_clamps_explicit_future_to_ms_to_server_now(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _root = app_with_root
+    server_now_ms = int(datetime(2026, 1, 5, 15, 0, tzinfo=UTC).timestamp() * 1000)
+    window_from_ms = server_now_ms - 60_000
+    captured: dict[str, int] = {}
+    monkeypatch.setattr(live_instances, "_now_ms", lambda: server_now_ms)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async def fake_resolve_chart_window(
+        *,
+        symbol: str | None,
+        timeframe: ChartTimeframe,
+        from_ms: int,
+        to_ms: int,
+        now_ms: int,
+        polygon_api_key: str,
+        live_aggregator: object,
+    ) -> ChartWindowResult:
+        _ = (symbol, from_ms, now_ms, polygon_api_key, live_aggregator)
+        captured["to_ms"] = to_ms
+        return ChartWindowResult(
+            bars=[],
+            timeframe=timeframe,
+            resolution="1m",
+            is_streaming=False,
+        )
+
+    monkeypatch.setattr(live_instances, "resolve_chart_window", fake_resolve_chart_window)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/live-instances/spy_chart/chart-snapshot",
+            params={"from_ms": window_from_ms, "to_ms": server_now_ms + 30_000},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["to_ms"] == server_now_ms
+    assert captured["to_ms"] == server_now_ms
 
 
 async def test_chart_snapshot_rejects_malformed_date(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1041,6 +1090,8 @@ async def test_activity_projection_uses_broker_ledger_for_chart_markers_and_orde
     assert response.status_code == 200
     body = response.json()
     assert body["timezone"] == "America/New_York"
+    assert body["has_bars"] is False
+    assert body["bars"] == []
     assert [m["side"] for m in body["fill_markers"]] == ["BUY", "SELL"]
     assert body["fill_markers"][1]["replay_count"] == 2
     assert body["fill_markers"][0]["position_effect"] == "Open long"
@@ -1659,10 +1710,16 @@ async def test_chart_snapshot_filters_trades_to_requested_utc_day(
         }
     )
     pq.write_table(table, run_dir / "trades.parquet")
+    window_from_ms = int(datetime(2026, 1, 5, 0, 0, tzinfo=UTC).timestamp() * 1000)
+    window_to_ms = int(datetime(2026, 1, 6, 0, 0, tzinfo=UTC).timestamp() * 1000)
+    monkeypatch.setattr(live_instances, "_now_ms", lambda: window_to_ms + 60_000)
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_spans/chart-snapshot", params={"date": "2026-01-05"})
+        response = await client.get(
+            "/api/live-instances/spy_spans/chart-snapshot",
+            params={"from_ms": window_from_ms, "to_ms": window_to_ms},
+        )
 
     assert response.status_code == 200
     runs = response.json()["runs"]

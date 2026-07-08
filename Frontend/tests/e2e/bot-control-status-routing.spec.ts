@@ -125,9 +125,13 @@ test.describe('Bot Control route and page shell', () => {
     await expect(page.locator('.posture-pills')).toContainText('Unsafe');
     await expect(page.locator('.posture-pills')).toContainText('Blocked before submit');
     await expect(page.locator('.connection-pill')).toContainText('Broker session disconnected');
-    await page.getByTestId('bot-control-attention-toggle').click();
-    await expect(page.getByTestId('bot-control-attention-panel')).toContainText('Broker proof waits for a live runtime');
-    await expect(page.getByTestId('bot-control-attention-panel')).toContainText('Next: Start a bot process only after IBKR positions/executions are manually verified');
+    await expect(page.getByTestId('bot-control-attention-toggle')).toHaveCount(0);
+    await expect(page.getByTestId('bot-control-attention-panel')).toHaveCount(0);
+    const attentionDetails = page.getByLabel('Attention details');
+    await expect(attentionDetails).toContainText('Broker proof waits for a live runtime');
+    await expect(attentionDetails).toContainText(
+      'Start a bot process only after IBKR positions/executions are manually verified',
+    );
     await expect(page.locator('[data-testid="bot-status-banner"]')).toHaveCount(0);
     await expect(page.getByTestId('inner-tab-status')).toHaveCount(0);
   });

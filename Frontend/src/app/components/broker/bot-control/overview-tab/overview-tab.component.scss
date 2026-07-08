@@ -98,6 +98,34 @@
   gap: 0.45rem;
 }
 
+.ladder-attention {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr));
+  gap: 0.5rem;
+}
+
+.attention-item {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+  padding: 0.58rem 0.65rem;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  background: var(--bg-surface);
+
+  strong {
+    color: var(--text-primary);
+    font-size: var(--fs-sm);
+    line-height: 1.25;
+  }
+
+  span {
+    color: var(--text-secondary);
+    font-size: var(--fs-xs);
+    line-height: 1.35;
+  }
+}
+
 .blockage-step {
   display: inline-grid;
   grid-template-columns: 0.55rem auto auto;
@@ -208,7 +236,19 @@
   border-color: var(--border-light);
 }
 
+.overview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .collapse-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
   min-height: 34px;
   padding: 0 0.75rem;
   border: 1px solid var(--border);
@@ -217,6 +257,11 @@
   color: var(--text-primary);
   cursor: pointer;
   font: inherit;
+
+  i {
+    color: var(--text-muted);
+    font-size: 0.72rem;
+  }
 
   &:focus-visible {
     outline: 2px solid var(--accent);
@@ -227,11 +272,15 @@
 .flow-panel {
   padding: 1.1rem 1rem 1.5rem;
   background: var(--bg-canvas);
+
+  &[hidden] {
+    display: none;
+  }
 }
 
 .gate-flow {
   display: grid;
-  grid-template-columns: minmax(0, min(100%, 36rem));
+  grid-template-columns: minmax(0, min(100%, 32rem));
   justify-content: center;
   align-items: start;
 }
@@ -256,7 +305,7 @@
   align-items: center;
   gap: 0.55rem;
   min-width: 0;
-  min-height: 3.15rem;
+  min-height: 2.6rem;
   color: var(--text-secondary);
 }
 
@@ -265,7 +314,7 @@
   justify-self: center;
   width: 2px;
   height: 100%;
-  min-height: 2.7rem;
+  min-height: 2.25rem;
   border-radius: var(--radius-pill);
   background: var(--edge-color);
   opacity: 0.95;
@@ -343,6 +392,11 @@
   .overview-header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .overview-actions {
+    justify-content: flex-start;
+    width: 100%;
   }
 
   .flow-panel {

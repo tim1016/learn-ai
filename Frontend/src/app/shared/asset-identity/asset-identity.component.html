@@ -9,7 +9,7 @@
     referrerpolicy="no-referrer"
     (error)="onLogoError()"
   />
-} @else {
+} @else if (showFallback()) {
   <span class="asset-identity__fallback" aria-hidden="true">{{ fallbackText() }}</span>
 }
 

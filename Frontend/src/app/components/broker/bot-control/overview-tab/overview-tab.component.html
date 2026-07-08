@@ -7,11 +7,25 @@
         <p class="active-summary">{{ currentGraph().title }} · {{ node.label }} · {{ node.status_label }}</p>
       }
     </div>
-    @if (isExpanded()) {
-      <button type="button" class="collapse-button" (click)="collapse()">
-        Collapse to global
+    <div class="overview-actions">
+      @if (isExpanded()) {
+        <button type="button" class="collapse-button" (click)="collapse()">
+          Collapse to global
+        </button>
+      }
+      <button
+        type="button"
+        class="collapse-button"
+        aria-controls="lifecycle-flow-panel"
+        [attr.aria-expanded]="!flowCollapsed()"
+        [attr.aria-label]="flowCollapsed() ? 'Show bot flow chart' : 'Hide bot flow chart'"
+        [title]="flowCollapsed() ? 'Show bot flow chart' : 'Hide bot flow chart'"
+        (click)="toggleFlowCollapsed()"
+      >
+        <i [class]="flowCollapsed() ? 'pi pi-chevron-down' : 'pi pi-chevron-up'" aria-hidden="true"></i>
+        {{ flowCollapsed() ? 'Show flow' : 'Hide flow' }}
       </button>
-    }
+    </div>
   </header>
 
   <section class="blockage-ladder" aria-label="Lifecycle signals">
@@ -43,9 +57,25 @@
         </article>
       }
     </div>
+    @if (attentionGroups().length > 0) {
+      <div class="ladder-attention" aria-label="Attention details">
+        @for (group of attentionGroups(); track group.code) {
+          <article [class]="'attention-item severity-' + group.severity">
+            <strong>{{ group.headline }}</strong>
+            <span>{{ group.explanation }}</span>
+            <span>{{ group.operator_next_step }}</span>
+          </article>
+        }
+      </div>
+    }
   </section>
 
-  <section class="flow-panel" aria-label="Lifecycle gates">
+  <section
+    id="lifecycle-flow-panel"
+    class="flow-panel"
+    aria-label="Lifecycle gates"
+    [hidden]="flowCollapsed()"
+  >
     <div class="gate-flow">
       @for (row of lifecycleFlowRows(); track row.node.id) {
         @let node = row.node;

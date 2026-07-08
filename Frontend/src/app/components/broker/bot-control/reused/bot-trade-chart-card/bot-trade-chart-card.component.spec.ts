@@ -1,9 +1,14 @@
 import type { Logical, LogicalRange } from 'lightweight-charts';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  candleDataForBar,
+  candleSignatureForBars,
   filterActivityItemsForSymbol,
   isAtLiveEdge,
+  isSnapshotTradeCoveredByActivity,
+  localDateEndMs,
   localDateString,
+  localDateStartMs,
   markerTimeForActivityFill,
   markerTimeForEventMs,
   visibleRangeToRestore,
@@ -25,6 +30,17 @@ const bar = (startMs: number): IbkrMinuteBar => ({
   close: '100.5',
   volume: 100,
   fetched_at_ms: startMs + 60_000,
+  source: 'ibkr',
+});
+
+const polygonBar = (startMs: number): IbkrMinuteBar => ({
+  ...bar(startMs),
+  source: 'polygon',
+});
+
+const mixedBar = (startMs: number): IbkrMinuteBar => ({
+  ...bar(startMs),
+  source: 'mixed',
 });
 
 describe('isAtLiveEdge', () => {
@@ -147,5 +163,65 @@ describe('localDateString', () => {
     const localNoon = new Date(2026, 5, 24, 12, 0, 0);
 
     expect(localDateString(localNoon)).toBe('2026-06-24');
+  });
+});
+
+describe('local date range bounds', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('closes date ranges at the next local midnight across DST transitions', () => {
+    vi.stubEnv('TZ', 'America/Chicago');
+
+    expect((localDateEndMs('2026-03-08') - localDateStartMs('2026-03-08')) / 3_600_000)
+      .toBe(23);
+    expect((localDateEndMs('2026-11-01') - localDateStartMs('2026-11-01')) / 3_600_000)
+      .toBe(25);
+  });
+});
+
+describe('candleDataForBar', () => {
+  it('uses default series styling for IBKR bars', () => {
+    expect(candleDataForBar(bar(1_800_000))).toEqual({
+      time: 1_800,
+      open: 100,
+      high: 101,
+      low: 99,
+      close: 100.5,
+    });
+  });
+
+  it('styles Polygon overlays as muted historical candles', () => {
+    expect(candleDataForBar(polygonBar(1_800_000))).toMatchObject({
+      color: 'rgba(148, 163, 184, 0.24)',
+      borderColor: 'rgba(203, 213, 225, 0.72)',
+      wickColor: 'rgba(203, 213, 225, 0.58)',
+    });
+  });
+
+  it('styles mixed IBKR/Polygon aggregate candles with a yellow border and wick', () => {
+    expect(candleDataForBar(mixedBar(1_800_000))).toMatchObject({
+      borderColor: '#facc15',
+      wickColor: '#facc15',
+    });
+  });
+});
+
+describe('candleSignatureForBars', () => {
+  it('changes when source styling inputs change without building a payload string', () => {
+    expect(candleSignatureForBars([bar(1_800_000)]))
+      .not.toBe(candleSignatureForBars([polygonBar(1_800_000)]));
+  });
+});
+
+describe('isSnapshotTradeCoveredByActivity', () => {
+  it('keeps snapshot trade markers for dates outside the activity projection session', () => {
+    const activity = { session_date: '2026-06-29' };
+
+    expect(isSnapshotTradeCoveredByActivity(new Date(2026, 5, 29, 10, 0).getTime(), activity))
+      .toBe(true);
+    expect(isSnapshotTradeCoveredByActivity(new Date(2026, 5, 28, 10, 0).getTime(), activity))
+      .toBe(false);
   });
 });

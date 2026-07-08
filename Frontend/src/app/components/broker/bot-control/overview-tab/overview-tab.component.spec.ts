@@ -210,6 +210,39 @@ describe('OverviewTabComponent', () => {
     expect(renderedText(fixture)).toContain('Bot lifecycle overview');
   });
 
+  it('vertically collapses and restores the lifecycle flow without hiding signals', () => {
+    TestBed.configureTestingModule({
+      imports: [OverviewTabComponent],
+      providers: [provideZonelessChangeDetection()],
+    });
+
+    const fixture = TestBed.createComponent(OverviewTabComponent);
+    fixture.componentRef.setInput('status', makeStatus());
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    const toggle = el.querySelector<HTMLButtonElement>('[aria-label="Hide bot flow chart"]');
+    const flowPanel = el.querySelector<HTMLElement>('#lifecycle-flow-panel');
+    expect(toggle?.getAttribute('aria-expanded')).toBe('true');
+    expect(flowPanel?.hidden).toBe(false);
+    expect(el.querySelector('.blockage-ladder')?.textContent).toContain('Signals');
+
+    toggle?.click();
+    fixture.detectChanges();
+
+    expect(flowPanel?.hidden).toBe(true);
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle?.getAttribute('aria-label')).toBe('Show bot flow chart');
+    expect(el.querySelector('.blockage-ladder')?.textContent).toContain('Signals');
+
+    toggle?.click();
+    fixture.detectChanges();
+
+    expect(flowPanel?.hidden).toBe(false);
+    expect(toggle?.getAttribute('aria-expanded')).toBe('true');
+    expect(toggle?.getAttribute('aria-label')).toBe('Hide bot flow chart');
+  });
+
   it('emits the selected lifecycle node when a graph node is activated', () => {
     TestBed.configureTestingModule({
       imports: [OverviewTabComponent],

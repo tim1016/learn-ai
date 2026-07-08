@@ -3,13 +3,20 @@
   min-width: 0;
 }
 
+.chart-action-shell {
+  display: inline-flex;
+  min-width: 0;
+}
+
 .chart-action {
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 2.5rem;
+  gap: 0.45rem;
+  min-width: 5.8rem;
   height: 2.5rem;
+  padding: 0 1.85rem 0 0.65rem;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--bg-elevated);
@@ -52,9 +59,17 @@
   }
 
   i {
-    transform: translateY(-0.08rem);
     font-size: 1rem;
     line-height: 1;
+  }
+
+  span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--fs-sm);
+    font-weight: 700;
   }
 
   &.is-disabled {

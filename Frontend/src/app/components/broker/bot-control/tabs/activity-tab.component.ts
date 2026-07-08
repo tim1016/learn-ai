@@ -25,11 +25,13 @@ import type { BrokerActivityHealth, LiveInstanceStatus } from '../../../../api/l
 
 import {
   BotTradeChartCardComponent,
-  type ChartResolution,
   localDateString,
   type ChartSelection,
 } from '../reused/bot-trade-chart-card/bot-trade-chart-card.component';
-import type { LiveInstanceActivityProjection } from '../reused/bot-trade-chart-card/bot-trade-chart-card.types';
+import type {
+  ChartBaseResolution,
+  LiveInstanceActivityProjection,
+} from '../reused/bot-trade-chart-card/bot-trade-chart-card.types';
 import { BrokerActivityTableComponent } from '../reused/broker-activity-table/broker-activity-table.component';
 import { IncidentsPanelComponent } from '../reused/incidents-panel/incidents-panel.component';
 import { LatestSignalStripComponent } from '../reused/latest-signal-strip/latest-signal-strip.component';
@@ -54,14 +56,14 @@ export function activityRefreshKeyForStatus(status: LiveInstanceStatus): number 
 interface ActivityRequestParams {
   readonly sid: string;
   readonly sessionDate: string;
-  readonly resolution: ChartResolution;
+  readonly resolution: ChartBaseResolution;
   readonly refreshKey: number | null;
 }
 
 interface CachedActivity {
   readonly sid: string;
   readonly sessionDate: string;
-  readonly resolution: ChartResolution;
+  readonly resolution: ChartBaseResolution;
   readonly projection: LiveInstanceActivityProjection | null;
 }
 
@@ -114,7 +116,7 @@ export class ActivityTabComponent {
 
   private readonly http = inject(HttpClient);
   readonly selectedSessionDate = signal<string>(localDateString());
-  readonly selectedResolution = signal<ChartResolution>('1m');
+  readonly selectedResolution = signal<ChartBaseResolution>('1m');
   private readonly cachedActivity = signal<CachedActivity | null>(null);
   private readonly activityRequestParams = computed<ActivityRequestParams>(() => ({
     sid: this.strategyInstanceId(),
@@ -156,6 +158,7 @@ export class ActivityTabComponent {
   });
   readonly openOrderClusters = computed(() => openOrderClustersForProjection(this.activity()));
   readonly brokerEventRows = computed(() => this.activity()?.broker_activity_rows ?? []);
+  readonly brokerEventSummary = computed(() => this.activity()?.broker_activity_summary ?? []);
   readonly backfillLoading = computed(() => this.activityResource.isLoading());
   readonly backfillError = computed(() => {
     const err = this.activityResource.error();
@@ -173,13 +176,13 @@ export class ActivityTabComponent {
 
   onChartSelectionChange(selection: ChartSelection): void {
     this.selectedSessionDate.set(selection.sessionDate);
-    this.selectedResolution.set(selection.resolution);
+    this.selectedResolution.set(selection.activityResolution);
   }
 
   private async loadActivity(
     sid: string,
     sessionDate: string,
-    resolution: ChartResolution,
+    resolution: ChartBaseResolution,
   ): Promise<LiveInstanceActivityProjection | null> {
     if (!sid) return null;
     return firstValueFrom(
@@ -193,7 +196,7 @@ export class ActivityTabComponent {
   private async loadAndCacheActivity(
     sid: string,
     sessionDate: string,
-    resolution: ChartResolution,
+    resolution: ChartBaseResolution,
   ): Promise<LiveInstanceActivityProjection | null> {
     const projection = await this.loadActivity(sid, sessionDate, resolution);
     this.cachedActivity.set({ sid, sessionDate, resolution, projection });

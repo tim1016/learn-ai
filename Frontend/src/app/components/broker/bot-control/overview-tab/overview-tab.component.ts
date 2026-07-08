@@ -5,6 +5,7 @@ import type {
   LifecycleChartNode,
   LifecycleChartStatus,
   LiveInstanceStatus,
+  OperatorSurfaceAttentionGroup,
   OperatorSurfaceBlockageStage,
 } from '../../../../api/live-instances.types';
 import { LifecycleNodeCardComponent } from './lifecycle-node-card.component';
@@ -34,6 +35,7 @@ export class OverviewTabComponent {
 
   readonly expandedGraphSelection = signal<ExpandedGraphSelection | null>(null);
   readonly expandedReceiptNodeId = signal<string | null>(null);
+  readonly flowCollapsed = signal(false);
   readonly chart = computed(() => this.status().lifecycle_chart);
   readonly chartKey = computed(() => {
     const status = this.status();
@@ -58,6 +60,9 @@ export class OverviewTabComponent {
     const ladder = this.blockageLadder();
     return ladder.stages.find((stage) => stage.current) ?? null;
   });
+  readonly attentionGroups = computed<readonly OperatorSurfaceAttentionGroup[]>(
+    () => this.status().operator_surface.trader_guidance?.additional_attention_groups ?? [],
+  );
   readonly lifecycleNodes = computed(() => this.currentGraph().nodes);
   readonly lifecycleEdges = computed(() => this.currentGraph().edges);
   readonly lifecycleFlowRows = computed<readonly LifecycleFlowRow[]>(() => {
@@ -82,6 +87,10 @@ export class OverviewTabComponent {
 
   collapse(): void {
     this.expandedGraphSelection.set(null);
+  }
+
+  toggleFlowCollapsed(): void {
+    this.flowCollapsed.update((collapsed) => !collapsed);
   }
 
   expandNode(node: LifecycleChartNode): void {

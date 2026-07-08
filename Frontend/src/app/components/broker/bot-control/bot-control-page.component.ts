@@ -24,7 +24,6 @@ import type {
   OperatorNotice,
   OperatorSurfaceControlPlane,
   RiskPosture,
-  TraderPrimaryRemediation,
 } from '../../../api/live-instances.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { formatReceiptLabel, ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
@@ -47,7 +46,6 @@ import {
 } from './lib/operator-notice-action-renderer';
 import { toOperationError, type OperationKind } from '../operation-error';
 import { operatorPillTone, type OperatorPillTone } from '../operator-severity';
-import { AttentionDropdownComponent } from './attention-dropdown.component';
 import { OverviewActionsComponent } from './overview-tab/overview-actions.component';
 import { OverviewTabComponent } from './overview-tab/overview-tab.component';
 import { RuntimeBannerComponent } from './runtime-banner/runtime-banner.component';
@@ -127,7 +125,6 @@ const EMPTY_TIMELINE_STATE: LifecycleTimelinePaneState = {
     ActivityTabComponent,
     TypedHaltConfirmComponent,
     OverviewActionsComponent,
-    AttentionDropdownComponent,
     TraderGuidanceTimelineComponent,
     RuntimeBannerComponent,
     WorkbenchAuditPanelComponent,
@@ -148,7 +145,6 @@ export class BotControlPageComponent {
   private statusRequestSeq = 0;
   private timelineRequestSeq = 0;
   private destroyed = false;
-  private autoOpenedAttentionSituation: string | null = null;
 
   readonly instanceId = signal<string | null>(null);
   readonly status = signal<LiveInstanceStatus | null>(null);
@@ -163,7 +159,6 @@ export class BotControlPageComponent {
   readonly typedHaltOpen = signal<boolean>(false);
   private readonly typedHaltInstanceId = signal<string | null>(null);
   readonly flattenConfirmOpen = signal<boolean>(false);
-  readonly attentionOpen = signal<boolean>(false);
   readonly activeWorkbenchTab = signal<WorkbenchTab>('activity');
   private readonly dismissedControlPlaneSig = signal<string | null>(null);
   private readonly dismissedBrokerEvidenceSig = signal<string | null>(null);
@@ -272,10 +267,6 @@ export class BotControlPageComponent {
     return graph.nodes.find((node) => node.id === graph.primary_node_id) ?? null;
   });
   readonly traderGuidance = computed(() => this.status()?.operator_surface.trader_guidance ?? null);
-  readonly attentionGroups = computed(
-    () => this.traderGuidance()?.additional_attention_groups ?? [],
-  );
-  readonly attentionCount = computed<number>(() => this.attentionGroups().length);
   readonly renderedPrimaryRemediation = computed<RenderedAction | null>(() => {
     const remediation = this.traderGuidance()?.primary_remediation ?? null;
     return renderTraderRemediation(remediation, this.primaryRemediationDispatch);
@@ -321,32 +312,11 @@ export class BotControlPageComponent {
       this.typedHaltOpen.set(false);
       this.typedHaltInstanceId.set(null);
       this.flattenConfirmOpen.set(false);
-      this.attentionOpen.set(false);
       this.activeWorkbenchTab.set('activity');
-      this.autoOpenedAttentionSituation = null;
       this.dismissedControlPlaneSig.set(null);
       this.dismissedBrokerEvidenceSig.set(null);
       if (id) {
         void this.refresh(id).finally(() => this.scheduleNextPoll(id, token));
-      }
-    });
-    effect(() => {
-      // Safety: auto-open the attention dropdown when a critical group appears,
-      // so a critical finding is never hidden behind a closed dropdown. The key
-      // is the situation_code plus the *set* of critical group codes, so a newly
-      // arrived critical finding reopens it — while an unchanged critical set
-      // does not fight the operator closing the dropdown.
-      const guidance = this.traderGuidance();
-      if (!guidance) return;
-      const criticalCodes = guidance.additional_attention_groups
-        .filter((group) => group.severity === 'critical')
-        .map((group) => group.code)
-        .sort();
-      if (criticalCodes.length === 0) return;
-      const key = `${guidance.situation_code}:${criticalCodes.join('|')}`;
-      if (this.autoOpenedAttentionSituation !== key) {
-        this.autoOpenedAttentionSituation = key;
-        this.attentionOpen.set(true);
       }
     });
     effect(() => {
@@ -499,12 +469,6 @@ export class BotControlPageComponent {
     action.invoke();
   }
 
-  handleTraderRemediation(remediation: TraderPrimaryRemediation): void {
-    const action = renderTraderRemediation(remediation, this.primaryRemediationDispatch);
-    if (action === null) return;
-    action.invoke();
-  }
-
   handleRuntimeNoticeAction(notice: OperatorNotice): void {
     const action = renderOperatorNoticeAction(notice, this.runtimeNoticeDispatch);
     if (action === null) {
@@ -512,14 +476,6 @@ export class BotControlPageComponent {
       return;
     }
     action.invoke();
-  }
-
-  toggleAttention(): void {
-    this.attentionOpen.update((open) => !open);
-  }
-
-  closeAttention(): void {
-    this.attentionOpen.set(false);
   }
 
   setActiveWorkbenchTab(value: string | number | undefined): void {

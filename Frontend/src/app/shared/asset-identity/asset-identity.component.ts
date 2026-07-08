@@ -96,6 +96,7 @@ export class AssetIdentityComponent {
   readonly symbol = input.required<string>();
   readonly name = input<string | null>(null);
   readonly logoSlug = input<string | null>(null);
+  readonly logo = input<boolean>(true);
   readonly size = input<AssetIdentitySize>('md');
   readonly tone = input<AssetIdentityTone>('default');
 
@@ -106,8 +107,9 @@ export class AssetIdentityComponent {
   readonly logoUrl = computed(() => tradingViewLogoUrl(this.symbol(), this.logoSlug()));
   readonly showLogo = computed(() => {
     const logoUrl = this.logoUrl();
-    return logoUrl !== null && logoUrl !== this.failedLogoUrl();
+    return this.logo() && logoUrl !== null && logoUrl !== this.failedLogoUrl();
   });
+  readonly showFallback = computed(() => this.logo() && !this.showLogo());
   readonly fallbackText = computed(() => fallbackTextForSymbol(this.symbol()));
   readonly titleText = computed(() => {
     const name = this.displayName();

@@ -6,38 +6,42 @@
       <p>{{ m.subtitle }}</p>
     </div>
     <div class="header-controls">
-      @if (activeDates().length > 0) {
-        <select
-          class="date-picker"
-          aria-label="Chart date"
-          [value]="chartDate()"
-          (change)="onDateSelected($any($event.target).value)"
-        >
-          <option [value]="todayDate()">Today</option>
-          @for (d of pickerDates(); track d.date) {
-            <option [value]="d.date">
-              {{ d.date }}{{ d.has_bars ? '' : ' (no bars)' }}
-              @if (d.run_count > 0) {
-                · {{ d.run_count }} run{{ d.run_count === 1 ? '' : 's' }}
-              }
-            </option>
-          }
-        </select>
-      }
-      <div class="resolution-toggle" role="group" aria-label="Bar resolution">
-        @for (r of resolutionOptions; track r) {
+      <div class="range-picker" aria-label="Chart range">
+        <input
+          type="date"
+          aria-label="Chart range start"
+          [min]="minRangeDate()"
+          [max]="rangeEndDate()"
+          [value]="rangeStartDate()"
+          (change)="onRangeStartSelected($any($event.target).value)"
+        />
+        <span aria-hidden="true">to</span>
+        <input
+          type="date"
+          aria-label="Chart range end"
+          [min]="rangeStartDate()"
+          [max]="todayDate()"
+          [value]="rangeEndDate()"
+          (change)="onRangeEndSelected($any($event.target).value)"
+        />
+        <button type="button" class="range-now" (click)="jumpToLiveRange()" title="Show the latest seven-day range">
+          Now
+        </button>
+      </div>
+      <div class="resolution-toggle" role="group" aria-label="Chart timeframe">
+        @for (r of timeframeOptions; track r) {
           <button
             type="button"
-            [class.active]="resolution() === r"
-            (click)="setResolution(r)"
-            [attr.aria-pressed]="resolution() === r"
-            [title]="r === '1m' ? '1-minute candles' : '5-second candles'"
+            [class.active]="timeframe() === r"
+            (click)="setTimeframe(r)"
+            [attr.aria-pressed]="timeframe() === r"
+            [title]="r + ' candles'"
           >
             {{ r }}
           </button>
         }
       </div>
-      @if (!isPastDate()) {
+      @if (liveStreaming()) {
         <button
           type="button"
           class="live-pill"
@@ -49,10 +53,20 @@
           <span class="live-dot" aria-hidden="true"></span>
           <span>LIVE</span>
         </button>
+      } @else if (isLiveRange()) {
+        <span class="status-chip warn" role="status">Not live</span>
       }
-      @if (missingBarsForSelectedDate()) {
-        <span class="status-chip warn" role="status">Bars unavailable for this date</span>
+      @if (overlayBarCount() > 0 || mixedBarCount() > 0) {
+        <span class="status-chip overlay" role="status">
+          {{ overlayBarCount() }} Polygon{{ mixedBarCount() > 0 ? ' · mixed ' + mixedBarCount() : '' }}
+        </span>
       }
+      @if (overlayNotices().length > 0) {
+        <span class="status-chip warn" role="status" [title]="overlayNotices()[0].message">
+          Overlay notice
+        </span>
+      }
+      <span class="status-chip timezone" role="status">{{ localTimeZone }}</span>
       @let tone = statusTone();
       <span
         class="status-chip"
@@ -64,6 +78,7 @@
           <app-asset-identity
             class="chart-status-asset"
             [symbol]="chartSymbol"
+            [logo]="false"
             size="sm"
             tone="inverse"
           />

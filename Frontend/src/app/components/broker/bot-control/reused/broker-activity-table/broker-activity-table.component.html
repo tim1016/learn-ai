@@ -12,16 +12,16 @@
             Feed unavailable
           }
           @case ('degraded') {
-            {{ eventRows()?.length ?? executedRows().length }} row(s) · stream {{ sseStatus() }} · feed degraded
+            {{ eventCount() }} event(s) · stream {{ sseStatus() }} · feed degraded
           }
           @default {
-            {{ eventRows()?.length ?? executedRows().length }} row(s) · stream {{ sseStatus() }}
+            {{ eventCount() }} event(s) · stream {{ sseStatus() }}
           }
         }
       } @else if (backfillLoading()) {
         Loading history…
       } @else {
-        {{ eventRows()?.length ?? executedRows().length }} row(s) · stream {{ sseStatus() }}
+        {{ eventCount() }} event(s) · stream {{ sseStatus() }}
       }
     </span>
   </header>
@@ -44,213 +44,114 @@
     </div>
   } @else {
     @if (health && health.state === 'degraded' && health.headline) {
-      <!-- degraded — show the warning notice AND still render the table -->
+      <!-- degraded — show the warning notice AND still render the summary cards -->
       <div class="health-notice" data-health-state="degraded" data-testid="broker-activity-health-notice">
         <app-operator-notice [notice]="health.headline" />
       </div>
     }
 
-    @if (eventRows(); as events) {
-      @if (events.length > 0) {
-      <table>
-        <thead>
-          <tr>
-            <th scope="col">DATE / TIME</th>
-            <th scope="col">TYPE</th>
-            <th scope="col">SOURCE</th>
-            <th scope="col">SYMBOL</th>
-            <th scope="col">SIDE</th>
-            <th scope="col" class="num">QTY</th>
-            <th scope="col" class="num">PRICE</th>
-            <th scope="col">STATUS</th>
-            <th scope="col">SUMMARY</th>
-            <th scope="col">EVIDENCE</th>
-          </tr>
-        </thead>
-        <tbody>
-          @for (row of events; track trackEventRow($index, row)) {
-            <tr
-                class="data-row"
-                [class.expanded]="isEventExpanded(row)"
-                [attr.data-testid]="'broker-activity-event-row-' + row.id"
-                [attr.aria-expanded]="isEventExpanded(row)"
-                (click)="toggleEvent(row)"
-                (keydown.enter)="toggleEvent(row)"
-                tabindex="0"
-              >
-              <td class="ts">{{ fmtTimestampLocal(row.ts_ms) }}</td>
-              <td>
-                {{ row.display_type }}
-                @if (row.fold_count > 1) {
-                  <p-tag
-                    class="activity-tag"
-                    severity="info"
-                    [value]="row.fold_count + 'x'"
-                    [attr.aria-label]="'Repeated ' + row.fold_count + ' times'"
-                  />
-                }
-              </td>
-              <td>{{ row.source_label }}</td>
-              <td>
-                @if (row.symbol) {
-                  <app-asset-identity class="table-asset" [symbol]="row.symbol" size="sm" />
-                } @else {
-                  —
-                }
-              </td>
-              <td>{{ row.side ?? '—' }}</td>
-              <td class="num">
-                @if (row.quantity !== null) {
-                  {{ fmtNumber(row.quantity, 0) }}
-                } @else {
-                  —
-                }
-              </td>
-              <td class="num">
-                @if (row.price !== null) {
-                  {{ fmtCurrency(row.price) }}
-                } @else {
-                  —
-                }
-              </td>
-              <td>{{ row.status ?? row.verdict }}</td>
-              <td>
-                {{ row.summary }}
-                @if (row.cluster_label; as clusterLabel) {
-                  <p-tag class="activity-tag" severity="secondary" [value]="clusterLabel" />
-                }
-                @if (row.constituent_fill_ids.length > 0) {
-                  <p-tag
-                    class="activity-tag"
-                    severity="info"
-                    [value]="row.constituent_fill_ids.length + ' fill(s)'"
-                  />
-                }
-              </td>
-              <td>{{ row.evidence.length }}</td>
-            </tr>
-              @if (isEventExpanded(row)) {
-                <tr class="drawer-row" [attr.data-testid]="'broker-activity-event-drawer-' + row.id">
-                  <td colspan="10">
-                    <div class="event-detail">
-                      @if (row.evidence.length > 0) {
-                        <h4>Broker API evidence</h4>
-                        <ul>
-                          @for (ref of row.evidence; track trackEvidence($index, ref)) {
-                            <li>
-                              <div class="event-detail-line">
-                                <span class="seq">#{{ ref.seq }}</span>
-                                <span>{{ fmtTimestampLocal(ref.ts_ms) }}</span>
-                                <code>{{ ref.request_call }}</code>
-                                @if (ref.response_callback) {
-                                  <span>→</span>
-                                  <code>{{ ref.response_callback }}</code>
-                                }
-                                <span>{{ ref.source }}</span>
-                              </div>
-                              <div class="event-detail-identity">{{ evidenceIdentity(ref) }}</div>
-                            </li>
-                          }
-                        </ul>
-                      } @else {
-                        <p>No row-level IBKR evidence is linked to this Activity row.</p>
-                      }
-                    </div>
-                  </td>
-                </tr>
-              }
-          }
-        </tbody>
-      </table>
-      } @else if (!backfillLoading()) {
-        <p class="empty" data-testid="broker-activity-empty">
-          No broker-tail rows yet for this instance.
-        </p>
-      }
-    } @else if (!health && !backfillLoading() && !hasRows()) {
-      <p class="empty" data-testid="broker-activity-empty">
-        No broker-tail rows yet for this instance.
-      </p>
-    }
-    @if (health && health.state === 'ready' && !hasRows()) {
-      <p class="empty" data-testid="broker-activity-empty">
-        No broker-tail rows yet for this instance.
-      </p>
-    }
-
-    @if (hasRows()) {
-      <table>
-        <thead>
-          <tr>
-            <th scope="col">DATE / TIME</th>
-            <th scope="col">SYMBOL</th>
-            <th scope="col">SIDE</th>
-            <th scope="col" class="num">QTY</th>
-            <th scope="col" class="num">PRICE</th>
-            <th scope="col" class="num">TOTAL</th>
-            <th scope="col" class="num">COMM</th>
-            <th scope="col" class="num">NET</th>
-            <th scope="col">ORDER TYPE</th>
-            <th scope="col">VERDICT</th>
-            <th scope="col" class="num">LAG</th>
-          </tr>
-        </thead>
-        @for (group of groupedRows(); track trackGroup($index, group)) {
-          <tbody class="group" [attr.data-group-key]="group.key">
-            <tr class="group-header">
-              <td colspan="11">{{ group.label }}</td>
-            </tr>
-            @for (row of group.rows; track trackRow($index, row)) {
-              <tr
-                class="data-row"
-                [class.expanded]="isExpanded(row.seq)"
-                [attr.data-testid]="'broker-activity-row-' + row.seq"
-                [attr.aria-expanded]="isExpanded(row.seq)"
-                (click)="toggleRow(row.seq)"
-                (keydown.enter)="toggleRow(row.seq)"
-                tabindex="0"
-              >
-                <td class="ts">{{ fmtTimestampLocal(row.ts_ms) }}</td>
-                <td><app-asset-identity class="table-asset" [symbol]="row.symbol" size="sm" /></td>
-                <td>{{ row.side }}</td>
-                <td class="num">{{ fmtNumber(row.quantity, 0) }}</td>
-                <td class="num">{{ fmtCurrency(row.price) }}</td>
-                <td class="num">
-                  @if (row.price !== null) {
-                    {{ fmtCurrency(row.price * row.quantity) }}
-                  } @else {
-                    —
-                  }
-                </td>
-                <td class="num">{{ fmtCurrency(row.commission) }}</td>
-                <td class="num">{{ fmtCurrency(row.net_amount) }}</td>
-                <td>{{ row.order_type }}</td>
-                <td>
-                  <span
-                    class="chip"
-                    [class]="verdictClass(row.verdict)"
-                    [attr.data-verdict]="row.verdict"
-                  >
-                    {{ verdictLabel(row.verdict) }}
-                  </span>
-                </td>
-                <td class="num">
-                  <span class="chip lag-chip">
-                    {{ formatLag(row.engine_overlay?.lag_breakdown?.intent_to_exec_ms ?? null) }}
-                  </span>
-                </td>
-              </tr>
-              @if (isExpanded(row.seq)) {
-                <tr class="drawer-row" [attr.data-testid]="'broker-activity-drawer-' + row.seq">
-                  <td colspan="11">
-                    <app-broker-activity-row-detail [row]="row" />
-                  </td>
-                </tr>
-              }
+    @if (hasEventSummary()) {
+      <div class="category-summary" aria-label="Broker tail categories">
+        @for (summary of eventSummary(); track summary.category_id) {
+          <button
+            type="button"
+            class="category-card"
+            [class.selected]="isSelected(summary)"
+            [attr.data-kind]="summary.kind"
+            [attr.aria-pressed]="isSelected(summary)"
+            (click)="selectCategory(summary)"
+          >
+            <span class="category-kind">{{ summary.kind | receiptLabel }}</span>
+            <strong>{{ summary.label }}</strong>
+            <span>{{ summary.event_count }} event{{ summary.event_count === 1 ? '' : 's' }}</span>
+            @if (summary.last_event_ts_ms !== null) {
+              <span>{{ fmtTimestampLocal(summary.last_event_ts_ms) }}</span>
             }
-          </tbody>
+          </button>
         }
-      </table>
+      </div>
+      @if (selectedSummary(); as selected) {
+        <div class="event-drilldown" [attr.aria-label]="selected.label + ' events'">
+          @if (selectedRows().length > 0) {
+            @for (row of selectedRows(); track rowIdentity(row)) {
+              <article
+                class="event-row"
+                [class.expanded]="isExpanded(row)"
+                [attr.data-kind]="selected.kind"
+                [attr.data-testid]="'broker-activity-event-row-' + rowIdentity(row)"
+              >
+                <button
+                  type="button"
+                  class="event-row-main"
+                  [attr.aria-expanded]="isExpanded(row)"
+                  (click)="toggleRow(row)"
+                >
+                  <span class="event-time">{{ fmtTimestampLocal(row.ts_ms) }}</span>
+                  <span class="event-type">{{ row.display_type }}</span>
+                  @if (row.symbol) {
+                    <app-asset-identity class="event-asset" [symbol]="row.symbol" [logo]="false" size="sm" />
+                  }
+                  @if (row.side) {
+                    <span class="event-pill">{{ row.side }}</span>
+                  }
+                  @if (row.quantity !== null) {
+                    <span class="event-pill">{{ row.quantity }}</span>
+                  }
+                  @if (row.fold_count > 1) {
+                    <span class="event-pill">{{ row.fold_count }}x</span>
+                  }
+                  <span class="event-summary">{{ row.summary }}</span>
+                </button>
+                @if (isExpanded(row)) {
+                  <div class="event-detail" [attr.data-testid]="'broker-activity-event-detail-' + rowIdentity(row)">
+                    <dl>
+                      <div>
+                        <dt>Source</dt>
+                        <dd>{{ row.source_label }}</dd>
+                      </div>
+                      <div>
+                        <dt>Status</dt>
+                        <dd>{{ row.status ?? row.verdict }}</dd>
+                      </div>
+                      @if (row.cluster_label) {
+                        <div>
+                          <dt>Cluster</dt>
+                          <dd>{{ row.cluster_label }}</dd>
+                        </div>
+                      }
+                      <div>
+                        <dt>Evidence</dt>
+                        <dd>{{ row.evidence.length }}</dd>
+                      </div>
+                    </dl>
+                    @if (row.evidence.length > 0) {
+                      <ul>
+                        @for (ref of row.evidence; track ref.seq) {
+                          <li>
+                            <span>#{{ ref.seq }}</span>
+                            <code>{{ ref.request_call }}</code>
+                            @if (ref.response_callback) {
+                              <code>{{ ref.response_callback }}</code>
+                            }
+                          </li>
+                        }
+                      </ul>
+                    }
+                  </div>
+                }
+              </article>
+            }
+          } @else {
+            <p class="empty" data-testid="broker-activity-empty">
+              No broker-tail rows are linked to this summary yet.
+            </p>
+          }
+        </div>
+      }
+    } @else if (!backfillLoading()) {
+      <p class="empty" data-testid="broker-activity-empty">
+        No broker-tail summary yet for this instance.
+      </p>
     }
   }
 </section>

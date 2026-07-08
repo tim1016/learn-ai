@@ -50,6 +50,14 @@ describe('BotControlPageComponent', () => {
     return receipts;
   }
 
+  function lifecycleActionTitle(button: HTMLButtonElement | null): string {
+    expect(button).not.toBeNull();
+    if (!button) throw new Error('Expected lifecycle action button.');
+    return button.closest<HTMLElement>('.chart-action-shell')?.getAttribute('title')
+      ?? button.getAttribute('title')
+      ?? '';
+  }
+
   it('renders compact broker evidence and control-plane warning panels before the bot tabs', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const { element: el } = await setupBotControlPage();
@@ -127,35 +135,17 @@ describe('BotControlPageComponent', () => {
     expect(liveRuns.renewControlPlaneLease).toHaveBeenCalledTimes(1);
   });
 
-  it('opens the attention dropdown on demand with folded why/risk and items', async () => {
+  it('folds attention copy into the lifecycle overview without a dropdown', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const { fixture, element: el } = await setupBotControlPage();
-    // A non-critical situation leaves the dropdown closed by default.
+    const { element: el } = await setupBotControlPage();
+
+    expect(el.querySelector('[data-testid="bot-control-attention-toggle"]')).toBeNull();
     expect(el.querySelector('[data-testid="bot-control-attention-panel"]')).toBeNull();
-    const toggle = el.querySelector<HTMLButtonElement>('[data-testid="bot-control-attention-toggle"]');
-    expect(toggle?.getAttribute('aria-expanded')).toBe('false');
-
-    toggle?.click();
-    fixture.detectChanges();
-
-    const panel = el.querySelector('[data-testid="bot-control-attention-panel"]');
-    expect(panel).not.toBeNull();
-    expect(toggle?.getAttribute('aria-expanded')).toBe('true');
-    // Folded guidance: situation headline + why + risk headline.
-    expect(panel?.textContent).toContain('Broker state is not proven enough to submit.');
-    expect(panel?.textContent).toContain(
-      'The backend cannot prove the broker/session/reconciliation facts needed before a submit.',
-    );
-    expect(panel?.textContent).toContain('Do not treat stale or missing broker evidence as live truth');
-    // Attention item headline.
-    expect(panel?.textContent).toContain('Broker session is disconnected');
-
-    toggle?.click();
-    fixture.detectChanges();
-    expect(el.querySelector('[data-testid="bot-control-attention-panel"]')).toBeNull();
+    expect(el.textContent).toContain('Broker session is disconnected');
+    expect(el.textContent).toContain('Reconnect the broker session, then refresh broker evidence.');
   });
 
-  it('auto-opens the attention dropdown when a critical group is present', async () => {
+  it('renders critical attention groups inline in the lifecycle overview', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();
     status.operator_surface.trader_guidance.additional_attention_groups = [
@@ -170,9 +160,9 @@ describe('BotControlPageComponent', () => {
     ];
     const { element } = await setupBotControlPage({ status });
 
-    const panel = element.querySelector('[data-testid="bot-control-attention-panel"]');
-    expect(panel).not.toBeNull();
-    expect(panel?.textContent).toContain('Broker safety is unsafe');
+    expect(element.querySelector('[data-testid="bot-control-attention-panel"]')).toBeNull();
+    expect(element.textContent).toContain('Broker safety is unsafe');
+    expect(element.textContent).toContain('Inspect broker/account safety evidence before any trading action.');
   });
 
   it('keeps lifecycle overview visible and switches the right pane from selected chart nodes', async () => {
@@ -193,7 +183,7 @@ describe('BotControlPageComponent', () => {
       '.top-action-banner .chart-action[aria-label="Start bot process"]',
     ) as HTMLButtonElement | null;
     expect(startAction).not.toBeNull();
-    expect(startAction?.textContent?.trim()).toBe('');
+    expect(startAction?.textContent?.trim()).toBe('Start bot process');
     expect(el.querySelector('app-overview-tab')).not.toBeNull();
     expect(el.querySelector('app-overview-tab app-trader-guidance-pane')).toBeNull();
     expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
@@ -333,11 +323,10 @@ describe('BotControlPageComponent', () => {
     const { element: el } = await setupBotControlPage({ status });
     const actionButton = el.querySelector<HTMLButtonElement>('[aria-label="Flatten and pause"]');
     expect(actionButton?.disabled).toBe(true);
-    expect(actionButton?.getAttribute('title')).toContain('No live binding');
-    expect(actionButton?.getAttribute('title')).toContain(
-      'The lifecycle action contract says the runner is not bound.',
-    );
-    expect(actionButton?.getAttribute('title')).not.toContain('NO_LIVE_BINDING');
+    const title = lifecycleActionTitle(actionButton);
+    expect(title).toContain('No live binding');
+    expect(title).toContain('The lifecycle action contract says the runner is not bound.');
+    expect(title).not.toContain('NO_LIVE_BINDING');
     const traderCopy = Array.from(el.querySelectorAll('[data-trader-copy]'))
       .map((node) => node.textContent ?? '')
       .join(' ');
@@ -374,8 +363,8 @@ describe('BotControlPageComponent', () => {
 
     const pause = element.querySelector<HTMLButtonElement>('.chart-action[aria-label="Pause"]');
     expect(pause?.getAttribute('aria-disabled')).toBe('false');
-    expect(pause?.getAttribute('title')).toContain('Pause On. Available');
-    expect(pause?.textContent?.trim()).toBe('');
+    expect(lifecycleActionTitle(pause)).toContain('Pause On. Available');
+    expect(pause?.textContent?.trim()).toBe('Pause');
   });
 
   it('renders redeploy settings as one concise row and hides raw strategy keys', async () => {
@@ -647,7 +636,7 @@ describe('BotControlPageComponent', () => {
     expect(liveRuns.reconcileInstance).toHaveBeenCalledWith('sid-x');
   });
 
-  it('routes attention-row reconcile actions to the existing instance endpoint', async () => {
+  it('does not render attention-row actions after folding attention into the ladder', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();
     status.operator_surface.trader_guidance.additional_attention_groups = [
@@ -665,22 +654,11 @@ describe('BotControlPageComponent', () => {
         },
       },
     ];
-    const { fixture, element: el, liveRuns } = await setupBotControlPage({
-      status,
-      mutationResponses: { reconcileInstance: makeReconcileAckResponse() },
-    });
+    const { element: el } = await setupBotControlPage({ status });
 
-    (el.querySelector('[data-testid="bot-control-attention-toggle"]') as HTMLButtonElement | null)?.click();
-    fixture.detectChanges();
-
-    const action = el.querySelector(
-      '.attention-row-action',
-    ) as HTMLButtonElement | null;
-    expect(action?.textContent).toContain('Reconcile now');
-    action?.click();
-    await flush(fixture);
-
-    expect(liveRuns.reconcileInstance).toHaveBeenCalledWith('sid-x');
+    expect(el.querySelector('[data-testid="bot-control-attention-toggle"]')).toBeNull();
+    expect(el.querySelector('.attention-row-action')).toBeNull();
+    expect(el.textContent).toContain('Reconciliation is not fresh-clean');
   });
 
   it('derives reconcile completion from refreshed backend status', async () => {
@@ -943,7 +921,7 @@ describe('BotControlPageComponent', () => {
     expect(el.querySelector('[data-testid="bot-control-plane-banner"]')).not.toBeNull();
   });
 
-  it('reopens the attention dropdown when a new critical group arrives after being closed', async () => {
+  it('updates inline attention content when a new critical group arrives', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();
     status.operator_surface.trader_guidance.additional_attention_groups = [
@@ -957,15 +935,10 @@ describe('BotControlPageComponent', () => {
       },
     ];
     const { fixture, component, element: el } = await setupBotControlPage({ status });
-    // Auto-opened for the initial critical group.
-    expect(el.querySelector('[data-testid="bot-control-attention-panel"]')).not.toBeNull();
 
-    // Operator closes it.
-    component.closeAttention();
-    fixture.detectChanges();
     expect(el.querySelector('[data-testid="bot-control-attention-panel"]')).toBeNull();
+    expect(el.textContent).toContain('Broker safety is unsafe');
 
-    // A different critical group arrives under the same situation_code -> reopens.
     const next = makeStatus();
     next.operator_surface.trader_guidance.additional_attention_groups = [
       {
@@ -984,6 +957,7 @@ describe('BotControlPageComponent', () => {
     ];
     component.status.set(next);
     fixture.detectChanges();
-    expect(el.querySelector('[data-testid="bot-control-attention-panel"]')).not.toBeNull();
+    expect(el.querySelector('[data-testid="bot-control-attention-panel"]')).toBeNull();
+    expect(el.textContent).toContain('Reconciliation failed');
   });
 });
