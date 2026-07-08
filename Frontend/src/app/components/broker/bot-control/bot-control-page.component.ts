@@ -60,6 +60,8 @@ const POISONED_CONFIRM_MESSAGE =
   'Flagging this instance as POISONED is IRREVERSIBLE: the current run can never resume on its run_id. Recovery requires a fresh deployment (new run_id) after you reconcile the account.';
 const FLATTEN_CONFIRM_MESSAGE =
   'Flatten & pause sends a market-flattening request for any owned positions and then pauses the bot. Positions may be closed at the next available price. Confirm to proceed.';
+const CRASH_RECOVERY_CONFIRM_MESSAGE =
+  'Recording recovery evidence clears the crash-retired start gate and lets this bot run again. Only confirm if you have verified in IBKR that the broker account is FLAT with no open orders. This writes audited safety evidence.';
 const TIMELINE_PROJECTION_UNAVAILABLE =
   'Projection unavailable; current snapshot remains file-backed.';
 
@@ -150,9 +152,11 @@ export class BotControlPageComponent {
   readonly typedHaltOpen = signal<boolean>(false);
   private readonly typedHaltInstanceId = signal<string | null>(null);
   readonly flattenConfirmOpen = signal<boolean>(false);
+  readonly crashRecoveryConfirmOpen = signal<boolean>(false);
   readonly activeWorkbenchTab = signal<WorkbenchTab>('activity');
   readonly poisonedConfirmMessage = POISONED_CONFIRM_MESSAGE;
   readonly flattenConfirmMessage = FLATTEN_CONFIRM_MESSAGE;
+  readonly crashRecoveryConfirmMessage = CRASH_RECOVERY_CONFIRM_MESSAGE;
 
   readonly errorMessage = computed<string | null>(
     () => this.mutationError() ?? this.statusError() ?? this.accountSummaryError(),
@@ -297,6 +301,7 @@ export class BotControlPageComponent {
       this.typedHaltOpen.set(false);
       this.typedHaltInstanceId.set(null);
       this.flattenConfirmOpen.set(false);
+      this.crashRecoveryConfirmOpen.set(false);
       this.mutationReceipt.set(null);
       this.mutationReceiptWarnings.set([]);
       this.activeWorkbenchTab.set('activity');
@@ -353,7 +358,22 @@ export class BotControlPageComponent {
     }
   }
 
-  async dispatchCrashRecoveryOverride(): Promise<void> {
+  // Opening the attestation dialog is the only entry point. Recording recovery
+  // evidence clears a safety gate, so the operator must explicitly confirm the
+  // account is flat before we post confirm_account_flat — never on a bare click.
+  dispatchCrashRecoveryOverride(): void {
+    const id = this.instanceId();
+    if (!id || this.busyAction()) return;
+    this.crashRecoveryConfirmOpen.set(true);
+  }
+
+  cancelCrashRecoveryConfirm(): void {
+    this.crashRecoveryConfirmOpen.set(false);
+  }
+
+  async confirmCrashRecoveryOverride(): Promise<void> {
+    if (!this.crashRecoveryConfirmOpen()) return;
+    this.crashRecoveryConfirmOpen.set(false);
     const id = this.instanceId();
     if (!id || this.busyAction()) return;
     this.busyAction.set('crash_recovery_override');

@@ -265,4 +265,14 @@
     (confirmed)="confirmFlatten()"
     (cancelled)="cancelFlattenConfirm()"
   />
+
+  <app-typed-halt-confirm
+    [open]="crashRecoveryConfirmOpen()"
+    heading="Confirm the broker account is flat"
+    [message]="crashRecoveryConfirmMessage"
+    requiredToken=""
+    confirmLabel="Record recovery override"
+    (confirmed)="confirmCrashRecoveryOverride()"
+    (cancelled)="cancelCrashRecoveryConfirm()"
+  />
 </section>

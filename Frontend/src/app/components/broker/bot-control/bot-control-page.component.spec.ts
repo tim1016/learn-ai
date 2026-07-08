@@ -700,7 +700,12 @@ describe('BotControlPageComponent', () => {
       mutationResponses: { recordCrashRecoveryOverride: response },
     });
 
-    await component.dispatchCrashRecoveryOverride();
+    // Bare dispatch only opens the attestation dialog — it must NOT post.
+    component.dispatchCrashRecoveryOverride();
+    await flush(fixture);
+    expect(liveRuns.recordCrashRecoveryOverride).not.toHaveBeenCalled();
+
+    await component.confirmCrashRecoveryOverride();
     await flush(fixture);
 
     expect(liveRuns.recordCrashRecoveryOverride).toHaveBeenCalledWith('sid-x', {
@@ -775,7 +780,12 @@ describe('BotControlPageComponent', () => {
       '[data-testid="bot-control-mutation-receipt"] [data-testid="operator-notice-action"]',
     );
     expect(action?.textContent).toContain('Record recovery override');
+    // The receipt action opens the attestation dialog; it must not post directly.
     action?.click();
+    await flush(fixture);
+    expect(liveRuns.recordCrashRecoveryOverride).not.toHaveBeenCalled();
+
+    await component.confirmCrashRecoveryOverride();
     await flush(fixture);
 
     expect(liveRuns.recordCrashRecoveryOverride).toHaveBeenCalledWith('sid-x', {
