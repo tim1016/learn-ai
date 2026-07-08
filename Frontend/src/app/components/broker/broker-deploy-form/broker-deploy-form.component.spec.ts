@@ -3,6 +3,7 @@ import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { AccountTruthResponse } from '../../../api/broker-models';
 import type { LiveInstanceStatus } from '../../../api/live-instances.types';
 import { BrokerService } from '../../../services/broker.service';
 import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
@@ -18,6 +19,8 @@ const DEPLOYMENT_VALIDATION_AUDIT_COPY = 'references/qc-shadow/DeploymentValidat
 const DEPLOYMENT_VALIDATION_SPEC_PATH =
   'PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json';
 const DEPLOYMENT_VALIDATION_QC_BACKTEST_ID = 'd2fe45a7142e88575f6fbd75229f8681';
+type AccountTruthFixture = Pick<AccountTruthResponse, 'final_verdict' | 'status_label' | 'status_detail'> &
+  Partial<Pick<AccountTruthResponse, 'blockers' | 'evidence_gaps' | 'invariants' | 'source_freshness'>>;
 const DEFAULT_STRATEGY_VALIDATION_CATALOG: StrategyValidationCatalog = {
   strategies: [
     {
@@ -100,7 +103,7 @@ function setup(
       description: string | null;
     }[];
     accountPromise?: Promise<{ account_id: string } | null>;
-    accountTruth?: { final_verdict: 'clean' | 'not_proven'; status_label: string; status_detail: string };
+    accountTruth?: AccountTruthFixture;
     instanceStatus?: LiveInstanceStatus | null;
     instanceStatusPromise?: Promise<LiveInstanceStatus | null>;
     instanceStatusError?: Error;
@@ -1211,6 +1214,30 @@ describe('BrokerDeployFormComponent', () => {
         final_verdict: 'not_proven',
         status_label: 'Not proven',
         status_detail: 'Run account reconcile before starting.',
+        source_freshness: [
+          {
+            source: 'positions',
+            label: 'Positions',
+            status: 'missing',
+            severity: 'critical',
+            fetched_at_ms: null,
+            age_ms: null,
+            hard_ttl_ms: 60_000,
+            reason_code: 'ACCOUNT_TRUTH_SOURCE_MISSING',
+            message: 'Positions source is missing.',
+          },
+          {
+            source: 'open_orders',
+            label: 'Open orders',
+            status: 'stale',
+            severity: 'critical',
+            fetched_at_ms: 1700000000000,
+            age_ms: 120_000,
+            hard_ttl_ms: 60_000,
+            reason_code: 'ACCOUNT_TRUTH_SOURCE_STALE',
+            message: 'Open orders source is stale.',
+          },
+        ],
       },
     });
     await flush();
@@ -1220,7 +1247,15 @@ describe('BrokerDeployFormComponent', () => {
 
     expect(deployButton(fixture).disabled).toBe(true);
     expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'Account NOT_PROVEN',
+      'Account proof is not proven',
+    );
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Missing evidence: Positions source is missing. Open orders source is stale.',
+    );
+    const reconcileLink = fixture.nativeElement.querySelector('.blocked a');
+    expect(reconcileLink?.textContent).toContain('Run account reconcile');
+    expect(reconcileLink?.getAttribute('href')).toBe(
+      '/broker/account-monitor#account-reconciliation-action',
     );
 
     component.startNow.set(false);
@@ -1371,6 +1406,70 @@ describe('BrokerDeployFormComponent', () => {
     expect(fixture.nativeElement.querySelector('.blocked')?.textContent).not.toContain(
       'This submit will deploy only',
     );
+  });
+
+  it('includes failing account truth invariants in the account-proof action detail', async () => {
+    const { fixture, component } = setup({
+      accountTruth: {
+        final_verdict: 'not_proven',
+        status_label: 'Not proven',
+        status_detail: 'Run account reconcile before starting.',
+        invariants: [
+          {
+            key: 'all_open_orders_owned',
+            label: 'All open orders owned',
+            status: 'fail',
+            severity: 'critical',
+            headline: 'Open order ownership is not proven.',
+            narrative: 'At least one broker order lacks a bot or manual owner receipt.',
+            checked_at_ms: 1_780_000_001_000,
+            evidence_count: 0,
+          },
+        ],
+      },
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    fixture.detectChanges();
+
+    expect(deployButton(fixture).disabled).toBe(true);
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Missing evidence: Open order ownership is not proven.',
+    );
+  });
+
+  it('keeps higher-priority blockers ahead of account-proof action links', async () => {
+    const { fixture, component } = setup({
+      daemonDown: true,
+      accountTruth: {
+        final_verdict: 'not_proven',
+        status_label: 'Not proven',
+        status_detail: 'Run account reconcile before starting.',
+        source_freshness: [
+          {
+            source: 'positions',
+            label: 'Positions',
+            status: 'missing',
+            severity: 'critical',
+            fetched_at_ms: null,
+            age_ms: null,
+            hard_ttl_ms: 60_000,
+            reason_code: 'ACCOUNT_TRUTH_SOURCE_MISSING',
+            message: 'Positions source is missing.',
+          },
+        ],
+      },
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Live engine unavailable',
+    );
+    expect(fixture.nativeElement.querySelector('.blocked a')).toBeNull();
   });
 
   it('blocks "Deploy & start" onto an already-running instance, but allows deploy-only', async () => {

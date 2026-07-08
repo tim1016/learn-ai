@@ -66,7 +66,15 @@
           <i class="pi pi-send" aria-hidden="true"></i>
           {{ commandButtonLabel() }}
         </button>
-        <p class="blocked" role="status">{{ commandStatus() }}</p>
+        @let blocker = activeBlocker();
+        @if (blocker?.actionLink; as actionLink) {
+          <p class="blocked" role="status">
+            <span>{{ blocker?.message }}</span>
+            <a [routerLink]="actionLink.route" [fragment]="actionLink.fragment">{{ actionLink.linkText }}</a>
+          </p>
+        } @else {
+          <p class="blocked" role="status">{{ commandStatus() }}</p>
+        }
       </section>
 
       <section>

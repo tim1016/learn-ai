@@ -571,7 +571,14 @@ small code {
 }
 
 .command-panel .blocked {
+  display: grid;
+  gap: var(--space-1);
   color: var(--text-primary);
+}
+
+.command-panel .blocked a {
+  color: var(--accent);
+  font-weight: var(--fw-semi);
 }
 
 .deployed {

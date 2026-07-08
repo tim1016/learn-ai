@@ -23,6 +23,7 @@ import {
   type SpecStrategyFixture,
 } from '../../../api/live-runs.types';
 import type { ActionPlan } from '../../../api/action-plan.types';
+import type { AccountTruthResponse } from '../../../api/broker-models';
 import { ActionPlanPickerComponent } from './action-plan-picker/action-plan-picker.component';
 import { BrokerService } from '../../../services/broker.service';
 import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
@@ -57,10 +58,23 @@ interface DeployTab {
   complete: boolean;
 }
 
+interface AccountProofBlock {
+  message: string;
+  route: string;
+  fragment: string;
+  linkText: string;
+}
+
+interface DeployBlocker {
+  message: string;
+  actionLink?: AccountProofBlock;
+}
+
 interface DeployCommandState {
   kind: 'busy' | 'accepted' | 'blocked' | 'ready';
   message: string;
   canSubmit: boolean;
+  actionLink?: AccountProofBlock;
 }
 
 // ADR 0009 § 3 — Reference parity preset's policy. Pinned here as a constant
@@ -217,9 +231,22 @@ export class BrokerDeployFormComponent {
     if (accepted !== null) {
       return { kind: 'accepted', message: accepted, canSubmit: false };
     }
-    const blocked = this.preSubmitBlockedReason();
+    const blocked = this.preSubmitBlocker();
     if (blocked !== null) {
-      return { kind: 'blocked', message: blocked, canSubmit: false };
+      return {
+        kind: 'blocked',
+        message: blocked.message,
+        canSubmit: false,
+        actionLink: blocked.actionLink,
+      };
+    }
+    if (this.stoppedStartLatch()) {
+      return {
+        kind: 'ready',
+        message:
+          'Durable STOPPED latch is set. This submit will deploy only; use Resume on the bot page to clear the latch before starting.',
+        canSubmit: true,
+      };
     }
     return { kind: 'ready', message: 'Ready to deploy.', canSubmit: true };
   });
@@ -420,18 +447,6 @@ export class BrokerDeployFormComponent {
   readonly commandButtonLabel = computed<string>(() =>
     this.effectiveStartNow() ? 'Deploy & start' : 'Deploy',
   );
-  readonly commandStatus = computed<string>(() => {
-    const reason = this.blockedReason();
-    if (reason !== null) return reason;
-    if (this.stoppedStartLatch()) {
-      return (
-        'Durable STOPPED latch is set. This submit will deploy only; use Resume ' +
-        'on the bot page to clear the latch before starting.'
-      );
-    }
-    return 'Ready to deploy.';
-  });
-
   constructor() {
     // Re-deploy prefill: query params seed operator/runtime fields from the
     // prior run. Validated-strategy provenance below still wins for settings,
@@ -546,58 +561,103 @@ export class BrokerDeployFormComponent {
     );
   });
 
+  readonly accountProofBlock = computed<AccountProofBlock | null>(() => {
+    if (!this.effectiveStartNow()) return null;
+    const accountProof = this.accountTruth.value();
+    if (!accountProof || accountProof.final_verdict !== 'not_proven') return null;
+    const missingEvidence = BrokerDeployFormComponent.accountProofMissingEvidence(accountProof);
+    const evidenceDetail = missingEvidence.length > 0
+      ? ` Missing evidence: ${missingEvidence.join(' ')}`
+      : '';
+    return {
+      message: (
+        'Account proof is not proven. Reconcile account before starting, or turn off ' +
+        `"Start trading immediately" to deploy only.${evidenceDetail}`
+      ),
+      route: '/broker/account-monitor',
+      fragment: 'account-reconciliation-action',
+      linkText: 'Run account reconcile',
+    };
+  });
+
   /** Why Deploy can't be submitted before an accepted-start response, sourced from the connectivity strip + form.
    * Null = ready. */
-  private readonly preSubmitBlockedReason = computed<string | null>(() => {
+  private readonly preSubmitBlocker = computed<DeployBlocker | null>(() => {
     const effectiveStartNow = this.effectiveStartNow();
     if (this.connectivity.daemonDown()) {
-      return 'Live engine unavailable. Start it on this machine, then recheck.';
+      return { message: 'Live engine unavailable. Start it on this machine, then recheck.' };
     }
     if (effectiveStartNow && this.executionMode() === 'live') {
-      return 'Live execution is not available from Deploy yet. Pick read-only or paper orders.';
+      return {
+        message: 'Live execution is not available from Deploy yet. Pick read-only or paper orders.',
+      };
     }
     const coexistence = this.allInCoexistenceBlock();
-    if (coexistence !== null) return coexistence;
+    if (coexistence !== null) return { message: coexistence };
     if (effectiveStartNow && this.connectivity.fleetBlocksStarts()) {
-      return 'Fleet state blocks new starts. Turn off "Start trading immediately" to deploy only, or clear the account state.';
+      return {
+        message: 'Fleet state blocks new starts. Turn off "Start trading immediately" to deploy only, or clear the account state.',
+      };
     }
     if (effectiveStartNow && this.instanceAlreadyRunning()) {
-      return `"${this.instanceId().trim()}" is already running. Stop it first, or turn off "Start trading immediately" to deploy without starting.`;
+      return {
+        message: `"${this.instanceId().trim()}" is already running. Stop it first, or turn off "Start trading immediately" to deploy without starting.`,
+      };
     }
     if (!this.brokerAccountAvailable()) {
-      return 'Connected broker account unavailable. Connect the broker session before deploying.';
+      return { message: 'Connected broker account unavailable. Connect the broker session before deploying.' };
     }
     const accountProof = this.accountTruth.value();
     if (effectiveStartNow) {
       if (!accountProof) {
-        return 'Account proof is still loading. Wait for account readiness, or turn off "Start trading immediately" to deploy only.';
+        return {
+          message: 'Account proof is still loading. Wait for account readiness, or turn off "Start trading immediately" to deploy only.',
+        };
       }
-      if (accountProof.final_verdict === 'not_proven') {
-        return 'Account NOT_PROVEN. Reconcile account before starting, or turn off "Start trading immediately" to deploy only.';
+      const accountProofBlock = this.accountProofBlock();
+      if (accountProofBlock) {
+        return {
+          message: accountProofBlock.message,
+          actionLink: accountProofBlock,
+        };
       }
     }
     if (this.strategyKey().trim() !== '' && this.selectedValidation() === null) {
-      return 'Strategy must be validated before deployment. Open Strategy Validation to promote it.';
+      return {
+        message: 'Strategy must be validated before deployment. Open Strategy Validation to promote it.',
+      };
     }
-    if (!this.required()) return 'Missing: ' + this.missingRequiredFields().join(', ') + '.';
+    if (!this.required()) {
+      return { message: 'Missing: ' + this.missingRequiredFields().join(', ') + '.' };
+    }
     const actionPlanReadiness = this.actionPlanReadiness();
-    if (!actionPlanReadiness.canDeploy) return actionPlanReadiness.message;
+    if (!actionPlanReadiness.canDeploy) return { message: actionPlanReadiness.message };
     // PR4 reviewer fix: surface invalid Custom sizing here so the deploy
     // button disables BEFORE submit() runs; throwing inside submit() would
     // leave busy=true and the form wedged.
     const customError = this.customSizingError();
-    if (customError !== null) return customError;
-    if (this.stoppedStartLatchState() === 'checking') {
-      return 'Checking durable desired state before starting. Wait for the latch check, or turn off "Start trading immediately" to deploy only.';
+    if (customError !== null) return { message: customError };
+    if (effectiveStartNow && this.stoppedStartLatchState() === 'checking') {
+      return {
+        message: 'Checking durable desired state before starting. Wait for the latch check, or turn off "Start trading immediately" to deploy only.',
+      };
     }
-    if (this.stoppedStartLatchState() === 'unknown') {
-      return 'Could not verify durable desired state before starting. Retry the status check, or turn off "Start trading immediately" to deploy only.';
+    if (effectiveStartNow && this.stoppedStartLatchState() === 'unknown') {
+      return {
+        message: 'Could not verify durable desired state before starting. Retry the status check, or turn off "Start trading immediately" to deploy only.',
+      };
     }
     return null;
   });
-  readonly blockedReason = computed<string | null>(() => {
+
+  readonly activeBlocker = computed<DeployBlocker | null>(() => {
     const state = this.commandState();
-    return state.kind === 'blocked' ? state.message : null;
+    if (state.kind !== 'blocked') return null;
+    return { message: state.message, actionLink: state.actionLink };
+  });
+
+  readonly blockedReason = computed<string | null>(() => {
+    return this.activeBlocker()?.message ?? null;
   });
 
   readonly canSubmit = computed<boolean>(() => this.commandState().canSubmit);
@@ -913,6 +973,22 @@ export class BrokerDeployFormComponent {
     if (leg.position !== 'long' || leg.instrument.kind !== 'stock') return null;
     const symbol = normalizedSymbol(leg.instrument.underlying);
     return symbol || null;
+  }
+
+  private static accountProofMissingEvidence(truth: AccountTruthResponse): string[] {
+    const criticalSources = (truth.source_freshness ?? [])
+      .filter((source) => source.severity === 'critical' && source.status !== 'fresh')
+      .map((source) => source.message);
+    const evidenceGaps = (truth.evidence_gaps ?? [])
+      .filter((gap) => gap.severity === 'critical' || gap.severity === 'warning')
+      .map((gap) => gap.message);
+    const invariantFailures = (truth.invariants ?? [])
+      .filter((invariant) => invariant.status === 'fail' || invariant.severity === 'critical')
+      .map((invariant) => invariant.headline || invariant.narrative || invariant.label);
+    const blockers = (truth.blockers ?? []).map((blocker) => blocker.title || blocker.message);
+    return [...new Set([...criticalSources, ...evidenceGaps, ...invariantFailures, ...blockers])]
+      .filter((label) => label.trim() !== '')
+      .slice(0, 3);
   }
 
 }

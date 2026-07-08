@@ -2,6 +2,7 @@ import { HttpErrorResponse } from '@angular/common/http';
 import {
   ChangeDetectionStrategy,
   Component,
+  ElementRef,
   Injector,
   computed,
   effect,
@@ -11,7 +12,8 @@ import {
 } from '@angular/core';
 import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
 import { PageGuideComponent } from '../../../shared/page-guide/page-guide.component';
-import { RouterLink } from '@angular/router';
+import { ActivatedRoute, RouterLink } from '@angular/router';
+import { toSignal } from '@angular/core/rxjs-interop';
 import { DataSourceComponent } from '../../../shared/data-source/data-source.component';
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
@@ -74,6 +76,9 @@ export class BrokerAccountMonitorComponent {
   private readonly health = inject(BrokerHealthService);
   readonly bannerState = this.health.bannerState;
   private readonly injector = inject(Injector);
+  private readonly route = inject(ActivatedRoute);
+  private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
+  private readonly fragment = toSignal(this.route.fragment, { initialValue: null });
 
   readonly positionsLoading = signal(false);
   readonly positionsError = signal<unknown>(null);
@@ -157,6 +162,12 @@ export class BrokerAccountMonitorComponent {
     effect((onCleanup) => {
       const id = setInterval(() => this.accountReconciliationNowMs.set(Date.now()), 1_000);
       onCleanup(() => clearInterval(id));
+    });
+
+    effect((onCleanup) => {
+      if (this.fragment() !== 'account-reconciliation-action') return;
+      if (this.truthLoading() || this.accountTruth() === null) return;
+      this.scheduleAccountReconciliationFocus(onCleanup);
     });
 
     // Fold per-conId ticks. The stream's ``data`` is a flat list across
@@ -258,6 +269,33 @@ export class BrokerAccountMonitorComponent {
     } finally {
       this.positionsLoading.set(false);
     }
+  }
+
+  private scheduleAccountReconciliationFocus(onCleanup: (cleanupFn: () => void) => void): void {
+    let timeoutId: number | null = null;
+    let attempts = 0;
+    const focus = () => {
+      timeoutId = null;
+      if (this.focusAccountReconciliationAction()) return;
+      attempts += 1;
+      if (attempts < 12) {
+        timeoutId = window.setTimeout(focus, 50);
+      }
+    };
+    timeoutId = window.setTimeout(focus, 0);
+    onCleanup(() => {
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
+    });
+  }
+
+  private focusAccountReconciliationAction(): boolean {
+    const target = this.host.nativeElement.querySelector<HTMLElement>(
+      '#account-reconciliation-action',
+    );
+    if (!target) return false;
+    target.scrollIntoView({ block: 'center' });
+    target.focus();
+    return true;
   }
 
   private openStreams(positions: IbkrPosition[]): void {
