@@ -403,6 +403,12 @@ def _strategy_key_from_spec(payload: dict) -> str:
         strategy = payload.get(key)
         if isinstance(strategy, str) and strategy.strip():
             return strategy.strip()
+    display_name = payload.get("name")
+    if isinstance(display_name, str) and display_name.strip():
+        normalized_display_name = display_name.strip().casefold()
+        for strategy_key, registration in _STRATEGY_REGISTRY.items():
+            if registration.display_name.casefold() == normalized_display_name:
+                return strategy_key
     return ""
 
 

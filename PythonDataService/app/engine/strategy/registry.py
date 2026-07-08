@@ -516,16 +516,16 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         class_name="SmaCrossoverAlgorithm",
         description=(
             "Long-term golden-cross / death-cross run against LEAN daily "
-            "bars (one zip per symbol under equity/usa/daily/). Defaults "
+            "bars (one daily zip per symbol). Defaults "
             "to the classic 50/200 on AAPL. Same SmaCrossoverAlgorithm as "
-            "the intraday variant — only the bar cadence differs."
+            "the intraday variant - only the bar cadence differs."
         ),
         algorithm_pseudocode=(
             "Universe\n"
             "    symbol     = configurable (default AAPL)\n"
-            "    resolution = daily (read from equity/usa/daily/{symbol}.zip)\n"
+            "    resolution = daily (read from the LEAN daily equity zip for the symbol)\n"
             "\n"
-            "Indicators (Alpha — updated each daily bar close)\n"
+            "Indicators (Alpha - updated each daily bar close)\n"
             "    SMA_short = SimpleMovingAverage(short_window days, default 50)\n"
             "    SMA_long  = SimpleMovingAverage(long_window  days, default 200)\n"
             "\n"
@@ -533,17 +533,17 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "    no signals until both SMAs have window-size samples\n"
             "    (typically ~200 trading days for the 50/200 default).\n"
             "\n"
-            "Alpha — bar entry conditions (evaluated while flat)\n"
+            "Alpha - bar entry conditions (evaluated while flat)\n"
             "    golden_cross = SMA_short > SMA_long\n"
             "                   AND SMA_short[-1] <= SMA_long[-1]\n"
             "    ⇒ if golden_cross: emit Insight(UP); enter long\n"
             "\n"
-            "Alpha — bar exit conditions (evaluated while in trade)\n"
+            "Alpha - bar exit conditions (evaluated while in trade)\n"
             "    death_cross = SMA_short < SMA_long\n"
             "    ⇒ if death_cross: Liquidate(symbol)\n"
             "\n"
-            "Risk Management — position survival rules\n"
-            "    none — overnight gap risk is not modeled by the fill model;\n"
+            "Risk Management - position survival rules\n"
+            "    none - overnight gap risk is not modeled by the fill model;\n"
             "    holding through earnings, splits, and dividends is the\n"
             "    intended behavior of the long-term cross.\n"
             "\n"
@@ -556,7 +556,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         ),
         gotchas=[
             "Uses the LEAN daily-bar reader, not a consolidator. Bars come "
-            "one-per-day from equity/usa/daily/{symbol}.zip — make sure "
+            "one-per-day from the LEAN daily equity zip - make sure "
             "those files exist for your chosen symbol.",
             "resolution_minutes is hardcoded to 1440 in the registry's "
             "build function; exposing it as a parameter would let users "

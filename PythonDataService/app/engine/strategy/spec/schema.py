@@ -113,6 +113,7 @@ PredictionLookup = Literal["exact_bar_close", "next_after_bar_close"]
 # but deploy/start reject it until a matching live runtime adapter exists.
 LiveBarSourceDescriptor = Literal["ibkr_realtime_bars", "ibkr_paper_delayed"]
 SUPPORTED_LIVE_RUNTIME_BAR_SOURCE: LiveBarSourceDescriptor = "ibkr_realtime_bars"
+STRATEGY_KEY_PATTERN = r"^[a-z][a-z0-9_]{0,63}$"
 
 
 class _ConditionBase(BaseModel):
@@ -427,6 +428,7 @@ class StrategySpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal["1.0"]
+    strategy_key: str | None = Field(default=None, pattern=STRATEGY_KEY_PATTERN)
     name: str
     description: str | None = None
     symbols: list[str]

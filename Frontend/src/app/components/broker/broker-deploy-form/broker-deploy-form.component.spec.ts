@@ -19,6 +19,15 @@ const DEPLOYMENT_VALIDATION_AUDIT_COPY = 'references/qc-shadow/DeploymentValidat
 const DEPLOYMENT_VALIDATION_SPEC_PATH =
   'PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json';
 const DEPLOYMENT_VALIDATION_QC_BACKTEST_ID = 'd2fe45a7142e88575f6fbd75229f8681';
+
+function identityCoherenceCard(fixture: { nativeElement: HTMLElement }): HTMLElement | null {
+  return fixture.nativeElement.querySelector('[aria-label="Run identity confirmation"]');
+}
+
+function exposureCoherenceCard(fixture: { nativeElement: HTMLElement }): HTMLElement | null {
+  return fixture.nativeElement.querySelector('[aria-label="Exposure confirmation"]');
+}
+
 type AccountTruthFixture = Pick<AccountTruthResponse, 'final_verdict' | 'status_label' | 'status_detail'> &
   Partial<Pick<AccountTruthResponse, 'blockers' | 'evidence_gaps' | 'invariants' | 'source_freshness'>>;
 const DEFAULT_STRATEGY_VALIDATION_CATALOG: StrategyValidationCatalog = {
@@ -1522,7 +1531,7 @@ describe('BrokerDeployFormComponent', () => {
     ]);
     expect(component.blockedReason()).toContain('Inherited bot symbol MU conflicts');
     expect(component.blockedReason()).toContain('Signal stream SPY and Action plan AAPL');
-    expect(fixture.nativeElement.querySelector('.identity-coherence')?.textContent).toContain(
+    expect(identityCoherenceCard(fixture)?.textContent).toContain(
       'Confirm new run identity',
     );
     expect(deployButton(fixture).disabled).toBe(true);
@@ -1532,7 +1541,7 @@ describe('BrokerDeployFormComponent', () => {
 
     expect(component.identityCoherenceConfirmed()).toBe(true);
     expect(component.blockedReason()).toBeNull();
-    expect(fixture.nativeElement.querySelector('.identity-coherence')?.textContent).toContain(
+    expect(identityCoherenceCard(fixture)?.textContent).toContain(
       'Confirmed for this Deploy & start.',
     );
     expect(deployButton(fixture).disabled).toBe(false);
@@ -1572,9 +1581,9 @@ describe('BrokerDeployFormComponent', () => {
 
     expect(component.exposureCoherenceEvidence()?.posture).toBe('LONG');
     expect(component.exposureCoherenceEvidence()?.ownedPositions).toEqual({ SPY: 5 });
-    expect(component.blockedReason()).toContain('Inherited exposure is LONG');
-    expect(fixture.nativeElement.querySelector('.exposure-coherence')?.textContent).toContain('SPY 5');
-    expect(fixture.nativeElement.querySelector('.exposure-coherence')?.textContent).toContain(
+    expect(component.blockedReason()).toContain('Inherited exposure is Long');
+    expect(exposureCoherenceCard(fixture)?.textContent).toContain('SPY 5');
+    expect(exposureCoherenceCard(fixture)?.textContent).toContain(
       'Confirm exposure state',
     );
     expect(deployButton(fixture).disabled).toBe(true);
@@ -1642,7 +1651,7 @@ describe('BrokerDeployFormComponent', () => {
       'SPY',
       'SPY',
     ]);
-    expect(fixture.nativeElement.querySelector('.identity-coherence')?.textContent).toContain(
+    expect(identityCoherenceCard(fixture)?.textContent).toContain(
       'Confirm new run identity',
     );
     expect(deployButton(fixture).disabled).toBe(true);
@@ -1678,7 +1687,7 @@ describe('BrokerDeployFormComponent', () => {
       'SPY',
     ]);
     expect(component.blockedReason()).toBeNull();
-    expect(fixture.nativeElement.querySelector('.identity-coherence')?.textContent).toContain(
+    expect(identityCoherenceCard(fixture)?.textContent).toContain(
       'Deploy-only will stage these values without starting.',
     );
     expect(deployButton(fixture).disabled).toBe(false);
@@ -1697,7 +1706,7 @@ describe('BrokerDeployFormComponent', () => {
     fixture.detectChanges();
 
     expect(component.blockedReason()).toBeNull();
-    expect(fixture.nativeElement.querySelector('.exposure-coherence')?.textContent).toContain(
+    expect(exposureCoherenceCard(fixture)?.textContent).toContain(
       'Deploy-only will stage these values without starting.',
     );
     expect(deployButton(fixture).disabled).toBe(false);
@@ -1718,7 +1727,7 @@ describe('BrokerDeployFormComponent', () => {
 
     expect(component.identityCoherenceEvidence()).toBeNull();
     expect(component.blockedReason()).toBeNull();
-    expect(fixture.nativeElement.querySelector('.identity-coherence')).toBeNull();
+    expect(identityCoherenceCard(fixture)).toBeNull();
     expect(deployButton(fixture).disabled).toBe(false);
   });
 
@@ -1738,7 +1747,7 @@ describe('BrokerDeployFormComponent', () => {
 
     expect(component.exposureCoherenceEvidence()).toBeNull();
     expect(component.blockedReason()).toBeNull();
-    expect(fixture.nativeElement.querySelector('.exposure-coherence')).toBeNull();
+    expect(exposureCoherenceCard(fixture)).toBeNull();
     expect(deployButton(fixture).disabled).toBe(false);
   });
 
