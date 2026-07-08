@@ -524,6 +524,22 @@ async def test_incidents_404_unknown_run(live_runs_root):
     assert response.status_code == 404
 
 
+async def test_incidents_refreshes_stale_run_listing_on_cache_miss(live_runs_root):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        list_response = await client.get("/api/live-runs")
+        assert list_response.status_code == 200
+
+        run_id = "run-cache-refresh-" + "r" * 46
+        run_dir = live_runs_root / run_id
+        run_dir.mkdir()
+        _write_ledger(run_dir, run_id)
+
+        response = await client.get(f"/api/live-runs/{run_id}/incidents")
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
 async def test_incidents_empty_when_no_log(live_runs_root):
     # _make_halted_run writes no live.log; the endpoint must return an
     # empty list rather than 404 / 500 in this case.

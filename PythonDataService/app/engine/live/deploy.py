@@ -211,6 +211,7 @@ ActionPlanDeployReasonCode = Literal[
 class ActionPlanDeployReadiness:
     reason_code: ActionPlanDeployReasonCode | None = None
     message: str = "Action plan is ready for deployment."
+    normalized_action: dict[str, object] | None = None
 
     @property
     def can_deploy(self) -> bool:
@@ -263,6 +264,7 @@ def action_plan_deploy_readiness(
         from app.schemas.action_plan import ActionPlan
 
         plan = ActionPlan.model_validate(action)
+        normalized_action = plan.model_dump(mode="json")
     except ValueError:
         return ActionPlanDeployReadiness(
             reason_code="ACTION_PLAN_UNSUPPORTED",
@@ -271,7 +273,7 @@ def action_plan_deploy_readiness(
                 "Use one long stock entry leg with a close-leg exit."
             ),
         )
-    if stock_symbol_from_action_plan(action) is None:
+    if stock_symbol_from_action_plan(normalized_action) is None:
         return ActionPlanDeployReadiness(
             reason_code="ACTION_PLAN_UNSUPPORTED",
             message=(
@@ -286,7 +288,7 @@ def action_plan_deploy_readiness(
             reason_code="ACTION_PLAN_CLOSE_LEG_REQUIRED",
             message=(f"Deployment Validation requires an ON EXIT close leg for the entry leg {entry_leg_id!r}."),
         )
-    return ActionPlanDeployReadiness()
+    return ActionPlanDeployReadiness(normalized_action=normalized_action)
 
 
 def _enforce_sizing_policy_present(live_config: dict) -> dict:
@@ -581,6 +583,9 @@ def deploy_run(params: DeployParams) -> DeployResult:
             reason_code,
             action_plan_readiness.message,
         )
+    if action_plan_readiness.normalized_action is not None:
+        canonical_live_config = dict(canonical_live_config)
+        canonical_live_config["action"] = action_plan_readiness.normalized_action
 
     # ADR 0009 — record the audit copy path relative to the repo so a
     # later read (the start gate, the cockpit) can re-verify against the

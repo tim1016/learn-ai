@@ -1565,6 +1565,40 @@ describe('BrokerDeployFormComponent', () => {
     expect(deployButton(fixture).disabled).toBe(true);
   });
 
+  it('lists only inherited-symbol disagreements in the identity confirmation', async () => {
+    const { fixture, component } = setup({
+      queryParams: {
+        inherited_symbol: 'SPY',
+        inherited_symbol_source: 'run_ledger.live_config.symbol signal stream',
+        signal_stream: 'spy',
+      },
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    component.actionPlan.set({
+      on_enter: [
+        {
+          leg_id: 'aapl_long',
+          instrument: { kind: 'stock', underlying: 'AAPL' },
+          position: 'long',
+          qty_ratio: 1,
+        },
+      ],
+      on_exit: [{ kind: 'close_leg', entry_leg_id: 'aapl_long' }],
+    });
+    await settleResource(fixture);
+
+    expect(component.identityCoherenceEvidence()?.facts.map((fact) => fact.value)).toEqual([
+      'SPY',
+      'AAPL',
+    ]);
+    expect(component.blockedReason()).toContain('Action plan AAPL');
+    expect(component.blockedReason()).not.toContain('Signal stream SPY');
+    expect(identityCoherenceCard(fixture)?.textContent).not.toContain('Signal stream');
+    expect(deployButton(fixture).disabled).toBe(true);
+  });
+
   it('blocks "Deploy & start" when inherited exposure is not proven flat until confirmed', async () => {
     const { fixture, svc, component } = setup({
       queryParams: {
@@ -1665,6 +1699,62 @@ describe('BrokerDeployFormComponent', () => {
       inherited_symbol: 'MU',
       signal_stream: 'SPY',
       action_plan_symbol: 'SPY',
+    });
+  });
+
+  it('uses backend exposure-coherence evidence after an unconfirmed submit is rejected', async () => {
+    const { fixture, svc, component } = setup();
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    await settleResource(fixture);
+    svc.deployInstance.mockRejectedValueOnce(
+      new HttpErrorResponse({
+        status: 409,
+        error: {
+          detail: {
+            reason_code: 'EXPOSURE_COHERENCE_UNCONFIRMED',
+            gate_id: 'deploy.exposure_coherence',
+            message: 'Confirm the current exposure.',
+            evidence: {
+              posture: 'LONG',
+              pending_order_count: 1,
+              owned_positions: { spy: 5 },
+              source: 'live_state.expected_position_by_symbol',
+              strategy_instance_id: 'deployment-validation-paper',
+              run_id: 'run-prev',
+            },
+            remediation: 'Confirm the current values, or turn off start.',
+          },
+        },
+      }),
+    );
+
+    expect(component.exposureCoherenceEvidence()).toBeNull();
+
+    await component.submit();
+    fixture.detectChanges();
+
+    expect(component.inheritedExposurePosture()).toBe('LONG');
+    expect(component.inheritedExposurePendingOrderCount()).toBe(1);
+    expect(component.inheritedExposurePositions()).toEqual({ SPY: 5 });
+    expect(component.inheritedExposureSource()).toBe('live_state.expected_position_by_symbol');
+    expect(component.parentRunId()).toBe('run-prev');
+    expect(exposureCoherenceCard(fixture)?.textContent).toContain('SPY 5');
+    expect(deployButton(fixture).disabled).toBe(true);
+
+    component.confirmExposureCoherence();
+    fixture.detectChanges();
+    await component.submit();
+
+    const retry = svc.deployInstance.mock.calls[1][0];
+    expect(retry.parent_run_id).toBe('run-prev');
+    expect(retry.exposure_coherence_confirmation).toEqual({
+      posture: 'LONG',
+      pending_order_count: 1,
+      owned_positions: { SPY: 5 },
+      strategy_instance_id: 'deployment-validation-paper',
+      run_id: 'run-prev',
     });
   });
 

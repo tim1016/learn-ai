@@ -153,6 +153,11 @@ def _existing_run_dir_from_listing(root: Path, run_id: str) -> Path:
     for run_dir in _get_run_dirs(root):
         if run_dir.name == safe:
             return run_dir
+    # The list endpoint intentionally caches directory scans for the cockpit,
+    # but artifact endpoints need to see a just-created run immediately.
+    for run_dir in _refresh_run_dirs(root):
+        if run_dir.name == safe:
+            return run_dir
     raise FileNotFoundError(safe)
 
 
@@ -204,14 +209,9 @@ _DIR_TTL_S: float = 15.0
 _dir_cache: dict[str, tuple[float, list[Path]]] = {}
 
 
-def _get_run_dirs(root: Path) -> list[Path]:
-    """Return sorted list of run directories, newest first. 15 s TTL cache."""
-    now = time.monotonic()
-    key = str(root)
-    cached = _dir_cache.get(key)
-    if cached is not None and now < cached[0]:
-        return cached[1]
-    dirs: list[Path] = (
+def _read_run_dirs(root: Path) -> list[Path]:
+    """Read sorted run directories directly from disk, newest first."""
+    return (
         sorted(
             (d for d in root.iterdir() if d.is_dir()),
             key=lambda p: p.stat().st_mtime,
@@ -220,7 +220,24 @@ def _get_run_dirs(root: Path) -> list[Path]:
         if root.exists()
         else []
     )
-    _dir_cache[key] = (now + _DIR_TTL_S, dirs)
+
+
+def _refresh_run_dirs(root: Path, *, now: float | None = None) -> list[Path]:
+    """Refresh and return the cached run-directory listing."""
+    dirs = _read_run_dirs(root)
+    refreshed_at = now if now is not None else time.monotonic()
+    _dir_cache[str(root)] = (refreshed_at + _DIR_TTL_S, dirs)
+    return dirs
+
+
+def _get_run_dirs(root: Path) -> list[Path]:
+    """Return sorted list of run directories, newest first. 15 s TTL cache."""
+    now = time.monotonic()
+    key = str(root)
+    cached = _dir_cache.get(key)
+    if cached is not None and now < cached[0]:
+        return cached[1]
+    dirs = _refresh_run_dirs(root, now=now)
     return dirs
 
 

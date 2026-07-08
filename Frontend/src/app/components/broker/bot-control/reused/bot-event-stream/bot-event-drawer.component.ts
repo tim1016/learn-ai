@@ -5,7 +5,7 @@ import { ReceiptLabelPipe } from '../../../../../shared/pipes/receipt-label.pipe
 import {
   type DisplayRow,
   type FactEntry,
-  gateFacts,
+  gateFacts as buildGateFacts,
 } from './bot-event-display-row';
 
 @Component({
@@ -20,7 +20,7 @@ export class BotEventDrawerComponent {
   readonly drawerId = input.required<string>();
 
   gateFacts(step: GateStep): readonly FactEntry[] {
-    return gateFacts(step);
+    return buildGateFacts(step);
   }
 
   trackGate(index: number, step: GateStep): string {

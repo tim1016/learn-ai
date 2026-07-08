@@ -43,22 +43,27 @@ export function isExposurePosture(value: string | null): value is ExposureCohere
   );
 }
 
+export function normalizeExposurePositionsRecord(parsed: unknown): Record<string, number> | null {
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const out: Record<string, number> = {};
+  for (const [symbol, rawQuantity] of Object.entries(parsed)) {
+    const normalized = symbol.trim().toUpperCase();
+    if (!normalized || typeof rawQuantity !== 'number' || !Number.isInteger(rawQuantity)) {
+      return null;
+    }
+    if (rawQuantity !== 0) {
+      out[normalized] = rawQuantity;
+    }
+  }
+  const entries = Object.entries(out).sort(([left], [right]) => left.localeCompare(right));
+  return Object.fromEntries(entries);
+}
+
 export function parseExposurePositions(value: string | null): Record<string, number> | null {
   if (value === null) return null;
   try {
     const parsed: unknown = JSON.parse(value);
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-    const out: Record<string, number> = {};
-    for (const [symbol, rawQuantity] of Object.entries(parsed)) {
-      const normalized = symbol.trim().toUpperCase();
-      if (!normalized || typeof rawQuantity !== 'number' || !Number.isInteger(rawQuantity)) {
-        return null;
-      }
-      if (rawQuantity !== 0) {
-        out[normalized] = rawQuantity;
-      }
-    }
-    return Object.fromEntries(Object.entries(out).sort(([left], [right]) => left.localeCompare(right)));
+    return normalizeExposurePositionsRecord(parsed);
   } catch {
     return null;
   }

@@ -37,6 +37,8 @@ import { BrokerOperationResultComponent } from '../broker-operation-result/broke
 import { type OperationError, toOperationError } from '../operation-error';
 import {
   deployPrefillParamsFromQuery,
+  isExposurePosture,
+  normalizeExposurePositionsRecord,
   normalizedSymbol,
   singleLongStockActionSymbol,
 } from '../lib/deploy-prefill-params';
@@ -447,7 +449,7 @@ export class BrokerDeployFormComponent {
   );
 
   readonly deployChecks = computed(() => buildDeployChecks(this.error()?.status));
-  readonly stoppedStartLatchState = computed(() => {
+  readonly stoppedStartLatchStatus = computed(() => {
     const statusUnavailable = this.instanceStatus.error() !== undefined;
     const status = statusUnavailable ? null : this.instanceStatus.value();
     const id = this.instanceId().trim();
@@ -461,7 +463,7 @@ export class BrokerDeployFormComponent {
       startCapability: status?.operator_surface.host_process.start_capability,
     });
   });
-  readonly stoppedStartLatch = computed<boolean>(() => this.stoppedStartLatchState() === 'blocked');
+  readonly stoppedStartLatch = computed<boolean>(() => this.stoppedStartLatchStatus() === 'blocked');
   readonly effectiveStartNow = computed<boolean>(() => this.startNow() && !this.stoppedStartLatch());
   readonly commandTitle = computed<string>(() =>
     this.effectiveStartNow() ? 'Deploy & start' : 'Deploy only',
@@ -590,7 +592,7 @@ export class BrokerDeployFormComponent {
       exposureConflictSummary: this.exposureCoherenceBlock()?.summary ?? null,
       actionPlanReadiness: this.actionPlanReadiness(),
       customSizingError: this.customSizingError(),
-      stoppedStartLatchState: this.stoppedStartLatchState(),
+      stoppedStartLatchState: this.stoppedStartLatchStatus(),
     }),
   );
 
@@ -674,17 +676,23 @@ export class BrokerDeployFormComponent {
       this.instances.reload();
     } catch (err) {
       this.seedIdentityCoherenceEvidence(err);
+      this.seedExposureCoherenceEvidence(err);
       this.error.set(toOperationError('deploy', err));
     } finally {
       this.busy.set(false);
     }
   }
 
-  private seedIdentityCoherenceEvidence(err: unknown): void {
-    if (!(err instanceof HttpErrorResponse)) return;
+  private deployErrorDetail(err: unknown): Record<string, unknown> | null {
+    if (!(err instanceof HttpErrorResponse)) return null;
     const detail = (err.error as { detail?: unknown } | null | undefined)?.detail;
-    if (!detail || typeof detail !== 'object') return;
-    const payload = detail as Record<string, unknown>;
+    if (!detail || typeof detail !== 'object') return null;
+    return detail as Record<string, unknown>;
+  }
+
+  private seedIdentityCoherenceEvidence(err: unknown): void {
+    const payload = this.deployErrorDetail(err);
+    if (payload === null) return;
     if (payload['reason_code'] !== 'IDENTITY_COHERENCE_UNCONFIRMED') return;
     const evidence = payload['evidence'];
     if (!Array.isArray(evidence)) return;
@@ -703,6 +711,36 @@ export class BrokerDeployFormComponent {
       typeof inherited?.['source'] === 'string' ? inherited['source'] : '',
     );
     this.identityCoherenceConfirmedSignature.set(null);
+  }
+
+  private seedExposureCoherenceEvidence(err: unknown): void {
+    const payload = this.deployErrorDetail(err);
+    if (payload === null) return;
+    if (payload['reason_code'] !== 'EXPOSURE_COHERENCE_UNCONFIRMED') return;
+    const evidence = payload['evidence'];
+    if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) return;
+    const facts = evidence as Record<string, unknown>;
+    const posture = facts['posture'];
+    if (typeof posture !== 'string' || !isExposurePosture(posture)) return;
+
+    const pendingOrderCount = facts['pending_order_count'];
+    const ownedPositions = normalizeExposurePositionsRecord(facts['owned_positions']) ?? {};
+    const source = facts['source'];
+    const runId = facts['run_id'];
+    const normalizedPendingOrderCount =
+      typeof pendingOrderCount === 'number' &&
+      Number.isInteger(pendingOrderCount) &&
+      pendingOrderCount >= 0
+        ? pendingOrderCount
+        : null;
+    this.inheritedExposurePosture.set(posture);
+    this.inheritedExposurePendingOrderCount.set(normalizedPendingOrderCount);
+    this.inheritedExposurePositions.set(ownedPositions);
+    this.inheritedExposureSource.set(typeof source === 'string' ? source : '');
+    if (typeof runId === 'string' && runId.trim()) {
+      this.parentRunId.set(runId.trim());
+    }
+    this.exposureCoherenceConfirmedSignature.set(null);
   }
 
   // Event readers that narrow without a type assertion.

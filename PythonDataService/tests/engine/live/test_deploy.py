@@ -567,6 +567,56 @@ def test_deploy_run_accepts_deployment_validation_action_plan(
 
 
 @requires_git
+def test_deploy_run_hashes_normalized_deployment_validation_action_plan(
+    repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
+) -> None:
+    repo, _spec, qc = repo_with_inputs
+    spec = _deployment_validation_spec(repo)
+    coerced_action = {
+        "on_enter": [
+            {
+                "leg_id": "spy_long",
+                "instrument": {"kind": "stock", "underlying": "SPY"},
+                "position": "long",
+                "qty_ratio": "1",
+            },
+        ],
+        "on_exit": [{"kind": "close_leg", "entry_leg_id": "spy_long"}],
+    }
+
+    coerced = deploy_run(
+        _params(
+            repo,
+            spec,
+            qc,
+            tmp_path / "coerced_runs",
+            live_config={
+                "symbol": "SPY",
+                "sizing": {"kind": "FixedShares", "value": 1},
+                "action": coerced_action,
+            },
+        )
+    )
+    canonical = deploy_run(
+        _params(
+            repo,
+            spec,
+            qc,
+            tmp_path / "canonical_runs",
+            live_config={
+                "symbol": "SPY",
+                "sizing": {"kind": "FixedShares", "value": 1},
+                "action": _deployment_validation_action(),
+            },
+        )
+    )
+
+    ledger = json.loads((coerced.run_dir / "run_ledger.json").read_text(encoding="utf-8"))
+    assert ledger["live_config"]["action"] == _deployment_validation_action()
+    assert coerced.run_id == canonical.run_id
+
+
+@requires_git
 def test_deploy_run_does_not_overblock_entry_only_plans_for_other_strategies(
     repo_with_inputs: tuple[Path, Path, Path], tmp_path: Path
 ) -> None:

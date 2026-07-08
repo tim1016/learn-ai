@@ -1,4 +1,6 @@
 :host {
+  --verdict-blocked-text: #ffb4b4;
+
   display: block;
 }
 
@@ -252,7 +254,7 @@ h1 {
   border: 1px solid var(--verdict-blocked);
   border-radius: 6px;
   background: var(--verdict-blocked-soft);
-  color: #ffb4b4;
+  color: var(--verdict-blocked-text);
   font-size: 12px;
   font-weight: 700;
   line-height: 18px;
@@ -449,7 +451,7 @@ dd {
 :host ::ng-deep .bot-table .p-tag-danger {
   border-color: var(--verdict-blocked);
   background: var(--verdict-blocked-soft);
-  color: #ffb4b4;
+  color: var(--verdict-blocked-text);
 }
 
 :host ::ng-deep .bot-table .p-tag-warn {

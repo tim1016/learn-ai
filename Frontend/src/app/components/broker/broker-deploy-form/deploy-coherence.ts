@@ -93,17 +93,15 @@ export function buildIdentityCoherenceEvidence(input: {
       source: 'declared entry leg',
     });
   }
-  if (facts.length < 2) return null;
-  if (new Set(facts.map((fact) => fact.value)).size === 1) return null;
+  const conflictingFacts = facts.slice(1).filter((fact) => fact.value !== inherited);
+  if (!conflictingFacts.length) return null;
 
-  const compared = facts
-    .slice(1)
-    .map((fact) => `${fact.label} ${fact.value}`)
-    .join(' and ');
+  const evidenceFacts = [facts[0], ...conflictingFacts];
+  const compared = conflictingFacts.map((fact) => `${fact.label} ${fact.value}`).join(' and ');
   return {
     summary: `Inherited bot symbol ${inherited} conflicts with ${compared}. Confirm the new run identity before Deploy & start.`,
-    signature: facts.map((fact) => `${fact.label}:${fact.value}`).join('|'),
-    facts,
+    signature: evidenceFacts.map((fact) => `${fact.label}:${fact.value}`).join('|'),
+    facts: evidenceFacts,
   };
 }
 
