@@ -236,7 +236,19 @@
   border-color: var(--border-light);
 }
 
+.overview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .collapse-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
   min-height: 34px;
   padding: 0 0.75rem;
   border: 1px solid var(--border);
@@ -245,6 +257,11 @@
   color: var(--text-primary);
   cursor: pointer;
   font: inherit;
+
+  i {
+    color: var(--text-muted);
+    font-size: 0.72rem;
+  }
 
   &:focus-visible {
     outline: 2px solid var(--accent);
@@ -255,6 +272,10 @@
 .flow-panel {
   padding: 1.1rem 1rem 1.5rem;
   background: var(--bg-canvas);
+
+  &[hidden] {
+    display: none;
+  }
 }
 
 .gate-flow {
@@ -371,6 +392,11 @@
   .overview-header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .overview-actions {
+    justify-content: flex-start;
+    width: 100%;
   }
 
   .flow-panel {

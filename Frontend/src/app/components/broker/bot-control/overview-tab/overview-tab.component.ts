@@ -35,6 +35,7 @@ export class OverviewTabComponent {
 
   readonly expandedGraphSelection = signal<ExpandedGraphSelection | null>(null);
   readonly expandedReceiptNodeId = signal<string | null>(null);
+  readonly flowCollapsed = signal(false);
   readonly chart = computed(() => this.status().lifecycle_chart);
   readonly chartKey = computed(() => {
     const status = this.status();
@@ -86,6 +87,10 @@ export class OverviewTabComponent {
 
   collapse(): void {
     this.expandedGraphSelection.set(null);
+  }
+
+  toggleFlowCollapsed(): void {
+    this.flowCollapsed.update((collapsed) => !collapsed);
   }
 
   expandNode(node: LifecycleChartNode): void {
