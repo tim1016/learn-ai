@@ -17,8 +17,19 @@ const action = (
   ...overrides,
 });
 
+const findActionButton = (element: HTMLElement, label: string): HTMLButtonElement | null =>
+  element.querySelector<HTMLButtonElement>(`.chart-action[aria-label="${label}"]`);
+
+const actionTitle = (button: HTMLButtonElement | null): string => {
+  expect(button).not.toBeNull();
+  if (!button) throw new Error('Expected lifecycle action button.');
+  return button.closest<HTMLElement>('.chart-action-shell')?.getAttribute('title')
+    ?? button.getAttribute('title')
+    ?? '';
+};
+
 describe('OverviewActionsComponent', () => {
-  it('renders all lifecycle actions as grouped icon-only toolbar buttons', () => {
+  it('renders all lifecycle actions as grouped labeled toolbar buttons', () => {
     TestBed.configureTestingModule({
       providers: [provideZonelessChangeDetection()],
     });
@@ -38,21 +49,20 @@ describe('OverviewActionsComponent', () => {
     expect(el.textContent).toContain('Run');
     expect(el.textContent).toContain('Recover');
     expect(el.textContent).toContain('Danger');
-    expect(el.querySelector('[aria-label="Start bot process"]')?.textContent?.trim()).toBe('');
-    expect(el.querySelector('[aria-label="Resume"]')).not.toBeNull();
-    expect(el.querySelector('[aria-label="Pause"]')).not.toBeNull();
-    expect(el.querySelector('[aria-label="Flatten and pause"]')).not.toBeNull();
-    expect(el.querySelector('[aria-label="Stop"]')).not.toBeNull();
-    expect(el.querySelector('[aria-label="Fresh run"]')).not.toBeNull();
-    expect(el.querySelector('[aria-label="Mark poisoned"]')).not.toBeNull();
+    expect(findActionButton(el, 'Start bot process')?.textContent?.trim()).toBe('Start bot process');
+    expect(findActionButton(el, 'Resume')).not.toBeNull();
+    expect(findActionButton(el, 'Pause')).not.toBeNull();
+    expect(findActionButton(el, 'Flatten and pause')).not.toBeNull();
+    expect(findActionButton(el, 'Stop')).not.toBeNull();
+    expect(findActionButton(el, 'Fresh run')).not.toBeNull();
+    expect(findActionButton(el, 'Mark poisoned')).not.toBeNull();
     for (const button of Array.from(el.querySelectorAll<HTMLButtonElement>('.chart-action'))) {
-      expect(button.getAttribute('title')).toBeTruthy();
+      expect(actionTitle(button)).toBeTruthy();
       expect(button.disabled).toBe(false);
       expect(button.classList.contains('is-on')).toBe(true);
       expect(button.classList.contains('is-off')).toBe(false);
     }
-    expect(el.querySelector('[aria-label="Pause"]')?.getAttribute('title'))
-      .toContain('Pause On. Available');
+    expect(actionTitle(findActionButton(el, 'Pause'))).toContain('Pause On. Available');
   });
 
   it('shows backend action prose in the tooltip and off state when disabled', () => {
@@ -73,17 +83,16 @@ describe('OverviewActionsComponent', () => {
     ]);
     fixture.detectChanges();
 
-    const button = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>(
-      '[aria-label="Flatten and pause"]',
-    );
+    const button = findActionButton(fixture.nativeElement as HTMLElement, 'Flatten and pause');
     expect(button?.getAttribute('aria-disabled')).toBe('true');
     expect(button?.disabled).toBe(true);
     expect(button?.classList.contains('is-off')).toBe(true);
     expect(button?.classList.contains('is-on')).toBe(false);
-    expect(button?.getAttribute('title')).toContain('Flatten and pause Off');
-    expect(button?.getAttribute('title')).toContain('No live binding');
-    expect(button?.getAttribute('title')).toContain('runner is not bound');
-    expect(button?.getAttribute('title')).not.toContain('NO_LIVE_BINDING');
+    const title = actionTitle(button);
+    expect(title).toContain('Flatten and pause Off');
+    expect(title).toContain('No live binding');
+    expect(title).toContain('runner is not bound');
+    expect(title).not.toContain('NO_LIVE_BINDING');
   });
 
   it('semantically disables unavailable actions and suppresses dispatch', () => {

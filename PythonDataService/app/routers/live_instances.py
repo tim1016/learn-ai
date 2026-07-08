@@ -24,10 +24,10 @@ from typing import TYPE_CHECKING, Annotated, Literal, NoReturn, TypedDict
 from fastapi import APIRouter, Body, HTTPException, Query, Response, status
 from pydantic import ValidationError
 
-from app.config import settings as app_settings
 from app.broker.ibkr.api_evidence import get_ibkr_api_evidence_recorder
 from app.broker.ibkr.config import IbkrSettings, get_settings
 from app.broker.runtime_snapshot import BrokerRuntimeSnapshot, snapshot_data_plane_broker
+from app.config import settings as app_settings
 from app.engine.action_plan.parity import parity_diagnostics
 from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import (
@@ -181,11 +181,6 @@ from app.services.bot_lifecycle_projection import (
 from app.services.bot_lifecycle_receipts import LifecycleReceiptContext
 from app.services.broker_activity_publisher_registry import get_publisher_registry
 from app.services.broker_activity_wal import BrokerActivityWal, instance_broker_activity_wal_path
-from app.services.live_chart_window import (
-    ChartWindowError,
-    coerce_chart_timeframe,
-    resolve_chart_window,
-)
 from app.services.daemon_diagnostics import (
     get_daemon_diagnostics_service,
     project_daemon_diagnostic_report,
@@ -197,6 +192,11 @@ from app.services.deploy_admission import (
     resolve_symbol_from_ledger,
 )
 from app.services.instance_context import InstanceContext, load_instance_context
+from app.services.live_chart_window import (
+    ChartWindowError,
+    coerce_chart_timeframe,
+    resolve_chart_window,
+)
 from app.services.mutation_attempt import (
     TERMINAL_STATES,
     MutationAttempt,

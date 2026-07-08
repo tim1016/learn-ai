@@ -50,6 +50,14 @@ describe('BotControlPageComponent', () => {
     return receipts;
   }
 
+  function lifecycleActionTitle(button: HTMLButtonElement | null): string {
+    expect(button).not.toBeNull();
+    if (!button) throw new Error('Expected lifecycle action button.');
+    return button.closest<HTMLElement>('.chart-action-shell')?.getAttribute('title')
+      ?? button.getAttribute('title')
+      ?? '';
+  }
+
   it('renders compact broker evidence and control-plane warning panels before the bot tabs', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const { element: el } = await setupBotControlPage();
@@ -134,7 +142,7 @@ describe('BotControlPageComponent', () => {
     expect(el.querySelector('[data-testid="bot-control-attention-toggle"]')).toBeNull();
     expect(el.querySelector('[data-testid="bot-control-attention-panel"]')).toBeNull();
     expect(el.textContent).toContain('Broker session is disconnected');
-    expect(el.textContent).toContain('Reconnect the broker session before submitting orders.');
+    expect(el.textContent).toContain('Reconnect the broker session, then refresh broker evidence.');
   });
 
   it('renders critical attention groups inline in the lifecycle overview', async () => {
@@ -175,7 +183,7 @@ describe('BotControlPageComponent', () => {
       '.top-action-banner .chart-action[aria-label="Start bot process"]',
     ) as HTMLButtonElement | null;
     expect(startAction).not.toBeNull();
-    expect(startAction?.textContent?.trim()).toBe('');
+    expect(startAction?.textContent?.trim()).toBe('Start bot process');
     expect(el.querySelector('app-overview-tab')).not.toBeNull();
     expect(el.querySelector('app-overview-tab app-trader-guidance-pane')).toBeNull();
     expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
@@ -315,11 +323,10 @@ describe('BotControlPageComponent', () => {
     const { element: el } = await setupBotControlPage({ status });
     const actionButton = el.querySelector<HTMLButtonElement>('[aria-label="Flatten and pause"]');
     expect(actionButton?.disabled).toBe(true);
-    expect(actionButton?.getAttribute('title')).toContain('No live binding');
-    expect(actionButton?.getAttribute('title')).toContain(
-      'The lifecycle action contract says the runner is not bound.',
-    );
-    expect(actionButton?.getAttribute('title')).not.toContain('NO_LIVE_BINDING');
+    const title = lifecycleActionTitle(actionButton);
+    expect(title).toContain('No live binding');
+    expect(title).toContain('The lifecycle action contract says the runner is not bound.');
+    expect(title).not.toContain('NO_LIVE_BINDING');
     const traderCopy = Array.from(el.querySelectorAll('[data-trader-copy]'))
       .map((node) => node.textContent ?? '')
       .join(' ');
@@ -356,8 +363,8 @@ describe('BotControlPageComponent', () => {
 
     const pause = element.querySelector<HTMLButtonElement>('.chart-action[aria-label="Pause"]');
     expect(pause?.getAttribute('aria-disabled')).toBe('false');
-    expect(pause?.getAttribute('title')).toContain('Pause On. Available');
-    expect(pause?.textContent?.trim()).toBe('');
+    expect(lifecycleActionTitle(pause)).toContain('Pause On. Available');
+    expect(pause?.textContent?.trim()).toBe('Pause');
   });
 
   it('renders redeploy settings as one concise row and hides raw strategy keys', async () => {
