@@ -8,15 +8,17 @@ are never appended to ``BarPersistence``.
 from __future__ import annotations
 
 import logging
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Literal, Protocol
 from zoneinfo import ZoneInfo
 
 from app.broker.ibkr.models import IbkrMinuteBar
 from app.data_lake.polygon_fetcher import (
     PolygonAuthError,
+    PolygonBar,
     PolygonEntitlementError,
     PolygonFetchError,
     PolygonRateLimitedError,
@@ -45,6 +47,26 @@ TIMEFRAME_MS: dict[ChartTimeframe, int] = {
 }
 CHART_TIMEFRAMES: frozenset[str] = frozenset(TIMEFRAME_MS)
 _NY_TZ = ZoneInfo("America/New_York")
+_POLYGON_OVERLAY_CACHE_MAX = 128
+_POLYGON_OVERLAY_CACHE: OrderedDict[tuple[str, date, int], list[PolygonBar]] = OrderedDict()
+
+
+class BarPersistenceLike(Protocol):
+    def read_parquet(self, symbol: str, resolution: str, day: date) -> list[IbkrMinuteBar]: ...
+
+    def replay(self, symbol: str, resolution: str, day: date) -> list[IbkrMinuteBar]: ...
+
+
+class LiveChartAggregator(Protocol):
+    _persistence: BarPersistenceLike | None
+
+    def snapshot(self, symbol: str) -> list[IbkrMinuteBar]: ...
+
+    def snapshot_5s(self, symbol: str) -> list[IbkrMinuteBar]: ...
+
+    def status(self, symbol: str) -> tuple[str, str | None, int | None]: ...
+
+    def status_5s(self, symbol: str) -> tuple[str, str | None, int | None]: ...
 
 
 @dataclass(frozen=True)
@@ -96,7 +118,7 @@ async def resolve_chart_window(
     to_ms: int,
     now_ms: int,
     polygon_api_key: str,
-    live_aggregator,
+    live_aggregator: LiveChartAggregator,
 ) -> ChartWindowResult:
     """Resolve chart bars for an explicit UTC millisecond window."""
     validate_chart_window(from_ms=from_ms, to_ms=to_ms, now_ms=now_ms)
@@ -158,7 +180,7 @@ def _recorded_bars(
     resolution: Literal["5s", "1m"],
     from_ms: int,
     to_ms: int,
-    live_aggregator,
+    live_aggregator: LiveChartAggregator,
 ) -> list[IbkrMinuteBar]:
     days = _utc_dates_for_window(from_ms, to_ms)
     by_start: dict[int, IbkrMinuteBar] = {}
@@ -199,10 +221,11 @@ async def _polygon_overlay_bars(
         return [], []
 
     recorded_starts = {bar.start_ms for bar in recorded_bars}
+    overlay_to_ms = _last_closed_minute_end_ms(min(to_ms, now_ms))
     overlay: list[IbkrMinuteBar] = []
     notices: list[ChartOverlayNotice] = []
     for window in windows:
-        expected_starts = _expected_minute_starts(window, from_ms, min(to_ms, now_ms))
+        expected_starts = _expected_minute_starts(window, from_ms, overlay_to_ms)
         if not expected_starts:
             continue
         missing = expected_starts - recorded_starts
@@ -219,11 +242,11 @@ async def _polygon_overlay_bars(
             )
             continue
         try:
-            polygon_bars = await fetch_minute_trade_aggregates(
+            polygon_bars = await _fetch_polygon_overlay_bars(
                 symbol,
-                window.session_date,
-                window.session_date,
-                polygon_api_key,
+                session_date=window.session_date,
+                overlay_to_ms=overlay_to_ms,
+                api_key=polygon_api_key,
             )
         except PolygonAuthError as exc:
             notices.append(_notice("polygon_auth_error", exc, session_label))
@@ -264,11 +287,31 @@ def _notice(code: str, exc: Exception, session_date: str) -> ChartOverlayNotice:
     return ChartOverlayNotice(code=code, message=str(exc), session_date=session_date)
 
 
+async def _fetch_polygon_overlay_bars(
+    symbol: str,
+    *,
+    session_date: date,
+    overlay_to_ms: int,
+    api_key: str,
+) -> list[PolygonBar]:
+    key = (symbol.upper(), session_date, overlay_to_ms)
+    cached = _POLYGON_OVERLAY_CACHE.get(key)
+    if cached is not None:
+        _POLYGON_OVERLAY_CACHE.move_to_end(key)
+        return cached
+
+    bars = await fetch_minute_trade_aggregates(symbol, session_date, session_date, api_key)
+    _POLYGON_OVERLAY_CACHE[key] = bars
+    if len(_POLYGON_OVERLAY_CACHE) > _POLYGON_OVERLAY_CACHE_MAX:
+        _POLYGON_OVERLAY_CACHE.popitem(last=False)
+    return bars
+
+
 def _convert_polygon_bars(
     *,
     symbol: str,
     session: SessionWindow,
-    polygon_bars,
+    polygon_bars: list[PolygonBar],
     allowed_starts: set[int],
     fetched_at_ms: int,
 ) -> list[IbkrMinuteBar]:
@@ -397,7 +440,7 @@ def _is_streaming(
     from_ms: int,
     to_ms: int,
     now_ms: int,
-    live_aggregator,
+    live_aggregator: LiveChartAggregator,
 ) -> bool:
     threshold_ms = 30_000 if resolution == "5s" else 180_000
     if from_ms > now_ms or to_ms < now_ms - threshold_ms:
@@ -423,6 +466,10 @@ def _expected_minute_starts(window: SessionWindow, from_ms: int, to_ms: int) -> 
     if first < start and first + 60_000 <= start:
         first += 60_000
     return set(range(first, end, 60_000))
+
+
+def _last_closed_minute_end_ms(value_ms: int) -> int:
+    return value_ms - (value_ms % 60_000)
 
 
 def _session_for_bar(bar: IbkrMinuteBar, windows: list[SessionWindow]) -> SessionWindow | None:

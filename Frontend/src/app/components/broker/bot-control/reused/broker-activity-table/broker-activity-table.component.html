@@ -52,7 +52,7 @@
 
     @if (hasEventSummary()) {
       <div class="category-summary" aria-label="Broker tail categories">
-        @for (summary of eventSummary(); track trackSummary($index, summary)) {
+        @for (summary of eventSummary(); track summary.category_id) {
           <article
             class="category-card"
             [attr.data-kind]="summary.kind"

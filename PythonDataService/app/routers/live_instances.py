@@ -3530,7 +3530,7 @@ async def get_chart_snapshot(
         if from_ms is None or to_ms is None:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="from_ms and to_ms must be provided together")
         window_from_ms = int(from_ms)
-        window_to_ms = int(to_ms)
+        window_to_ms = min(int(to_ms), now_ms)
         day = datetime.fromtimestamp(window_from_ms / 1000, tz=UTC).astimezone(_NY_TZ).date()
     else:
         try:

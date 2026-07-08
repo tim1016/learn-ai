@@ -45,6 +45,4 @@ export class BrokerActivityTableComponent {
 
   /** Render-only formatting wrappers used by the template. */
   readonly fmtTimestampLocal = fmtTimestampLocal;
-
-  trackSummary = (_i: number, r: ActivityBrokerCategorySummary): string => r.category_id;
 }

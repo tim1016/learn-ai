@@ -3,8 +3,8 @@
   [attr.title]="tooltip()"
   (mouseenter)="hoverAction(true)"
   (mouseleave)="hoverAction(false)"
-  (focus)="hoverAction(true)"
-  (blur)="hoverAction(false)"
+  (focusin)="hoverAction(true)"
+  (focusout)="hoverAction(false)"
 >
   <button
     type="button"

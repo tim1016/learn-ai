@@ -15,6 +15,7 @@ import {
   viewChild,
 } from '@angular/core';
 import {
+  type CandlestickData,
   CandlestickSeries,
   CrosshairMode,
   type IChartApi,
@@ -93,12 +94,18 @@ function addDays(date: Date, days: number): Date {
   return next;
 }
 
-function localDateStartMs(value: string): number {
-  return new Date(`${value}T00:00:00`).getTime();
+function localDateParts(value: string): readonly [number, number, number] {
+  const [year, month, day] = value.split('-').map(Number);
+  return [year, month - 1, day];
 }
 
-function localDateEndMs(value: string): number {
-  return new Date(`${value}T00:00:00`).getTime() + 86_400_000;
+export function localDateStartMs(value: string): number {
+  return new Date(...localDateParts(value)).getTime();
+}
+
+export function localDateEndMs(value: string): number {
+  const [year, month, day] = localDateParts(value);
+  return new Date(year, month, day + 1).getTime();
 }
 
 function clampDateString(value: string, min: string, max: string): string {
@@ -168,6 +175,70 @@ export function markerTimeForActivityFill(
   return markerTimeForEventMs(marker.chart_ts_ms, bars);
 }
 
+function sourceSignature(source: IbkrMinuteBar['source']): number {
+  switch (source) {
+    case 'polygon':
+      return 2;
+    case 'mixed':
+      return 3;
+    default:
+      return 1;
+  }
+}
+
+function priceSignature(value: string): number {
+  return Math.round(Number(value) * 10_000);
+}
+
+export function candleSignatureForBars(bars: readonly IbkrMinuteBar[]): string {
+  let hash = 2_166_136_261;
+  for (const bar of bars) {
+    hash = Math.imul(hash ^ bar.start_ms, 16_777_619);
+    hash = Math.imul(hash ^ bar.end_ms, 16_777_619);
+    hash = Math.imul(hash ^ priceSignature(bar.open), 16_777_619);
+    hash = Math.imul(hash ^ priceSignature(bar.high), 16_777_619);
+    hash = Math.imul(hash ^ priceSignature(bar.low), 16_777_619);
+    hash = Math.imul(hash ^ priceSignature(bar.close), 16_777_619);
+    hash = Math.imul(hash ^ sourceSignature(bar.source), 16_777_619);
+  }
+  return `${bars.length}:${hash >>> 0}`;
+}
+
+export function candleDataForBar(bar: IbkrMinuteBar): CandlestickData<UTCTimestamp> {
+  const open = Number(bar.open);
+  const close = Number(bar.close);
+  const base = {
+    time: (bar.start_ms / 1000) as UTCTimestamp,
+    open,
+    high: Number(bar.high),
+    low: Number(bar.low),
+    close,
+  };
+  if (bar.source === 'polygon') {
+    return {
+      ...base,
+      color: 'rgba(148, 163, 184, 0.24)',
+      borderColor: 'rgba(203, 213, 225, 0.72)',
+      wickColor: 'rgba(203, 213, 225, 0.58)',
+    };
+  }
+  if (bar.source === 'mixed') {
+    return {
+      ...base,
+      borderColor: '#facc15',
+      wickColor: '#facc15',
+    };
+  }
+  return base;
+}
+
+export function isSnapshotTradeCoveredByActivity(
+  eventMs: number,
+  activity: Pick<LiveInstanceActivityProjection, 'session_date'> | null,
+): boolean {
+  return activity !== null && localDateString(new Date(eventMs)) === activity.session_date;
+}
+
 export interface ChartSelection {
   readonly sessionDate: string;
   readonly timeframe: ChartTimeframe;
@@ -222,7 +293,7 @@ const TIMEFRAME_META: Record<
 };
 
 const CHART_HEIGHT_PX = 380;
-const TIMEFRAME_OPTIONS: ChartTimeframe[] = ['1m', '5m', '15m', '1h', '1d'];
+const TIMEFRAME_OPTIONS: ChartTimeframe[] = ['5s', '1m', '5m', '15m', '1h', '1d'];
 
 interface SnapshotCache {
   readonly key: string;
@@ -447,9 +518,6 @@ export class BotTradeChartCardComponent {
         }
         this.rangeStartDate.set(clampDateString(this.rangeStartDate(), this.minRangeDate(), nextToday));
       }
-      if (this.isLiveRange()) {
-        this.snapshotResource.reload();
-      }
     }, POLL_INTERVAL_MS);
 
     this.destroyRef.onDestroy(() => {
@@ -600,40 +668,10 @@ export class BotTradeChartCardComponent {
       timeScale?.getVisibleLogicalRange() ?? null,
     );
     const bars = this.bars();
-    const signature = bars
-      .map((b) => `${b.start_ms}:${b.end_ms}:${b.open}:${b.high}:${b.low}:${b.close}:${b.source}`)
-      .join('|');
+    const signature = candleSignatureForBars(bars);
     if (signature === this.lastCandleSignature) return;
     this.lastCandleSignature = signature;
-    this.candles.setData(
-      bars.map((b) => {
-        const open = Number(b.open);
-        const close = Number(b.close);
-        const base = {
-          time: (b.start_ms / 1000) as UTCTimestamp,
-          open,
-          high: Number(b.high),
-          low: Number(b.low),
-          close,
-        };
-        if (b.source === 'polygon') {
-          return {
-            ...base,
-            color: 'rgba(148, 163, 184, 0.24)',
-            borderColor: 'rgba(203, 213, 225, 0.72)',
-            wickColor: 'rgba(203, 213, 225, 0.58)',
-          };
-        }
-        if (b.source === 'mixed') {
-          return {
-            ...base,
-            borderColor: '#facc15',
-            wickColor: '#facc15',
-          };
-        }
-        return base;
-      }),
-    );
+    this.candles.setData(bars.map(candleDataForBar));
     if (restoreRange !== null) {
       timeScale?.setVisibleLogicalRange(restoreRange);
     }
@@ -661,27 +699,28 @@ export class BotTradeChartCardComponent {
             (marker.replay_count > 1 ? ` · seen ${marker.replay_count}x` : ''),
         });
       });
-      out.sort((a, b) => (a.time as number) - (b.time as number));
-      this.markersPlugin.setMarkers(out);
-      return;
     }
     this.runs().forEach((run) => {
       const color = this.runColor(run);
       run.trades.forEach((t, i) => {
-        out.push({
-          time: markerTimeForEventMs(t.entry_time_ms, bars),
-          position: 'belowBar',
-          color,
-          shape: 'arrowUp',
-          text: `BUY #${i + 1}`,
-        });
-        out.push({
-          time: markerTimeForEventMs(t.exit_time_ms, bars),
-          position: 'aboveBar',
-          color: t.pnl_points >= 0 ? '#4ade80' : '#ef4444',
-          shape: 'circle',
-          text: `CLOSE ${t.pnl_points >= 0 ? '+' : ''}${t.pnl_points.toFixed(2)}`,
-        });
+        if (!isSnapshotTradeCoveredByActivity(t.entry_time_ms, activity)) {
+          out.push({
+            time: markerTimeForEventMs(t.entry_time_ms, bars),
+            position: 'belowBar',
+            color,
+            shape: 'arrowUp',
+            text: `BUY #${i + 1}`,
+          });
+        }
+        if (!isSnapshotTradeCoveredByActivity(t.exit_time_ms, activity)) {
+          out.push({
+            time: markerTimeForEventMs(t.exit_time_ms, bars),
+            position: 'aboveBar',
+            color: t.pnl_points >= 0 ? '#4ade80' : '#ef4444',
+            shape: 'circle',
+            text: `CLOSE ${t.pnl_points >= 0 ? '+' : ''}${t.pnl_points.toFixed(2)}`,
+          });
+        }
       });
     });
     out.sort((a, b) => (a.time as number) - (b.time as number));

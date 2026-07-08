@@ -31,6 +31,7 @@ from app.operator.notices.schema import OperatorIncident, OperatorNotice, Operat
 from app.routers import live_instances
 from app.schemas.broker_activity import BrokerActivityRow
 from app.schemas.live_runs import LiveBinding
+from app.services.live_chart_window import ChartTimeframe, ChartWindowResult
 from tests._fixtures.daemon_transport import as_typed_get
 
 
@@ -955,6 +956,48 @@ async def test_chart_snapshot_historical_window_omits_live_buffer(
     assert body["date"] == "2026-01-05"
     assert body["has_bars"] is False
     assert body["runs"] == []
+
+
+async def test_chart_snapshot_clamps_explicit_future_to_ms_to_server_now(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _root = app_with_root
+    server_now_ms = int(datetime(2026, 1, 5, 15, 0, tzinfo=UTC).timestamp() * 1000)
+    window_from_ms = server_now_ms - 60_000
+    captured: dict[str, int] = {}
+    monkeypatch.setattr(live_instances, "_now_ms", lambda: server_now_ms)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async def fake_resolve_chart_window(
+        *,
+        symbol: str | None,
+        timeframe: ChartTimeframe,
+        from_ms: int,
+        to_ms: int,
+        now_ms: int,
+        polygon_api_key: str,
+        live_aggregator: object,
+    ) -> ChartWindowResult:
+        _ = (symbol, from_ms, now_ms, polygon_api_key, live_aggregator)
+        captured["to_ms"] = to_ms
+        return ChartWindowResult(
+            bars=[],
+            timeframe=timeframe,
+            resolution="1m",
+            is_streaming=False,
+        )
+
+    monkeypatch.setattr(live_instances, "resolve_chart_window", fake_resolve_chart_window)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            "/api/live-instances/spy_chart/chart-snapshot",
+            params={"from_ms": window_from_ms, "to_ms": server_now_ms + 30_000},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["to_ms"] == server_now_ms
+    assert captured["to_ms"] == server_now_ms
 
 
 async def test_chart_snapshot_rejects_malformed_date(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
