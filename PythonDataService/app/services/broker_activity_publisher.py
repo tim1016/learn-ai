@@ -1171,6 +1171,8 @@ class BrokerActivityPublisher:
                     "price": price,
                     "discovered_at_ms": now_ms,
                 },
+                actionability="routed",
+                resolution="Clears after the operator verifies the foreign execution in IBKR and reconciles bot positions.",
                 action=OperatorNoticeAction(
                     kind="external_manual_check",
                     label="Check positions in IBKR",

@@ -189,8 +189,9 @@ def test_reconciler_classifies_known_socket_without_pid_as_orphan() -> None:
     assert rows[0].notice is not None
     assert rows[0].notice.code == "broker_session.orphaned_socket"
     assert rows[0].notice.tier == "critical"
-    assert rows[0].notice.action.kind == "focus_cockpit_action"
-    assert rows[0].notice.action.target == "orphan-demo"
+    assert rows[0].notice.actionability == "routed"
+    assert rows[0].notice.action.kind == "external_manual_check"
+    assert rows[0].notice.action.target == "ibkr_sessions"
     assert rows[0].notice.forensic_facts["client_id"] == 17
 
 

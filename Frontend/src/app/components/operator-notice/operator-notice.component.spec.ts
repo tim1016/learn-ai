@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 import { OperatorNoticeComponent } from './operator-notice.component';
 import type { OperatorNotice } from '../../models/operator-notice';
+import type { RenderableNotice } from '../../models/operator-notice-action-contract';
 
 function makeNotice(overrides: Partial<OperatorNotice> = {}): OperatorNotice {
   return {
@@ -11,7 +12,10 @@ function makeNotice(overrides: Partial<OperatorNotice> = {}): OperatorNotice {
     message: 'No fresh bar has arrived for 92 seconds.',
     source_codes: ['BAR_LOOP_LATEST_BAR_STALE'],
     forensic_facts: { age_ms: 92_000 },
-    action: { kind: 'wait', label: null, target: null },
+    actionability: 'routed',
+    resolution: 'Clears when a fresh IBKR bar arrives inside the freshness window.',
+    remedy_status: null,
+    action: { kind: 'external_manual_check', label: 'Check IBKR market data', target: 'ibkr_connection' },
     runbook_slug: 'runtime-freshness',
     occurred_at_ms: null,
     ...overrides,
@@ -26,6 +30,8 @@ describe('OperatorNoticeComponent', () => {
 
     expect(screen.getByText('Market data is stale')).toBeTruthy();
     expect(screen.getByText('No fresh bar has arrived for 92 seconds.')).toBeTruthy();
+    expect(screen.getByText('Clears when a fresh IBKR bar arrives inside the freshness window.')).toBeTruthy();
+    expect(screen.getByText('Check elsewhere')).toBeTruthy();
   });
 
   it('never renders raw source_codes as primary copy', async () => {
@@ -92,10 +98,10 @@ describe('OperatorNoticeComponent', () => {
     const notice = makeNotice({
       action: { kind: 'open_runbook', label: 'How to recover', target: 'runtime-freshness' },
     });
-    let captured: OperatorNotice | null = null;
+    let captured: RenderableNotice | null = null;
     await render(OperatorNoticeComponent, {
       inputs: { notice },
-      on: { actionClicked: (value: OperatorNotice) => { captured = value; } },
+      on: { actionClicked: (value) => { captured = value; } },
     });
     await screen.getByRole('button', { name: /how to recover/i }).click();
     expect(captured).toEqual(notice);

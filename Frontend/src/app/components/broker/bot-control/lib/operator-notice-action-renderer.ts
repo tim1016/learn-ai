@@ -1,5 +1,7 @@
-import type { OperatorNotice } from '../../../../models/operator-notice';
-import { executableOperatorNoticeAction } from '../../../../models/operator-notice-action-contract';
+import {
+  executableOperatorNoticeAction,
+  type RenderableNotice,
+} from '../../../../models/operator-notice-action-contract';
 import type { RenderedAction, RendererDispatch } from './suggested-action-renderer';
 
 export interface OperatorNoticeDispatch extends Pick<RendererDispatch, 'openRunbook' | 'redeploy'> {
@@ -8,7 +10,7 @@ export interface OperatorNoticeDispatch extends Pick<RendererDispatch, 'openRunb
 }
 
 export function renderOperatorNoticeAction(
-  notice: OperatorNotice,
+  notice: RenderableNotice,
   dispatch: OperatorNoticeDispatch,
 ): RenderedAction | null {
   const action = executableOperatorNoticeAction(notice);

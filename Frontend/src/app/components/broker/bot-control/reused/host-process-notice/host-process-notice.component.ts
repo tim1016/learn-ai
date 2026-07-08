@@ -51,6 +51,8 @@ const START_DISABLED_COPY: Record<HostProcessStartDisabledReasonCode, string> = 
     "This bot's saved start settings are incomplete. Review Configuration and redeploy.",
   ACCOUNT_FROZEN:
     'The account is frozen by a backend safety gate. Clear the freeze evidence before starting this bot.',
+  CRASH_RECOVERY_REQUIRED:
+    'The previous host runner crashed. Record audited recovery evidence before restarting this bot.',
 };
 
 /**

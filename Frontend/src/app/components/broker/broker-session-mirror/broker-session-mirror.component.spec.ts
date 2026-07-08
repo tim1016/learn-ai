@@ -389,7 +389,7 @@ describe('BrokerSessionMirrorComponent', () => {
     expect(text).toContain('1100');
   });
 
-  it('renders backend-authored orphan notices and opens the owning cockpit', async () => {
+  it('renders backend-authored orphan notices with a routed manual-check action', async () => {
     const { fixture, router } = await setup(
       snapshot({
         rows: [
@@ -406,13 +406,14 @@ describe('BrokerSessionMirrorComponent', () => {
     const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
 
     let text = pageText(fixture);
-    expect(text).toContain('Open Bot Cockpit');
+    expect(text).toContain('Check IBKR sessions');
+    expect(text).not.toContain('Open Bot Cockpit');
     expect(text).not.toContain('Verify the client session in IBKR');
 
-    buttonByText(fixture, 'Open Bot Cockpit').click();
-    await settle(fixture);
-
-    expect(navigate).toHaveBeenCalledWith(['/broker/bots', 'PrajiTSLADemo']);
+    // Routed notices point at IBKR; the cockpit cannot actuate them, so the
+    // rendered action is inert and never navigates.
+    expect(buttonByText(fixture, 'Check IBKR sessions').disabled).toBe(true);
+    expect(navigate).not.toHaveBeenCalled();
 
     expandRow(fixture);
     await settle(fixture);

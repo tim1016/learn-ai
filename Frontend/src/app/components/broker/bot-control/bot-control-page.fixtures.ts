@@ -3,6 +3,7 @@ import type {
   HostProcessState,
   LifecycleTimelineResponse,
   LiveInstanceStatus,
+  MutationRungReceipt,
   OperatorNotice,
   OperatorSurfaceRuntimeFreshness,
   SetInstanceDesiredStateResponse,
@@ -290,6 +291,13 @@ export function makeStatus(options: {
       reconciliation: null,
       broker_activity_health: null,
       incident_headline: null,
+      notice_placement: {
+        banner: null,
+        banner_fold_count: 0,
+        banner_folded: [],
+        attention: [],
+        quiet_status: [],
+      },
     },
     lifecycle_chart: makeLifecycleChartFixture(),
     fetched_at_ms: 0,
@@ -310,21 +318,6 @@ export function makeAccountSummary(): FleetAccountSummary {
       policy_blocks_starts: false,
       summary: 'Broker evidence unavailable.',
     },
-    notice: {
-      code: 'activity.source_blind_to_bot_orders',
-      tier: 'warning',
-      title: 'Broker evidence is unavailable',
-      message: 'The data plane could not fetch broker net positions.',
-      source_codes: [],
-      forensic_facts: {},
-      action: {
-        kind: 'external_manual_check',
-        label: 'Check positions in IBKR',
-        target: 'ibkr_positions',
-      },
-      runbook_slug: 'broker evidence/health?',
-      occurred_at_ms: null,
-    },
   };
 }
 
@@ -339,7 +332,10 @@ export function makeIncidentHeadline(): OperatorNotice {
       run_id: 'run-x',
       attempt: 1,
     },
-    action: { kind: 'none', label: null, target: null },
+    actionability: 'routed',
+    resolution: 'Clears after the operator verifies IBKR positions and runs Reconcile.',
+    remedy_status: null,
+    action: { kind: 'open_runbook', label: 'How to recover', target: 'watchdog-halt' },
     runbook_slug: 'watchdog-halt',
     occurred_at_ms: 1_700_000_001_000,
   };
@@ -353,6 +349,9 @@ export function makeRuntimeFreshnessWithLeaseAction(): OperatorSurfaceRuntimeFre
     message: 'The engine has not observed a fresh daemon lease.',
     source_codes: ['CONTROL_PLANE_LEASE_STALE'],
     forensic_facts: {},
+    actionability: 'actuatable',
+    resolution: 'Clears when the cockpit renews the control-plane lease and the engine reports the same lease holder.',
+    remedy_status: null,
     action: {
       kind: 'renew_control_plane_lease',
       label: 'Renew control-plane lease',
@@ -431,6 +430,8 @@ export function makeDesiredStateResponse(): SetInstanceDesiredStateResponse {
       command_seq: 1,
       detail: 'Command accepted.',
     },
+    rung_receipt: makeMutationRungReceipt(),
+    rung_receipt_warnings: [],
   };
 }
 
@@ -448,6 +449,8 @@ export function makeCommandWriteResponse(verb: CommandVerb = 'MARK_POISONED'): C
       outcome: null,
       outcome_detail: null,
     },
+    rung_receipt: makeMutationRungReceipt({ title: `${verb} accepted. Next rung: Broker proof.` }),
+    rung_receipt_warnings: [],
   };
 }
 
@@ -479,6 +482,32 @@ export function makeReconcileAckResponse(): ReconcileAckResponse {
   return {
     request_id: 'reconcile-request-x',
     accepted_at_ms: 1_700_000_001_000,
+    rung_receipt: makeMutationRungReceipt({ title: 'Reconcile accepted. Next rung: reconciliation.' }),
+    rung_receipt_warnings: [],
+  };
+}
+
+export function makeMutationRungReceipt(
+  overrides: Partial<MutationRungReceipt> = {},
+): MutationRungReceipt {
+  return {
+    code: 'mutation.next_blocking_rung',
+    tier: 'warning',
+    title: 'Mutation accepted. Next rung: Broker proof.',
+    message: 'Broker evidence is not connected.',
+    rung_id: 'broker',
+    source_codes: ['BROKER_DISCONNECTED'],
+    forensic_facts: {},
+    actionability: 'routed',
+    resolution: 'Clears when broker evidence is connected again.',
+    remedy_status: null,
+    action: {
+      kind: 'external_manual_check',
+      label: 'Check IBKR session',
+      target: 'ibkr_connection',
+    },
+    occurred_at_ms: 1_700_000_001_000,
+    ...overrides,
   };
 }
 

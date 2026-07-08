@@ -8,7 +8,7 @@
 // this array AND PythonDataService/app/operator/notices/snapshot.json.
 //
 // Canonical source: PythonDataService/app/operator/notices/snapshot.json
-// schema_version: 1
+// schema_version: 2
 import { describe, expect, it } from 'vitest';
 import type { OperatorNoticeCode } from './live-instances.types';
 
@@ -37,12 +37,15 @@ const SNAPSHOT_OPERATOR_NOTICE_CODES: readonly string[] = [
   'activity.dropped_paused_intent',
   'reconciliation.required_after_uncertain_flatten',
   'reconciliation.discovered_execution_not_in_engine_state',
+  'reconciliation.divergence_while_submitting',
+  'fleet.sibling_liveness_unproven',
   'broker_session.orphaned_socket',
   'order.rejected',
   'submit.uncertain',
   'submit.halted',
   'submit.launch_failed',
   'submit.unmapped_diagnostic',
+  'safety_halt.poisoned',
 ];
 
 const TS_OPERATOR_NOTICE_CODES: readonly OperatorNoticeCode[] = [
@@ -69,12 +72,15 @@ const TS_OPERATOR_NOTICE_CODES: readonly OperatorNoticeCode[] = [
   'activity.dropped_paused_intent',
   'reconciliation.required_after_uncertain_flatten',
   'reconciliation.discovered_execution_not_in_engine_state',
+  'reconciliation.divergence_while_submitting',
+  'fleet.sibling_liveness_unproven',
   'broker_session.orphaned_socket',
   'order.rejected',
   'submit.uncertain',
   'submit.halted',
   'submit.launch_failed',
   'submit.unmapped_diagnostic',
+  'safety_halt.poisoned',
 ] as const;
 
 describe('OperatorNoticeCode TS literal vs Python snapshot', () => {

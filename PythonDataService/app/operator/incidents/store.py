@@ -14,11 +14,14 @@ check for blocking conditions before the engine enters its bar loop.
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 from pathlib import Path
 
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
 from app.operator.notices.schema import OperatorIncident
+
+logger = logging.getLogger(__name__)
 
 INCIDENTS_DIR = "operator_incidents"
 
@@ -93,7 +96,16 @@ class IncidentStore:
                 incident = OperatorIncident.model_validate_json(
                     p.read_text(encoding="utf-8")
                 )
-            except Exception:
+            except (OSError, ValueError) as exc:
+                # A record we can't parse is dropped, but this feeds the
+                # post-halt safety gate — a silently-skipped unresolved incident
+                # could let a bot restart that should stay blocked. Surface it
+                # (e.g. a pre-schema incident missing actionability/resolution)
+                # so it's visible during incident response instead of vanishing.
+                logger.warning(
+                    "skipping unparseable operator incident",
+                    extra={"path": str(p), "exception": repr(exc)},
+                )
                 continue
             if incident.resolved_at_ms is None:
                 result.append(incident)

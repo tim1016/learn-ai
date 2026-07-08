@@ -325,6 +325,8 @@ async def test_running_instance_status_carries_every_operator_surface_block(
         "incident_headline",
         # Operator-notice PR 5 — broker-activity publisher health surface.
         "broker_activity_health",
+        # ADR-0025 / PRD #972 — backend-authored single-banner placement.
+        "notice_placement",
     }
     assert surface["schema_version"] == 1
     assert surface["host_process"]["state"] == "RUNNING"
@@ -698,7 +700,6 @@ async def test_account_summary_endpoint_returns_composed_dto(app_with_root, monk
         "account_identity",
         "account_identity_reason_codes",
         "contamination",
-        "notice",
     }
     assert body["account_identity"] in {"CONSISTENT", "CONFLICTING", "UNKNOWN"}
     assert isinstance(body["account_identity_reason_codes"], list)

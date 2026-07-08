@@ -233,14 +233,17 @@
     },
     "headline": {
       "action": {
-        "kind": "wait",
-        "label": null,
-        "target": null
+        "kind": "external_manual_check",
+        "label": "Check activity publisher",
+        "target": "data_plane_activity_publisher"
       },
+      "actionability": "routed",
       "code": "activity.publisher_not_running",
       "forensic_facts": {},
       "message": "No broker-activity publisher is registered for this instance. The bot process may still be running, but the cockpit cannot confirm durable activity capture from the data plane.",
       "occurred_at_ms": null,
+      "remedy_status": null,
+      "resolution": "Clears when the data plane registers and starts the broker-activity publisher for this instance.",
       "runbook_slug": "broker-activity-health",
       "source_codes": [],
       "tier": "critical",
@@ -249,14 +252,17 @@
     "notices": [
       {
         "action": {
-          "kind": "wait",
-          "label": null,
-          "target": null
+          "kind": "external_manual_check",
+          "label": "Check activity publisher",
+          "target": "data_plane_activity_publisher"
         },
+        "actionability": "routed",
         "code": "activity.publisher_not_running",
         "forensic_facts": {},
         "message": "No broker-activity publisher is registered for this instance. The bot process may still be running, but the cockpit cannot confirm durable activity capture from the data plane.",
         "occurred_at_ms": null,
+        "remedy_status": null,
+        "resolution": "Clears when the data plane registers and starts the broker-activity publisher for this instance.",
         "runbook_slug": "broker-activity-health",
         "source_codes": [],
         "tier": "critical",
@@ -322,6 +328,51 @@
     "state": "RUNNING"
   },
   "incident_headline": null,
+  "notice_placement": {
+    "attention": [],
+    "banner": {
+      "action": {
+        "kind": "redeploy",
+        "label": "Redeploy bot",
+        "target": "configuration_tab"
+      },
+      "actionability": "actuatable",
+      "code": "runtime.engine_runtime_incompatible",
+      "forensic_facts": {},
+      "message": "The engine runtime version is incompatible with the cockpit. The bot will not start trading. Redeploy with a matching runtime.",
+      "occurred_at_ms": null,
+      "remedy_status": null,
+      "resolution": "Clears when a redeployed bot reports a compatible engine runtime version.",
+      "runbook_slug": "runtime-freshness",
+      "source_codes": [
+        "ENGINE_RUNTIME_MISSING"
+      ],
+      "tier": "critical",
+      "title": "Engine runtime is incompatible"
+    },
+    "banner_fold_count": 1,
+    "banner_folded": [
+      {
+        "action": {
+          "kind": "external_manual_check",
+          "label": "Check activity publisher",
+          "target": "data_plane_activity_publisher"
+        },
+        "actionability": "routed",
+        "code": "activity.publisher_not_running",
+        "forensic_facts": {},
+        "message": "No broker-activity publisher is registered for this instance. The bot process may still be running, but the cockpit cannot confirm durable activity capture from the data plane.",
+        "occurred_at_ms": null,
+        "remedy_status": null,
+        "resolution": "Clears when the data plane registers and starts the broker-activity publisher for this instance.",
+        "runbook_slug": "broker-activity-health",
+        "source_codes": [],
+        "tier": "critical",
+        "title": "Activity capture is unavailable"
+      }
+    ],
+    "quiet_status": []
+  },
   "prior_run": {
     "classification": "UNKNOWN"
   },
@@ -441,10 +492,13 @@
         "label": "Redeploy bot",
         "target": "configuration_tab"
       },
+      "actionability": "actuatable",
       "code": "runtime.engine_runtime_incompatible",
       "forensic_facts": {},
       "message": "The engine runtime version is incompatible with the cockpit. The bot will not start trading. Redeploy with a matching runtime.",
       "occurred_at_ms": null,
+      "remedy_status": null,
+      "resolution": "Clears when a redeployed bot reports a compatible engine runtime version.",
       "runbook_slug": "runtime-freshness",
       "source_codes": [
         "ENGINE_RUNTIME_MISSING"

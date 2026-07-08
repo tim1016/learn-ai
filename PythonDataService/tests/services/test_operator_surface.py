@@ -26,6 +26,7 @@ from app.schemas.account_truth import (
 )
 from app.schemas.live_runs import (
     DesiredStateView,
+    GateResult,
     InstanceBrokerView,
     InstanceLastExit,
     InstanceProcessView,
@@ -409,6 +410,32 @@ def test_host_process_start_capability_poisoned_overrides_stopped_latch() -> Non
     assert cap.disabled_reason_code == "STOPPED_REQUIRES_REDEPLOY"
 
 
+def test_host_process_start_capability_crash_recovery_required_blocks_start() -> None:
+    gate = GateResult(
+        gate_id="account.crash_recovery",
+        status="block",
+        source="account_instance_registry",
+        operator_reason="CRASH_RECOVERY_REQUIRED",
+        operator_next_step="Record audited recovery evidence.",
+        evidence_at_ms=_NOW_MS - 1_000,
+    )
+    surface = _surface(
+        process=_IDLE_PROC,
+        start_run_id=_START_RUN,
+        start_defaults=_defaults(),
+        crash_recovery_gate=gate,
+    )
+
+    cap = surface.host_process.start_capability
+    assert cap.enabled is False
+    assert cap.disabled_reason_code == "CRASH_RECOVERY_REQUIRED"
+    assert cap.gate_results == [gate]
+    assert surface.blockage_ladder.current_stage_id == "host_process"
+    assert surface.blockage_ladder.headline == "Previous host runner crashed"
+    current = next(stage for stage in surface.blockage_ladder.stages if stage.current)
+    assert current.reason_codes == ["CRASH_RECOVERY_REQUIRED"]
+
+
 @pytest.mark.parametrize(
     ("start_run_id", "start_defaults"),
     [
@@ -783,6 +810,81 @@ def test_trader_guidance_runtime_first_bar_timeout_blocks_submit_loudly() -> Non
     assert surface.blockage_ladder.current_stage_id == "runtime_freshness"
     assert runtime_stage.severity == "critical"
     assert runtime_stage.state == "danger"
+
+
+def test_notice_placement_chooses_one_banner_and_folds_concurrent_criticals() -> None:
+    fresh = DomainFreshness(state="FRESH", age_ms=100)
+    runtime = RuntimeFreshness(
+        command_loop=fresh,
+        broker=fresh,
+        bar_loop=DomainFreshness(
+            state="STALE",
+            age_ms=90_000,
+            stale_reason_codes=["BAR_LOOP_FIRST_BAR_TIMEOUT"],
+        ),
+        control_plane=fresh,
+        posture_demoted=False,
+    )
+
+    surface = _surface(
+        runtime_freshness=runtime,
+        live_binding=_LIVE,
+        now_ms=_RTH_MID,
+    )
+
+    placement = surface.notice_placement
+    assert placement.banner is not None
+    assert placement.banner.code == "activity.publisher_not_running"
+    assert placement.banner_fold_count == 1
+    assert [notice.code for notice in placement.banner_folded] == [
+        "runtime.market_data_first_bar_timeout"
+    ]
+
+
+def test_notice_placement_routes_warning_to_attention_without_banner() -> None:
+    fresh = DomainFreshness(state="FRESH", age_ms=100)
+    runtime = RuntimeFreshness(
+        command_loop=fresh,
+        broker=fresh,
+        bar_loop=DomainFreshness(
+            state="STALE",
+            age_ms=90_000,
+            stale_reason_codes=["BAR_LOOP_LATEST_BAR_STALE"],
+        ),
+        control_plane=fresh,
+        posture_demoted=False,
+    )
+
+    surface = _surface(runtime_freshness=runtime, now_ms=_RTH_MID)
+
+    assert surface.notice_placement.banner is None
+    assert [notice.code for notice in surface.notice_placement.attention] == [
+        "runtime.market_data_stale"
+    ]
+    assert surface.notice_placement.quiet_status == []
+
+
+def test_notice_placement_routes_info_to_quiet_status_only() -> None:
+    fresh = DomainFreshness(state="FRESH", age_ms=100)
+    runtime = RuntimeFreshness(
+        command_loop=fresh,
+        broker=fresh,
+        bar_loop=DomainFreshness(
+            state="STALE",
+            age_ms=90_000,
+            stale_reason_codes=["BAR_LOOP_SESSION_CLOSED"],
+        ),
+        control_plane=fresh,
+        posture_demoted=False,
+    )
+
+    surface = _surface(runtime_freshness=runtime, now_ms=_RTH_MID)
+
+    assert surface.notice_placement.banner is None
+    assert surface.notice_placement.attention == []
+    assert [notice.code for notice in surface.notice_placement.quiet_status] == [
+        "runtime.market_closed"
+    ]
 
 
 def test_trader_guidance_account_freeze_is_never_collapsed() -> None:

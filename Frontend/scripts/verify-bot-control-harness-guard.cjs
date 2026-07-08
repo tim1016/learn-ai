@@ -32,6 +32,7 @@ const mutationMethods = [
   'flattenAndPause',
   'issueInstanceCommand',
   'reconcileInstance',
+  'recordCrashRecoveryOverride',
 ];
 const mutationMethodSet = new Set(mutationMethods);
 const mutationHelperNames = [
@@ -42,6 +43,7 @@ const mutationHelperNames = [
   'allowFlattenAndPauseCall',
   'allowIssueInstanceCommandCall',
   'allowReconcileInstanceCall',
+  'allowCrashRecoveryOverrideCall',
   'rejectReconcileInstanceCall',
 ];
 const mutationMockNames = new Set([

@@ -19,6 +19,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from app.engine.live.identity import _INSTANCE_ID_RE, validate_strategy_instance_id
+
 
 class LiveStateSidecarCorruptError(RuntimeError):
     """Raised by ``LiveStateSidecarRepo.read`` when the on-disk bytes
@@ -43,7 +45,28 @@ def stable_live_state_path(artifacts_root: Path, strategy_instance_id: str) -> P
     stable_global_path so both sidecars sit side-by-side under the same
     per-strategy directory.
     """
-    return artifacts_root / "live_state" / strategy_instance_id / "live_state.json"
+    validate_strategy_instance_id(strategy_instance_id)
+    match = _INSTANCE_ID_RE.fullmatch(strategy_instance_id)
+    if match is None:
+        raise ValueError(
+            f"strategy_instance_id rejected on second check: {strategy_instance_id!r}"
+        )
+    safe_sid = match.group(0)
+    live_state_root = os.path.realpath(
+        os.path.join(os.fspath(artifacts_root), "live_state")
+    )
+    sidecar_dir = os.path.realpath(os.path.join(live_state_root, safe_sid))
+    try:
+        common = os.path.commonpath([sidecar_dir, live_state_root])
+    except ValueError as exc:
+        raise ValueError(
+            f"live-state sidecar path {sidecar_dir} cannot share a root with {live_state_root}"
+        ) from exc
+    if common != live_state_root:
+        raise ValueError(
+            f"live-state sidecar path {sidecar_dir} escapes {live_state_root}"
+        )
+    return Path(sidecar_dir) / "live_state.json"
 
 
 class LiveStateEnvelope(BaseModel):

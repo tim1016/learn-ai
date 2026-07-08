@@ -31,6 +31,8 @@ class _IncidentTemplate:
     notice_code: OperatorNoticeCode
     title: str
     action_kind: Literal["none", "external_manual_check", "redeploy"]
+    actionability: Literal["actuatable", "routed", "self_resolving"]
+    resolution: str
     runbook_slug: str
     action_label: str | None = None
     action_target: str | None = None
@@ -75,6 +77,8 @@ def build_terminal_incident(raw_event: BotEventRaw) -> OperatorIncident:
             if terminal_error.external_code is not None
             else [],
             forensic_facts=_notice_forensic_facts(raw_event, terminal_error),
+            actionability=template.actionability,
+            resolution=template.resolution,
             action=template.build_action(),
             runbook_slug=template.runbook_slug,
             occurred_at_ms=raw_event.ts_ms,
@@ -221,6 +225,8 @@ _TEMPLATES: dict[TerminalErrorCode, _IncidentTemplate] = {
         notice_code="order.rejected",
         title="IBKR rejected the order",
         action_kind="external_manual_check",
+        actionability="routed",
+        resolution="Clears after the operator reviews the IBKR rejection and either adjusts the strategy/order inputs or leaves the rejected intent retired.",
         action_label="Review in IBKR",
         action_target="ibkr_order_rejection",
         runbook_slug="ibkr-order-rejection",
@@ -230,6 +236,8 @@ _TEMPLATES: dict[TerminalErrorCode, _IncidentTemplate] = {
         notice_code="submit.uncertain",
         title="Submit outcome is uncertain",
         action_kind="external_manual_check",
+        actionability="routed",
+        resolution="Clears after the operator verifies the order status at IBKR and reconciles the bot's broker state.",
         action_label="Verify in IBKR",
         action_target="ibkr_order_status",
         runbook_slug="submit-outcome-uncertain",
@@ -239,6 +247,8 @@ _TEMPLATES: dict[TerminalErrorCode, _IncidentTemplate] = {
         notice_code="submit.halted",
         title="Bot halted before submit",
         action_kind="none",
+        actionability="self_resolving",
+        resolution="Clears when the halted submit incident is archived after the bot remains stopped or is redeployed.",
         runbook_slug="bot-halted",
     ),
     TerminalErrorCode.LAUNCH_FAILED: _IncidentTemplate(
@@ -246,6 +256,8 @@ _TEMPLATES: dict[TerminalErrorCode, _IncidentTemplate] = {
         notice_code="submit.launch_failed",
         title="Bot launch failed",
         action_kind="redeploy",
+        actionability="actuatable",
+        resolution="Clears when the operator redeploys the bot and the new run starts without this launch failure.",
         action_label="Redeploy bot",
         action_target="redeploy",
         runbook_slug="bot-launch-failed",
@@ -255,6 +267,8 @@ _TEMPLATES: dict[TerminalErrorCode, _IncidentTemplate] = {
         notice_code="submit.unmapped_diagnostic",
         title="Unmapped terminal diagnostic",
         action_kind="external_manual_check",
+        actionability="routed",
+        resolution="Resolution unknown — requires manual reconciliation.",
         action_label="Review run logs",
         action_target="run_logs",
         runbook_slug="unmapped-terminal-diagnostic",

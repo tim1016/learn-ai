@@ -180,6 +180,8 @@ def _watchdog_notice() -> OperatorNotice:
         tier="critical",
         title="Watchdog flatten failed",
         message="The watchdog could not prove the account was flat before disconnect.",
+        actionability="routed",
+        resolution="Clears after the operator verifies IBKR positions and runs Reconcile.",
         action=OperatorNoticeAction(kind="open_runbook", label="Open runbook", target="watchdog-halt"),
         runbook_slug="watchdog-halt",
         occurred_at_ms=_NOW_MS - 7_000,

@@ -57,6 +57,8 @@ def flatten_completed_notice(
             "All open positions were flattened before the broker session was disconnected. "
             "No manual action is required — the account is in a clean state."
         ),
+        actionability="self_resolving",
+        resolution="Clears when the safe watchdog incident is archived from the operator incident store.",
         action=OperatorNoticeAction(kind="none"),
         runbook_slug=_RUNBOOK_SLUG,
         forensic_facts={"flatten_ms": flatten_ms},
@@ -78,6 +80,8 @@ def flatten_not_needed_notice(
             "The account held no open positions, so no flatten was needed. "
             "No manual action is required — the account is in a clean state."
         ),
+        actionability="self_resolving",
+        resolution="Clears when the safe watchdog incident is archived from the operator incident store.",
         action=OperatorNoticeAction(kind="none"),
         runbook_slug=_RUNBOOK_SLUG,
         occurred_at_ms=occurred_at_ms,
@@ -102,9 +106,12 @@ def flatten_timed_out_notice(
             "Open positions may still exist in your IBKR account. "
             "Verify and close any residual positions manually before restarting."
         ),
+        actionability="routed",
+        resolution="Clears after the operator verifies IBKR positions and runs Reconcile for this bot.",
         action=OperatorNoticeAction(
             kind="external_manual_check",
             label="Check positions at IBKR",
+            target="ibkr_positions",
         ),
         runbook_slug=_RUNBOOK_SLUG,
         forensic_facts={"flatten_timeout_ms": flatten_timeout_ms},
@@ -129,9 +136,12 @@ def flatten_failed_notice(
             "Open positions may still exist in your IBKR account. "
             "Verify and close any residual positions manually before restarting."
         ),
+        actionability="routed",
+        resolution="Clears after the operator verifies IBKR positions and runs Reconcile for this bot.",
         action=OperatorNoticeAction(
             kind="external_manual_check",
             label="Check positions at IBKR",
+            target="ibkr_positions",
         ),
         runbook_slug=_RUNBOOK_SLUG,
         forensic_facts={"error_summary": error_summary},
@@ -154,9 +164,12 @@ def broker_disconnected_before_flatten_notice(
             "Open positions may still exist in your IBKR account. "
             "Verify and close any residual positions manually before restarting."
         ),
+        actionability="routed",
+        resolution="Clears after the operator verifies IBKR positions and runs Reconcile for this bot.",
         action=OperatorNoticeAction(
             kind="external_manual_check",
             label="Check positions at IBKR",
+            target="ibkr_positions",
         ),
         runbook_slug=_RUNBOOK_SLUG,
         occurred_at_ms=occurred_at_ms,
@@ -182,6 +195,8 @@ def residual_positions_after_failed_flatten_incident(
             f"and IBKR still reports residual position(s): {parts}. "
             "Verify and close these positions manually before restarting."
         ),
+        actionability="routed",
+        resolution="Clears after the operator verifies residual IBKR positions and runs Reconcile for this bot.",
         action=OperatorNoticeAction(
             kind="external_manual_check",
             label="Check positions at IBKR",

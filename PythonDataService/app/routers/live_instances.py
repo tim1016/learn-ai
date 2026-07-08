@@ -59,7 +59,12 @@ from app.engine.live.live_artifact_io import (
     read_parquet_rows,
     read_parquet_tail,
 )
-from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarCorruptError, LiveStateSidecarRepo
+from app.engine.live.live_state_sidecar import (
+    LiveStateEnvelope,
+    LiveStateSidecarCorruptError,
+    LiveStateSidecarRepo,
+    stable_live_state_path,
+)
 from app.engine.live.order_identity import mint_intent_id
 from app.engine.live.readiness import build_start_readiness
 from app.engine.live.readiness_sidecar import read_readiness
@@ -68,7 +73,7 @@ from app.engine.strategy.spec.descriptors import decision_column_descriptors
 from app.engine.strategy.spec.schema import load_spec_from_path
 from app.lean_sidecar.trading_calendar import session_state_at_ms
 from app.operator.incidents.store import IncidentStore
-from app.operator.notices.schema import OperatorNotice, OperatorNoticeAction
+from app.operator.notices.schema import OperatorNotice
 from app.routers.live_runs import (
     _ACTION_TO_STATE,
     COMMAND_POLL_INTERVAL_MS,
@@ -81,6 +86,7 @@ from app.routers.live_runs import (
     _validate_path_segment,
     build_command_timeline,
 )
+from app.schemas.account_recovery import CrashRecoveryOverrideRequest, CrashRecoveryOverrideResponse
 from app.schemas.action_plan import ActionPlan, ActionPlanPreviewResponse
 from app.schemas.daemon_diagnostics import DaemonDiagnosticReport
 from app.schemas.live_runs import (
@@ -129,6 +135,7 @@ from app.schemas.live_runs import (
     LiveInstanceStatus,
     LiveInstanceSummary,
     MutationOutcomeUnknownResponse,
+    MutationRungReceipt,
     OperatorSurfaceAccountOwner,
     QcAuditCopyListing,
     ReadinessVector,
@@ -138,6 +145,13 @@ from app.schemas.live_runs import (
     SetInstanceDesiredStateResponse,
     SignalTone,
     SizingAuditRow,
+)
+from app.services.account_crash_recovery import (
+    CrashRecoveryNotRequiredError,
+    crash_recovery_block_detail,
+    crash_recovery_blocking_binding,
+    crash_recovery_gate_for_instance,
+    record_crash_recovery_override_evidence,
 )
 from app.services.account_truth_snapshot import get_account_truth_snapshot_provider
 from app.services.activity_evidence_matching import (
@@ -205,6 +219,7 @@ from app.services.mutation_attempt import (
     reconcile_mutation_effect,
     transition_attempt,
 )
+from app.services.mutation_rung_receipts import mutation_rung_receipts
 from app.services.operator_capability import evaluate_action
 from app.services.operator_surface import (
     compute_operator_surface,
@@ -473,6 +488,36 @@ def _resolve_account_freeze(
         if account_freeze is not None:
             return account_freeze
     return None
+
+
+def _run_dir_account_id(run_dir: Path) -> str | None:
+    try:
+        ledger = _read_ledger(run_dir)
+    except (OSError, json.JSONDecodeError):
+        return None
+    value = ledger.get("account_id")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return value
+
+
+def _raise_if_crash_recovery_blocks_start(
+    artifacts_root: Path,
+    *,
+    account_id: str,
+    strategy_instance_id: str,
+) -> None:
+    binding = crash_recovery_blocking_binding(
+        artifacts_root,
+        account_id=account_id,
+        strategy_instance_id=strategy_instance_id,
+    )
+    if binding is None:
+        return
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        detail=crash_recovery_block_detail(strategy_instance_id, binding),
+    )
 
 
 def _resolve_account_owner_surface(
@@ -1021,8 +1066,9 @@ def _sizing_audit_rows(strategy_instance_id: str) -> list[dict]:
         if wal_rows:
             return wal_rows
 
-    sidecar_path = artifacts_root / "live_state" / strategy_instance_id / "live_state.json"
-    if not sidecar_path.is_file():
+    try:
+        sidecar_path = stable_live_state_path(artifacts_root, strategy_instance_id)
+    except ValueError:
         return []
     try:
         envelope = LiveStateSidecarRepo(sidecar_path).read()
@@ -1494,6 +1540,11 @@ async def _resolve_instance_status_from_process(
         sid,
         runs_by_instance=runs_by_instance,
     )
+    crash_recovery_gate = crash_recovery_gate_for_instance(
+        root.parent,
+        account_id=instance_account_id,
+        strategy_instance_id=sid,
+    )
     account_owner = _resolve_account_owner_surface(root.parent, instance_account_id)
     account_truth_snapshot = get_account_truth_snapshot_provider().get(instance_account_id)
     latest_mutation = _resolve_latest_mutation(root, sid)
@@ -1538,6 +1589,7 @@ async def _resolve_instance_status_from_process(
         host_start_command=settings.live_runner_host_start_command,
         start_run_id=_resolve_start_run_id(root, live_binding, runs),
         account_freeze=account_freeze,
+        crash_recovery_gate=crash_recovery_gate,
         account_owner=account_owner,
         reconciliation_receipt=reconciliation_receipt,
         current_wal_seq=current_wal_seq,
@@ -1838,6 +1890,12 @@ async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -
                 "gate_result": account_freeze.to_gate_result().model_dump(mode="json"),
             },
         )
+    if daemon_request.start and daemon_request.strategy_instance_id:
+        _raise_if_crash_recovery_blocks_start(
+            Path(settings.live_runs_root).parent,
+            account_id=daemon_request.account_id,
+            strategy_instance_id=daemon_request.strategy_instance_id,
+        )
     _raise_if_deploy_admission_blocks_start(
         Path(settings.live_runs_root),
         body,
@@ -1882,6 +1940,48 @@ def _parse_action_response(result: dict) -> HostRunnerActionResponse:
             status.HTTP_502_BAD_GATEWAY,
             detail="host daemon returned an invalid start/stop payload",
         ) from exc
+
+
+async def _mutation_rung_receipts_from_process(
+    sid: str,
+    root: Path,
+    settings: IbkrSettings,
+    daemon_process: dict | None,
+    *,
+    mutation_key: str,
+) -> tuple[MutationRungReceipt, list[MutationRungReceipt]]:
+    status_view = await _resolve_instance_status_from_process(
+        sid,
+        root,
+        settings,
+        daemon_process,
+        runs_by_instance=_visible_runs_by_instance(root),
+    )
+    return mutation_rung_receipts(status_view, mutation_key=mutation_key)
+
+
+async def _mutation_rung_receipts_for_instance(
+    sid: str,
+    root: Path,
+    settings: IbkrSettings,
+    *,
+    mutation_key: str,
+) -> tuple[MutationRungReceipt, list[MutationRungReceipt]]:
+    _result, daemon_process = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
+    return await _mutation_rung_receipts_from_process(
+        sid,
+        root,
+        settings,
+        daemon_process,
+        mutation_key=mutation_key,
+    )
+
+
+def _strategy_instance_id_for_run(root: Path, run_id: str) -> str | None:
+    for sid, runs in _scan_runs_by_instance(root).items():
+        if any(run["run_id"] == run_id for run in runs):
+            return sid
+    return None
 
 
 @router.post("/preview-action-plan", response_model=ActionPlanPreviewResponse)
@@ -1997,6 +2097,13 @@ async def _assert_start_allowed(run_id: str, settings) -> None:
                 "gate_result": account_freeze.to_gate_result().model_dump(mode="json"),
             },
         )
+    account_id = _run_dir_account_id(run_dir)
+    if account_id is not None:
+        _raise_if_crash_recovery_blocks_start(
+            root.parent,
+            account_id=account_id,
+            strategy_instance_id=sid,
+        )
 
     if (run_dir / "poisoned.flag").exists():
         raise HTTPException(
@@ -2065,6 +2172,7 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     settings = get_settings()
+    root = Path(settings.live_runs_root)
     await _assert_start_allowed(run_id, settings)
     try:
         result = await host_daemon_client.start_run(settings.live_runner_daemon_url, run_id, body.model_dump())
@@ -2074,6 +2182,21 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
     response = _parse_action_response(result)
     await _maybe_start_broker_activity_publisher(response)
+    sid = _strategy_instance_id_for_run(root, run_id)
+    if sid is not None:
+        receipt, warnings = await _mutation_rung_receipts_from_process(
+            sid,
+            root,
+            settings,
+            response.process.model_dump(mode="json"),
+            mutation_key="start",
+        )
+        response = response.model_copy(
+            update={
+                "rung_receipt": receipt,
+                "rung_receipt_warnings": warnings,
+            }
+        )
     return response
 
 
@@ -2140,7 +2263,24 @@ async def stop_run(run_id: str, body: HostRunnerStopRequest) -> HostRunnerAction
         _raise_outcome_unknown("stop_run", exc)
     except host_daemon_client.HostDaemonError as exc:
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
-    return _parse_action_response(result)
+    response = _parse_action_response(result)
+    root = Path(settings.live_runs_root)
+    sid = _strategy_instance_id_for_run(root, run_id)
+    if sid is not None:
+        receipt, warnings = await _mutation_rung_receipts_from_process(
+            sid,
+            root,
+            settings,
+            response.process.model_dump(mode="json"),
+            mutation_key="stop",
+        )
+        response = response.model_copy(
+            update={
+                "rung_receipt": receipt,
+                "rung_receipt_warnings": warnings,
+            }
+        )
+    return response
 
 
 def _instance_last_exit(runs: list[dict]) -> InstanceLastExit | None:
@@ -2532,66 +2672,7 @@ async def get_account_summary() -> FleetAccountSummary:
         policy_blocks_starts=settings.fleet_dirty_blocks_starts,
     )
     payload["contamination"] = FleetContamination(**payload["contamination"])
-    payload["notice"] = _account_summary_notice(
-        net_positions_available=net is not None,
-        broker_account_known=broker_known,
-        data_plane_client_available=data_plane_snapshot.client_available,
-        data_plane_connected=data_plane_snapshot.connected,
-        data_plane_connection_state=data_plane_snapshot.connection_state,
-    )
     return FleetAccountSummary(**payload)
-
-
-def _account_summary_notice(
-    *,
-    net_positions_available: bool,
-    broker_account_known: bool,
-    data_plane_client_available: bool,
-    data_plane_connected: bool,
-    data_plane_connection_state: str | None,
-) -> OperatorNotice | None:
-    if net_positions_available and broker_account_known:
-        return None
-    missing: list[str] = []
-    if not net_positions_available:
-        missing.append("net positions")
-    if not broker_account_known:
-        missing.append("connected account")
-    missing_text = " and ".join(missing)
-    if not data_plane_client_available or not data_plane_connected:
-        state = data_plane_connection_state or "unavailable"
-        return OperatorNotice(
-            code="activity.source_blind_to_bot_orders",
-            tier="warning",
-            title="Data-plane broker session is not connected",
-            message=(
-                f"The data plane could not fetch broker {missing_text} because its "
-                f"IBKR client session is {state}. IB Gateway/TWS may still be logged in; "
-                "use the IBKR Connect/Reconnect control so account evidence can refresh."
-            ),
-            action=OperatorNoticeAction(
-                kind="external_manual_check",
-                label="Check IBKR API connection",
-                target="ibkr_connection",
-            ),
-            runbook_slug="broker-evidence-health",
-        )
-    return OperatorNotice(
-        code="activity.source_blind_to_bot_orders",
-        tier="warning",
-        title="Broker evidence fetch failed",
-        message=(
-            f"The data-plane IBKR session is connected, but it could not fetch broker {missing_text}. "
-            "Account contamination and identity are not fully proven; verify positions in IBKR "
-            "before trusting an empty or unknown fleet view."
-        ),
-        action=OperatorNoticeAction(
-            kind="external_manual_check",
-            label="Check positions in IBKR",
-            target="ibkr_positions",
-        ),
-        runbook_slug="broker-evidence-health",
-    )
 
 
 @router.get("/{strategy_instance_id}/status", response_model=LiveInstanceStatus)
@@ -2611,6 +2692,82 @@ async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
         settings,
         daemon,
         runs_by_instance=runs_by_instance,
+    )
+
+
+@router.post(
+    "/{strategy_instance_id}/crash-recovery-override",
+    response_model=CrashRecoveryOverrideResponse,
+)
+async def record_crash_recovery_override(
+    strategy_instance_id: str,
+    body: CrashRecoveryOverrideRequest,
+) -> CrashRecoveryOverrideResponse:
+    """Record audited evidence allowing a crash-retired runner to restart."""
+
+    sid = _validate_instance_id(strategy_instance_id)
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    runs = _scan_runs_by_instance(root).get(sid, [])
+    if not runs:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail={
+                "reason_code": "INSTANCE_RUN_NOT_FOUND",
+                "message": f"No run directory was found for {sid}. Deploy before recording recovery evidence.",
+            },
+        )
+    account_id = _run_dir_account_id(Path(runs[0]["run_dir"]))
+    if account_id is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "ACCOUNT_ID_UNAVAILABLE",
+                "message": "The latest run ledger does not contain an account_id.",
+                "remediation": "Redeploy with broker account evidence before recording crash recovery.",
+            },
+        )
+    try:
+        override = record_crash_recovery_override_evidence(
+            root.parent,
+            account_id=account_id,
+            strategy_instance_id=sid,
+            request=body,
+            now_ms=_now_ms(),
+        )
+    except CrashRecoveryNotRequiredError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "CRASH_RECOVERY_NOT_REQUIRED",
+                "message": "This bot is not blocked by crash-retired recovery proof.",
+                "remediation": "Refresh Bot Control and use the currently enabled action.",
+            },
+        ) from exc
+    # The audited override is already durably recorded above. The receipt is a
+    # convenience projection off the fresh ladder; if resolving it fails (daemon
+    # unreachable, artifact read error) the mutation still succeeded, so degrade
+    # to a receipt-less 200 rather than 500-ing a request whose retry would hit
+    # CrashRecoveryNotRequiredError → 409 and never report success.
+    try:
+        receipt, warnings = await _mutation_rung_receipts_for_instance(
+            sid,
+            root,
+            settings,
+            mutation_key="crash_recovery_override",
+        )
+    except Exception as exc:
+        # Post-commit projection must not mask the durable write.
+        logger.warning(
+            "crash-recovery override recorded, but post-commit receipt resolution failed",
+            extra={"strategy_instance_id": sid, "override_id": override.override_id, "exception": repr(exc)},
+        )
+        return override
+    return override.model_copy(
+        update={
+            "rung_receipt": receipt,
+            "rung_receipt_warnings": warnings,
+        }
     )
 
 
@@ -3896,7 +4053,19 @@ async def set_instance_desired_state(
                 detail=f"{verb.value} queued on {live_binding.run_id}; awaiting ack",
             )
 
-    return SetInstanceDesiredStateResponse(durable=durable, actuation=actuation)
+    receipt, warnings = await _mutation_rung_receipts_from_process(
+        sid,
+        root,
+        settings,
+        daemon,
+        mutation_key=action_name,
+    )
+    return SetInstanceDesiredStateResponse(
+        durable=durable,
+        actuation=actuation,
+        rung_receipt=receipt,
+        rung_receipt_warnings=warnings,
+    )
 
 
 @router.post(
@@ -4017,7 +4186,19 @@ async def flatten_and_pause_instance(
                 detail=(f"PAUSE persisted; FLATTEN_NOW queued on {live_binding.run_id}; awaiting flatten ack"),
             )
 
-    return SetInstanceDesiredStateResponse(durable=durable, actuation=actuation)
+    receipt, warnings = await _mutation_rung_receipts_from_process(
+        sid,
+        root,
+        settings,
+        daemon,
+        mutation_key="flatten_and_pause",
+    )
+    return SetInstanceDesiredStateResponse(
+        durable=durable,
+        actuation=actuation,
+        rung_receipt=receipt,
+        rung_receipt_warnings=warnings,
+    )
 
 
 @router.post(
@@ -4081,9 +4262,18 @@ async def reconcile_instance(strategy_instance_id: str) -> ReconcileAckResponse:
             detail=f"failed to enqueue RECONCILE command: {exc}",
         ) from exc
 
+    receipt, warnings = await _mutation_rung_receipts_from_process(
+        sid,
+        root,
+        settings,
+        daemon,
+        mutation_key="reconcile",
+    )
     return ReconcileAckResponse(
         request_id=mint_intent_id(),
         accepted_at_ms=_now_ms(),
+        rung_receipt=receipt,
+        rung_receipt_warnings=warnings,
     )
 
 
@@ -4310,7 +4500,18 @@ async def issue_instance_command(strategy_instance_id: str, body: EnqueueCommand
     if run_dir is None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="no live run bound to this instance to command")
     command = CommandChannel(run_dir / "commands").write_from_operator(verb)
-    return CommandView(seq=command.seq, verb=command.verb.value)
+    receipt, warnings = await _mutation_rung_receipts_for_instance(
+        sid,
+        root,
+        settings,
+        mutation_key=verb.value.lower(),
+    )
+    return CommandView(
+        seq=command.seq,
+        verb=command.verb.value,
+        rung_receipt=receipt,
+        rung_receipt_warnings=warnings,
+    )
 
 
 @router.post("/{strategy_instance_id}/emergency-flatten", response_model=HostRunnerActionResponse)
@@ -4347,4 +4548,17 @@ async def emergency_flatten_instance(
         _raise_outcome_unknown("emergency_flatten", exc)
     except host_daemon_client.HostDaemonError as exc:
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
-    return HostRunnerActionResponse.model_validate(body_json)
+    response = HostRunnerActionResponse.model_validate(body_json)
+    receipt, warnings = await _mutation_rung_receipts_from_process(
+        sid,
+        root,
+        settings,
+        response.process.model_dump(mode="json"),
+        mutation_key="emergency_flatten",
+    )
+    return response.model_copy(
+        update={
+            "rung_receipt": receipt,
+            "rung_receipt_warnings": warnings,
+        }
+    )

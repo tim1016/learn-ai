@@ -13,7 +13,7 @@ export default defineConfig({
   retries: process.env['CI'] ? 2 : 0,
   reporter: [['html', { open: 'never' }]],
   use: {
-    baseURL: 'http://localhost:4200',
+    baseURL: process.env['PLAYWRIGHT_BASE_URL'] ?? 'http://localhost:4200',
     trace: 'on-first-retry',
   },
   projects: [

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from app.operator.notices.schema import (
+    NOTICE_CODE_CONTRACTS,
     OperatorIncident,
     OperatorNotice,
     OperatorNoticeAction,
+    OperatorNoticeActionability,
     OperatorNoticeCode,
+    OperatorNoticeRemedyStatus,
     OperatorNoticeTier,
     RuntimeFreshnessReasonCode,
 )
@@ -23,6 +28,8 @@ def _baseline_notice() -> OperatorNotice:
         tier="info",
         title="Market closed",
         message="The bot is idle until the regular trading session opens.",
+        actionability="self_resolving",
+        resolution="Clears automatically when the regular trading session opens.",
         action=_baseline_action(),
     )
 
@@ -31,10 +38,22 @@ def test_tier_literal_is_three_values():
     assert set(get_literal_args(OperatorNoticeTier)) == {"info", "warning", "critical"}
 
 
-def test_action_kind_is_seven_values():
+def test_actionability_literal_is_four_values():
+    assert set(get_literal_args(OperatorNoticeActionability)) == {
+        "actuatable",
+        "routed",
+        "self_resolving",
+        "no_remedy",
+    }
+
+
+def test_remedy_status_literal_is_two_values():
+    assert set(get_literal_args(OperatorNoticeRemedyStatus)) == {"inherent", "unbuilt"}
+
+
+def test_action_kind_is_six_values():
     assert set(get_literal_args(OperatorNoticeAction.model_fields["kind"].annotation)) == {
         "none",
-        "wait",
         "open_runbook",
         "focus_cockpit_action",
         "renew_control_plane_lease",
@@ -90,8 +109,14 @@ def test_code_literal_declares_pr6_reconciliation_slots():
     reconciliation_slots = {
         "reconciliation.required_after_uncertain_flatten",
         "reconciliation.discovered_execution_not_in_engine_state",
+        "reconciliation.divergence_while_submitting",
     }
     assert reconciliation_slots <= codes
+
+
+def test_code_literal_declares_fleet_slots():
+    codes = set(get_literal_args(OperatorNoticeCode))
+    assert "fleet.sibling_liveness_unproven" in codes
 
 
 def test_code_literal_declares_safety_halt_slot():
@@ -157,9 +182,87 @@ def test_notice_forensic_facts_accept_scalar_values_only():
         title="Market data is stale",
         message="No fresh bar has arrived for 92 seconds.",
         forensic_facts={"age_ms": 92_000, "expected_window_ms": 30_000, "feed": "polygon"},
-        action=_baseline_action(),
+        actionability="routed",
+        resolution="Clears when a fresh IBKR bar arrives inside the freshness window.",
+        action=OperatorNoticeAction(
+            kind="external_manual_check",
+            label="Check IBKR market data",
+            target="ibkr_connection",
+        ),
     )
     assert notice.forensic_facts["age_ms"] == 92_000
+
+
+def test_notice_rejects_missing_resolution():
+    payload = _baseline_notice().model_dump()
+    payload.pop("resolution")
+    with pytest.raises(ValueError):
+        OperatorNotice.model_validate(payload)
+
+
+def test_notice_rejects_illegal_actionability_pairing():
+    with pytest.raises(ValueError, match="self_resolving notices cannot carry"):
+        OperatorNotice(
+            code="runtime.market_closed",
+            tier="info",
+            title="Market closed",
+            message="The bot is idle.",
+            actionability="self_resolving",
+            resolution="Clears when the session opens.",
+            action=OperatorNoticeAction(kind="open_runbook", label="Open", target="runtime-freshness"),
+        )
+
+
+def test_notice_rejects_routed_without_target():
+    with pytest.raises(ValueError, match="routed notices require a named target"):
+        OperatorNotice(
+            code="runtime.command_loop_unresponsive",
+            tier="critical",
+            title="Bot is not responding",
+            message="Commands may not take effect.",
+            actionability="routed",
+            resolution="Clears when command loop evidence is fresh again.",
+            action=OperatorNoticeAction(kind="external_manual_check", label="Check positions"),
+        )
+
+
+def test_notice_rejects_no_remedy_code_missing_pinned_remedy_status():
+    # fleet.sibling_liveness_unproven pins remedy_status="unbuilt"; omitting it
+    # trips the contract-pinning check (not the pairing branch) for OperatorNotice.
+    with pytest.raises(ValueError, match="remedy_status='unbuilt'"):
+        OperatorNotice(
+            code="fleet.sibling_liveness_unproven",
+            tier="critical",
+            title="Sibling liveness is unproven",
+            message="The cockpit cannot prove whether a sibling bot is still alive.",
+            actionability="no_remedy",
+            resolution="Resolution unknown — requires manual reconciliation.",
+            action=OperatorNoticeAction(kind="none"),
+        )
+
+
+def test_notice_code_contract_exhaustive_and_pinned():
+    codes = list(get_literal_args(OperatorNoticeCode))
+    assert list(NOTICE_CODE_CONTRACTS) == codes
+    for contract in NOTICE_CODE_CONTRACTS.values():
+        if contract.actionability == "no_remedy":
+            assert contract.remedy_status in {"inherent", "unbuilt"}
+        else:
+            assert contract.remedy_status is None
+
+
+def test_unbuilt_remedies_are_cross_referenced_in_known_gaps():
+    known_gaps = (
+        Path(__file__).resolve().parents[3] / "docs" / "known-gaps.md"
+    ).read_text(encoding="utf-8")
+    unbuilt_codes = [
+        code
+        for code, contract in NOTICE_CODE_CONTRACTS.items()
+        if contract.remedy_status == "unbuilt"
+    ]
+    assert unbuilt_codes
+    for code in unbuilt_codes:
+        assert code in known_gaps
 
 
 def test_incident_records_started_and_unresolved_by_default():

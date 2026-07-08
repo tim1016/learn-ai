@@ -251,6 +251,13 @@ export const DEFAULT_OPERATOR_SURFACE: OperatorSurface = {
   incident_headline: null,
   // PR 5 — broker-activity publisher health surface.
   broker_activity_health: null,
+  notice_placement: {
+    banner: null,
+    banner_folded: [],
+    banner_fold_count: 0,
+    attention: [],
+    quiet_status: [],
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -467,7 +474,10 @@ export const STALE_BAR_LOOP_NOTICE: OperatorNotice = {
     'The most recent bar is older than the freshness window. New trading decisions are held until fresh data arrives.',
   source_codes: ['BAR_LOOP_LATEST_BAR_STALE'],
   forensic_facts: { bar_loop_age_ms: 90_000 },
-  action: { kind: 'wait', label: null, target: null },
+  actionability: 'self_resolving',
+  resolution: 'Fresh market data arrives.',
+  remedy_status: null,
+  action: { kind: 'none', label: null, target: null },
   runbook_slug: 'runtime-freshness',
   occurred_at_ms: 1_700_000_090_000,
 };

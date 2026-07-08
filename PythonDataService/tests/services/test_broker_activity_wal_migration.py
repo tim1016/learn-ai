@@ -23,6 +23,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from app.schemas.broker_activity import BrokerActivityRow, Verdict
 from app.services.broker_activity_publisher import (
     _migrate_per_run_wals_to_instance_wal,
@@ -87,6 +89,14 @@ def test_instance_path_lands_under_live_instances(tmp_path: Path) -> None:
     # in the runner's temp dir (macOS' /tmp is a symlink, Linux' is not).
     expected = (artifacts_root / "live_instances" / SID / "broker_activity.jsonl").resolve()
     assert path == expected
+
+
+@pytest.mark.parametrize("bad_sid", ["../escape", "nested/id", "", " sid", ".", ".."])
+def test_instance_path_rejects_unsafe_strategy_instance_id(
+    tmp_path: Path, bad_sid: str
+) -> None:
+    with pytest.raises(ValueError):
+        instance_broker_activity_wal_path(tmp_path / "artifacts", bad_sid)
 
 
 def test_migration_with_no_source_runs_is_a_no_op(tmp_path: Path) -> None:

@@ -1205,3 +1205,96 @@ verdict stays the authority for "can it trade now" (see below).
   at `info` — escalating those is how alarm fatigue is trained. Escalation is
   deduped by incident key (instance + `order_ref`/`evaluation_id` + terminal code):
   one failure, one visible terminal story.
+
+## Operator notice actionability & resolution (resolved 2026-07-08)
+
+Every operator notice (ADR-0015) declares two orthogonal truths — how
+much to distrust the bot, and what (if anything) can be done. Neither
+implies the other.
+
+- **Tier** (`info` / `warning` / `critical`) is **trust-impact only**:
+  "how much should the operator distrust the bot right now." It never
+  encodes what the operator should do. `critical` with no remedy is a
+  legal, first-class state.
+- **Actionability** — required closed classification on every notice:
+  - **`actuatable`** — the cockpit performs or directly navigates to
+    the fix (renew lease, focus a cockpit action, redeploy).
+  - **`routed`** — a fix exists but lives elsewhere; the notice must
+    name the destination and what to look at there (runbook, IBKR
+    screen, host shell).
+  - **`self_resolving`** — no operator action needed; the notice must
+    name its clearing condition. Retires `wait`.
+  - **`no_remedy`** — no action exists anywhere; the notice must state
+    what the operator must not trust meanwhile. Carries a required
+    `remedy_status`: **`inherent`** (no remedy can exist — justified in
+    the authoring table) or **`unbuilt`** (remedy conceivable but not
+    built — must cross-reference `docs/known-gaps.md`, enforced by the
+    exhaustiveness gate). `no_remedy` is honest copy, never a
+    dumping ground: an unbuilt remedy stays visible as a feature gap.
+- **Resolution statement** — required on every notice: the condition
+  under which it clears and who observes it. "Resolution unknown —
+  requires manual reconciliation" is a legal truthful value; omission
+  is not. A notice whose author cannot state its resolution condition
+  is not ready to ship.
+- **The `none` conflation is dead.** "No action *needed*" and "no
+  action *exists*" are different states (`self_resolving` vs
+  `no_remedy`) and demand opposite operator responses; `action.kind =
+  "none"` survives only as "no clickable affordance."
+- **Silent states get reserved codes.** A state with trust impact that
+  emits nothing is a contract failure, same as an untruthful message.
+  Known silent-critical states are declared upfront as reserved notice
+  codes with honest pre-classification (`fleet.sibling_liveness_unproven`,
+  `reconciliation.divergence_while_submitting`), cross-referenced with
+  `docs/known-gaps.md`. Reserve first, implement second.
+
+Authority: ADR-0015 § Amendment 2026-07-08. Placement/prominence is
+resolved by the single-dominant-headline rule below.
+
+## Single dominant headline (resolved 2026-07-08)
+
+Placement of every operator notice is a pure function of
+**tier × actionability** (ADR-0025). No surface opts out; no notice
+chooses its own placement.
+
+- **At most one banner, ever.** One arbitrated winner across all banner
+  sources (control-plane, broker-evidence, runtime-freshness, incident).
+  Highest tier wins; ties broken by blockage-ladder rung order.
+  Concurrent criticals fold behind a "+N more critical" affordance that
+  opens the ladder — one click away, never stacked.
+- **`critical` × anything** → the banner slot. `no_remedy` criticals
+  lead with the trust impact and the resolution statement.
+- **`warning` × `actuatable`/`routed`** → attention dropdown row with
+  the affordance inline. Never a banner.
+- **`warning` × `self_resolving`/`no_remedy`** → attention dropdown,
+  quiet (no pulse), resolution statement visible.
+- **`info` × anything** → the **quiet status region** (session card
+  tier). Never a banner, never the attention dropdown, and **never**
+  PRD #951's lower documentation section — that section is "no CTAs,
+  no live claims", and a live notice is a live claim.
+- **Arbitration is backend-authored** (ADR-0013 verbatim rule): the
+  banner winner, the "+N more" count, and the folded list are one
+  server-side projection; the frontend never re-derives dominance.
+
+Authority: ADR-0025.
+
+## Rung receipt (resolved 2026-07-08)
+
+Every mutation response (Resume, Start, Reconcile, Flatten-and-pause,
+crash-recovery override, Mark Poisoned) carries a backend-authored
+**rung receipt**: a notice-shaped statement naming the **next blocking
+rung** from the blockage ladder — or the scoped all-clear ("no enforced
+gate blocks the next start"). It exists because a mutation can succeed
+while the thing the operator actually wanted (a running bot) is still
+blocked downstream; the receipt connects the click to the next blocker
+at the moment of the click.
+
+- Inherits the full notice contract: tier, [[actionability]], mandatory
+  resolution statement, verbatim rendering.
+- Claims only what the enforcement layer guarantees; observational
+  verdicts that disagree ride along as `warning`, never silently.
+- Authored from a fresh ladder evaluation inside the mutation request —
+  never from the client's pre-click poll.
+- Same resolver as the status projection's ladder (shared-resolver
+  pattern, ADR-0013 §6).
+
+Authority: ADR-0015 § Amendment 2026-07-08 (b).

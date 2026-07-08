@@ -22,10 +22,9 @@ malformation (unparseable line, non-monotonic seq) raises
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-from app.engine.live.identity import _INSTANCE_ID_RE, validate_strategy_instance_id
+from app.engine.live.identity import strategy_instance_artifact_dir
 from app.schemas.broker_activity import BrokerActivityRow
 from app.services.jsonl_wal import JsonlWal
 
@@ -70,54 +69,15 @@ def instance_broker_activity_wal_path(
     ``broker_activity_publisher`` does the one-time fold of the legacy
     per-run files into it.
 
-    ``strategy_instance_id`` flows into a directory segment, so we
-    apply the same three-layer guard the LEAN-sidecar workspace builder
-    uses on ``run_id`` (``app.lean_sidecar.workspace.create_for_run``):
-
-    1. Validate via :func:`validate_strategy_instance_id` (fails closed
-       on path-traversal / separator / NUL / empty / non-pattern
-       inputs).
-    2. **Reconstruct from the regex match group** so the value used in
-       path construction below is provably from the regex capture
-       rather than from the raw caller input. CodeQL's
-       ``py/path-injection`` rule recognises ``re.Match.group(0)``
-       output as sanitised; the cross-function ``validate_*`` return
-       value it does not follow.
-    3. Resolve the constructed path and verify it stays under
-       ``<artifacts_root>/live_instances`` via :func:`os.path.commonpath`
-       — catches symlink escapes the regex cannot see.
+    ``strategy_instance_id`` flows into a directory segment, so path
+    construction goes through ``strategy_instance_artifact_dir``: it
+    validates the id, reconstructs the segment from the regex capture,
+    resolves the candidate, and verifies it stays under
+    ``<artifacts_root>/live_instances``.
     """
-    # Boundary check (raises on bad input).
-    validate_strategy_instance_id(strategy_instance_id)
-    # Inline match.group(0) reconstruction so the value flowing into the
-    # path below is dataflow-provably from the regex capture, not the
-    # raw caller input. The cross-function ``validate_*`` return CodeQL
-    # does not follow.
-    match = _INSTANCE_ID_RE.fullmatch(strategy_instance_id)
-    if match is None:
-        # Defensive: validate_strategy_instance_id already raised on this case.
-        raise ValueError(
-            f"strategy_instance_id rejected on second check: {strategy_instance_id!r}"
-        )
-    safe_sid = match.group(0)
-
-    instances_root = (artifacts_root / "live_instances").resolve()
-    # ``resolve(strict=False)`` returns the canonical path even when the
-    # target does not yet exist — the publisher materialises the dir on
-    # first append.
-    candidate = (instances_root / safe_sid / "broker_activity.jsonl").resolve(strict=False)
-    try:
-        common = os.path.commonpath([str(candidate), str(instances_root)])
-    except ValueError as exc:
-        # ``commonpath`` raises on drive-letter mismatches (Windows).
-        raise ValueError(
-            f"broker-activity WAL path {candidate} cannot share a root with {instances_root}"
-        ) from exc
-    if common != str(instances_root):
-        raise ValueError(
-            f"broker-activity WAL path {candidate} escapes instances root {instances_root}"
-        )
-    return candidate
+    return strategy_instance_artifact_dir(
+        artifacts_root, "live_instances", strategy_instance_id
+    ) / "broker_activity.jsonl"
 
 
 class BrokerActivityWal:

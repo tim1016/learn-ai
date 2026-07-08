@@ -14,6 +14,7 @@ import { of, type Observable } from 'rxjs';
 import { vi } from 'vitest';
 
 import type {
+  CrashRecoveryOverrideResponse,
   FleetAccountSummary,
   LifecycleTimelineResponse,
   LiveInstanceStatus,
@@ -113,6 +114,7 @@ export class FakeLiveRunsService {
   flattenAndPause = vi.fn<LiveRunsService['flattenAndPause']>();
   issueInstanceCommand = vi.fn<LiveRunsService['issueInstanceCommand']>();
   reconcileInstance = vi.fn<LiveRunsService['reconcileInstance']>();
+  recordCrashRecoveryOverride = vi.fn<LiveRunsService['recordCrashRecoveryOverride']>();
 }
 
 export function allowRenewControlPlaneLeaseCall(
@@ -159,6 +161,13 @@ export function allowReconcileInstanceCall(
   response: ReconcileAckResponse = makeReconcileAckResponse(),
 ): void {
   liveRuns.reconcileInstance.mockResolvedValue(response);
+}
+
+export function allowCrashRecoveryOverrideCall(
+  liveRuns: FakeLiveRunsService,
+  response: CrashRecoveryOverrideResponse,
+): void {
+  liveRuns.recordCrashRecoveryOverride.mockResolvedValue(response);
 }
 
 export function rejectReconcileInstanceCall(liveRuns: FakeLiveRunsService, error: unknown): void {
@@ -223,6 +232,7 @@ interface BotControlMutationResponses {
   flattenAndPause?: SetInstanceDesiredStateResponse;
   issueInstanceCommand?: CommandWriteResponse;
   reconcileInstance?: ReconcileAckResponse;
+  recordCrashRecoveryOverride?: CrashRecoveryOverrideResponse;
 }
 
 interface BotControlMutationFailures {
@@ -309,6 +319,9 @@ function applyMutationResponses(
   if (responses.reconcileInstance) {
     allowReconcileInstanceCall(liveRuns, responses.reconcileInstance);
   }
+  if (responses.recordCrashRecoveryOverride) {
+    allowCrashRecoveryOverrideCall(liveRuns, responses.recordCrashRecoveryOverride);
+  }
 }
 
 function hasOwn(object: object, property: PropertyKey): boolean {
@@ -360,6 +373,7 @@ export function makeFailClosedLiveRuns(options: BotControlLiveRunsOptions = {}):
   liveRuns.flattenAndPause.mockRejectedValue(unexpectedMutation('flattenAndPause'));
   liveRuns.issueInstanceCommand.mockRejectedValue(unexpectedMutation('issueInstanceCommand'));
   liveRuns.reconcileInstance.mockRejectedValue(unexpectedMutation('reconcileInstance'));
+  liveRuns.recordCrashRecoveryOverride.mockRejectedValue(unexpectedMutation('recordCrashRecoveryOverride'));
   applyMutationResponses(liveRuns, options.mutationResponses);
   applyMutationFailures(liveRuns, options.mutationFailures);
   options.configureLiveRuns?.(liveRuns);

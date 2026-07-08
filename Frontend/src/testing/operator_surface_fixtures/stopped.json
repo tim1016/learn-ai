@@ -276,6 +276,13 @@
     "state": "IDLE"
   },
   "incident_headline": null,
+  "notice_placement": {
+    "attention": [],
+    "banner": null,
+    "banner_fold_count": 0,
+    "banner_folded": [],
+    "quiet_status": []
+  },
   "prior_run": {
     "classification": "UNKNOWN"
   },

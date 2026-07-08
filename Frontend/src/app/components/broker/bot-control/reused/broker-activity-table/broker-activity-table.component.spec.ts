@@ -51,6 +51,7 @@ function healthNotice(
   tier: OperatorNotice['tier'],
   title: string,
 ): OperatorNotice {
+  const routed = code === 'activity.publisher_not_running';
   return {
     code,
     tier,
@@ -58,7 +59,18 @@ function healthNotice(
     message: `${title} message`,
     source_codes: [],
     forensic_facts: {},
-    action: { kind: 'wait', label: null, target: null },
+    actionability: routed ? 'routed' : 'self_resolving',
+    resolution: routed
+      ? 'Clears when the data-plane publisher is restarted and running for this instance.'
+      : 'Clears automatically when activity publisher evidence is healthy again.',
+    remedy_status: null,
+    action: routed
+      ? {
+          kind: 'external_manual_check',
+          label: 'Check activity publisher',
+          target: 'data_plane_activity_publisher',
+        }
+      : { kind: 'none', label: null, target: null },
     runbook_slug: 'broker-activity-health',
     occurred_at_ms: null,
   };

@@ -11,6 +11,9 @@
     <span class="operator-notice__tier-pill" [attr.data-tier]="notice().tier">
       {{ notice().tier }}
     </span>
+    <span class="operator-notice__actionability" [attr.data-actionability]="notice().actionability">
+      {{ actionabilityLabel() }}
+    </span>
     <h3 class="operator-notice__title" data-testid="operator-notice-title">
       {{ notice().title }}
     </h3>
@@ -18,6 +21,10 @@
 
   <p class="operator-notice__message" data-testid="operator-notice-message">
     {{ notice().message }}
+  </p>
+
+  <p class="operator-notice__resolution" data-testid="operator-notice-resolution">
+    {{ notice().resolution }}
   </p>
 
   @if (hasClickableAction() && notice().action.label) {
