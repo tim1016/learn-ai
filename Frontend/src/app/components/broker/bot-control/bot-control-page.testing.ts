@@ -29,7 +29,9 @@ import { BrokerHealthService } from '../../../services/broker-health.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { BrokerBannerComponent } from '../../../shell/broker-banner.component';
 import { ActivityTabComponent } from './tabs/activity-tab.component';
+import { BotEventStreamComponent } from './reused/bot-event-stream/bot-event-stream.component';
 import { BotControlPageComponent } from './bot-control-page.component';
+import { BotControlSidePanelComponent } from './bot-control-side-panel.component';
 import { WorkbenchAuditPanelComponent } from './workbench-audit-panel.component';
 import {
   makeAccountSummary,
@@ -48,6 +50,15 @@ import {
 })
 class ActivityTabStubComponent {
   readonly status = input.required<LiveInstanceStatus>();
+}
+
+@Component({
+  selector: 'app-bot-event-stream',
+  template: '<div data-testid="bot-event-stream-stub">{{ runId() }}</div>',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+})
+class BotEventStreamStubComponent {
+  readonly runId = input.required<string>();
 }
 
 @Component({
@@ -196,6 +207,10 @@ export function installBotControlPageTestStubs(): void {
   TestBed.overrideComponent(BotControlPageComponent, {
     remove: { imports: [ActivityTabComponent, WorkbenchAuditPanelComponent] },
     add: { imports: [ActivityTabStubComponent, WorkbenchAuditPanelStubComponent] },
+  });
+  TestBed.overrideComponent(BotControlSidePanelComponent, {
+    remove: { imports: [BotEventStreamComponent] },
+    add: { imports: [BotEventStreamStubComponent] },
   });
 }
 

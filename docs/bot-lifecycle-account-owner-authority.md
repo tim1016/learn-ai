@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-07-07 (Safety-halt incidents now bridge cold-start poison into Recent Incidents and Bot Control headlines; the deploy form pre-detects durable STOPPED before start-now submissions and switches to deploy-only; deploy now fails closed before ledger creation when a strategy with a deploy-time action-plan contract, currently `deployment_validation`, is missing required legs or submits a plan shape the runtime path cannot consume; not-proven Account Truth start blockers name missing/stale evidence and link directly to Account Monitor's account reconciliation action, while deploy-only staging remains available; Bot Control carries inherited identity and exposure evidence into the deploy form and blocks Deploy & start until any symbol mismatch or non-flat/unknown exposure facts are explicitly confirmed; operation-error alert announcements preserve authored operation title, backend detail, and remediation as separated prose so blocked deploy messages do not concatenate the category with bot-scoped detail.)
+> **Last reviewed:** 2026-07-07 (Safety-halt incidents now bridge cold-start poison into Recent Incidents and Bot Control headlines; the deploy form pre-detects durable STOPPED before start-now submissions and switches to deploy-only; deploy now fails closed before ledger creation when a strategy with a deploy-time action-plan contract, currently `deployment_validation`, is missing required legs or submits a plan shape the runtime path cannot consume; not-proven Account Truth start blockers name missing/stale evidence and link directly to Account Monitor's account reconciliation action, while deploy-only staging remains available; Bot Control carries inherited identity and exposure evidence into the deploy form and blocks Deploy & start until any symbol mismatch or non-flat/unknown exposure facts are explicitly confirmed; operation-error alert announcements preserve authored operation title, backend detail, and remediation as separated prose so blocked deploy messages do not concatenate the category with bot-scoped detail; the run-scoped Bot event stream is the persistent side-panel surface, binds to the live run or evidence run, and renders an honest no-run state with a Fresh run route when neither binding exists.)
 
 ---
 
@@ -142,6 +142,13 @@ and remediation as separate authored clauses in the alert announcement. The
 Frontend may control layout, but it must not concatenate the title/category
 with bot-scoped detail text; backend-authored detail and remediation remain the
 literal operator evidence shown by the alert.
+
+The Bot event stream is the persistent run-history surface beside the lifecycle
+chart. It binds only to `live_binding.run_id` or, when no live binding exists,
+`evidence_binding.run_id`; if neither exists, the side panel must say no run is
+bound yet and route the operator to Fresh run rather than borrowing rows from
+another run. The old activity workbench no longer owns a second copy of the
+stream.
 
 | Canonical node id | Meaning | Primary source of truth |
 |---|---|---|

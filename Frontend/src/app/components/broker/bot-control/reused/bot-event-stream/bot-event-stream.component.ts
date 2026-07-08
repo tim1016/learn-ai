@@ -33,6 +33,7 @@ interface FactEntry {
 interface DisplayRow {
   readonly row: BotEventRow;
   readonly localTime: string;
+  readonly isoTime: string;
   readonly eventLabel: string;
   readonly severityLabel: string;
   readonly sourceLabel: string;
@@ -51,7 +52,7 @@ interface DisplayRow {
   styleUrl: './bot-event-stream.component.scss',
 })
 export class BotEventStreamComponent {
-  readonly runId = input<string | null>(null);
+  readonly runId = input.required<string>();
 
   private readonly injector = inject(Injector);
   private readonly expanded = signal<Set<number>>(new Set());
@@ -60,10 +61,6 @@ export class BotEventStreamComponent {
   constructor() {
     effect((onCleanup) => {
       const runId = this.runId();
-      if (!runId) {
-        this.stream.set(null);
-        return;
-      }
       const next = runInInjectionContext(this.injector, () => botEventRowStream(runId));
       this.stream.set(next);
       onCleanup(() => next.close());
@@ -74,7 +71,7 @@ export class BotEventStreamComponent {
     (this.stream()?.rows() ?? []).map((row) => this.toDisplayRow(row)),
   );
   readonly isLoading = computed<boolean>(() =>
-    this.runId() !== null && (this.stream()?.isLoading() ?? true),
+    this.stream()?.isLoading() ?? true,
   );
   readonly errorMessage = computed<string | null>(() => this.stream()?.errorMessage() ?? null);
   readonly rowCountLabel = computed<string>(() => `${this.rows().length} row(s)`);
@@ -116,6 +113,7 @@ export class BotEventStreamComponent {
     return {
       row,
       localTime: formatLocalTimestamp(row.ts_ms),
+      isoTime: new Date(row.ts_ms).toISOString(),
       eventLabel: formatReceiptLabel(row.event_type),
       severityLabel: formatReceiptLabel(row.severity),
       sourceLabel: formatReceiptLabel(row.source_authority),
