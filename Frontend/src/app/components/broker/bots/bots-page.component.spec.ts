@@ -21,6 +21,7 @@ function bot(overrides: Partial<BotCatalogRow> = {}): BotCatalogRow {
     status_label: 'Ready for paper trading',
     status_detail: 'All readiness checks are passing.',
     status_tone: 'positive',
+    only_fresh_run_available: false,
     needs_attention: false,
     trading_mode: 'live',
     symbols: ['SPY'],
@@ -178,6 +179,26 @@ describe('BotsPageComponent', () => {
     expect(text).not.toContain('RUNNING');
     expect(text).not.toContain('Needs operator review');
     expect(text).not.toContain('Desired state has no durable intent.');
+  });
+
+  it('surfaces catalog rows where Fresh run is the only available lifecycle action', async () => {
+    const { fixture } = await setup();
+    fixture.componentInstance.bots.update((rows) =>
+      rows.map((row) =>
+        row.strategy_instance_id === 'paper-msft'
+          ? {
+              ...row,
+              only_fresh_run_available: true,
+              readiness_verdict: 'BLOCKED',
+            }
+          : row,
+      ),
+    );
+    fixture.detectChanges();
+
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text).toContain('Fresh run only');
+    expect(fixture.componentInstance.paperBots()[0].searchText).toContain('only fresh run available');
   });
 
   it('navigates to the bot control page when a row is clicked', async () => {

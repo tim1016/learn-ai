@@ -234,6 +234,32 @@ h1 {
   white-space: nowrap;
 }
 
+.readiness-cell {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  white-space: normal;
+}
+
+.fresh-run-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  max-width: 100%;
+  padding: 1px 7px;
+  border: 1px solid var(--verdict-blocked);
+  border-radius: 6px;
+  background: var(--verdict-blocked-soft);
+  color: #ffb4b4;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .numeric-cell {
   text-align: right;
   font-variant-numeric: tabular-nums;

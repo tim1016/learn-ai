@@ -30,6 +30,7 @@ def compose_bot_catalog_row(status: LiveInstanceStatus, trading_mode: TradingMod
         status_label=_status_label(status),
         status_detail=_status_detail(status),
         status_tone=_status_tone(readiness_verdict, error_count),
+        only_fresh_run_available=status.lifecycle_chart.only_fresh_run_available,
         needs_attention=error_count > 0 or readiness_verdict in ("BLOCKED", "DEGRADED"),
         trading_mode=trading_mode,
         symbols=_symbols(status),

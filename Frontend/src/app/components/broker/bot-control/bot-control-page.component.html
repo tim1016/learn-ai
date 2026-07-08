@@ -64,6 +64,7 @@
       <app-overview-actions
         class="top-action-banner"
         [actions]="s.lifecycle_chart.actions"
+        [onlyFreshRunAvailable]="s.lifecycle_chart.only_fresh_run_available"
         [busyAction]="busyAction()"
         (actionInvoked)="dispatchOverviewAction($event)"
         (actionTargetHovered)="setHighlightedLifecycleNode($event)"

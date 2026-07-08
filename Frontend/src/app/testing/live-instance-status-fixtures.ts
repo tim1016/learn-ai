@@ -21,6 +21,7 @@ export function makeLifecycleChartFixture(
     chart_id: 'bot_lifecycle_v1',
     selected_bot_id: 'sid-x',
     title: 'Bot lifecycle overview',
+    only_fresh_run_available: false,
     global_graph: {
       graph_id: 'global',
       title: 'Bot lifecycle overview',

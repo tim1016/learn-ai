@@ -51,6 +51,30 @@
   min-width: 0;
 }
 
+.fresh-run-only {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.5rem;
+  max-width: 34rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--verdict-blocked);
+  border-radius: 6px;
+  background: var(--verdict-blocked-soft);
+  color: var(--text-primary);
+  font-size: var(--fs-xs);
+  line-height: 1.25;
+
+  strong,
+  span {
+    overflow-wrap: anywhere;
+  }
+
+  span {
+    color: var(--text-secondary);
+  }
+}
+
 .action-group {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -88,6 +112,11 @@
 @media (max-width: 980px) {
   .action-panel {
     align-items: stretch;
+    flex-direction: column;
+  }
+
+  .fresh-run-only {
+    align-items: flex-start;
     flex-direction: column;
   }
 

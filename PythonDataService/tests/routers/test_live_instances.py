@@ -2059,6 +2059,44 @@ async def test_bot_catalog_authors_trader_friendly_status_and_last_run_labels(
     assert row["last_run_detail"] == "Previous run exited with an error: runtime exception. Exit code 3."
 
 
+async def test_bot_catalog_marks_when_only_fresh_run_is_available(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_repairable_ledger(root, "run-stopped", "stopped_bot", 100)
+    DesiredStateRepo(stable_desired_state_path(root.parent, "stopped_bot")).set(
+        DesiredState.STOPPED,
+        updated_by="operator",
+        reason="retired run",
+        now_ms=200,
+    )
+    _set_daemon(
+        monkeypatch,
+        instances={
+            "instances": [
+                {
+                    "strategy_instance_id": "stopped_bot",
+                    "run_id": "run-stopped",
+                    "run_dir": str(root / "run-stopped"),
+                    "process": {"state": "exited", "run_id": "run-stopped"},
+                }
+            ],
+            "fetched_at_ms": 1,
+        },
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/catalog")
+        status_response = await client.get("/api/live-instances/stopped_bot/status")
+
+    assert response.status_code == 200
+    row = response.json()["bots"][0]
+    assert row["strategy_instance_id"] == "stopped_bot"
+    assert row["only_fresh_run_available"] is True
+    assert status_response.status_code == 200
+    assert status_response.json()["lifecycle_chart"]["only_fresh_run_available"] is True
+
+
 async def test_bot_catalog_does_not_fallback_unknown_symbol_to_instance_id(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:

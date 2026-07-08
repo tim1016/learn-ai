@@ -2188,6 +2188,7 @@ class BotLifecycleChartView(BaseModel):
     global_graph: LifecycleChartGraph
     subgraphs: dict[str, LifecycleChartGraph] = Field(default_factory=dict)
     actions: list[LifecycleChartAction] = Field(default_factory=list)
+    only_fresh_run_available: bool = False
 
 
 class LiveInstanceStatus(BaseModel):
@@ -2646,6 +2647,7 @@ class BotCatalogRow(BaseModel):
     status_label: str
     status_detail: str | None = None
     status_tone: Literal["positive", "warning", "danger", "neutral"] = "neutral"
+    only_fresh_run_available: bool = False
     needs_attention: bool
     trading_mode: Literal["paper", "live", "unknown"] = "unknown"
     symbols: list[str] = Field(default_factory=list)

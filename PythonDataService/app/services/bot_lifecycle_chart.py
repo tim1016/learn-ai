@@ -284,13 +284,15 @@ def compose_bot_lifecycle_chart(
     facts = _lifecycle_facts(surface, desired_state, lifecycle_events, receipt_context=receipt_context)
     subgraphs = {graph_id: _build_graph(graph_def, facts) for graph_id, graph_def in SUBGRAPH_DEFS.items()}
     global_graph = _build_graph(GLOBAL_GRAPH, facts, expandable_graph_ids=subgraphs.keys())
+    actions = _actions(surface, redeploy_available=redeploy_available)
     return BotLifecycleChartView(
         chart_id="bot_lifecycle_v1",
         selected_bot_id=strategy_instance_id,
         title=GLOBAL_GRAPH.title,
         global_graph=global_graph,
         subgraphs=subgraphs,
-        actions=_actions(surface, redeploy_available=redeploy_available),
+        actions=actions,
+        only_fresh_run_available=_only_fresh_run_available(actions),
     )
 
 
@@ -1184,6 +1186,11 @@ def _actions(surface: OperatorSurface, *, redeploy_available: bool) -> list[Life
             tone="secondary",
         ),
     ]
+
+
+def _only_fresh_run_available(actions: list[LifecycleChartAction]) -> bool:
+    enabled_actions = [action.id for action in actions if action.enabled]
+    return len(enabled_actions) == 1 and enabled_actions[0] == "redeploy"
 
 
 def _action(

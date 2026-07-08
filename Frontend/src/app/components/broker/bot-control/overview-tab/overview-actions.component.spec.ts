@@ -110,4 +110,69 @@ describe('OverviewActionsComponent', () => {
 
     expect(invoked).not.toHaveBeenCalled();
   });
+
+  it('calls out when the backend marks Fresh run as the only available action', () => {
+    TestBed.configureTestingModule({
+      providers: [provideZonelessChangeDetection()],
+    });
+    const fixture = TestBed.createComponent(OverviewActionsComponent);
+    fixture.componentRef.setInput('onlyFreshRunAvailable', true);
+    fixture.componentRef.setInput('actions', [
+      action({
+        id: 'start_process',
+        label: 'Start bot process',
+        enabled: false,
+        reason_headline: 'Stopped',
+        reason_detail: 'Resume is required first.',
+      }),
+      action({
+        id: 'resume',
+        label: 'Resume',
+        enabled: false,
+        reason_headline: 'Broker safety unknown',
+        reason_detail: 'Paper-only proof is missing.',
+      }),
+      action({
+        id: 'pause',
+        label: 'Pause',
+        enabled: false,
+        reason_headline: 'Already stopped',
+        reason_detail: 'Pause is unavailable.',
+      }),
+      action({ id: 'redeploy', label: 'Redeploy' }),
+    ]);
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('[data-testid="fresh-run-only-notice"]')?.textContent).toContain(
+      'Only Fresh run is available',
+    );
+    expect(el.querySelector<HTMLButtonElement>('[aria-label="Fresh run"]')?.classList.contains('is-on'))
+      .toBe(true);
+    expect(el.querySelector<HTMLButtonElement>('[aria-label="Start bot process"]')?.classList.contains('is-off'))
+      .toBe(true);
+  });
+
+  it('does not infer the Fresh-run-only notice from enabled actions', () => {
+    TestBed.configureTestingModule({
+      providers: [provideZonelessChangeDetection()],
+    });
+    const fixture = TestBed.createComponent(OverviewActionsComponent);
+    fixture.componentRef.setInput('onlyFreshRunAvailable', false);
+    fixture.componentRef.setInput('actions', [
+      action({
+        id: 'start_process',
+        label: 'Start bot process',
+        enabled: false,
+        reason_headline: 'Stopped',
+        reason_detail: 'Resume is required first.',
+      }),
+      action({ id: 'redeploy', label: 'Redeploy' }),
+    ]);
+    fixture.detectChanges();
+
+    expect(
+      (fixture.nativeElement as HTMLElement).querySelector('[data-testid="fresh-run-only-notice"]'),
+    ).toBeNull();
+  });
 });
