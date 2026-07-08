@@ -242,7 +242,7 @@ def test_notice_rejects_no_remedy_without_remedy_status():
 def test_notice_code_contract_exhaustive_and_pinned():
     codes = list(get_literal_args(OperatorNoticeCode))
     assert list(NOTICE_CODE_CONTRACTS) == codes
-    for code, contract in NOTICE_CODE_CONTRACTS.items():
+    for contract in NOTICE_CODE_CONTRACTS.values():
         if contract.actionability == "no_remedy":
             assert contract.remedy_status in {"inherent", "unbuilt"}
         else:

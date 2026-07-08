@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from pathlib import Path
 
-from app.engine.live.account_artifacts import AccountAuditedOverride, append_account_event
+from app.engine.live.account_artifacts import AccountArtifactError, AccountAuditedOverride, append_account_event
 from app.engine.live.account_registry import AccountInstanceBinding, crash_retired_restart_blocking_binding
 from app.schemas.account_recovery import CrashRecoveryOverrideRequest, CrashRecoveryOverrideResponse
 from app.schemas.live_runs import GateResult
+
+logger = logging.getLogger(__name__)
 
 CRASH_RECOVERY_GATE_ID = "account.crash_recovery"
 CRASH_RECOVERY_OVERRIDE_VALID_FOR_MS = 15 * 60 * 1000
@@ -36,13 +40,30 @@ def crash_recovery_gate_for_instance(
     account_id: str | None,
     strategy_instance_id: str,
 ) -> GateResult | None:
+    """Project the crash-recovery gate for the read-only operator surface.
+
+    Observability reads degrade on corrupt account artifacts instead of
+    failing the whole status projection; the start-mutation path stays
+    fail-closed by letting the same errors propagate.
+    """
     if account_id is None:
         return None
-    binding = crash_retired_restart_blocking_binding(
-        artifacts_root,
-        account_id=account_id,
-        strategy_instance_id=strategy_instance_id,
-    )
+    try:
+        binding = crash_retired_restart_blocking_binding(
+            artifacts_root,
+            account_id=account_id,
+            strategy_instance_id=strategy_instance_id,
+        )
+    except (OSError, json.JSONDecodeError, AccountArtifactError) as exc:
+        logger.warning(
+            "failed to read account artifacts while projecting crash-recovery gate",
+            extra={
+                "account_id": account_id,
+                "strategy_instance_id": strategy_instance_id,
+                "exception": repr(exc),
+            },
+        )
+        return None
     if binding is None:
         return None
     return crash_recovery_gate(binding)
