@@ -46,3 +46,50 @@ Object.defineProperty(window, 'matchMedia', {
     dispatchEvent: () => false,
   }),
 });
+
+// jsdom's Web Storage can be shadowed by Node's own experimental global
+// `localStorage`/`sessionStorage` (Node ≥22), which is undefined unless
+// `--localstorage-file` is passed and takes precedence on globalThis. On a
+// host Node that new, bare `localStorage` in a spec resolves to that undefined
+// global and every setup `localStorage.clear()` throws. Install a minimal
+// in-memory Storage only when the ambient one is unusable, so CI's pinned-Node
+// jsdom storage is left untouched.
+function installStorageIfMissing(key: 'localStorage' | 'sessionStorage'): void {
+  const globalWithStorage = globalThis as unknown as Record<string, Storage | undefined>;
+  try {
+    const existing = globalWithStorage[key];
+    if (existing) {
+      existing.setItem('__probe__', '1');
+      existing.removeItem('__probe__');
+      return;
+    }
+  } catch {
+    // Ambient storage exists but is unusable (Node's flag-gated global);
+    // fall through and install the in-memory replacement below.
+  }
+  const store = new Map<string, string>();
+  const storage: Storage = {
+    get length(): number {
+      return store.size;
+    },
+    clear(): void {
+      store.clear();
+    },
+    getItem(itemKey: string): string | null {
+      return store.has(itemKey) ? (store.get(itemKey) as string) : null;
+    },
+    key(index: number): string | null {
+      return Array.from(store.keys())[index] ?? null;
+    },
+    removeItem(itemKey: string): void {
+      store.delete(itemKey);
+    },
+    setItem(itemKey: string, value: string): void {
+      store.set(String(itemKey), String(value));
+    },
+  };
+  Object.defineProperty(globalThis, key, { configurable: true, value: storage });
+}
+
+installStorageIfMissing('localStorage');
+installStorageIfMissing('sessionStorage');
