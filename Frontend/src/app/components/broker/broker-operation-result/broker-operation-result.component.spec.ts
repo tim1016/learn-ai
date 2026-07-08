@@ -31,6 +31,19 @@ describe('BrokerOperationResultComponent', () => {
     expect(el.textContent).toContain('Commit or stash');
   });
 
+  it('separates the blocked title from the bot-scoped detail in alert text', () => {
+    const fixture = render({
+      ...ERR,
+      detail: 'deiagAPPL6 is durably STOPPED. Resume the bot to clear the stop latch.',
+    });
+    const alert = (fixture.nativeElement as HTMLElement).querySelector<HTMLElement>('[role="alert"]');
+    const announcedCopy = alert?.querySelector<HTMLElement>('.sr-only');
+
+    expect(alert?.textContent).toContain('Deploy — blocked deiagAPPL6');
+    expect(announcedCopy?.textContent).toContain('Deploy — blocked deiagAPPL6');
+    expect(alert?.textContent).not.toContain('Deploy — blockeddeiagAPPL6');
+  });
+
   it('renders nothing when error is null', () => {
     const fixture = render(null);
     expect((fixture.nativeElement as HTMLElement).querySelector('.op-result')).toBeNull();
