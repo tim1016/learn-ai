@@ -170,7 +170,7 @@ def write_operator_surface_fixtures(fixtures: dict[str, dict[str, Any]]) -> None
     _FIXTURE_DIR.mkdir(parents=True, exist_ok=True)
     for name, payload in fixtures.items():
         target = _FIXTURE_DIR / f"{name}.json"
-        target.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(f"wrote {target}")
 
 
