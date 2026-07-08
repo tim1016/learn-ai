@@ -199,8 +199,8 @@ describe('OverviewTabComponent', () => {
     fixture.detectChanges();
     expect(renderedText(fixture)).toContain('Bot lifecycle overview');
 
-    const node = fixture.componentInstance.chart().global_graph.nodes[0];
-    fixture.componentInstance.expandNode(node);
+    const el = fixture.nativeElement as HTMLElement;
+    el.querySelector<HTMLButtonElement>('[aria-label^="Open Deploy or start details"]')?.click();
     fixture.detectChanges();
     expect(renderedText(fixture)).toContain('Deploy and start internals');
     expect(renderedText(fixture)).toContain('Host state');
@@ -222,11 +222,68 @@ describe('OverviewTabComponent', () => {
     fixture.componentInstance.nodeSelected.subscribe(nodeSelected);
     fixture.detectChanges();
 
-    const node = fixture.componentInstance.chart().global_graph.nodes.find((candidate) => !candidate.expandable);
-    if (!node) throw new Error('Expected a non-expandable lifecycle node in fixture.');
-    fixture.componentInstance.expandNode(node);
-    expect(nodeSelected).toHaveBeenCalledWith(node);
+    const el = fixture.nativeElement as HTMLElement;
+    el.querySelector<HTMLButtonElement>('[aria-label^="Select Monitor live bot"]')?.click();
+    expect(nodeSelected).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'active' }),
+    );
     expect(renderedText(fixture)).toContain('Bot lifecycle overview');
+  });
+
+  it('expands node receipts with a dedicated header button and one open region', () => {
+    TestBed.configureTestingModule({
+      imports: [OverviewTabComponent],
+      providers: [provideZonelessChangeDetection()],
+    });
+
+    const fixture = TestBed.createComponent(OverviewTabComponent);
+    const status = makeStatus();
+    const deploy = status.lifecycle_chart.global_graph.nodes[0];
+    const preflight = status.lifecycle_chart.global_graph.nodes[1];
+    deploy.receipts = [
+      {
+        label: 'deploy.state',
+        value: 'READY',
+        headline: 'Deploy gate is ready.',
+        detail: 'The host start gate is ready.',
+        unit: null,
+        source: 'operator_surface',
+        gate_id: 'desired_state.start',
+        ts_ms: 1_700_000_000_000,
+        ts_ms_resolved: true,
+      },
+    ];
+    fixture.componentRef.setInput('status', status);
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    const deployNode = el.querySelector<HTMLElement>('app-lifecycle-node-card .flow-node');
+    expect(deployNode?.getAttribute('role')).toBeNull();
+
+    const deployToggle = el.querySelector<HTMLButtonElement>(
+      '[aria-controls="lifecycle-node-receipts-global-deploy"]',
+    );
+    expect(deployToggle?.getAttribute('aria-expanded')).toBe('false');
+    deployToggle?.click();
+    fixture.detectChanges();
+
+    const deployReceipts = el.querySelector<HTMLElement>('[data-testid="lifecycle-node-receipts-deploy"]');
+    expect(deployToggle?.getAttribute('aria-expanded')).toBe('true');
+    expect(deployReceipts?.textContent).toContain('Deploy gate is ready.');
+    expect(deployReceipts?.textContent).toContain('Deploy State is Ready.');
+    expect(deployReceipts?.querySelector(':scope > app-node-receipts-list')).not.toBeNull();
+    expect(deployReceipts?.querySelector(':scope > details')).toBeNull();
+
+    const preflightToggle = el.querySelector<HTMLButtonElement>(
+      '[aria-controls="lifecycle-node-receipts-global-preflight"]',
+    );
+    preflightToggle?.click();
+    fixture.detectChanges();
+
+    expect(el.querySelector('[data-testid="lifecycle-node-receipts-deploy"]')).toBeNull();
+    expect(el.querySelector('[data-testid="lifecycle-node-receipts-preflight"]')?.textContent)
+      .toContain('No node-scoped receipts have been emitted');
+    expect(preflightToggle?.getAttribute('aria-expanded')).toBe('true');
+    expect(preflight.id).toBe('preflight');
   });
 
   it('renders backend-authored branch transitions as in-flow arrows without requiring a pan-zoom viewport', () => {

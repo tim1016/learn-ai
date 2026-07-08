@@ -8,6 +8,7 @@ import type {
   LiveInstanceStatus,
   OperatorSurfaceBlockageStage,
 } from '../../../../api/live-instances.types';
+import { LifecycleNodeCardComponent } from './lifecycle-node-card.component';
 
 interface ExpandedGraphSelection {
   readonly chartKey: string;
@@ -21,7 +22,7 @@ interface LifecycleFlowRow {
 
 @Component({
   selector: 'app-overview-tab',
-  imports: [CommonModule],
+  imports: [CommonModule, LifecycleNodeCardComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './overview-tab.component.html',
   styleUrl: './overview-tab.component.scss',
@@ -33,6 +34,7 @@ export class OverviewTabComponent {
   readonly nodeSelected = output<LifecycleChartNode>();
 
   readonly expandedGraphSelection = signal<ExpandedGraphSelection | null>(null);
+  readonly expandedReceiptNodeId = signal<string | null>(null);
   readonly chart = computed(() => this.status().lifecycle_chart);
   readonly chartKey = computed(() => {
     const status = this.status();
@@ -86,26 +88,47 @@ export class OverviewTabComponent {
   expandNode(node: LifecycleChartNode): void {
     this.nodeSelected.emit(node);
     if (!node.expandable || !node.subgraph_id || !this.chart().subgraphs[node.subgraph_id]) return;
+    this.expandedReceiptNodeId.set(null);
     this.expandedGraphSelection.set({
       chartKey: this.chartKey(),
       graphId: node.subgraph_id,
     });
   }
 
-  onNodeKeydown(event: KeyboardEvent, node: LifecycleChartNode): void {
-    if (event.key !== 'Enter' && event.key !== ' ') return;
-    event.preventDefault();
-    this.expandNode(node);
+  toggleNodeReceipts(node: LifecycleChartNode): void {
+    this.nodeSelected.emit(node);
+    const key = this.nodeReceiptKey(node);
+    this.expandedReceiptNodeId.update((current) => current === key ? null : key);
   }
 
-  nodeAriaLabel(node: LifecycleChartNode): string {
-    const action = node.expandable ? 'Open' : 'Select';
+  isNodeReceiptsExpanded(node: LifecycleChartNode): boolean {
+    return this.expandedReceiptNodeId() === this.nodeReceiptKey(node);
+  }
+
+  nodeReceiptRegionId(node: LifecycleChartNode): string {
+    return `lifecycle-node-receipts-${this.currentGraph().graph_id}-${node.id}`;
+  }
+
+  nodeHeadingId(node: LifecycleChartNode): string {
+    return `lifecycle-node-heading-${this.currentGraph().graph_id}-${node.id}`;
+  }
+
+  nodeReceiptToggleLabel(node: LifecycleChartNode): string {
+    const action = this.isNodeReceiptsExpanded(node) ? 'Hide' : 'Show';
     const callout = this.isBlockingNode(node)
       ? ' Blocking step.'
       : this.isPrimaryNode(node)
         ? ' Current step.'
         : '';
-    return `${action} ${node.label}. Status: ${node.status_label}.${callout}`;
+    return `${action} receipts for ${node.label}. Status: ${node.status_label}.${callout}`;
+  }
+
+  nodeReceiptKey(node: LifecycleChartNode): string {
+    return `${this.chartKey()}:${this.currentGraph().graph_id}:${node.id}`;
+  }
+
+  selectNode(node: LifecycleChartNode): void {
+    this.nodeSelected.emit(node);
   }
 
   isPrimaryNode(node: LifecycleChartNode): boolean {

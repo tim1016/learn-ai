@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-07-07 (Safety-halt incidents now bridge cold-start poison into Recent Incidents and Bot Control headlines; the deploy form pre-detects durable STOPPED before start-now submissions and switches to deploy-only; deploy now fails closed before ledger creation when a strategy with a deploy-time action-plan contract, currently `deployment_validation`, is missing required legs or submits a plan shape the runtime path cannot consume; not-proven Account Truth start blockers name missing/stale evidence and link directly to Account Monitor's account reconciliation action, while deploy-only staging remains available; Bot Control carries inherited identity and exposure evidence into the deploy form and blocks Deploy & start until any symbol mismatch or non-flat/unknown exposure facts are explicitly confirmed; operation-error alert announcements preserve authored operation title, backend detail, and remediation as separated prose so blocked deploy messages do not concatenate the category with bot-scoped detail; the run-scoped Bot event stream is the persistent side-panel surface, binds to the live run or evidence run, and renders an honest no-run state with a Fresh run route when neither binding exists.)
+> **Last reviewed:** 2026-07-07 (Safety-halt incidents now bridge cold-start poison into Recent Incidents and Bot Control headlines; the deploy form pre-detects durable STOPPED before start-now submissions and switches to deploy-only; deploy now fails closed before ledger creation when a strategy with a deploy-time action-plan contract, currently `deployment_validation`, is missing required legs or submits a plan shape the runtime path cannot consume; not-proven Account Truth start blockers name missing/stale evidence and link directly to Account Monitor's account reconciliation action, while deploy-only staging remains available; Bot Control carries inherited identity and exposure evidence into the deploy form and blocks Deploy & start until any symbol mismatch or non-flat/unknown exposure facts are explicitly confirmed; operation-error alert announcements preserve authored operation title, backend detail, and remediation as separated prose so blocked deploy messages do not concatenate the category with bot-scoped detail; the run-scoped Bot event stream is the persistent side-panel surface, binds to the live run or evidence run, and renders an honest no-run state with a Fresh run route when neither binding exists; lifecycle chart nodes are non-interactive containers with a dedicated receipts button and one expanded node-scoped receipt region at a time.)
 
 ---
 
@@ -121,10 +121,14 @@ Each lifecycle node carries its own receipt list plus an
 or `no-action-needed`. Receipt rows are backend-authored operator copy with
 `headline` and optional `detail` fields. Raw receipt ids, source/gate ids,
 reason codes, values, and timestamps remain audit payload, not primary trader
-instructions. The bot control page right-pane inspector is selected-node scoped: it may
-show only the selected node's backend receipts and the node actionability
-banner. Whole-bot proof lines and advanced diagnostics belong in the lower
-audit panel so they do not imply that every selected node has direct evidence.
+instructions. The lifecycle chart renders those receipts in the node itself:
+the node card is a non-interactive container, a dedicated header button toggles
+one expanded receipt region at a time, and nodes without emitted receipts say so
+inside the node rather than borrowing whole-status evidence. The bot control
+page right-pane inspector is selected-node scoped: it may show only the
+selected node's backend receipts and the node actionability banner. Whole-bot
+proof lines and advanced diagnostics belong in the lower audit panel so they do
+not imply that every selected node has direct evidence.
 
 When the backend does not yet fold an evidence family into a node, it must say
 so honestly with a node-scoped receipt rather than borrowing a whole-status or

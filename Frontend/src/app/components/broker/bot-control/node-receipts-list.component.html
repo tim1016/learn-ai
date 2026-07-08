@@ -1,0 +1,17 @@
+<ul class="context-receipts-list">
+  @for (receipt of receipts(); track trackNodeReceipt($index, receipt)) {
+    <li>
+      <p class="receipt-headline" data-trader-copy>{{ receiptHeadline(receipt) }}</p>
+      @if (receipt.detail) {
+        <p class="receipt-detail" data-trader-copy>{{ receipt.detail }}</p>
+      }
+      <details class="receipt-audit" [attr.title]="receiptDetail(receipt)">
+        <summary>Audit payload</summary>
+        <span data-receipt>{{ receiptLine(receipt) }}</span>
+        @if (receiptDetail(receipt); as detail) {
+          <span class="audit-detail">{{ detail }}</span>
+        }
+      </details>
+    </li>
+  }
+</ul>
