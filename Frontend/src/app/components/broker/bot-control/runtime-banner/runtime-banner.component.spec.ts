@@ -1,6 +1,10 @@
 import { render, screen } from '@testing-library/angular';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RuntimeBannerComponent, STALE_DEBOUNCE_MS } from './runtime-banner.component';
+import {
+  CRITICAL_CLEAR_DEBOUNCE_MS,
+  RuntimeBannerComponent,
+  STALE_DEBOUNCE_MS,
+} from './runtime-banner.component';
 import type { OperatorNotice, OperatorSurfaceRuntimeFreshness } from '../../../../api/live-instances.types';
 
 function withHeadline(): OperatorSurfaceRuntimeFreshness {
@@ -148,6 +152,26 @@ describe('RuntimeBannerComponent', () => {
     f.posture_demoted = true;
     await render(RuntimeBannerComponent, { inputs: { freshness: f } });
     expect(screen.getByText('Command loop unresponsive')).toBeTruthy();
+  });
+
+  it('keeps critical freshness headlines visible through a single fresh poll', async () => {
+    const stale = freshFreshness();
+    stale.headline = criticalFreshnessNotice();
+    stale.posture_demoted = true;
+    const fresh = freshFreshness();
+
+    const { rerender, container } = await render(RuntimeBannerComponent, {
+      inputs: { freshness: stale },
+    });
+    expect(screen.getByText('Command loop unresponsive')).toBeTruthy();
+
+    await rerender({ inputs: { freshness: fresh } });
+
+    expect(screen.getByText('Command loop unresponsive')).toBeTruthy();
+
+    await vi.advanceTimersByTimeAsync(CRITICAL_CLEAR_DEBOUNCE_MS + 1_000);
+
+    expect(container.querySelector('[data-testid="runtime-banner"]')).toBeNull();
   });
 
   it('emits operator notice actions from the freshness headline', async () => {
