@@ -136,6 +136,9 @@ async def bootstrap_publisher_for_instance(
     envelope_path = _live_state_path_for_request(
         artifacts_root, safe_strategy_instance_id
     )
+    # _live_state_path_for_request validates the URL segment, confines it
+    # below artifacts/live_state, and returns the confined path directly.
+    # codeql[py/path-injection]
     if not envelope_path.is_file():
         raise PublisherBootstrapError(
             "no_envelope",

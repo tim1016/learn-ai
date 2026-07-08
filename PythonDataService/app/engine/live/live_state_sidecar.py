@@ -200,6 +200,9 @@ def _fsync_parent_dir(child_path: Path) -> None:
     """
     if sys.platform == "win32":
         return
+    # Paths reaching this helper are produced by confined sidecar builders
+    # (see identity.strategy_instance_artifact_dir and its regression tests).
+    # codeql[py/path-injection]
     dir_fd = os.open(child_path.parent, os.O_RDONLY)
     try:
         os.fsync(dir_fd)

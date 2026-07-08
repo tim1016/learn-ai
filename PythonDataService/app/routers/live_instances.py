@@ -1035,6 +1035,9 @@ def _container_resolve_repo_path(path: str) -> list[Path]:
         if rel.is_absolute() or any(part in ("", ".", "..") for part in rel.parts):
             return None
         root_resolved = os.path.realpath(root)
+        # relative_path is rejected when absolute or containing traversal
+        # segments, then commonpath confines the materialized candidate below root.
+        # codeql[py/path-injection]
         resolved = os.path.realpath(os.path.join(root_resolved, *rel.parts))
         try:
             common = os.path.commonpath([root_resolved, resolved])
@@ -1042,6 +1045,8 @@ def _container_resolve_repo_path(path: str) -> list[Path]:
             return None
         if common != root_resolved:
             return None
+        # resolved is the confined commonpath-checked candidate above.
+        # codeql[py/path-injection]
         candidate = Path(resolved)
         return candidate if candidate.is_file() else None
 
