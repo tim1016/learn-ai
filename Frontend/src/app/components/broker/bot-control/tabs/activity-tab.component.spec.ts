@@ -247,6 +247,7 @@ function activityProjection(overrides: Partial<LiveInstanceActivityProjection> =
     position_annotations: [],
     order_overlays: [],
     orders_today: [],
+    broker_activity_summary: [],
     broker_activity_rows: [],
     position_snapshot: [],
     reconciliation_warnings: [],

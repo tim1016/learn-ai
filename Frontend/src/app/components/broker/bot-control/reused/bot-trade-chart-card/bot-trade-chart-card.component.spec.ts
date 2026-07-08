@@ -25,6 +25,7 @@ const bar = (startMs: number): IbkrMinuteBar => ({
   close: '100.5',
   volume: 100,
   fetched_at_ms: startMs + 60_000,
+  source: 'ibkr',
 });
 
 describe('isAtLiveEdge', () => {

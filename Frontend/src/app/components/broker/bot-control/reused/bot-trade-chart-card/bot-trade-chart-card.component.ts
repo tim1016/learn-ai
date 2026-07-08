@@ -51,24 +51,31 @@ const POLL_INTERVAL_MS = 5_000;
 // every new bar emit but still flips it off as soon as the user pans back
 // a couple of bars to inspect history.
 const LIVE_EDGE_THRESHOLD_BARS = 0.5;
+const LOCAL_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+function formatLocalDate(ms: number, options: Intl.DateTimeFormatOptions): string {
+  return new Date(ms).toLocaleString(undefined, {
+    ...options,
+    timeZone: LOCAL_TIME_ZONE,
+  });
+}
 
 // Hand-rolled formatters that use the browser's local TZ instead of UTC.
 function formatLocalTickMark(time: UTCTimestamp, tickMarkType: number): string {
-  const d = new Date((time as number) * 1000);
-  const pad = (n: number) => n.toString().padStart(2, '0');
+  const ms = (time as number) * 1000;
   switch (tickMarkType) {
     case 0:
-      return d.getFullYear().toString();
+      return formatLocalDate(ms, { year: 'numeric' });
     case 1:
-      return d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+      return formatLocalDate(ms, { month: 'short', year: 'numeric' });
     case 2:
-      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      return formatLocalDate(ms, { month: 'short', day: 'numeric' });
     case 3:
-      return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      return formatLocalDate(ms, { hour: '2-digit', minute: '2-digit', hour12: false });
     case 4:
-      return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+      return formatLocalDate(ms, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
     default:
-      return '';
+      return formatLocalDate(ms, { hour: '2-digit', minute: '2-digit', hour12: false });
   }
 }
 
@@ -217,6 +224,11 @@ const TIMEFRAME_META: Record<
 const CHART_HEIGHT_PX = 380;
 const TIMEFRAME_OPTIONS: ChartTimeframe[] = ['1m', '5m', '15m', '1h', '1d'];
 
+interface SnapshotCache {
+  readonly key: string;
+  readonly snapshot: ChartSnapshotResponse;
+}
+
 @Component({
   selector: 'app-bot-trade-chart-card',
   imports: [AssetIdentityComponent],
@@ -274,6 +286,7 @@ export class BotTradeChartCardComponent {
   private activeLine: IPriceLine | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private lastCandleSignature = '';
 
   protected readonly windowFromMs = computed<number>(() => localDateStartMs(this.rangeStartDate()));
   protected readonly windowToMs = computed<number>(() => {
@@ -285,6 +298,16 @@ export class BotTradeChartCardComponent {
   protected readonly activityResolution = computed<ChartBaseResolution>(() =>
     this.timeframe() === '5s' ? '5s' : '1m',
   );
+  protected readonly localTimeZone = LOCAL_TIME_ZONE;
+  private readonly snapshotCacheKey = computed<string>(() =>
+    [
+      this.strategyInstanceId() ?? 'none',
+      this.rangeStartDate(),
+      this.rangeEndDate(),
+      this.timeframe(),
+    ].join(':'),
+  );
+  private readonly snapshotCache = signal<SnapshotCache | null>(null);
 
   protected readonly snapshotResource = resource<
     ChartSnapshotResponse | null,
@@ -305,12 +328,19 @@ export class BotTradeChartCardComponent {
       this.loadSnapshot(params.instanceId, params.fromMs, params.toMs, params.timeframe),
   });
 
+  private readonly snapshot = computed<ChartSnapshotResponse | null>(() => {
+    const current = this.snapshotResource.value();
+    if (current) return current;
+    const cached = this.snapshotCache();
+    return cached?.key === this.snapshotCacheKey() ? cached.snapshot : null;
+  });
+
   protected readonly bars = computed<IbkrMinuteBar[]>(
-    () => this.snapshotResource.value()?.bars ?? [],
+    () => this.snapshot()?.bars ?? [],
   );
 
   protected readonly runs = computed<ChartSnapshotRun[]>(
-    () => this.snapshotResource.value()?.runs ?? [],
+    () => this.snapshot()?.runs ?? [],
   );
 
   protected readonly overlayBarCount = computed<number>(() =>
@@ -319,13 +349,13 @@ export class BotTradeChartCardComponent {
   protected readonly mixedBarCount = computed<number>(() =>
     this.bars().filter((bar) => bar.source === 'mixed').length,
   );
-  protected readonly overlayNotices = computed(() => this.snapshotResource.value()?.overlay_notices ?? []);
-  protected readonly liveStreaming = computed<boolean>(() => this.snapshotResource.value()?.is_streaming ?? false);
+  protected readonly overlayNotices = computed(() => this.snapshot()?.overlay_notices ?? []);
+  protected readonly liveStreaming = computed<boolean>(() => this.snapshot()?.is_streaming ?? false);
 
   protected readonly statusLabel = computed<string>(() => {
     if (this.strategyInstanceId() === null) return 'No instance selected';
     if (this.symbol() === null) return 'No symbol resolved yet';
-    const snap = this.snapshotResource.value();
+    const snap = this.snapshot();
     if (!snap) return this.snapshotResource.isLoading() ? 'Loading…' : '';
     if (!snap.has_bars) return 'No bars in selected range';
     if (snap.is_streaming) return 'Streaming';
@@ -333,7 +363,7 @@ export class BotTradeChartCardComponent {
   });
 
   protected readonly statusTone = computed<'ok' | 'warn' | 'bad' | 'idle'>(() => {
-    const snap = this.snapshotResource.value();
+    const snap = this.snapshot();
     if (snap === null || snap === undefined) {
       return this.snapshotResource.isLoading() ? 'warn' : 'idle';
     }
@@ -356,6 +386,16 @@ export class BotTradeChartCardComponent {
   constructor() {
     effect(() => {
       this.timeframe.set(this.initialTimeframe());
+    });
+
+    effect(() => {
+      const snap = this.snapshotResource.value();
+      if (snap) {
+        this.snapshotCache.set({
+          key: this.snapshotCacheKey(),
+          snapshot: snap,
+        });
+      }
     });
 
     effect(() => {
@@ -479,10 +519,9 @@ export class BotTradeChartCardComponent {
     const el = this.container().nativeElement;
     const m = this.meta();
     const crosshairTimeFormatter = (time: Time): string => {
-      const d = new Date((time as number) * 1000);
       return this.meta().secondsVisible
-        ? d.toLocaleTimeString(undefined, { hour12: false })
-        : d.toLocaleTimeString(undefined, {
+        ? formatLocalDate((time as number) * 1000, { hour12: false })
+        : formatLocalDate((time as number) * 1000, {
             hour: '2-digit',
             minute: '2-digit',
             hour12: false,
@@ -516,6 +555,7 @@ export class BotTradeChartCardComponent {
         pinch: false,
       },
       timeScale: {
+        visible: true,
         timeVisible: true,
         secondsVisible: m.secondsVisible,
         borderColor: 'rgba(148, 163, 184, 0.2)',
@@ -560,6 +600,11 @@ export class BotTradeChartCardComponent {
       timeScale?.getVisibleLogicalRange() ?? null,
     );
     const bars = this.bars();
+    const signature = bars
+      .map((b) => `${b.start_ms}:${b.end_ms}:${b.open}:${b.high}:${b.low}:${b.close}:${b.source}`)
+      .join('|');
+    if (signature === this.lastCandleSignature) return;
+    this.lastCandleSignature = signature;
     this.candles.setData(
       bars.map((b) => {
         const open = Number(b.open);
@@ -572,12 +617,11 @@ export class BotTradeChartCardComponent {
           close,
         };
         if (b.source === 'polygon') {
-          const color = close >= open ? 'rgba(96, 165, 250, 0.36)' : 'rgba(248, 113, 113, 0.34)';
           return {
             ...base,
-            color,
-            borderColor: '#60a5fa',
-            wickColor: '#60a5fa',
+            color: 'rgba(148, 163, 184, 0.24)',
+            borderColor: 'rgba(203, 213, 225, 0.72)',
+            wickColor: 'rgba(203, 213, 225, 0.58)',
           };
         }
         if (b.source === 'mixed') {
