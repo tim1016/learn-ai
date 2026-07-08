@@ -21,7 +21,10 @@ import pyarrow.parquet as pq
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.engine.live.halt import PoisonedHaltReason, PoisonedHaltTrigger
 from app.main import app
+from app.operator.incidents.safety_halt_notices import build_safety_halt_incident
+from app.operator.incidents.store import IncidentStore
 from app.schemas.live_runs import ExitReason, RunStatusSidecar
 
 # ---------------------------------------------------------------------------
@@ -531,6 +534,149 @@ async def test_incidents_empty_when_no_log(live_runs_root):
 
     assert response.status_code == 200
     assert response.json() == []
+
+
+async def test_incidents_returns_safety_halt_operator_incident_without_log(live_runs_root):
+    run_id = "run-safety-halt-" + "s" * 48
+    run_dir = live_runs_root / run_id
+    run_dir.mkdir()
+    _write_ledger(run_dir, run_id)
+    IncidentStore(run_dir).append(
+        build_safety_halt_incident(
+            strategy_instance_id="spy_ema_paper",
+            run_id=run_id,
+            halt_reason=PoisonedHaltReason(
+                trigger=PoisonedHaltTrigger.COLD_START_DIVERGENCE,
+                halted_at_ms=1_781_014_378_021,
+                last_clean_bar_close_ms=1_781_014_300_000,
+                details={"reason": "foreign_perm_id", "source": "reconciliation_orchestrator"},
+            ),
+            artifact_path=run_dir / "poisoned.flag",
+            log_path=run_dir / "live.log",
+        )
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-runs/{run_id}/incidents")
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 1
+    assert rows[0]["incident_category"] == "cold_start_divergence"
+    assert rows[0]["incident_source"] == "app"
+    assert rows[0]["dynamic_facts"]["run_id"] == run_id
+    assert rows[0]["dynamic_facts"]["halt_trigger"] == "cold_start_divergence"
+    assert rows[0]["dynamic_facts"]["artifact_path"].endswith("poisoned.flag")
+
+
+async def test_incidents_dedupes_safety_halt_operator_incident_against_log(live_runs_root):
+    run_id = "run-safety-dedupe-" + "d" * 46
+    run_dir = live_runs_root / run_id
+    run_dir.mkdir()
+    _write_ledger(run_dir, run_id)
+    halted_at_ms = 1_781_014_378_021
+    IncidentStore(run_dir).append(
+        build_safety_halt_incident(
+            strategy_instance_id="spy_ema_paper",
+            run_id=run_id,
+            halt_reason=PoisonedHaltReason(
+                trigger=PoisonedHaltTrigger.COLD_START_DIVERGENCE,
+                halted_at_ms=halted_at_ms,
+                last_clean_bar_close_ms=1_781_014_300_000,
+                details={"reason": "foreign_perm_id", "source": "reconciliation_orchestrator"},
+            ),
+            artifact_path=run_dir / "poisoned.flag",
+            log_path=run_dir / "live.log",
+        )
+    )
+    _write_log(
+        run_dir,
+        (
+            "2026-06-09 14:12:58,021 CRITICAL app Safety halt recorded: This run wrote "
+            "poisoned.flag for cold_start_divergence. Reason: foreign_perm_id. Review "
+            "the halt evidence before starting a fresh run.\n"
+        ),
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-runs/{run_id}/incidents")
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert len([row for row in rows if row["incident_category"] == "cold_start_divergence"]) == 1
+    assert rows[0]["dynamic_facts"]["run_id"] == run_id
+
+
+async def test_incidents_preserves_distinct_single_same_time_safety_halt_log_row(live_runs_root):
+    run_id = "run-safety-halt-log-" + "x" * 43
+    run_dir = live_runs_root / run_id
+    run_dir.mkdir()
+    _write_ledger(run_dir, run_id)
+    IncidentStore(run_dir).append(
+        build_safety_halt_incident(
+            strategy_instance_id="spy_ema_paper",
+            run_id=run_id,
+            halt_reason=PoisonedHaltReason(
+                trigger=PoisonedHaltTrigger.COLD_START_DIVERGENCE,
+                halted_at_ms=1_767_279_600_000,
+                last_clean_bar_close_ms=1_767_279_540_000,
+                details={"reason": "first path", "source": "reconciliation_orchestrator"},
+            ),
+            artifact_path=run_dir / "poisoned.flag",
+            log_path=run_dir / "live.log",
+        )
+    )
+    _write_log(
+        run_dir,
+        "2026-01-01 15:00:00,000 ERROR app poison_sentinel.cold_start_divergence traceback path\n",
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-runs/{run_id}/incidents")
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 2
+    assert rows[1]["message"] == "poison_sentinel.cold_start_divergence traceback path"
+
+
+async def test_incidents_preserves_distinct_same_time_safety_halt_log_rows(live_runs_root):
+    run_id = "run-safety-halt-logs-" + "y" * 42
+    run_dir = live_runs_root / run_id
+    run_dir.mkdir()
+    _write_ledger(run_dir, run_id)
+    IncidentStore(run_dir).append(
+        build_safety_halt_incident(
+            strategy_instance_id="spy_ema_paper",
+            run_id=run_id,
+            halt_reason=PoisonedHaltReason(
+                trigger=PoisonedHaltTrigger.COLD_START_DIVERGENCE,
+                halted_at_ms=1_767_279_600_000,
+                last_clean_bar_close_ms=1_767_279_540_000,
+                details={"reason": "first path", "source": "reconciliation_orchestrator"},
+            ),
+            artifact_path=run_dir / "poisoned.flag",
+            log_path=run_dir / "live.log",
+        )
+    )
+    _write_log(
+        run_dir,
+        (
+            "2026-01-01 15:00:00,000 ERROR app poison_sentinel.cold_start_divergence first path\n"
+            "2026-01-01 15:00:00,000 ERROR app poison_sentinel.cold_start_divergence second path\n"
+        ),
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-runs/{run_id}/incidents")
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert len(rows) == 3
+    assert [row["message"] for row in rows[1:]] == [
+        "poison_sentinel.cold_start_divergence first path",
+        "poison_sentinel.cold_start_divergence second path",
+    ]
 
 
 async def test_incidents_returns_warning_error_critical_with_categories(live_runs_root):

@@ -45,6 +45,7 @@ from app.engine.live.reconciliation_orchestrator import (
     reconcile,
 )
 from app.engine.live.reconciliation_receipt import RECEIPT_FILENAME
+from app.operator.incidents.store import IncidentStore
 from app.schemas.live_runs import ReconciliationReceipt
 
 NS = build_bot_order_namespace("test-strategy")
@@ -233,6 +234,12 @@ async def test_foreign_perm_id_poisons(tmp_path: Path) -> None:
     assert halt is not None
     assert halt.details["reason"] == "foreign_perm_id"
     assert halt.details["source"] == "reconciliation_orchestrator"
+    incidents = IncidentStore(run_dir).list_unresolved()
+    assert len(incidents) == 1
+    assert incidents[0].category == "safety-halt"
+    assert incidents[0].notice.code == "safety_halt.poisoned"
+    assert incidents[0].evidence["halt_trigger"] == "cold_start_divergence"
+    assert incidents[0].evidence["run_id"] == RUN_ID
 
 
 @pytest.mark.asyncio

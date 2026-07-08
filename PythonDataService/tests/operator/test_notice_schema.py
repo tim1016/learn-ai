@@ -94,6 +94,10 @@ def test_code_literal_declares_pr6_reconciliation_slots():
     assert reconciliation_slots <= codes
 
 
+def test_code_literal_declares_safety_halt_slot():
+    assert "safety_halt.poisoned" in set(get_literal_args(OperatorNoticeCode))
+
+
 def test_code_literal_declares_broker_session_slots():
     codes = set(get_literal_args(OperatorNoticeCode))
     assert "broker_session.orphaned_socket" in codes
@@ -176,6 +180,7 @@ def test_incident_category_is_closed_enum():
         "reconciliation",
         "order",
         "submit",
+        "safety-halt",
     }
     with pytest.raises(ValueError):
         OperatorIncident.model_validate(

@@ -25,6 +25,7 @@ from app.engine.live.intent_events import IntentEvent, IntentEventType
 from app.engine.live.intent_wal import IntentWal
 from app.engine.live.run_ledger import LiveRunLedger
 from app.engine.live.run_ledger import write_ledger as write_live_run_ledger
+from app.operator.incidents.safety_halt_notices import build_safety_halt_incident
 from app.operator.incidents.store import IncidentStore
 from app.operator.notices.schema import OperatorIncident, OperatorNotice, OperatorNoticeAction
 from app.routers import live_instances
@@ -213,6 +214,37 @@ def test_resolve_incident_headline_includes_order_and_submit_incidents(tmp_path:
 
     assert notice is not None
     assert notice.code == "submit.uncertain"
+
+
+def test_resolve_incident_headline_includes_safety_halt_incidents(tmp_path: Path) -> None:
+    from app.engine.live.halt import PoisonedHaltReason, PoisonedHaltTrigger
+
+    root = tmp_path / "live_runs"
+    _write_ledger(root, "run-latest", "spy_ema_paper", 100)
+    run_dir = root / "run-latest"
+    IncidentStore(run_dir).append(
+        build_safety_halt_incident(
+            strategy_instance_id="spy_ema_paper",
+            run_id="run-latest",
+            halt_reason=PoisonedHaltReason(
+                trigger=PoisonedHaltTrigger.COLD_START_DIVERGENCE,
+                halted_at_ms=500,
+                last_clean_bar_close_ms=400,
+                details={"reason": "foreign_perm_id", "source": "reconciliation_orchestrator"},
+            ),
+            artifact_path=run_dir / "poisoned.flag",
+            log_path=run_dir / "live.log",
+        )
+    )
+
+    notice = live_instances._resolve_incident_headline(
+        root,
+        live_binding=None,
+        runs=[{"run_dir": str(run_dir)}],
+    )
+
+    assert notice is not None
+    assert notice.code == "safety_halt.poisoned"
 
 
 def _write_live_state(root: Path, sid: str, run_id: str, positions: dict[str, int]) -> None:

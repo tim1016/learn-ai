@@ -22,7 +22,7 @@ from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, status
 
@@ -43,6 +43,8 @@ from app.engine.live.live_artifact_io import (
     read_parquet_tail,
 )
 from app.engine.live.run_ledger import read_ledger
+from app.operator.incidents.store import IncidentStore
+from app.operator.notices.schema import OperatorIncident
 from app.schemas.live_runs import (
     ArtifactFile,
     ArtifactsSummary,
@@ -68,7 +70,7 @@ from app.schemas.live_runs import (
     SetDesiredStateRequest,
     TradesSummary,
 )
-from app.services.live_log_failures import parse_failures, parse_incidents
+from app.services.live_log_failures import IncidentCategory, IncidentSource, parse_failures, parse_incidents
 from app.services.live_log_parser import BarEvent, parse_log_tail
 from app.services.live_run_state import infer_state
 
@@ -97,7 +99,10 @@ def _validate_path_segment(value: str, *, field: str) -> str:
         raise ValueError(f"{field} must not contain path separators or NUL bytes")
     if Path(value).is_absolute():
         raise ValueError(f"{field} must not be an absolute path")
-    return value
+    safe = Path(value).name
+    if safe != value:
+        raise ValueError(f"{field} must be a single path segment")
+    return safe
 
 
 def _confine(root: Path, segment: str) -> Path:
@@ -848,22 +853,145 @@ async def get_incidents(
     except FileNotFoundError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
 
+    rows = _operator_incident_records(run_dir)
     log_path = _artifact_path(run_dir, "live.log")
-    if not log_path.exists():
-        return []
-
-    try:
-        text = log_path.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        logger.warning("Could not read %s: %s", log_path, exc)
-        return []
-
-    rows = [IncidentRecord.model_validate(r.model_dump()) for r in parse_incidents(text)]
+    if log_path.exists():
+        try:
+            text = log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            logger.warning("Could not read %s: %s", log_path, exc)
+        else:
+            rows.extend(IncidentRecord.model_validate(r.model_dump()) for r in parse_incidents(text))
+    rows = _dedupe_incident_records(rows)
     if since_ms is not None:
         rows = [r for r in rows if r.ts_ms > since_ms]
     if len(rows) > limit:
         rows = rows[-limit:]
     return rows
+
+
+_SAFETY_HALT_CATEGORY_BY_TRIGGER: dict[str, IncidentCategory] = {
+    "cold_start_divergence": IncidentCategory.COLD_START_DIVERGENCE,
+    "lost_fill": IncidentCategory.LOST_FILL,
+    "outside_mutation": IncidentCategory.OUTSIDE_MUTATION,
+    "operator_declared": IncidentCategory.OPERATOR_HALT,
+}
+
+_SAFETY_HALT_SOURCE_BY_TRIGGER: dict[str, IncidentSource] = {
+    "cold_start_divergence": IncidentSource.APP,
+    "lost_fill": IncidentSource.BROKER,
+    "outside_mutation": IncidentSource.BROKER,
+    "operator_declared": IncidentSource.OPERATOR,
+}
+
+
+def _operator_incident_records(run_dir: Path) -> list[IncidentRecord]:
+    records: list[IncidentRecord] = []
+    for incident in IncidentStore(run_dir).list_unresolved():
+        record = _safety_halt_incident_record(incident)
+        if record is not None:
+            records.append(record)
+    return records
+
+
+def _safety_halt_incident_record(incident: OperatorIncident) -> IncidentRecord | None:
+    if incident.category != "safety-halt":
+        return None
+    trigger = str(incident.evidence.get("halt_trigger") or "")
+    category = _SAFETY_HALT_CATEGORY_BY_TRIGGER.get(trigger, IncidentCategory.UNKNOWN)
+    source = _SAFETY_HALT_SOURCE_BY_TRIGGER.get(trigger, IncidentSource.UNKNOWN)
+    ts_ms = incident.notice.occurred_at_ms or incident.started_at_ms
+    level: Literal["WARNING", "CRITICAL"] = (
+        "CRITICAL" if incident.notice.tier == "critical" else "WARNING"
+    )
+    return IncidentRecord(
+        ts_ms=ts_ms,
+        raw_ts=_raw_ts_from_ms(ts_ms),
+        level=level,
+        logger="operator_incidents",
+        message=f"{incident.notice.title}: {incident.notice.message}",
+        traceback=None,
+        incident_category=category.value,
+        incident_source=source.value,
+        dynamic_facts=_operator_incident_dynamic_facts(incident),
+    )
+
+
+def _operator_incident_dynamic_facts(incident: OperatorIncident) -> dict[str, str | int]:
+    facts: dict[str, str | int] = {}
+    for source in (incident.notice.forensic_facts, incident.evidence):
+        for key, value in source.items():
+            if isinstance(value, bool):
+                facts[key] = str(value).lower()
+            elif isinstance(value, (int, str)):
+                facts[key] = value
+    return facts
+
+
+def _dedupe_incident_records(rows: list[IncidentRecord]) -> list[IncidentRecord]:
+    operator_safety_rows = [
+        row
+        for row in rows
+        if row.logger == "operator_incidents" and _is_safety_halt_category(row.incident_category)
+    ]
+    deduped: list[IncidentRecord] = []
+    seen_operator_safety_identities: set[tuple[str, str, int, str]] = set()
+    for row in rows:
+        if row.logger == "operator_incidents" and _is_safety_halt_category(row.incident_category):
+            key = _safety_halt_identity_key(row)
+            if key is not None:
+                if key in seen_operator_safety_identities:
+                    continue
+                seen_operator_safety_identities.add(key)
+            deduped.append(row)
+            continue
+        if _is_safety_halt_log_echo(row, operator_safety_rows):
+            continue
+        deduped.append(row)
+    return sorted(deduped, key=lambda row: row.ts_ms)
+
+
+def _is_safety_halt_category(category: str) -> bool:
+    return category in {
+        IncidentCategory.COLD_START_DIVERGENCE.value,
+        IncidentCategory.LOST_FILL.value,
+        IncidentCategory.OUTSIDE_MUTATION.value,
+        IncidentCategory.OPERATOR_HALT.value,
+    }
+
+
+def _is_safety_halt_log_echo(row: IncidentRecord, operator_rows: list[IncidentRecord]) -> bool:
+    if row.logger == "operator_incidents" or not _is_safety_halt_category(row.incident_category):
+        return False
+    for operator_row in operator_rows:
+        if (
+            row.ts_ms == operator_row.ts_ms
+            and row.incident_category == operator_row.incident_category
+            and row.message == operator_row.message
+            and row.traceback == operator_row.traceback
+        ):
+            return True
+    return False
+
+
+def _safety_halt_identity_key(row: IncidentRecord) -> tuple[str, str, int, str] | None:
+    facts = row.dynamic_facts or {}
+    run_id = facts.get("run_id")
+    halt_trigger = facts.get("halt_trigger")
+    evidence_time_ms = facts.get("evidence_time_ms")
+    artifact_ref = facts.get("artifact_path") or facts.get("source_flag")
+    if (
+        isinstance(run_id, str)
+        and isinstance(halt_trigger, str)
+        and isinstance(evidence_time_ms, int)
+    ):
+        return (run_id, halt_trigger, evidence_time_ms, str(artifact_ref or ""))
+    return None
+
+
+def _raw_ts_from_ms(ts_ms: int) -> str:
+    dt = datetime.fromtimestamp(ts_ms // 1000, UTC)
+    return f"{dt:%Y-%m-%d %H:%M:%S}.{ts_ms % 1000:03d}"
 
 
 def _status_sid(run_dir: Path) -> str:

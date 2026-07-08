@@ -23,6 +23,7 @@ from app.engine.live.config import LiveConfig
 from app.engine.live.halt import PoisonedHaltTrigger, read_poisoned_flag
 from app.engine.live.live_engine import LiveEngine
 from app.engine.strategy.base import Strategy
+from app.operator.incidents.store import IncidentStore
 from tests.engine.live.fixtures.fake_broker import FakeBroker, iter_bars
 
 
@@ -142,6 +143,8 @@ async def test_mark_poisoned_writes_structured_operator_flag(tmp_path: Path) -> 
         output_dir=tmp_path,
         account_id="DU123",
         command_channel=channel,
+        run_id="run-operator-poisoned",
+        strategy_instance_id="operator-poisoned-bot",
     )
 
     bars = [_bar(minute) for minute in range(30, 200)]
@@ -158,6 +161,13 @@ async def test_mark_poisoned_writes_structured_operator_flag(tmp_path: Path) -> 
     assert reason.trigger is PoisonedHaltTrigger.OPERATOR_DECLARED
     assert reason.details["source"] == "operator_command"
     assert reason.details["reason"] == "manual_trade_observed"
+    incidents = IncidentStore(tmp_path).list_unresolved()
+    assert len(incidents) == 1
+    assert incidents[0].category == "safety-halt"
+    assert incidents[0].notice.code == "safety_halt.poisoned"
+    assert incidents[0].evidence["run_id"] == "run-operator-poisoned"
+    assert incidents[0].evidence["strategy_instance_id"] == "operator-poisoned-bot"
+    assert incidents[0].evidence["halt_trigger"] == "operator_declared"
 
 
 @pytest.mark.asyncio
