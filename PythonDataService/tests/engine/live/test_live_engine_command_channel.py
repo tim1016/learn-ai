@@ -10,6 +10,7 @@ existing FakeBroker bar loop.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json as _json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -20,6 +21,7 @@ import pytest
 from app.engine.data.trade_bar import TradeBar
 from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.config import LiveConfig
+from app.engine.live.engine_runtime import CommandLoopBlock
 from app.engine.live.halt import PoisonedHaltTrigger, read_poisoned_flag
 from app.engine.live.live_engine import LiveEngine
 from app.engine.strategy.base import Strategy
@@ -53,6 +55,54 @@ class _NoopStrategy(Strategy):
 
     def on_bar(self, bar: TradeBar) -> None:
         return None
+
+
+@pytest.mark.asyncio
+async def test_command_poll_loop_refreshes_heartbeat_after_poll_cycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A slow-but-successful command-channel pass must not age the command-loop
+    heartbeat until the next poll cycle starts.
+    """
+
+    from app.engine.live import live_engine as live_engine_mod
+
+    class _EmptyCommandChannel:
+        def read_pending(self) -> list:
+            return []
+
+    class _RuntimeAggregator:
+        def __init__(self) -> None:
+            self.blocks: list[CommandLoopBlock] = []
+            self.second_update = asyncio.Event()
+
+        async def update_command_loop(self, block: CommandLoopBlock) -> None:
+            self.blocks.append(block)
+            if len(self.blocks) >= 2:
+                self.second_update.set()
+
+    timestamps = iter([10.0, 13.2, 14.0])
+    monkeypatch.setattr(live_engine_mod.time, "time", lambda: next(timestamps))
+    aggregator = _RuntimeAggregator()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=FakeBroker(),
+        command_channel=_EmptyCommandChannel(),  # type: ignore[arg-type]
+        runtime_aggregator=aggregator,
+    )
+    shutdown_event = asyncio.Event()
+
+    task = asyncio.create_task(engine._command_poll_loop(shutdown_event))  # type: ignore[attr-defined]
+    try:
+        await asyncio.wait_for(aggregator.second_update.wait(), timeout=0.2)
+    finally:
+        shutdown_event.set()
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    assert [block.heartbeat_at_ms for block in aggregator.blocks[:2]] == [10_000, 13_200]
 
 
 @pytest.mark.asyncio

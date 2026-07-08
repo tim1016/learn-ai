@@ -1997,6 +1997,10 @@ class LiveEngine:
                         cmd.seq,
                         cmd.verb.value,
                     )
+            # Mark successful completion of the command-channel critical
+            # section too. A slow read/ack pass means the loop is alive but
+            # would otherwise look stale until the next cycle starts.
+            await self._publish_command_loop_block()
             await asyncio.sleep(1.0)
 
     def _dispatch_command(self, cmd: Command, shutdown_event: asyncio.Event) -> dict:
@@ -2914,9 +2918,10 @@ class LiveEngine:
     async def _publish_command_loop_block(self) -> None:
         """PRD #619-B B3 — update the command-loop block.
 
-        Stamped on every command-poll tick AND on every bar-loop
-        iteration so the backend freshness evaluator's command-loop
-        check is always sourced from the freshest of the two paths.
+        Stamped when every command-poll cycle starts and completes,
+        plus every bar-loop iteration, so the backend freshness
+        evaluator's command-loop check is always sourced from the
+        freshest of the live paths.
         """
         if self._runtime_aggregator is None:
             return

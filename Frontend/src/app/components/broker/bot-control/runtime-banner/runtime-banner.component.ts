@@ -23,6 +23,11 @@ import { OperatorNoticeComponent } from '../../../operator-notice/operator-notic
  *  (12s) is the floor at which the staleness stops being transient. Critical
  *  tier notices bypass this gate per ADR-0013 §3 and render immediately. */
 export const STALE_DEBOUNCE_MS = 12_000;
+/** Keep a critical freshness headline visible through one normal status-poll
+ *  recovery blip. Critical notices still render immediately; this only delays
+ *  clearing them long enough to avoid a page-wide flash when the backend sees
+ *  one fresh sample between stale command-loop samples. */
+export const CRITICAL_CLEAR_DEBOUNCE_MS = 5_000;
 
 @Component({
   selector: 'app-runtime-banner',
@@ -47,6 +52,8 @@ export class RuntimeBannerComponent {
   // freshness headline is clear; set when it first becomes non-null and
   // kept stable across subsequent polls until it clears again.
   private readonly _firstStaleAt = signal<number | null>(null);
+  private readonly _lastCriticalHeadline = signal<OperatorNotice | null>(null);
+  private readonly _lastCriticalSeenAt = signal<number | null>(null);
 
   constructor() {
     const handle = setInterval(() => this._now.set(Date.now()), 1_000);
@@ -62,20 +69,41 @@ export class RuntimeBannerComponent {
         }
       });
     });
+    effect(() => {
+      const headline = this.freshness()?.headline ?? null;
+      untracked(() => {
+        if (headline?.tier === 'critical') {
+          this._lastCriticalHeadline.set(headline);
+          this._lastCriticalSeenAt.set(Date.now());
+        }
+      });
+    });
   }
 
   readonly headline = computed<OperatorNotice | null>(() => {
     const candidate = this.freshness()?.headline ?? null;
+    if (candidate !== null && candidate.tier === 'critical') return candidate;
+    const recentCritical = this.recentCriticalHeadline();
+    if (recentCritical !== null) return recentCritical;
     if (candidate === null) return null;
-    if (candidate.tier === 'critical') return candidate;
     const firstAt = this._firstStaleAt();
     if (firstAt === null) return null;
     return this._now() - firstAt >= STALE_DEBOUNCE_MS ? candidate : null;
   });
 
-  readonly additionalReasons = computed<OperatorNotice[]>(() =>
-    this.headline() ? this.freshness()?.additional_reasons ?? [] : [],
-  );
+  private readonly recentCriticalHeadline = computed<OperatorNotice | null>(() => {
+    const headline = this._lastCriticalHeadline();
+    const seenAt = this._lastCriticalSeenAt();
+    if (headline === null || seenAt === null) return null;
+    return this._now() - seenAt < CRITICAL_CLEAR_DEBOUNCE_MS ? headline : null;
+  });
+
+  readonly additionalReasons = computed<OperatorNotice[]>(() => {
+    const visibleHeadline = this.headline();
+    return visibleHeadline !== null && visibleHeadline === this.freshness()?.headline
+      ? this.freshness()?.additional_reasons ?? []
+      : [];
+  });
 
   /** True when either the incident headline or the freshness headline is visible. */
   readonly hasBannerContent = computed<boolean>(

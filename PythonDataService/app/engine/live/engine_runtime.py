@@ -63,9 +63,9 @@ BarSourceState = Literal[
 class CommandLoopBlock(BaseModel):
     """The engine's command-channel poll loop.
 
-    ``heartbeat_at_ms`` is updated on every poll tick (1Hz cadence in
-    ``live_engine.py:_command_poll_loop``). ``state`` is the engine's
-    high-level disposition the cockpit renders.
+    ``heartbeat_at_ms`` is updated when every poll cycle starts and
+    completes (1Hz cadence in ``live_engine.py:_command_poll_loop``).
+    ``state`` is the engine's high-level disposition the cockpit renders.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
