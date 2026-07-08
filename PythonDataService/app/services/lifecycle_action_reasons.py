@@ -108,7 +108,15 @@ _ACTION_REASON_COPY: dict[str, tuple[str, str]] = {
     ),
     "ALREADY_RUNNING": (
         "Already running",
-        "The effective desired state is already RUNNING, so this command would be a no-op.",
+        "The host process is already running, so Start bot process would be a no-op.",
+    ),
+    "DESIRED_STATE_ALREADY_RUNNING": (
+        "Desired state already running",
+        "Resume only changes durable desired state, and desired_state is already RUNNING. If no runtime is bound, use Start bot process.",
+    ),
+    "DESIRED_STATE_DEFAULT_RUNNING": (
+        "Desired state defaults to running",
+        "No durable desired_state is recorded, so Resume would leave the effective default RUNNING. If no runtime is bound, use Start bot process.",
     ),
     "ALREADY_PAUSED": (
         "Already paused",

@@ -53,7 +53,8 @@ export type OperatorReasonCode =
   | 'UNRESOLVED_UNCERTAIN_INTENT'
   | 'UNCERTAIN_INTENT_STATE_UNKNOWN'
   // Intent-state pair rules (ADR-0010 §A5)
-  | 'ALREADY_RUNNING'
+  | 'DESIRED_STATE_ALREADY_RUNNING'
+  | 'DESIRED_STATE_DEFAULT_RUNNING'
   | 'ALREADY_PAUSED'
   | 'STOPPED_REQUIRES_REDEPLOY'
   | 'REDEPLOY_REQUIRED';
@@ -120,7 +121,10 @@ const OPERATOR_REASON_COPY: Record<OperatorReasonCode, string> = {
   UNCERTAIN_INTENT_STATE_UNKNOWN:
     'Uncertain-intent state cannot be read. Resume is held until the WAL is observable.',
   // Intent-state pair rules
-  ALREADY_RUNNING: 'Bot is already RUNNING.',
+  DESIRED_STATE_ALREADY_RUNNING:
+    'Resume only changes desired state, and desired_state is already RUNNING. If no runtime is bound, use Start bot process.',
+  DESIRED_STATE_DEFAULT_RUNNING:
+    'No durable desired_state is recorded, so Resume would leave the effective default RUNNING. If no runtime is bound, use Start bot process.',
   ALREADY_PAUSED: 'Bot is already PAUSED.',
   STOPPED_REQUIRES_REDEPLOY:
     'Bot is STOPPED. Pause is a no-op while stopped; redeploy if this run is retired.',

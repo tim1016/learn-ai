@@ -15,10 +15,13 @@ server" design.  Resume, Pause, and Stop now consume the shared
 - ``resume`` is refused when the broker safety verdict is UNSAFE /
   UNKNOWN, when an uncertain intent is present / unknown, when the
   reconciliation receipt has failed / gone stale / is unreadable, OR
-  when the current durable intent is already RUNNING (no-op) or the run
-  is poisoned (``REDEPLOY_REQUIRED``). When durable intent is STOPPED,
-  Resume is the explicit operator unlatch that writes RUNNING after the
-  same artifact guards pass.
+  when the current durable intent is already RUNNING (no-op,
+  ``DESIRED_STATE_ALREADY_RUNNING``), when missing desired-state evidence
+  defaults the effective intent to RUNNING
+  (``DESIRED_STATE_DEFAULT_RUNNING``), or when the run is poisoned
+  (``REDEPLOY_REQUIRED``). When durable intent is STOPPED, Resume is the
+  explicit operator unlatch that writes RUNNING after the same artifact
+  guards pass.
 - ``pause`` is refused symmetrically: ``ALREADY_PAUSED`` when current
   intent is PAUSED, ``STOPPED_REQUIRES_REDEPLOY`` when STOPPED.  The
   broker-safety / reconciliation / uncertain-intent guards do NOT
@@ -172,14 +175,6 @@ def _current_intent(desired_state: DesiredStateView | None) -> str | None:
     return desired_state.state.upper()
 
 
-def _effective_intent(desired_state: DesiredStateView | None) -> str:
-    """Resolved intent for evaluation: when the sidecar is absent /
-    unknown the system behaves as RUNNING (the cockpit's effective
-    default for never-deployed instances)."""
-    intent = _current_intent(desired_state)
-    return intent if intent is not None else "RUNNING"
-
-
 def _enabled(effect: Literal["LIVE_ACTUATION", "DURABLE_ONLY"]) -> ActionCapability:
     return ActionCapability(
         enabled=True,
@@ -233,7 +228,8 @@ def evaluate_action(
 
     effect = _effect(process=process, live_binding=live_binding)
     guards = guard_state if guard_state is not None else empty_guard_state()
-    intent = _effective_intent(desired_state)
+    explicit_intent = _current_intent(desired_state)
+    intent = explicit_intent if explicit_intent is not None else "RUNNING"
     mutation_conflict = _mutation_conflict_reason(action, latest_mutation)
 
     def _finish(branch_effect: Literal["LIVE_ACTUATION", "DURABLE_ONLY"], reasons: list[str]) -> ActionCapability:
@@ -263,7 +259,11 @@ def evaluate_action(
         # guards because they describe the durable target, not a
         # broker / WAL condition.
         if intent == "RUNNING":
-            reasons.append("ALREADY_RUNNING")
+            reasons.append(
+                "DESIRED_STATE_ALREADY_RUNNING"
+                if explicit_intent == "RUNNING"
+                else "DESIRED_STATE_DEFAULT_RUNNING"
+            )
         if poisoned:
             reasons.append("REDEPLOY_REQUIRED")
         # Artifact guards (broker safety verdict, reconciliation,

@@ -284,12 +284,10 @@ export const RESUME_DISABLED_MULTI_REASON: ActionCapability = _capability(
   ['BROKER_SAFETY_UNSAFE', 'UNRESOLVED_UNCERTAIN_INTENT', 'RECONCILIATION_FAILED'],
 );
 
-export const RESUME_DISABLED_ALREADY_RUNNING: ActionCapability = _capability(
-  false,
-  'LIVE_ACTUATION',
-  'ALREADY_RUNNING',
-  ['ALREADY_RUNNING'],
-);
+export const RESUME_DISABLED_DESIRED_STATE_ALREADY_RUNNING: ActionCapability =
+  _capability(false, 'LIVE_ACTUATION', 'DESIRED_STATE_ALREADY_RUNNING', [
+    'DESIRED_STATE_ALREADY_RUNNING',
+  ]);
 
 export const RESUME_DISABLED_STOPPED_REQUIRES_REDEPLOY: ActionCapability = _capability(
   false,
