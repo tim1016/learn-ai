@@ -769,7 +769,9 @@ describe('BotControlPageComponent', () => {
     expect(receipt?.textContent).toContain(
       "Stop latch cleared. The bot still won't run: previous host runner crashed — record crash-recovery evidence",
     );
-    const action = element.querySelector<HTMLButtonElement>('[data-testid="bot-control-mutation-receipt-action"]');
+    const action = element.querySelector<HTMLButtonElement>(
+      '[data-testid="bot-control-mutation-receipt"] [data-testid="operator-notice-action"]',
+    );
     expect(action?.textContent).toContain('Record recovery override');
     action?.click();
     await flush(fixture);

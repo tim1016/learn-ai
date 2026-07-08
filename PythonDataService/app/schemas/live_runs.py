@@ -20,6 +20,7 @@ from app.operator.notices.schema import (
     OperatorNoticeRemedyStatus,
     OperatorNoticeTier,
     RuntimeFreshnessReasonCode,
+    validate_actionability_action_pairing,
 )
 
 
@@ -519,30 +520,12 @@ class MutationRungReceipt(BaseModel):
 
     @model_validator(mode="after")
     def _actionability_contract(self) -> MutationRungReceipt:
-        action_kind = self.action.kind
-        if self.actionability == "actuatable":
-            if action_kind not in {"renew_control_plane_lease", "focus_cockpit_action", "redeploy"}:
-                raise ValueError("actuatable receipts require an inline cockpit action")
-            if not self.action.label:
-                raise ValueError("actuatable receipts require an action label")
-        elif self.actionability == "routed":
-            if action_kind not in {"open_runbook", "external_manual_check"}:
-                raise ValueError("routed receipts require an external route action")
-            if not self.action.target:
-                raise ValueError("routed receipts require a named target")
-            if not self.action.label:
-                raise ValueError("routed receipts require an action label")
-        elif self.actionability in {"self_resolving", "no_remedy"}:
-            if action_kind != "none":
-                raise ValueError(f"{self.actionability} receipts cannot carry a clickable action")
-            if self.action.label is not None or self.action.target is not None:
-                raise ValueError(f"{self.actionability} receipts cannot carry action label or target")
-            if self.actionability == "no_remedy" and self.remedy_status is None:
-                raise ValueError("no_remedy receipts require remedy_status")
-        else:
-            raise AssertionError(f"unknown receipt actionability: {self.actionability}")
-        if self.actionability != "no_remedy" and self.remedy_status is not None:
-            raise ValueError("remedy_status is only legal for no_remedy receipts")
+        validate_actionability_action_pairing(
+            actionability=self.actionability,
+            action=self.action,
+            remedy_status=self.remedy_status,
+            noun="receipts",
+        )
         return self
 
 

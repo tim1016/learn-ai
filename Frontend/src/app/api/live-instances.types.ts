@@ -5,6 +5,10 @@ import type {
   HostRunnerStartRequest,
   HydratePolicy,
   MutationRungReceipt,
+  OperatorNoticeAction,
+  OperatorNoticeActionability,
+  OperatorNoticeRemedyStatus,
+  OperatorNoticeTier,
   SizingPolicy,
   SizingPreset,
   SizingProvenance,
@@ -19,13 +23,13 @@ import type {
 
 export type {
   MutationRungReceipt,
-  MutationRungReceiptAction,
-  MutationRungReceiptActionability,
-  MutationRungReceiptActionKind,
   MutationRungReceiptCode,
-  MutationRungReceiptRemedyStatus,
   MutationRungReceiptStageId,
-  MutationRungReceiptTier,
+  OperatorNoticeAction,
+  OperatorNoticeActionability,
+  OperatorNoticeActionKind,
+  OperatorNoticeRemedyStatus,
+  OperatorNoticeTier,
 } from './live-runs.types';
 export type {
   BotLifecycleChartView,
@@ -586,8 +590,6 @@ export type RuntimeFreshnessState =
 // OperatorNoticeCode MUST stay byte-identical to the Python Literal and
 // PythonDataService/app/operator/notices/snapshot.json (enforced by CI).
 
-export type OperatorNoticeTier = 'info' | 'warning' | 'critical';
-
 export type OperatorNoticeCode =
   // PR 1 — runtime freshness (implemented in this PR).
   | 'runtime.market_closed'
@@ -627,28 +629,6 @@ export type OperatorNoticeCode =
   | 'submit.launch_failed'
   | 'submit.unmapped_diagnostic'
   | 'safety_halt.poisoned';
-
-export type OperatorNoticeActionability =
-  | 'actuatable'
-  | 'routed'
-  | 'self_resolving'
-  | 'no_remedy';
-
-export type OperatorNoticeRemedyStatus = 'inherent' | 'unbuilt';
-
-export type OperatorNoticeActionKind =
-  | 'none'
-  | 'open_runbook'
-  | 'focus_cockpit_action'
-  | 'renew_control_plane_lease'
-  | 'external_manual_check'
-  | 'redeploy';
-
-export interface OperatorNoticeAction {
-  kind: OperatorNoticeActionKind;
-  label: string | null;
-  target: string | null;
-}
 
 export interface OperatorNotice {
   code: OperatorNoticeCode;

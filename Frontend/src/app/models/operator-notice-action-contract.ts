@@ -1,5 +1,13 @@
 import type { OperatorNotice } from './operator-notice';
 
+/** Structural subset of OperatorNotice that the shared notice renderer and
+ *  action contract consume. MutationRungReceipt satisfies it too, so
+ *  notice-shaped receipts render through the same component without a cast. */
+export type RenderableNotice = Pick<
+  OperatorNotice,
+  'tier' | 'actionability' | 'title' | 'message' | 'resolution' | 'action' | 'forensic_facts'
+> & { runbook_slug?: string | null };
+
 export type ExecutableOperatorNoticeAction =
   | {
       kind: 'open_runbook';
@@ -21,7 +29,7 @@ export type ExecutableOperatorNoticeAction =
     };
 
 export function executableOperatorNoticeAction(
-  notice: OperatorNotice,
+  notice: RenderableNotice,
 ): ExecutableOperatorNoticeAction | null {
   const { action } = notice;
   if (!action.label) return null;

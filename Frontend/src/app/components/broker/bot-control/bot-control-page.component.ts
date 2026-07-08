@@ -270,6 +270,20 @@ export class BotControlPageComponent {
     renewControlPlaneLease: () => { void this.dispatchRenewControlPlaneLease(); },
   };
 
+  // Receipt focus targets actuate the named mutation; anything else falls
+  // back to chart-node selection like a runtime notice.
+  private readonly mutationReceiptDispatch: OperatorNoticeDispatch = {
+    redeploy: () => this.onGateRedeploy(),
+    openRunbook: (slug) => this.onGateOpenRunbook(slug),
+    focusTarget: (target) => {
+      if (target === 'crash_recovery_override') void this.dispatchCrashRecoveryOverride();
+      else if (target === 'start_process') void this.dispatchStartProcess();
+      else if (target === 'reconcile_now') void this.dispatchReconcileNow();
+      else this.selectActionTargetNode(target);
+    },
+    renewControlPlaneLease: () => { void this.dispatchRenewControlPlaneLease(); },
+  };
+
   constructor() {
     this.route.paramMap.pipe(takeUntilDestroyed()).subscribe((params) => {
       const id = params.get('id');
@@ -461,61 +475,8 @@ export class BotControlPageComponent {
     action.invoke();
   }
 
-  mutationReceiptActionabilityLabel(receipt: MutationRungReceipt): string {
-    switch (receipt.actionability) {
-      case 'actuatable':
-        return 'Action available';
-      case 'routed':
-        return 'Check elsewhere';
-      case 'self_resolving':
-        return 'No action needed';
-      case 'no_remedy':
-        return 'No remedy';
-    }
-  }
-
-  hasClickableMutationReceiptAction(receipt: MutationRungReceipt): boolean {
-    const action = receipt.action;
-    return !!action.label && (
-      action.kind === 'open_runbook'
-      || action.kind === 'focus_cockpit_action'
-      || action.kind === 'renew_control_plane_lease'
-      || action.kind === 'redeploy'
-    );
-  }
-
-  hasInertMutationReceiptAction(receipt: MutationRungReceipt): boolean {
-    return receipt.action.kind === 'external_manual_check' && !!receipt.action.label;
-  }
-
-  invokeMutationReceiptAction(receipt: MutationRungReceipt): void {
-    const action = receipt.action;
-    if (!action.label) return;
-    switch (action.kind) {
-      case 'open_runbook':
-        if (action.target) this.onGateOpenRunbook(action.target);
-        break;
-      case 'focus_cockpit_action':
-        if (action.target === 'crash_recovery_override') {
-          void this.dispatchCrashRecoveryOverride();
-        } else if (action.target === 'start_process') {
-          void this.dispatchStartProcess();
-        } else if (action.target === 'reconcile_now') {
-          void this.dispatchReconcileNow();
-        } else if (action.target) {
-          this.selectActionTargetNode(action.target);
-        }
-        break;
-      case 'renew_control_plane_lease':
-        void this.dispatchRenewControlPlaneLease();
-        break;
-      case 'redeploy':
-        this.onGateRedeploy();
-        break;
-      case 'external_manual_check':
-      case 'none':
-        break;
-    }
+  handleMutationReceiptAction(receipt: MutationRungReceipt): void {
+    renderOperatorNoticeAction(receipt, this.mutationReceiptDispatch)?.invoke();
   }
 
   setActiveWorkbenchTab(value: string | number | undefined): void {

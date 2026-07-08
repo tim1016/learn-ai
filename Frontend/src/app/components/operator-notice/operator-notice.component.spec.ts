@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/angular';
 import { describe, expect, it } from 'vitest';
 import { OperatorNoticeComponent } from './operator-notice.component';
 import type { OperatorNotice } from '../../models/operator-notice';
+import type { RenderableNotice } from '../../models/operator-notice-action-contract';
 
 function makeNotice(overrides: Partial<OperatorNotice> = {}): OperatorNotice {
   return {
@@ -97,10 +98,10 @@ describe('OperatorNoticeComponent', () => {
     const notice = makeNotice({
       action: { kind: 'open_runbook', label: 'How to recover', target: 'runtime-freshness' },
     });
-    let captured: OperatorNotice | null = null;
+    let captured: RenderableNotice | null = null;
     await render(OperatorNoticeComponent, {
       inputs: { notice },
-      on: { actionClicked: (value: OperatorNotice) => { captured = value; } },
+      on: { actionClicked: (value) => { captured = value; } },
     });
     await screen.getByRole('button', { name: /how to recover/i }).click();
     expect(captured).toEqual(notice);

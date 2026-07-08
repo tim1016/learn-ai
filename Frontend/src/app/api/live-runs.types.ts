@@ -196,23 +196,32 @@ export type MutationRungReceiptCode =
   | 'mutation.scoped_all_clear'
   | 'mutation.observational_warning';
 
-export type MutationRungReceiptTier = 'info' | 'warning' | 'critical';
+// Shared notice vocabulary — mirrors PythonDataService/app/operator/notices/schema.py.
+// Declared here (the dependency leaf) and re-exported from live-instances.types.ts;
+// OperatorNotice and MutationRungReceipt consume the same unions.
+export type OperatorNoticeTier = 'info' | 'warning' | 'critical';
 
-export type MutationRungReceiptActionability =
+export type OperatorNoticeActionability =
   | 'actuatable'
   | 'routed'
   | 'self_resolving'
   | 'no_remedy';
 
-export type MutationRungReceiptRemedyStatus = 'inherent' | 'unbuilt';
+export type OperatorNoticeRemedyStatus = 'inherent' | 'unbuilt';
 
-export type MutationRungReceiptActionKind =
+export type OperatorNoticeActionKind =
   | 'none'
   | 'open_runbook'
   | 'focus_cockpit_action'
   | 'renew_control_plane_lease'
   | 'external_manual_check'
   | 'redeploy';
+
+export interface OperatorNoticeAction {
+  kind: OperatorNoticeActionKind;
+  label: string | null;
+  target: string | null;
+}
 
 export type MutationRungReceiptStageId =
   | 'control_plane'
@@ -225,24 +234,18 @@ export type MutationRungReceiptStageId =
   | 'trading_session'
   | 'runtime_freshness';
 
-export interface MutationRungReceiptAction {
-  kind: MutationRungReceiptActionKind;
-  label: string | null;
-  target: string | null;
-}
-
 export interface MutationRungReceipt {
   code: MutationRungReceiptCode;
-  tier: MutationRungReceiptTier;
+  tier: OperatorNoticeTier;
   title: string;
   message: string;
   rung_id: MutationRungReceiptStageId | null;
   source_codes: string[];
   forensic_facts: Record<string, string | number | boolean | null>;
-  actionability: MutationRungReceiptActionability;
+  actionability: OperatorNoticeActionability;
   resolution: string;
-  remedy_status: MutationRungReceiptRemedyStatus | null;
-  action: MutationRungReceiptAction;
+  remedy_status: OperatorNoticeRemedyStatus | null;
+  action: OperatorNoticeAction;
   occurred_at_ms: number;
 }
 

@@ -122,37 +122,8 @@
   }
 
   @if (mutationReceipt(); as receipt) {
-    <section
-      class="mutation-receipt"
-      [class.tier-info]="receipt.tier === 'info'"
-      [class.tier-warning]="receipt.tier === 'warning'"
-      [class.tier-critical]="receipt.tier === 'critical'"
-      data-testid="bot-control-mutation-receipt"
-      role="status"
-    >
-      <header class="mutation-receipt__header">
-        <span class="mutation-receipt__tier">{{ receipt.tier }}</span>
-        <span class="mutation-receipt__actionability">
-          {{ mutationReceiptActionabilityLabel(receipt) }}
-        </span>
-        <h3 data-testid="bot-control-mutation-receipt-title">{{ receipt.title }}</h3>
-      </header>
-      <p data-testid="bot-control-mutation-receipt-message">{{ receipt.message }}</p>
-      <p class="mutation-receipt__resolution">{{ receipt.resolution }}</p>
-      @if (hasClickableMutationReceiptAction(receipt) && receipt.action.label) {
-        <button
-          type="button"
-          class="mutation-receipt__action"
-          data-testid="bot-control-mutation-receipt-action"
-          (click)="invokeMutationReceiptAction(receipt)"
-        >
-          {{ receipt.action.label }}
-        </button>
-      } @else if (hasInertMutationReceiptAction(receipt)) {
-        <p class="mutation-receipt__action mutation-receipt__action--inert">
-          {{ receipt.action.label }}
-        </p>
-      }
+    <section class="mutation-receipt" data-testid="bot-control-mutation-receipt">
+      <app-operator-notice [notice]="receipt" (actionClicked)="handleMutationReceiptAction($event)" />
       @if (mutationReceiptWarnings().length > 0) {
         <div class="mutation-receipt__warnings" data-testid="bot-control-mutation-receipt-warnings">
           @for (warning of mutationReceiptWarnings(); track warning.code + warning.title) {

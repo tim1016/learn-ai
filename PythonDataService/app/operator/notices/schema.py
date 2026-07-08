@@ -150,6 +150,44 @@ class OperatorNoticeAction(BaseModel):
     target: str | None = None
 
 
+def validate_actionability_action_pairing(
+    *,
+    actionability: OperatorNoticeActionability,
+    action: OperatorNoticeAction,
+    remedy_status: OperatorNoticeRemedyStatus | None,
+    noun: str,
+) -> None:
+    """Enforce the actionability ↔ action pairing shared by notices and receipts.
+
+    ``noun`` names the validated shape ("notices" / "receipts") so error
+    messages stay specific to the model that failed.
+    """
+    action_kind = action.kind
+    if actionability == "actuatable":
+        if action_kind not in {"renew_control_plane_lease", "focus_cockpit_action", "redeploy"}:
+            raise ValueError(f"actuatable {noun} require an inline cockpit action")
+        if not action.label:
+            raise ValueError(f"actuatable {noun} require an action label")
+    elif actionability == "routed":
+        if action_kind not in {"open_runbook", "external_manual_check"}:
+            raise ValueError(f"routed {noun} require an external route action")
+        if not action.target:
+            raise ValueError(f"routed {noun} require a named target")
+        if not action.label:
+            raise ValueError(f"routed {noun} require an action label")
+    elif actionability in {"self_resolving", "no_remedy"}:
+        if action_kind != "none":
+            raise ValueError(f"{actionability} {noun} cannot carry a clickable action")
+        if action.label is not None or action.target is not None:
+            raise ValueError(f"{actionability} {noun} cannot carry action label or target")
+        if actionability == "no_remedy" and remedy_status is None:
+            raise ValueError(f"no_remedy {noun} require remedy_status")
+    else:
+        raise AssertionError(f"unknown {noun} actionability: {actionability}")
+    if actionability != "no_remedy" and remedy_status is not None:
+        raise ValueError(f"remedy_status is only legal for no_remedy {noun}")
+
+
 class OperatorNotice(BaseModel):
     """Backend-authored, trader-readable failure surface.
 
@@ -182,26 +220,12 @@ class OperatorNotice(BaseModel):
         if self.remedy_status != contract.remedy_status:
             raise ValueError(f"{self.code} must use remedy_status={contract.remedy_status!r}")
 
-        action_kind = self.action.kind
-        if self.actionability == "actuatable":
-            if action_kind not in {"renew_control_plane_lease", "focus_cockpit_action", "redeploy"}:
-                raise ValueError("actuatable notices require an inline cockpit action")
-            if not self.action.label:
-                raise ValueError("actuatable notices require an action label")
-        elif self.actionability == "routed":
-            if action_kind not in {"open_runbook", "external_manual_check"}:
-                raise ValueError("routed notices require an external route action")
-            if not self.action.target:
-                raise ValueError("routed notices require a named target")
-            if not self.action.label:
-                raise ValueError("routed notices require an action label")
-        elif self.actionability in {"self_resolving", "no_remedy"}:
-            if action_kind != "none":
-                raise ValueError(f"{self.actionability} notices cannot carry a clickable action")
-            if self.action.label is not None or self.action.target is not None:
-                raise ValueError(f"{self.actionability} notices cannot carry action label or target")
-        else:
-            raise AssertionError(f"unknown notice actionability: {self.actionability}")
+        validate_actionability_action_pairing(
+            actionability=self.actionability,
+            action=self.action,
+            remedy_status=self.remedy_status,
+            noun="notices",
+        )
         return self
 
 

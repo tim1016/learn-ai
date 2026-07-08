@@ -1,8 +1,10 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
-import type { OperatorNotice } from '../../models/operator-notice';
-import { executableOperatorNoticeAction } from '../../models/operator-notice-action-contract';
+import {
+  executableOperatorNoticeAction,
+  type RenderableNotice,
+} from '../../models/operator-notice-action-contract';
 
-const ACTIONABILITY_LABEL: Record<OperatorNotice['actionability'], string> = {
+const ACTIONABILITY_LABEL: Record<RenderableNotice['actionability'], string> = {
   actuatable: 'Action available',
   routed: 'Check elsewhere',
   self_resolving: 'Clears automatically',
@@ -18,9 +20,9 @@ const ACTIONABILITY_LABEL: Record<OperatorNotice['actionability'], string> = {
     '[attr.data-tier]': 'notice().tier',
   },
 })
-export class OperatorNoticeComponent {
-  readonly notice = input.required<OperatorNotice>();
-  readonly actionClicked = output<OperatorNotice>();
+export class OperatorNoticeComponent<T extends RenderableNotice> {
+  readonly notice = input.required<T>();
+  readonly actionClicked = output<T>();
 
   readonly tier = computed(() => this.notice().tier);
   readonly actionabilityLabel = computed(() => ACTIONABILITY_LABEL[this.notice().actionability]);
