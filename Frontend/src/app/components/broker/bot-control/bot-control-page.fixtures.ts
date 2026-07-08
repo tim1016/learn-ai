@@ -318,24 +318,6 @@ export function makeAccountSummary(): FleetAccountSummary {
       policy_blocks_starts: false,
       summary: 'Broker evidence unavailable.',
     },
-    notice: {
-      code: 'activity.source_blind_to_bot_orders',
-      tier: 'warning',
-      title: 'Broker evidence is unavailable',
-      message: 'The data plane could not fetch broker net positions.',
-      source_codes: [],
-      forensic_facts: {},
-      actionability: 'routed',
-      resolution: 'Clears when broker net positions and connected-account evidence refresh successfully.',
-      remedy_status: null,
-      action: {
-        kind: 'external_manual_check',
-        label: 'Check positions in IBKR',
-        target: 'ibkr_positions',
-      },
-      runbook_slug: 'broker evidence/health?',
-      occurred_at_ms: null,
-    },
   };
 }
 

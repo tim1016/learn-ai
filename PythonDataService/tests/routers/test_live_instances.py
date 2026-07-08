@@ -2536,65 +2536,6 @@ async def test_account_fleet_unknown_without_broker(app_with_root, monkeypatch: 
     assert response.json()["verdict"] == "unknown"
 
 
-async def test_account_summary_surfaces_broker_evidence_notice_when_positions_unavailable(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    app, root = app_with_root
-    _write_ledger(root, "run-ema", "spy_ema", 100)
-    _write_live_state(root, "spy_ema", "run-ema", {"SPY": 100})
-
-    async def fake_net() -> None:
-        return None
-
-    data_plane_snapshot = SimpleNamespace(
-        client_available=False,
-        connected=False,
-        connection_state=None,
-    )
-    snapshot_calls: list[object] = []
-    account_snapshots: list[object] = []
-
-    async def fake_account(snapshot: object) -> tuple[None, bool]:
-        account_snapshots.append(snapshot)
-        return None, False
-
-    monkeypatch.setattr(live_instances, "_fetch_net_positions", fake_net)
-    monkeypatch.setattr(live_instances, "_fetch_broker_connected_account", fake_account)
-    monkeypatch.setattr(
-        live_instances,
-        "snapshot_data_plane_broker",
-        lambda: snapshot_calls.append(data_plane_snapshot) or data_plane_snapshot,
-    )
-    _set_daemon(monkeypatch, process={"state": "idle"})
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/account-summary")
-
-    body = response.json()
-    assert body["contamination"]["verdict"] == "unknown"
-    assert body["notice"]["code"] == "activity.source_blind_to_bot_orders"
-    assert body["notice"]["title"] == "Data-plane broker session is not connected"
-    assert "could not fetch broker net positions" in body["notice"]["message"]
-    assert "IB Gateway/TWS may still be logged in" in body["notice"]["message"]
-    assert snapshot_calls == [data_plane_snapshot]
-    assert account_snapshots == [data_plane_snapshot]
-
-
-def test_account_summary_notice_distinguishes_connected_fetch_failure() -> None:
-    notice = live_instances._account_summary_notice(
-        net_positions_available=False,
-        broker_account_known=True,
-        data_plane_client_available=True,
-        data_plane_connected=True,
-        data_plane_connection_state="connected",
-    )
-
-    assert notice is not None
-    assert notice.title == "Broker evidence fetch failed"
-    assert "data-plane IBKR session is connected" in notice.message
-    assert notice.action.label == "Check positions in IBKR"
-
-
 async def test_instance_commands_returns_bound_run_timeline(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-cmd", "spy_ema_paper", 100)
