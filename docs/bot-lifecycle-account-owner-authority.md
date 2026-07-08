@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-07-07 (Safety-halt incidents now bridge cold-start poison into Recent Incidents and Bot Control headlines; the deploy form pre-detects durable STOPPED before start-now submissions and switches to deploy-only; deploy now fails closed before ledger creation when a strategy with a deploy-time action-plan contract, currently `deployment_validation`, is missing required legs or submits a plan shape the runtime path cannot consume; not-proven Account Truth start blockers name missing/stale evidence and link directly to Account Monitor's account reconciliation action, while deploy-only staging remains available.)
+> **Last reviewed:** 2026-07-07 (Safety-halt incidents now bridge cold-start poison into Recent Incidents and Bot Control headlines; the deploy form pre-detects durable STOPPED before start-now submissions and switches to deploy-only; deploy now fails closed before ledger creation when a strategy with a deploy-time action-plan contract, currently `deployment_validation`, is missing required legs or submits a plan shape the runtime path cannot consume; not-proven Account Truth start blockers name missing/stale evidence and link directly to Account Monitor's account reconciliation action, while deploy-only staging remains available; Bot Control carries the status symbol into the deploy form as inherited identity evidence and blocks Deploy & start when the inherited symbol disagrees with the new signal stream or declared stock action-plan symbol until the operator explicitly confirms the exact symbol set.)
 
 ---
 
@@ -76,6 +76,20 @@ This is **not** R3. The current process-local `_submit_lock` in `LiveEngine` ser
 | Low-level broker write | Paper safety checks run, `order_ref` is required, contract is qualified, then `client.ib.placeOrder(...)` is called. | `broker/ibkr/orders.py::place_paper_order` |
 | Operator actions | Resume/Pause/Stop/Flatten-and-pause/Mark-poisoned use shared capability evaluator. Start has separate recheck. | `services/operator_capability.py`, `routers/live_instances.py` |
 | Watchdog lease loss | Child watchdog detects daemon lease loss and delegates typed halt sequence. | `child_watchdog.py`, `watchdog_controller.py` |
+
+Fresh-run links carry `LiveInstanceStatus.symbol` to Deploy as inherited
+identity evidence with its source label (`run_ledger.live_config.action`,
+`run_ledger.live_config.symbol`, or strategy-spec fallback). The deploy form
+mirrors the admission policy and submits an unhashed
+`identity_coherence_confirmation` only after the operator confirms the current
+symbol set. The public deploy endpoint is authoritative: for `Deploy & start`
+it compares the backend-derived inherited symbol with the new
+`live_config.symbol` signal stream and, when a single long stock entry is
+declared, the action-plan trade symbol. A disagreement returns
+`IDENTITY_COHERENCE_UNCONFIRMED` until the confirmation matches those exact
+values; deploy-only staging remains available. The host daemon still owns the
+canonical run ledger and does not treat URL query params as authoritative run
+identity.
 
 ### 3.1 Canonical Lifecycle Observability Model
 

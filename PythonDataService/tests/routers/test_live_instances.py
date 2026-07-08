@@ -2844,6 +2844,150 @@ async def test_deploy_and_start_rejects_when_desired_state_is_stopped(
     assert called is False
 
 
+def _write_identity_source_run(root: Path, sid: str, symbol: str) -> None:
+    run_dir = root / f"run-{symbol.lower()}"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_dir.name,
+                "strategy_instance_id": sid,
+                "created_at_ms": 1_700_000_000_000,
+                "live_config": {
+                    "symbol": "SPY",
+                    "sizing": {"kind": "FixedShares", "value": 1},
+                    "action": {
+                        "on_enter": [
+                            {
+                                "leg_id": "leg_1",
+                                "instrument": {"kind": "stock", "underlying": symbol},
+                                "position": "long",
+                                "qty_ratio": 1,
+                            }
+                        ],
+                        "on_exit": [{"kind": "close_leg", "entry_leg_id": "leg_1"}],
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+async def test_deploy_and_start_rejects_unconfirmed_identity_incoherence(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _set_connected_broker_account(monkeypatch, "DU111")
+    _write_identity_source_run(root, "spy_ema_paper", "MU")
+    called = False
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        nonlocal called
+        called = True
+        return {"run_id": "run-new", "run_dir": "/runs/run-new", "created": True, "start": None}
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+    body = _deploy_body()
+    body["start"] = True
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=body)
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "IDENTITY_COHERENCE_UNCONFIRMED"
+    assert detail["gate_id"] == "deploy.identity_coherence"
+    assert detail["evidence"] == [
+        {
+            "label": "inherited_symbol",
+            "value": "MU",
+            "source": "run_ledger.live_config.action stock target",
+        },
+        {"label": "signal_stream", "value": "SPY", "source": "live_config.symbol"},
+    ]
+    assert called is False
+
+
+async def test_deploy_and_start_allows_confirmed_identity_incoherence(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _set_connected_broker_account(monkeypatch, "DU111")
+    _write_identity_source_run(root, "spy_ema_paper", "MU")
+    captured: dict = {}
+
+    async def fake_deploy(_base_url: str, payload: dict) -> dict:
+        captured.update(payload)
+        return {"run_id": "run-new", "run_dir": "/runs/run-new", "created": True, "start": None}
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+    body = _deploy_body()
+    body["start"] = True
+    body["identity_coherence_confirmation"] = {
+        "inherited_symbol": "MU",
+        "signal_stream": "SPY",
+        "action_plan_symbol": None,
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=body)
+
+    assert response.status_code == 201
+    assert captured["account_id"] == "DU111"
+    assert "identity_coherence_confirmation" not in captured
+
+
+async def test_deploy_and_start_ignores_soft_deleted_inherited_identity(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _set_connected_broker_account(monkeypatch, "DU111")
+    _write_identity_source_run(root, "spy_ema_paper", "MU")
+    _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1}, process={"state": "idle"})
+    captured: dict = {}
+
+    async def fake_deploy(_base_url: str, payload: dict) -> dict:
+        captured.update(payload)
+        return {"run_id": "run-new", "run_dir": "/runs/run-new", "created": True, "start": None}
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+    body = _deploy_body()
+    body["start"] = True
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        delete_response = await client.request("DELETE", "/api/live-instances/spy_ema_paper")
+        deploy_response = await client.post("/api/live-instances", json=body)
+
+    assert delete_response.status_code == 200
+    assert deploy_response.status_code == 201
+    assert captured["strategy_instance_id"] == "spy_ema_paper"
+
+
+async def test_deploy_and_start_ignores_request_inherited_symbol_for_new_instance(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _root = app_with_root
+    _set_connected_broker_account(monkeypatch, "DU111")
+    captured: dict = {}
+
+    async def fake_deploy(_base_url: str, payload: dict) -> dict:
+        captured.update(payload)
+        return {"run_id": "run-new", "run_dir": "/runs/run-new", "created": True, "start": None}
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+    body = _deploy_body()
+    body["start"] = True
+    body["inherited_symbol"] = "MU"
+    body["inherited_symbol_source"] = "stale redeploy URL"
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=body)
+
+    assert response.status_code == 201
+    assert captured["strategy_instance_id"] == "spy_ema_paper"
+
+
 async def test_deploy_instance_uses_connected_broker_account_when_request_omits_account(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:

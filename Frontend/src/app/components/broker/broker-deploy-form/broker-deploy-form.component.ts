@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import {
   afterEveryRender,
   ChangeDetectionStrategy,
@@ -18,6 +19,7 @@ import {
   type HostRunnerDeployRequest,
   type HostRunnerDeployResponse,
   type HydratePolicy,
+  type IdentityCoherenceConfirmation,
   type SizingPolicy,
   type SizingPreset,
   type SpecStrategyFixture,
@@ -75,6 +77,18 @@ interface DeployCommandState {
   message: string;
   canSubmit: boolean;
   actionLink?: AccountProofBlock;
+}
+
+interface IdentitySymbolEvidence {
+  label: string;
+  value: string;
+  source: string;
+}
+
+interface IdentityCoherenceConflict {
+  summary: string;
+  signature: string;
+  facts: IdentitySymbolEvidence[];
 }
 
 // ADR 0009 § 3 — Reference parity preset's policy. Pinned here as a constant
@@ -146,6 +160,8 @@ export class BrokerDeployFormComponent {
   readonly qcBacktestId = signal<string>('');
   readonly qcAuditCopyPath = signal<string>('');
   readonly instanceId = signal<string>('');
+  readonly inheritedSymbol = signal<string>('');
+  readonly inheritedSymbolSource = signal<string>('');
   readonly executionMode = signal<ExecutionMode>('paper_orders');
   readonly hydratePolicy = signal<HydratePolicy>('require');
   readonly maxOrdersPerDay = signal<number>(DEFAULT_MAX_ORDERS_PER_DAY);
@@ -331,6 +347,67 @@ export class BrokerDeployFormComponent {
   readonly actionPlanReadiness = computed(() =>
     actionPlanDeployReadiness(this.strategyKey(), this.actionPlan()),
   );
+  private readonly identityCoherenceConfirmedSignature = signal<string | null>(null);
+  readonly identityCoherenceEvidence = computed<IdentityCoherenceConflict | null>(() => {
+    const inherited = normalizedSymbol(this.inheritedSymbol());
+    if (!inherited) return null;
+    const facts: IdentitySymbolEvidence[] = [
+      {
+        label: 'Inherited bot symbol',
+        value: inherited,
+        source: this.inheritedSymbolSource().trim() || 'request inherited symbol',
+      },
+    ];
+    const signalStream = this.resolvedSignalStream();
+    if (signalStream) {
+      facts.push({
+        label: 'Signal stream',
+        value: signalStream,
+        source: 'live_config.symbol',
+      });
+    }
+    const actionSymbol = this.actionPlanTradeSymbol();
+    if (actionSymbol) {
+      facts.push({
+        label: 'Action plan',
+        value: actionSymbol,
+        source: 'declared entry leg',
+      });
+    }
+    if (facts.length < 2) return null;
+    if (new Set(facts.map((fact) => fact.value)).size === 1) return null;
+
+    const compared = facts
+      .slice(1)
+      .map((fact) => `${fact.label} ${fact.value}`)
+      .join(' and ');
+    return {
+      summary: `Inherited bot symbol ${inherited} conflicts with ${compared}. Confirm the new run identity before Deploy & start.`,
+      signature: facts.map((fact) => `${fact.label}:${fact.value}`).join('|'),
+      facts,
+    };
+  });
+  readonly identityCoherenceConfirmed = computed<boolean>(() => {
+    const evidence = this.identityCoherenceEvidence();
+    return evidence !== null && this.identityCoherenceConfirmedSignature() === evidence.signature;
+  });
+  readonly identityCoherenceConfirmation = computed<IdentityCoherenceConfirmation | null>(() => {
+    if (!this.identityCoherenceConfirmed()) return null;
+    const inherited = normalizedSymbol(this.inheritedSymbol());
+    if (!inherited) return null;
+    return {
+      inherited_symbol: inherited,
+      signal_stream: this.resolvedSignalStream() || null,
+      action_plan_symbol: this.actionPlanTradeSymbol() ?? null,
+    };
+  });
+  readonly identityCoherenceBlock = computed<IdentityCoherenceConflict | null>(() => {
+    const evidence = this.identityCoherenceEvidence();
+    if (evidence === null || !this.effectiveStartNow() || this.identityCoherenceConfirmed()) {
+      return null;
+    }
+    return evidence;
+  });
 
   readonly deployTabs = computed<DeployTab[]>(() => [
     {
@@ -467,6 +544,10 @@ export class BrokerDeployFormComponent {
     if (seedAuditCopy) this.qcAuditCopyPath.set(seedAuditCopy);
     const seedInstanceId = qp.get('instance_id');
     if (seedInstanceId) this.instanceId.set(seedInstanceId);
+    const seedInheritedSymbol = qp.get('inherited_symbol');
+    if (seedInheritedSymbol) this.inheritedSymbol.set(normalizedSymbol(seedInheritedSymbol));
+    const seedInheritedSymbolSource = qp.get('inherited_symbol_source');
+    if (seedInheritedSymbolSource) this.inheritedSymbolSource.set(seedInheritedSymbolSource.trim());
     const seedParent = qp.get('parent_run_id');
     if (seedParent) this.parentRunId.set(seedParent);
     const seedSignalStream = qp.get('signal_stream');
@@ -630,6 +711,8 @@ export class BrokerDeployFormComponent {
     if (!this.required()) {
       return { message: 'Missing: ' + this.missingRequiredFields().join(', ') + '.' };
     }
+    const identityConflict = this.identityCoherenceBlock();
+    if (identityConflict !== null) return { message: identityConflict.summary };
     const actionPlanReadiness = this.actionPlanReadiness();
     if (!actionPlanReadiness.canDeploy) return { message: actionPlanReadiness.message };
     // PR4 reviewer fix: surface invalid Custom sizing here so the deploy
@@ -686,6 +769,16 @@ export class BrokerDeployFormComponent {
     };
     const parent = this.parentRunId();
     if (parent) request.parent_run_id = parent;
+    const inheritedSymbol = normalizedSymbol(this.inheritedSymbol());
+    if (inheritedSymbol) {
+      request.inherited_symbol = inheritedSymbol;
+      const source = this.inheritedSymbolSource().trim();
+      if (source) request.inherited_symbol_source = source;
+    }
+    const identityConfirmation = this.identityCoherenceConfirmation();
+    if (identityConfirmation !== null) {
+      request.identity_coherence_confirmation = identityConfirmation;
+    }
     // Only attach launch knobs when actually starting — otherwise a deploy-only
     // request carries irrelevant start_options that still get validated (and a
     // cleared "max orders" field would serialize NaN → null and fail).
@@ -707,10 +800,36 @@ export class BrokerDeployFormComponent {
       // guard blocks an immediate second start rather than waiting on a 409.
       this.instances.reload();
     } catch (err) {
+      this.seedIdentityCoherenceEvidence(err);
       this.error.set(toOperationError('deploy', err));
     } finally {
       this.busy.set(false);
     }
+  }
+
+  private seedIdentityCoherenceEvidence(err: unknown): void {
+    if (!(err instanceof HttpErrorResponse)) return;
+    const detail = (err.error as { detail?: unknown } | null | undefined)?.detail;
+    if (!detail || typeof detail !== 'object') return;
+    const payload = detail as Record<string, unknown>;
+    if (payload['reason_code'] !== 'IDENTITY_COHERENCE_UNCONFIRMED') return;
+    const evidence = payload['evidence'];
+    if (!Array.isArray(evidence)) return;
+    const inherited = evidence.find(
+      (fact): fact is Record<string, unknown> =>
+        Boolean(fact) &&
+        typeof fact === 'object' &&
+        (fact as Record<string, unknown>)['label'] === 'inherited_symbol',
+    );
+    const inheritedSymbol = normalizedSymbol(
+      typeof inherited?.['value'] === 'string' ? inherited['value'] : '',
+    );
+    if (!inheritedSymbol) return;
+    this.inheritedSymbol.set(inheritedSymbol);
+    this.inheritedSymbolSource.set(
+      typeof inherited?.['source'] === 'string' ? inherited['source'] : '',
+    );
+    this.identityCoherenceConfirmedSignature.set(null);
   }
 
   // Event readers that narrow without a type assertion.
@@ -869,6 +988,13 @@ export class BrokerDeployFormComponent {
   setStartNow(e: Event): void {
     if (e.target instanceof HTMLInputElement) {
       this.startNow.set(e.target.checked);
+    }
+  }
+
+  confirmIdentityCoherence(): void {
+    const evidence = this.identityCoherenceEvidence();
+    if (evidence !== null) {
+      this.identityCoherenceConfirmedSignature.set(evidence.signature);
     }
   }
 

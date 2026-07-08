@@ -114,6 +114,7 @@ from app.schemas.live_runs import (
     HostRunnerHealth,
     HostRunnerStartRequest,
     HostRunnerStopRequest,
+    IdentityCoherenceConfirmation,
     InstanceBrokerView,
     InstanceLastExit,
     InstanceProcessView,
@@ -1755,6 +1756,133 @@ def _bot_delete_response(artifacts_root: Path, record: BotDeletionRecord) -> Bot
     )
 
 
+def _deploy_symbol(value: object) -> str:
+    return value.strip().upper() if isinstance(value, str) else ""
+
+
+def _deploy_identity_confirmation_matches(
+    confirmation: IdentityCoherenceConfirmation | None,
+    *,
+    inherited_symbol: str,
+    signal_stream: str,
+    action_plan_symbol: str,
+) -> bool:
+    if confirmation is None:
+        return False
+    return (
+        _deploy_symbol(confirmation.inherited_symbol) == inherited_symbol
+        and _deploy_symbol(confirmation.signal_stream) == signal_stream
+        and _deploy_symbol(confirmation.action_plan_symbol) == action_plan_symbol
+    )
+
+
+def _deploy_inherited_symbol(root: Path, runs: list[dict]) -> tuple[str, str]:
+    run_dir = _resolve_evidence_run_dir(root, None, runs)
+    if run_dir is None:
+        return "", ""
+    try:
+        ledger = _read_ledger(run_dir)
+    except (OSError, ValueError, KeyError):
+        return "", ""
+    live_config = ledger.get("live_config") or {}
+    if isinstance(live_config, dict):
+        symbol = _deploy_symbol(stock_symbol_from_action_plan(live_config.get("action")))
+        if symbol:
+            return symbol, "run_ledger.live_config.action stock target"
+        symbol = _deploy_symbol(live_config.get("symbol"))
+        if symbol:
+            return symbol, "run_ledger.live_config.symbol signal stream"
+    spec_path = ledger.get("strategy_spec_path")
+    if isinstance(spec_path, str) and spec_path:
+        for candidate in _container_resolve_repo_path(spec_path):
+            try:
+                spec = json.loads(candidate.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            symbols = spec.get("symbols")
+            if isinstance(symbols, list) and symbols:
+                first = _deploy_symbol(symbols[0])
+                if first:
+                    return first, "strategy_spec.symbols fallback"
+            break
+    return "", ""
+
+
+def _raise_if_identity_coherence_blocks_start(
+    live_runs_root: Path,
+    body: LiveInstanceDeployRequest,
+) -> None:
+    if not body.start:
+        return
+    sid = body.strategy_instance_id.strip()
+    inherited_symbol = ""
+    inherited_symbol_source = ""
+    visible_runs: list[dict] = []
+    if sid:
+        visible_runs = _visible_runs_by_instance(live_runs_root).get(sid, [])
+        inherited_symbol, inherited_symbol_source = _deploy_inherited_symbol(live_runs_root, visible_runs)
+    if not inherited_symbol and (not sid or visible_runs):
+        inherited_symbol = _deploy_symbol(body.inherited_symbol)
+        inherited_symbol_source = body.inherited_symbol_source or "request inherited symbol"
+    if not inherited_symbol:
+        return
+
+    live_config = body.live_config if isinstance(body.live_config, dict) else {}
+    signal_stream = _deploy_symbol(live_config.get("symbol"))
+    action_plan_symbol = _deploy_symbol(stock_symbol_from_action_plan(live_config.get("action")))
+    facts = [
+        {
+            "label": "inherited_symbol",
+            "value": inherited_symbol,
+            "source": inherited_symbol_source,
+        },
+    ]
+    if signal_stream:
+        facts.append(
+            {
+                "label": "signal_stream",
+                "value": signal_stream,
+                "source": "live_config.symbol",
+            }
+        )
+    if action_plan_symbol:
+        facts.append(
+            {
+                "label": "action_plan_symbol",
+                "value": action_plan_symbol,
+                "source": "live_config.action",
+            }
+        )
+    if len(facts) < 2 or len({fact["value"] for fact in facts}) == 1:
+        return
+    if _deploy_identity_confirmation_matches(
+        body.identity_coherence_confirmation,
+        inherited_symbol=inherited_symbol,
+        signal_stream=signal_stream,
+        action_plan_symbol=action_plan_symbol,
+    ):
+        return
+    compared = ", ".join(f"{fact['label']}={fact['value']}" for fact in facts)
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        detail={
+            "reason_code": "IDENTITY_COHERENCE_UNCONFIRMED",
+            "gate_id": "deploy.identity_coherence",
+            "message": (
+                "Deploy & start is blocked because the inherited bot symbol "
+                f"does not match the new run identity ({compared}). Confirm "
+                "the new run identity, or deploy without starting."
+            ),
+            "evidence": facts,
+            "remediation": (
+                "Review the inherited symbol, signal stream, and action plan. "
+                "Then submit an identity_coherence_confirmation matching the "
+                "current values, or turn off start."
+            ),
+        },
+    )
+
+
 async def _host_deploy_request_from_public(
     body: LiveInstanceDeployRequest,
 ) -> HostRunnerDeployRequest:
@@ -1776,6 +1904,9 @@ async def _host_deploy_request_from_public(
         )
     payload = body.model_dump()
     payload.pop("account_id", None)
+    payload.pop("inherited_symbol", None)
+    payload.pop("inherited_symbol_source", None)
+    payload.pop("identity_coherence_confirmation", None)
     return HostRunnerDeployRequest.model_validate({**payload, "account_id": broker_account})
 
 
@@ -1808,6 +1939,10 @@ async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -
                 "gate_result": account_freeze.to_gate_result().model_dump(mode="json"),
             },
         )
+    _raise_if_identity_coherence_blocks_start(
+        Path(settings.live_runs_root),
+        body,
+    )
     if daemon_request.start and daemon_request.strategy_instance_id:
         _raise_if_stopped_blocks_start(
             Path(settings.live_runs_root),

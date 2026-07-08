@@ -491,6 +491,19 @@ class HostRunnerActionResponse(BaseModel):
     exit_reason: str | None = None
 
 
+class IdentityCoherenceConfirmation(BaseModel):
+    """Operator confirmation for a Fresh-run symbol identity change.
+
+    Unhashed deploy-admission evidence: the backend compares these symbols to
+    the current request and the inherited instance symbol before allowing an
+    immediate start through an incoherent redeploy.
+    """
+
+    inherited_symbol: str = Field(min_length=1)
+    signal_stream: str | None = None
+    action_plan_symbol: str | None = None
+
+
 class HostRunnerDeployBaseRequest(BaseModel):
     """Common deploy request fields shared by public API and host daemon.
 
@@ -591,6 +604,10 @@ class LiveInstanceDeployRequest(HostRunnerDeployBaseRequest):
     """
 
     model_config = ConfigDict(extra="allow")
+
+    inherited_symbol: str | None = None
+    inherited_symbol_source: str | None = None
+    identity_coherence_confirmation: IdentityCoherenceConfirmation | None = None
 
     @model_validator(mode="after")
     def _validate_legacy_extras(self) -> LiveInstanceDeployRequest:

@@ -75,6 +75,30 @@
         } @else {
           <p class="blocked" role="status">{{ commandStatus() }}</p>
         }
+        @if (identityCoherenceEvidence(); as identity) {
+          <div class="identity-coherence" [class.confirmed]="identityCoherenceConfirmed()" role="group" aria-label="Run identity confirmation">
+            <strong>Run identity</strong>
+            <dl>
+              @for (fact of identity.facts; track fact.label) {
+                <div>
+                  <dt>{{ fact.label }}</dt>
+                  <dd>{{ fact.value }} <small>{{ fact.source | receiptLabel }}</small></dd>
+                </div>
+              }
+            </dl>
+            @if (effectiveStartNow()) {
+              @if (identityCoherenceConfirmed()) {
+                <p>Confirmed for this Deploy & start.</p>
+              } @else {
+                <button type="button" class="text-button" (click)="confirmIdentityCoherence()">
+                  Confirm new run identity
+                </button>
+              }
+            } @else {
+              <p>Deploy-only will stage these values without starting.</p>
+            }
+          </div>
+        }
       </section>
 
       <section>
