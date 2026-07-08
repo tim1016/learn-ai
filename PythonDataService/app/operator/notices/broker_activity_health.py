@@ -42,13 +42,22 @@ def _notice(
     tier: str,
     title: str,
     message: str,
+    actionability: str,
+    resolution: str,
+    target: str | None = None,
 ) -> OperatorNotice:
     return OperatorNotice(
         code=code,  # type: ignore[arg-type]
         tier=tier,  # type: ignore[arg-type]
         title=title,
         message=message,
-        action=OperatorNoticeAction(kind="wait", label=None, target=None),
+        actionability=actionability,  # type: ignore[arg-type]
+        resolution=resolution,
+        action=OperatorNoticeAction(
+            kind="external_manual_check" if target is not None else "none",
+            label="Check activity publisher" if target is not None else None,
+            target=target,
+        ),
         runbook_slug=_RUNBOOK,
     )
 
@@ -120,6 +129,9 @@ def compose_broker_activity_health(
                 "The bot process may still be running, but the cockpit cannot "
                 "confirm durable activity capture from the data plane."
             ),
+            actionability="routed",
+            resolution="Clears when the data plane registers and starts the broker-activity publisher for this instance.",
+            target="data_plane_activity_publisher",
         )
         return BrokerActivityHealth(
             state="unavailable",
@@ -141,6 +153,8 @@ def compose_broker_activity_health(
                     "The broker-activity publisher has been registered and is starting up. "
                     "Activity events will appear shortly."
                 ),
+                actionability="self_resolving",
+                resolution="Clears automatically when the registered broker-activity publisher starts running.",
             )
             return BrokerActivityHealth(
                 state="starting",
@@ -158,6 +172,9 @@ def compose_broker_activity_health(
                     "within the expected window. The host process state is separate; "
                     "check the data-plane publisher before trusting an empty feed."
                 ),
+                actionability="routed",
+                resolution="Clears when the data-plane publisher is restarted and running for this instance.",
+                target="data_plane_activity_publisher",
             )
             return BrokerActivityHealth(
                 state="unavailable",

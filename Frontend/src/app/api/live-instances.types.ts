@@ -4,6 +4,7 @@ import type {
   GovernedBy,
   HostRunnerStartRequest,
   HydratePolicy,
+  MutationRungReceipt,
   SizingPolicy,
   SizingPreset,
   SizingProvenance,
@@ -16,6 +17,16 @@ import type {
   OperatorSurfaceNamedCondition,
 } from './operator-observability.types';
 
+export type {
+  MutationRungReceipt,
+  MutationRungReceiptAction,
+  MutationRungReceiptActionability,
+  MutationRungReceiptActionKind,
+  MutationRungReceiptCode,
+  MutationRungReceiptRemedyStatus,
+  MutationRungReceiptStageId,
+  MutationRungReceiptTier,
+} from './live-runs.types';
 export type {
   BotLifecycleChartView,
   LifecycleChartAction,
@@ -305,7 +316,28 @@ export type HostProcessStartDisabledReasonCode =
   | 'STOPPED_REQUIRES_RESUME'
   | 'STOPPED_REQUIRES_REDEPLOY'
   | 'START_SETTINGS_INCOMPLETE'
-  | 'ACCOUNT_FROZEN';
+  | 'ACCOUNT_FROZEN'
+  | 'CRASH_RECOVERY_REQUIRED';
+
+export interface CrashRecoveryOverrideRequest {
+  confirm_account_flat: true;
+  approved_by?: string;
+  reason?: string | null;
+}
+
+export interface CrashRecoveryOverrideResponse {
+  accepted: true;
+  account_id: string;
+  strategy_instance_id: string;
+  run_id: string;
+  bot_order_namespace: string;
+  override_id: string;
+  recorded_at_ms: number;
+  blocking_recorded_at_ms: number;
+  event_type: 'account_audited_override_recorded';
+  rung_receipt?: MutationRungReceipt | null;
+  rung_receipt_warnings?: MutationRungReceipt[];
+}
 
 /** Server-authored per-instance Start-bot-process affordance
  *  (ADR-0006 §1 / ADR-0007 / ADR 0013 amendment 2026-06-22).
@@ -584,6 +616,8 @@ export type OperatorNoticeCode =
   // PR 6 — reconciliation (reserved).
   | 'reconciliation.required_after_uncertain_flatten'
   | 'reconciliation.discovered_execution_not_in_engine_state'
+  | 'reconciliation.divergence_while_submitting'
+  | 'fleet.sibling_liveness_unproven'
   // Broker session mirror — ADR 0018 orphaned-socket observability.
   | 'broker_session.orphaned_socket'
   // PRD #928 / ADR 0024 — order and submit terminal outcomes (reserved).
@@ -594,9 +628,16 @@ export type OperatorNoticeCode =
   | 'submit.unmapped_diagnostic'
   | 'safety_halt.poisoned';
 
+export type OperatorNoticeActionability =
+  | 'actuatable'
+  | 'routed'
+  | 'self_resolving'
+  | 'no_remedy';
+
+export type OperatorNoticeRemedyStatus = 'inherent' | 'unbuilt';
+
 export type OperatorNoticeActionKind =
   | 'none'
-  | 'wait'
   | 'open_runbook'
   | 'focus_cockpit_action'
   | 'renew_control_plane_lease'
@@ -616,6 +657,9 @@ export interface OperatorNotice {
   message: string;
   source_codes: string[];
   forensic_facts: Record<string, string | number | boolean | null>;
+  actionability: OperatorNoticeActionability;
+  resolution: string;
+  remedy_status: OperatorNoticeRemedyStatus | null;
   action: OperatorNoticeAction;
   runbook_slug: string | null;
   occurred_at_ms: number | null;
@@ -708,6 +752,14 @@ export interface BrokerActivityHealth {
   facts: BrokerActivityHealthFacts;
 }
 
+export interface OperatorSurfaceNoticePlacement {
+  banner: OperatorNotice | null;
+  banner_fold_count: number;
+  banner_folded: OperatorNotice[];
+  attention: OperatorNotice[];
+  quiet_status: OperatorNotice[];
+}
+
 export interface OperatorSurface {
   /** Bump on breaking shape changes; additive fields do NOT bump the version. */
   schema_version: number;
@@ -763,6 +815,8 @@ export interface OperatorSurface {
    *  uncertain-outcome incident exists. The cockpit renders this above
    *  the freshness headline in the runtime banner. */
   incident_headline: OperatorNotice | null;
+  /** ADR-0025 / PRD #972 — backend-authored single-banner and notice placement. */
+  notice_placement: OperatorSurfaceNoticePlacement;
 }
 
 /** ADR-0008 §5 / PR 1 — operator-facing cold-start reconciliation state
@@ -1023,4 +1077,6 @@ export interface DesiredStateRecord {
 export interface SetInstanceDesiredStateResponse {
   durable: DesiredStateRecord;
   actuation: IntentActuation;
+  rung_receipt: MutationRungReceipt;
+  rung_receipt_warnings: MutationRungReceipt[];
 }

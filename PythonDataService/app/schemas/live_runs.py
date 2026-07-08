@@ -13,7 +13,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.broker.ibkr.models import IbkrMinuteBar
 from app.engine.live.daemon_transport import DaemonResultKind
-from app.operator.notices.schema import OperatorNotice, RuntimeFreshnessReasonCode
+from app.operator.notices.schema import (
+    OperatorNotice,
+    OperatorNoticeAction,
+    OperatorNoticeActionability,
+    OperatorNoticeRemedyStatus,
+    OperatorNoticeTier,
+    RuntimeFreshnessReasonCode,
+)
 
 
 class RunState(StrEnum):
@@ -468,6 +475,77 @@ class ReconcileMutationResponse(BaseModel):
     reconciled_at_ms: int = Field(ge=0)
 
 
+OperatorSurfaceBlockageStageId = Literal[
+    "control_plane",
+    "host_process",
+    "broker",
+    "account_safety",
+    "account_owner",
+    "reconciliation",
+    "preflight",
+    "trading_session",
+    "runtime_freshness",
+]
+
+MutationRungReceiptCode = Literal[
+    "mutation.next_blocking_rung",
+    "mutation.scoped_all_clear",
+    "mutation.observational_warning",
+]
+
+
+class MutationRungReceipt(BaseModel):
+    """Notice-shaped post-mutation receipt authored from the fresh ladder.
+
+    These receipts are not persisted operator incidents, so their ``code`` values
+    intentionally live outside the closed ``OperatorNoticeCode`` union. They
+    still obey the notice actionability vocabulary and action-pairing contract.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    code: MutationRungReceiptCode
+    tier: OperatorNoticeTier
+    title: str
+    message: str
+    rung_id: OperatorSurfaceBlockageStageId | None = None
+    source_codes: list[str] = Field(default_factory=list)
+    forensic_facts: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+    actionability: OperatorNoticeActionability
+    resolution: str = Field(min_length=1)
+    remedy_status: OperatorNoticeRemedyStatus | None = None
+    action: OperatorNoticeAction
+    occurred_at_ms: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _actionability_contract(self) -> MutationRungReceipt:
+        action_kind = self.action.kind
+        if self.actionability == "actuatable":
+            if action_kind not in {"renew_control_plane_lease", "focus_cockpit_action", "redeploy"}:
+                raise ValueError("actuatable receipts require an inline cockpit action")
+            if not self.action.label:
+                raise ValueError("actuatable receipts require an action label")
+        elif self.actionability == "routed":
+            if action_kind not in {"open_runbook", "external_manual_check"}:
+                raise ValueError("routed receipts require an external route action")
+            if not self.action.target:
+                raise ValueError("routed receipts require a named target")
+            if not self.action.label:
+                raise ValueError("routed receipts require an action label")
+        elif self.actionability in {"self_resolving", "no_remedy"}:
+            if action_kind != "none":
+                raise ValueError(f"{self.actionability} receipts cannot carry a clickable action")
+            if self.action.label is not None or self.action.target is not None:
+                raise ValueError(f"{self.actionability} receipts cannot carry action label or target")
+            if self.actionability == "no_remedy" and self.remedy_status is None:
+                raise ValueError("no_remedy receipts require remedy_status")
+        else:
+            raise AssertionError(f"unknown receipt actionability: {self.actionability}")
+        if self.actionability != "no_remedy" and self.remedy_status is not None:
+            raise ValueError("remedy_status is only legal for no_remedy receipts")
+        return self
+
+
 class HostRunnerActionResponse(BaseModel):
     """Response for daemon start/stop actions.
 
@@ -490,6 +568,8 @@ class HostRunnerActionResponse(BaseModel):
     command_id: str | None = None
     stop_outcome: str | None = None
     exit_reason: str | None = None
+    rung_receipt: MutationRungReceipt | None = None
+    rung_receipt_warnings: list[MutationRungReceipt] = Field(default_factory=list)
 
 
 class IdentityCoherenceConfirmation(BaseModel):
@@ -807,6 +887,8 @@ class CommandView(BaseModel):
 
     seq: int
     verb: str
+    rung_receipt: MutationRungReceipt | None = None
+    rung_receipt_warnings: list[MutationRungReceipt] = Field(default_factory=list)
 
 
 class CommandAckView(BaseModel):
@@ -1449,6 +1531,7 @@ HostProcessStartDisabledReasonCode = Literal[
     "STOPPED_REQUIRES_REDEPLOY",
     "START_SETTINGS_INCOMPLETE",
     "ACCOUNT_FROZEN",
+    "CRASH_RECOVERY_REQUIRED",
 ]
 
 
@@ -1746,18 +1829,6 @@ class OperatorSurfaceTraderGuidance(BaseModel):
             raise ValueError(f"proof_lines must contain canonical ids in order: {expected_ids}")
         return proof_lines
 
-
-OperatorSurfaceBlockageStageId = Literal[
-    "control_plane",
-    "host_process",
-    "broker",
-    "account_safety",
-    "account_owner",
-    "reconciliation",
-    "preflight",
-    "trading_session",
-    "runtime_freshness",
-]
 OperatorSurfaceBlockageState = Literal["clear", "info", "warning", "danger", "unknown"]
 OperatorSurfaceRunSignalTone = Literal["on", "off", "transition", "attention"]
 
@@ -2020,6 +2091,22 @@ class BrokerActivityHealth(BaseModel):
     facts: BrokerActivityHealthFacts
 
 
+class OperatorSurfaceNoticePlacement(BaseModel):
+    """Backend-authored placement for operator notices.
+
+    The cockpit renders these lists directly. It must not re-run dominance or
+    tier/actionability placement rules locally.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    banner: OperatorNotice | None = None
+    banner_fold_count: int = Field(default=0, ge=0)
+    banner_folded: list[OperatorNotice] = Field(default_factory=list)
+    attention: list[OperatorNotice] = Field(default_factory=list)
+    quiet_status: list[OperatorNotice] = Field(default_factory=list)
+
+
 class OperatorSurface(BaseModel):
     """Operator-facing projection of run state for the Terminal Cockpit
     (PRD #607 / Slice 1 / #608, extended by PRD #616).
@@ -2097,6 +2184,9 @@ class OperatorSurface(BaseModel):
     # replaces the implicit "Loading history…" spinner with the typed
     # state machine from this field.
     broker_activity_health: BrokerActivityHealth | None = None
+    # ADR-0025 / PRD #972 — single dominant headline and tier × actionability
+    # placement. Frontend consumes this projection verbatim.
+    notice_placement: OperatorSurfaceNoticePlacement = Field(default_factory=OperatorSurfaceNoticePlacement)
 
 
 LifecycleChartStatus = Literal[
@@ -2844,6 +2934,8 @@ class SetInstanceDesiredStateResponse(BaseModel):
 
     durable: DesiredStateRecordResponse
     actuation: IntentActuation
+    rung_receipt: MutationRungReceipt
+    rung_receipt_warnings: list[MutationRungReceipt] = Field(default_factory=list)
 
 
 class ReconcileAckResponse(BaseModel):
@@ -2867,3 +2959,5 @@ class ReconcileAckResponse(BaseModel):
 
     request_id: str
     accepted_at_ms: int = Field(gt=0)
+    rung_receipt: MutationRungReceipt
+    rung_receipt_warnings: list[MutationRungReceipt] = Field(default_factory=list)

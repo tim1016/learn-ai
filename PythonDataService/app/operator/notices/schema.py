@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # ---------------------------------------------------------------------------
 # Tier
 # ---------------------------------------------------------------------------
 
 OperatorNoticeTier = Literal["info", "warning", "critical"]
+OperatorNoticeActionability = Literal["actuatable", "routed", "self_resolving", "no_remedy"]
+OperatorNoticeRemedyStatus = Literal["inherent", "unbuilt"]
 
 # ---------------------------------------------------------------------------
 # Codes — PR-1-through-PR-6 slots plus later ADR-backed notice families.
@@ -43,6 +45,9 @@ OperatorNoticeCode = Literal[
     # PR 6 — reconciliation (reserved).
     "reconciliation.required_after_uncertain_flatten",
     "reconciliation.discovered_execution_not_in_engine_state",
+    "reconciliation.divergence_while_submitting",
+    # Fleet liveness — reserved silent-state code.
+    "fleet.sibling_liveness_unproven",
     # Broker session mirror — ADR 0018 orphaned-socket observability.
     "broker_session.orphaned_socket",
     # PRD #928 / ADR 0024 — order and submit terminal outcomes (reserved).
@@ -54,6 +59,58 @@ OperatorNoticeCode = Literal[
     # Stream-primary PRD — safety-halt incident bridge.
     "safety_halt.poisoned",
 ]
+
+
+class NoticeCodeContract(BaseModel):
+    """Per-code truthfulness metadata pinned by the exhaustiveness gate."""
+
+    tier: OperatorNoticeTier
+    actionability: OperatorNoticeActionability
+    remedy_status: OperatorNoticeRemedyStatus | None = None
+
+
+NOTICE_CODE_CONTRACTS: dict[str, NoticeCodeContract] = {
+    "runtime.market_closed": NoticeCodeContract(tier="info", actionability="self_resolving"),
+    "runtime.market_session_halted": NoticeCodeContract(tier="info", actionability="self_resolving"),
+    "runtime.market_data_stale": NoticeCodeContract(tier="warning", actionability="routed"),
+    "runtime.market_data_first_bar_timeout": NoticeCodeContract(tier="critical", actionability="routed"),
+    "runtime.market_data_feed_stalled": NoticeCodeContract(tier="warning", actionability="routed"),
+    "runtime.broker_probe_stale": NoticeCodeContract(tier="warning", actionability="self_resolving"),
+    "runtime.broker_probe_missing": NoticeCodeContract(tier="warning", actionability="routed"),
+    "runtime.command_loop_unresponsive": NoticeCodeContract(tier="critical", actionability="routed"),
+    "runtime.engine_runtime_incompatible": NoticeCodeContract(tier="critical", actionability="actuatable"),
+    "runtime.control_plane_lease_stale": NoticeCodeContract(tier="critical", actionability="actuatable"),
+    "runtime.control_plane_boot_id_mismatch": NoticeCodeContract(tier="critical", actionability="routed"),
+    "watchdog.flatten_completed": NoticeCodeContract(tier="info", actionability="self_resolving"),
+    "watchdog.flatten_not_needed": NoticeCodeContract(tier="info", actionability="self_resolving"),
+    "watchdog.flatten_timed_out": NoticeCodeContract(tier="critical", actionability="routed"),
+    "watchdog.flatten_failed": NoticeCodeContract(tier="critical", actionability="routed"),
+    "watchdog.broker_disconnected_before_flatten": NoticeCodeContract(tier="critical", actionability="routed"),
+    "activity.publisher_starting": NoticeCodeContract(tier="info", actionability="self_resolving"),
+    "activity.publisher_not_running": NoticeCodeContract(tier="critical", actionability="routed"),
+    "activity.publisher_degraded": NoticeCodeContract(tier="warning", actionability="self_resolving"),
+    "activity.source_blind_to_bot_orders": NoticeCodeContract(tier="warning", actionability="routed"),
+    "activity.dropped_paused_intent": NoticeCodeContract(tier="warning", actionability="no_remedy", remedy_status="inherent"),
+    "reconciliation.required_after_uncertain_flatten": NoticeCodeContract(tier="critical", actionability="actuatable"),
+    "reconciliation.discovered_execution_not_in_engine_state": NoticeCodeContract(tier="critical", actionability="routed"),
+    "reconciliation.divergence_while_submitting": NoticeCodeContract(
+        tier="critical",
+        actionability="no_remedy",
+        remedy_status="unbuilt",
+    ),
+    "fleet.sibling_liveness_unproven": NoticeCodeContract(
+        tier="critical",
+        actionability="no_remedy",
+        remedy_status="unbuilt",
+    ),
+    "broker_session.orphaned_socket": NoticeCodeContract(tier="critical", actionability="routed"),
+    "order.rejected": NoticeCodeContract(tier="critical", actionability="routed"),
+    "submit.uncertain": NoticeCodeContract(tier="critical", actionability="routed"),
+    "submit.halted": NoticeCodeContract(tier="critical", actionability="self_resolving"),
+    "submit.launch_failed": NoticeCodeContract(tier="critical", actionability="actuatable"),
+    "submit.unmapped_diagnostic": NoticeCodeContract(tier="critical", actionability="routed"),
+    "safety_halt.poisoned": NoticeCodeContract(tier="critical", actionability="actuatable"),
+}
 
 # ---------------------------------------------------------------------------
 # Runtime freshness reason codes — moved from app/services/runtime_freshness.py.
@@ -83,7 +140,6 @@ class OperatorNoticeAction(BaseModel):
 
     kind: Literal[
         "none",
-        "wait",
         "open_runbook",
         "focus_cockpit_action",
         "renew_control_plane_lease",
@@ -109,9 +165,44 @@ class OperatorNotice(BaseModel):
     message: str
     source_codes: list[str] = Field(default_factory=list)
     forensic_facts: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+    actionability: OperatorNoticeActionability
+    resolution: str = Field(min_length=1)
+    remedy_status: OperatorNoticeRemedyStatus | None = None
     action: OperatorNoticeAction
     runbook_slug: str | None = None
     occurred_at_ms: int | None = None
+
+    @model_validator(mode="after")
+    def _truthfulness_contract(self) -> OperatorNotice:
+        contract = NOTICE_CODE_CONTRACTS[str(self.code)]
+        if self.tier != contract.tier:
+            raise ValueError(f"{self.code} must use tier={contract.tier}")
+        if self.actionability != contract.actionability:
+            raise ValueError(f"{self.code} must use actionability={contract.actionability}")
+        if self.remedy_status != contract.remedy_status:
+            raise ValueError(f"{self.code} must use remedy_status={contract.remedy_status!r}")
+
+        action_kind = self.action.kind
+        if self.actionability == "actuatable":
+            if action_kind not in {"renew_control_plane_lease", "focus_cockpit_action", "redeploy"}:
+                raise ValueError("actuatable notices require an inline cockpit action")
+            if not self.action.label:
+                raise ValueError("actuatable notices require an action label")
+        elif self.actionability == "routed":
+            if action_kind not in {"open_runbook", "external_manual_check"}:
+                raise ValueError("routed notices require an external route action")
+            if not self.action.target:
+                raise ValueError("routed notices require a named target")
+            if not self.action.label:
+                raise ValueError("routed notices require an action label")
+        elif self.actionability in {"self_resolving", "no_remedy"}:
+            if action_kind != "none":
+                raise ValueError(f"{self.actionability} notices cannot carry a clickable action")
+            if self.action.label is not None or self.action.target is not None:
+                raise ValueError(f"{self.actionability} notices cannot carry action label or target")
+        else:
+            raise AssertionError(f"unknown notice actionability: {self.actionability}")
+        return self
 
 
 class OperatorIncident(BaseModel):

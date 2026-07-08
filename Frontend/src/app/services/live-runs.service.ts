@@ -31,6 +31,8 @@ import type {
   BotCatalogResponse,
   BotDeleteRequest,
   BotDeleteResponse,
+  CrashRecoveryOverrideRequest,
+  CrashRecoveryOverrideResponse,
   InstanceDesiredStateRequest,
   LifecycleChartStatus,
   LifecycleSafetySeverity,
@@ -200,6 +202,18 @@ export class LiveRunsService {
   getInstanceStatus(instanceId: string): Promise<LiveInstanceStatus> {
     return firstValueFrom(
       this.http.get<LiveInstanceStatus>(`${this.instancesBase}/${encodeURIComponent(instanceId)}/status`),
+    );
+  }
+
+  recordCrashRecoveryOverride(
+    instanceId: string,
+    request: CrashRecoveryOverrideRequest,
+  ): Promise<CrashRecoveryOverrideResponse> {
+    return firstValueFrom(
+      this.http.post<CrashRecoveryOverrideResponse>(
+        `${this.instancesBase}/${encodeURIComponent(instanceId)}/crash-recovery-override`,
+        request,
+      ),
     );
   }
 

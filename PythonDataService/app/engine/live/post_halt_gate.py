@@ -85,6 +85,8 @@ def _make_reconciliation_required(
             "Run the Reconcile-now procedure in the cockpit and verify positions "
             "at IBKR before the engine will accept new orders."
         ),
+        actionability="actuatable",
+        resolution="Clears when runtime reconciliation records clean or adopted broker evidence for this run.",
         action=OperatorNoticeAction(
             kind="focus_cockpit_action",
             label="Run reconciliation",

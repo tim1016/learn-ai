@@ -6,7 +6,12 @@ from pathlib import Path
 
 from app.engine.live.post_halt_gate import check_post_halt_gate
 from app.operator.incidents.store import IncidentStore
-from app.operator.notices.schema import OperatorIncident, OperatorNotice, OperatorNoticeAction
+from app.operator.notices.schema import (
+    NOTICE_CODE_CONTRACTS,
+    OperatorIncident,
+    OperatorNotice,
+    OperatorNoticeAction,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -14,12 +19,30 @@ from app.operator.notices.schema import OperatorIncident, OperatorNotice, Operat
 
 
 def _make_notice(code: str, tier: str = "critical") -> OperatorNotice:
+    contract = NOTICE_CODE_CONTRACTS[code]
+    if contract.actionability == "actuatable":
+        action = OperatorNoticeAction(
+            kind="focus_cockpit_action",
+            label="Run reconciliation",
+            target="reconcile_now",
+        )
+    elif contract.actionability == "routed":
+        action = OperatorNoticeAction(
+            kind="external_manual_check",
+            label="Check positions at IBKR",
+            target="ibkr_positions",
+        )
+    else:
+        action = OperatorNoticeAction(kind="none")
     return OperatorNotice(
         code=code,  # type: ignore[arg-type]
         tier=tier,  # type: ignore[arg-type]
         title="Test notice",
         message="Test message",
-        action=OperatorNoticeAction(kind="none"),
+        actionability=contract.actionability,
+        resolution="Clears when the fixture's contract condition is satisfied.",
+        remedy_status=contract.remedy_status,
+        action=action,
     )
 
 

@@ -1,7 +1,10 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { LifecycleTimelineResponse } from '../../../api/live-instances.types';
+import type {
+  CrashRecoveryOverrideResponse,
+  LifecycleTimelineResponse,
+} from '../../../api/live-instances.types';
 import {
   allowFlattenAndPause,
   makeCommandWriteResponse,
@@ -9,6 +12,7 @@ import {
   makeHostRunnerHealth,
   makeIncidentHeadline,
   makeLifecycleTimeline,
+  makeMutationRungReceipt,
   makeReconcileAckResponse,
   makeRuntimeFreshnessWithLeaseAction,
   makeStatus,
@@ -58,28 +62,12 @@ describe('BotControlPageComponent', () => {
       ?? '';
   }
 
-  it('renders compact broker evidence and control-plane warning panels before the bot tabs', async () => {
+  it('does not render legacy independent slim warning panels', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const { element: el } = await setupBotControlPage();
-    const brokerPanel = el.querySelector('[data-testid="bot-control-broker-evidence-banner"]');
-    const controlPanel = el.querySelector('[data-testid="bot-control-plane-banner"]');
-    expect(brokerPanel?.textContent)
-      .toContain('Warning, broker evidence unavailable.');
-    expect(controlPanel?.textContent)
-      .toContain('Control plane, last known.');
-    const runbookLinks = Array.from(el.querySelectorAll<HTMLAnchorElement>('.warning-link'))
-      .map((link) => link.getAttribute('href'));
-    expect(runbookLinks).toContain('/broker/account-monitor');
-    expect(runbookLinks).toContain('/broker');
-    expect(runbookLinks).not.toContain('/data-lab');
-    const dismissButtons = Array.from(el.querySelectorAll<HTMLButtonElement>('.slim-dismiss'));
-    expect(dismissButtons.map((button) => button.getAttribute('title'))).toEqual([
-      'Dismiss broker evidence warning',
-      'Dismiss control plane warning',
-    ]);
-    expect(el.querySelector('[data-testid="bot-control-host-runner-banner"]')).toBeNull();
-    expect(el.querySelector('[data-testid="bot-control-tabs"]')).toBeNull();
-    expect(el.querySelector('.decision-row')).toBeNull();
+    expect(el.querySelector('[data-testid="bot-control-broker-evidence-banner"]')).toBeNull();
+    expect(el.querySelector('[data-testid="bot-control-plane-banner"]')).toBeNull();
+    expect(el.querySelector('.slim-dismiss')).toBeNull();
   });
 
   it('renders the backend-authored broker connection condition in the header', async () => {
@@ -101,16 +89,16 @@ describe('BotControlPageComponent', () => {
     expect(pill?.textContent).not.toContain('Degraded');
   });
 
-  it('renders backend-authored runtime incident headlines on the bot control page', async () => {
+  it('renders the backend-authored dominant notice on the bot control page', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();
-    status.operator_surface.incident_headline = makeIncidentHeadline();
+    status.operator_surface.notice_placement.banner = makeIncidentHeadline();
     const { element: el } = await setupBotControlPage({ status });
 
-    const incident = el.querySelector('[data-testid="runtime-banner-incident"]');
-    expect(incident).not.toBeNull();
-    expect(incident?.textContent).toContain('Flatten timed out');
-    expect(incident?.textContent).toContain(
+    const banner = el.querySelector('[data-testid="bot-control-dominant-notice"]');
+    expect(banner).not.toBeNull();
+    expect(banner?.textContent).toContain('Flatten timed out');
+    expect(banner?.textContent).toContain(
       'The watchdog could not prove that the account is flat after the emergency flatten attempt.',
     );
   });
@@ -119,6 +107,7 @@ describe('BotControlPageComponent', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();
     status.operator_surface.runtime_freshness = makeRuntimeFreshnessWithLeaseAction();
+    status.operator_surface.notice_placement.banner = status.operator_surface.runtime_freshness.headline;
     const { fixture, element, liveRuns } = await setupBotControlPage({
       status,
       mutationResponses: { renewControlPlaneLease: makeHostRunnerHealth() },
@@ -683,6 +672,114 @@ describe('BotControlPageComponent', () => {
     expect(text).not.toContain('Reconciled successfully');
   });
 
+  it('records crash recovery override and refreshes backend status', async () => {
+    const initial = makeStatus();
+    initial.operator_surface.host_process.start_capability = {
+      enabled: false,
+      run_id: null,
+      request: null,
+      disabled_reason_code: 'CRASH_RECOVERY_REQUIRED',
+      gate_results: [],
+    };
+    const refreshed = makeStatus();
+    refreshed.symbol = 'QQQ';
+    const response: CrashRecoveryOverrideResponse = {
+      accepted: true,
+      account_id: 'DU123',
+      strategy_instance_id: 'sid-x',
+      run_id: 'run-x',
+      bot_order_namespace: 'learn-ai/sid-x/v1',
+      override_id: 'crash-recovery-1',
+      recorded_at_ms: 1_700_000_000_001,
+      blocking_recorded_at_ms: 1_700_000_000_000,
+      event_type: 'account_audited_override_recorded',
+    };
+    const { fixture, component, liveRuns, element } = await setupBotControlPage({
+      statusSequence: [initial, refreshed],
+      mutationResponses: { recordCrashRecoveryOverride: response },
+    });
+
+    await component.dispatchCrashRecoveryOverride();
+    await flush(fixture);
+
+    expect(liveRuns.recordCrashRecoveryOverride).toHaveBeenCalledWith('sid-x', {
+      confirm_account_flat: true,
+      approved_by: 'operator',
+    });
+    expect(liveRuns.getInstanceStatus).toHaveBeenCalledTimes(2);
+    expect(element.textContent).toContain('QQQ');
+  });
+
+  it('renders the post-resume crash-recovery rung receipt with inline override action', async () => {
+    const initial = makeStatus();
+    initial.operator_surface.actions.resume = {
+      enabled: true,
+      effect: 'DURABLE_ONLY',
+      disabled_reason_code: null,
+      disabled_reasons: [],
+      gate_results: [],
+    };
+    const refreshed = makeStatus();
+    refreshed.operator_surface.host_process.start_capability = {
+      enabled: false,
+      run_id: null,
+      request: null,
+      disabled_reason_code: 'CRASH_RECOVERY_REQUIRED',
+      gate_results: [],
+    };
+    const resumeResponse = makeDesiredStateResponse();
+    resumeResponse.rung_receipt = makeMutationRungReceipt({
+      code: 'mutation.next_blocking_rung',
+      tier: 'critical',
+      title: "Stop latch cleared. The bot still won't run: previous host runner crashed — record crash-recovery evidence",
+      message: 'Resume persisted desired_state=RUNNING, but Start remains blocked.',
+      rung_id: 'host_process',
+      source_codes: ['CRASH_RECOVERY_REQUIRED'],
+      actionability: 'actuatable',
+      resolution: 'Clears when audited crash-recovery evidence is recorded for this account and bot.',
+      action: {
+        kind: 'focus_cockpit_action',
+        label: 'Record recovery override',
+        target: 'crash_recovery_override',
+      },
+    });
+    const overrideResponse: CrashRecoveryOverrideResponse = {
+      accepted: true,
+      account_id: 'DU123',
+      strategy_instance_id: 'sid-x',
+      run_id: 'run-x',
+      bot_order_namespace: 'learn-ai/sid-x/v1',
+      override_id: 'crash-recovery-1',
+      recorded_at_ms: 1_700_000_000_001,
+      blocking_recorded_at_ms: 1_700_000_000_000,
+      event_type: 'account_audited_override_recorded',
+    };
+    const { fixture, component, liveRuns, element } = await setupBotControlPage({
+      statusSequence: [initial, refreshed, refreshed],
+      mutationResponses: {
+        setInstanceDesiredState: resumeResponse,
+        recordCrashRecoveryOverride: overrideResponse,
+      },
+    });
+
+    await component.dispatchResume();
+    await flush(fixture);
+
+    const receipt = element.querySelector('[data-testid="bot-control-mutation-receipt"]');
+    expect(receipt?.textContent).toContain(
+      "Stop latch cleared. The bot still won't run: previous host runner crashed — record crash-recovery evidence",
+    );
+    const action = element.querySelector<HTMLButtonElement>('[data-testid="bot-control-mutation-receipt-action"]');
+    expect(action?.textContent).toContain('Record recovery override');
+    action?.click();
+    await flush(fixture);
+
+    expect(liveRuns.recordCrashRecoveryOverride).toHaveBeenCalledWith('sid-x', {
+      confirm_account_flat: true,
+      approved_by: 'operator',
+    });
+  });
+
   it('renders backend reconcile precondition details instead of the generic load error', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const reconcileError = new HttpErrorResponse({
@@ -849,14 +946,23 @@ describe('BotControlPageComponent', () => {
     });
   });
 
-  it('dismisses the control-plane banner for the session', async () => {
+  it('folds concurrent critical notices behind the dominant banner', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    const { fixture, component, element: el } = await setupBotControlPage();
-    expect(el.querySelector('[data-testid="bot-control-plane-banner"]')).not.toBeNull();
+    const status = makeStatus();
+    const dominant = makeIncidentHeadline();
+    const folded = makeRuntimeFreshnessWithLeaseAction().headline;
+    if (!folded) throw new Error('Expected runtime freshness headline fixture.');
+    status.operator_surface.notice_placement.banner = dominant;
+    status.operator_surface.notice_placement.banner_fold_count = 1;
+    status.operator_surface.notice_placement.banner_folded = [folded];
 
-    component.dismissControlPlaneBanner();
-    fixture.detectChanges();
-    expect(el.querySelector('[data-testid="bot-control-plane-banner"]')).toBeNull();
+    const { element: el } = await setupBotControlPage({ status });
+
+    const banners = el.querySelectorAll('[data-testid="bot-control-dominant-notice"]');
+    expect(banners).toHaveLength(1);
+    const fold = el.querySelector('[data-testid="bot-control-dominant-notice-fold"]');
+    expect(fold?.textContent).toContain('+1 more critical');
+    expect(fold?.textContent).toContain('Control-plane lease is stale');
   });
 
   it('does not flatten when the action became disabled while the confirm dialog was open', async () => {
@@ -882,43 +988,6 @@ describe('BotControlPageComponent', () => {
 
     await component.confirmFlatten();
     expect(liveRuns.flattenAndPause).not.toHaveBeenCalled();
-  });
-
-  it('re-shows a dismissed control-plane banner when its rendered content changes', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const { fixture, component, element: el } = await setupBotControlPage();
-    component.dismissControlPlaneBanner();
-    fixture.detectChanges();
-    expect(el.querySelector('[data-testid="bot-control-plane-banner"]')).toBeNull();
-
-    // Same UNREACHABLE state but materially different notice content -> reappears.
-    const next = makeStatus();
-    const cp = next.operator_surface.control_plane;
-    if (cp) cp.notice = 'A newer, different command-channel failure notice.';
-    component.status.set(next);
-    fixture.detectChanges();
-    expect(el.querySelector('[data-testid="bot-control-plane-banner"]')).not.toBeNull();
-  });
-
-  it('re-shows a dismissed control-plane banner after recovery and a later re-failure', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const { fixture, component, element: el } = await setupBotControlPage();
-    component.dismissControlPlaneBanner();
-    fixture.detectChanges();
-    expect(el.querySelector('[data-testid="bot-control-plane-banner"]')).toBeNull();
-
-    // Recover: control plane CONNECTED -> banner clears and the dismissal resets.
-    const recovered = makeStatus();
-    const recoveredCp = recovered.operator_surface.control_plane;
-    if (recoveredCp) recoveredCp.state = 'CONNECTED';
-    component.status.set(recovered);
-    fixture.detectChanges();
-    expect(el.querySelector('[data-testid="bot-control-plane-banner"]')).toBeNull();
-
-    // Fail back to the same UNREACHABLE state -> new outage, banner reappears.
-    component.status.set(makeStatus());
-    fixture.detectChanges();
-    expect(el.querySelector('[data-testid="bot-control-plane-banner"]')).not.toBeNull();
   });
 
   it('updates inline attention content when a new critical group arrives', async () => {

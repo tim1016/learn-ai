@@ -26,21 +26,28 @@
   &__header {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
     gap: 0.5rem;
     margin-bottom: 0.25rem;
   }
 
-  &__tier-pill {
+  &__tier-pill,
+  &__actionability {
     text-transform: uppercase;
     font-size: 0.7rem;
-    letter-spacing: 0.05em;
+    letter-spacing: 0;
     padding: 0.1rem 0.45rem;
     border-radius: 999px;
     background: var(--notice-border);
     color: var(--notice-pill-fg, #fff);
   }
 
+  &__actionability {
+    background: rgba(255, 255, 255, 0.08);
+  }
+
   &__title {
+    flex: 1 1 14rem;
     margin: 0;
     font-size: 0.95rem;
     font-weight: 600;
@@ -50,6 +57,13 @@
     margin: 0.25rem 0 0.5rem;
     font-size: 0.875rem;
     line-height: 1.35;
+  }
+
+  &__resolution {
+    margin: 0 0 0.5rem;
+    font-size: 0.8rem;
+    line-height: 1.35;
+    color: var(--text-secondary, rgba(255, 255, 255, 0.78));
   }
 
   &__action {

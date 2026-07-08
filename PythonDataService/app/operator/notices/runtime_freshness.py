@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from app.operator.notices.schema import (
     OperatorNotice,
     OperatorNoticeAction,
+    OperatorNoticeActionability,
     OperatorNoticeCode,
     OperatorNoticeTier,
     RuntimeFreshnessReasonCode,
@@ -20,6 +21,8 @@ class _Rule:
     tier: OperatorNoticeTier
     title: str
     message: str
+    actionability: OperatorNoticeActionability
+    resolution: str
     action: OperatorNoticeAction
     runbook_slug: str | None = None
     suppress_banner: bool = False
@@ -43,6 +46,8 @@ _RUNTIME_FRESHNESS_RULES: tuple[_Rule, ...] = tuple(sorted([
             "happened that the cockpit did not initiate. Stop trusting cockpit "
             "state, verify positions at IBKR, and redeploy."
         ),
+        actionability="routed",
+        resolution="Clears after the operator verifies positions at IBKR and redeploys the bot from a trusted runtime.",
         action=OperatorNoticeAction(kind="open_runbook", label="How to recover", target=_RUNBOOK),
         runbook_slug=_RUNBOOK,
     ),
@@ -57,6 +62,8 @@ _RUNTIME_FRESHNESS_RULES: tuple[_Rule, ...] = tuple(sorted([
             "in a guarded state. Verify only one cockpit or host runner is "
             "attached to this run."
         ),
+        actionability="actuatable",
+        resolution="Clears when the cockpit renews the control-plane lease and the engine reports the same lease holder.",
         action=OperatorNoticeAction(
             kind="renew_control_plane_lease",
             label="Renew control-plane lease",
@@ -75,6 +82,8 @@ _RUNTIME_FRESHNESS_RULES: tuple[_Rule, ...] = tuple(sorted([
             "recovers. If this persists, stop the bot from the host runner and "
             "verify positions at IBKR."
         ),
+        actionability="routed",
+        resolution="Clears when the command loop heartbeat is fresh again or after the operator verifies positions and restarts the bot.",
         action=OperatorNoticeAction(
             kind="external_manual_check",
             label="Check positions in IBKR",
@@ -92,6 +101,8 @@ _RUNTIME_FRESHNESS_RULES: tuple[_Rule, ...] = tuple(sorted([
             "The engine runtime version is incompatible with the cockpit. The "
             "bot will not start trading. Redeploy with a matching runtime."
         ),
+        actionability="actuatable",
+        resolution="Clears when a redeployed bot reports a compatible engine runtime version.",
         action=OperatorNoticeAction(kind="redeploy", label="Redeploy bot", target="configuration_tab"),
         runbook_slug=_RUNBOOK,
     ),
@@ -105,6 +116,8 @@ _RUNTIME_FRESHNESS_RULES: tuple[_Rule, ...] = tuple(sorted([
             "The engine runtime version is incompatible with the cockpit. The "
             "bot will not start trading. Redeploy with a matching runtime."
         ),
+        actionability="actuatable",
+        resolution="Clears when a redeployed bot reports a compatible engine runtime version.",
         action=OperatorNoticeAction(kind="redeploy", label="Redeploy bot", target="configuration_tab"),
         runbook_slug=_RUNBOOK,
     ),
@@ -118,7 +131,13 @@ _RUNTIME_FRESHNESS_RULES: tuple[_Rule, ...] = tuple(sorted([
             "The broker probe has not run since the bot started. Cockpit sees "
             "no broker telemetry. Check that the broker daemon is connected."
         ),
-        action=OperatorNoticeAction(kind="external_manual_check", label="Check broker daemon"),
+        actionability="routed",
+        resolution="Clears when broker probe telemetry is present and fresh in the child runtime.",
+        action=OperatorNoticeAction(
+            kind="external_manual_check",
+            label="Check broker daemon",
+            target="broker_daemon",
+        ),
         runbook_slug=_RUNBOOK,
     ),
     _Rule(
@@ -131,7 +150,9 @@ _RUNTIME_FRESHNESS_RULES: tuple[_Rule, ...] = tuple(sorted([
             "The broker probe has not returned a fresh status within the "
             "freshness window. The bot is protecting itself."
         ),
-        action=OperatorNoticeAction(kind="wait"),
+        actionability="self_resolving",
+        resolution="Clears automatically when the child runtime reports a fresh broker probe.",
+        action=OperatorNoticeAction(kind="none"),
         runbook_slug=_RUNBOOK,
     ),
     _Rule(
@@ -144,6 +165,8 @@ _RUNTIME_FRESHNESS_RULES: tuple[_Rule, ...] = tuple(sorted([
             "Both the heartbeat and the most recent bar are stale. New trading "
             "decisions are held until fresh data arrives."
         ),
+        actionability="routed",
+        resolution="Clears when IBKR market data heartbeat and latest-bar evidence are fresh again.",
         action=OperatorNoticeAction(
             kind="external_manual_check",
             label="Check IBKR connection",
@@ -163,6 +186,8 @@ _RUNTIME_FRESHNESS_RULES: tuple[_Rule, ...] = tuple(sorted([
             "session or paper market-data entitlement issue is starving the "
             "paper API feed. New trading decisions are held until bars arrive."
         ),
+        actionability="routed",
+        resolution="Clears when the first IBKR live bar arrives or after the operator fixes the IBKR market-data session.",
         action=OperatorNoticeAction(
             kind="external_manual_check",
             label="Fix IBKR market data",
@@ -180,6 +205,8 @@ _RUNTIME_FRESHNESS_RULES: tuple[_Rule, ...] = tuple(sorted([
             "The bot subscribed to the market-data feed, but no source bar has "
             "arrived yet. New trading decisions are held until IBKR sends bars."
         ),
+        actionability="routed",
+        resolution="Clears when IBKR sends source bars for this subscription.",
         action=OperatorNoticeAction(
             kind="external_manual_check",
             label="Check IBKR market data",
@@ -197,7 +224,13 @@ _RUNTIME_FRESHNESS_RULES: tuple[_Rule, ...] = tuple(sorted([
             "The most recent bar is older than the freshness window. New "
             "trading decisions are held until fresh data arrives."
         ),
-        action=OperatorNoticeAction(kind="wait"),
+        actionability="routed",
+        resolution="Clears when a fresh IBKR bar arrives inside the freshness window.",
+        action=OperatorNoticeAction(
+            kind="external_manual_check",
+            label="Check IBKR market data",
+            target="ibkr_connection",
+        ),
         runbook_slug=_RUNBOOK,
     ),
     _Rule(
@@ -210,7 +243,13 @@ _RUNTIME_FRESHNESS_RULES: tuple[_Rule, ...] = tuple(sorted([
             "The data feed heartbeat is older than the freshness window. New "
             "trading decisions are held until fresh data arrives."
         ),
-        action=OperatorNoticeAction(kind="wait"),
+        actionability="routed",
+        resolution="Clears when the child runtime reports a fresh market-data heartbeat.",
+        action=OperatorNoticeAction(
+            kind="external_manual_check",
+            label="Check IBKR market data",
+            target="ibkr_connection",
+        ),
         runbook_slug=_RUNBOOK,
     ),
     _Rule(
@@ -223,7 +262,9 @@ _RUNTIME_FRESHNESS_RULES: tuple[_Rule, ...] = tuple(sorted([
             "The exchange has halted the session for this symbol. The bot will "
             "resume when the halt clears."
         ),
-        action=OperatorNoticeAction(kind="wait"),
+        actionability="self_resolving",
+        resolution="Clears automatically when the exchange halt clears for this symbol.",
+        action=OperatorNoticeAction(kind="none"),
     ),
     _Rule(
         priority=10,
@@ -235,6 +276,8 @@ _RUNTIME_FRESHNESS_RULES: tuple[_Rule, ...] = tuple(sorted([
             "The bot is idle until the regular trading session opens. No "
             "trading decision is being made."
         ),
+        actionability="self_resolving",
+        resolution="Clears automatically when the regular trading session opens.",
         action=OperatorNoticeAction(kind="none"),
         suppress_banner=True,
     ),
@@ -270,6 +313,8 @@ def _build_notice(rule: _Rule, active_codes: set[str], facts: dict[str, int | No
         message=rule.message,
         source_codes=matched_sources,
         forensic_facts={k: v for k, v in facts.items() if v is not None},
+        actionability=rule.actionability,
+        resolution=rule.resolution,
         action=rule.action,
         runbook_slug=rule.runbook_slug,
         occurred_at_ms=now_ms,

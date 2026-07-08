@@ -19,7 +19,8 @@ export type OperationKind =
   | 'flatten'
   | 'reconcile'
   | 'mark-poisoned'
-  | 'renew-lease';
+  | 'renew-lease'
+  | 'recovery-override';
 
 export type ErrorCategory =
   | 'validation'
@@ -93,6 +94,7 @@ const OPERATION_LABEL: Record<OperationKind, string> = {
   reconcile: 'Reconcile',
   'mark-poisoned': 'Mark poisoned',
   'renew-lease': 'Renew lease',
+  'recovery-override': 'Recovery override',
 };
 
 // Remediation keyed on (operation, status). Most-specific cell wins; a generic
@@ -118,6 +120,10 @@ const REMEDIATION: Partial<Record<OperationKind, Partial<Record<number, string>>
   'renew-lease': {
     409: 'Refresh Bot Control to read the current daemon lease before retrying.',
     503: 'The host daemon is unavailable. Check the local daemon and retry.',
+  },
+  'recovery-override': {
+    409: 'Refresh Bot Control. The blocker may already have changed.',
+    404: 'Deploy a run for this bot before recording recovery evidence.',
   },
 };
 

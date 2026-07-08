@@ -111,6 +111,7 @@ describe('operator surface fixture wire contract', () => {
       'reconciliation',
       'broker_activity_health',
       'incident_headline',
+      'notice_placement',
       'execution',
     ];
     for (const fixture of [STEADY, STOPPED]) {

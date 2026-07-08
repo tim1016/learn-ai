@@ -188,6 +188,46 @@ describe('OverviewTabComponent', () => {
     expect(current?.classList.contains('severity-critical')).toBe(true);
   });
 
+  it('emits a recovery override request when crash recovery blocks Start', () => {
+    TestBed.configureTestingModule({
+      imports: [OverviewTabComponent],
+      providers: [provideZonelessChangeDetection()],
+    });
+
+    const fixture = TestBed.createComponent(OverviewTabComponent);
+    const requested = vi.fn();
+    const status = makeStatus();
+    status.operator_surface.host_process.start_capability = {
+      enabled: false,
+      run_id: null,
+      request: null,
+      disabled_reason_code: 'CRASH_RECOVERY_REQUIRED',
+      gate_results: [
+        {
+          gate_id: 'account.crash_recovery',
+          status: 'block',
+          source: 'account_instance_registry',
+          operator_reason: 'CRASH_RECOVERY_REQUIRED',
+          operator_next_step: 'Record audited recovery evidence.',
+          evidence_at_ms: 1_700_000_000_000,
+        },
+      ],
+    };
+    fixture.componentRef.setInput('status', status);
+    fixture.componentInstance.crashRecoveryOverrideRequested.subscribe(requested);
+    fixture.detectChanges();
+
+    const button = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>('.recovery-button');
+    expect(button?.textContent?.replace(/\s+/g, ' ').trim()).toBe('Record recovery override');
+    button?.click();
+    expect(requested).toHaveBeenCalledTimes(1);
+
+    fixture.componentRef.setInput('recoveryOverrideBusy', true);
+    fixture.detectChanges();
+    button?.click();
+    expect(requested).toHaveBeenCalledTimes(1);
+  });
+
   it('expands an expandable backend-authored subgraph and collapses to global', () => {
     TestBed.configureTestingModule({
       imports: [OverviewTabComponent],

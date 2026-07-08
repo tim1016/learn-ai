@@ -35,10 +35,25 @@
         <h3>{{ blockageLadder().headline }}</h3>
         <p>{{ blockageLadder().summary }}</p>
       </div>
-      @if (currentBlockage(); as current) {
-        <span [class]="'current-chip severity-' + current.severity">
-          {{ current.label }}
-        </span>
+      @if (currentBlockage() || crashRecoveryRequired()) {
+        <div class="blockage-actions">
+          @if (crashRecoveryRequired()) {
+            <button
+              type="button"
+              class="recovery-button"
+              [disabled]="recoveryOverrideBusy()"
+              (click)="recordCrashRecoveryOverride()"
+            >
+              <i class="pi pi-shield" aria-hidden="true"></i>
+              {{ recoveryOverrideBusy() ? 'Recording...' : 'Record recovery override' }}
+            </button>
+          }
+          @if (currentBlockage(); as current) {
+            <span [class]="'current-chip severity-' + current.severity">
+              {{ current.label }}
+            </span>
+          }
+        </div>
       }
     </header>
     <div class="blockage-steps" aria-label="Readiness signal states">

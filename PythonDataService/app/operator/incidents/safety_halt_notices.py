@@ -93,6 +93,8 @@ def build_safety_halt_incident(
                 "artifact_path": str(artifact_path) if artifact_path is not None else None,
                 "log_path": str(log_path) if log_path is not None else None,
             },
+            actionability="actuatable",
+            resolution="Clears when the poisoned run remains retired and the operator deploys a fresh run after reviewing halt evidence.",
             action=OperatorNoticeAction(kind="redeploy", label="Open Fresh run"),
             runbook_slug="safety-halt",
             occurred_at_ms=halt_reason.halted_at_ms,

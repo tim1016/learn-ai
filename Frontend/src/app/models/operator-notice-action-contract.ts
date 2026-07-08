@@ -40,7 +40,6 @@ export function executableOperatorNoticeAction(
       return { kind: action.kind, label: action.label };
     case 'external_manual_check':
     case 'none':
-    case 'wait':
       return null;
     default: {
       const unreachable: never = action.kind;

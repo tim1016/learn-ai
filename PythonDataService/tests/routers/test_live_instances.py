@@ -18,7 +18,17 @@ from httpx import ASGITransport, AsyncClient
 
 from app.broker.ibkr.api_evidence import evidence_request, evidence_response, get_ibkr_api_evidence_recorder
 from app.engine.live import host_daemon_client
-from app.engine.live.account_artifacts import AccountFreezeEvidence, append_account_event, write_account_freeze
+from app.engine.live.account_artifacts import (
+    AccountFreezeEvidence,
+    append_account_event,
+    read_account_events,
+    write_account_freeze,
+)
+from app.engine.live.account_registry import (
+    AccountInstanceBinding,
+    crash_retired_restart_blocking_binding,
+    write_account_instance_binding,
+)
 from app.engine.live.artifacts import ExecutionRow, ExecutionWriter, TradeRow, TradeWriter
 from app.engine.live.desired_state import DesiredState, DesiredStateRepo, stable_desired_state_path
 from app.engine.live.intent_events import IntentEvent, IntentEventType
@@ -27,7 +37,12 @@ from app.engine.live.run_ledger import LiveRunLedger
 from app.engine.live.run_ledger import write_ledger as write_live_run_ledger
 from app.operator.incidents.safety_halt_notices import build_safety_halt_incident
 from app.operator.incidents.store import IncidentStore
-from app.operator.notices.schema import OperatorIncident, OperatorNotice, OperatorNoticeAction
+from app.operator.notices.schema import (
+    NOTICE_CODE_CONTRACTS,
+    OperatorIncident,
+    OperatorNotice,
+    OperatorNoticeAction,
+)
 from app.routers import live_instances
 from app.schemas.broker_activity import BrokerActivityRow
 from app.schemas.live_runs import LiveBinding
@@ -53,6 +68,28 @@ def _write_ledger(
     (run_dir / "run_ledger.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _write_crash_retired_binding(
+    artifacts_root: Path,
+    *,
+    account_id: str,
+    sid: str,
+    run_id: str,
+    recorded_at_ms: int = 1_700_000_000_000,
+) -> None:
+    write_account_instance_binding(
+        artifacts_root,
+        AccountInstanceBinding(
+            account_id=account_id,
+            strategy_instance_id=sid,
+            run_id=run_id,
+            bot_order_namespace=f"learn-ai/{sid}/v1",
+            lifecycle_state="RETIRED",
+            recorded_at_ms=recorded_at_ms,
+            source="host_daemon.process_crashed",
+        ),
+    )
+
+
 def _append_watchdog_incident(run_dir: Path, *, incident_id: str, message: str, started_at_ms: int) -> None:
     IncidentStore(run_dir).append(
         OperatorIncident(
@@ -64,6 +101,8 @@ def _append_watchdog_incident(run_dir: Path, *, incident_id: str, message: str, 
                 tier="critical",
                 title="Watchdog flatten failed",
                 message=message,
+                actionability="routed",
+                resolution="Clears after the operator verifies IBKR positions and runs Reconcile.",
                 action=OperatorNoticeAction(kind="open_runbook", label="Open runbook", target="watchdog-halt"),
                 runbook_slug="watchdog-halt",
                 occurred_at_ms=started_at_ms,
@@ -82,6 +121,21 @@ def _append_operator_incident(
     message: str,
     started_at_ms: int,
 ) -> None:
+    contract = NOTICE_CODE_CONTRACTS[code]
+    if contract.actionability == "routed":
+        action = OperatorNoticeAction(
+            kind="external_manual_check",
+            label="Check external evidence",
+            target="operator_external_evidence",
+        )
+    elif contract.actionability == "actuatable":
+        action = OperatorNoticeAction(
+            kind="focus_cockpit_action",
+            label="Focus action",
+            target="reconcile_now",
+        )
+    else:
+        action = OperatorNoticeAction(kind="none")
     IncidentStore(run_dir).append(
         OperatorIncident(
             incident_id=incident_id,
@@ -89,10 +143,13 @@ def _append_operator_incident(
             started_at_ms=started_at_ms,
             notice=OperatorNotice(
                 code=code,
-                tier="critical",
+                tier=contract.tier,
                 title=title,
                 message=message,
-                action=OperatorNoticeAction(kind="none"),
+                actionability=contract.actionability,
+                resolution="Clears when the fixture's contract condition is satisfied.",
+                remedy_status=contract.remedy_status,
+                action=action,
                 occurred_at_ms=started_at_ms,
             ),
         )
@@ -476,6 +533,51 @@ async def test_instance_status_running_exposes_live_binding(app_with_root, monke
     assert body["evidence_binding"]["run_id"] == "run-live-aaa"
     assert body["evidence_binding"]["is_live"] is False
     assert body["desired_state"] is not None
+
+
+async def test_instance_status_blocks_start_when_crash_recovery_required(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    sid = "spy_crash_status"
+    account_id = "DU123456"
+    run_id = "run-crash-status"
+    _write_ledger(root, run_id, sid, 100, account_id=account_id)
+    run_dir = root / run_id
+    (run_dir / "verdict_snapshot.json").write_text(json.dumps({"verdict": "paper-only"}), encoding="utf-8")
+    (run_dir / "run_status.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "run_id": run_id,
+                "started_at_ms": 1_700_000_000_000,
+                "last_update_ms": 1_700_000_000_000,
+                "host_pid": 1,
+                "submit_mode_at_start": "live_paper",
+                "readonly_at_start": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "intent_events.jsonl").write_text("", encoding="utf-8")
+    _write_crash_retired_binding(
+        root.parent,
+        account_id=account_id,
+        sid=sid,
+        run_id=run_id,
+        recorded_at_ms=1_700_000_000_000,
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/status")
+
+    assert response.status_code == 200
+    start_capability = response.json()["operator_surface"]["host_process"]["start_capability"]
+    assert start_capability["enabled"] is False
+    assert start_capability["disabled_reason_code"] == "CRASH_RECOVERY_REQUIRED"
+    assert start_capability["gate_results"][0]["gate_id"] == "account.crash_recovery"
 
 
 async def test_status_activity_publisher_resolution_bootstraps_missing_live_publisher(
@@ -2710,6 +2812,73 @@ async def test_resume_rejects_when_account_is_frozen(app_with_root, monkeypatch:
     assert response.json()["detail"]["disabled_reason_code"] == "ACCOUNT_FROZEN"
 
 
+async def test_resume_receipt_names_crash_recovery_next_rung(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    sid = "spy_resume_crash"
+    account_id = "DU123456"
+    run_id = "run-resume-crash"
+    _write_ledger(root, run_id, sid, 100, account_id=account_id)
+    run_dir = root / run_id
+    (run_dir / "verdict_snapshot.json").write_text(json.dumps({"verdict": "paper-only"}), encoding="utf-8")
+    (run_dir / "run_status.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "run_id": run_id,
+                "started_at_ms": 1_700_000_000_000,
+                "last_update_ms": 1_700_000_000_000,
+                "host_pid": 1,
+                "submit_mode_at_start": "live_paper",
+                "readonly_at_start": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "intent_events.jsonl").write_text("", encoding="utf-8")
+    _write_crash_retired_binding(
+        root.parent,
+        account_id=account_id,
+        sid=sid,
+        run_id=run_id,
+        recorded_at_ms=1_700_000_000_000,
+    )
+    DesiredStateRepo(stable_desired_state_path(root.parent, sid)).set(
+        DesiredState.STOPPED,
+        updated_by="test",
+        reason="regression",
+        now_ms=1_700_000_000_000,
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/live-instances/{sid}/desired-state",
+            json={"action": "resume", "updated_by": "operator", "reason": "Resume"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["durable"]["state"] == "RUNNING"
+    receipt = body["rung_receipt"]
+    assert receipt["code"] == "mutation.next_blocking_rung"
+    assert receipt["tier"] == "critical"
+    assert receipt["rung_id"] == "host_process"
+    assert receipt["source_codes"] == ["CRASH_RECOVERY_REQUIRED"]
+    assert receipt["title"] == (
+        "Stop latch cleared. The bot still won't run: previous host runner crashed "
+        "— record crash-recovery evidence"
+    )
+    assert receipt["actionability"] == "actuatable"
+    assert receipt["action"] == {
+        "kind": "focus_cockpit_action",
+        "label": "Record recovery override",
+        "target": "crash_recovery_override",
+    }
+
+
 async def test_set_desired_state_without_live_binding_is_durable_only(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3675,6 +3844,90 @@ async def test_start_run_rejects_when_account_is_frozen(app_with_root, monkeypat
     assert response.status_code == 409
     assert response.json()["detail"]["reason_code"] == "ACCOUNT_FROZEN"
     assert called is False
+
+
+async def test_start_run_rejects_when_crash_recovery_required(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    sid = "spy_crash_start"
+    account_id = "DU123456"
+    run_id = "run-crash-start"
+    _write_ledger(root, run_id, sid, 100, account_id=account_id)
+    _write_crash_retired_binding(
+        root.parent,
+        account_id=account_id,
+        sid=sid,
+        run_id=run_id,
+        recorded_at_ms=1_700_000_000_000,
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    called = False
+
+    async def fake_start(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return {"accepted": True, "process": {}}
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(f"/api/live-instances/runs/{run_id}/start", json={})
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "CRASH_RECOVERY_REQUIRED"
+    assert called is False
+
+
+async def test_crash_recovery_override_records_later_audited_override(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    sid = "spy_crash_override"
+    account_id = "DU123456"
+    run_id = "run-crash-override"
+    crash_recorded_at_ms = 1_700_000_000_000
+    _write_ledger(root, run_id, sid, 100, account_id=account_id)
+    _write_crash_retired_binding(
+        root.parent,
+        account_id=account_id,
+        sid=sid,
+        run_id=run_id,
+        recorded_at_ms=crash_recorded_at_ms,
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/live-instances/{sid}/crash-recovery-override",
+            json={"confirm_account_flat": True, "approved_by": "operator"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepted"] is True
+    assert body["event_type"] == "account_audited_override_recorded"
+    assert body["account_id"] == account_id
+    assert body["strategy_instance_id"] == sid
+    assert body["run_id"] == run_id
+    assert body["recorded_at_ms"] > crash_recorded_at_ms
+
+    events = read_account_events(root.parent, account_id)
+    override_events = [event for event in events if event["event_type"] == "account_audited_override_recorded"]
+    assert override_events
+    assert override_events[-1]["strategy_instance_id"] == sid
+    assert override_events[-1]["ts_ms"] > crash_recorded_at_ms
+    assert (
+        crash_retired_restart_blocking_binding(
+            root.parent,
+            account_id=account_id,
+            strategy_instance_id=sid,
+        )
+        is None
+    )
 
 
 async def test_start_run_rejects_when_daemon_already_running(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:

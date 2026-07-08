@@ -21,6 +21,8 @@ def _baseline_notice(*, code: str = "watchdog.flatten_completed") -> OperatorNot
         tier="info",
         title="Flatten completed",
         message="The engine flattened all positions cleanly.",
+        actionability="self_resolving",
+        resolution="Clears when the safe watchdog incident is archived.",
         action=OperatorNoticeAction(kind="none"),
     )
 

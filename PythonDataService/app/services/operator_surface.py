@@ -62,6 +62,7 @@ from app.schemas.live_runs import (
     OperatorSurfaceDomainFreshness,
     OperatorSurfaceExecution,
     OperatorSurfaceHostProcess,
+    OperatorSurfaceNoticePlacement,
     OperatorSurfacePriorRun,
     OperatorSurfaceReconciliation,
     OperatorSurfaceRunSignal,
@@ -93,6 +94,19 @@ from app.services.runtime_freshness import (
 )
 
 TraderExecutionPosture = Literal["PAPER_EXECUTION", "READ_ONLY", "UNSAFE", "UNKNOWN"]
+
+_NOTICE_TIER_ORDER = {"critical": 0, "warning": 1, "info": 2}
+_NOTICE_STAGE_ORDER = {
+    "control_plane": 0,
+    "host_process": 1,
+    "broker": 2,
+    "account_safety": 3,
+    "account_owner": 4,
+    "reconciliation": 5,
+    "preflight": 6,
+    "trading_session": 7,
+    "runtime_freshness": 8,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +149,7 @@ def _project_host_start_capability(
     poisoned: bool,
     now_ms: int,
     account_freeze: AccountFreezeEvidence | None = None,
+    crash_recovery_gate: GateResult | None = None,
 ) -> HostProcessStartCapability:
     """Project the per-instance Start-bot-process affordance.
 
@@ -150,6 +165,12 @@ def _project_host_start_capability(
             enabled=False,
             disabled_reason_code="ACCOUNT_FROZEN",
             gate_results=[account_freeze.to_gate_result()],
+        )
+    if crash_recovery_gate is not None:
+        return HostProcessStartCapability(
+            enabled=False,
+            disabled_reason_code="CRASH_RECOVERY_REQUIRED",
+            gate_results=[crash_recovery_gate],
         )
     # Poisoned runs are dead and still require redeploy. Durable STOPPED is
     # only a Resume-clearable latch when the run is otherwise recoverable.
@@ -247,6 +268,7 @@ def _project_host_process(
     host_start_command: str | None = None,
     now_ms: int = 0,
     account_freeze: AccountFreezeEvidence | None = None,
+    crash_recovery_gate: GateResult | None = None,
 ) -> OperatorSurfaceHostProcess:
     state = _DAEMON_STATE_TO_HOST_PROCESS_STATE.get(process.state, "UNREACHABLE")
     # WAITING_FOR_HOST: daemon reachable + no tracked subprocess + the
@@ -274,6 +296,7 @@ def _project_host_process(
         poisoned,
         now_ms,
         account_freeze,
+        crash_recovery_gate,
     )
     return OperatorSurfaceHostProcess(
         state=state,
@@ -952,6 +975,80 @@ def _reconciliation_from_receipt(
     )
 
 
+def _notice_stage_id(notice: OperatorNotice) -> str:
+    code = str(notice.code)
+    if code.startswith("runtime."):
+        if code.startswith("runtime.control_plane_"):
+            return "control_plane"
+        if code in {"runtime.broker_probe_stale", "runtime.broker_probe_missing"}:
+            return "broker"
+        if code.startswith("runtime.market_"):
+            return "runtime_freshness"
+        return "host_process"
+    if code.startswith(("broker_session.", "activity.")):
+        return "broker"
+    if code.startswith(("watchdog.", "reconciliation.")):
+        return "reconciliation"
+    if code.startswith(("order.", "submit.", "safety_halt.")):
+        return "preflight"
+    if code.startswith("fleet."):
+        return "account_safety"
+    return "runtime_freshness"
+
+
+def _notice_sort_key(notice: OperatorNotice) -> tuple[int, int, str]:
+    return (
+        _NOTICE_TIER_ORDER[notice.tier],
+        _NOTICE_STAGE_ORDER[_notice_stage_id(notice)],
+        str(notice.code),
+    )
+
+
+def _dedupe_notices(notices: list[OperatorNotice]) -> list[OperatorNotice]:
+    seen: set[tuple[str, str, str]] = set()
+    deduped: list[OperatorNotice] = []
+    for notice in notices:
+        key = (str(notice.code), notice.title, notice.message)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(notice)
+    return deduped
+
+
+def _compose_notice_placement(
+    *,
+    runtime_freshness: OperatorSurfaceRuntimeFreshness | None,
+    incident_headline: OperatorNotice | None,
+    broker_activity_health: BrokerActivityHealth | None,
+) -> OperatorSurfaceNoticePlacement:
+    notices: list[OperatorNotice] = []
+    if incident_headline is not None:
+        notices.append(incident_headline)
+    if runtime_freshness is not None:
+        if runtime_freshness.headline is not None:
+            notices.append(runtime_freshness.headline)
+        notices.extend(runtime_freshness.additional_reasons)
+    if broker_activity_health is not None:
+        if broker_activity_health.headline is not None:
+            notices.append(broker_activity_health.headline)
+        notices.extend(broker_activity_health.notices)
+
+    ordered = sorted(_dedupe_notices(notices), key=_notice_sort_key)
+    criticals = [notice for notice in ordered if notice.tier == "critical"]
+    warnings = [notice for notice in ordered if notice.tier == "warning"]
+    infos = [notice for notice in ordered if notice.tier == "info"]
+    banner = criticals[0] if criticals else None
+    folded = criticals[1:] if banner is not None else []
+    return OperatorSurfaceNoticePlacement(
+        banner=banner,
+        banner_fold_count=len(folded),
+        banner_folded=folded,
+        attention=warnings,
+        quiet_status=infos,
+    )
+
+
 # ---------------------------------------------------------------------------
 # compose
 # ---------------------------------------------------------------------------
@@ -981,6 +1078,7 @@ def compute_operator_surface(
     host_start_command: str | None = None,
     start_run_id: str | None = None,
     account_freeze: AccountFreezeEvidence | None = None,
+    crash_recovery_gate: GateResult | None = None,
     account_owner: OperatorSurfaceAccountOwner | None = None,
     # ADR-0008 §5 / PR 1 — cold-start reconciliation projection inputs.
     # All optional: when no live binding is resolved, the router passes
@@ -1042,6 +1140,7 @@ def compute_operator_surface(
         host_start_command=host_start_command,
         now_ms=now_ms,
         account_freeze=account_freeze,
+        crash_recovery_gate=crash_recovery_gate,
     )
     broker_projection = project_broker(
         safety_verdict_final,
@@ -1117,6 +1216,11 @@ def compute_operator_surface(
         account_truth=account_truth_assessment,
         control_plane=control_plane_projection,
     )
+    notice_placement = _compose_notice_placement(
+        runtime_freshness=runtime_freshness_projection,
+        incident_headline=incident_headline_notice,
+        broker_activity_health=broker_activity_health,
+    )
 
     return OperatorSurface(
         host_process=host_process,
@@ -1141,4 +1245,5 @@ def compute_operator_surface(
         reconciliation=reconciliation_projection,
         incident_headline=incident_headline_notice,
         broker_activity_health=broker_activity_health,
+        notice_placement=notice_placement,
     )

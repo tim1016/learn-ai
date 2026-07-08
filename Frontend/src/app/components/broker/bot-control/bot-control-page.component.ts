@@ -9,7 +9,7 @@ import {
 } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import { TabsModule } from 'primeng/tabs';
 
 import type {
@@ -19,14 +19,14 @@ import type {
   LifecycleChartNode,
   LifecycleProjectionEventRow,
   LiveInstanceStatus,
+  MutationRungReceipt,
   OperatorSurfaceCurrentRisk,
   OperatorSurfaceSubmitReadiness,
   OperatorNotice,
-  OperatorSurfaceControlPlane,
   RiskPosture,
 } from '../../../api/live-instances.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
-import { formatReceiptLabel, ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import { formatReceiptLabel } from '../../../shared/pipes/receipt-label.pipe';
 import { AssetIdentityComponent } from '../../../shared/asset-identity';
 import { ActiveBotSidebarNoticeService } from '../../../shell/active-bot-sidebar-notice.service';
 import type { ActiveBotSidebarNotice } from '../../../shell/active-bot-sidebar-notice.service';
@@ -48,11 +48,11 @@ import { toOperationError, type OperationKind } from '../operation-error';
 import { operatorPillTone, type OperatorPillTone } from '../operator-severity';
 import { OverviewActionsComponent } from './overview-tab/overview-actions.component';
 import { OverviewTabComponent } from './overview-tab/overview-tab.component';
-import { RuntimeBannerComponent } from './runtime-banner/runtime-banner.component';
 import { TraderGuidanceTimelineComponent } from './overview-tab/trader-guidance-timeline.component';
 import { WorkbenchAuditPanelComponent } from './workbench-audit-panel.component';
 import { BotControlSidePanelComponent } from './bot-control-side-panel.component';
 import { boundRunIdForStatus } from './lib/bound-run-id';
+import { OperatorNoticeComponent } from '../../operator-notice/operator-notice.component';
 
 const POLL_INTERVAL_MS = 4_000;
 const TIMELINE_LIMIT = 5;
@@ -77,15 +77,6 @@ interface ConnectionPill {
   readonly symbol: string | null;
   readonly state: string;
   readonly tone: OperatorPillTone;
-}
-
-interface ControlPlaneBanner {
-  readonly state: OperatorSurfaceControlPlane['state'];
-  readonly shortLabel: 'attention needed' | 'last known';
-  readonly demoted: boolean;
-  readonly notice: string | null;
-  readonly attemptText: string | null;
-  readonly runbookSlug: string | null;
 }
 
 interface LifecycleTimelinePaneState {
@@ -117,18 +108,16 @@ const EMPTY_TIMELINE_STATE: LifecycleTimelinePaneState = {
 @Component({
   selector: 'app-bot-control-page',
   imports: [
-    RouterLink,
     TabsModule,
-    ReceiptLabelPipe,
     AssetIdentityComponent,
     OverviewTabComponent,
     ActivityTabComponent,
     TypedHaltConfirmComponent,
     OverviewActionsComponent,
     TraderGuidanceTimelineComponent,
-    RuntimeBannerComponent,
     WorkbenchAuditPanelComponent,
     BotControlSidePanelComponent,
+    OperatorNoticeComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './bot-control-page.component.html',
@@ -155,22 +144,18 @@ export class BotControlPageComponent {
   readonly statusError = signal<string | null>(null);
   readonly accountSummaryError = signal<string | null>(null);
   readonly mutationError = signal<string | null>(null);
+  readonly mutationReceipt = signal<MutationRungReceipt | null>(null);
+  readonly mutationReceiptWarnings = signal<readonly MutationRungReceipt[]>([]);
   readonly busyAction = signal<string | null>(null);
   readonly typedHaltOpen = signal<boolean>(false);
   private readonly typedHaltInstanceId = signal<string | null>(null);
   readonly flattenConfirmOpen = signal<boolean>(false);
   readonly activeWorkbenchTab = signal<WorkbenchTab>('activity');
-  private readonly dismissedControlPlaneSig = signal<string | null>(null);
-  private readonly dismissedBrokerEvidenceSig = signal<string | null>(null);
   readonly poisonedConfirmMessage = POISONED_CONFIRM_MESSAGE;
   readonly flattenConfirmMessage = FLATTEN_CONFIRM_MESSAGE;
 
   readonly errorMessage = computed<string | null>(
     () => this.mutationError() ?? this.statusError() ?? this.accountSummaryError(),
-  );
-
-  readonly brokerEvidenceNotice = computed<OperatorNotice | null>(
-    () => this.accountSummary()?.notice ?? null,
   );
 
   readonly hostRunnerNotice = computed<ActiveBotSidebarNotice | null>(() => {
@@ -204,34 +189,20 @@ export class BotControlPageComponent {
     };
   });
 
-  readonly controlPlaneBanner = computed<ControlPlaneBanner | null>(() => {
-    const cp = this.status()?.operator_surface.control_plane ?? null;
-    if (cp === null || cp.state === 'CONNECTED') return null;
-    const demoted = cp.state !== 'RETRYING';
-    return {
-      state: cp.state,
-      shortLabel: demoted ? 'last known' : 'attention needed',
-      demoted,
-      notice: cp.notice,
-      attemptText: cp.state === 'RETRYING' && cp.attempt > 0
-        ? `retrying · attempt ${cp.attempt}`
-        : null,
-      runbookSlug: cp.runbook_slug,
-    };
-  });
-
-  readonly showControlPlaneBanner = computed<boolean>(() => {
-    const banner = this.controlPlaneBanner();
-    return banner !== null && this.dismissedControlPlaneSig() !== this.controlPlaneSignature(banner);
-  });
-
-  readonly showBrokerEvidenceBanner = computed<boolean>(() => {
-    const notice = this.brokerEvidenceNotice();
-    return notice !== null && this.dismissedBrokerEvidenceSig() !== this.brokerEvidenceSignature(notice);
-  });
-
-  readonly hasSlimBanners = computed<boolean>(
-    () => this.showControlPlaneBanner() || this.showBrokerEvidenceBanner(),
+  readonly noticePlacement = computed(
+    () => this.status()?.operator_surface.notice_placement ?? null,
+  );
+  readonly dominantNotice = computed<OperatorNotice | null>(
+    () => this.noticePlacement()?.banner ?? null,
+  );
+  readonly foldedCriticalNotices = computed<readonly OperatorNotice[]>(
+    () => this.noticePlacement()?.banner_folded ?? [],
+  );
+  readonly attentionNotices = computed<readonly OperatorNotice[]>(
+    () => this.noticePlacement()?.attention ?? [],
+  );
+  readonly quietStatusNotices = computed<readonly OperatorNotice[]>(
+    () => this.noticePlacement()?.quiet_status ?? [],
   );
 
   readonly posturePills = computed<PosturePill[]>(() => {
@@ -312,21 +283,12 @@ export class BotControlPageComponent {
       this.typedHaltOpen.set(false);
       this.typedHaltInstanceId.set(null);
       this.flattenConfirmOpen.set(false);
+      this.mutationReceipt.set(null);
+      this.mutationReceiptWarnings.set([]);
       this.activeWorkbenchTab.set('activity');
-      this.dismissedControlPlaneSig.set(null);
-      this.dismissedBrokerEvidenceSig.set(null);
       if (id) {
         void this.refresh(id).finally(() => this.scheduleNextPoll(id, token));
       }
-    });
-    effect(() => {
-      // A dismissed banner that clears (recovery) must not stay dismissed: a
-      // later re-failure — even to the same state — is a new outage and should
-      // reappear, per the PRD's session-dismiss rule.
-      if (this.controlPlaneBanner() === null) this.dismissedControlPlaneSig.set(null);
-    });
-    effect(() => {
-      if (this.brokerEvidenceNotice() === null) this.dismissedBrokerEvidenceSig.set(null);
     });
     effect(() => {
       const id = this.instanceId();
@@ -365,12 +327,32 @@ export class BotControlPageComponent {
     const cap = this.status()?.operator_surface.host_process.start_capability;
     if (!id || this.busyAction() || !cap || !canStartHostProcess(cap)) return;
     this.busyAction.set('start_process');
-    this.mutationError.set(null);
+    this.clearMutationOutcome();
     try {
-      await startHostProcessFromCapability(this.liveRuns, cap);
+      const response = await startHostProcessFromCapability(this.liveRuns, cap);
+      this.applyMutationReceipt(response);
       await this.refreshStatus(id);
     } catch (err) {
       this.mutationError.set(this.operationErrorMessage('start', err));
+    } finally {
+      this.busyAction.set(null);
+    }
+  }
+
+  async dispatchCrashRecoveryOverride(): Promise<void> {
+    const id = this.instanceId();
+    if (!id || this.busyAction()) return;
+    this.busyAction.set('crash_recovery_override');
+    this.clearMutationOutcome();
+    try {
+      const response = await this.liveRuns.recordCrashRecoveryOverride(id, {
+        confirm_account_flat: true,
+        approved_by: 'operator',
+      });
+      this.applyMutationReceipt(response);
+      await this.refreshStatus(id);
+    } catch (err) {
+      this.mutationError.set(this.operationErrorMessage('recovery-override', err));
     } finally {
       this.busyAction.set(null);
     }
@@ -388,13 +370,14 @@ export class BotControlPageComponent {
     const id = this.instanceId();
     if (!id || this.busyAction()) return;
     this.busyAction.set('flatten_and_pause');
-    this.mutationError.set(null);
+    this.clearMutationOutcome();
     try {
-      await this.liveRuns.flattenAndPause(id, {
+      const response = await this.liveRuns.flattenAndPause(id, {
         action: 'pause',
         reason: 'Flatten and pause',
         updated_by: 'operator',
       });
+      this.applyMutationReceipt(response);
       await this.refreshStatus(id);
     } catch (err) {
       this.mutationError.set(this.operationErrorMessage('flatten', err));
@@ -478,29 +461,77 @@ export class BotControlPageComponent {
     action.invoke();
   }
 
+  mutationReceiptActionabilityLabel(receipt: MutationRungReceipt): string {
+    switch (receipt.actionability) {
+      case 'actuatable':
+        return 'Action available';
+      case 'routed':
+        return 'Check elsewhere';
+      case 'self_resolving':
+        return 'No action needed';
+      case 'no_remedy':
+        return 'No remedy';
+    }
+  }
+
+  hasClickableMutationReceiptAction(receipt: MutationRungReceipt): boolean {
+    const action = receipt.action;
+    return !!action.label && (
+      action.kind === 'open_runbook'
+      || action.kind === 'focus_cockpit_action'
+      || action.kind === 'renew_control_plane_lease'
+      || action.kind === 'redeploy'
+    );
+  }
+
+  hasInertMutationReceiptAction(receipt: MutationRungReceipt): boolean {
+    return receipt.action.kind === 'external_manual_check' && !!receipt.action.label;
+  }
+
+  invokeMutationReceiptAction(receipt: MutationRungReceipt): void {
+    const action = receipt.action;
+    if (!action.label) return;
+    switch (action.kind) {
+      case 'open_runbook':
+        if (action.target) this.onGateOpenRunbook(action.target);
+        break;
+      case 'focus_cockpit_action':
+        if (action.target === 'crash_recovery_override') {
+          void this.dispatchCrashRecoveryOverride();
+        } else if (action.target === 'start_process') {
+          void this.dispatchStartProcess();
+        } else if (action.target === 'reconcile_now') {
+          void this.dispatchReconcileNow();
+        } else if (action.target) {
+          this.selectActionTargetNode(action.target);
+        }
+        break;
+      case 'renew_control_plane_lease':
+        void this.dispatchRenewControlPlaneLease();
+        break;
+      case 'redeploy':
+        this.onGateRedeploy();
+        break;
+      case 'external_manual_check':
+      case 'none':
+        break;
+    }
+  }
+
   setActiveWorkbenchTab(value: string | number | undefined): void {
     if (value === 'activity' || value === 'audit') {
       this.activeWorkbenchTab.set(value);
     }
   }
 
-  dismissControlPlaneBanner(): void {
-    const banner = this.controlPlaneBanner();
-    if (banner) this.dismissedControlPlaneSig.set(this.controlPlaneSignature(banner));
-  }
-
-  dismissBrokerEvidenceBanner(): void {
-    const notice = this.brokerEvidenceNotice();
-    if (notice) this.dismissedBrokerEvidenceSig.set(this.brokerEvidenceSignature(notice));
-  }
-
   async dispatchReconcileNow(): Promise<void> {
     const id = this.instanceId();
     if (!id || this.busyAction()) return;
     this.busyAction.set('reconcile_now');
-    this.mutationError.set(null);
+    this.clearMutationOutcome();
     try {
-      await this.liveRuns.reconcileInstance(id);
+      const response = await this.liveRuns.reconcileInstance(id);
+      this.applyMutationReceipt(response);
       await this.refreshStatus(id);
     } catch (err) {
       this.mutationError.set(this.operationErrorMessage('reconcile', err));
@@ -522,16 +553,6 @@ export class BotControlPageComponent {
     } finally {
       this.busyAction.set(null);
     }
-  }
-
-  private controlPlaneSignature(banner: ControlPlaneBanner): string {
-    // Dismissal is keyed on the rendered content, not just the state enum, so a
-    // materially changed warning (new notice / attempt / runbook) reappears.
-    return [banner.state, banner.notice ?? '', banner.attemptText ?? '', banner.runbookSlug ?? ''].join('|');
-  }
-
-  private brokerEvidenceSignature(notice: OperatorNotice): string {
-    return [notice.code ?? '', notice.message, notice.runbook_slug ?? ''].join('|');
   }
 
   private brokerProofPill(verdict: BrokerSafetyVerdict): PosturePill {
@@ -605,11 +626,12 @@ export class BotControlPageComponent {
     const id = this.instanceId();
     if (!id || id !== this.typedHaltInstanceId() || this.busyAction()) return;
     this.busyAction.set('mark_poisoned');
-    this.mutationError.set(null);
+    this.clearMutationOutcome();
     this.typedHaltOpen.set(false);
     this.typedHaltInstanceId.set(null);
     try {
-      await this.liveRuns.issueInstanceCommand(id, { verb: 'MARK_POISONED' });
+      const response = await this.liveRuns.issueInstanceCommand(id, { verb: 'MARK_POISONED' });
+      this.applyMutationReceipt(response);
       await this.refreshStatus(id);
     } catch (err) {
       this.mutationError.set(this.operationErrorMessage('mark-poisoned', err));
@@ -717,13 +739,14 @@ export class BotControlPageComponent {
     const id = this.instanceId();
     if (!id || this.busyAction()) return;
     this.busyAction.set(action);
-    this.mutationError.set(null);
+    this.clearMutationOutcome();
     try {
-      await this.liveRuns.setInstanceDesiredState(id, {
+      const response = await this.liveRuns.setInstanceDesiredState(id, {
         action,
         reason: label,
         updated_by: 'operator',
       });
+      this.applyMutationReceipt(response);
       await this.refreshStatus(id);
     } catch (err) {
       this.mutationError.set(this.operationErrorMessage(action, err));
@@ -735,6 +758,20 @@ export class BotControlPageComponent {
   private operationErrorMessage(operation: OperationKind, err: unknown): string {
     const error = toOperationError(operation, err);
     return `${error.detail} ${error.remediation}`;
+  }
+
+  private clearMutationOutcome(): void {
+    this.mutationError.set(null);
+    this.mutationReceipt.set(null);
+    this.mutationReceiptWarnings.set([]);
+  }
+
+  private applyMutationReceipt(response: {
+    rung_receipt?: MutationRungReceipt | null;
+    rung_receipt_warnings?: MutationRungReceipt[];
+  }): void {
+    this.mutationReceipt.set(response.rung_receipt ?? null);
+    this.mutationReceiptWarnings.set(response.rung_receipt_warnings ?? []);
   }
 
   private humanError(err: unknown): string {

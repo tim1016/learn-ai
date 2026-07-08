@@ -605,6 +605,13 @@
     "template_id": "operator_surface.trader_guidance.broker_state_unproven",
     "template_version": 1
   },
+  "notice_placement": {
+    "attention": [],
+    "banner": null,
+    "banner_fold_count": 0,
+    "banner_folded": [],
+    "quiet_status": []
+  },
   "trading_session": {
     "as_of_ms": 1782000000000,
     "next_transition_ms": 1782115200000,

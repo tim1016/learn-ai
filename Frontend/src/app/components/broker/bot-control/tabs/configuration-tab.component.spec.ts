@@ -240,6 +240,13 @@ function status(): LiveInstanceStatus {
       reconciliation: null,
       broker_activity_health: null,
       incident_headline: null,
+      notice_placement: {
+        banner: null,
+        banner_fold_count: 0,
+        banner_folded: [],
+        attention: [],
+        quiet_status: [],
+      },
     },
     lifecycle_chart: makeLifecycleChartFixture(),
     fetched_at_ms: 1_700_000_000_000,

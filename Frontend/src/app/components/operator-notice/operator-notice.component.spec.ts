@@ -11,7 +11,10 @@ function makeNotice(overrides: Partial<OperatorNotice> = {}): OperatorNotice {
     message: 'No fresh bar has arrived for 92 seconds.',
     source_codes: ['BAR_LOOP_LATEST_BAR_STALE'],
     forensic_facts: { age_ms: 92_000 },
-    action: { kind: 'wait', label: null, target: null },
+    actionability: 'routed',
+    resolution: 'Clears when a fresh IBKR bar arrives inside the freshness window.',
+    remedy_status: null,
+    action: { kind: 'external_manual_check', label: 'Check IBKR market data', target: 'ibkr_connection' },
     runbook_slug: 'runtime-freshness',
     occurred_at_ms: null,
     ...overrides,
@@ -26,6 +29,8 @@ describe('OperatorNoticeComponent', () => {
 
     expect(screen.getByText('Market data is stale')).toBeTruthy();
     expect(screen.getByText('No fresh bar has arrived for 92 seconds.')).toBeTruthy();
+    expect(screen.getByText('Clears when a fresh IBKR bar arrives inside the freshness window.')).toBeTruthy();
+    expect(screen.getByText('Check elsewhere')).toBeTruthy();
   });
 
   it('never renders raw source_codes as primary copy', async () => {

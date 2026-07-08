@@ -138,6 +138,10 @@ _ACTION_REASON_COPY: dict[str, tuple[str, str]] = {
         "Account frozen",
         "An account-wide freeze is active. Resolve the freeze before starting or resuming this bot.",
     ),
+    "CRASH_RECOVERY_REQUIRED": (
+        "Recovery proof required",
+        "The previous host runner crashed. Record audited recovery evidence before restarting this bot.",
+    ),
     "STOPPING": (
         "Stopping",
         "The host runner is stopping. Wait for it to finish before starting again.",

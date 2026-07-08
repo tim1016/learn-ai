@@ -226,6 +226,13 @@ function status(
       reconciliation: null,
       broker_activity_health: null,
       incident_headline: null,
+      notice_placement: {
+        banner: null,
+        banner_fold_count: 0,
+        banner_folded: [],
+        attention: [],
+        quiet_status: [],
+      },
     },
     lifecycle_chart: makeLifecycleChartFixture(),
     fetched_at_ms: 123_456,

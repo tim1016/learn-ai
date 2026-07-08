@@ -153,6 +153,8 @@ export interface CommandWriteRequest {
 export interface CommandWriteResponse {
   accepted: boolean;
   command: CommandEntry;
+  rung_receipt?: MutationRungReceipt | null;
+  rung_receipt_warnings?: MutationRungReceipt[];
 }
 
 export interface LiveRunStatus {
@@ -185,6 +187,63 @@ export interface LiveRunStatus {
 export interface ReconcileAckResponse {
   request_id: string;
   accepted_at_ms: number;
+  rung_receipt: MutationRungReceipt;
+  rung_receipt_warnings: MutationRungReceipt[];
+}
+
+export type MutationRungReceiptCode =
+  | 'mutation.next_blocking_rung'
+  | 'mutation.scoped_all_clear'
+  | 'mutation.observational_warning';
+
+export type MutationRungReceiptTier = 'info' | 'warning' | 'critical';
+
+export type MutationRungReceiptActionability =
+  | 'actuatable'
+  | 'routed'
+  | 'self_resolving'
+  | 'no_remedy';
+
+export type MutationRungReceiptRemedyStatus = 'inherent' | 'unbuilt';
+
+export type MutationRungReceiptActionKind =
+  | 'none'
+  | 'open_runbook'
+  | 'focus_cockpit_action'
+  | 'renew_control_plane_lease'
+  | 'external_manual_check'
+  | 'redeploy';
+
+export type MutationRungReceiptStageId =
+  | 'control_plane'
+  | 'host_process'
+  | 'broker'
+  | 'account_safety'
+  | 'account_owner'
+  | 'reconciliation'
+  | 'preflight'
+  | 'trading_session'
+  | 'runtime_freshness';
+
+export interface MutationRungReceiptAction {
+  kind: MutationRungReceiptActionKind;
+  label: string | null;
+  target: string | null;
+}
+
+export interface MutationRungReceipt {
+  code: MutationRungReceiptCode;
+  tier: MutationRungReceiptTier;
+  title: string;
+  message: string;
+  rung_id: MutationRungReceiptStageId | null;
+  source_codes: string[];
+  forensic_facts: Record<string, string | number | boolean | null>;
+  actionability: MutationRungReceiptActionability;
+  resolution: string;
+  remedy_status: MutationRungReceiptRemedyStatus | null;
+  action: MutationRungReceiptAction;
+  occurred_at_ms: number;
 }
 
 export interface LogLine {
@@ -351,6 +410,8 @@ export interface HostRunnerStopRequest {
 export interface HostRunnerActionResponse {
   accepted: boolean;
   process: HostRunnerProcessStatus;
+  rung_receipt?: MutationRungReceipt | null;
+  rung_receipt_warnings?: MutationRungReceipt[];
 }
 
 // ─────────────────────────── ADR 0009 sizing policy ───────────────────────────

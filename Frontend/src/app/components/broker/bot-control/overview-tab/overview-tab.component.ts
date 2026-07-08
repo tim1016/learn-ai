@@ -31,7 +31,9 @@ export class OverviewTabComponent {
   readonly status = input.required<LiveInstanceStatus>();
   readonly selectedNodeId = input<string | null>(null);
   readonly highlightedNodeId = input<string | null>(null);
+  readonly recoveryOverrideBusy = input(false);
   readonly nodeSelected = output<LifecycleChartNode>();
+  readonly crashRecoveryOverrideRequested = output();
 
   readonly expandedGraphSelection = signal<ExpandedGraphSelection | null>(null);
   readonly expandedReceiptNodeId = signal<string | null>(null);
@@ -60,6 +62,9 @@ export class OverviewTabComponent {
     const ladder = this.blockageLadder();
     return ladder.stages.find((stage) => stage.current) ?? null;
   });
+  readonly crashRecoveryRequired = computed(
+    () => this.status().operator_surface.host_process.start_capability.disabled_reason_code === 'CRASH_RECOVERY_REQUIRED',
+  );
   readonly attentionGroups = computed<readonly OperatorSurfaceAttentionGroup[]>(
     () => this.status().operator_surface.trader_guidance?.additional_attention_groups ?? [],
   );
@@ -127,6 +132,11 @@ export class OverviewTabComponent {
 
   selectNode(node: LifecycleChartNode): void {
     this.nodeSelected.emit(node);
+  }
+
+  recordCrashRecoveryOverride(): void {
+    if (this.recoveryOverrideBusy()) return;
+    this.crashRecoveryOverrideRequested.emit();
   }
 
   isPrimaryNode(node: LifecycleChartNode): boolean {

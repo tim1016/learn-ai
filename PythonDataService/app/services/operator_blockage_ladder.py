@@ -195,6 +195,28 @@ def _host_process_stage(host_process: OperatorSurfaceHostProcess) -> _StageDraft
             "Bot process is running",
             "The host daemon reports this bot process is running.",
         )
+    if host_process.start_capability.disabled_reason_code == "CRASH_RECOVERY_REQUIRED":
+        gate = (
+            host_process.start_capability.gate_results[0]
+            if host_process.start_capability.gate_results
+            else None
+        )
+        return _StageDraft(
+            "host_process",
+            "Host process",
+            "critical",
+            "Previous host runner crashed",
+            (
+                "Start is blocked because the previous host runner retired after a crash "
+                "without later account recovery proof."
+            ),
+            (
+                gate.operator_next_step
+                if gate is not None and gate.operator_next_step
+                else "Verify the broker account is flat with no open orders, then record an audited recovery override."
+            ),
+            reason_codes=("CRASH_RECOVERY_REQUIRED",),
+        )
     if host_process.last_exit_error_code == IBKR_CLIENT_ID_IN_USE:
         return _StageDraft(
             "host_process",

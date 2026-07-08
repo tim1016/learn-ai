@@ -2,6 +2,13 @@ import { ChangeDetectionStrategy, Component, computed, input, output } from '@an
 import type { OperatorNotice } from '../../models/operator-notice';
 import { executableOperatorNoticeAction } from '../../models/operator-notice-action-contract';
 
+const ACTIONABILITY_LABEL: Record<OperatorNotice['actionability'], string> = {
+  actuatable: 'Action available',
+  routed: 'Check elsewhere',
+  self_resolving: 'Clears automatically',
+  no_remedy: 'No remedy',
+};
+
 @Component({
   selector: 'app-operator-notice',
   templateUrl: './operator-notice.component.html',
@@ -16,6 +23,7 @@ export class OperatorNoticeComponent {
   readonly actionClicked = output<OperatorNotice>();
 
   readonly tier = computed(() => this.notice().tier);
+  readonly actionabilityLabel = computed(() => ACTIONABILITY_LABEL[this.notice().actionability]);
 
   readonly hasClickableAction = computed(() =>
     executableOperatorNoticeAction(this.notice()) !== null,

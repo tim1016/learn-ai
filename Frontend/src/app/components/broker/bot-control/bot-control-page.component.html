@@ -85,80 +85,85 @@
       }
     </div>
 
-    @if (s.operator_surface.runtime_freshness !== null || s.operator_surface.incident_headline !== null) {
-      <app-runtime-banner
-        [freshness]="s.operator_surface.runtime_freshness"
-        [incidentHeadline]="s.operator_surface.incident_headline"
-        (actionClicked)="handleRuntimeNoticeAction($event)"
-      />
+    @if (dominantNotice(); as notice) {
+      <section class="dominant-notice" data-testid="bot-control-dominant-notice">
+        <app-operator-notice [notice]="notice" (actionClicked)="handleRuntimeNoticeAction($event)" />
+        @if (foldedCriticalNotices().length > 0) {
+          <details class="dominant-notice__fold" data-testid="bot-control-dominant-notice-fold">
+            <summary>+{{ foldedCriticalNotices().length }} more critical</summary>
+            <div class="dominant-notice__fold-list">
+              @for (folded of foldedCriticalNotices(); track folded.code + folded.title) {
+                <app-operator-notice [notice]="folded" (actionClicked)="handleRuntimeNoticeAction($event)" />
+              }
+            </div>
+          </details>
+        }
+      </section>
+    }
+
+    @if (attentionNotices().length > 0 || quietStatusNotices().length > 0) {
+      <section class="notice-rows" data-testid="bot-control-notice-rows">
+        @if (attentionNotices().length > 0) {
+          <div class="notice-rows__group" data-testid="bot-control-attention-notices">
+            @for (notice of attentionNotices(); track notice.code + notice.title) {
+              <app-operator-notice [notice]="notice" (actionClicked)="handleRuntimeNoticeAction($event)" />
+            }
+          </div>
+        }
+        @if (quietStatusNotices().length > 0) {
+          <div class="notice-rows__group notice-rows__group--quiet" data-testid="bot-control-quiet-notices">
+            @for (notice of quietStatusNotices(); track notice.code + notice.title) {
+              <app-operator-notice [notice]="notice" (actionClicked)="handleRuntimeNoticeAction($event)" />
+            }
+          </div>
+        }
+      </section>
     }
   }
 
-  <!-- ── SLIM DISMISSIBLE BANNERS ── -->
-  @if (hasSlimBanners()) {
-    <div class="slim-banners" aria-label="Bot warnings">
-      @if (showBrokerEvidenceBanner()) {
-        @if (brokerEvidenceNotice(); as notice) {
-          <div class="slim-banner tone-attention" data-testid="bot-control-broker-evidence-banner">
-            <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
-            <span class="slim-headline">Warning, broker evidence unavailable.</span>
-            <span class="slim-detail">{{ notice.message }}</span>
-            <a class="warning-link" [routerLink]="['/broker/account-monitor']">Open Account Monitor</a>
-            @if (notice.runbook_slug) {
-              @if (runbookHref(notice.runbook_slug); as href) {
-                <a class="warning-link" [href]="href">Open runbook</a>
-              }
-            }
-            <div class="slim-spacer"></div>
-            <button
-              type="button"
-              class="slim-dismiss"
-              aria-label="Dismiss broker evidence warning"
-              title="Dismiss broker evidence warning"
-              (click)="dismissBrokerEvidenceBanner()"
-            >
-              <i class="pi pi-times" aria-hidden="true"></i>
-            </button>
-          </div>
-        }
+  @if (mutationReceipt(); as receipt) {
+    <section
+      class="mutation-receipt"
+      [class.tier-info]="receipt.tier === 'info'"
+      [class.tier-warning]="receipt.tier === 'warning'"
+      [class.tier-critical]="receipt.tier === 'critical'"
+      data-testid="bot-control-mutation-receipt"
+      role="status"
+    >
+      <header class="mutation-receipt__header">
+        <span class="mutation-receipt__tier">{{ receipt.tier }}</span>
+        <span class="mutation-receipt__actionability">
+          {{ mutationReceiptActionabilityLabel(receipt) }}
+        </span>
+        <h3 data-testid="bot-control-mutation-receipt-title">{{ receipt.title }}</h3>
+      </header>
+      <p data-testid="bot-control-mutation-receipt-message">{{ receipt.message }}</p>
+      <p class="mutation-receipt__resolution">{{ receipt.resolution }}</p>
+      @if (hasClickableMutationReceiptAction(receipt) && receipt.action.label) {
+        <button
+          type="button"
+          class="mutation-receipt__action"
+          data-testid="bot-control-mutation-receipt-action"
+          (click)="invokeMutationReceiptAction(receipt)"
+        >
+          {{ receipt.action.label }}
+        </button>
+      } @else if (hasInertMutationReceiptAction(receipt)) {
+        <p class="mutation-receipt__action mutation-receipt__action--inert">
+          {{ receipt.action.label }}
+        </p>
       }
-
-      @if (showControlPlaneBanner()) {
-        @if (controlPlaneBanner(); as banner) {
-          <div
-            class="slim-banner tone-warn"
-            [class.demoted]="banner.demoted"
-            data-testid="bot-control-plane-banner"
-          >
-            <i class="pi pi-exclamation-triangle" aria-hidden="true"></i>
-            <span class="slim-headline">Control plane, {{ banner.shortLabel }}.</span>
-            @if (banner.notice) {
-              <span class="slim-detail">{{ banner.notice }}</span>
-            }
-            <span class="slim-meta">State: {{ banner.state | receiptLabel }}</span>
-            @if (banner.attemptText) {
-              <span class="slim-meta">{{ banner.attemptText }}</span>
-            }
-            <a class="warning-link" [routerLink]="['/broker']">Open Broker Status</a>
-            @if (banner.runbookSlug) {
-              @if (runbookHref(banner.runbookSlug); as href) {
-                <a class="warning-link" [href]="href">Open runbook</a>
-              }
-            }
-            <div class="slim-spacer"></div>
-            <button
-              type="button"
-              class="slim-dismiss"
-              aria-label="Dismiss control plane warning"
-              title="Dismiss control plane warning"
-              (click)="dismissControlPlaneBanner()"
-            >
-              <i class="pi pi-times" aria-hidden="true"></i>
-            </button>
-          </div>
-        }
+      @if (mutationReceiptWarnings().length > 0) {
+        <div class="mutation-receipt__warnings" data-testid="bot-control-mutation-receipt-warnings">
+          @for (warning of mutationReceiptWarnings(); track warning.code + warning.title) {
+            <article class="mutation-receipt__warning">
+              <strong>{{ warning.title }}</strong>
+              <span>{{ warning.message }}</span>
+            </article>
+          }
+        </div>
       }
-    </div>
+    </section>
   }
 
   @if (errorMessage(); as message) {
@@ -173,7 +178,9 @@
           [status]="s"
           [selectedNodeId]="selectedLifecycleNodeId()"
           [highlightedNodeId]="highlightedLifecycleNodeId()"
+          [recoveryOverrideBusy]="busyAction() === 'crash_recovery_override'"
           (nodeSelected)="selectLifecycleNode($event)"
+          (crashRecoveryOverrideRequested)="dispatchCrashRecoveryOverride()"
         />
       </section>
 
