@@ -45,7 +45,7 @@ TIMEFRAME_MS: dict[ChartTimeframe, int] = {
     "1h": 60 * 60_000,
     "1d": MS_PER_DAY,
 }
-CHART_TIMEFRAMES: frozenset[str] = frozenset(TIMEFRAME_MS)
+CHART_TIMEFRAME_BY_VALUE: dict[str, ChartTimeframe] = {value: value for value in TIMEFRAME_MS}
 _NY_TZ = ZoneInfo("America/New_York")
 _POLYGON_OVERLAY_CACHE_MAX = 128
 _POLYGON_OVERLAY_CACHE: OrderedDict[tuple[str, date, int], list[PolygonBar]] = OrderedDict()
@@ -92,9 +92,10 @@ class ChartWindowError(ValueError):
 
 def coerce_chart_timeframe(raw: str) -> ChartTimeframe:
     value = raw.strip()
-    if value not in CHART_TIMEFRAMES:
+    timeframe = CHART_TIMEFRAME_BY_VALUE.get(value)
+    if timeframe is None:
         raise ChartWindowError("timeframe must be one of 5s, 1m, 5m, 15m, 1h, 1d")
-    return value  # type: ignore[return-value]
+    return timeframe
 
 
 def validate_chart_window(*, from_ms: int, to_ms: int, now_ms: int) -> None:

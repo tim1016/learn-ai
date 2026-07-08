@@ -229,8 +229,10 @@ export interface LiveInstanceActivityProjection {
   timezone: string;
   symbol: string;
   resolution: '1m' | '5s';
+  /** Legacy compatibility field; chart candles come from /chart-snapshot. */
   has_bars: boolean;
   now_ms: number;
+  /** Legacy compatibility field; chart candles come from /chart-snapshot. */
   bars: IbkrMinuteBar[];
   fill_markers: ActivityFillMarker[];
   position_annotations: ActivityPositionAnnotation[];

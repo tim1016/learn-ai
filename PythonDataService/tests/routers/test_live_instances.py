@@ -1090,6 +1090,8 @@ async def test_activity_projection_uses_broker_ledger_for_chart_markers_and_orde
     assert response.status_code == 200
     body = response.json()
     assert body["timezone"] == "America/New_York"
+    assert body["has_bars"] is False
+    assert body["bars"] == []
     assert [m["side"] for m in body["fill_markers"]] == ["BUY", "SELL"]
     assert body["fill_markers"][1]["replay_count"] == 2
     assert body["fill_markers"][0]["position_effect"] == "Open long"

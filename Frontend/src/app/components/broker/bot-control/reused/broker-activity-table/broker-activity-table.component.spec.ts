@@ -113,7 +113,7 @@ function health(
   };
 }
 
-function render(props: {
+function renderFixture(props: {
   rows?: BrokerActivityRow[];
   eventSummary?: ActivityBrokerCategorySummary[];
   eventRows?: ActivityBrokerEventRow[] | null;
@@ -139,13 +139,17 @@ function render(props: {
     fixture.componentRef.setInput('activityHealth', props.activityHealth);
   }
   fixture.detectChanges();
-  return fixture.nativeElement as HTMLElement;
+  return fixture;
+}
+
+function render(props: Parameters<typeof renderFixture>[0]) {
+  return renderFixture(props).nativeElement as HTMLElement;
 }
 
 afterEach(() => TestBed.resetTestingModule());
 
 describe('BrokerActivityTableComponent', () => {
-  it('renders broker-tail category cards and hides row tables', () => {
+  it('renders broker-tail category cards with linked drill-down rows', () => {
     const el = render({
       eventSummary: [summary()],
       eventRows: [eventRow()],
@@ -157,7 +161,78 @@ describe('BrokerActivityTableComponent', () => {
     expect(el.textContent ?? '').toContain('Broker positions refreshed');
     expect(el.textContent ?? '').toContain('3 events');
     expect(el.querySelector('table')).toBeNull();
+    expect(el.textContent ?? '').toContain('The bot refreshed broker-held positions');
+  });
+
+  it('filters drill-down rows by selected category', () => {
+    const fixture = renderFixture({
+      eventSummary: [
+        summary(),
+        summary({
+          category_id: 'order_fill',
+          label: 'Broker fills',
+          kind: 'order',
+          row_ids: ['fill:exec-1'],
+        }),
+      ],
+      eventRows: [
+        eventRow(),
+        eventRow({
+          id: 'exec:exec-1',
+          visible_row_id: 'fill:exec-1',
+          row_type: 'fill',
+          display_type: 'Broker fill',
+          source_label: 'Broker activity stream',
+          symbol: 'SPY',
+          side: 'BUY',
+          quantity: 1,
+          price: 735.72,
+          status: 'Open long',
+          summary: 'BUY 1 SPY @ 735.72',
+        }),
+      ],
+    });
+    const el = fixture.nativeElement as HTMLElement;
+
+    expect(el.textContent ?? '').toContain('The bot refreshed broker-held positions');
+    expect(el.textContent ?? '').not.toContain('BUY 1 SPY @ 735.72');
+
+    el.querySelectorAll<HTMLButtonElement>('.category-card')[1]?.click();
+    fixture.detectChanges();
+
     expect(el.textContent ?? '').not.toContain('The bot refreshed broker-held positions');
+    expect(el.textContent ?? '').toContain('BUY 1 SPY @ 735.72');
+  });
+
+  it('expands a drill-down row to show source and evidence details', () => {
+    const fixture = renderFixture({
+      eventSummary: [summary()],
+      eventRows: [
+        eventRow({
+          evidence: [
+            {
+              seq: 7,
+              ts_ms: 1_700_000_000_000,
+              source: 'account.fetch_positions',
+              request_call: 'reqPositionsAsync',
+              response_callback: 'position',
+              order_ref: null,
+              order_id: null,
+              perm_id: null,
+              exec_id: null,
+              symbol: null,
+            },
+          ],
+        }),
+      ],
+    });
+    const el = fixture.nativeElement as HTMLElement;
+
+    expect(el.textContent ?? '').not.toContain('reqPositionsAsync');
+    el.querySelector<HTMLButtonElement>('.event-row-main')?.click();
+    fixture.detectChanges();
+    expect(el.textContent ?? '').toContain('IBKR API evidence');
+    expect(el.textContent ?? '').toContain('reqPositionsAsync');
   });
 
   it('updates the rendered card values from the latest backend summary input', () => {

@@ -2623,9 +2623,10 @@ class LifecycleNodeDetail(BaseModel):
 class LiveInstanceActivityProjection(BaseModel):
     """Backend-materialized Activity tab view for one exchange/session date.
 
-    The chart, Orders Today panel, Broker Activity table, and raw evidence
-    drill-downs all read this one contract so no chart marker can exist
-    without a matching ledger row.
+    Broker-confirmed chart markers, the Orders Today panel, Broker Activity
+    table, and raw evidence drill-downs all read this one contract so no
+    activity marker can exist without a matching ledger row. Chart bars are
+    resolved by ``/chart-snapshot``.
     """
 
     schema_version: int = 1

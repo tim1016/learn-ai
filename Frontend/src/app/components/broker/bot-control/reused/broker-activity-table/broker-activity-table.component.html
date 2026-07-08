@@ -53,9 +53,13 @@
     @if (hasEventSummary()) {
       <div class="category-summary" aria-label="Broker tail categories">
         @for (summary of eventSummary(); track summary.category_id) {
-          <article
+          <button
+            type="button"
             class="category-card"
+            [class.selected]="isSelected(summary)"
             [attr.data-kind]="summary.kind"
+            [attr.aria-pressed]="isSelected(summary)"
+            (click)="selectCategory(summary)"
           >
             <span class="category-kind">{{ summary.kind }}</span>
             <strong>{{ summary.label }}</strong>
@@ -63,9 +67,87 @@
             @if (summary.last_event_ts_ms !== null) {
               <span>{{ fmtTimestampLocal(summary.last_event_ts_ms) }}</span>
             }
-          </article>
+          </button>
         }
       </div>
+      @if (selectedSummary(); as selected) {
+        <div class="event-drilldown" [attr.aria-label]="selected.label + ' events'">
+          @if (selectedRows().length > 0) {
+            @for (row of selectedRows(); track rowIdentity(row)) {
+              <article
+                class="event-row"
+                [class.expanded]="isExpanded(row)"
+                [attr.data-kind]="selected.kind"
+                [attr.data-testid]="'broker-activity-event-row-' + rowIdentity(row)"
+              >
+                <button
+                  type="button"
+                  class="event-row-main"
+                  [attr.aria-expanded]="isExpanded(row)"
+                  (click)="toggleRow(row)"
+                >
+                  <span class="event-time">{{ fmtTimestampLocal(row.ts_ms) }}</span>
+                  <span class="event-type">{{ row.display_type }}</span>
+                  @if (row.symbol) {
+                    <app-asset-identity class="event-asset" [symbol]="row.symbol" [logo]="false" size="sm" />
+                  }
+                  @if (row.side) {
+                    <span class="event-pill">{{ row.side }}</span>
+                  }
+                  @if (row.quantity !== null) {
+                    <span class="event-pill">{{ row.quantity }}</span>
+                  }
+                  @if (row.fold_count > 1) {
+                    <span class="event-pill">{{ row.fold_count }}x</span>
+                  }
+                  <span class="event-summary">{{ row.summary }}</span>
+                </button>
+                @if (isExpanded(row)) {
+                  <div class="event-detail" [attr.data-testid]="'broker-activity-event-detail-' + rowIdentity(row)">
+                    <dl>
+                      <div>
+                        <dt>Source</dt>
+                        <dd>{{ row.source_label }}</dd>
+                      </div>
+                      <div>
+                        <dt>Status</dt>
+                        <dd>{{ row.status ?? row.verdict }}</dd>
+                      </div>
+                      @if (row.cluster_label) {
+                        <div>
+                          <dt>Cluster</dt>
+                          <dd>{{ row.cluster_label }}</dd>
+                        </div>
+                      }
+                      <div>
+                        <dt>Evidence</dt>
+                        <dd>{{ row.evidence.length }}</dd>
+                      </div>
+                    </dl>
+                    @if (row.evidence.length > 0) {
+                      <ul>
+                        @for (ref of row.evidence; track ref.seq) {
+                          <li>
+                            <span>#{{ ref.seq }}</span>
+                            <code>{{ ref.request_call }}</code>
+                            @if (ref.response_callback) {
+                              <code>{{ ref.response_callback }}</code>
+                            }
+                          </li>
+                        }
+                      </ul>
+                    }
+                  </div>
+                }
+              </article>
+            }
+          } @else {
+            <p class="empty" data-testid="broker-activity-empty">
+              No broker-tail rows are linked to this summary yet.
+            </p>
+          }
+        </div>
+      }
     } @else if (!backfillLoading()) {
       <p class="empty" data-testid="broker-activity-empty">
         No broker-tail summary yet for this instance.

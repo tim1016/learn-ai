@@ -2902,47 +2902,6 @@ def _today_ny() -> date:
     return datetime.now(_NY_TZ).date()
 
 
-def _bar_to_dict(bar) -> dict:
-    """Serialize an ``IbkrMinuteBar`` for the chart payload (Decimal → str)."""
-    return bar.model_dump(mode="json")
-
-
-def _resolve_chart_bars(
-    *,
-    symbol: str | None,
-    resolution: str,
-    day: date,
-    is_today: bool,
-) -> list[dict]:
-    """Resolve the bars for a chart snapshot.
-
-    Today's path consults the live aggregator (which itself replays from
-    persistence on subscribe) for the freshest buffer, then falls back to
-    persistence when the buffer is empty. Past-date paths consult
-    persistence only — they ignore the aggregator entirely so a stopped
-    daemon doesn't make yesterday's chart disappear.
-    """
-    if symbol is None:
-        return []
-    from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
-
-    if is_today:
-        bars = LIVE_BAR_AGGREGATOR.snapshot(symbol) if resolution == "1m" else LIVE_BAR_AGGREGATOR.snapshot_5s(symbol)
-        if bars:
-            return [_bar_to_dict(b) for b in bars]
-
-    persistence = LIVE_BAR_AGGREGATOR._persistence
-    if persistence is None:
-        return []
-    # Past dates: prefer compacted Parquet; fall back to JSONL when the
-    # day's first compaction hasn't run yet (still streaming or the
-    # nightly compaction job hasn't fired).
-    bars = persistence.read_parquet(symbol, resolution, day)
-    if not bars:
-        bars = persistence.replay(symbol, resolution, day)
-    return [_bar_to_dict(b) for b in bars]
-
-
 def _ny_session_bounds_ms(day: date) -> tuple[int, int]:
     """Return America/New_York calendar-day bounds as UTC ms.
 
@@ -3042,7 +3001,6 @@ def _build_activity_projection(
     day: date,
     symbol: str | None,
     resolution: str,
-    bars: list[dict],
     wal_rows: list,
     evidence_refs: list[ActivityEvidenceRef],
 ) -> LiveInstanceActivityProjection:
@@ -3287,9 +3245,9 @@ def _build_activity_projection(
         session_date=day.isoformat(),
         symbol=symbol or "",
         resolution=resolution,
-        has_bars=bool(bars),
+        has_bars=False,
         now_ms=_now_ms(),
-        bars=bars,
+        bars=[],
         fill_markers=fill_markers,
         position_annotations=annotations,
         order_overlays=[],
@@ -3683,20 +3641,7 @@ async def get_instance_activity(
     _process, live_binding = _interpret_daemon_process(daemon, root)
     runs = _scan_runs_by_instance(root).get(sid, [])
     symbol = _resolve_symbol(root, live_binding, runs)
-    is_today = day == _today_ny()
 
-    if is_today and symbol is not None:
-        from app.services.live_bar_aggregator import LIVE_BAR_AGGREGATOR
-
-        try:
-            if resolution == "1m":
-                await LIVE_BAR_AGGREGATOR.ensure_subscribed(symbol)
-            else:
-                await LIVE_BAR_AGGREGATOR.ensure_subscribed_5s(symbol)
-        except Exception as exc:
-            logger.info("ensure_subscribed for activity %s/%s declined: %s", symbol, resolution, exc)
-
-    bars = _resolve_chart_bars(symbol=symbol, resolution=resolution, day=day, is_today=is_today)
     start_ms, end_ms = _ny_session_bounds_ms(day)
     wal_rows = _read_activity_wal_rows(
         artifacts_root=artifacts_root,
@@ -3724,7 +3669,6 @@ async def get_instance_activity(
         day=day,
         symbol=symbol,
         resolution=resolution,
-        bars=bars,
         wal_rows=activity_rows,
         evidence_refs=evidence_refs,
     )

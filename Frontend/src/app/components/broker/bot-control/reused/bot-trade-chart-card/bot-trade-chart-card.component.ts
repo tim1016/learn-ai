@@ -99,8 +99,12 @@ function localDateParts(value: string): readonly [number, number, number] {
   return [year, month - 1, day];
 }
 
+function localDateValue(value: string): Date {
+  return new Date(...localDateParts(value));
+}
+
 export function localDateStartMs(value: string): number {
-  return new Date(...localDateParts(value)).getTime();
+  return localDateValue(value).getTime();
 }
 
 export function localDateEndMs(value: string): number {
@@ -330,7 +334,7 @@ export class BotTradeChartCardComponent {
 
   protected readonly todayDate = signal<string>(localDateString());
   protected readonly minRangeDate = computed<string>(() =>
-    localDateString(addDays(new Date(`${this.todayDate()}T00:00:00`), -6)),
+    localDateString(addDays(localDateValue(this.todayDate()), -6)),
   );
   protected readonly rangeStartDate = signal<string>(localDateString(addDays(new Date(), -6)));
   protected readonly rangeEndDate = signal<string>(localDateString());
