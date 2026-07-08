@@ -129,6 +129,23 @@ def _validate_run_id(run_id: str, root: Path) -> Path:
     return _confine(root, safe)
 
 
+def _existing_run_dir_from_listing(root: Path, run_id: str) -> Path:
+    """Return a run dir by selecting from the server-owned directory listing.
+
+    CodeQL's path-injection query does not always treat custom path validators
+    as sanitizers. This path is stronger anyway for artifact-read endpoints:
+    the returned ``Path`` comes from ``root.iterdir()``, not from joining the
+    request parameter into a filesystem path.
+    """
+    safe = _validate_path_segment(run_id, field="run_id")
+    if _RUN_ID_RE.fullmatch(safe) is None:
+        raise ValueError(f"Invalid run_id format: {run_id!r}")
+    for run_dir in _get_run_dirs(root):
+        if run_dir.name == safe:
+            return run_dir
+    raise FileNotFoundError(safe)
+
+
 # Whitelist of artifact filenames any operator-facing endpoint may read out
 # of a run directory. Looking up the literal here (rather than constructing
 # ``run_dir / <name>`` directly at the call site) keeps the CodeQL
@@ -825,10 +842,10 @@ async def get_incidents(
     """
     root = Path(get_settings().live_runs_root)
     try:
-        run_dir = _validate_run_id(run_id, root)
+        run_dir = _existing_run_dir_from_listing(root, run_id)
     except ValueError:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Invalid run_id: {run_id!r}")
-    if not run_dir.is_dir():
+    except FileNotFoundError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"Run {run_id!r} not found")
 
     log_path = _artifact_path(run_dir, "live.log")
