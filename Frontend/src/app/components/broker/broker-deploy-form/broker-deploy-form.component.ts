@@ -54,6 +54,12 @@ interface DeployTab {
   complete: boolean;
 }
 
+interface DeployCommandState {
+  kind: 'busy' | 'accepted' | 'blocked' | 'ready';
+  message: string;
+  canSubmit: boolean;
+}
+
 // ADR 0009 § 3 — Reference parity preset's policy. Pinned here as a constant
 // so the gate lookup and the submit path use the *same* shape; a future change
 // to the preset's all-in fraction needs to land in exactly one place.
@@ -186,6 +192,28 @@ export class BrokerDeployFormComponent {
     const id = this.deployedInstanceId();
     return id ? ['/broker/bots', id] : ['/broker/bots'];
   });
+  readonly postSubmitCommandStatus = computed<string | null>(() => {
+    const deployed = this.deployed();
+    if (!deployed?.start?.accepted) return null;
+    if (!this.startNow()) return null;
+    if (this.deployedInstanceId() !== this.instanceId().trim()) return null;
+    return `Start accepted for run ${deployed.run_id}. View deployment to monitor the live run.`;
+  });
+  readonly commandState = computed<DeployCommandState>(() => {
+    if (this.busy()) {
+      return { kind: 'busy', message: 'Submitting deployment.', canSubmit: false };
+    }
+    const accepted = this.postSubmitCommandStatus();
+    if (accepted !== null) {
+      return { kind: 'accepted', message: accepted, canSubmit: false };
+    }
+    const blocked = this.preSubmitBlockedReason();
+    if (blocked !== null) {
+      return { kind: 'blocked', message: blocked, canSubmit: false };
+    }
+    return { kind: 'ready', message: 'Ready to deploy.', canSubmit: true };
+  });
+  readonly commandStatus = computed<string>(() => this.commandState().message);
 
   // Captured once when the form opens, NOT per-submit: start_date_ms is part of
   // the content-addressed run_id hash, so a retry with identical inputs must
@@ -472,9 +500,9 @@ export class BrokerDeployFormComponent {
     );
   });
 
-  /** Why Deploy can't be submitted, sourced from the connectivity strip + form.
+  /** Why Deploy can't be submitted before an accepted-start response, sourced from the connectivity strip + form.
    * Null = ready. */
-  readonly blockedReason = computed<string | null>(() => {
+  private readonly preSubmitBlockedReason = computed<string | null>(() => {
     if (this.connectivity.daemonDown()) {
       return 'Live engine unavailable. Start it on this machine, then recheck.';
     }
@@ -512,8 +540,12 @@ export class BrokerDeployFormComponent {
     if (customError !== null) return customError;
     return null;
   });
+  readonly blockedReason = computed<string | null>(() => {
+    const state = this.commandState();
+    return state.kind === 'blocked' ? state.message : null;
+  });
 
-  readonly canSubmit = computed<boolean>(() => !this.busy() && this.blockedReason() === null);
+  readonly canSubmit = computed<boolean>(() => this.commandState().canSubmit);
 
   async submit(): Promise<void> {
     this.syncRenderedFieldValues();

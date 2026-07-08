@@ -416,6 +416,51 @@ describe('BrokerDeployFormComponent', () => {
     );
   });
 
+  it('shows a coherent accepted-start state after the submitted instance becomes running', async () => {
+    const { fixture, svc, component } = setup();
+    svc.deployInstance.mockResolvedValueOnce({
+      run_id: 'run-started',
+      run_dir: '/runs/run-started',
+      created: true,
+      start: {
+        accepted: true,
+        process: { state: 'running', message: 'Host runner process is active.' },
+      },
+    });
+    svc.getInstances.mockResolvedValueOnce([
+      { strategy_instance_id: 'deployment-validation-paper', process_state: 'running' },
+    ]);
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    fixture.detectChanges();
+
+    await component.submit();
+    await flush();
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('Deployment created');
+    expect(text).toContain('Start accepted: Host runner process is active.');
+    expect(text).toContain('Start accepted for run run-started. View deployment to monitor the live run.');
+    expect(text).not.toContain('"deployment-validation-paper" is already running');
+    expect(component.commandState().kind).toBe('accepted');
+    expect(component.blockedReason()).toBeNull();
+    expect(deployButton(fixture).disabled).toBe(true);
+
+    component.startNow.set(false);
+    fixture.detectChanges();
+
+    expect(component.commandState().kind).toBe('ready');
+    expect(deployButton(fixture).disabled).toBe(false);
+
+    await component.submit();
+
+    const deployOnlyRetry = svc.deployInstance.mock.calls[1][0];
+    expect(deployOnlyRetry.start).toBe(false);
+    expect(deployOnlyRetry.start_options).toBeUndefined();
+  });
+
   // PRD #593 Slice 1E (#598) — query-param-deep-linked redeploy carries
   // the parent_run_id at the top level of the submit payload (NOT
   // inside live_config — lineage is unhashed).

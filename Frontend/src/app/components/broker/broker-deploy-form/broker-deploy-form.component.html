@@ -66,8 +66,7 @@
           <i class="pi pi-send" aria-hidden="true"></i>
           {{ startNow() ? 'Deploy & start' : 'Deploy' }}
         </button>
-        @let reason = blockedReason();
-        <p class="blocked" role="status">{{ reason ?? 'Ready to deploy.' }}</p>
+        <p class="blocked" role="status">{{ commandStatus() }}</p>
       </section>
 
       <section>
