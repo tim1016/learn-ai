@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-07-07 (Safety-halt incident bridge update: cold-start reconciliation poison writes now mint a `safety-halt` OperatorIncident alongside `poisoned.flag`; the run incidents endpoint projects safety-halt incidents into the existing Recent Incidents contract; Bot Control incident headlines include safety-halt incidents.)
+> **Last reviewed:** 2026-07-07 (Safety-halt incident bridge update: cold-start reconciliation poison writes now mint a `safety-halt` OperatorIncident alongside `poisoned.flag`; the run incidents endpoint projects safety-halt incidents into the existing Recent Incidents contract; Bot Control incident headlines include safety-halt incidents. Bot deploy form now pre-detects the durable STOPPED start latch for start-now submissions from `desired_state` and `host_process.start_capability`, switches the primary path to deploy-only, and leaves the backend submit/start gates authoritative.)
 
 ---
 
@@ -66,7 +66,7 @@ This is **not** R3. The current process-local `_submit_lock` in `LiveEngine` ser
 
 | Phase | Current authority | Code |
 |---|---|---|
-| Deploy | Data-plane deploy endpoint derives broker account from the connected session, then forwards to host daemon. Host daemon writes run ledger. | `routers/live_instances.py`, `engine/live/host_daemon.py`, `engine/live/deploy.py` |
+| Deploy | Data-plane deploy endpoint derives broker account from the connected session, then forwards to host daemon. Host daemon writes run ledger. The deploy form pre-detects durable STOPPED for start-now and submits deploy-only rather than promising a start the backend will reject. | `routers/live_instances.py`, `engine/live/host_daemon.py`, `engine/live/deploy.py`, `Frontend/src/app/components/broker/broker-deploy-form/broker-deploy-form.component.ts` |
 | Start recheck | Data plane blocks stale starts for poisoned runs, durable STOPPED, offline daemon, running/stopping daemon state. | `routers/live_instances.py::_assert_start_allowed` |
 | Host spawn | Host daemon starts `python -m app.engine.live.run start` as a subprocess keyed by `strategy_instance_id`. | `RunnerProcessManager.start` |
 | Run pre-flight | Runner validates run state, sizing, dirty tree policy, halt flags, unexpected positions, coexistence, and prior artifacts. | `engine/live/pre_flight.py`, `engine/live/run.py` |
@@ -562,6 +562,7 @@ This is a reproducibility receipt, not a new text-authoring engine or frontend t
 | Broker activity vs writer authority charting | `PythonDataService/app/services/bot_lifecycle_chart.py`, `PythonDataService/app/services/bot_lifecycle_projection.py` |
 | Lifecycle chart node receipts | `PythonDataService/app/schemas/live_runs.py`, `PythonDataService/app/services/bot_lifecycle_chart.py`, `PythonDataService/app/services/bot_lifecycle_receipts.py`, `Frontend/src/app/api/lifecycle-projection.types.ts`, `Frontend/src/app/components/broker/bot-control/node-receipts-pane.component.*` |
 | Lifecycle projection timeline pane | `PythonDataService/app/routers/lifecycle_projection.py`, `Frontend/src/app/services/live-runs.service.ts`, `Frontend/src/app/components/broker/bot-control/bot-control-page.component.ts`, `Frontend/src/app/components/broker/bot-control/overview-tab/trader-guidance-pane.component.*`, `Frontend/src/app/components/broker/bot-control/overview-tab/trader-guidance-timeline.component.*` |
+| Deploy form pre-submit gates | `Frontend/src/app/components/broker/broker-deploy-form/broker-deploy-form.component.*`, `Frontend/src/app/components/broker/broker-deploy-form/deploy-readiness.ts` |
 | Lifecycle chart layout geometry | `Frontend/src/app/components/broker/bot-control/overview-tab/overview-tab.component.ts`, `Frontend/src/app/components/broker/bot-control/overview-tab/overview-tab.component.html` |
 | Lifecycle Postgres projection read model | `Backend/Migrations/20260630023000_AddLifecycleProjectionReadModel.cs`, `PythonDataService/app/services/lifecycle_projection_store.py`, `PythonDataService/app/services/lifecycle_projection_replay.py`, `PythonDataService/app/services/lifecycle_projection_tailer.py`, `PythonDataService/app/routers/lifecycle_projection.py` |
 | Activity/lifecycle consistency diagnostics | `PythonDataService/app/services/activity_lifecycle_consistency.py`, `PythonDataService/app/routers/live_instances.py` |

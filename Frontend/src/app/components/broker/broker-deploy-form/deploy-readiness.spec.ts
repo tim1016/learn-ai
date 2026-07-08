@@ -4,6 +4,7 @@ import {
   buildDeployChecks,
   buildDeployReadinessFacts,
   buildNowChecks,
+  stoppedStartLatchState,
 } from './deploy-readiness';
 
 describe('deploy readiness helpers', () => {
@@ -70,5 +71,64 @@ describe('deploy readiness helpers', () => {
       expect.objectContaining({ key: 'tree', state: 'down' }),
       expect.objectContaining({ key: 'spec', state: 'pending' }),
     ]);
+  });
+
+  it('detects durable STOPPED from desired state, start capability, or gate next-step', () => {
+    const base = {
+	      startNow: true,
+	      instanceId: 'bot-1',
+	      instanceIdValid: true,
+	      statusLoading: false,
+	      statusUnavailable: false,
+	      desiredState: null,
+	      startCapability: null,
+	    };
+
+	    expect(stoppedStartLatchState(base)).toBe('clear');
+	    expect(stoppedStartLatchState({ ...base, statusLoading: true })).toBe('checking');
+	    expect(stoppedStartLatchState({ ...base, statusUnavailable: true })).toBe('unknown');
+	    expect(stoppedStartLatchState({ ...base, startNow: false })).toBe('not_applicable');
+	    expect(stoppedStartLatchState({ ...base, instanceId: '' })).toBe('not_applicable');
+	    expect(stoppedStartLatchState({ ...base, instanceIdValid: false })).toBe('not_applicable');
+	    expect(
+	      stoppedStartLatchState({
+        ...base,
+        desiredState: {
+          state: 'STOPPED',
+          updated_at_ms: 1,
+          updated_by: 'operator',
+          reason: null,
+          version: 1,
+          path_status: 'ok',
+        },
+      }),
+    ).toBe('blocked');
+    expect(
+      stoppedStartLatchState({
+        ...base,
+        startCapability: {
+          disabled_reason_code: 'STOPPED_REQUIRES_RESUME',
+          gate_results: [],
+        },
+      }),
+    ).toBe('blocked');
+    expect(
+      stoppedStartLatchState({
+        ...base,
+        startCapability: {
+          disabled_reason_code: null,
+          gate_results: [
+            {
+              gate_id: 'desired_state.start',
+              status: 'block',
+              source: 'desired_state',
+              operator_reason: 'STOPPED',
+              operator_next_step: 'STOPPED_REQUIRES_RESUME',
+              evidence_at_ms: 1,
+            },
+          ],
+        },
+      }),
+    ).toBe('blocked');
   });
 });

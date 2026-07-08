@@ -12,6 +12,7 @@ import {
 } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { InputTextModule } from 'primeng/inputtext';
+import type { LiveInstanceStatus } from '../../../api/live-instances.types';
 import {
   DEFAULT_MAX_ORDERS_PER_DAY,
   type HostRunnerDeployRequest,
@@ -36,6 +37,7 @@ import {
   buildDeployChecks,
   buildDeployReadinessFacts,
   buildNowChecks,
+  stoppedStartLatchState,
 } from './deploy-readiness';
 
 // Kept in lockstep with the backend guard `identity._INSTANCE_ID_RE`
@@ -103,6 +105,13 @@ export class BrokerDeployFormComponent {
   // Used only to pre-empt the daemon's "already active" 409: a start-immediately
   // deploy onto an instance that already has a live runner is rejected.
   readonly instances = resource({ loader: () => this.svc.getInstances() });
+  readonly instanceStatus = resource<LiveInstanceStatus | null, string | null>({
+    params: () => {
+      const id = this.instanceId().trim();
+      return this.startNow() && id !== '' && INSTANCE_ID_RE.test(id) ? id : null;
+    },
+    loader: ({ params }) => this.loadInstanceStatus(params),
+  });
   // Display-only: the deploy boundary derives this from the connected broker
   // session and rejects deployment while broker identity is unavailable.
   readonly account = resource({ loader: () => this.broker.account() });
@@ -385,6 +394,39 @@ export class BrokerDeployFormComponent {
   );
 
   readonly deployChecks = computed(() => buildDeployChecks(this.error()?.status));
+  readonly stoppedStartLatchState = computed(() => {
+    const statusUnavailable = this.instanceStatus.error() !== undefined;
+    const status = statusUnavailable ? null : this.instanceStatus.value();
+    const id = this.instanceId().trim();
+    return stoppedStartLatchState({
+      startNow: this.startNow(),
+      instanceId: id,
+      instanceIdValid: id !== '' && INSTANCE_ID_RE.test(id),
+      statusLoading: this.instanceStatus.isLoading(),
+      statusUnavailable,
+      desiredState: status?.desired_state,
+      startCapability: status?.operator_surface.host_process.start_capability,
+    });
+  });
+  readonly stoppedStartLatch = computed<boolean>(() => this.stoppedStartLatchState() === 'blocked');
+  readonly effectiveStartNow = computed<boolean>(() => this.startNow() && !this.stoppedStartLatch());
+  readonly commandTitle = computed<string>(() =>
+    this.effectiveStartNow() ? 'Deploy & start' : 'Deploy only',
+  );
+  readonly commandButtonLabel = computed<string>(() =>
+    this.effectiveStartNow() ? 'Deploy & start' : 'Deploy',
+  );
+  readonly commandStatus = computed<string>(() => {
+    const reason = this.blockedReason();
+    if (reason !== null) return reason;
+    if (this.stoppedStartLatch()) {
+      return (
+        'Durable STOPPED latch is set. This submit will deploy only; use Resume ' +
+        'on the bot page to clear the latch before starting.'
+      );
+    }
+    return 'Ready to deploy.';
+  });
 
   constructor() {
     // Re-deploy prefill: query params seed operator/runtime fields from the
@@ -503,25 +545,26 @@ export class BrokerDeployFormComponent {
   /** Why Deploy can't be submitted before an accepted-start response, sourced from the connectivity strip + form.
    * Null = ready. */
   private readonly preSubmitBlockedReason = computed<string | null>(() => {
+    const effectiveStartNow = this.effectiveStartNow();
     if (this.connectivity.daemonDown()) {
       return 'Live engine unavailable. Start it on this machine, then recheck.';
     }
-    if (this.startNow() && this.executionMode() === 'live') {
+    if (effectiveStartNow && this.executionMode() === 'live') {
       return 'Live execution is not available from Deploy yet. Pick read-only or paper orders.';
     }
     const coexistence = this.allInCoexistenceBlock();
     if (coexistence !== null) return coexistence;
-    if (this.startNow() && this.connectivity.fleetBlocksStarts()) {
+    if (effectiveStartNow && this.connectivity.fleetBlocksStarts()) {
       return 'Fleet state blocks new starts. Turn off "Start trading immediately" to deploy only, or clear the account state.';
     }
-    if (this.startNow() && this.instanceAlreadyRunning()) {
+    if (effectiveStartNow && this.instanceAlreadyRunning()) {
       return `"${this.instanceId().trim()}" is already running. Stop it first, or turn off "Start trading immediately" to deploy without starting.`;
     }
     if (!this.brokerAccountAvailable()) {
       return 'Connected broker account unavailable. Connect the broker session before deploying.';
     }
     const accountProof = this.accountTruth.value();
-    if (this.startNow()) {
+    if (effectiveStartNow) {
       if (!accountProof) {
         return 'Account proof is still loading. Wait for account readiness, or turn off "Start trading immediately" to deploy only.';
       }
@@ -538,6 +581,12 @@ export class BrokerDeployFormComponent {
     // leave busy=true and the form wedged.
     const customError = this.customSizingError();
     if (customError !== null) return customError;
+    if (this.stoppedStartLatchState() === 'checking') {
+      return 'Checking durable desired state before starting. Wait for the latch check, or turn off "Start trading immediately" to deploy only.';
+    }
+    if (this.stoppedStartLatchState() === 'unknown') {
+      return 'Could not verify durable desired state before starting. Retry the status check, or turn off "Start trading immediately" to deploy only.';
+    }
     return null;
   });
   readonly blockedReason = computed<string | null>(() => {
@@ -567,14 +616,14 @@ export class BrokerDeployFormComponent {
         sizing: this.resolveSizingPolicy(),
         action: this.actionPlan(),
       },
-      start: this.startNow(),
+      start: this.effectiveStartNow(),
     };
     const parent = this.parentRunId();
     if (parent) request.parent_run_id = parent;
     // Only attach launch knobs when actually starting — otherwise a deploy-only
     // request carries irrelevant start_options that still get validated (and a
     // cleared "max orders" field would serialize NaN → null and fail).
-    if (this.startNow()) {
+    if (this.effectiveStartNow()) {
       const maxOrders = this.maxOrdersPerDay();
       request.start_options = {
         readonly: this.readonlyFlag(),
@@ -603,6 +652,11 @@ export class BrokerDeployFormComponent {
     return e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement
       ? e.target.value
       : '';
+  }
+
+  private async loadInstanceStatus(instanceId: string | null): Promise<LiveInstanceStatus | null> {
+    if (instanceId === null) return null;
+    return this.svc.getInstanceStatus(instanceId);
   }
   private renderedFieldValue(
     field:
