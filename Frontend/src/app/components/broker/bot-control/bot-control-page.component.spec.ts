@@ -1,4 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
+import { TestBed } from '@angular/core/testing';
+import { Router } from '@angular/router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -101,6 +103,44 @@ describe('BotControlPageComponent', () => {
     expect(banner?.textContent).toContain(
       'The watchdog could not prove that the account is flat after the emergency flatten attempt.',
     );
+  });
+
+  it('renders the global account freeze banner from backend gate evidence', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = makeStatus();
+    status.operator_surface.readiness_gates = [
+      {
+        name: 'Account freeze',
+        status: 'freeze',
+        severity: 'critical',
+        detail: 'manual_freeze',
+        gate_result: {
+          gate_id: 'account.unresolved_exposure',
+          status: 'freeze',
+          source: 'manual_freeze',
+          operator_reason: 'manual_freeze',
+          operator_next_step: 'CLEAR_FREEZE',
+          evidence_at_ms: 1_780_000_002_500,
+        },
+        suggested_action: null,
+        suggested_action_unavailable_reason: 'handled_by_account_monitor',
+      },
+    ];
+    const { element } = await setupBotControlPage({ status });
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+
+    expect(element.textContent).toContain('Account sick bay is gating new starts.');
+    expect(element.textContent).toContain('Manual Freeze');
+
+    const button = Array.from(element.querySelectorAll('button')).find((candidate) =>
+      candidate.textContent?.includes('Open Account Monitor'),
+    );
+    expect(button).toBeDefined();
+    button?.click();
+
+    expect(navigate).toHaveBeenCalledWith(['/broker/account-monitor'], {
+      fragment: 'account-reconciliation-action',
+    });
   });
 
   it('runs the backend-authored renew-lease action from runtime freshness notices', async () => {

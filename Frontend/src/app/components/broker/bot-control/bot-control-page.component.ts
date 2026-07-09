@@ -229,6 +229,19 @@ export class BotControlPageComponent {
       tone: operatorPillTone(condition.severity),
     };
   });
+  readonly accountFreezeGate = computed(() => {
+    return (
+      this.status()?.operator_surface.readiness_gates.find(
+        (gate) =>
+          gate.gate_result.status === 'freeze' &&
+          gate.gate_result.gate_id.startsWith('account.'),
+      )?.gate_result ?? null
+    );
+  });
+  readonly accountFreezeReason = computed(() => {
+    const reason = this.accountFreezeGate()?.operator_reason;
+    return reason ? formatReceiptLabel(reason) : null;
+  });
 
   readonly rightPaneNode = computed<LifecycleChartNode | null>(() => {
     const status = this.status();
@@ -266,6 +279,12 @@ export class BotControlPageComponent {
       if (endpoint === 'reconcile_instance') void this.dispatchReconcileNow();
     },
   };
+
+  openAccountMonitor(): void {
+    void this.router.navigate(['/broker/account-monitor'], {
+      fragment: 'account-reconciliation-action',
+    });
+  }
 
   private readonly runtimeNoticeDispatch: OperatorNoticeDispatch = {
     redeploy: () => this.onGateRedeploy(),

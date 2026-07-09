@@ -11,6 +11,10 @@ from app.engine.live.account_artifacts import AccountArtifactError
 from app.engine.live.account_identity import normalize_account_id
 from app.routers.broker_dependencies import require_connected_client
 from app.schemas.account_reconciliation import (
+    AccountAcceptExposureOverrideRequest,
+    AccountAcceptExposureOverrideResponse,
+    AccountClearFreezeRequest,
+    AccountClearFreezeResponse,
     AccountReconciliationReceipt,
     AccountTriageResponse,
 )
@@ -84,6 +88,56 @@ async def account_triage_endpoint(
     """Return the thin account recovery projection for an account."""
     try:
         return service.triage(account_id=_canonical_account_id(account_id))
+    except AccountArtifactError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+
+@router.post(
+    "/{account_id}/freeze/clear",
+    response_model=AccountClearFreezeResponse,
+)
+async def clear_account_freeze_endpoint(
+    account_id: str,
+    request: AccountClearFreezeRequest,
+    service: Annotated[
+        AccountReconciliationService,
+        Depends(get_account_reconciliation_service),
+    ],
+) -> AccountClearFreezeResponse:
+    """Clear an active account freeze only from a fresh, newer clean receipt."""
+    try:
+        return service.clear_freeze_from_latest_receipt(
+            account_id=_canonical_account_id(account_id),
+            requested_by=request.requested_by,
+            receipt_id=request.receipt_id,
+            reason=request.reason,
+        )
+    except AccountArtifactError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+
+@router.post(
+    "/{account_id}/freeze/accept-exposure-override",
+    response_model=AccountAcceptExposureOverrideResponse,
+)
+async def accept_exposure_override_endpoint(
+    account_id: str,
+    request: AccountAcceptExposureOverrideRequest,
+    service: Annotated[
+        AccountReconciliationService,
+        Depends(get_account_reconciliation_service),
+    ],
+) -> AccountAcceptExposureOverrideResponse:
+    """Clear an exposure freeze by recording an audited operator override."""
+    try:
+        return service.accept_exposure_override(
+            account_id=_canonical_account_id(account_id),
+            requested_by=request.requested_by,
+            reason=request.reason,
+            strategy_instance_id=request.strategy_instance_id,
+            run_id=request.run_id,
+            bot_order_namespace=request.bot_order_namespace,
+        )
     except AccountArtifactError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 

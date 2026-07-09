@@ -13,7 +13,12 @@ from app.broker.ibkr.models import (
     IbkrConnectionHealth,
     IbkrPositionsSnapshot,
 )
-from app.engine.live.account_artifacts import account_artifacts_root
+from app.engine.live.account_artifacts import (
+    AccountFreezeEvidence,
+    account_artifacts_root,
+    read_account_freeze,
+    write_account_freeze,
+)
 from app.routers import account_reconciliation
 from app.services.account_reconciliation import AccountReconciliationService
 
@@ -106,6 +111,7 @@ async def test_triage_returns_latest_receipt(tmp_path: Path) -> None:
     assert body["account_id"] == "DU1234567"
     assert body["account_reconciliation_receipt"]["receipt_id"] == receipt.receipt_id
     assert body["overall_gate_result"]["status"] == "pass"
+    assert body["conditions"] == []
 
 
 async def test_triage_returns_unknown_when_registry_is_corrupt(tmp_path: Path) -> None:
@@ -160,3 +166,178 @@ async def test_latest_reconciliation_normalizes_account_id(tmp_path: Path) -> No
     body = response.json()
     assert body["account_id"] == "DU1234567"
     assert body["receipt_id"] == receipt.receipt_id
+
+
+async def test_triage_contract_returns_condition_rows_for_active_freeze(tmp_path: Path) -> None:
+    from app.main import app
+
+    service = AccountReconciliationService(artifacts_root=tmp_path, ttl_ms=10_000_000_000)
+    service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(),
+        now_ms=1_780_000_002_000,
+    )
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id="DU1234567",
+            reason="watchdog.flatten_timed_out",
+            source="watchdog_halt_executor",
+            recorded_at_ms=1_780_000_002_500,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+    app.dependency_overrides[
+        account_reconciliation.get_account_reconciliation_service
+    ] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/accounts/DU1234567/triage")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["overall_gate_result"]["status"] == "freeze"
+    assert body["clear_freeze_actionable"] is False
+    assert body["conditions"] == [
+        {
+            "condition_type": "exposure_freeze",
+            "scope": "account",
+            "owner": {
+                "owner_type": "account",
+                "owner_id": "DU1234567",
+                "label": "Account DU1234567",
+                "strategy_instance_id": None,
+                "run_id": None,
+                "lifecycle_state": None,
+            },
+            "severity": "critical",
+            "title": "Account freeze active",
+            "detail": "watchdog.flatten_timed_out",
+            "operator_next_step": "CHECK_IBKR",
+            "source": "watchdog_halt_executor",
+            "evidence_at_ms": 1_780_000_002_500,
+            "evidence_refs": [],
+            "affected_strategy_instance_ids": [],
+            "cure_action": "resolve_exposure",
+        }
+    ]
+
+
+async def test_clear_freeze_endpoint_refuses_stale_pre_freeze_receipt(tmp_path: Path) -> None:
+    from app.main import app
+
+    service = AccountReconciliationService(artifacts_root=tmp_path, ttl_ms=10_000_000_000)
+    receipt = service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(),
+        now_ms=1_780_000_002_000,
+    )
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id="DU1234567",
+            reason="watchdog.flatten_timed_out",
+            source="watchdog_halt_executor",
+            recorded_at_ms=1_780_000_002_500,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+    app.dependency_overrides[
+        account_reconciliation.get_account_reconciliation_service
+    ] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/accounts/DU1234567/freeze/clear",
+                json={"requested_by": "operator", "receipt_id": receipt.receipt_id},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert "newer than the active freeze" in response.json()["detail"]
+    assert read_account_freeze(tmp_path, "DU1234567") is not None
+
+
+async def test_clear_freeze_endpoint_returns_refreshed_triage_after_success(tmp_path: Path) -> None:
+    from app.main import app
+
+    service = AccountReconciliationService(artifacts_root=tmp_path, ttl_ms=10_000_000_000)
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id="DU1234567",
+            reason="watchdog.flatten_timed_out",
+            source="watchdog_halt_executor",
+            recorded_at_ms=1_780_000_001_000,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+    receipt = service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(),
+        now_ms=1_780_000_002_000,
+    )
+    app.dependency_overrides[
+        account_reconciliation.get_account_reconciliation_service
+    ] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/accounts/DU1234567/freeze/clear",
+                json={"requested_by": "operator", "receipt_id": receipt.receipt_id},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["cleared"] is True
+    assert body["receipt_id"] == receipt.receipt_id
+    assert body["triage"]["overall_gate_result"]["status"] == "pass"
+    assert body["triage"]["conditions"] == []
+    assert read_account_freeze(tmp_path, "DU1234567") is None
+
+
+async def test_accept_exposure_override_endpoint_returns_refreshed_triage(
+    tmp_path: Path,
+) -> None:
+    from app.main import app
+
+    service = AccountReconciliationService(artifacts_root=tmp_path, ttl_ms=10_000_000_000)
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id="DU1234567",
+            reason="watchdog.flatten_timed_out",
+            source="watchdog_halt_executor",
+            recorded_at_ms=1_780_000_001_000,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+    app.dependency_overrides[
+        account_reconciliation.get_account_reconciliation_service
+    ] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/accounts/DU1234567/freeze/accept-exposure-override",
+                json={
+                    "requested_by": "operator",
+                    "reason": "Operator accepts the current account exposure.",
+                    "strategy_instance_id": "bot-a",
+                    "run_id": "run-a",
+                    "bot_order_namespace": "learn-ai/bot-a/v1",
+                },
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["cleared"] is True
+    assert body["cleared_source"] == "account_audited_override"
+    assert body["triage"]["overall_gate_result"]["status"] == "unknown"
+    assert read_account_freeze(tmp_path, "DU1234567") is None

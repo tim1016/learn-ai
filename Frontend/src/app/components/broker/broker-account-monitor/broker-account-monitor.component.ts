@@ -1,4 +1,3 @@
-import { HttpErrorResponse } from '@angular/common/http';
 import {
   ChangeDetectionStrategy,
   Component,
@@ -21,6 +20,7 @@ import { AccountTruthBoardComponent } from '../account-truth-board/account-truth
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { brokerSse, type SseStream } from '../../../services/broker-sse';
+import { LiveRunsService } from '../../../services/live-runs.service';
 import type { GateResultStatus } from '../../../api/live-instances.types';
 import type {
   AccountTruthResponse,
@@ -28,7 +28,11 @@ import type {
   IbkrPosition,
   IbkrPositionsSnapshot,
 } from '../../../api/broker-models';
-import type { AccountReconciliationReceipt } from '../../../api/account-reconciliation.types';
+import type {
+  AccountConditionRow,
+  AccountReconciliationReceipt,
+  AccountTriageResponse,
+} from '../../../api/account-reconciliation.types';
 import {
   fmtBrokerExpiryDate,
   fmtCurrency,
@@ -73,6 +77,7 @@ interface PositionRow {
 })
 export class BrokerAccountMonitorComponent {
   private readonly broker = inject(BrokerService);
+  private readonly liveRuns = inject(LiveRunsService);
   private readonly health = inject(BrokerHealthService);
   readonly bannerState = this.health.bannerState;
   private readonly injector = inject(Injector);
@@ -87,13 +92,35 @@ export class BrokerAccountMonitorComponent {
   readonly truthError = signal<unknown>(null);
   readonly accountTruth = signal<AccountTruthResponse | null>(null);
   readonly accountReconciliation = signal<AccountReconciliationReceipt | null>(null);
+  readonly accountTriage = signal<AccountTriageResponse | null>(null);
   readonly accountReconciliationNowMs = signal(Date.now());
   readonly accountReconciliationLoading = signal(false);
   readonly accountReconciliationError = signal<unknown>(null);
+  readonly accountTriageLoading = signal(false);
+  readonly accountTriageError = signal<unknown>(null);
+  readonly accountCureError = signal<unknown>(null);
+  readonly accountFreezeClearLoading = signal(false);
+  readonly exposureResolutionCondition = signal<AccountConditionRow | null>(null);
+  readonly exposureResolutionLoading = signal<'flatten' | 'override' | null>(null);
+  readonly exposureOverrideReason = signal(
+    'Operator reviewed and accepts the current account exposure.',
+  );
+  readonly exposureOverrideReasonMissing = computed(
+    () => this.exposureOverrideReason().trim().length === 0,
+  );
   readonly accountReconciliationAccountId = computed(() => {
     const truth = this.accountTruth();
     return truth === null ? null : this.reconciliationAccountIdForTruth(truth);
   });
+  readonly accountConditions = computed(() => this.accountTriage()?.conditions ?? []);
+  readonly accountHasFreeze = computed(() =>
+    this.accountConditions().some(
+      (condition) =>
+        condition.scope === 'account' &&
+        (condition.condition_type === 'exposure_freeze' ||
+          condition.condition_type === 'account_freeze'),
+    ),
+  );
   readonly accountReconciliationExpired = computed(() => {
     const receipt = this.accountReconciliation();
     return receipt !== null && receipt.expires_at_ms < this.accountReconciliationNowMs();
@@ -103,19 +130,24 @@ export class BrokerAccountMonitorComponent {
   );
   readonly accountReconciliationDisplayState = computed(() =>
     this.accountReconciliationExpired()
-      ? 'STALE'
-      : this.accountReconciliation()?.state ?? 'UNKNOWN',
+      ? 'NOT_PROVEN'
+      : this.accountReconciliation()?.state ?? 'NOT_PROVEN',
   );
   readonly accountReconciliationDisplayGate = computed<GateResultStatus>(() =>
     this.accountReconciliationExpired()
       ? 'unknown'
       : this.accountReconciliation()?.final_gate_result.status ?? 'unknown',
   );
+  readonly accountReconciliationDisplayGateLabel = computed(() => {
+    const status = this.accountReconciliationDisplayGate();
+    return status === 'unknown' ? 'Not yet proven' : status;
+  });
   readonly accountReconciliationReason = computed(
     () =>
       this.accountReconciliationExpired()
-        ? 'Receipt expired before this account monitor snapshot. Run account reconcile again.'
-        : this.accountReconciliation()?.final_gate_result.operator_reason ?? '',
+        ? 'Not yet proven: the account reconciliation receipt is stale. Run account reconcile again.'
+        : this.accountReconciliation()?.final_gate_result.operator_reason ??
+          'Not yet proven: no account-level reconciliation receipt has been recorded for this account.',
   );
 
   private readonly accountStream = signal<SseStream<IbkrPnLTick> | null>(null);
@@ -204,8 +236,9 @@ export class BrokerAccountMonitorComponent {
       this.accountTruth.set(truth);
       const accountId = this.reconciliationAccountIdForTruth(truth);
       if (accountId) {
-        await this.loadLatestAccountReconciliation(accountId);
+        await this.loadAccountTriage(accountId);
       } else {
+        this.accountTriage.set(null);
         this.setAccountReconciliation(null);
       }
     } catch (err) {
@@ -215,20 +248,23 @@ export class BrokerAccountMonitorComponent {
     }
   }
 
-  async loadLatestAccountReconciliation(accountId: string): Promise<void> {
-    this.accountReconciliationLoading.set(true);
-    this.accountReconciliationError.set(null);
+  async loadAccountTriage(accountId: string): Promise<void> {
+    this.accountTriageLoading.set(true);
+    this.accountTriageError.set(null);
     try {
-      this.setAccountReconciliation(await this.broker.latestAccountReconciliation(accountId));
+      this.setAccountTriage(await this.broker.accountTriage(accountId));
     } catch (err) {
-      if (err instanceof HttpErrorResponse && err.status === 404) {
-        this.setAccountReconciliation(null);
-      } else {
-        this.accountReconciliationError.set(err);
-      }
+      this.accountTriageError.set(err);
+      this.accountTriage.set(null);
+      this.setAccountReconciliation(null);
     } finally {
-      this.accountReconciliationLoading.set(false);
+      this.accountTriageLoading.set(false);
     }
+  }
+
+  retryAccountTriage(): void {
+    const accountId = this.accountReconciliationAccountId();
+    if (accountId) void this.loadAccountTriage(accountId);
   }
 
   async runAccountReconciliation(): Promise<void> {
@@ -240,10 +276,133 @@ export class BrokerAccountMonitorComponent {
       const receipt = await this.broker.reconcileAccount(accountId);
       this.setAccountReconciliation(receipt);
       this.accountTruth.set(receipt.account_truth);
+      await this.loadAccountTriage(accountId);
     } catch (err) {
       this.accountReconciliationError.set(err);
     } finally {
       this.accountReconciliationLoading.set(false);
+    }
+  }
+
+  async clearAccountFreeze(): Promise<void> {
+    const accountId = this.accountReconciliationAccountId();
+    const triage = this.accountTriage();
+    if (!accountId || !triage?.clear_freeze_actionable || this.accountFreezeClearLoading()) return;
+    this.accountFreezeClearLoading.set(true);
+    this.accountCureError.set(null);
+    try {
+      const response = await this.broker.clearAccountFreeze(accountId);
+      this.setAccountTriage(response.triage);
+    } catch (err) {
+      this.accountCureError.set(err);
+    } finally {
+      this.accountFreezeClearLoading.set(false);
+    }
+  }
+
+  openExposureResolution(condition: AccountConditionRow): void {
+    this.accountCureError.set(null);
+    this.exposureOverrideReason.set(
+      `Operator reviewed and accepts exposure for ${condition.owner.label}.`,
+    );
+    this.exposureResolutionCondition.set(condition);
+  }
+
+  closeExposureResolution(): void {
+    if (this.exposureResolutionLoading() !== null) return;
+    this.exposureResolutionCondition.set(null);
+  }
+
+  setExposureOverrideReason(value: string): void {
+    this.exposureOverrideReason.set(value);
+  }
+
+  async flattenExposureFromDialog(): Promise<void> {
+    const condition = this.exposureResolutionCondition();
+    const accountId = this.accountReconciliationAccountId();
+    const strategyInstanceId = condition?.owner.strategy_instance_id;
+    if (!condition || !accountId || !strategyInstanceId || this.exposureResolutionLoading() !== null) return;
+    this.exposureResolutionLoading.set('flatten');
+    this.accountCureError.set(null);
+    try {
+      await this.liveRuns.emergencyFlattenAccount(strategyInstanceId, {
+        account: accountId,
+        confirm: true,
+      });
+      await this.runAccountReconciliation();
+      await this.loadAccountTriage(accountId);
+      this.exposureResolutionCondition.set(null);
+    } catch (err) {
+      this.accountCureError.set(err);
+    } finally {
+      this.exposureResolutionLoading.set(null);
+    }
+  }
+
+  async acceptExposureOverrideFromDialog(): Promise<void> {
+    const condition = this.exposureResolutionCondition();
+    const accountId = this.accountReconciliationAccountId();
+    if (
+      !condition ||
+      !accountId ||
+      this.exposureResolutionLoading() !== null ||
+      this.exposureOverrideReasonMissing()
+    ) {
+      return;
+    }
+    this.exposureResolutionLoading.set('override');
+    this.accountCureError.set(null);
+    try {
+      const response = await this.broker.acceptExposureOverride(accountId, {
+        reason: this.exposureOverrideReason().trim(),
+        strategy_instance_id: condition.owner.strategy_instance_id,
+        run_id: condition.owner.run_id,
+        bot_order_namespace: null,
+      });
+      this.setAccountTriage(response.triage);
+      this.exposureResolutionCondition.set(null);
+    } catch (err) {
+      this.accountCureError.set(err);
+    } finally {
+      this.exposureResolutionLoading.set(null);
+    }
+  }
+
+  conditionActionLabel(condition: AccountConditionRow): string {
+    switch (condition.cure_action) {
+      case 'resolve_exposure':
+        return 'Resolve exposure';
+      case 'clear_freeze':
+        return 'Clear freeze';
+      case 'reconcile_now':
+        return 'Run account reconcile';
+      case 'prove_evidence':
+        return 'Prove now';
+      case 'retire_replace':
+        return 'Retire & Replace';
+    }
+  }
+
+  gateStatusLabel(status: GateResultStatus): string {
+    return status === 'unknown' ? 'Not yet proven' : status;
+  }
+
+  conditionActionDisabled(condition: AccountConditionRow): boolean {
+    if (condition.cure_action === 'resolve_exposure') return this.exposureResolutionLoading() !== null;
+    if (condition.cure_action === 'reconcile_now') return this.accountReconciliationLoading();
+    if (condition.cure_action === 'clear_freeze') {
+      return !this.accountTriage()?.clear_freeze_actionable || this.accountFreezeClearLoading();
+    }
+    return true;
+  }
+
+  runConditionAction(condition: AccountConditionRow): void {
+    if (condition.cure_action === 'reconcile_now') {
+      void this.runAccountReconciliation();
+    } else if (condition.cure_action === 'clear_freeze') {
+      void this.clearAccountFreeze();
+    } else if (condition.cure_action === 'resolve_exposure') {
+      this.openExposureResolution(condition);
     }
   }
 
@@ -254,6 +413,11 @@ export class BrokerAccountMonitorComponent {
   private setAccountReconciliation(receipt: AccountReconciliationReceipt | null): void {
     this.accountReconciliationNowMs.set(Date.now());
     this.accountReconciliation.set(receipt);
+  }
+
+  private setAccountTriage(triage: AccountTriageResponse | null): void {
+    this.accountTriage.set(triage);
+    this.setAccountReconciliation(triage?.account_reconciliation_receipt ?? null);
   }
 
   async loadPositions(): Promise<void> {

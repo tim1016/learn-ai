@@ -1,7 +1,13 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
-import type { AccountReconciliationReceipt } from '../api/account-reconciliation.types';
+import type {
+  AccountAcceptExposureOverrideRequest,
+  AccountAcceptExposureOverrideResponse,
+  AccountClearFreezeResponse,
+  AccountReconciliationReceipt,
+  AccountTriageResponse,
+} from '../api/account-reconciliation.types';
 import type {
   AccountTruthResponse,
   DataPlaneHealth,
@@ -112,6 +118,38 @@ export class BrokerService {
     return firstValueFrom(
       this.http.get<AccountReconciliationReceipt>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/reconciliation/latest`,
+      ),
+    );
+  }
+
+  accountTriage(accountId: string): Promise<AccountTriageResponse> {
+    return firstValueFrom(
+      this.http.get<AccountTriageResponse>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/triage`,
+      ),
+    );
+  }
+
+  clearAccountFreeze(
+    accountId: string,
+    payload: { requested_by?: string; receipt_id?: string | null; reason?: string | null } = {},
+  ): Promise<AccountClearFreezeResponse> {
+    return firstValueFrom(
+      this.http.post<AccountClearFreezeResponse>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/freeze/clear`,
+        payload,
+      ),
+    );
+  }
+
+  acceptExposureOverride(
+    accountId: string,
+    payload: AccountAcceptExposureOverrideRequest,
+  ): Promise<AccountAcceptExposureOverrideResponse> {
+    return firstValueFrom(
+      this.http.post<AccountAcceptExposureOverrideResponse>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/freeze/accept-exposure-override`,
+        payload,
       ),
     );
   }

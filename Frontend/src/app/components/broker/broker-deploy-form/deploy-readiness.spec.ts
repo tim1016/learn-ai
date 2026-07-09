@@ -133,6 +133,7 @@ describe('deploy readiness helpers', () => {
         final_verdict: 'not_proven',
         status_detail: 'Run account reconcile before starting.',
       },
+      accountTriage: null,
       brokerAccountAvailable: true,
       fleetState: 'warn',
       nothingDeployed: false,
@@ -166,6 +167,56 @@ describe('deploy readiness helpers', () => {
     ]);
   });
 
+  it('lets active account freeze override clean account and fleet facts', () => {
+    const facts = buildDeployReadinessFacts({
+      daemonState: 'ok',
+      daemonFreshness: { state: 'fresh', sha: 'abc1234', commitsBehind: null },
+      brokerState: 'ok',
+      brokerDetail: 'Connected',
+      accountTruth: {
+        final_verdict: 'clean',
+        status_detail: 'Account Truth is clean.',
+      },
+      accountTriage: {
+        conditions: [
+          {
+            condition_type: 'exposure_freeze',
+            scope: 'account',
+            owner: {
+              owner_type: 'account',
+              owner_id: 'DU123',
+              label: 'Account DU123',
+              strategy_instance_id: null,
+              run_id: null,
+              lifecycle_state: null,
+            },
+            severity: 'critical',
+            title: 'Account freeze active',
+            detail: 'watchdog.flatten_timed_out',
+            operator_next_step: 'CHECK_IBKR',
+            source: 'watchdog_halt_executor',
+            evidence_at_ms: 1,
+            evidence_refs: [],
+            affected_strategy_instance_ids: ['bot-a'],
+            cure_action: 'resolve_exposure',
+          },
+        ],
+      },
+      brokerAccountAvailable: true,
+      fleetState: 'ok',
+      nothingDeployed: false,
+    });
+
+    expect(facts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: 'account', condition: 'Frozen', state: 'down' }),
+        expect.objectContaining({ key: 'fleet', condition: 'Frozen', state: 'warn' }),
+      ]),
+    );
+    expect(facts).not.toContainEqual(expect.objectContaining({ condition: 'Clean' }));
+    expect(facts).not.toContainEqual(expect.objectContaining({ condition: 'Clear' }));
+  });
+
   it('preserves legacy now/deploy check semantics', () => {
     expect(
       buildNowChecks({
@@ -174,6 +225,7 @@ describe('deploy readiness helpers', () => {
         fieldsReady: false,
         fleetState: 'unknown',
         nothingDeployed: true,
+        accountTriage: null,
       }),
     ).toEqual([
       expect.objectContaining({ key: 'engine', detail: 'Checking' }),

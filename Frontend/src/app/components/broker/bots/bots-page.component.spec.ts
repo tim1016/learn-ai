@@ -1,12 +1,15 @@
-import { provideZonelessChangeDetection } from '@angular/core';
+import { provideZonelessChangeDetection, signal } from '@angular/core';
 import { TestBed, type ComponentFixture } from '@angular/core/testing';
 import { provideRouter, Router } from '@angular/router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { AccountTriageResponse } from '../../../api/account-reconciliation.types';
 import type {
   BotCatalogResponse,
   BotCatalogRow,
 } from '../../../api/live-instances.types';
+import { BrokerHealthService } from '../../../services/broker-health.service';
+import { BrokerService } from '../../../services/broker.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { BotsPageComponent } from './bots-page.component';
 
@@ -56,8 +59,29 @@ class FakeLiveRunsService {
   deleteBot = vi.fn<(instanceId: string, request?: unknown) => Promise<unknown>>();
 }
 
-async function setup() {
+class FakeBrokerService {
+  accountTriage = vi.fn<(accountId: string) => Promise<AccountTriageResponse>>();
+}
+
+class FakeBrokerHealthService {
+  readonly health = signal({
+    connected: true,
+    is_paper: true,
+    account_id: 'DU1234567',
+    mode: 'paper' as const,
+    host: '127.0.0.1',
+    port: 4002,
+    client_id: 1,
+    connection_state: 'connected' as const,
+  });
+  refresh = vi.fn(async () => undefined);
+}
+
+async function setup(options: { triage?: AccountTriageResponse } = {}) {
   const service = new FakeLiveRunsService();
+  const broker = new FakeBrokerService();
+  const health = new FakeBrokerHealthService();
+  broker.accountTriage.mockResolvedValue(options.triage ?? cleanTriage());
   service.getBotCatalog.mockResolvedValue({
     bots: [
       bot(),
@@ -113,17 +137,82 @@ async function setup() {
       provideZonelessChangeDetection(),
       provideRouter([]),
       { provide: LiveRunsService, useValue: service },
+      { provide: BrokerService, useValue: broker },
+      { provide: BrokerHealthService, useValue: health },
     ],
   }).compileComponents();
   const fixture = TestBed.createComponent(BotsPageComponent);
   await settle(fixture);
-  return { fixture, service, router: TestBed.inject(Router) };
+  return { fixture, service, broker, health, router: TestBed.inject(Router) };
 }
 
 async function settle(fixture: ComponentFixture<BotsPageComponent>): Promise<void> {
   fixture.detectChanges();
   await fixture.whenStable();
   fixture.detectChanges();
+}
+
+function cleanTriage(): AccountTriageResponse {
+  return {
+    schema_version: 1,
+    generated_at_ms: NEW_RUN,
+    account_id: 'DU1234567',
+    strategy_instance_id: null,
+    summary_headline: 'Account recovery gates passing',
+    summary_detail: 'Account DU1234567 has no blocking account triage rows.',
+    overall_gate_result: {
+      gate_id: 'account.triage',
+      status: 'pass',
+      source: 'account_triage',
+      operator_reason: 'Account DU1234567 has no blocking account triage rows.',
+      operator_next_step: 'ACCOUNT_TRIAGE_PASSING',
+      evidence_at_ms: NEW_RUN,
+    },
+    account_reconciliation_receipt: null,
+    gate_rows: [],
+    conditions: [],
+    clear_freeze_actionable: false,
+    affected_bots: [],
+  };
+}
+
+function frozenTriage(): AccountTriageResponse {
+  return {
+    ...cleanTriage(),
+    summary_headline: 'Account recovery needs attention',
+    summary_detail: 'manual_freeze',
+    overall_gate_result: {
+      gate_id: 'account.triage',
+      status: 'freeze',
+      source: 'manual_freeze',
+      operator_reason: 'manual_freeze',
+      operator_next_step: 'CLEAR_FREEZE',
+      evidence_at_ms: NEW_RUN,
+    },
+    conditions: [
+      {
+        condition_type: 'account_freeze',
+        scope: 'account',
+        owner: {
+          owner_type: 'account',
+          owner_id: 'DU1234567',
+          label: 'Account DU1234567',
+          strategy_instance_id: null,
+          run_id: null,
+          lifecycle_state: null,
+        },
+        severity: 'critical',
+        title: 'Account freeze active',
+        detail: 'manual_freeze',
+        operator_next_step: 'CLEAR_FREEZE',
+        source: 'manual_freeze',
+        evidence_at_ms: NEW_RUN,
+        evidence_refs: [],
+        affected_strategy_instance_ids: ['live-running-aapl'],
+        cure_action: 'clear_freeze',
+      },
+    ],
+  };
 }
 
 describe('BotsPageComponent', () => {
@@ -179,6 +268,29 @@ describe('BotsPageComponent', () => {
     expect(text).not.toContain('RUNNING');
     expect(text).not.toContain('Needs operator review');
     expect(text).not.toContain('Desired state has no durable intent.');
+  });
+
+  it('renders the account freeze banner from account triage', async () => {
+    const { fixture, broker, router } = await setup({ triage: frozenTriage() });
+    const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
+
+    await fixture.componentInstance.refreshAccountTriage();
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+
+    expect(root.textContent).toContain('Account sick bay is gating new starts.');
+    expect(root.textContent).toContain('Manual Freeze');
+    expect(broker.accountTriage).toHaveBeenCalledWith('DU1234567');
+
+    const button = Array.from(root.querySelectorAll('button')).find((candidate) =>
+      candidate.textContent?.includes('Open Account Monitor'),
+    );
+    expect(button).toBeDefined();
+    button?.click();
+
+    expect(navigate).toHaveBeenCalledWith(['/broker/account-monitor'], {
+      fragment: 'account-reconciliation-action',
+    });
   });
 
   it('surfaces catalog rows where Fresh run is the only available lifecycle action', async () => {

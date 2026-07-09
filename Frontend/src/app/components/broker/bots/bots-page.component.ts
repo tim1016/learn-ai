@@ -14,11 +14,18 @@ import { TabsModule } from 'primeng/tabs';
 import { TagModule } from 'primeng/tag';
 
 import type {
+  AccountConditionRow,
+  AccountTriageResponse,
+} from '../../../api/account-reconciliation.types';
+import type {
   BotCatalogRow,
   BotCatalogTradingMode,
   ReadinessVerdictEnum,
 } from '../../../api/live-instances.types';
+import { BrokerHealthService } from '../../../services/broker-health.service';
+import { BrokerService } from '../../../services/broker.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
+import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { fmtInteger, fmtSignedCurrency, fmtTimestampLocal } from '../format';
 
 type AttentionFilter = 'all' | 'needs-attention' | 'healthy';
@@ -53,6 +60,7 @@ interface BotTableRow {
     TableModule,
     TabsModule,
     TagModule,
+    ReceiptLabelPipe,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './bots-page.component.html',
@@ -60,9 +68,13 @@ interface BotTableRow {
 })
 export class BotsPageComponent {
   private readonly liveRuns = inject(LiveRunsService);
+  private readonly broker = inject(BrokerService);
+  private readonly health = inject(BrokerHealthService);
   private readonly router = inject(Router);
 
   readonly bots = signal<BotCatalogRow[]>([]);
+  readonly accountTriage = signal<AccountTriageResponse | null>(null);
+  readonly accountTriageError = signal<string | null>(null);
   readonly isLoading = signal<boolean>(true);
   readonly errorMessage = signal<string | null>(null);
   readonly searchQuery = signal<string>('');
@@ -115,6 +127,16 @@ export class BotsPageComponent {
   });
 
   readonly activeTabCount = computed(() => this.activeRows().length);
+  readonly accountFreezeCondition = computed<AccountConditionRow | null>(() => {
+    return (
+      this.accountTriage()?.conditions.find(
+        (condition) =>
+          condition.scope === 'account' &&
+          (condition.condition_type === 'exposure_freeze' ||
+            condition.condition_type === 'account_freeze'),
+      ) ?? null
+    );
+  });
 
   readonly selectedRows = computed<BotTableRow[]>(() => {
     const selected = this.selectedBotIds();
@@ -148,10 +170,29 @@ export class BotsPageComponent {
       const catalog = await this.liveRuns.getBotCatalog();
       this.bots.set(catalog.bots);
       this.retainKnownSelections(catalog.bots);
+      await this.refreshAccountTriage();
     } catch (err) {
       this.errorMessage.set(this.humanError(err));
     } finally {
       this.isLoading.set(false);
+    }
+  }
+
+  async refreshAccountTriage(): Promise<void> {
+    this.accountTriageError.set(null);
+    if (this.health.health() === null) {
+      await this.health.refresh();
+    }
+    const accountId = this.health.health()?.account_id;
+    if (!accountId) {
+      this.accountTriage.set(null);
+      return;
+    }
+    try {
+      this.accountTriage.set(await this.broker.accountTriage(accountId));
+    } catch (err) {
+      this.accountTriage.set(null);
+      this.accountTriageError.set(this.humanError(err));
     }
   }
 
@@ -180,6 +221,12 @@ export class BotsPageComponent {
     this.searchQuery.set('');
     this.attentionFilter.set('all');
     this.readinessFilter.set('all');
+  }
+
+  openAccountMonitor(): void {
+    void this.router.navigate(['/broker/account-monitor'], {
+      fragment: 'account-reconciliation-action',
+    });
   }
 
   isSelected(id: string): boolean {

@@ -171,6 +171,42 @@
   }
 }
 
+.account-freeze-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.75rem 1rem 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid rgba(255, 107, 107, 0.5);
+  border-radius: var(--radius-md);
+  background: rgba(255, 107, 107, 0.12);
+  color: #ffd1d1;
+
+  div {
+    display: grid;
+    gap: 0.15rem;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  span {
+    color: var(--text-secondary);
+    font-size: var(--fs-sm);
+  }
+
+  button {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.45rem 0.75rem;
+    border: 1px solid rgba(255, 107, 107, 0.65);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: #ffd1d1;
+    cursor: pointer;
+  }
+}
+
 /* ── CONTROLS TOOLBAR ── */
 .controls-toolbar {
   flex: 0 0 auto;

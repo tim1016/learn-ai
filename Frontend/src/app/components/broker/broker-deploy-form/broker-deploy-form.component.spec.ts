@@ -3,6 +3,7 @@ import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { AccountTriageResponse } from '../../../api/account-reconciliation.types';
 import type { AccountTruthResponse } from '../../../api/broker-models';
 import type { LiveInstanceStatus } from '../../../api/live-instances.types';
 import { BrokerService } from '../../../services/broker.service';
@@ -113,6 +114,7 @@ function setup(
     }[];
     accountPromise?: Promise<{ account_id: string } | null>;
     accountTruth?: AccountTruthFixture;
+    accountTriage?: AccountTriageResponse;
     instanceStatus?: LiveInstanceStatus | null;
     instanceStatusPromise?: Promise<LiveInstanceStatus | null>;
     instanceStatusError?: Error;
@@ -196,6 +198,7 @@ function setup(
         status_detail: 'Broker/account evidence is fresh enough to start.',
       },
     ),
+    accountTriage: vi.fn().mockResolvedValue(opts.accountTriage ?? cleanTriage()),
     positions: vi
       .fn()
       .mockResolvedValue({ positions: opts.positions ?? [] }),
@@ -264,6 +267,69 @@ function validDeploymentValidationActionPlan(): ActionPlan {
       },
     ],
     on_exit: [{ kind: 'close_leg', entry_leg_id: 'spy_long' }],
+  };
+}
+
+function cleanTriage(): AccountTriageResponse {
+  return {
+    schema_version: 1,
+    generated_at_ms: 1_780_000_002_000,
+    account_id: 'DU123',
+    strategy_instance_id: null,
+    summary_headline: 'Account recovery gates passing',
+    summary_detail: 'Account DU123 has no blocking account triage rows.',
+    overall_gate_result: {
+      gate_id: 'account.triage',
+      status: 'pass',
+      source: 'account_triage',
+      operator_reason: 'Account DU123 has no blocking account triage rows.',
+      operator_next_step: 'ACCOUNT_TRIAGE_PASSING',
+      evidence_at_ms: 1_780_000_002_000,
+    },
+    account_reconciliation_receipt: null,
+    gate_rows: [],
+    conditions: [],
+    clear_freeze_actionable: false,
+    affected_bots: [],
+  };
+}
+
+function frozenTriage(): AccountTriageResponse {
+  return {
+    ...cleanTriage(),
+    summary_headline: 'Account recovery needs attention',
+    summary_detail: 'watchdog.flatten_timed_out',
+    overall_gate_result: {
+      gate_id: 'account.triage',
+      status: 'freeze',
+      source: 'watchdog_halt_executor',
+      operator_reason: 'watchdog.flatten_timed_out',
+      operator_next_step: 'CHECK_IBKR',
+      evidence_at_ms: 1_780_000_002_500,
+    },
+    conditions: [
+      {
+        condition_type: 'exposure_freeze',
+        scope: 'account',
+        owner: {
+          owner_type: 'account',
+          owner_id: 'DU123',
+          label: 'Account DU123',
+          strategy_instance_id: null,
+          run_id: null,
+          lifecycle_state: null,
+        },
+        severity: 'critical',
+        title: 'Account freeze active',
+        detail: 'watchdog.flatten_timed_out',
+        operator_next_step: 'CHECK_IBKR',
+        source: 'watchdog_halt_executor',
+        evidence_at_ms: 1_780_000_002_500,
+        evidence_refs: [],
+        affected_strategy_instance_ids: ['DEPVALSPYJUL8'],
+        cure_action: 'resolve_exposure',
+      },
+    ],
   };
 }
 
@@ -1215,6 +1281,33 @@ describe('BrokerDeployFormComponent', () => {
     component.startNow.set(false);
     fixture.detectChanges();
     expect(deployButton(fixture).disabled).toBe(false);
+  });
+
+  it('never renders Account Clean or Fleet Clear while account triage has an active freeze', async () => {
+    const { fixture, component } = setup({
+      accountTruth: {
+        final_verdict: 'clean',
+        status_label: 'Clean',
+        status_detail: 'Broker/account evidence is fresh enough to start.',
+      },
+      accountTriage: frozenTriage(),
+    });
+    await settleResource(fixture);
+    fillRequired(component);
+    component.startNow.set(true);
+    fixture.detectChanges();
+
+    const readiness = fixture.nativeElement.querySelector('.deploy-readiness-strip');
+    const readinessText = readiness?.textContent ?? '';
+    expect(readinessText).toContain('Account');
+    expect(readinessText).toContain('Fleet');
+    expect(readinessText).toContain('Frozen');
+    expect(readinessText).not.toContain('Clean');
+    expect(readinessText).not.toContain('Clear');
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Account freeze active',
+    );
+    expect(deployButton(fixture).disabled).toBe(true);
   });
 
   it('blocks start when account truth is not proven but allows deploy-only staging', async () => {

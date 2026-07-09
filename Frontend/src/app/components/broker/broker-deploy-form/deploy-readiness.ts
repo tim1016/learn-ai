@@ -1,3 +1,7 @@
+import type {
+  AccountConditionRow,
+  AccountTriageResponse,
+} from '../../../api/account-reconciliation.types';
 import type { AccountTruthResponse } from '../../../api/broker-models';
 import type { GateResult, HostProcessStartCapability } from '../../../api/live-instances.types';
 import type { DesiredStateView } from '../../../api/live-runs-controls.types';
@@ -43,6 +47,7 @@ export interface DeployReadinessInput {
   brokerState: LinkState;
   brokerDetail: string;
   accountTruth: Pick<AccountTruthResponse, 'final_verdict' | 'status_detail'> | null | undefined;
+  accountTriage: Pick<AccountTriageResponse, 'conditions'> | null | undefined;
   brokerAccountAvailable: boolean;
   fleetState: LinkState;
   nothingDeployed: boolean;
@@ -54,6 +59,7 @@ export interface NowChecksInput {
   fieldsReady: boolean;
   fleetState: LinkState;
   nothingDeployed: boolean;
+  accountTriage: Pick<AccountTriageResponse, 'conditions'> | null | undefined;
 }
 
 export interface DeployBlockerInput {
@@ -66,6 +72,7 @@ export interface DeployBlockerInput {
   instanceId: string;
   brokerAccountAvailable: boolean;
   accountTruth: AccountTruthResponse | null | undefined;
+  accountTriage: Pick<AccountTriageResponse, 'conditions'> | null | undefined;
   strategyKey: string;
   strategySelected: boolean;
   required: boolean;
@@ -125,15 +132,18 @@ const ACTION_PLAN_READY: ActionPlanDeployReadiness = {
 };
 
 export function buildDeployReadinessFacts(input: DeployReadinessInput): DeployReadinessFact[] {
+  const freeze = activeAccountFreezeCondition(input.accountTriage);
   return [
     engineReadinessFact(input.daemonState, input.daemonFreshness),
     brokerReadinessFact(input.brokerState, input.brokerDetail),
-    accountReadinessFact(input.accountTruth, input.brokerAccountAvailable),
-    fleetReadinessFact(input.fleetState, input.nothingDeployed),
+    accountReadinessFact(input.accountTruth, input.brokerAccountAvailable, freeze),
+    fleetReadinessFact(input.fleetState, input.nothingDeployed, freeze),
   ];
 }
 
 export function buildNowChecks(input: NowChecksInput): DeployStatusCheck[] {
+  const freeze = activeAccountFreezeCondition(input.accountTriage);
+  const fleetCheck = fleetNowCheck(input, freeze);
   return [
     {
       key: 'engine',
@@ -166,17 +176,25 @@ export function buildNowChecks(input: NowChecksInput): DeployStatusCheck[] {
     {
       key: 'fleet',
       label: 'Fleet clear',
-      state: input.fleetState,
-      detail:
-        input.fleetState === 'warn'
-          ? 'Starts blocked'
-          : input.fleetState === 'unknown'
-            ? input.nothingDeployed
-              ? 'Nothing deployed'
-              : 'Checking'
-            : 'Clear',
+      state: fleetCheck.state,
+      detail: fleetCheck.detail,
     },
   ];
+}
+
+function fleetNowCheck(
+  input: NowChecksInput,
+  freeze: AccountConditionRow | null,
+): Pick<DeployStatusCheck, 'state' | 'detail'> {
+  if (freeze !== null) return { state: 'warn', detail: 'Account frozen' };
+  if (input.fleetState === 'warn') return { state: input.fleetState, detail: 'Starts blocked' };
+  if (input.fleetState === 'unknown') {
+    return {
+      state: input.fleetState,
+      detail: input.nothingDeployed ? 'Nothing deployed' : 'Checking',
+    };
+  }
+  return { state: input.fleetState, detail: 'Clear' };
 }
 
 export function deployBlocker(input: DeployBlockerInput): DeployBlocker | null {
@@ -189,6 +207,18 @@ export function deployBlocker(input: DeployBlockerInput): DeployBlocker | null {
     };
   }
   if (input.allInCoexistenceBlock !== null) return { message: input.allInCoexistenceBlock };
+  const freeze = activeAccountFreezeCondition(input.accountTriage);
+  if (input.effectiveStartNow && freeze !== null) {
+    return {
+      message: 'Account freeze active. Resolve the account sick-bay condition before starting.',
+      actionLink: {
+        message: 'Account freeze active.',
+        route: '/broker/account-monitor',
+        fragment: 'account-reconciliation-action',
+        linkText: 'Open account monitor',
+      },
+    };
+  }
   if (input.effectiveStartNow && input.fleetBlocksStarts) {
     return {
       message: 'Fleet state blocks new starts. Turn off "Start trading immediately" to deploy only, or clear the account state.',
@@ -476,7 +506,18 @@ function brokerReadinessFact(state: LinkState, detail: string): DeployReadinessF
 function accountReadinessFact(
   truth: Pick<AccountTruthResponse, 'final_verdict' | 'status_detail'> | null | undefined,
   brokerAccountAvailable: boolean,
+  freeze: AccountConditionRow | null,
 ): DeployReadinessFact {
+  if (freeze !== null) {
+    return {
+      key: 'account',
+      label: 'Account',
+      condition: 'Frozen',
+      detail: freeze.title,
+      state: 'down',
+      link: '/broker/account-monitor',
+    };
+  }
   if (!brokerAccountAvailable) {
     return {
       key: 'account',
@@ -520,7 +561,18 @@ function accountReadinessFact(
 function fleetReadinessFact(
   state: LinkState,
   nothingDeployed: boolean,
+  freeze: AccountConditionRow | null,
 ): DeployReadinessFact {
+  if (freeze !== null) {
+    return {
+      key: 'fleet',
+      label: 'Fleet',
+      condition: 'Frozen',
+      detail: 'New starts are blocked by the account sick bay.',
+      state: 'warn',
+      link: '/broker/account-monitor',
+    };
+  }
   if (nothingDeployed) {
     return {
       key: 'fleet',
@@ -559,4 +611,13 @@ function fleetReadinessFact(
     state: 'unknown',
     link: '/broker/bots',
   };
+}
+
+export function activeAccountFreezeCondition(
+  triage: Pick<AccountTriageResponse, 'conditions'> | null | undefined,
+): AccountConditionRow | null {
+  return triage?.conditions.find((condition) =>
+    condition.scope === 'account' &&
+    (condition.condition_type === 'exposure_freeze' || condition.condition_type === 'account_freeze')
+  ) ?? null;
 }
