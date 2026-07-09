@@ -1,0 +1,137 @@
+.launch-decision {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-3);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-md);
+  background: var(--warn-soft);
+}
+
+.launch-decision-copy {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.launch-decision-copy h3,
+.launch-decision-copy p {
+  margin: 0;
+}
+
+.launch-decision-copy h3 {
+  color: var(--text-primary);
+  font-size: var(--fs-md);
+  letter-spacing: 0;
+}
+
+.launch-decision-copy p {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.launch-decision-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.launch-decision-facts div {
+  min-width: 0;
+}
+
+.launch-decision-facts dt,
+.launch-decision-facts dd {
+  margin: 0;
+}
+
+.launch-decision-facts dt {
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+}
+
+.launch-decision-facts dd {
+  display: grid;
+  gap: 0.05rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-bold);
+}
+
+.launch-decision-facts small {
+  font-weight: var(--fw-regular);
+}
+
+.launch-decision-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.safe-action,
+.confirm-action,
+.review-link {
+  display: inline-flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-height: 2.35rem;
+  border-radius: var(--radius-md);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-bold);
+}
+
+.safe-action,
+.confirm-action {
+  padding: 0.45rem var(--space-3);
+  font: inherit;
+  cursor: pointer;
+}
+
+.safe-action {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--text-on-accent);
+}
+
+.confirm-action {
+  border: 1px solid color-mix(in srgb, var(--warn) 65%, var(--border));
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+.safe-action:disabled,
+.confirm-action:disabled {
+  border-color: var(--border-light);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  cursor: not-allowed;
+}
+
+.review-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.review-link:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
+@media (max-width: 960px) {
+  .launch-decision-facts {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .safe-action,
+  .confirm-action,
+  .review-link {
+    justify-content: center;
+    width: 100%;
+  }
+}

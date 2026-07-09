@@ -127,6 +127,45 @@ describe('LiveRunsService start/stop proxy', () => {
     await expect(promise).resolves.toEqual(health);
   });
 
+  it('reads deploy preflight through the data-plane proxy', async () => {
+    const response = {
+      ready: false,
+      blockers: [
+        {
+          id: 'broker_disconnected',
+          severity: 'blocking' as const,
+          disposition: 'fix_elsewhere' as const,
+          headline: 'Broker disconnected',
+          detail: 'Connect the IBKR session before deploying.',
+          primary_move: {
+            label: 'Connect the broker',
+            action: { kind: 'navigate' as const, route: '/broker', fragment: null },
+            target: null,
+          },
+          secondary_moves: [],
+          applies_to: 'both' as const,
+        },
+      ],
+    };
+    const promise = service.deployPreflight({
+      strategyKey: 'deployment_validation',
+      accountId: 'DU123',
+      instanceId: 'bot-1',
+    });
+
+    const req = httpMock.expectOne(
+      (candidate) =>
+        candidate.url === '/api/live-instances/deploy-preflight' &&
+        candidate.params.get('strategy_key') === 'deployment_validation' &&
+        candidate.params.get('account_id') === 'DU123' &&
+        candidate.params.get('instance_id') === 'bot-1',
+    );
+    expect(req.request.method).toBe('GET');
+    req.flush(response);
+
+    await expect(promise).resolves.toEqual(response);
+  });
+
   it('reads the bounded lifecycle projection timeline through the data plane', async () => {
     const response: LifecycleTimelineResponse = {
       projection_available: true,

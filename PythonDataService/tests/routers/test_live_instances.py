@@ -526,6 +526,28 @@ def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         readonly=False,
     )
     monkeypatch.setattr(live_instances, "get_settings", lambda: stub)
+    from app.services.deploy_preflight import DeployPreflightSignals
+
+    async def healthy_deploy_preflight(
+        _strategy_key: str,
+        _account_id: str,
+        _instance_id: str,
+    ) -> DeployPreflightSignals:
+        return DeployPreflightSignals(
+            daemon_reachable=True,
+            broker_connection_state="connected",
+            account_frozen=False,
+            account_proven=True,
+            fleet_blocks_starts=False,
+            strategy_deployable=True,
+            instance_already_running=False,
+        )
+
+    monkeypatch.setattr(
+        live_instances.deploy_preflight_service,
+        "gather_deploy_preflight_signals",
+        healthy_deploy_preflight,
+    )
     from app.main import app
 
     return app, root
@@ -2338,6 +2360,27 @@ async def test_status_marks_bot_sick_bay_for_terminal_account_condition(
     lifecycle = response.json()["daily_lifecycle"]
     assert lifecycle["display_status"] == "Sick bay"
     assert lifecycle["attention_badge"] == "Sick bay"
+    assert lifecycle["conditions"][0] == {
+        "scope": "bot",
+        "severity": "critical",
+        "title": "Bot ended without status",
+        "detail": (
+            f"{sid} exited without a run-status receipt for run {run_id}. "
+            "Retire & Replace is required."
+        ),
+        "owner_label": f"Bot {sid}",
+        "cure_action": "retire_replace",
+        "cure_label": "Retire & Replace",
+    }
+    assert {
+        "scope": "account",
+        "severity": "warning",
+        "title": "Account evidence not yet proven",
+        "detail": "No account-level reconciliation receipt exists for DU1234567.",
+        "owner_label": "Account DU1234567",
+        "cure_action": "reconcile_now",
+        "cure_label": "Run account reconcile",
+    } in lifecycle["conditions"]
 
 
 async def test_bot_catalog_authors_closed_lifecycle_status_and_last_run_labels(
@@ -3152,6 +3195,55 @@ async def test_deploy_and_start_stages_after_legacy_stopped_latch_check(
 
     assert response.status_code == 201
     assert captured["start"] is False
+
+
+async def test_deploy_and_start_rejects_backend_preflight_blocker(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _root = app_with_root
+    _set_connected_broker_account(monkeypatch, "DU111")
+    from app.services.deploy_preflight import DeployPreflightSignals
+
+    async def blocked_preflight(
+        _strategy_key: str,
+        _account_id: str,
+        _instance_id: str,
+    ) -> DeployPreflightSignals:
+        return DeployPreflightSignals(
+            daemon_reachable=True,
+            broker_connection_state="disconnected",
+            account_frozen=False,
+            account_proven=True,
+            fleet_blocks_starts=False,
+            strategy_deployable=True,
+            instance_already_running=False,
+        )
+
+    monkeypatch.setattr(
+        live_instances.deploy_preflight_service,
+        "gather_deploy_preflight_signals",
+        blocked_preflight,
+    )
+    called = False
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        nonlocal called
+        called = True
+        return {"run_id": "run-new", "run_dir": "/runs/run-new", "created": True, "start": None}
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+    body = _deploy_body()
+    body["start"] = True
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=body)
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "DEPLOY_PREFLIGHT_BLOCKED"
+    assert detail["blockers"][0]["id"] == "broker_disconnected"
+    assert called is False
 
 
 def _write_identity_source_run(root: Path, sid: str, symbol: str) -> None:

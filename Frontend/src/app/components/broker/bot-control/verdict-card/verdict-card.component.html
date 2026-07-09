@@ -1,0 +1,137 @@
+@let m = model();
+@let supporting = m.state === 'Off duty' || m.state === 'Ready' || m.state === 'Off roster';
+
+<section
+  class="verdict-card"
+  [class]="'tone-' + m.tone"
+  [attr.data-layout]="m.layout"
+  [attr.data-state]="m.state"
+  aria-labelledby="verdict-state"
+>
+  <div class="vc-overflow">
+    <button
+      type="button"
+      class="vc-overflow__trigger"
+      aria-haspopup="menu"
+      [attr.aria-expanded]="overflowOpen()"
+      aria-label="More actions"
+      (click)="toggleOverflow()"
+    >
+      <i class="pi pi-ellipsis-h" aria-hidden="true"></i>
+    </button>
+    @if (overflowOpen()) {
+      <div class="vc-overflow__menu" role="menu">
+        @for (action of m.ambientActions; track action.id) {
+          <button
+            type="button"
+            role="menuitem"
+            [disabled]="!action.enabled || busy()"
+            [attr.title]="action.reason"
+            (click)="invokeAmbient(action)"
+          >
+            {{ action.label }}
+          </button>
+        }
+        <button type="button" role="menuitem" (click)="requestSettings()">Change settings…</button>
+        <button type="button" role="menuitem" (click)="openHistory()">Full history</button>
+      </div>
+    }
+  </div>
+
+  <div class="vc-main">
+    <p class="vc-identity">
+      <span class="vc-identity__slug">{{ m.identity.instanceId }}</span>
+      @if (m.identity.symbol; as symbol) {
+        <span aria-hidden="true">·</span>
+        <app-asset-identity [symbol]="symbol" size="sm" />
+      }
+      <span aria-hidden="true">·</span>
+      <span class="vc-identity__mode">{{ m.identity.mode }}</span>
+    </p>
+
+    <p class="vc-state" id="verdict-state" role="status">{{ m.state }}</p>
+
+    <p class="vc-reason">
+      @if (m.reason; as reason) {
+        <span>{{ reason }}</span>
+      }
+      <button type="button" class="vc-why" (click)="openWhy()">why?</button>
+    </p>
+
+    @if (m.driftDetected) {
+      <p class="vc-drift" role="status">State may be stale — refreshing.</p>
+    }
+
+    @if (sickBayCondition(); as condition) {
+      <div class="vc-condition" role="note">
+        <strong>{{ condition.title }}</strong>
+        <span>{{ condition.detail }}</span>
+        <button type="button" (click)="invokeConditionCure()">
+          {{ condition.cure_label }}
+        </button>
+      </div>
+    }
+
+    @if (verbLabel(); as label) {
+      <button
+        type="button"
+        class="vc-verb"
+        data-testid="verdict-verb"
+        [disabled]="!verbEnabled()"
+        [attr.title]="verbEnabled() ? null : verbDisabledReason()"
+        (click)="invokeVerb()"
+      >
+        {{ label }}
+      </button>
+    }
+
+    @if (m.showChecklist) {
+      <p class="vc-checklist-note">
+        Clocking out — cancelling orders, flattening, and writing the exit receipt.
+      </p>
+    }
+
+    @if (m.vitals.length > 0) {
+      <dl class="vc-vitals" aria-label="Bot vitals">
+        @for (vital of m.vitals; track vital.label) {
+          <div class="vc-vital" [class]="'tone-' + vital.tone">
+            <dt>{{ vital.label }}</dt>
+            <dd data-trader-copy>{{ vital.value }}</dd>
+          </div>
+        }
+      </dl>
+    }
+
+    @if (supporting) {
+      <div class="vc-supporting">
+        @if (sizingPreset(); as preset) {
+          <span><span class="vc-supporting__label">Sizing</span> {{ preset }}</span>
+        }
+        @if (orderCapLimit(); as cap) {
+          <span><span class="vc-supporting__label">Order cap</span> {{ cap }}/day</span>
+        }
+        <button type="button" class="vc-supporting__link" (click)="requestSettings()">
+          Change settings →
+        </button>
+      </div>
+    }
+  </div>
+
+  @if (m.showChart || historyOpen()) {
+    <div class="vc-chart">
+      @if (historyOpen() && !m.showChart) {
+        <button type="button" class="vc-chart__collapse" (click)="closeHistory()">
+          <i class="pi pi-chevron-up" aria-hidden="true"></i> Hide history
+        </button>
+      }
+      <app-activity-tab [status]="status()" />
+    </div>
+  }
+</section>
+
+<app-why-drawer
+  [open]="whyOpen()"
+  [guidance]="guidance()"
+  [gates]="gates()"
+  (closed)="closeWhy()"
+/>

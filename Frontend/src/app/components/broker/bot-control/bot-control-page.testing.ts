@@ -1,7 +1,6 @@
 import {
   ChangeDetectionStrategy,
   Component,
-  computed,
   input,
   provideZonelessChangeDetection,
   signal,
@@ -31,10 +30,8 @@ import { BrokerHealthService } from '../../../services/broker-health.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { BrokerBannerComponent } from '../../../shell/broker-banner.component';
 import { ActivityTabComponent } from './tabs/activity-tab.component';
-import { BotEventStreamComponent } from './reused/bot-event-stream/bot-event-stream.component';
 import { BotControlPageComponent } from './bot-control-page.component';
-import { BotControlSidePanelComponent } from './bot-control-side-panel.component';
-import { WorkbenchAuditPanelComponent } from './workbench-audit-panel.component';
+import { VerdictCardComponent } from './verdict-card/verdict-card.component';
 import {
   makeAccountSummary,
   makeCommandWriteResponse,
@@ -52,40 +49,6 @@ import {
 })
 class ActivityTabStubComponent {
   readonly status = input.required<LiveInstanceStatus>();
-}
-
-@Component({
-  selector: 'app-bot-event-stream',
-  template: '<div data-testid="bot-event-stream-stub">{{ runId() }}</div>',
-  changeDetection: ChangeDetectionStrategy.OnPush,
-})
-class BotEventStreamStubComponent {
-  readonly runId = input.required<string>();
-}
-
-@Component({
-  selector: 'app-workbench-audit-panel',
-  template: `
-    <div data-testid="workbench-audit-panel">
-      @for (line of proofLines(); track line.id) {
-        <div
-          data-testid="locked-evidence-field"
-          [class.tone-neutral]="line.tone === 'neutral'"
-          [class.tone-ok]="line.tone === 'ok'"
-          [class.tone-attention]="line.tone === 'attention'"
-          [attr.title]="line.detail"
-        >
-          <span>{{ line.label }}</span>
-          <strong>{{ line.message }}</strong>
-        </div>
-      }
-    </div>
-  `,
-  changeDetection: ChangeDetectionStrategy.OnPush,
-})
-class WorkbenchAuditPanelStubComponent {
-  readonly status = input.required<LiveInstanceStatus>();
-  readonly proofLines = computed(() => this.status().operator_surface.trader_guidance.proof_lines);
 }
 
 @Component({
@@ -232,13 +195,12 @@ function installLocalStorageStub(): void {
 
 export function installBotControlPageTestStubs(): void {
   installLocalStorageStub();
-  TestBed.overrideComponent(BotControlPageComponent, {
-    remove: { imports: [ActivityTabComponent, WorkbenchAuditPanelComponent] },
-    add: { imports: [ActivityTabStubComponent, WorkbenchAuditPanelStubComponent] },
-  });
-  TestBed.overrideComponent(BotControlSidePanelComponent, {
-    remove: { imports: [BotEventStreamComponent] },
-    add: { imports: [BotEventStreamStubComponent] },
+  // The heavy price-chart / activity surface is rendered inside the Verdict
+  // Card (on-duty and history-expand), not the page shell. Stub it there so the
+  // page tests never fire the activity HTTP resource.
+  TestBed.overrideComponent(VerdictCardComponent, {
+    remove: { imports: [ActivityTabComponent] },
+    add: { imports: [ActivityTabStubComponent] },
   });
 }
 

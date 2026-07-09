@@ -63,7 +63,6 @@ from app.engine.live.engine_runtime import (
 )
 from app.engine.live.fleet import (
     compute_fleet_account_summary,
-    compute_fleet_contamination,
 )
 from app.engine.live.halt import read_poisoned_flag
 from app.engine.live.intent_events import IntentEvent, IntentEventType
@@ -74,7 +73,6 @@ from app.engine.live.live_artifact_io import (
     read_parquet_tail,
 )
 from app.engine.live.live_state_sidecar import (
-    LiveStateEnvelope,
     LiveStateSidecarCorruptError,
     LiveStateSidecarRepo,
     stable_live_state_path,
@@ -140,7 +138,6 @@ from app.schemas.live_runs import (
     HostRunnerHealth,
     HostRunnerStartRequest,
     HostRunnerStopRequest,
-    InstanceBrokerView,
     InstanceLastExit,
     InstanceProcessView,
     InstanceProvenance,
@@ -164,6 +161,9 @@ from app.schemas.live_runs import (
     SignalTone,
     SizingAuditRow,
 )
+from app.schemas.operator_blocker import DeployPreflightResponse
+from app.services import deploy_preflight as deploy_preflight_service
+from app.services import fleet_contamination as fleet_contamination_service
 from app.services.account_crash_recovery import (
     CrashRecoveryNotRequiredError,
     crash_recovery_block_detail,
@@ -171,7 +171,6 @@ from app.services.account_crash_recovery import (
     crash_recovery_gate_for_instance,
     record_crash_recovery_override_evidence,
 )
-from app.services.account_reconciliation import AccountReconciliationService
 from app.services.account_truth_snapshot import get_account_truth_snapshot_provider
 from app.services.activity_evidence_matching import (
     activity_evidence_ref_from_event,
@@ -209,6 +208,7 @@ from app.services.bot_deletion import (
     stable_bot_deletion_path,
 )
 from app.services.bot_lifecycle_chart import compose_bot_lifecycle_chart
+from app.services.bot_lifecycle_conditions import lifecycle_conditions_for_instance
 from app.services.bot_lifecycle_projection import (
     account_event_to_lifecycle_event,
     project_account_events,
@@ -239,6 +239,21 @@ from app.services.deploy_admission import (
     evaluate_deploy_start_admission,
     resolve_symbol_from_ledger,
 )
+from app.services.fleet_contamination import (
+    collect_fleet_position_explanations,
+)
+from app.services.fleet_contamination import (
+    fetch_net_positions as _fetch_net_positions,
+)
+from app.services.fleet_contamination import (
+    instance_broker as _instance_broker,
+)
+from app.services.fleet_contamination import (
+    read_instance_live_state as _read_instance_live_state,
+)
+from app.services.fleet_contamination import (
+    scan_runs_by_instance as _scan_runs_by_instance,
+)
 from app.services.instance_context import InstanceContext, load_instance_context
 from app.services.live_chart_window import (
     ChartWindowError,
@@ -267,6 +282,9 @@ from app.services.runtime_freshness import (
     RuntimeFreshness,
     evaluate_runtime_freshness,
     unavailable_runtime_freshness,
+)
+from app.services.strategy_validation_manifest import (
+    StrategyValidationManifestError,
 )
 
 if TYPE_CHECKING:
@@ -329,41 +347,6 @@ def _validate_instance_id(strategy_instance_id: str) -> str:
             detail=f"Invalid strategy_instance_id: {strategy_instance_id!r}",
         )
     return safe
-
-
-def _scan_runs_by_instance(root: Path) -> dict[str, list[dict]]:
-    """Group run dirs by ``strategy_instance_id`` from their ledgers, newest first.
-
-    Legacy runs with no binding are skipped — they are not instances.
-    This shared scan is intentionally inclusive of soft-deleted runs because
-    account attribution and run-addressed start gates still need to see the
-    audit artifacts on disk. Catalog/list/status projections apply deletion
-    filtering at their boundary instead.
-    """
-    out: dict[str, list[dict]] = {}
-    if not root.is_dir():
-        return out
-    for run_dir in root.iterdir():
-        if not run_dir.is_dir():
-            continue
-        try:
-            ledger = _read_ledger(run_dir)
-        except (OSError, json.JSONDecodeError):
-            continue
-        sid = ledger.get("strategy_instance_id") or ""
-        if not sid:
-            continue
-        run_id = str(ledger.get("run_id") or run_dir.name)
-        out.setdefault(sid, []).append(
-            {
-                "run_id": run_id,
-                "run_dir": str(run_dir),
-                "created_at_ms": ledger.get("created_at_ms") or 0,
-            }
-        )
-    for runs in out.values():
-        runs.sort(key=lambda r: r["created_at_ms"], reverse=True)
-    return out
 
 
 def _run_is_soft_deleted(artifacts_root: Path, sid: str, run_id: str) -> bool:
@@ -516,41 +499,6 @@ def _visible_live_run_dir(root: Path, live_binding: LiveBinding) -> Path | None:
         except OSError:
             return None
     return run_dir if run_dir.is_dir() else None
-
-
-def _lifecycle_condition_count(
-    root: Path,
-    *,
-    account_id: str | None,
-    sid: str,
-    account_freeze: AccountFreezeEvidence | None,
-    now_ms: int,
-) -> int:
-    fallback = 1 if account_freeze is not None else 0
-    if account_id is None:
-        return fallback
-    try:
-        triage = AccountReconciliationService(artifacts_root=root.parent).triage(
-            account_id=account_id,
-            now_ms=now_ms,
-        )
-    except Exception as exc:
-        logger.warning(
-            "failed to project account triage conditions for lifecycle status",
-            extra={
-                "strategy_instance_id": sid,
-                "account_id": account_id,
-                "error": str(exc),
-            },
-        )
-        return fallback
-    return sum(
-        1
-        for condition in triage.conditions
-        if condition.scope == "account"
-        or condition.owner.strategy_instance_id == sid
-        or sid in condition.affected_strategy_instance_ids
-    )
 
 
 def _resolve_readiness(
@@ -850,20 +798,6 @@ def _resolve_reconciliation_inputs(root: Path, live_binding: LiveBinding | None)
             current_wal_seq = None
             events = []
     return receipt, current_wal_seq, current_run_id, current_namespace, events
-
-
-def _read_instance_live_state(root: Path, sid: str) -> LiveStateEnvelope | None:
-    artifacts_root = _desired_state_root(root)
-    try:
-        sidecar_path = stable_live_state_path(artifacts_root, sid)
-    except ValueError:
-        return None
-    try:
-        return LiveStateSidecarRepo(
-            sidecar_path, trusted_root=artifacts_root / "live_state"
-        ).read()
-    except (LiveStateSidecarCorruptError, OSError):
-        return None
 
 
 def _session_started_at_ms(process: InstanceProcessView, live_binding: LiveBinding | None) -> int | None:
@@ -1497,11 +1431,10 @@ def _provenance(root: Path, live_binding: LiveBinding | None, runs: list[dict]) 
     )
 
 
-@router.get("", response_model=list[LiveInstanceSummary])
-async def list_live_instances() -> list[LiveInstanceSummary]:
-    """Account fleet overview: every known strategy instance, live or not."""
-    settings = get_settings()
-    root = Path(settings.live_runs_root)
+async def _build_live_instance_summaries(
+    settings: IbkrSettings,
+    root: Path,
+) -> list[LiveInstanceSummary]:
     by_instance = _visible_runs_by_instance(root)
 
     _result, daemon = await host_daemon_client.fetch_instances(settings.live_runner_daemon_url)
@@ -1549,6 +1482,14 @@ async def list_live_instances() -> list[LiveInstanceSummary]:
             )
         )
     return summaries
+
+
+@router.get("", response_model=list[LiveInstanceSummary])
+async def list_live_instances() -> list[LiveInstanceSummary]:
+    """Account fleet overview: every known strategy instance, live or not."""
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    return await _build_live_instance_summaries(settings, root)
 
 
 def _daemon_process_from_instance(managed: dict | None) -> dict | None:
@@ -1728,7 +1669,7 @@ async def _resolve_instance_status_from_process(
     )
     lifecycle_state = _resolve_bot_lifecycle_state(root, sid)
     roll_call_offer = _active_roll_call_offer(root, sid, now_ms=observed_at_ms)
-    lifecycle_condition_count = _lifecycle_condition_count(
+    lifecycle_conditions = lifecycle_conditions_for_instance(
         root,
         account_id=instance_account_id,
         sid=sid,
@@ -1744,7 +1685,7 @@ async def _resolve_instance_status_from_process(
             active_run_id=live_binding.run_id if live_binding is not None else None,
             persisted_state=lifecycle_state,
             roll_call_offer=roll_call_offer,
-            condition_count=lifecycle_condition_count,
+            conditions=tuple(lifecycle_conditions),
             now_ms=observed_at_ms,
         )
     )
@@ -2111,6 +2052,64 @@ async def _host_deploy_request_from_public(
     return HostRunnerDeployRequest.model_validate({**payload, "account_id": broker_account})
 
 
+@router.get("/deploy-preflight", response_model=DeployPreflightResponse)
+async def deploy_preflight(
+    strategy_key: str,
+    account_id: str,
+    instance_id: str,
+) -> DeployPreflightResponse:
+    """Return backend-authored blockers standing between deploy and a running bot."""
+
+    try:
+        signals = await deploy_preflight_service.gather_deploy_preflight_signals(
+            strategy_key.strip(),
+            account_id.strip(),
+            instance_id.strip(),
+        )
+    except AccountArtifactError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except StrategyValidationManifestError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    blockers = deploy_preflight_service.author_deploy_blockers(signals)
+    return DeployPreflightResponse(
+        ready=not any(blocker.severity == "blocking" for blocker in blockers),
+        blockers=blockers,
+    )
+
+
+async def _raise_if_deploy_preflight_blocks_start(
+    request: HostRunnerDeployRequest,
+) -> None:
+    if not request.start:
+        return
+    try:
+        signals = await deploy_preflight_service.gather_deploy_preflight_signals(
+            request.strategy_key.strip(),
+            request.account_id.strip(),
+            request.strategy_instance_id.strip(),
+        )
+    except AccountArtifactError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except StrategyValidationManifestError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    blockers = [
+        blocker
+        for blocker in deploy_preflight_service.author_deploy_blockers(signals)
+        if blocker.severity == "blocking"
+    ]
+    if not blockers:
+        return
+    first = blockers[0]
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        detail={
+            "reason_code": "DEPLOY_PREFLIGHT_BLOCKED",
+            "message": f"Deploy preflight blocked deploy & run: {first.headline}.",
+            "blockers": [blocker.model_dump(mode="json") for blocker in blockers],
+        },
+    )
+
+
 @router.post("", response_model=HostRunnerDeployResponse, status_code=status.HTTP_201_CREATED)
 async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -> HostRunnerDeployResponse:
     """Create a run (deploy a strategy) by forwarding to the host daemon (ADR 0006).
@@ -2150,6 +2149,7 @@ async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -
         Path(settings.live_runs_root),
         body,
     )
+    await _raise_if_deploy_preflight_blocks_start(daemon_request)
     if daemon_request.start:
         verdict = start_boundary_verdict(_now_ms(), daemon_request.live_config)
         if not verdict.allowed:
@@ -2918,45 +2918,6 @@ def _instance_last_exit(runs: list[dict]) -> InstanceLastExit | None:
     )
 
 
-def _instance_broker(root: Path, sid: str) -> InstanceBrokerView | None:
-    """The instance's namespace-attributed broker slice from its live-state
-    sidecar (ADR 0005, #398). Ownership is keyed on bot_order_namespace;
-    owned_positions is the engine's running tally of its own namespace fills,
-    never decomposed from the net account snapshot.
-    """
-    envelope = _read_instance_live_state(root, sid)
-    if envelope is None:
-        return None
-    return InstanceBrokerView(
-        bot_order_namespace=envelope.bot_order_namespace,
-        owned_positions=dict(envelope.expected_position_by_symbol),
-        pending_order_count=len(envelope.pending_intents),
-    )
-
-
-async def _fetch_net_positions() -> dict[str, int] | None:
-    """Best-effort net account position by symbol from the broker; ``None`` when
-    the broker is unavailable — the fleet view then reports residual unknown.
-
-    Fail-open boundary: any broker/connection error resolves to ``None`` (logged,
-    not silent) rather than failing the fleet endpoint.
-    """
-    try:
-        from app.broker.ibkr import account as ibkr_account
-        from app.routers.broker_dependencies import require_connected_client
-
-        client = require_connected_client()
-        snapshot = await ibkr_account.fetch_positions(client)
-    except Exception as exc:
-        logger.info("fleet net-position fetch unavailable: %s", exc)
-        return None
-    net: dict[str, int] = {}
-    for pos in snapshot.positions:
-        symbol = str(pos.symbol).upper()
-        net[symbol] = net.get(symbol, 0) + int(pos.quantity)
-    return net
-
-
 @router.get("/audit-copy-sizing-lookup", response_model=AuditCopySizingLookup)
 async def get_audit_copy_sizing_lookup(
     audit_copy_path: str,
@@ -3174,6 +3135,17 @@ async def _fetch_broker_connected_account(
     return None, True
 
 
+async def _compute_account_fleet_contamination(
+    settings: IbkrSettings,
+    root: Path,
+) -> FleetContamination:
+    return await fleet_contamination_service.compute_account_fleet_contamination(
+        settings,
+        root,
+        fetch_positions=_fetch_net_positions,
+    )
+
+
 @router.get("/account", response_model=FleetContamination)
 async def get_account_fleet() -> FleetContamination:
     """Account/fleet contamination: net account position vs the sum of every
@@ -3185,14 +3157,7 @@ async def get_account_fleet() -> FleetContamination:
     """
     settings = get_settings()
     root = Path(settings.live_runs_root)
-    explained: dict[str, dict[str, int]] = {}
-    for sid in _scan_runs_by_instance(root):
-        broker = _instance_broker(root, sid)
-        if broker is not None and broker.owned_positions:
-            explained[sid] = broker.owned_positions
-    net = await _fetch_net_positions()
-    result = compute_fleet_contamination(net, explained, policy_blocks_starts=settings.fleet_dirty_blocks_starts)
-    return FleetContamination(**result)
+    return await _compute_account_fleet_contamination(settings, root)
 
 
 @router.get("/account-summary", response_model=FleetAccountSummary)
@@ -3206,19 +3171,15 @@ async def get_account_summary() -> FleetAccountSummary:
     """
     settings = get_settings()
     root = Path(settings.live_runs_root)
-    explained: dict[str, dict[str, int]] = {}
     account_ids: dict[str, str | None] = {}
     for sid in _scan_runs_by_instance(root):
-        broker = _instance_broker(root, sid)
-        if broker is not None and broker.owned_positions:
-            explained[sid] = broker.owned_positions
         account_ids[sid] = _instance_ledger_account_id(root, sid)
     net = await _fetch_net_positions()
     data_plane_snapshot = snapshot_data_plane_broker()
     broker_account, broker_known = await _fetch_broker_connected_account(data_plane_snapshot)
     payload = compute_fleet_account_summary(
         net_positions=net,
-        explained_by_instance=explained,
+        explained_by_instance=collect_fleet_position_explanations(root),
         instance_account_ids=account_ids,
         broker_connected_account=broker_account,
         broker_account_known=broker_known,

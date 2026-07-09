@@ -420,7 +420,25 @@
                   />
                 }
                 @if (row.statusReason; as reason) {
-                  <span>{{ reason }}</span>
+                  <span class="status-reason">{{ reason }}</span>
+                }
+                @if (row.sickBayCondition; as condition) {
+                  <div class="sick-condition" role="note">
+                    <strong>{{ condition.title }}</strong>
+                    <span>{{ condition.detail }}</span>
+                    <button
+                      pButton
+                      type="button"
+                      size="small"
+                      severity="secondary"
+                      [outlined]="true"
+                      icon="pi pi-arrow-right"
+                      [attr.data-testid]="'bot-condition-action-' + row.id"
+                      (click)="runConditionCure(row, $event)"
+                    >
+                      <span class="p-button-label">{{ condition.cure_label }}</span>
+                    </button>
+                  </div>
                 }
               </div>
             </td>
@@ -505,7 +523,25 @@
                       />
                     }
                     @if (row.statusReason; as reason) {
-                      <span>{{ reason }}</span>
+                      <span class="status-reason">{{ reason }}</span>
+                    }
+                    @if (row.sickBayCondition; as condition) {
+                      <div class="sick-condition" role="note">
+                        <strong>{{ condition.title }}</strong>
+                        <span>{{ condition.detail }}</span>
+                        <button
+                          pButton
+                          type="button"
+                          size="small"
+                          severity="secondary"
+                          [outlined]="true"
+                          icon="pi pi-arrow-right"
+                          [attr.data-testid]="'bot-condition-action-mobile-' + row.id"
+                          (click)="runConditionCure(row, $event)"
+                        >
+                          <span class="p-button-label">{{ condition.cure_label }}</span>
+                        </button>
+                      </div>
                     }
                   </div>
                 </dd>

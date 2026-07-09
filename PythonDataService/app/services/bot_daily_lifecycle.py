@@ -13,6 +13,7 @@ from app.engine.live.bot_lifecycle_state import (
 from app.schemas.live_runs import (
     BotDailyLifecycleProjection,
     BotLifecycleAction,
+    BotLifecycleCondition,
     HostProcessStartCapability,
     InstanceProcessView,
 )
@@ -27,7 +28,7 @@ class BotDailyLifecycleEvidence:
     active_run_id: str | None
     persisted_state: BotLifecycleStateRecord | None = None
     roll_call_offer: BotRollCallOfferRecord | None = None
-    condition_count: int = 0
+    conditions: tuple[BotLifecycleCondition, ...] = ()
     now_ms: int = 0
 
 
@@ -45,7 +46,7 @@ def project_bot_daily_lifecycle(evidence: BotDailyLifecycleEvidence) -> BotDaily
         phase=phase,
         process_state=evidence.process.state,
         on_roster=on_roster,
-        condition_count=evidence.condition_count,
+        condition_count=len(evidence.conditions),
         start_enabled=evidence.start_capability.enabled,
         offer_available=evidence.roll_call_offer is not None,
     )
@@ -62,6 +63,7 @@ def project_bot_daily_lifecycle(evidence: BotDailyLifecycleEvidence) -> BotDaily
         active_run_id=evidence.active_run_id,
         latest_run_id=evidence.latest_run_id,
         drift_detected=persisted_phase is not None and persisted_phase != phase,
+        conditions=list(evidence.conditions),
         primary_action=primary_action,
         ambient_actions=ambient_actions,
     )
@@ -97,11 +99,7 @@ def _display_status(
     if phase == BotLifecyclePhase.RETIRED:
         return BotDisplayStatus.RETIRED
     if phase == BotLifecyclePhase.ON_DUTY:
-        return (
-            BotDisplayStatus.CLOCKING_OUT
-            if process_state == "stopping"
-            else BotDisplayStatus.ON_DUTY
-        )
+        return BotDisplayStatus.CLOCKING_OUT if process_state == "stopping" else BotDisplayStatus.ON_DUTY
     if condition_count > 0:
         return BotDisplayStatus.SICK_BAY
     if not on_roster:
@@ -127,8 +125,10 @@ def _reason(display_status: BotDisplayStatus, evidence: BotDailyLifecycleEvidenc
     if display_status == BotDisplayStatus.OFF_ROSTER:
         return "This bot is intentionally left off tomorrow's duty roster."
     if display_status == BotDisplayStatus.SICK_BAY:
-        count = evidence.condition_count
-        return f"{count} condition{'s' if count != 1 else ''} need a cure before start."
+        count = len(evidence.conditions)
+        noun = "condition" if count == 1 else "conditions"
+        verb = "needs" if count == 1 else "need"
+        return f"{count} {noun} {verb} a cure before start."
     if display_status == BotDisplayStatus.OFF_DUTY and not evidence.start_capability.enabled:
         return evidence.start_capability.disabled_reason_code or "Start is not yet proven safe."
     if (

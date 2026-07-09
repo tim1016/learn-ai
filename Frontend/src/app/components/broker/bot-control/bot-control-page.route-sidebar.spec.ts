@@ -26,9 +26,9 @@ describe('BotControlPageComponent route and sidebar behavior', () => {
     window.localStorage.clear();
   });
 
-  it('resets selected tab, lifecycle context, and typed HALT when the route changes to another bot', async () => {
+  it('resets typed HALT and ignores a stale confirm when the route changes to another bot', async () => {
     const paramMap = new Subject<ParamMap>();
-    const { fixture, component, element, liveRuns } = await setupBotControlPage({
+    const { fixture, component, liveRuns } = await setupBotControlPage({
       routeParamMap$: paramMap,
       status: makeStatus({ markPoisonedEnabled: true }),
     });
@@ -36,21 +36,16 @@ describe('BotControlPageComponent route and sidebar behavior', () => {
     paramMap.next(convertToParamMap({ id: 'bot-a' }));
     await flush(fixture);
 
-    const recovery = component.status()
-      ?.lifecycle_chart.global_graph.nodes.find((node) => node.id === 'recovery');
-    if (!recovery) throw new Error('Expected recovery lifecycle node in fixture.');
-    component.selectLifecycleNode(recovery);
     component.openTypedHalt();
+    component.busyAction.set('start_process');
     fixture.detectChanges();
-    expect(component.selectedLifecycleNodeId()).toBe('recovery');
     expect(component.typedHaltOpen()).toBe(true);
-    expect(element.querySelector('[data-testid="bot-control-tabs"]')).toBeNull();
 
     paramMap.next(convertToParamMap({ id: 'bot-b' }));
     await flush(fixture);
 
-    expect(component.selectedLifecycleNodeId()).toBeNull();
     expect(component.typedHaltOpen()).toBe(false);
+    expect(component.busyAction()).toBeNull();
     await component.confirmTypedHalt();
     expect(liveRuns.issueInstanceCommand).not.toHaveBeenCalled();
   });
@@ -103,10 +98,10 @@ describe('BotControlPageComponent route and sidebar behavior', () => {
     expect(liveRuns.startHostRunner).toHaveBeenCalledWith('run-bind', request);
   });
 
-  it('refreshes broker evidence on the serialized poll loop', async () => {
+  it('refreshes status on the serialized poll loop', async () => {
     vi.useFakeTimers();
     const { fixture, liveRuns } = await setupBotControlPage();
-    expect(liveRuns.getAccountSummary).toHaveBeenCalledTimes(1);
+    expect(liveRuns.getInstanceStatus).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(4_000);
     await Promise.resolve();
@@ -114,7 +109,6 @@ describe('BotControlPageComponent route and sidebar behavior', () => {
     fixture.detectChanges();
 
     expect(liveRuns.getInstanceStatus).toHaveBeenCalledTimes(2);
-    expect(liveRuns.getAccountSummary).toHaveBeenCalledTimes(2);
   });
 
   it('ignores stale status responses after the route changes to another bot', async () => {

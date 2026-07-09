@@ -5,6 +5,7 @@ import { of } from 'rxjs';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type {
+  AccountConditionRow,
   AccountReconciliationReceipt,
   AccountTriageResponse,
 } from '../../../api/account-reconciliation.types';
@@ -125,6 +126,17 @@ describe('BrokerAccountMonitorComponent', () => {
     view.fixture.componentInstance.accountReconciliationNowMs.set(expiresAtMs + 1);
     view.fixture.detectChanges();
 
+    expect(screen.getByText('Next account action')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Run account reconcile' })).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Broker account is flat. Run account reconcile to refresh proof, then clear the account freeze.',
+      ),
+    ).toBeTruthy();
+    const reconcileButton = screen.getByRole('button', {
+      name: /run account reconcile/i,
+    }) as HTMLButtonElement;
+    expect(reconcileButton.id).toBe('account-reconciliation-action');
     expect(screen.getByText('Not Proven')).toBeTruthy();
     expect(
       screen.getByText(
@@ -133,6 +145,109 @@ describe('BrokerAccountMonitorComponent', () => {
     ).toBeTruthy();
     expect(screen.getByText('Not yet proven')).toBeTruthy();
     expect(screen.queryByText('Unknown')).toBeNull();
+  });
+
+  it('promotes exposure resolution after reconciliation returns unresolved exposure', async () => {
+    const broker = new FakeBrokerService();
+    const receipt = accountReconciliationReceipt({
+      accountTruth: unresolvedSpyAccountTruth(),
+      exposureResolution: 'unresolved',
+      gate: {
+        status: 'block',
+        operator_reason:
+          'Account Truth is otherwise clean, but broker exposure is not flat. exposure_resolution=unresolved.',
+        operator_next_step: 'RESOLVE_EXPOSURE',
+      },
+      state: 'NOT_PROVEN',
+    });
+    broker.accountTruth.mockResolvedValue(unresolvedSpyAccountTruth());
+    broker.accountTriage.mockResolvedValue(cleanTriage(receipt));
+    await render(BrokerAccountMonitorComponent, {
+      providers: [
+        { provide: BrokerService, useValue: broker },
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useClass: FakeLiveRunsService },
+        routeFragment(),
+      ],
+    });
+
+    expect(
+      await screen.findByRole('heading', { name: 'Flatten unresolved exposure' }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(
+        'SPY +1 (Foreign or unclaimed) remains unresolved. Open the Orders page, prefill the flatten order, review what-if, place the paper order, wait for the fill, then run account reconcile again.',
+      ),
+    ).toBeTruthy();
+
+    const flattenLink = screen.getByRole('link', {
+      name: /open flatten ticket/i,
+    }) as HTMLAnchorElement;
+    expect(flattenLink.id).toBe('account-primary-action');
+    expect(flattenLink.getAttribute('href')).toBe('/broker/orders?flatten=open-exposure');
+    expect(screen.getByRole('button', { name: /run account reconcile/i }).id).toBe(
+      'account-reconciliation-action',
+    );
+  });
+
+  it('promotes reconciliation after the flatten order leaves the account flat', async () => {
+    const broker = new FakeBrokerService();
+    const unresolvedReceipt = accountReconciliationReceipt({
+      accountTruth: unresolvedSpyAccountTruth(),
+      exposureResolution: 'unresolved',
+      gate: {
+        status: 'block',
+        operator_reason:
+          'Account Truth is otherwise clean, but broker exposure is not flat. exposure_resolution=unresolved.',
+        operator_next_step: 'RESOLVE_EXPOSURE',
+      },
+      state: 'NOT_PROVEN',
+    });
+    broker.accountTruth.mockResolvedValue(accountTruthResponse());
+    broker.accountTriage.mockResolvedValue(cleanTriage(unresolvedReceipt));
+    await render(BrokerAccountMonitorComponent, {
+      providers: [
+        { provide: BrokerService, useValue: broker },
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useClass: FakeLiveRunsService },
+        routeFragment(),
+      ],
+    });
+
+    expect(await screen.findByRole('heading', { name: 'Run account reconcile' })).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Broker account is flat now. Run account reconcile to record the filled flatten order, then clear the account freeze.',
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole('link', { name: /open flatten ticket/i })).toBeNull();
+  });
+
+  it('keeps account recovery prominent and collapses bot-specific history', async () => {
+    const broker = new FakeBrokerService();
+    const expiredReceipt = accountReconciliationReceipt({
+      expiresAtMs: Date.now() - 1,
+    });
+    broker.accountTriage.mockResolvedValue(
+      mixedFrozenTriage(expiredReceipt),
+    );
+    await render(BrokerAccountMonitorComponent, {
+      providers: [
+        { provide: BrokerService, useValue: broker },
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useClass: FakeLiveRunsService },
+        routeFragment(),
+      ],
+    });
+
+    expect(await screen.findByText('Account freeze active')).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Broker account is flat. Account sick bay is waiting for a fresh reconciliation receipt.',
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText('Bot-specific history')).toBeTruthy();
+    expect(screen.getByText('1')).toBeTruthy();
   });
 
   it('renders sick-bay conditions with their cure action and refreshes after clearing freeze', async () => {
@@ -148,11 +263,14 @@ describe('BrokerAccountMonitorComponent', () => {
     });
 
     expect(await screen.findByText('Account freeze active')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Clear account freeze' })).toBeTruthy();
     expect(screen.getAllByText('Manual Freeze').length).toBeGreaterThan(0);
     expect(screen.getByText('Owner Account DU1234567')).toBeTruthy();
     expect(screen.getByText(/Account sick bay is gating new starts/)).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: /clear freeze/i }));
+    const clearFreezeButton = screen.getByRole('button', { name: /clear freeze/i });
+    expect(clearFreezeButton.id).toBe('account-clear-freeze-action');
+    fireEvent.click(clearFreezeButton);
 
     await waitFor(() => {
       expect(broker.clearAccountFreeze).toHaveBeenCalledWith('DU1234567');
@@ -330,9 +448,15 @@ function gateResult(overrides: Partial<GateResult> = {}): GateResult {
 }
 
 function accountReconciliationReceipt(
-  overrides: { expiresAtMs?: number } = {},
+  overrides: {
+    accountTruth?: AccountTruthResponse;
+    exposureResolution?: AccountReconciliationReceipt['exposure_resolution'];
+    expiresAtMs?: number;
+    gate?: Partial<GateResult>;
+    state?: AccountReconciliationReceipt['state'];
+  } = {},
 ): AccountReconciliationReceipt {
-  const truth = accountTruthResponse();
+  const truth = overrides.accountTruth ?? accountTruthResponse();
   const generatedAtMs = Date.now();
   return {
     schema_version: 1,
@@ -340,11 +464,11 @@ function accountReconciliationReceipt(
     account_id: 'DU1234567',
     requested_account_id: 'DU1234567',
     connected_account_id: 'DU1234567',
-    state: 'CLEAN',
-    account_truth_verdict: 'clean',
-    account_truth_severity: 'ok',
-    final_gate_result: gateResult(),
-    exposure_resolution: 'flat',
+    state: overrides.state ?? 'CLEAN',
+    account_truth_verdict: truth.final_verdict,
+    account_truth_severity: truth.final_severity,
+    final_gate_result: gateResult(overrides.gate),
+    exposure_resolution: overrides.exposureResolution ?? 'flat',
     account_truth: truth,
     evidence_refs: [],
     generated_at_ms: generatedAtMs,
@@ -424,32 +548,80 @@ function ambiguousExposureFrozenTriage(): AccountTriageResponse {
   });
 }
 
+function mixedFrozenTriage(receipt: AccountReconciliationReceipt): AccountTriageResponse {
+  return makeFrozenAccountTriage({
+    receipt,
+    conditions: [
+      makeAccountFreezeCondition({
+        detail: 'watchdog.flatten_timed_out',
+        source: 'watchdog_halt_executor',
+        affectedStrategyInstanceIds: ['DEPVALSPYJUL8'],
+        cureAction: 'clear_freeze',
+      }),
+      botCrashCondition(),
+    ],
+    clearFreezeActionable: false,
+  });
+}
+
+function botCrashCondition(): AccountConditionRow {
+  return {
+    condition_type: 'crashed',
+    scope: 'bot',
+    owner: {
+      owner_type: 'bot',
+      owner_id: 'retired-freezer',
+      label: 'Bot retired-freezer',
+      strategy_instance_id: 'retired-freezer',
+      run_id: 'run-freeze',
+      lifecycle_state: 'RETIRED',
+    },
+    severity: 'critical',
+    title: 'Bot crashed',
+    detail: 'retired-freezer ended from a crash in run run-freeze.',
+    operator_next_step: 'RETIRE_REPLACE',
+    source: 'host_daemon.process_crashed',
+    evidence_at_ms: 1_780_000_002_500,
+    evidence_refs: [],
+    affected_strategy_instance_ids: [],
+    cure_action: 'retire_replace',
+  };
+}
+
 function terminalTriage(): AccountTriageResponse {
   return {
     ...makeCleanAccountTriage({ receipt: accountReconciliationReceipt() }),
     summary_headline: 'Account recovery needs attention',
     summary_detail: 'A retired bot needs operator attention.',
-    conditions: [
+    conditions: [botCrashCondition()],
+  };
+}
+
+function unresolvedSpyAccountTruth(): AccountTruthResponse {
+  return {
+    ...accountTruthResponse(),
+    final_verdict: 'not_proven',
+    final_severity: 'critical',
+    status_label: 'Not proven',
+    status_detail: 'Bot submits should stay blocked until critical account truth blockers clear.',
+    blockers: [
       {
-        condition_type: 'crashed',
-        scope: 'bot',
-        owner: {
-          owner_type: 'bot',
-          owner_id: 'retired-freezer',
-          label: 'Bot retired-freezer',
-          strategy_instance_id: 'retired-freezer',
-          run_id: 'run-freeze',
-          lifecycle_state: 'RETIRED',
-        },
+        code: 'unknown_positions',
         severity: 'critical',
-        title: 'Bot crashed',
-        detail: 'retired-freezer ended from a crash in run run-freeze.',
-        operator_next_step: 'RETIRE_REPLACE',
-        source: 'host_daemon.process_crashed',
-        evidence_at_ms: 1_780_000_002_500,
-        evidence_refs: [],
-        affected_strategy_instance_ids: [],
-        cure_action: 'retire_replace',
+        title: 'Unknown current broker positions',
+        message:
+          'At least one current IBKR position is not explained by known bot/manual evidence.',
+        forensic_facts: { count: 1 },
+      },
+    ],
+    symbol_exposures: [
+      {
+        symbol: 'SPY',
+        owner_class: 'foreign_or_unclaimed',
+        owner_key: 'foreign_or_unclaimed',
+        owner_label: 'Foreign or unclaimed',
+        quantity: 1,
+        con_id: 756733,
       },
     ],
   };

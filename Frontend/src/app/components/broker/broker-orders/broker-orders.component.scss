@@ -185,6 +185,51 @@
   gap: 0.75rem;
 }
 
+.coi-guidance {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.9rem;
+  padding: 0.75rem;
+  border: 1px solid rgba(255, 152, 0, 0.42);
+  border-radius: 8px;
+  background: rgba(255, 152, 0, 0.12);
+  color: #ffe0b5;
+
+  h2 {
+    margin: 0.15rem 0 0.35rem;
+    color: var(--text-primary, #f0f3fa);
+    font-size: 0.95rem;
+    font-weight: 700;
+  }
+
+  p {
+    margin: 0.2rem 0 0;
+    font-size: 0.84rem;
+  }
+
+  .ghost-btn {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+}
+
+.guidance-eyebrow {
+  color: var(--warn, #ff9800);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+@media (max-width: 640px) {
+  .coi-guidance {
+    flex-direction: column;
+  }
+}
+
 .row {
   display: flex;
   flex-wrap: wrap;
@@ -566,6 +611,13 @@
   margin: 0;
   color: #ffd29d;
   font-size: 0.82rem;
+}
+
+.confirm-disabled-reason {
+  margin: 0.65rem 0 0.55rem;
+  color: var(--text-secondary, #b2b5be);
+  font-size: 0.82rem;
+  text-align: right;
 }
 
 .confirm-actions {

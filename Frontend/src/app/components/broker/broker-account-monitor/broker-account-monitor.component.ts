@@ -42,10 +42,23 @@ import {
   fmtSignedCurrency,
   fmtSignedNumber,
 } from '../format';
+import { accountConditionActionKind, conditionActionLabel } from '../lib/condition-cure-actions';
 
 interface PositionRow {
   position: IbkrPosition;
   pnl: IbkrPnLTick | null;
+}
+
+interface AccountPrimaryAction {
+  kind: 'reconcile' | 'openOrders' | 'clearFreeze';
+  title: string;
+  detail: string;
+  buttonLabel: string;
+}
+
+interface AccountConditionGroups {
+  account: AccountConditionRow[];
+  bot: AccountConditionRow[];
 }
 
 /**
@@ -117,10 +130,35 @@ export class BrokerAccountMonitorComponent {
     return truth === null ? null : this.reconciliationAccountIdForTruth(truth);
   });
   readonly accountConditions = computed(() => this.accountTriage()?.conditions ?? []);
+  readonly accountConditionGroups = computed<AccountConditionGroups>(() => {
+    const account: AccountConditionRow[] = [];
+    const bot: AccountConditionRow[] = [];
+    for (const condition of this.accountConditions()) {
+      if (condition.scope === 'bot') {
+        bot.push(condition);
+      } else {
+        account.push(condition);
+      }
+    }
+    return { account, bot };
+  });
   readonly accountFreezeBanner = computed(() => this.accountTriage()?.freeze_banner ?? null);
   readonly accountReconciliationExpired = computed(() => {
     const receipt = this.accountReconciliation();
     return receipt !== null && receipt.expires_at_ms < this.accountReconciliationNowMs();
+  });
+  readonly accountHasOpenBrokerExposure = computed(() =>
+    this.truthHasOpenBrokerExposure(this.accountTruth()),
+  );
+  readonly accountNeedsPostFlattenReconcile = computed(() => {
+    const receipt = this.accountReconciliation();
+    return (
+      receipt !== null &&
+      !this.accountReconciliationExpired() &&
+      (receipt.exposure_resolution === 'unresolved' ||
+        receipt.final_gate_result.operator_next_step === 'RESOLVE_EXPOSURE') &&
+      !this.accountHasOpenBrokerExposure()
+    );
   });
   readonly accountReconciliationTone = computed(
     () => this.accountReconciliationDisplayGate(),
@@ -146,6 +184,103 @@ export class BrokerAccountMonitorComponent {
         : this.accountReconciliation()?.final_gate_result.operator_reason ??
           'Not yet proven: no account-level reconciliation receipt has been recorded for this account.',
   );
+  readonly accountPrimaryAction = computed<AccountPrimaryAction | null>(() => {
+    const receipt = this.accountReconciliation();
+    const truth = this.accountTruth();
+
+    if (
+      receipt !== null &&
+      !this.accountReconciliationExpired() &&
+      (receipt.exposure_resolution === 'unresolved' ||
+        receipt.final_gate_result.operator_next_step === 'RESOLVE_EXPOSURE') &&
+      this.accountHasOpenBrokerExposure()
+    ) {
+      return {
+        kind: 'openOrders',
+        title: 'Flatten unresolved exposure',
+        detail: this.unresolvedBrokerExposureDetail(),
+        buttonLabel: 'Open flatten ticket',
+      };
+    }
+
+    if (this.accountTriage()?.clear_freeze_actionable === true) {
+      return {
+        kind: 'clearFreeze',
+        title: 'Clear account freeze',
+        detail:
+          'Fresh account proof is clean and the broker account is flat. Clear the freeze to unblock new starts.',
+        buttonLabel: 'Clear freeze',
+      };
+    }
+
+    if (
+      this.accountReconciliationDisplayGate() === 'pass' &&
+      truth?.final_verdict !== 'not_proven'
+    ) {
+      return null;
+    }
+
+    return {
+      kind: 'reconcile',
+      title: 'Run account reconcile',
+      detail: this.accountReconciliationActionDetail(),
+      buttonLabel: 'Run account reconcile',
+    };
+  });
+  readonly accountReconciliationActionDetail = computed(() => {
+    const truth = this.accountTruth();
+    if (truth?.final_verdict === 'not_proven') {
+      return (
+        'Account truth is not proven. Run reconciliation to refresh ownership evidence, ' +
+        'then clear any remaining sick-bay blockers.'
+      );
+    }
+    if (this.accountNeedsPostFlattenReconcile()) {
+      return 'Broker account is flat now. Run account reconcile to record the filled flatten order, then clear the account freeze.';
+    }
+    if (this.accountReconciliationExpired()) {
+      if (truth !== null && !this.accountHasOpenBrokerExposure()) {
+        return 'Broker account is flat. Run account reconcile to refresh proof, then clear the account freeze.';
+      }
+      return 'The account reconciliation receipt is stale. Refresh the account proof before deploying.';
+    }
+    if (this.accountReconciliation() === null) {
+      return 'No account reconciliation receipt has been recorded for this account yet.';
+    }
+    return this.accountReconciliationReason();
+  });
+  readonly unresolvedBrokerExposureDetail = computed(() => {
+    const exposures =
+      this.accountTruth()?.symbol_exposures.filter((row) => row.quantity !== 0) ?? [];
+    if (exposures.length === 0) {
+      return (
+        'Broker exposure is not flat. Close or account for the remaining live position, ' +
+        'then run account reconcile again.'
+      );
+    }
+    const summary = exposures
+      .map((row) => (
+        `${row.symbol} ${fmtSignedNumber(row.quantity, 0)} (${row.owner_label})`
+      ))
+      .join(', ');
+    return (
+      `${summary} remains unresolved. Open the Orders page, prefill the flatten ` +
+      'order, review what-if, place the paper order, wait for the fill, then run ' +
+      'account reconcile again.'
+    );
+  });
+  readonly accountSickBayDetail = computed(() => {
+    const triage = this.accountTriage();
+    if (triage === null) return '';
+    if (this.accountHasOpenBrokerExposure()) return triage.summary_detail;
+    if (this.accountReconciliationExpired()) {
+      return 'Broker account is flat. Account sick bay is waiting for a fresh reconciliation receipt.';
+    }
+    if (triage.clear_freeze_actionable) {
+      return 'Broker account is flat with fresh proof. Clear the account freeze when ready.';
+    }
+    return triage.summary_detail;
+  });
 
   private readonly accountStream = signal<SseStream<IbkrPnLTick> | null>(null);
   private readonly positionStream = signal<SseStream<IbkrPnLTick> | null>(null);
@@ -374,23 +509,18 @@ export class BrokerAccountMonitorComponent {
   }
 
   conditionActionLabel(condition: AccountConditionRow): string {
-    switch (condition.cure_action) {
-      case 'resolve_exposure':
-        return 'Resolve exposure';
-      case 'clear_freeze':
-        return 'Clear freeze';
-      case 'reconcile_now':
-        return 'Run account reconcile';
-    }
-    return condition.cure_action;
+    return conditionActionLabel(condition.cure_action);
   }
 
   hasConditionAction(condition: AccountConditionRow): boolean {
-    return (
-      condition.cure_action === 'resolve_exposure' ||
-      condition.cure_action === 'clear_freeze' ||
-      condition.cure_action === 'reconcile_now'
-    );
+    const actionKind = accountConditionActionKind(condition);
+    if (actionKind === null) {
+      return false;
+    }
+    if (actionKind === 'clearFreeze' && this.accountTriage()?.clear_freeze_actionable === true) {
+      return false;
+    }
+    return true;
   }
 
   gateStatusLabel(status: GateResultStatus): string {
@@ -398,9 +528,10 @@ export class BrokerAccountMonitorComponent {
   }
 
   conditionActionDisabled(condition: AccountConditionRow): boolean {
-    if (condition.cure_action === 'resolve_exposure') return this.exposureResolutionLoading() !== null;
-    if (condition.cure_action === 'reconcile_now') return this.accountReconciliationLoading();
-    if (condition.cure_action === 'clear_freeze') {
+    const actionKind = accountConditionActionKind(condition);
+    if (actionKind === 'resolveExposure') return this.exposureResolutionLoading() !== null;
+    if (actionKind === 'reconcile') return this.accountReconciliationLoading();
+    if (actionKind === 'clearFreeze') {
       return !this.accountTriage()?.clear_freeze_actionable || this.accountFreezeClearLoading();
     }
     return true;
@@ -415,18 +546,54 @@ export class BrokerAccountMonitorComponent {
     );
   }
 
-  runConditionAction(condition: AccountConditionRow): void {
-    if (condition.cure_action === 'reconcile_now') {
+  primaryActionDisabled(action: AccountPrimaryAction): boolean {
+    if (action.kind === 'reconcile') {
+      return this.accountReconciliationLoading() || !this.accountReconciliationAccountId();
+    }
+    if (action.kind === 'clearFreeze') {
+      return this.accountFreezeClearLoading() || this.accountTriage()?.clear_freeze_actionable !== true;
+    }
+    return false;
+  }
+
+  runPrimaryAccountAction(action: AccountPrimaryAction): void {
+    if (action.kind === 'reconcile') {
       void this.runAccountReconciliation();
-    } else if (condition.cure_action === 'clear_freeze') {
+    } else if (action.kind === 'clearFreeze') {
       void this.clearAccountFreeze();
-    } else if (condition.cure_action === 'resolve_exposure') {
+    }
+  }
+
+  primaryActionButtonLabel(action: AccountPrimaryAction): string {
+    if (action.kind === 'reconcile' && this.accountReconciliationLoading()) {
+      return 'Reconciling…';
+    }
+    if (action.kind === 'clearFreeze' && this.accountFreezeClearLoading()) {
+      return 'Clearing…';
+    }
+    return action.buttonLabel;
+  }
+
+  runConditionAction(condition: AccountConditionRow): void {
+    const actionKind = accountConditionActionKind(condition);
+    if (actionKind === 'reconcile') {
+      void this.runAccountReconciliation();
+    } else if (actionKind === 'clearFreeze') {
+      void this.clearAccountFreeze();
+    } else if (actionKind === 'resolveExposure') {
       this.openExposureResolution(condition);
     }
   }
 
   private reconciliationAccountIdForTruth(truth: AccountTruthResponse): string | null {
     return truth.account_id ?? truth.health.account_id ?? null;
+  }
+
+  private truthHasOpenBrokerExposure(truth: AccountTruthResponse | null): boolean {
+    return (
+      truth?.positions.some((position) => position.quantity !== 0) === true ||
+      truth?.symbol_exposures.some((row) => row.quantity !== 0) === true
+    );
   }
 
   private setAccountReconciliation(receipt: AccountReconciliationReceipt | null): void {
@@ -512,4 +679,6 @@ export class BrokerAccountMonitorComponent {
   }
 
   trackRow = (_: number, row: PositionRow): number => row.position.con_id;
+  trackCondition = (_: number, condition: AccountConditionRow): string =>
+    `${condition.scope}:${condition.condition_type}:${condition.owner.owner_id}:${condition.evidence_at_ms}`;
 }

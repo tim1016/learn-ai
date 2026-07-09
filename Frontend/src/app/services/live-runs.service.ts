@@ -46,6 +46,7 @@ import type {
   LiveInstanceSummary,
   SetInstanceDesiredStateResponse,
 } from '../api/live-instances.types';
+import type { DeployPreflightResponse } from '../api/operator-blocker.types';
 
 @Injectable({ providedIn: 'root' })
 export class LiveRunsService {
@@ -425,6 +426,22 @@ export class LiveRunsService {
   deployInstance(request: HostRunnerDeployRequest): Promise<HostRunnerDeployResponse> {
     return firstValueFrom(
       this.http.post<HostRunnerDeployResponse>(this.instancesBase, request),
+    );
+  }
+
+  deployPreflight(params: {
+    strategyKey: string;
+    accountId: string;
+    instanceId: string;
+  }): Promise<DeployPreflightResponse> {
+    const query = new HttpParams()
+      .set('strategy_key', params.strategyKey)
+      .set('account_id', params.accountId)
+      .set('instance_id', params.instanceId);
+    return firstValueFrom(
+      this.http.get<DeployPreflightResponse>(`${this.instancesBase}/deploy-preflight`, {
+        params: query,
+      }),
     );
   }
 

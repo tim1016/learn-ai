@@ -18,6 +18,7 @@ import type {
   BotCatalogRow,
   BotCatalogTone,
   BotCatalogTradingMode,
+  BotLifecycleCondition,
   BotAttendanceCell,
   BotEveningReport,
   BotLifecycleDisplayStatus,
@@ -29,6 +30,7 @@ import { BrokerService } from '../../../services/broker.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { AccountFreezeBannerComponent } from '../account-freeze-banner/account-freeze-banner.component';
 import { fmtInteger, fmtSignedCurrency, fmtTimestampLocal } from '../format';
+import { lifecycleConditionCureTarget } from '../lib/condition-cure-actions';
 
 type AttentionFilter = 'all' | 'needs-attention' | 'healthy';
 type BotModeTab = BotCatalogTradingMode;
@@ -63,6 +65,7 @@ interface BotTableRow {
   symbolsLabel: string;
   displayStatus: BotLifecycleDisplayStatus;
   statusReason: string | null;
+  sickBayCondition: BotLifecycleCondition | null;
   presenceLabel: string;
   attentionBadge: BotCatalogRow['daily_lifecycle']['attention_badge'];
   attentionSeverity: TagSeverity;
@@ -309,10 +312,23 @@ export class BotsPageComponent {
     this.lifecycleFilter.set('all');
   }
 
-  openAccountMonitor(): void {
+  openAccountMonitor(event?: Event): void {
+    event?.stopPropagation();
     void this.router.navigate(['/broker/account-monitor'], {
       fragment: 'account-reconciliation-action',
     });
+  }
+
+  runConditionCure(row: BotTableRow, event: Event): void {
+    event.stopPropagation();
+    if (
+      row.sickBayCondition &&
+      lifecycleConditionCureTarget(row.sickBayCondition) === 'retireReplace'
+    ) {
+      void this.openBot(row.id);
+      return;
+    }
+    this.openAccountMonitor();
   }
 
   isSelected(id: string): boolean {
@@ -465,6 +481,9 @@ function normalize(value: string): string {
 
 function toTableRow(bot: BotCatalogRow): BotTableRow {
   const symbolsLabel = bot.symbols.length > 0 ? bot.symbols.join(', ') : '—';
+  const sickBayCondition = bot.daily_lifecycle.display_status === 'Sick bay'
+    ? bot.daily_lifecycle.conditions?.[0] ?? null
+    : null;
 
   return {
     id: bot.strategy_instance_id,
@@ -475,6 +494,7 @@ function toTableRow(bot: BotCatalogRow): BotTableRow {
     symbolsLabel,
     displayStatus: bot.daily_lifecycle.display_status,
     statusReason: bot.daily_lifecycle.reason ?? bot.status_detail,
+    sickBayCondition,
     presenceLabel: bot.daily_lifecycle.presence_label,
     attentionBadge: bot.daily_lifecycle.attention_badge,
     attentionSeverity: BOT_TONE_SEVERITY[bot.status_tone],
@@ -498,6 +518,12 @@ function toTableRow(bot: BotCatalogRow): BotTableRow {
       bot.daily_lifecycle.display_status,
       bot.daily_lifecycle.presence_label,
       bot.daily_lifecycle.reason,
+      ...(bot.daily_lifecycle.conditions ?? []).flatMap((condition) => [
+        condition.title,
+        condition.detail,
+        condition.cure_label,
+        condition.owner_label,
+      ]),
       bot.daily_lifecycle.phase,
       bot.trading_mode,
       bot.engine,
