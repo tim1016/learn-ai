@@ -357,6 +357,61 @@
           </p>
         }
 
+        @let exposureDecision = exposureLaunchDecision();
+        @if (exposureDecision) {
+          <section class="launch-decision" aria-labelledby="exposure-launch-decision-title">
+            <div class="launch-decision-copy">
+              <p class="eyebrow"><i class="pi pi-shield" aria-hidden="true"></i> Exposure check</p>
+              <h3 id="exposure-launch-decision-title">{{ exposureDecision.title }}</h3>
+              <p>{{ exposureDecision.detail }}</p>
+            </div>
+            <dl class="launch-decision-facts">
+              @for (fact of exposureCoherenceFacts(); track fact.label) {
+                <div>
+                  <dt>{{ fact.label }}</dt>
+                  <dd>
+                    @if (fact.valueReceiptLabel) {
+                      {{ fact.value | receiptLabel }}
+                    } @else {
+                      {{ fact.value }}
+                    }
+                    @if (fact.source) {
+                      <small>
+                        @if (fact.sourceReceiptLabel) {
+                          {{ fact.source | receiptLabel }}
+                        } @else {
+                          {{ fact.source }}
+                        }
+                      </small>
+                    }
+                  </dd>
+                </div>
+              }
+            </dl>
+            <div class="launch-decision-actions">
+              <button type="button" class="safe-action" [disabled]="busy()" (click)="deployWithoutStarting()">
+                <i class="pi pi-pause-circle" aria-hidden="true"></i>
+                {{ exposureDecision.deployOnlyLabel }}
+              </button>
+              @if (effectiveStartNow()) {
+                <button
+                  type="button"
+                  class="confirm-action"
+                  [disabled]="busy() || exposureCoherenceConfirmed()"
+                  (click)="confirmExposureAndDeployStart()"
+                >
+                  <i class="pi pi-check-circle" aria-hidden="true"></i>
+                  {{ exposureDecision.confirmAndStartLabel }}
+                </button>
+              }
+              <a routerLink="/broker/account-monitor" fragment="account-reconciliation-action" class="review-link">
+                {{ exposureDecision.reviewLabel }}
+                <i class="pi pi-external-link" aria-hidden="true"></i>
+              </a>
+            </div>
+          </section>
+        }
+
         <div class="launch-fields" [class.dimmed]="!effectiveStartNow()">
           <label class="field inline">
             <span>Daily order limit</span>

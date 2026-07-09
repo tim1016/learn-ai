@@ -28,6 +28,14 @@ export interface ExposureCoherenceConflict {
   signature: string;
 }
 
+export interface ExposureLaunchDecision {
+  title: string;
+  detail: string;
+  deployOnlyLabel: string;
+  confirmAndStartLabel: string;
+  reviewLabel: string;
+}
+
 export interface CoherenceConfirmationCardFact {
   label: string;
   value: string;
@@ -62,6 +70,24 @@ export function exposureCoherenceCardFacts(
     },
     { label: 'Source', value: evidence.source, valueReceiptLabel: true },
   ];
+}
+
+export function exposureLaunchDecision(
+  evidence: ExposureCoherenceConflict | null,
+): ExposureLaunchDecision | null {
+  if (evidence === null) return null;
+  const posture = formatReceiptLabel(evidence.posture);
+  const pending = evidence.pendingOrderCount === null ? 'unknown' : String(evidence.pendingOrderCount);
+  const unknown = evidence.posture === 'UNKNOWN' || evidence.pendingOrderCount === null;
+  return {
+    title: unknown ? 'Exposure is not proven flat' : 'Existing exposure needs a launch decision',
+    detail: unknown
+      ? `Current risk reports ${posture} posture, ${pending} pending orders, and positions ${evidence.positionsLabel}. Reconcile the account, deploy without starting, or confirm these exact values if you intentionally want to start now.`
+      : `Current risk reports ${posture} posture, ${pending} pending orders, and positions ${evidence.positionsLabel}. Deploy without starting, or confirm these exact values before starting now.`,
+    deployOnlyLabel: 'Deploy without starting',
+    confirmAndStartLabel: 'Confirm and deploy & start',
+    reviewLabel: 'Open account monitor',
+  };
 }
 
 export function buildIdentityCoherenceEvidence(input: {
@@ -140,7 +166,7 @@ export function buildExposureCoherenceEvidence(input: {
     ownedPositions: input.ownedPositions,
     positionsLabel: exposurePositionsLabel(input.ownedPositions),
     source: input.source.trim() || 'request inherited exposure',
-    summary: `Inherited exposure is ${postureLabel} with ${pendingLabel} pending order(s). Confirm exposure before Deploy & start.`,
+    summary: `Inherited exposure is ${postureLabel} with ${pendingLabel} pending order(s). Confirm exposure before Deploy & start, or deploy without starting.`,
     signature: `${input.instanceId}:${input.parentRunId ?? ''}:${input.posture}:${pendingLabel}:${JSON.stringify(input.ownedPositions)}`,
   };
 }

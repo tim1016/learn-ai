@@ -33,6 +33,10 @@ function exposureCoherenceCard(fixture: { nativeElement: HTMLElement }): HTMLEle
   return fixture.nativeElement.querySelector('[aria-label="Exposure confirmation"]');
 }
 
+function exposureLaunchDecision(fixture: { nativeElement: HTMLElement }): HTMLElement | null {
+  return fixture.nativeElement.querySelector('.launch-decision');
+}
+
 type AccountTruthFixture = Pick<AccountTruthResponse, 'final_verdict' | 'status_label' | 'status_detail'> &
   Partial<Pick<AccountTruthResponse, 'blockers' | 'evidence_gaps' | 'invariants' | 'source_freshness'>>;
 const DEFAULT_STRATEGY_VALIDATION_CATALOG: StrategyValidationCatalog = {
@@ -378,6 +382,16 @@ function deployButton(fixture: { nativeElement: HTMLElement }): HTMLButtonElemen
   const el = fixture.nativeElement.querySelector('button.primary');
   if (!(el instanceof HTMLButtonElement)) throw new Error('no submit button');
   return el;
+}
+
+function buttonContaining(
+  fixture: { nativeElement: HTMLElement },
+  text: string,
+): HTMLButtonElement {
+  const buttons = Array.from(fixture.nativeElement.querySelectorAll('button'));
+  const button = buttons.find((candidate) => candidate.textContent?.includes(text));
+  if (button instanceof HTMLButtonElement) return button;
+  throw new Error(`missing button containing: ${text}`);
 }
 
 function fieldControl(
@@ -1814,6 +1828,87 @@ describe('BrokerDeployFormComponent', () => {
       strategy_instance_id: 'deployment-validation-paper',
       run_id: 'run-prev',
     });
+  });
+
+  it('surfaces UNKNOWN exposure blocks as launch recovery actions', async () => {
+    const { fixture, svc, component } = setup();
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    await settleResource(fixture);
+    svc.deployInstance.mockRejectedValueOnce(
+      new HttpErrorResponse({
+        status: 409,
+        error: {
+          detail: {
+            reason_code: 'EXPOSURE_COHERENCE_UNCONFIRMED',
+            gate_id: 'deploy.exposure_coherence',
+            message:
+              'Deploy & start is blocked because existing exposure is not proven flat (posture=UNKNOWN, pending_order_count=None).',
+            evidence: {
+              posture: 'UNKNOWN',
+              pending_order_count: null,
+              owned_positions: {},
+              source: 'operator_surface.current_risk',
+              strategy_instance_id: 'deployment-validation-paper',
+              run_id: null,
+            },
+            remediation:
+              'Review the bot current risk and account reconciliation, then confirm or turn off start.',
+          },
+        },
+      }),
+    );
+
+    await component.submit();
+    fixture.detectChanges();
+
+    expect(component.activeDeployTab()).toBe('launch');
+    expect(component.error()?.detail).toContain('existing exposure is not proven flat');
+    expect(exposureLaunchDecision(fixture)?.textContent).toContain('Exposure is not proven flat');
+    expect(exposureLaunchDecision(fixture)?.textContent).toContain('Pending orders');
+    expect(exposureLaunchDecision(fixture)?.textContent).toContain('unknown');
+    expect(buttonContaining(fixture, 'Deploy without starting').disabled).toBe(false);
+
+    buttonContaining(fixture, 'Confirm and deploy & start').click();
+    await flush();
+    fixture.detectChanges();
+
+    const retry = svc.deployInstance.mock.calls[1][0];
+    expect(component.error()).toBeNull();
+    expect(retry.start).toBe(true);
+    expect(retry.exposure_coherence_confirmation).toEqual({
+      posture: 'UNKNOWN',
+      pending_order_count: null,
+      owned_positions: {},
+      strategy_instance_id: 'deployment-validation-paper',
+      run_id: null,
+    });
+  });
+
+  it('deploys without starting from the exposure launch decision', async () => {
+    const { fixture, svc, component } = setup({
+      queryParams: {
+        inherited_exposure_posture: 'UNKNOWN',
+        inherited_exposure_source: 'operator_surface.current_risk',
+      },
+    });
+    await flush();
+    fillRequired(component);
+    component.startNow.set(true);
+    component.activeDeployTab.set('launch');
+    await settleResource(fixture);
+
+    buttonContaining(fixture, 'Deploy without starting').click();
+    await flush();
+    fixture.detectChanges();
+
+    const request = svc.deployInstance.mock.calls[0][0];
+    expect(request.start).toBe(false);
+    expect(request.start_options).toBeUndefined();
+    expect(request.inherited_exposure_posture).toBe('UNKNOWN');
+    expect(request.inherited_exposure_pending_order_count).toBeNull();
+    expect(request.exposure_coherence_confirmation).toBeUndefined();
   });
 
   it('allows deploy-only staging when inherited identity conflicts with the new signal stream', async () => {

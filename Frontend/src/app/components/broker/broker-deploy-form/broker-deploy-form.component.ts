@@ -49,7 +49,9 @@ import {
   buildIdentityCoherenceConfirmation,
   buildIdentityCoherenceEvidence,
   exposureCoherenceCardFacts,
+  exposureLaunchDecision as buildExposureLaunchDecision,
   type ExposureCoherenceConflict,
+  type ExposureLaunchDecision,
   identityCoherenceCardFacts,
   type IdentityCoherenceConflict,
 } from './deploy-coherence';
@@ -70,6 +72,7 @@ const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
 type DeployTabKey = 'strategy' | 'signal' | 'sizing' | 'legs' | 'launch';
 type ExecutionMode = 'read_only' | 'paper_orders' | 'live';
+type CoherenceRecoveryKind = 'identity' | 'exposure';
 
 interface DeployTab {
   key: DeployTabKey;
@@ -159,6 +162,7 @@ export class BrokerDeployFormComponent {
   readonly sizingPreset = signal<SizingPreset>('safe_canary');
   readonly activeDeployTab = signal<DeployTabKey>('strategy');
   private readonly signalStreamManuallyEdited = signal<boolean>(false);
+  private readonly activeCoherenceRecovery = signal<CoherenceRecoveryKind | null>(null);
 
   readonly referenceParityGate = resource({
     params: () => ({ auditCopyPath: this.qcAuditCopyPath().trim() }),
@@ -363,6 +367,9 @@ export class BrokerDeployFormComponent {
   );
   readonly exposureCoherenceFacts = computed(() =>
     exposureCoherenceCardFacts(this.exposureCoherenceEvidence()),
+  );
+  readonly exposureLaunchDecision = computed<ExposureLaunchDecision | null>(() =>
+    buildExposureLaunchDecision(this.exposureCoherenceEvidence()),
   );
   readonly exposureCoherenceBlock = computed<ExposureCoherenceConflict | null>(() => {
     const evidence = this.exposureCoherenceEvidence();
@@ -625,6 +632,7 @@ export class BrokerDeployFormComponent {
     if (!this.canSubmit()) return;
     this.busy.set(true);
     this.error.set(null);
+    this.activeCoherenceRecovery.set(null);
     this.deployed.set(null);
     this.deployedInstanceId.set(null);
     const strategyKey = this.strategyKey().trim();
@@ -687,8 +695,12 @@ export class BrokerDeployFormComponent {
       // guard blocks an immediate second start rather than waiting on a 409.
       this.instances.reload();
     } catch (err) {
-      this.seedIdentityCoherenceEvidence(err);
-      this.seedExposureCoherenceEvidence(err);
+      const identitySeeded = this.seedIdentityCoherenceEvidence(err);
+      const exposureSeeded = this.seedExposureCoherenceEvidence(err);
+      this.activeCoherenceRecovery.set(exposureSeeded ? 'exposure' : identitySeeded ? 'identity' : null);
+      if (exposureSeeded) {
+        this.activeDeployTab.set('launch');
+      }
       this.error.set(toOperationError('deploy', err));
     } finally {
       this.busy.set(false);
@@ -702,12 +714,12 @@ export class BrokerDeployFormComponent {
     return detail as Record<string, unknown>;
   }
 
-  private seedIdentityCoherenceEvidence(err: unknown): void {
+  private seedIdentityCoherenceEvidence(err: unknown): boolean {
     const payload = this.deployErrorDetail(err);
-    if (payload === null) return;
-    if (payload['reason_code'] !== 'IDENTITY_COHERENCE_UNCONFIRMED') return;
+    if (payload === null) return false;
+    if (payload['reason_code'] !== 'IDENTITY_COHERENCE_UNCONFIRMED') return false;
     const evidence = payload['evidence'];
-    if (!Array.isArray(evidence)) return;
+    if (!Array.isArray(evidence)) return false;
     const inherited = evidence.find(
       (fact): fact is Record<string, unknown> =>
         Boolean(fact) &&
@@ -717,23 +729,24 @@ export class BrokerDeployFormComponent {
     const inheritedSymbol = normalizedSymbol(
       typeof inherited?.['value'] === 'string' ? inherited['value'] : '',
     );
-    if (!inheritedSymbol) return;
+    if (!inheritedSymbol) return false;
     this.inheritedSymbol.set(inheritedSymbol);
     this.inheritedSymbolSource.set(
       typeof inherited?.['source'] === 'string' ? inherited['source'] : '',
     );
     this.identityCoherenceConfirmedSignature.set(null);
+    return true;
   }
 
-  private seedExposureCoherenceEvidence(err: unknown): void {
+  private seedExposureCoherenceEvidence(err: unknown): boolean {
     const payload = this.deployErrorDetail(err);
-    if (payload === null) return;
-    if (payload['reason_code'] !== 'EXPOSURE_COHERENCE_UNCONFIRMED') return;
+    if (payload === null) return false;
+    if (payload['reason_code'] !== 'EXPOSURE_COHERENCE_UNCONFIRMED') return false;
     const evidence = payload['evidence'];
-    if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) return;
+    if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) return false;
     const facts = evidence as Record<string, unknown>;
     const posture = facts['posture'];
-    if (typeof posture !== 'string' || !isExposurePosture(posture)) return;
+    if (typeof posture !== 'string' || !isExposurePosture(posture)) return false;
 
     const pendingOrderCount = facts['pending_order_count'];
     const ownedPositions = normalizeExposurePositionsRecord(facts['owned_positions']) ?? {};
@@ -753,6 +766,7 @@ export class BrokerDeployFormComponent {
       this.parentRunId.set(runId.trim());
     }
     this.exposureCoherenceConfirmedSignature.set(null);
+    return true;
   }
 
   // Event readers that narrow without a type assertion.
@@ -911,6 +925,9 @@ export class BrokerDeployFormComponent {
   setStartNow(e: Event): void {
     if (e.target instanceof HTMLInputElement) {
       this.startNow.set(e.target.checked);
+      if (!e.target.checked) {
+        this.clearCoherenceRecoveryError();
+      }
     }
   }
 
@@ -918,6 +935,7 @@ export class BrokerDeployFormComponent {
     const evidence = this.identityCoherenceEvidence();
     if (evidence !== null) {
       this.identityCoherenceConfirmedSignature.set(evidence.signature);
+      this.clearCoherenceRecoveryError('identity');
     }
   }
 
@@ -925,7 +943,29 @@ export class BrokerDeployFormComponent {
     const evidence = this.exposureCoherenceEvidence();
     if (evidence !== null) {
       this.exposureCoherenceConfirmedSignature.set(evidence.signature);
+      this.clearCoherenceRecoveryError('exposure');
     }
+  }
+
+  async deployWithoutStarting(): Promise<void> {
+    if (this.busy()) return;
+    this.startNow.set(false);
+    this.clearCoherenceRecoveryError();
+    await this.submit();
+  }
+
+  async confirmExposureAndDeployStart(): Promise<void> {
+    if (this.busy()) return;
+    this.confirmExposureCoherence();
+    await this.submit();
+  }
+
+  private clearCoherenceRecoveryError(kind?: CoherenceRecoveryKind): void {
+    const active = this.activeCoherenceRecovery();
+    if (active === null) return;
+    if (kind !== undefined && active !== kind) return;
+    this.activeCoherenceRecovery.set(null);
+    this.error.set(null);
   }
 
   setActiveDeployTab(key: DeployTabKey): void {
