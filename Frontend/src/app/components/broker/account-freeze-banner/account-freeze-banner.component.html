@@ -1,0 +1,13 @@
+<section class="account-freeze-banner" role="status" data-testid="account-freeze-banner">
+  <i class="pi pi-ban" aria-hidden="true"></i>
+  <div>
+    <strong>{{ banner().headline }}</strong>
+    <span>{{ banner().detail }}</span>
+  </div>
+  @if (actionLabel(); as label) {
+    <button type="button" class="account-freeze-banner__action" (click)="actionClicked.emit()">
+      {{ label }}
+      <i class="pi pi-arrow-right" aria-hidden="true"></i>
+    </button>
+  }
+</section>

@@ -20,16 +20,31 @@ RunExitCategory = Literal[
 ]
 
 RUN_STATUS_FILENAME = "run_status.json"
+PROCESS_CRASHED_REGISTRY_SOURCE = "host_daemon.process_crashed"
+ENDED_WITHOUT_STATUS_REGISTRY_SOURCE = "host_daemon.ended_without_status"
+PROCESS_HALTED_REGISTRY_SOURCE = "host_daemon.process_halted"
+PROCESS_EXITED_REGISTRY_SOURCE = "host_daemon.process_exited"
+PROCESS_STOPPED_REGISTRY_SOURCE = "host_daemon.process_stopped"
+STOP_EXITED_REGISTRY_SOURCE = "host_daemon.stop_exited"
+RECOVERY_FLATTEN_REGISTRY_SOURCE = "host_daemon.recovery_flatten"
+PROCESS_POISONED_REGISTRY_SOURCE = "host_daemon.process_poisoned"
+CRASH_RETIRED_BINDING_SOURCES = frozenset({PROCESS_CRASHED_REGISTRY_SOURCE})
+ENDED_WITHOUT_STATUS_RETIRED_BINDING_SOURCES = frozenset(
+    {ENDED_WITHOUT_STATUS_REGISTRY_SOURCE}
+)
+TERMINAL_RESTART_BLOCKING_BINDING_SOURCES = (
+    CRASH_RETIRED_BINDING_SOURCES | ENDED_WITHOUT_STATUS_RETIRED_BINDING_SOURCES
+)
 
 _NON_CRASH_EXIT_REASONS: dict[str, tuple[RunExitCategory, str]] = {
-    "normal": ("clean", "host_daemon.process_exited"),
-    "force_flat_complete": ("clean", "host_daemon.process_exited"),
-    "fatal_halt": ("halted", "host_daemon.process_halted"),
-    "max_orders_exceeded": ("halted", "host_daemon.process_halted"),
-    "keyboard_interrupt": ("interrupted", "host_daemon.process_stopped"),
-    "signal": ("interrupted", "host_daemon.process_stopped"),
-    "recovery_flatten": ("recovery_flatten", "host_daemon.recovery_flatten"),
-    "poisoned": ("poisoned", "host_daemon.process_poisoned"),
+    "normal": ("clean", PROCESS_EXITED_REGISTRY_SOURCE),
+    "force_flat_complete": ("clean", PROCESS_EXITED_REGISTRY_SOURCE),
+    "fatal_halt": ("halted", PROCESS_HALTED_REGISTRY_SOURCE),
+    "max_orders_exceeded": ("halted", PROCESS_HALTED_REGISTRY_SOURCE),
+    "keyboard_interrupt": ("interrupted", PROCESS_STOPPED_REGISTRY_SOURCE),
+    "signal": ("interrupted", PROCESS_STOPPED_REGISTRY_SOURCE),
+    "recovery_flatten": ("recovery_flatten", RECOVERY_FLATTEN_REGISTRY_SOURCE),
+    "poisoned": ("poisoned", PROCESS_POISONED_REGISTRY_SOURCE),
 }
 
 
@@ -89,7 +104,7 @@ def classify_run_exit(
     if stopping:
         return RunExitTaxonomyVerdict(
             category="controlled_stop",
-            registry_source="host_daemon.stop_exited",
+            registry_source=STOP_EXITED_REGISTRY_SOURCE,
         )
 
     code = evidence.exit_code if evidence.exit_code is not None else returncode
@@ -99,26 +114,26 @@ def classify_run_exit(
     if evidence.exit_reason == "exception":
         return RunExitTaxonomyVerdict(
             category="crashed",
-            registry_source="host_daemon.process_crashed",
+            registry_source=PROCESS_CRASHED_REGISTRY_SOURCE,
         )
     if evidence.exit_reason is None and code == 0:
         return RunExitTaxonomyVerdict(
             category="clean",
-            registry_source="host_daemon.process_exited",
+            registry_source=PROCESS_EXITED_REGISTRY_SOURCE,
         )
     if evidence.exit_reason is None:
         return RunExitTaxonomyVerdict(
             category="ended_without_status",
-            registry_source="host_daemon.ended_without_status",
+            registry_source=ENDED_WITHOUT_STATUS_REGISTRY_SOURCE,
         )
     if code is not None and code != 0:
         return RunExitTaxonomyVerdict(
             category="crashed",
-            registry_source="host_daemon.process_crashed",
+            registry_source=PROCESS_CRASHED_REGISTRY_SOURCE,
         )
     return RunExitTaxonomyVerdict(
         category="unclassified",
-        registry_source="host_daemon.process_exited",
+        registry_source=PROCESS_EXITED_REGISTRY_SOURCE,
     )
 
 
@@ -128,13 +143,24 @@ def false_crash_repair_source(evidence: RunExitEvidence) -> str | None:
     if not evidence.status_present or evidence.exit_reason is None:
         return None
     verdict = classify_run_exit(evidence, returncode=evidence.exit_code, stopping=False)
-    if verdict.registry_source == "host_daemon.process_crashed":
+    if verdict.registry_source == PROCESS_CRASHED_REGISTRY_SOURCE:
         return None
     return verdict.registry_source
 
 
 __all__ = [
+    "CRASH_RETIRED_BINDING_SOURCES",
+    "ENDED_WITHOUT_STATUS_REGISTRY_SOURCE",
+    "ENDED_WITHOUT_STATUS_RETIRED_BINDING_SOURCES",
+    "PROCESS_CRASHED_REGISTRY_SOURCE",
+    "PROCESS_EXITED_REGISTRY_SOURCE",
+    "PROCESS_HALTED_REGISTRY_SOURCE",
+    "PROCESS_POISONED_REGISTRY_SOURCE",
+    "PROCESS_STOPPED_REGISTRY_SOURCE",
+    "RECOVERY_FLATTEN_REGISTRY_SOURCE",
     "RUN_STATUS_FILENAME",
+    "STOP_EXITED_REGISTRY_SOURCE",
+    "TERMINAL_RESTART_BLOCKING_BINDING_SOURCES",
     "RunExitEvidence",
     "RunExitTaxonomyVerdict",
     "classify_run_exit",

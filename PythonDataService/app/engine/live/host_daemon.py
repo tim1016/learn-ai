@@ -924,7 +924,9 @@ class RunnerProcessManager:
             return
         try:
             path = stable_desired_state_path(self.artifacts_root, strategy_instance_id)
-            desired_state = DesiredStateRepo(path).read_state()
+            desired_state = DesiredStateRepo(
+                path, trusted_root=self.artifacts_root / "live_state"
+            ).read_state()
         except (DesiredStateCorruptError, OSError, ValueError) as exc:
             raise HostRunnerError(
                 status.HTTP_409_CONFLICT,

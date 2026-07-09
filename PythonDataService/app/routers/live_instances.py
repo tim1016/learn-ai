@@ -20,7 +20,6 @@ from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal, NoReturn, TypedDict
-from uuid import uuid4
 
 from fastapi import APIRouter, Body, HTTPException, Query, Response, status
 from pydantic import ValidationError
@@ -44,15 +43,18 @@ from app.engine.live.bot_lifecycle_state import (
     BotLifecycleStateRecord,
     BotLifecycleStateRepo,
     BotRollCallOfferRecord,
-    BotRollCallOfferRepo,
     stable_bot_lifecycle_state_path,
-    stable_bot_roll_call_offers_path,
 )
 from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.daemon_connectivity_monitor import (
     get_monitor as get_daemon_connectivity_monitor,
 )
-from app.engine.live.desired_state import DesiredState, DesiredStateCorruptError, DesiredStateRepo
+from app.engine.live.desired_state import (
+    DesiredState,
+    DesiredStateCorruptError,
+    DesiredStateRepo,
+    stable_desired_state_path,
+)
 from app.engine.live.engine_runtime import (
     ENGINE_RUNTIME_FILENAME,
     EngineRuntimeSnapshot,
@@ -111,18 +113,13 @@ from app.schemas.live_runs import (
     ActivityPositionSnapshot,
     ActivityReconciliationWarning,
     AuditCopySizingLookup,
-    BotAttendanceCell,
     BotCatalogResponse,
     BotDeleteRequest,
     BotDeleteResponse,
-    BotEveningReport,
-    BotEveningReportRow,
     BotLifecycleMutationResponse,
     BotLifecycleRosterRequest,
     BotRetireReplaceRequest,
-    BotRollCallOffer,
     BotRollCallResponse,
-    BotRollCallSummary,
     BrokerObservationConsistency,
     ChartOverlayNotice,
     ChartSnapshotResponse,
@@ -217,6 +214,16 @@ from app.services.bot_lifecycle_projection import (
     sort_lifecycle_events,
 )
 from app.services.bot_lifecycle_receipts import LifecycleReceiptContext
+from app.services.bot_roll_call import (
+    active_roll_call_offer,
+    attendance_for_instance,
+    bot_roll_call_offer_repo,
+    ensure_roll_call_offer,
+    evening_report_from_rows,
+    roll_call_offer_schema,
+    roll_call_summary_from_rows,
+    status_is_roll_call_eligible,
+)
 from app.services.broker_activity_publisher_registry import get_publisher_registry
 from app.services.broker_activity_wal import BrokerActivityWal, instance_broker_activity_wal_path
 from app.services.daemon_diagnostics import (
@@ -276,9 +283,6 @@ _ACTION_TO_VERB = {
     DesiredStateAction.stop: CommandVerb.STOP,
 }
 
-# Filename of the durable desired-state sidecar (the stable
-# <artifacts>/live_state/<sid>/ layout owned by desired_state.py).
-_DESIRED_STATE_FILE = "desired_state.json"
 _STATUS_ACTIVITY_BOOTSTRAP_TIMEOUT_S = 2.0
 
 logger = logging.getLogger(__name__)
@@ -405,17 +409,9 @@ def _bot_lifecycle_state_repo(root: Path, sid: str) -> BotLifecycleStateRepo:
     return BotLifecycleStateRepo(path)
 
 
-def _bot_roll_call_offer_repo(root: Path, sid: str) -> BotRollCallOfferRepo:
-    try:
-        path = stable_bot_roll_call_offers_path(root.parent, sid)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
-    return BotRollCallOfferRepo(path)
-
-
 def _active_roll_call_offer(root: Path, sid: str, *, now_ms: int) -> BotRollCallOfferRecord | None:
     try:
-        return _bot_roll_call_offer_repo(root, sid).active_offer(now_ms=now_ms)
+        return active_roll_call_offer(root, sid, now_ms=now_ms)
     except BotLifecycleStateCorruptError as exc:
         logger.warning(
             "failed to read bot roll-call offers",
@@ -822,11 +818,13 @@ def _resolve_reconciliation_inputs(root: Path, live_binding: LiveBinding | None)
 def _read_instance_live_state(root: Path, sid: str) -> LiveStateEnvelope | None:
     artifacts_root = _desired_state_root(root)
     try:
-        sidecar_dir = _confine(artifacts_root / "live_state", sid)
+        sidecar_path = stable_live_state_path(artifacts_root, sid)
     except ValueError:
         return None
     try:
-        return LiveStateSidecarRepo(sidecar_dir / "live_state.json").read()
+        return LiveStateSidecarRepo(
+            sidecar_path, trusted_root=artifacts_root / "live_state"
+        ).read()
     except (LiveStateSidecarCorruptError, OSError):
         return None
 
@@ -1157,7 +1155,9 @@ def _sizing_audit_rows(strategy_instance_id: str) -> list[dict]:
     except ValueError:
         return []
     try:
-        envelope = LiveStateSidecarRepo(sidecar_path).read()
+        envelope = LiveStateSidecarRepo(
+            sidecar_path, trusted_root=artifacts_root / "live_state"
+        ).read()
     except (LiveStateSidecarCorruptError, OSError):
         return []
     if envelope is None:
@@ -1814,10 +1814,10 @@ async def list_bot_catalog() -> BotCatalogResponse:
         rows.append(
             row.model_copy(
                 update={
-                    "attendance": _attendance_for_instance(
-                        sid=sid,
+                    "attendance": attendance_for_instance(
                         runs=by_instance.get(sid, []),
                         lifecycle_state=_resolve_bot_lifecycle_state(root, sid),
+                        read_sidecar=_read_sidecar,
                     )
                 }
             )
@@ -1825,8 +1825,8 @@ async def list_bot_catalog() -> BotCatalogResponse:
     rows.sort(key=lambda row: (row.created_at_ms or row.last_run_at_ms or 0, row.name), reverse=True)
     return BotCatalogResponse(
         bots=rows,
-        roll_call=_roll_call_summary_from_rows(rows, now_ms=_now_ms()),
-        evening_report=_evening_report_from_rows(rows, now_ms=_now_ms()),
+        roll_call=roll_call_summary_from_rows(rows, now_ms=_now_ms()),
+        evening_report=evening_report_from_rows(rows, now_ms=_now_ms()),
     )
 
 
@@ -1846,22 +1846,16 @@ async def run_roll_call() -> BotRollCallResponse:
                 daemon_by_sid[sid] = inst
 
     now_ms = _now_ms()
-    offers: list[BotRollCallOffer] = []
-    display_counts: dict[str, int] = {
-        "Ready": 0,
-        "Off roster": 0,
-        "Sick bay": 0,
-        "On duty": 0,
-        "Clocking out": 0,
-        "Off duty": 0,
-        "Retired": 0,
-    }
+    rows = []
+    offers = []
+    retired_count = 0
+    trading_mode = trading_mode_from_configured_mode(getattr(settings, "mode", None))
     summary_session_date: str | None = None
     summary_effective_stop_ms: int | None = None
     for sid in sorted(set(by_instance) | set(daemon_by_sid)):
         lifecycle_state = _resolve_bot_lifecycle_state(root, sid)
         if lifecycle_state is not None and lifecycle_state.phase == BotLifecyclePhase.RETIRED:
-            display_counts["Retired"] += 1
+            retired_count += 1
             continue
         status_view = await _resolve_instance_status_from_process(
             sid,
@@ -1870,10 +1864,8 @@ async def run_roll_call() -> BotRollCallResponse:
             _daemon_process_from_instance(daemon_by_sid.get(sid)),
             runs_by_instance=by_instance,
         )
-        display_counts[status_view.daily_lifecycle.display_status] = (
-            display_counts.get(status_view.daily_lifecycle.display_status, 0) + 1
-        )
-        if not _status_is_roll_call_eligible(status_view):
+        rows.append(compose_bot_catalog_row(status_view, trading_mode))
+        if not status_is_roll_call_eligible(status_view):
             continue
         runs = by_instance.get(sid, [])
         if not runs:
@@ -1882,7 +1874,7 @@ async def run_roll_call() -> BotRollCallResponse:
         boundary = start_boundary_verdict(now_ms, _live_config_for_run_dir(run_dir))
         if not boundary.allowed or boundary.effective_stop_ms is None or boundary.session_date is None:
             continue
-        offer = _ensure_roll_call_offer(
+        offer = ensure_roll_call_offer(
             root,
             sid=sid,
             run_id=status_view.operator_surface.host_process.start_capability.run_id or str(runs[0]["run_id"]),
@@ -1897,7 +1889,7 @@ async def run_roll_call() -> BotRollCallResponse:
                 "display_status": status_view.daily_lifecycle.display_status,
             },
         )
-        offers.append(_roll_call_offer_schema(offer))
+        offers.append(roll_call_offer_schema(offer))
         summary_session_date = summary_session_date or boundary.session_date
         summary_effective_stop_ms = (
             boundary.effective_stop_ms
@@ -1906,69 +1898,15 @@ async def run_roll_call() -> BotRollCallResponse:
         )
 
     return BotRollCallResponse(
-        summary=BotRollCallSummary(
-            ready=len(offers),
-            off_roster=display_counts["Off roster"],
-            sick_bay=display_counts["Sick bay"],
-            on_duty=display_counts["On duty"] + display_counts["Clocking out"],
-            off_duty=display_counts["Off duty"],
-            retired=display_counts["Retired"],
-            generated_at_ms=now_ms,
-            session_date=summary_session_date,
-            effective_stop_ms=summary_effective_stop_ms,
+        summary=roll_call_summary_from_rows(rows, now_ms=now_ms).model_copy(
+            update={
+                "ready": len(offers),
+                "retired": retired_count,
+                "session_date": summary_session_date,
+                "effective_stop_ms": summary_effective_stop_ms,
+            }
         ),
         offers=offers,
-    )
-
-
-def _status_is_roll_call_eligible(status_view: LiveInstanceStatus) -> bool:
-    lifecycle = status_view.daily_lifecycle
-    start = status_view.operator_surface.host_process.start_capability
-    return (
-        lifecycle.phase == "OFF_DUTY"
-        and lifecycle.on_roster
-        and lifecycle.attention_badge != "Sick bay"
-        and start.enabled
-        and start.run_id is not None
-        and start.request is not None
-    )
-
-
-def _ensure_roll_call_offer(
-    root: Path,
-    *,
-    sid: str,
-    run_id: str,
-    session_date: str,
-    issued_at_ms: int,
-    expires_at_ms: int,
-    evidence_snapshot: dict[str, object],
-) -> BotRollCallOfferRecord:
-    repo = _bot_roll_call_offer_repo(root, sid)
-    active = repo.active_offer(now_ms=issued_at_ms, session_date=session_date)
-    if active is not None and active.run_id == run_id and active.expires_at_ms == expires_at_ms:
-        return active
-    return repo.append(
-        BotRollCallOfferRecord(
-            offer_id=f"{session_date}-{uuid4().hex}",
-            strategy_instance_id=sid,
-            run_id=run_id,
-            session_date=session_date,
-            issued_at_ms=issued_at_ms,
-            expires_at_ms=expires_at_ms,
-            evidence_snapshot=evidence_snapshot,
-        )
-    )
-
-
-def _roll_call_offer_schema(offer: BotRollCallOfferRecord) -> BotRollCallOffer:
-    return BotRollCallOffer(
-        offer_id=offer.offer_id,
-        strategy_instance_id=offer.strategy_instance_id,
-        run_id=offer.run_id,
-        session_date=offer.session_date,
-        issued_at_ms=offer.issued_at_ms,
-        expires_at_ms=offer.expires_at_ms,
     )
 
 
@@ -1979,145 +1917,6 @@ def _live_config_for_run_dir(run_dir: Path) -> Mapping[str, object] | None:
         return None
     live_config = ledger.get("live_config")
     return live_config if isinstance(live_config, Mapping) else None
-
-
-def _attendance_for_instance(
-    *,
-    sid: str,
-    runs: list[dict],
-    lifecycle_state: BotLifecycleStateRecord | None,
-) -> list[BotAttendanceCell]:
-    cells: list[BotAttendanceCell] = []
-    for run in sorted(runs, key=lambda item: item.get("created_at_ms") or 0)[-7:]:
-        run_dir = Path(str(run.get("run_dir") or ""))
-        run_id = str(run.get("run_id") or run_dir.name)
-        sidecar = _read_sidecar(run_dir)
-        created_at_ms = _positive_int(run.get("created_at_ms"))
-        timestamp_ms = (
-            sidecar.ended_at_ms
-            if sidecar is not None and sidecar.ended_at_ms is not None
-            else sidecar.started_at_ms
-            if sidecar is not None
-            else created_at_ms
-        )
-        if timestamp_ms is None:
-            continue
-        session_date = datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC).astimezone(_NY_TZ).date().isoformat()
-        clean = sidecar is not None and (
-            sidecar.exit_code == 0
-            or (sidecar.exit_reason is not None and str(sidecar.exit_reason) in {"normal", "force_flat_complete"})
-        )
-        cells.append(
-            BotAttendanceCell(
-                session_date=session_date,
-                status="clean" if clean else "sick",
-                label="Clean day" if clean else "Sick bay",
-                receipt_ref=f"{run_id}/run_status.json",
-            )
-        )
-    if lifecycle_state is not None and lifecycle_state.phase == BotLifecyclePhase.RETIRED:
-        today = _today_ny().isoformat()
-        if not cells or cells[-1].session_date != today or cells[-1].status != "retired":
-            cells.append(
-                BotAttendanceCell(
-                    session_date=today,
-                    status="retired",
-                    label="Retired",
-                    receipt_ref=None,
-                )
-            )
-    if not cells and lifecycle_state is not None and not lifecycle_state.on_roster:
-        cells.append(
-            BotAttendanceCell(
-                session_date=_today_ny().isoformat(),
-                status="rested",
-                label="Rested",
-                receipt_ref=None,
-            )
-        )
-    return cells
-
-
-def _roll_call_summary_from_rows(rows: list, *, now_ms: int) -> BotRollCallSummary:
-    counts = {
-        "Ready": 0,
-        "Off roster": 0,
-        "Sick bay": 0,
-        "On duty": 0,
-        "Clocking out": 0,
-        "Off duty": 0,
-        "Retired": 0,
-    }
-    session_date: str | None = None
-    effective_stop_ms: int | None = None
-    for row in rows:
-        status_label = row.daily_lifecycle.display_status
-        counts[status_label] = counts.get(status_label, 0) + 1
-        action = row.daily_lifecycle.primary_action
-        if action is not None and action.id == "confirm_start":
-            session_date = session_date or _today_ny().isoformat()
-            if action.expires_at_ms is not None:
-                effective_stop_ms = (
-                    action.expires_at_ms
-                    if effective_stop_ms is None
-                    else min(effective_stop_ms, action.expires_at_ms)
-                )
-    return BotRollCallSummary(
-        ready=counts["Ready"],
-        off_roster=counts["Off roster"],
-        sick_bay=counts["Sick bay"],
-        on_duty=counts["On duty"] + counts["Clocking out"],
-        off_duty=counts["Off duty"],
-        retired=counts["Retired"],
-        generated_at_ms=now_ms,
-        session_date=session_date,
-        effective_stop_ms=effective_stop_ms,
-    )
-
-
-def _evening_report_from_rows(rows: list, *, now_ms: int) -> BotEveningReport:
-    report_date = datetime.fromtimestamp(now_ms / 1000, tz=UTC).astimezone(_NY_TZ).date().isoformat()
-    report_rows: list[BotEveningReportRow] = []
-    for row in rows:
-        latest = row.attendance[-1] if row.attendance else None
-        if latest is None:
-            status_value: Literal["clean", "rested", "sick", "retired"] = (
-                "retired" if row.daily_lifecycle.phase == "RETIRED" else "rested"
-            )
-            label = "Retired" if status_value == "retired" else "Rested"
-            receipt_ref = None
-        else:
-            status_value = latest.status
-            label = latest.label
-            receipt_ref = latest.receipt_ref
-        report_rows.append(
-            BotEveningReportRow(
-                strategy_instance_id=row.strategy_instance_id,
-                label=label,
-                status=status_value,
-                receipt_ref=receipt_ref,
-            )
-        )
-    clean = sum(1 for row in report_rows if row.status == "clean")
-    rested = sum(1 for row in report_rows if row.status == "rested")
-    sick = sum(1 for row in report_rows if row.status == "sick")
-    retired = sum(1 for row in report_rows if row.status == "retired")
-    return BotEveningReport(
-        session_date=report_date,
-        generated_at_ms=now_ms,
-        clean_exits=clean,
-        rested=rested,
-        sick=sick,
-        retired=retired,
-        summary=f"{clean} clean exits · {sick} sick bay · {rested} rested · {retired} retired",
-        rows=report_rows,
-    )
-
-
-def _positive_int(value: object) -> int | None:
-    if isinstance(value, bool):
-        return None
-    return value if isinstance(value, int) and value >= 0 else None
 
 
 @router.delete("/{strategy_instance_id}", response_model=BotDeleteResponse)
@@ -2526,12 +2325,12 @@ def _persist_start_intent(root: Path, sid: str) -> None:
 
     artifacts_root = _desired_state_root(root)
     try:
-        sidecar_dir = _confine(artifacts_root / "live_state", sid)
+        sidecar_path = stable_desired_state_path(artifacts_root, sid)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
 
     try:
-        DesiredStateRepo(sidecar_dir / _DESIRED_STATE_FILE).set(
+        DesiredStateRepo(sidecar_path, trusted_root=artifacts_root / "live_state").set(
             DesiredState.RUNNING,
             updated_by="system",
             reason="daily_lifecycle.start",
@@ -2710,7 +2509,7 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
     if sid is not None:
         if response.accepted:
             if body.roll_call_offer_id is not None:
-                _bot_roll_call_offer_repo(root, sid).consume(body.roll_call_offer_id)
+                bot_roll_call_offer_repo(root, sid).consume(body.roll_call_offer_id)
             _bot_lifecycle_state_repo(root, sid).set_phase(
                 BotLifecyclePhase.ON_DUTY,
                 now_ms=_now_ms(),
@@ -3793,13 +3592,19 @@ def _position_effect_for_fill(
 
 
 def _read_activity_wal_rows(*, artifacts_root: Path, sid: str, start_ms: int, end_ms: int) -> list:
-    wal = BrokerActivityWal(instance_broker_activity_wal_path(artifacts_root, sid))
+    wal = BrokerActivityWal(
+        instance_broker_activity_wal_path(artifacts_root, sid),
+        trusted_root=artifacts_root / "live_instances",
+    )
     rows = wal.read_all()
     return [row for row in rows if start_ms <= _activity_row_time_ms(row) < end_ms]
 
 
 def _latest_activity_wal_day(*, artifacts_root: Path, sid: str) -> date | None:
-    wal = BrokerActivityWal(instance_broker_activity_wal_path(artifacts_root, sid))
+    wal = BrokerActivityWal(
+        instance_broker_activity_wal_path(artifacts_root, sid),
+        trusted_root=artifacts_root / "live_instances",
+    )
     rows = wal.read_all()
     if not rows:
         return None
@@ -4604,15 +4409,9 @@ async def set_instance_desired_state(
     settings = get_settings()
     root = Path(settings.live_runs_root)
 
-    # The id is a remote (URL) value flowing into a filesystem write. Build the
-    # sidecar path through `_confine` (resolve + relative_to on the validated
-    # literal, return used) exactly as `_validate_run_id` does for the
-    # CodeQL-clean command-channel write — this is the form the scanner
-    # recognizes as breaking py/path-injection. `_safe_desired_state_path`
-    # discards `_confine`'s confined return, so the scanner can't see it.
     artifacts_root = _desired_state_root(root)
     try:
-        sidecar_dir = _confine(artifacts_root / "live_state", sid)
+        sidecar_path = stable_desired_state_path(artifacts_root, sid)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
 
@@ -4655,7 +4454,7 @@ async def set_instance_desired_state(
             },
         )
 
-    repo = DesiredStateRepo(sidecar_dir / _DESIRED_STATE_FILE)
+    repo = DesiredStateRepo(sidecar_path, trusted_root=artifacts_root / "live_state")
     record = repo.set(
         _ACTION_TO_STATE[body.action],
         updated_by=body.updated_by,
@@ -4754,7 +4553,7 @@ async def flatten_and_pause_instance(
 
     artifacts_root = _desired_state_root(root)
     try:
-        sidecar_dir = _confine(artifacts_root / "live_state", sid)
+        sidecar_path = stable_desired_state_path(artifacts_root, sid)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
 
@@ -4784,7 +4583,7 @@ async def flatten_and_pause_instance(
         reason="flatten-and-pause",
         updated_by="operator",
     )
-    repo = DesiredStateRepo(sidecar_dir / _DESIRED_STATE_FILE)
+    repo = DesiredStateRepo(sidecar_path, trusted_root=artifacts_root / "live_state")
     try:
         record = repo.set(
             DesiredState.PAUSED,

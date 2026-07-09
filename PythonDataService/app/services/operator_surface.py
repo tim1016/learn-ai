@@ -26,6 +26,7 @@ from pydantic import ValidationError
 from app.engine.live.account_artifacts import AccountFreezeEvidence
 from app.engine.live.daemon_connectivity_monitor import DaemonConnectivityState
 from app.engine.live.daemon_transport import DaemonResultKind
+from app.engine.live.exit_taxonomy import RunExitEvidence, classify_run_exit
 from app.lean_sidecar.trading_calendar import next_trading_day, session_window_for_date
 from app.operator.notices.broker_activity_health import compose_broker_activity_health
 from app.operator.notices.runtime_freshness import compose_runtime_freshness_notices
@@ -353,7 +354,16 @@ def _project_prior_run(last_exit: InstanceLastExit | None) -> OperatorSurfacePri
         return OperatorSurfacePriorRun(classification="UNKNOWN")
     if last_exit.halt_trigger is not None:
         return OperatorSurfacePriorRun(classification="HALT_TRIGGERED")
-    if last_exit.exit_reason in {"fatal_halt", "max_orders_exceeded"}:
+    verdict = classify_run_exit(
+        RunExitEvidence(
+            status_present=True,
+            exit_code=last_exit.exit_code,
+            exit_reason=last_exit.exit_reason,
+        ),
+        returncode=last_exit.exit_code,
+        stopping=False,
+    )
+    if verdict.category == "halted":
         return OperatorSurfacePriorRun(classification="HALT_TRIGGERED")
     if last_exit.exit_code == 0 or last_exit.exit_reason == "normal":
         return OperatorSurfacePriorRun(classification="CLEAN")

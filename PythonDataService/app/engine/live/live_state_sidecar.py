@@ -19,7 +19,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.engine.live.identity import _INSTANCE_ID_RE, validate_strategy_instance_id
+from app.engine.live.identity import strategy_instance_artifact_dir
 
 
 class LiveStateSidecarCorruptError(RuntimeError):
@@ -45,28 +45,12 @@ def stable_live_state_path(artifacts_root: Path, strategy_instance_id: str) -> P
     stable_global_path so both sidecars sit side-by-side under the same
     per-strategy directory.
     """
-    validate_strategy_instance_id(strategy_instance_id)
-    match = _INSTANCE_ID_RE.fullmatch(strategy_instance_id)
-    if match is None:
-        raise ValueError(
-            f"strategy_instance_id rejected on second check: {strategy_instance_id!r}"
+    return (
+        strategy_instance_artifact_dir(
+            artifacts_root, "live_state", strategy_instance_id
         )
-    safe_sid = match.group(0)
-    live_state_root = os.path.realpath(
-        os.path.join(os.fspath(artifacts_root), "live_state")
+        / "live_state.json"
     )
-    sidecar_dir = os.path.realpath(os.path.join(live_state_root, safe_sid))
-    try:
-        common = os.path.commonpath([sidecar_dir, live_state_root])
-    except ValueError as exc:
-        raise ValueError(
-            f"live-state sidecar path {sidecar_dir} cannot share a root with {live_state_root}"
-        ) from exc
-    if common != live_state_root:
-        raise ValueError(
-            f"live-state sidecar path {sidecar_dir} escapes {live_state_root}"
-        )
-    return Path(sidecar_dir) / "live_state.json"
 
 
 class LiveStateEnvelope(BaseModel):
@@ -120,18 +104,37 @@ class LiveStateEnvelope(BaseModel):
 
 
 class LiveStateSidecarRepo:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, trusted_root: Path | None = None) -> None:
         self._path = path
+        self._trusted_root = trusted_root if trusted_root is not None else path.parent
+
+    def _confined_path(self) -> Path:
+        root_real = os.path.realpath(os.fspath(self._trusted_root))
+        candidate = os.path.realpath(os.fspath(self._path))
+        root_prefix = root_real.rstrip(os.sep) + os.sep
+        if not candidate.startswith(root_prefix):
+            raise ValueError(
+                f"live-state sidecar path {candidate} escapes root {root_real}"
+            )
+        return Path(candidate)
 
     def read(self) -> LiveStateEnvelope | None:
-        if not self._path.exists():
+        root_real = os.path.realpath(os.fspath(self._trusted_root))
+        candidate = os.path.realpath(os.fspath(self._path))
+        root_prefix = root_real.rstrip(os.sep) + os.sep
+        if not candidate.startswith(root_prefix):
+            raise ValueError(
+                f"live-state sidecar path {candidate} escapes root {root_real}"
+            )
+        path = Path(candidate)
+        if not path.exists():
             return None
         try:
             return LiveStateEnvelope.model_validate_json(
-                self._path.read_text(encoding="utf-8")
+                path.read_text(encoding="utf-8")
             )
         except (ValidationError, ValueError) as exc:
-            raise LiveStateSidecarCorruptError(self._path, exc) from exc
+            raise LiveStateSidecarCorruptError(path, exc) from exc
 
     def update_after_flush(
         self, *, last_processed_bar_ms: int, last_artifact_flush_ms: int
@@ -143,14 +146,23 @@ class LiveStateSidecarRepo:
         back. Every other field is preserved verbatim. Called by the
         engine after a successful artifact flush.
         """
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        with _file_lock(self._path):
+        root_real = os.path.realpath(os.fspath(self._trusted_root))
+        candidate = os.path.realpath(os.fspath(self._path))
+        root_prefix = root_real.rstrip(os.sep) + os.sep
+        if not candidate.startswith(root_prefix):
+            raise ValueError(
+                f"live-state sidecar path {candidate} escapes root {root_real}"
+            )
+        path = Path(candidate)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _file_lock(path, trusted_root=self._trusted_root):
             existing = self.read()
             if existing is None:
                 raise FileNotFoundError(
-                    f"cannot update flush cursors: no live-state sidecar at {self._path}"
+                    f"cannot update flush cursors: no live-state sidecar at {path}"
                 )
             self._write_locked(
+                path,
                 existing.model_copy(
                     update={
                         "last_processed_bar_ms": last_processed_bar_ms,
@@ -168,9 +180,17 @@ class LiveStateSidecarRepo:
         Without the lock, the loser's os.replace finds the tempfile
         already renamed by the winner and raises FileNotFoundError.
         """
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        with _file_lock(self._path):
-            self._write_locked(envelope)
+        root_real = os.path.realpath(os.fspath(self._trusted_root))
+        candidate = os.path.realpath(os.fspath(self._path))
+        root_prefix = root_real.rstrip(os.sep) + os.sep
+        if not candidate.startswith(root_prefix):
+            raise ValueError(
+                f"live-state sidecar path {candidate} escapes root {root_real}"
+            )
+        path = Path(candidate)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _file_lock(path, trusted_root=self._trusted_root):
+            self._write_locked(path, envelope)
 
     def write_if_missing(self, envelope: LiveStateEnvelope) -> bool:
         """Atomically seed the sidecar only when no envelope exists.
@@ -179,14 +199,22 @@ class LiveStateSidecarRepo:
         envelope won. The read and write share one lock so concurrent
         bootstrap attempts cannot clobber the first seed.
         """
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        with _file_lock(self._path):
+        root_real = os.path.realpath(os.fspath(self._trusted_root))
+        candidate = os.path.realpath(os.fspath(self._path))
+        root_prefix = root_real.rstrip(os.sep) + os.sep
+        if not candidate.startswith(root_prefix):
+            raise ValueError(
+                f"live-state sidecar path {candidate} escapes root {root_real}"
+            )
+        path = Path(candidate)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _file_lock(path, trusted_root=self._trusted_root):
             if self.read() is not None:
                 return False
-            self._write_locked(envelope)
+            self._write_locked(path, envelope)
             return True
 
-    def _write_locked(self, envelope: LiveStateEnvelope) -> None:
+    def _write_locked(self, path: Path, envelope: LiveStateEnvelope) -> None:
         """File-mechanics half of write(). Caller must hold _file_lock.
 
         Split out so update_after_flush can hold a single lock across
@@ -194,19 +222,27 @@ class LiveStateSidecarRepo:
         (fcntl/msvcrt locks are per-fd; nesting would deadlock or
         produce surprising semantics).
         """
-        tmp_path = self._path.with_suffix(self._path.suffix + ".tmp")
+        root_real = os.path.realpath(os.fspath(self._trusted_root))
+        candidate = os.path.realpath(os.fspath(path))
+        root_prefix = root_real.rstrip(os.sep) + os.sep
+        if not candidate.startswith(root_prefix):
+            raise ValueError(
+                f"live-state sidecar path {candidate} escapes root {root_real}"
+            )
+        safe_path = Path(candidate)
+        tmp_path = safe_path.with_suffix(safe_path.suffix + ".tmp")
         payload = envelope.model_dump_json().encode("utf-8")
         with open(tmp_path, "wb") as fh:
             fh.write(payload)
             fh.flush()
             os.fsync(fh.fileno())
         try:
-            os.replace(tmp_path, self._path)
+            os.replace(tmp_path, safe_path)
         except Exception:
             with contextlib.suppress(OSError):
                 tmp_path.unlink()
             raise
-        _fsync_parent_dir(self._path)
+        _fsync_parent_dir(safe_path)
 
 
 def _fsync_parent_dir(child_path: Path) -> None:
@@ -228,7 +264,7 @@ def _fsync_parent_dir(child_path: Path) -> None:
 
 
 @contextlib.contextmanager
-def _file_lock(target_path: Path) -> Iterator[None]:
+def _file_lock(target_path: Path, *, trusted_root: Path | None = None) -> Iterator[None]:
     """Advisory lock on a sibling .lock file for the duration of the write.
 
     Ported from indicator_state.py's _file_lock. POSIX uses fcntl.flock,
@@ -236,7 +272,14 @@ def _file_lock(target_path: Path) -> Iterator[None]:
     the same path serialise here; the lock window is only as long as the
     atomic write.
     """
-    lock_path = target_path.with_suffix(target_path.suffix + ".lock")
+    root = target_path.parent if trusted_root is None else trusted_root
+    root_real = os.path.realpath(os.fspath(root))
+    candidate = os.path.realpath(os.fspath(target_path))
+    root_prefix = root_real.rstrip(os.sep) + os.sep
+    if not candidate.startswith(root_prefix):
+        raise ValueError(f"lock path {candidate} escapes root {root_real}")
+    safe_target_path = Path(candidate)
+    lock_path = safe_target_path.with_suffix(safe_target_path.suffix + ".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fh = open(lock_path, "a+b")  # noqa: SIM115
     fh.seek(0)

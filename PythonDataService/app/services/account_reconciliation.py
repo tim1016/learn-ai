@@ -11,8 +11,6 @@ from pydantic import ValidationError
 
 from app.broker.ibkr.account_truth_freshness import critical_source_freshness_blocks
 from app.engine.live.account_artifacts import (
-    RESTART_INTENSITY_REASON,
-    RESTART_INTENSITY_SOURCE,
     AccountArtifactError,
     AccountAuditedOverride,
     AccountFreezeEvidence,
@@ -20,12 +18,18 @@ from app.engine.live.account_artifacts import (
     account_artifacts_root,
     append_account_event,
     clear_account_freeze,
+    read_account_events,
     read_account_freeze,
 )
 from app.engine.live.account_identity import InvalidAccountIdError, normalize_account_id
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
+    has_account_recovery_evidence_after,
     read_account_instance_registry,
+)
+from app.engine.live.exit_taxonomy import (
+    CRASH_RETIRED_BINDING_SOURCES,
+    ENDED_WITHOUT_STATUS_RETIRED_BINDING_SOURCES,
 )
 from app.schemas.account_reconciliation import (
     AccountAcceptExposureOverrideResponse,
@@ -33,6 +37,7 @@ from app.schemas.account_reconciliation import (
     AccountConditionOwner,
     AccountConditionRow,
     AccountExposureResolution,
+    AccountFreezeBanner,
     AccountReconciliationEvidenceRef,
     AccountReconciliationReceipt,
     AccountTriageBotRef,
@@ -51,8 +56,6 @@ ACCOUNT_RECONCILIATION_RECEIPT_FILENAME = "account_reconciliation_receipt.json"
 DEFAULT_ACCOUNT_RECONCILIATION_TTL_MS = 60_000
 MAX_EVIDENCE_REF_DETAIL_LENGTH = 512
 CLEARABLE_EXPOSURE_RESOLUTIONS = frozenset({"flat", "intended", "accepted_override"})
-CRASHED_RETIREMENT_SOURCES = frozenset({"host_daemon.process_crashed"})
-ENDED_WITHOUT_STATUS_RETIREMENT_SOURCES = frozenset({"host_daemon.ended_without_status"})
 
 
 class AccountReconciliationService:
@@ -178,22 +181,15 @@ class AccountReconciliationService:
         if freeze is None:
             raise AccountArtifactError(f"account freeze does not exist for {canonical_account_id!r}")
         receipt = self.read_latest_receipt(canonical_account_id)
-        if receipt is None:
-            raise AccountArtifactError(
-                f"account reconciliation receipt not found for {canonical_account_id!r}"
-            )
-        if receipt.account_id != canonical_account_id:
-            raise AccountArtifactError("latest account receipt belongs to a different account")
-        if receipt_id is not None and receipt.receipt_id != receipt_id:
-            raise AccountArtifactError("submitted receipt_id does not match the latest account receipt")
-        if receipt.expires_at_ms < recorded_at_ms:
-            raise AccountArtifactError("account reconciliation receipt is stale")
-        if receipt.generated_at_ms <= freeze.recorded_at_ms:
-            raise AccountArtifactError("account reconciliation receipt must be newer than the active freeze")
-        if _is_exposure_freeze(freeze) and receipt.exposure_resolution not in CLEARABLE_EXPOSURE_RESOLUTIONS:
-            raise AccountArtifactError("exposure freeze cannot clear while exposure resolution is unresolved")
-        if receipt.state != "CLEAN" or receipt.final_gate_result.status != "pass":
-            raise AccountArtifactError("account reconciliation receipt must be clean and passing")
+        clear_blocker = _clear_freeze_blocker(
+            account_id=canonical_account_id,
+            receipt=receipt,
+            freeze=freeze,
+            now_ms=recorded_at_ms,
+            receipt_id=receipt_id,
+        )
+        if clear_blocker is not None:
+            raise AccountArtifactError(clear_blocker)
 
         recovery_id = _recovery_id(
             account_id=canonical_account_id,
@@ -319,6 +315,7 @@ class AccountReconciliationService:
             account_id=canonical_account_id,
             generated_at_ms=generated_at_ms,
         )
+        account_events = read_account_events(self._artifacts_root, canonical_account_id)
         latest_bindings = _latest_bindings(bindings)
         active_bindings = [
             binding
@@ -360,7 +357,10 @@ class AccountReconciliationService:
                     receipt=receipt,
                     generated_at_ms=generated_at_ms,
                 ),
-                *_terminal_binding_conditions(latest_bindings),
+                *_terminal_binding_conditions(
+                    latest_bindings,
+                    account_events=account_events,
+                ),
                 *(
                     _freeze_conditions(
                         freeze,
@@ -390,6 +390,7 @@ class AccountReconciliationService:
             account_reconciliation_receipt=receipt,
             gate_rows=gate_rows,
             conditions=conditions,
+            freeze_banner=_freeze_banner(freeze),
             clear_freeze_actionable=_clear_freeze_actionable(
                 receipt=receipt,
                 freeze=freeze,
@@ -649,12 +650,22 @@ def _reconciliation_conditions(
     return []
 
 
-def _terminal_binding_conditions(bindings: list[AccountInstanceBinding]) -> list[AccountConditionRow]:
+def _terminal_binding_conditions(
+    bindings: list[AccountInstanceBinding],
+    *,
+    account_events: list[dict],
+) -> list[AccountConditionRow]:
     conditions: list[AccountConditionRow] = []
     for binding in bindings:
         if binding.lifecycle_state != "RETIRED":
             continue
-        if binding.source in CRASHED_RETIREMENT_SOURCES:
+        if binding.source not in (
+            CRASH_RETIRED_BINDING_SOURCES | ENDED_WITHOUT_STATUS_RETIRED_BINDING_SOURCES
+        ):
+            continue
+        if has_account_recovery_evidence_after(account_events, binding.recorded_at_ms):
+            continue
+        if binding.source in CRASH_RETIRED_BINDING_SOURCES:
             conditions.append(
                 AccountConditionRow(
                     condition_type="crashed",
@@ -673,7 +684,7 @@ def _terminal_binding_conditions(bindings: list[AccountInstanceBinding]) -> list
                     cure_action="retire_replace",
                 )
             )
-        elif binding.source in ENDED_WITHOUT_STATUS_RETIREMENT_SOURCES:
+        elif binding.source in ENDED_WITHOUT_STATUS_RETIRED_BINDING_SOURCES:
             conditions.append(
                 AccountConditionRow(
                     condition_type="ended_without_status",
@@ -763,6 +774,19 @@ def _freeze_condition_owner(
     return _account_owner(freeze.account_id)
 
 
+def _freeze_banner(freeze: AccountFreezeEvidence | None) -> AccountFreezeBanner | None:
+    if freeze is None:
+        return None
+    if _is_exposure_freeze(freeze):
+        detail = "Resolve or audit broker exposure before starting another bot on this account."
+    else:
+        detail = "Run account reconciliation and clear the active account freeze before deploying."
+    return AccountFreezeBanner(
+        headline="Account sick bay is gating new starts.",
+        detail=detail,
+    )
+
+
 def _dedupe_conditions(conditions: list[AccountConditionRow]) -> list[AccountConditionRow]:
     deduped: dict[tuple[str, str], AccountConditionRow] = {}
     for condition in conditions:
@@ -774,10 +798,44 @@ def _dedupe_conditions(conditions: list[AccountConditionRow]) -> list[AccountCon
 
 
 def _is_exposure_freeze(freeze: AccountFreezeEvidence) -> bool:
-    return not (
-        freeze.source == RESTART_INTENSITY_SOURCE
-        or freeze.reason.startswith(RESTART_INTENSITY_REASON)
-    )
+    return freeze.freeze_kind == "exposure"
+
+
+def _clear_freeze_blocker(
+    *,
+    receipt: AccountReconciliationReceipt | None,
+    freeze: AccountFreezeEvidence | None,
+    now_ms: int,
+    account_id: str | None = None,
+    receipt_id: str | None = None,
+) -> str | None:
+    if freeze is None:
+        return (
+            f"account freeze does not exist for {account_id!r}"
+            if account_id is not None
+            else "account freeze does not exist"
+        )
+    if receipt is None:
+        return (
+            f"account reconciliation receipt not found for {account_id!r}"
+            if account_id is not None
+            else "account reconciliation receipt not found"
+        )
+    if account_id is not None and receipt.account_id != account_id:
+        return "latest account receipt belongs to a different account"
+    if receipt.account_id != freeze.account_id:
+        return "latest account receipt belongs to a different account"
+    if receipt_id is not None and receipt.receipt_id != receipt_id:
+        return "submitted receipt_id does not match the latest account receipt"
+    if receipt.expires_at_ms < now_ms:
+        return "account reconciliation receipt is stale"
+    if receipt.generated_at_ms <= freeze.recorded_at_ms:
+        return "account reconciliation receipt must be newer than the active freeze"
+    if _is_exposure_freeze(freeze) and receipt.exposure_resolution not in CLEARABLE_EXPOSURE_RESOLUTIONS:
+        return "exposure freeze cannot clear while exposure resolution is unresolved"
+    if receipt.state != "CLEAN" or receipt.final_gate_result.status != "pass":
+        return "account reconciliation receipt must be clean and passing"
+    return None
 
 
 def _clear_freeze_actionable(
@@ -786,20 +844,7 @@ def _clear_freeze_actionable(
     freeze: AccountFreezeEvidence | None,
     now_ms: int,
 ) -> bool:
-    if receipt is None or freeze is None:
-        return False
-    if receipt.account_id != freeze.account_id:
-        return False
-    if receipt.expires_at_ms < now_ms:
-        return False
-    if receipt.generated_at_ms <= freeze.recorded_at_ms:
-        return False
-    if receipt.state != "CLEAN" or receipt.final_gate_result.status != "pass":
-        return False
-    return (
-        not _is_exposure_freeze(freeze)
-        or receipt.exposure_resolution in CLEARABLE_EXPOSURE_RESOLUTIONS
-    )
+    return _clear_freeze_blocker(receipt=receipt, freeze=freeze, now_ms=now_ms) is None
 
 
 def _reconciliation_triage_row(

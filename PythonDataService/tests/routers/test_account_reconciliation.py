@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from httpx import ASGITransport, AsyncClient
@@ -18,6 +19,12 @@ from app.engine.live.account_artifacts import (
     account_artifacts_root,
     read_account_freeze,
     write_account_freeze,
+)
+from app.engine.live.account_registry import (
+    AccountInstanceBinding,
+    latest_account_instance_binding,
+    read_account_instance_registry,
+    write_account_instance_binding,
 )
 from app.routers import account_reconciliation
 from app.services.account_reconciliation import AccountReconciliationService
@@ -181,6 +188,7 @@ async def test_triage_contract_returns_condition_rows_for_active_freeze(tmp_path
         tmp_path,
         AccountFreezeEvidence(
             account_id="DU1234567",
+            freeze_kind="exposure",
             reason="watchdog.flatten_timed_out",
             source="watchdog_halt_executor",
             recorded_at_ms=1_780_000_002_500,
@@ -238,6 +246,7 @@ async def test_clear_freeze_endpoint_refuses_stale_pre_freeze_receipt(tmp_path: 
         tmp_path,
         AccountFreezeEvidence(
             account_id="DU1234567",
+            freeze_kind="exposure",
             reason="watchdog.flatten_timed_out",
             source="watchdog_halt_executor",
             recorded_at_ms=1_780_000_002_500,
@@ -269,6 +278,7 @@ async def test_clear_freeze_endpoint_returns_refreshed_triage_after_success(tmp_
         tmp_path,
         AccountFreezeEvidence(
             account_id="DU1234567",
+            freeze_kind="exposure",
             reason="watchdog.flatten_timed_out",
             source="watchdog_halt_executor",
             recorded_at_ms=1_780_000_001_000,
@@ -311,6 +321,7 @@ async def test_accept_exposure_override_endpoint_returns_refreshed_triage(
         tmp_path,
         AccountFreezeEvidence(
             account_id="DU1234567",
+            freeze_kind="exposure",
             reason="watchdog.flatten_timed_out",
             source="watchdog_halt_executor",
             recorded_at_ms=1_780_000_001_000,
@@ -341,3 +352,66 @@ async def test_accept_exposure_override_endpoint_returns_refreshed_triage(
     assert body["cleared_source"] == "account_audited_override"
     assert body["triage"]["overall_gate_result"]["status"] == "unknown"
     assert read_account_freeze(tmp_path, "DU1234567") is None
+
+
+async def test_false_crash_backfill_endpoint_repairs_disproven_registry_row(
+    tmp_path: Path,
+) -> None:
+    from app.main import app
+
+    active = AccountInstanceBinding(
+        account_id="DU1234567",
+        strategy_instance_id="bot-a",
+        run_id="run-halt",
+        bot_order_namespace="learn-ai/bot-a/v1",
+        lifecycle_state="ACTIVE",
+        recorded_at_ms=1_780_000_001_000,
+        source="host_daemon.start",
+    )
+    retired = active.model_copy(
+        update={
+            "lifecycle_state": "RETIRED",
+            "recorded_at_ms": 1_780_000_002_000,
+            "source": "host_daemon.process_crashed",
+        }
+    )
+    write_account_instance_binding(tmp_path, active)
+    write_account_instance_binding(tmp_path, retired)
+    run_dir = tmp_path / "live_runs" / "run-halt"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run_status.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "run_id": "run-halt",
+                "started_at_ms": 1_780_000_001_000,
+                "last_update_ms": 1_780_000_002_000,
+                "ended_at_ms": 1_780_000_002_000,
+                "exit_code": 1,
+                "exit_reason": "fatal_halt",
+            }
+        ),
+        encoding="utf-8",
+    )
+    app.dependency_overrides[
+        account_reconciliation.get_account_artifacts_root
+    ] = lambda: tmp_path
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/accounts/DU1234567/registry/backfill-false-crashes"
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["rows_repaired"] == 1
+    assert body["repaired_run_ids"] == ["run-halt"]
+    repaired = latest_account_instance_binding(
+        read_account_instance_registry(tmp_path, "DU1234567"),
+        account_id="DU1234567",
+        strategy_instance_id="bot-a",
+    )
+    assert repaired is not None
+    assert repaired.source == "host_daemon.process_halted"

@@ -58,11 +58,8 @@
         [showExecutionHistory]="true"
         [showSymbolExposures]="true"
       />
-      @if (accountHasFreeze()) {
-        <div class="account-freeze-banner" role="status">
-          <i class="pi pi-ban" aria-hidden="true"></i>
-          Account sick bay is gating new starts. Resolve the active account condition before deploying.
-        </div>
+      @if (accountFreezeBanner(); as banner) {
+        <app-account-freeze-banner [banner]="banner" />
       }
       <article class="account-sick-bay-card">
         <header class="card-header">
@@ -115,15 +112,17 @@
                       </p>
                     }
                   </div>
-                  <button
-                    type="button"
-                    class="ghost-btn"
-                    [disabled]="conditionActionDisabled(condition)"
-                    (click)="runConditionAction(condition)"
-                  >
-                    <i class="pi pi-wrench" aria-hidden="true"></i>
-                    {{ conditionActionLabel(condition) }}
-                  </button>
+                  @if (hasConditionAction(condition)) {
+                    <button
+                      type="button"
+                      class="ghost-btn"
+                      [disabled]="conditionActionDisabled(condition)"
+                      (click)="runConditionAction(condition)"
+                    >
+                      <i class="pi pi-wrench" aria-hidden="true"></i>
+                      {{ conditionActionLabel(condition) }}
+                    </button>
+                  }
                 </article>
               }
             </div>
@@ -170,7 +169,7 @@
                 <textarea
                   rows="3"
                   [value]="exposureOverrideReason()"
-                  (input)="setExposureOverrideReason($any($event.target).value)"
+                  (input)="setExposureOverrideReasonFromEvent($event)"
                 ></textarea>
               </label>
               <button

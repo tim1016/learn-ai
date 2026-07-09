@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from app.schemas.bot_events import BotEventRaw
-from app.services.jsonl_wal import JsonlWal
+from app.services.jsonl_wal import JsonlWal, confined_wal_path
 
 
 class BotEventWalCorruptError(RuntimeError):
@@ -25,19 +25,20 @@ class BotEventWalCorruptError(RuntimeError):
 def run_bot_event_wal_path(run_dir: Path) -> Path:
     """Canonical run-scoped raw bot-event WAL path."""
 
-    return run_dir / "bot_events.jsonl"
+    return confined_wal_path(run_dir, "bot_events.jsonl")
 
 
 class BotEventRawWal:
     """Append-only JSONL store for ``BotEventRaw`` records."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, trusted_root: Path | None = None) -> None:
         self._wal = JsonlWal(
             path,
             record_model=BotEventRaw,
             corrupt_error=BotEventWalCorruptError,
             seq_of=lambda event: event.seq,
             label="bot-event",
+            trusted_root=trusted_root,
         )
 
     @property

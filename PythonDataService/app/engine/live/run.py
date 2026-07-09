@@ -446,6 +446,7 @@ def _is_recovery_readonly(args, client) -> bool:
 def _append_live_state_submitted_order(
     live_state_path: Path,
     *,
+    trusted_root: Path | None = None,
     client_order_id: str,
     perm_id: int | None,
     order_id: int,
@@ -456,7 +457,7 @@ def _append_live_state_submitted_order(
     """Append one submitted-order fingerprint to the live-state sidecar."""
     from app.engine.live.live_state_sidecar import LiveStateSidecarRepo
 
-    repo = LiveStateSidecarRepo(live_state_path)
+    repo = LiveStateSidecarRepo(live_state_path, trusted_root=trusted_root)
     existing = repo.read()
     if existing is None:
         if seed_envelope is None:
@@ -499,6 +500,7 @@ async def _recovery_flatten(
     *,
     readonly: bool = False,
     live_state_path: Path | None = None,
+    live_state_trusted_root: Path | None = None,
     live_state_seed: LiveStateEnvelope | None = None,
     bot_order_namespace: str | None = None,
     failed_symbols: list[str] | None = None,
@@ -671,6 +673,7 @@ async def _recovery_flatten(
                 try:
                     _append_live_state_submitted_order(
                         live_state_path,
+                        trusted_root=live_state_trusted_root,
                         client_order_id=spec.client_order_id,
                         perm_id=ack.perm_id,
                         order_id=ack.order_id,
@@ -949,7 +952,10 @@ def _build_live_state_writer(
 
     bot_order_namespace = f"learn-ai/{strategy_instance_id}/v1"
     ib_client_id = int(raw_client_id)
-    repo = LiveStateSidecarRepo(stable_live_state_path(artifacts_root, strategy_instance_id))
+    repo = LiveStateSidecarRepo(
+        stable_live_state_path(artifacts_root, strategy_instance_id),
+        trusted_root=artifacts_root / "live_state",
+    )
 
     # ADR 0009 § 11 — bounded ring-buffer for the per-trade audit list. Keeps
     # the sidecar size predictable on a long-running bot; the cockpit only
@@ -1048,15 +1054,18 @@ def _seed_live_state_sidecar_if_missing(
         stable_live_state_path,
     )
 
-    repo = LiveStateSidecarRepo(stable_live_state_path(artifacts_root, strategy_instance_id))
+    repo = LiveStateSidecarRepo(
+        stable_live_state_path(artifacts_root, strategy_instance_id),
+        trusted_root=artifacts_root / "live_state",
+    )
     repo.write_if_missing(seed_envelope)
 
 
-def _read_owned_perm_ids(live_state_path: Path) -> set[int]:
+def _read_owned_perm_ids(live_state_path: Path, *, trusted_root: Path | None = None) -> set[int]:
     """Load durable bot-owned permIds from the live-state sidecar."""
     from app.engine.live.live_state_sidecar import LiveStateSidecarRepo
 
-    envelope = LiveStateSidecarRepo(live_state_path).read()
+    envelope = LiveStateSidecarRepo(live_state_path, trusted_root=trusted_root).read()
     if envelope is None:
         return set()
     return {int(perm_id) for perm_id in envelope.known_perm_ids}
@@ -1510,7 +1519,9 @@ def cmd_start(args: argparse.Namespace) -> int:
     )
 
     desired_state_path = stable_desired_state_path(_artifacts_root, strategy_instance_id)
-    desired_repo = DesiredStateRepo(desired_state_path)
+    desired_repo = DesiredStateRepo(
+        desired_state_path, trusted_root=_artifacts_root / "live_state"
+    )
     try:
         desired_record = desired_repo.read()
     except DesiredStateCorruptError as exc:
@@ -1663,7 +1674,10 @@ def cmd_start(args: argparse.Namespace) -> int:
             strategy_instance_id=strategy_instance_id,
             seed_envelope=live_state_seed,
         )
-        owned_perm_ids = _read_owned_perm_ids(stable_live_state_path(_artifacts_root, strategy_instance_id))
+        owned_perm_ids = _read_owned_perm_ids(
+            stable_live_state_path(_artifacts_root, strategy_instance_id),
+            trusted_root=_artifacts_root / "live_state",
+        )
 
     # Operator command channel (PRD-A § 16.4 Resolution 7 / PR-D). The
     # bot polls ``<run_dir>/commands/`` at 1s, independent of the bar
@@ -2102,7 +2116,9 @@ def cmd_start(args: argparse.Namespace) -> int:
                 from app.engine.live.reconciliation_orchestrator import reconcile
 
                 _live_state_path = stable_live_state_path(_artifacts_root, strategy_instance_id)
-                _sidecar_repo = LiveStateSidecarRepo(_live_state_path)
+                _sidecar_repo = LiveStateSidecarRepo(
+                    _live_state_path, trusted_root=_artifacts_root / "live_state"
+                )
                 _bot_order_namespace = (
                     live_state_seed.bot_order_namespace
                     if live_state_seed is not None
@@ -2439,6 +2455,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                             broker_for_flatten,
                             readonly=is_readonly,
                             live_state_path=live_state_path,
+                            live_state_trusted_root=_artifacts_root / "live_state",
                             live_state_seed=live_state_seed,
                             bot_order_namespace=f"learn-ai/{strategy_instance_id}/v1",
                             failed_symbols=failed_symbols,
@@ -2750,7 +2767,7 @@ def _cmd_set_desired_state(args: argparse.Namespace, state) -> int:
     from app.engine.live.run_status import now_ms
 
     path = stable_desired_state_path(args.artifacts_root, args.strategy_instance_id)
-    repo = DesiredStateRepo(path)
+    repo = DesiredStateRepo(path, trusted_root=args.artifacts_root / "live_state")
     record = repo.set(
         state,
         updated_by=args.updated_by,

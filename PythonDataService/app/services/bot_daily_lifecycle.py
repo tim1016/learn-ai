@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.engine.live.bot_lifecycle_state import (
+    BotDisplayStatus,
     BotLifecyclePhase,
     BotLifecycleStateRecord,
     BotRollCallOfferRecord,
@@ -50,11 +51,12 @@ def project_bot_daily_lifecycle(evidence: BotDailyLifecycleEvidence) -> BotDaily
     )
     primary_action = _primary_action(phase, display_status, evidence)
     ambient_actions = _ambient_actions(phase, on_roster)
+    attention_badge = _attention_badge(display_status)
     return BotDailyLifecycleProjection(
         phase=phase.value,
         presence_label=_presence_label(phase),
-        display_status=display_status,
-        attention_badge=_attention_badge(display_status),
+        display_status=display_status.value,
+        attention_badge=attention_badge.value if attention_badge is not None else None,
         reason=_reason(display_status, evidence),
         on_roster=on_roster,
         active_run_id=evidence.active_run_id,
@@ -91,54 +93,64 @@ def _display_status(
     condition_count: int,
     start_enabled: bool,
     offer_available: bool,
-) -> str:
+) -> BotDisplayStatus:
     if phase == BotLifecyclePhase.RETIRED:
-        return "Retired"
+        return BotDisplayStatus.RETIRED
     if phase == BotLifecyclePhase.ON_DUTY:
-        return "Clocking out" if process_state == "stopping" else "On duty"
+        return (
+            BotDisplayStatus.CLOCKING_OUT
+            if process_state == "stopping"
+            else BotDisplayStatus.ON_DUTY
+        )
     if condition_count > 0:
-        return "Sick bay"
+        return BotDisplayStatus.SICK_BAY
     if not on_roster:
-        return "Off roster"
+        return BotDisplayStatus.OFF_ROSTER
     if start_enabled and offer_available:
-        return "Ready"
-    return "Off duty"
+        return BotDisplayStatus.READY
+    return BotDisplayStatus.OFF_DUTY
 
 
-def _attention_badge(display_status: str) -> str | None:
-    return display_status if display_status in {"Sick bay", "Ready", "Off roster"} else None
+def _attention_badge(display_status: BotDisplayStatus) -> BotDisplayStatus | None:
+    if display_status in {
+        BotDisplayStatus.SICK_BAY,
+        BotDisplayStatus.READY,
+        BotDisplayStatus.OFF_ROSTER,
+    }:
+        return display_status
+    return None
 
 
-def _reason(display_status: str, evidence: BotDailyLifecycleEvidence) -> str | None:
-    if display_status == "Ready":
+def _reason(display_status: BotDisplayStatus, evidence: BotDailyLifecycleEvidence) -> str | None:
+    if display_status == BotDisplayStatus.READY:
         return "Roll call offered a fresh start before stop-time."
-    if display_status == "Off roster":
+    if display_status == BotDisplayStatus.OFF_ROSTER:
         return "This bot is intentionally left off tomorrow's duty roster."
-    if display_status == "Sick bay":
+    if display_status == BotDisplayStatus.SICK_BAY:
         count = evidence.condition_count
         return f"{count} condition{'s' if count != 1 else ''} need a cure before start."
-    if display_status == "Off duty" and not evidence.start_capability.enabled:
+    if display_status == BotDisplayStatus.OFF_DUTY and not evidence.start_capability.enabled:
         return evidence.start_capability.disabled_reason_code or "Start is not yet proven safe."
     if (
-        display_status == "Off duty"
+        display_status == BotDisplayStatus.OFF_DUTY
         and evidence.start_capability.enabled
         and evidence.roll_call_offer is None
     ):
         return "Run roll call to issue a start offer."
-    if display_status == "Clocking out":
+    if display_status == BotDisplayStatus.CLOCKING_OUT:
         return "Clean-exit procedure is in progress."
     return None
 
 
 def _primary_action(
     phase: BotLifecyclePhase,
-    display_status: str,
+    display_status: BotDisplayStatus,
     evidence: BotDailyLifecycleEvidence,
 ) -> BotLifecycleAction | None:
     if phase == BotLifecyclePhase.ON_DUTY:
         return BotLifecycleAction(id="end_day_now", label="End day now")
     if (
-        display_status == "Ready"
+        display_status == BotDisplayStatus.READY
         and evidence.start_capability.enabled
         and evidence.roll_call_offer is not None
     ):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -9,12 +10,14 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.broker.ibkr.client import BrokerError, IbkrClient
 from app.engine.live.account_artifacts import AccountArtifactError
 from app.engine.live.account_identity import normalize_account_id
+from app.engine.live.account_registry import backfill_false_crash_registry_rows
 from app.routers.broker_dependencies import require_connected_client
 from app.schemas.account_reconciliation import (
     AccountAcceptExposureOverrideRequest,
     AccountAcceptExposureOverrideResponse,
     AccountClearFreezeRequest,
     AccountClearFreezeResponse,
+    AccountFalseCrashBackfillResponse,
     AccountReconciliationReceipt,
     AccountTriageResponse,
 )
@@ -25,8 +28,15 @@ router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 ConnectedIbkrClient = Annotated[IbkrClient, Depends(require_connected_client)]
 
 
+def get_account_artifacts_root() -> Path:
+    return account_truth_artifacts_root()
+
+
+AccountArtifactsRoot = Annotated[Path, Depends(get_account_artifacts_root)]
+
+
 def get_account_reconciliation_service() -> AccountReconciliationService:
-    return AccountReconciliationService(artifacts_root=account_truth_artifacts_root())
+    return AccountReconciliationService(artifacts_root=get_account_artifacts_root())
 
 
 @router.post("/{account_id}/reconciliation", response_model=AccountReconciliationReceipt)
@@ -137,6 +147,32 @@ async def accept_exposure_override_endpoint(
             strategy_instance_id=request.strategy_instance_id,
             run_id=request.run_id,
             bot_order_namespace=request.bot_order_namespace,
+        )
+    except AccountArtifactError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+
+@router.post(
+    "/{account_id}/registry/backfill-false-crashes",
+    response_model=AccountFalseCrashBackfillResponse,
+)
+async def backfill_false_crash_registry_rows_endpoint(
+    account_id: str,
+    artifacts_root: AccountArtifactsRoot,
+) -> AccountFalseCrashBackfillResponse:
+    """Repair latest crash-retired registry rows disproven by durable run status."""
+    try:
+        result = backfill_false_crash_registry_rows(
+            artifacts_root,
+            account_id=_canonical_account_id(account_id),
+        )
+        return AccountFalseCrashBackfillResponse(
+            accounts_scanned=result.accounts_scanned,
+            candidate_rows=result.candidate_rows,
+            rows_repaired=result.rows_repaired,
+            rows_skipped_no_disproof=result.rows_skipped_no_disproof,
+            invalid_account_dirs=result.invalid_account_dirs,
+            repaired_run_ids=list(result.repaired_run_ids),
         )
     except AccountArtifactError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc

@@ -26,7 +26,10 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 # Reuse the atomic-write primitives instead of duplicating them. The
 # reviewer-flagged extraction of these into a shared util is the
 # follow-up; importing keeps a single source of truth in the meantime.
-from app.engine.live.identity import validate_strategy_instance_id
+from app.engine.live.identity import (
+    strategy_instance_artifact_dir,
+    validate_strategy_instance_id,
+)
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
 
 # Re-exported so existing callers can keep importing it from here.
@@ -67,8 +70,12 @@ def stable_desired_state_path(artifacts_root: Path, strategy_instance_id: str) -
     boundary) so a caller-controlled value can never escape
     ``artifacts_root``.
     """
-    validate_strategy_instance_id(strategy_instance_id)
-    return artifacts_root / "live_state" / strategy_instance_id / "desired_state.json"
+    return (
+        strategy_instance_artifact_dir(
+            artifacts_root, "live_state", strategy_instance_id
+        )
+        / "desired_state.json"
+    )
 
 
 class DesiredState(StrEnum):
@@ -88,8 +95,17 @@ class DesiredStateRecord(BaseModel):
 
 
 class DesiredStateRepo:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, trusted_root: Path | None = None) -> None:
         self._path = path
+        self._trusted_root = trusted_root if trusted_root is not None else path.parent
+
+    def _confined_path(self) -> Path:
+        root_real = os.path.realpath(os.fspath(self._trusted_root))
+        candidate = os.path.realpath(os.fspath(self._path))
+        root_prefix = root_real.rstrip(os.sep) + os.sep
+        if not candidate.startswith(root_prefix):
+            raise ValueError(f"desired-state path {candidate} escapes root {root_real}")
+        return Path(candidate)
 
     def read(self) -> DesiredStateRecord | None:
         """Return the on-disk record, or ``None`` when the file is absent.
@@ -97,14 +113,20 @@ class DesiredStateRepo:
         Absence means "no operator has expressed intent yet" — the
         caller defaults to RUNNING (see ``read_state``).
         """
-        if not self._path.exists():
+        root_real = os.path.realpath(os.fspath(self._trusted_root))
+        candidate = os.path.realpath(os.fspath(self._path))
+        root_prefix = root_real.rstrip(os.sep) + os.sep
+        if not candidate.startswith(root_prefix):
+            raise ValueError(f"desired-state path {candidate} escapes root {root_real}")
+        path = Path(candidate)
+        if not path.exists():
             return None
         try:
             return DesiredStateRecord.model_validate_json(
-                self._path.read_text(encoding="utf-8")
+                path.read_text(encoding="utf-8")
             )
         except (ValidationError, ValueError) as exc:
-            raise DesiredStateCorruptError(self._path, exc) from exc
+            raise DesiredStateCorruptError(path, exc) from exc
 
     def read_state(self) -> DesiredState:
         """Convenience: the desired state, defaulting to RUNNING when no
@@ -118,9 +140,15 @@ class DesiredStateRepo:
         fsync, os.replace, then fsync the parent dir so the rename
         survives a crash. Mirrors ``LiveStateSidecarRepo.write``.
         """
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        with _file_lock(self._path):
-            self._write_locked(record)
+        root_real = os.path.realpath(os.fspath(self._trusted_root))
+        candidate = os.path.realpath(os.fspath(self._path))
+        root_prefix = root_real.rstrip(os.sep) + os.sep
+        if not candidate.startswith(root_prefix):
+            raise ValueError(f"desired-state path {candidate} escapes root {root_real}")
+        path = Path(candidate)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _file_lock(path, trusted_root=self._trusted_root):
+            self._write_locked(path, record)
 
     def set(
         self,
@@ -137,8 +165,14 @@ class DesiredStateRepo:
         int64 ms UTC value is produced at the boundary, not inside this
         repo, so the write stays deterministic and testable.
         """
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        with _file_lock(self._path):
+        root_real = os.path.realpath(os.fspath(self._trusted_root))
+        candidate = os.path.realpath(os.fspath(self._path))
+        root_prefix = root_real.rstrip(os.sep) + os.sep
+        if not candidate.startswith(root_prefix):
+            raise ValueError(f"desired-state path {candidate} escapes root {root_real}")
+        path = Path(candidate)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _file_lock(path, trusted_root=self._trusted_root):
             existing = self.read()
             next_version = (existing.version + 1) if existing is not None else 1
             record = DesiredStateRecord(
@@ -148,26 +182,32 @@ class DesiredStateRepo:
                 reason=reason,
                 version=next_version,
             )
-            self._write_locked(record)
+            self._write_locked(path, record)
             return record
 
-    def _write_locked(self, record: DesiredStateRecord) -> None:
+    def _write_locked(self, path: Path, record: DesiredStateRecord) -> None:
         """File-mechanics half of write(). Caller must hold ``_file_lock``.
 
         Split out so ``set`` can hold one lock across its full
         read-modify-write without re-entering ``_file_lock`` (the
         fcntl/msvcrt locks are per-fd; nesting would surprise).
         """
-        tmp_path = self._path.with_suffix(self._path.suffix + ".tmp")
+        root_real = os.path.realpath(os.fspath(self._trusted_root))
+        candidate = os.path.realpath(os.fspath(path))
+        root_prefix = root_real.rstrip(os.sep) + os.sep
+        if not candidate.startswith(root_prefix):
+            raise ValueError(f"desired-state path {candidate} escapes root {root_real}")
+        safe_path = Path(candidate)
+        tmp_path = safe_path.with_suffix(safe_path.suffix + ".tmp")
         payload = record.model_dump_json().encode("utf-8")
         with open(tmp_path, "wb") as fh:
             fh.write(payload)
             fh.flush()
             os.fsync(fh.fileno())
         try:
-            os.replace(tmp_path, self._path)
+            os.replace(tmp_path, safe_path)
         except Exception:
             with contextlib.suppress(OSError):
                 tmp_path.unlink()
             raise
-        _fsync_parent_dir(self._path)
+        _fsync_parent_dir(safe_path)

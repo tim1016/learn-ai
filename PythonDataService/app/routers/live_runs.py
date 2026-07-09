@@ -1033,7 +1033,7 @@ def _resolve_desired_state(live_runs_root: Path, strategy_instance_id: str) -> D
         path = _safe_desired_state_path(_desired_state_root(live_runs_root), strategy_instance_id)
     except ValueError:
         return DesiredStateView(path_status=DesiredStatePathStatus.unknown_no_ledger_binding)
-    repo = DesiredStateRepo(path)
+    repo = DesiredStateRepo(path, trusted_root=_desired_state_root(live_runs_root) / "live_state")
     try:
         record = repo.read()
     except DesiredStateCorruptError:
@@ -1154,7 +1154,11 @@ async def set_desired_state(run_id: str, body: SetDesiredStateRequest) -> Desire
             detail="run has no strategy_instance_id binding (legacy ledger)",
         )
     _validate_strategy_instance_id(sid)
-    repo = DesiredStateRepo(_safe_desired_state_path(_desired_state_root(root), sid))
+    artifacts_root = _desired_state_root(root)
+    repo = DesiredStateRepo(
+        _safe_desired_state_path(artifacts_root, sid),
+        trusted_root=artifacts_root / "live_state",
+    )
     record = repo.set(
         _ACTION_TO_STATE[body.action],
         updated_by=body.updated_by,

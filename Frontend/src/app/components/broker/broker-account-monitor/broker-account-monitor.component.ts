@@ -17,6 +17,7 @@ import { DataSourceComponent } from '../../../shared/data-source/data-source.com
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { AccountTruthBoardComponent } from '../account-truth-board/account-truth-board.component';
+import { AccountFreezeBannerComponent } from '../account-freeze-banner/account-freeze-banner.component';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { brokerSse, type SseStream } from '../../../services/broker-sse';
@@ -70,6 +71,7 @@ interface PositionRow {
     SectionErrorComponent,
     RouterLink,
     AccountTruthBoardComponent,
+    AccountFreezeBannerComponent,
     ReceiptLabelPipe,
   ],
   styleUrl: './broker-account-monitor.component.scss',
@@ -113,14 +115,7 @@ export class BrokerAccountMonitorComponent {
     return truth === null ? null : this.reconciliationAccountIdForTruth(truth);
   });
   readonly accountConditions = computed(() => this.accountTriage()?.conditions ?? []);
-  readonly accountHasFreeze = computed(() =>
-    this.accountConditions().some(
-      (condition) =>
-        condition.scope === 'account' &&
-        (condition.condition_type === 'exposure_freeze' ||
-          condition.condition_type === 'account_freeze'),
-    ),
-  );
+  readonly accountFreezeBanner = computed(() => this.accountTriage()?.freeze_banner ?? null);
   readonly accountReconciliationExpired = computed(() => {
     const receipt = this.accountReconciliation();
     return receipt !== null && receipt.expires_at_ms < this.accountReconciliationNowMs();
@@ -317,6 +312,13 @@ export class BrokerAccountMonitorComponent {
     this.exposureOverrideReason.set(value);
   }
 
+  setExposureOverrideReasonFromEvent(event: Event): void {
+    const target = event.target;
+    if (target instanceof HTMLTextAreaElement) {
+      this.setExposureOverrideReason(target.value);
+    }
+  }
+
   async flattenExposureFromDialog(): Promise<void> {
     const condition = this.exposureResolutionCondition();
     const accountId = this.accountReconciliationAccountId();
@@ -381,6 +383,14 @@ export class BrokerAccountMonitorComponent {
       case 'retire_replace':
         return 'Retire & Replace';
     }
+  }
+
+  hasConditionAction(condition: AccountConditionRow): boolean {
+    return (
+      condition.cure_action === 'resolve_exposure' ||
+      condition.cure_action === 'clear_freeze' ||
+      condition.cure_action === 'reconcile_now'
+    );
   }
 
   gateStatusLabel(status: GateResultStatus): string {

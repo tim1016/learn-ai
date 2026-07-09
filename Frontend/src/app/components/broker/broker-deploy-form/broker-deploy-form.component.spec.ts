@@ -289,6 +289,7 @@ function cleanTriage(): AccountTriageResponse {
     account_reconciliation_receipt: null,
     gate_rows: [],
     conditions: [],
+    freeze_banner: null,
     clear_freeze_actionable: false,
     affected_bots: [],
   };
@@ -330,6 +331,10 @@ function frozenTriage(): AccountTriageResponse {
         cure_action: 'resolve_exposure',
       },
     ],
+    freeze_banner: {
+      headline: 'Account sick bay is gating new starts.',
+      detail: 'Resolve or audit broker exposure before starting another bot on this account.',
+    },
   };
 }
 

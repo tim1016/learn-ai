@@ -37,7 +37,9 @@ class BotEventStreamService:
         limit: int,
     ) -> BotEventStreamPage:
         try:
-            raw_events = BotEventRawWal(run_bot_event_wal_path(run_dir)).read_all()
+            raw_events = BotEventRawWal(
+                run_bot_event_wal_path(run_dir), trusted_root=run_dir
+            ).read_all()
             rows = sorted(
                 project_bot_event_rows(raw_events),
                 key=lambda row: row.seq,

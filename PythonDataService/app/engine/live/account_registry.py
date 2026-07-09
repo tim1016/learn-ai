@@ -16,16 +16,20 @@ from app.engine.live.account_artifacts import (
     ACCOUNT_RECOVERY_EVIDENCE_EVENT_TYPES,
     AccountArtifactError,
     _append_account_event,
+    _safe_account_path_segment,
     account_artifacts_root,
     read_account_events,
 )
-from app.engine.live.exit_taxonomy import false_crash_repair_source, read_run_exit_evidence
+from app.engine.live.exit_taxonomy import (
+    CRASH_RETIRED_BINDING_SOURCES,
+    false_crash_repair_source,
+    read_run_exit_evidence,
+)
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
 from app.schemas.live_runs import GateResult
 
 ACCOUNT_INSTANCE_REGISTRY_FILENAME = "instance_registry.jsonl"
 ACTIVE_INSTANCE_BINDING_STATES = frozenset({"DEPLOYED", "ACTIVE"})
-CRASH_RETIRED_BINDING_SOURCES = frozenset({"host_daemon.process_crashed"})
 
 
 class AccountInstanceBinding(BaseModel):
@@ -80,9 +84,16 @@ def write_account_instance_binding(
     artifacts_root: Path,
     binding: AccountInstanceBinding,
 ) -> Path:
-    root = account_artifacts_root(artifacts_root, binding.account_id)
-    root.mkdir(parents=True, exist_ok=True)
-    path = root / ACCOUNT_INSTANCE_REGISTRY_FILENAME
+    safe_account_id = _safe_account_path_segment(binding.account_id)
+    accounts_root = os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts"))
+    root_real = os.path.realpath(os.path.join(accounts_root, safe_account_id))
+    registry_filename = os.path.basename(ACCOUNT_INSTANCE_REGISTRY_FILENAME)
+    registry_real = os.path.realpath(os.path.join(root_real, registry_filename))
+    root_prefix = root_real if root_real.endswith(os.sep) else f"{root_real}{os.sep}"
+    if not registry_real.startswith(root_prefix):
+        raise AccountArtifactError(f"registry path traversal detected for account_id: {binding.account_id!r}")
+    path = Path(registry_real)
+    path.parent.mkdir(parents=True, exist_ok=True)
     line = binding.model_dump_json() + "\n"
     with _file_lock(path):
         with open(path, "a", encoding="utf-8") as fh:
@@ -91,7 +102,8 @@ def write_account_instance_binding(
             os.fsync(fh.fileno())
         _fsync_parent_dir(path)
     _append_account_event(
-        root,
+        artifacts_root,
+        binding.account_id,
         {
             "event_type": "account_instance_binding_recorded",
             "account_id": binding.account_id,

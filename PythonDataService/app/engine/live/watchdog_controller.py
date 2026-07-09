@@ -361,6 +361,7 @@ class WatchdogHaltExecutor:
                 self._artifacts_root,
                 AccountFreezeEvidence(
                     account_id=self._account_id,
+                    freeze_kind="exposure",
                     reason=reason,
                     source="watchdog_halt_executor",
                     recorded_at_ms=recorded_at_ms,

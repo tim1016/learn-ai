@@ -70,6 +70,11 @@ export interface AccountConditionRow {
   cure_action: AccountCureAction;
 }
 
+export interface AccountFreezeBanner {
+  headline: string;
+  detail: string;
+}
+
 export interface AccountTriageBotRef {
   strategy_instance_id: string;
   run_id: string;
@@ -103,6 +108,7 @@ export interface AccountTriageResponse {
   account_reconciliation_receipt: AccountReconciliationReceipt | null;
   gate_rows: AccountTriageGateRow[];
   conditions: AccountConditionRow[];
+  freeze_banner: AccountFreezeBanner | null;
   clear_freeze_actionable: boolean;
   affected_bots: AccountTriageBotRef[];
 }

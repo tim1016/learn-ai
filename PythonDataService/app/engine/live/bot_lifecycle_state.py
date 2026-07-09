@@ -34,6 +34,16 @@ class BotLifecyclePhase(StrEnum):
     RETIRED = "RETIRED"
 
 
+class BotDisplayStatus(StrEnum):
+    OFF_DUTY = "Off duty"
+    READY = "Ready"
+    ON_DUTY = "On duty"
+    CLOCKING_OUT = "Clocking out"
+    SICK_BAY = "Sick bay"
+    OFF_ROSTER = "Off roster"
+    RETIRED = "Retired"
+
+
 class BotLifecycleStateRecord(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -308,6 +318,7 @@ def _next_active_run_id(
 
 
 __all__ = [
+    "BotDisplayStatus",
     "BotLifecyclePhase",
     "BotLifecycleStateCorruptError",
     "BotLifecycleStateRecord",

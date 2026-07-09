@@ -1,0 +1,55 @@
+:host {
+  display: block;
+}
+
+.account-freeze-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 1rem 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 107, 107, 0.5);
+  border-radius: 8px;
+  background: rgba(255, 107, 107, 0.12);
+  color: #ffd1d1;
+
+  div {
+    display: grid;
+    gap: 2px;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  span {
+    color: var(--text-secondary, #b2b5be);
+    font-size: 13px;
+    line-height: 1.3;
+  }
+}
+
+.account-freeze-banner__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid rgba(255, 209, 209, 0.45);
+  border-radius: 6px;
+  background: rgba(255, 209, 209, 0.08);
+  color: #ffd1d1;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.86rem;
+  padding: 0.45rem 0.7rem;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .account-freeze-banner {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .account-freeze-banner__action {
+    width: 100%;
+    justify-content: center;
+  }
+}

@@ -109,7 +109,9 @@ def reconstruct_broker_activity_for_run(
 
     source, source_events = _source_events(run_dir)
     target_wal_path = instance_broker_activity_wal_path(artifacts_root, strategy_instance_id)
-    wal = BrokerActivityWal(target_wal_path)
+    wal = BrokerActivityWal(
+        target_wal_path, trusted_root=artifacts_root / "live_instances"
+    )
     existing_keys = _existing_row_keys(wal.read_all())
 
     rows_written = 0
@@ -269,7 +271,8 @@ def _read_envelope(
 ) -> LiveStateEnvelope | None:
     try:
         return LiveStateSidecarRepo(
-            stable_live_state_path(artifacts_root, strategy_instance_id)
+            stable_live_state_path(artifacts_root, strategy_instance_id),
+            trusted_root=artifacts_root / "live_state",
         ).read()
     except LiveStateSidecarCorruptError:
         return None

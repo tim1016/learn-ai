@@ -350,6 +350,7 @@ function cleanTriage(): AccountTriageResponse {
     account_reconciliation_receipt: null,
     gate_rows: [],
     conditions: [],
+    freeze_banner: null,
     clear_freeze_actionable: false,
     affected_bots: [],
   };
@@ -391,6 +392,10 @@ function frozenTriage(): AccountTriageResponse {
         cure_action: 'clear_freeze',
       },
     ],
+    freeze_banner: {
+      headline: 'Account sick bay is gating new starts.',
+      detail: 'Run account reconciliation and clear the active account freeze before deploying.',
+    },
   };
 }
 
@@ -453,6 +458,11 @@ describe('BotsPageComponent', () => {
     expect(text).toContain('1 ready · 1 on duty · 1 in sick bay · 0 off roster · 0 retired');
     expect(fixture.nativeElement.querySelectorAll('[data-testid="bot-attendance-strip"]').length)
       .toBeGreaterThan(0);
+    const sickStatusCell = Array.from(
+      (fixture.nativeElement as HTMLElement).querySelectorAll('.status-cell'),
+    ).find((cell) => cell.textContent?.includes('1 condition needs a cure before start.'));
+    expect(sickStatusCell?.textContent).toContain('Off duty');
+    expect(sickStatusCell?.textContent).toContain('Sick bay');
   });
 
   it('runs roll call and starts ready bots with their offer ids', async () => {
@@ -489,7 +499,9 @@ describe('BotsPageComponent', () => {
     const root = fixture.nativeElement as HTMLElement;
 
     expect(root.textContent).toContain('Account sick bay is gating new starts.');
-    expect(root.textContent).toContain('Manual Freeze');
+    expect(root.textContent).toContain(
+      'Run account reconciliation and clear the active account freeze before deploying.',
+    );
     expect(broker.accountTriage).toHaveBeenCalledWith('DU1234567');
 
     const button = Array.from(root.querySelectorAll('button')).find((candidate) =>

@@ -215,6 +215,22 @@ describe('BrokerAccountMonitorComponent', () => {
     });
   });
 
+  it('renders unsupported condition cures without dead action buttons', async () => {
+    const broker = new FakeBrokerService();
+    broker.accountTriage.mockResolvedValue(terminalTriage());
+    await render(BrokerAccountMonitorComponent, {
+      providers: [
+        { provide: BrokerService, useValue: broker },
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useClass: FakeLiveRunsService },
+        routeFragment(),
+      ],
+    });
+
+    expect(await screen.findByText('Bot crashed')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /retire/i })).toBeNull();
+  });
+
   it('runs fail-closed reconciliation from broker health account when truth account is unknown', async () => {
     const broker = new FakeBrokerService();
     broker.accountTruth.mockResolvedValue(
@@ -331,6 +347,7 @@ function cleanTriage(receipt: AccountReconciliationReceipt | null = null): Accou
     account_reconciliation_receipt: receipt,
     gate_rows: [],
     conditions: [],
+    freeze_banner: null,
     clear_freeze_actionable: false,
     affected_bots: [],
   };
@@ -373,6 +390,10 @@ function frozenTriage(): AccountTriageResponse {
         cure_action: 'clear_freeze',
       },
     ],
+    freeze_banner: {
+      headline: 'Account sick bay is gating new starts.',
+      detail: 'Run account reconciliation and clear the active account freeze before deploying.',
+    },
     clear_freeze_actionable: true,
     affected_bots: [
       {
@@ -422,8 +443,43 @@ function exposureFrozenTriage(): AccountTriageResponse {
         cure_action: 'resolve_exposure',
       },
     ],
+    freeze_banner: {
+      headline: 'Account sick bay is gating new starts.',
+      detail: 'Resolve or audit broker exposure before starting another bot on this account.',
+    },
     clear_freeze_actionable: false,
     affected_bots: [],
+  };
+}
+
+function terminalTriage(): AccountTriageResponse {
+  return {
+    ...cleanTriage(accountReconciliationReceipt()),
+    summary_headline: 'Account recovery needs attention',
+    summary_detail: 'A retired bot needs operator attention.',
+    conditions: [
+      {
+        condition_type: 'crashed',
+        scope: 'bot',
+        owner: {
+          owner_type: 'bot',
+          owner_id: 'retired-freezer',
+          label: 'Bot retired-freezer',
+          strategy_instance_id: 'retired-freezer',
+          run_id: 'run-freeze',
+          lifecycle_state: 'RETIRED',
+        },
+        severity: 'critical',
+        title: 'Bot crashed',
+        detail: 'retired-freezer ended from a crash in run run-freeze.',
+        operator_next_step: 'RETIRE_REPLACE',
+        source: 'host_daemon.process_crashed',
+        evidence_at_ms: 1_780_000_002_500,
+        evidence_refs: [],
+        affected_strategy_instance_ids: [],
+        cure_action: 'retire_replace',
+      },
+    ],
   };
 }
 

@@ -131,6 +131,15 @@ class AccountConditionRow(BaseModel):
     cure_action: AccountCureAction
 
 
+class AccountFreezeBanner(BaseModel):
+    """Backend-authored banner copy for active account freezes."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    headline: str = Field(min_length=1, max_length=160)
+    detail: str = Field(min_length=1, max_length=512)
+
+
 class AccountTriageResponse(BaseModel):
     """Thin account-scoped recovery projection over existing authorities."""
 
@@ -146,6 +155,7 @@ class AccountTriageResponse(BaseModel):
     account_reconciliation_receipt: AccountReconciliationReceipt | None = None
     gate_rows: list[AccountTriageGateRow] = Field(default_factory=list)
     conditions: list[AccountConditionRow] = Field(default_factory=list)
+    freeze_banner: AccountFreezeBanner | None = None
     clear_freeze_actionable: bool = False
     affected_bots: list[AccountTriageBotRef] = Field(default_factory=list)
 
@@ -198,3 +208,17 @@ class AccountAcceptExposureOverrideResponse(BaseModel):
     cleared_source: Literal["account_audited_override"] = "account_audited_override"
     override_id: str = Field(min_length=1, max_length=128)
     triage: AccountTriageResponse
+
+
+class AccountFalseCrashBackfillResponse(BaseModel):
+    """Summary of the append-only false-crash registry repair."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    accounts_scanned: int = Field(ge=0)
+    candidate_rows: int = Field(ge=0)
+    rows_repaired: int = Field(ge=0)
+    rows_skipped_no_disproof: int = Field(ge=0)
+    invalid_account_dirs: int = Field(ge=0)
+    repaired_run_ids: list[str] = Field(default_factory=list)

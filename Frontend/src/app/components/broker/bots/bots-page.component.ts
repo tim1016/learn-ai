@@ -13,12 +13,10 @@ import { TableModule } from 'primeng/table';
 import { TabsModule } from 'primeng/tabs';
 import { TagModule } from 'primeng/tag';
 
-import type {
-  AccountConditionRow,
-  AccountTriageResponse,
-} from '../../../api/account-reconciliation.types';
+import type { AccountTriageResponse } from '../../../api/account-reconciliation.types';
 import type {
   BotCatalogRow,
+  BotCatalogTone,
   BotCatalogTradingMode,
   BotAttendanceCell,
   BotEveningReport,
@@ -29,7 +27,7 @@ import type { HostRunnerStartRequest } from '../../../api/live-runs.types';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
-import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import { AccountFreezeBannerComponent } from '../account-freeze-banner/account-freeze-banner.component';
 import { fmtInteger, fmtSignedCurrency, fmtTimestampLocal } from '../format';
 
 type AttentionFilter = 'all' | 'needs-attention' | 'healthy';
@@ -49,6 +47,13 @@ const EMPTY_ROLL_CALL_SUMMARY: BotRollCallSummary = {
   effective_stop_ms: null,
 };
 
+const BOT_TONE_SEVERITY: Record<BotCatalogTone, TagSeverity> = {
+  positive: 'success',
+  warning: 'warn',
+  danger: 'danger',
+  neutral: 'secondary',
+};
+
 interface BotTableRow {
   id: string;
   name: string;
@@ -59,6 +64,8 @@ interface BotTableRow {
   displayStatus: BotLifecycleDisplayStatus;
   statusReason: string | null;
   presenceLabel: string;
+  attentionBadge: BotCatalogRow['daily_lifecycle']['attention_badge'];
+  attentionSeverity: TagSeverity;
   exposure: string;
   openPositions: number | null;
   totalPnl: number | null;
@@ -82,7 +89,7 @@ interface BotTableRow {
     TableModule,
     TabsModule,
     TagModule,
-    ReceiptLabelPipe,
+    AccountFreezeBannerComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './bots-page.component.html',
@@ -175,16 +182,7 @@ export class BotsPageComponent {
     ].join(' · ');
   });
   readonly eveningReportLine = computed(() => this.eveningReport()?.summary ?? null);
-  readonly accountFreezeCondition = computed<AccountConditionRow | null>(() => {
-    return (
-      this.accountTriage()?.conditions.find(
-        (condition) =>
-          condition.scope === 'account' &&
-          (condition.condition_type === 'exposure_freeze' ||
-            condition.condition_type === 'account_freeze'),
-      ) ?? null
-    );
-  });
+  readonly accountFreezeBanner = computed(() => this.accountTriage()?.freeze_banner ?? null);
 
   readonly selectedRows = computed<BotTableRow[]>(() => {
     const selected = this.selectedBotIds();
@@ -410,22 +408,6 @@ export class BotsPageComponent {
     await this.router.navigate(['/broker/bots', id]);
   }
 
-  lifecycleSeverity(status: BotLifecycleDisplayStatus): TagSeverity {
-    switch (status) {
-      case 'Ready':
-      case 'On duty':
-        return 'success';
-      case 'Clocking out':
-      case 'Off roster':
-        return 'warn';
-      case 'Sick bay':
-        return 'danger';
-      case 'Off duty':
-      case 'Retired':
-        return 'secondary';
-    }
-  }
-
   formatMoney(value: number | null): string {
     return fmtSignedCurrency(value);
   }
@@ -494,6 +476,8 @@ function toTableRow(bot: BotCatalogRow): BotTableRow {
     displayStatus: bot.daily_lifecycle.display_status,
     statusReason: bot.daily_lifecycle.reason ?? bot.status_detail,
     presenceLabel: bot.daily_lifecycle.presence_label,
+    attentionBadge: bot.daily_lifecycle.attention_badge,
+    attentionSeverity: BOT_TONE_SEVERITY[bot.status_tone],
     exposure: bot.metrics.current_exposure,
     openPositions: bot.metrics.open_positions,
     totalPnl: bot.metrics.pnl.total,

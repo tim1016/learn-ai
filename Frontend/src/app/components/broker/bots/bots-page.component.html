@@ -39,23 +39,12 @@
     </div>
   </header>
 
-  @if (accountFreezeCondition(); as condition) {
-    <section class="account-freeze-banner" role="status">
-      <i class="pi pi-ban" aria-hidden="true"></i>
-      <div>
-        <strong>Account sick bay is gating new starts.</strong>
-        <span>{{ condition.detail | receiptLabel }}</span>
-      </div>
-      <button
-        pButton
-        type="button"
-        severity="danger"
-        icon="pi pi-arrow-right"
-        (click)="openAccountMonitor()"
-      >
-        <span class="p-button-label">Open Account Monitor</span>
-      </button>
-    </section>
+  @if (accountFreezeBanner(); as banner) {
+    <app-account-freeze-banner
+      [banner]="banner"
+      actionLabel="Open Account Monitor"
+      (actionClicked)="openAccountMonitor()"
+    />
   } @else if (accountTriageError(); as message) {
     <p class="load-error" role="status">{{ message }}</p>
   }
@@ -421,9 +410,15 @@
             <td>
               <div class="status-cell" [title]="row.statusReason ?? row.presenceLabel">
                 <p-tag
-                  [severity]="lifecycleSeverity(row.displayStatus)"
-                  [value]="row.displayStatus"
+                  severity="secondary"
+                  [value]="row.presenceLabel"
                 />
+                @if (row.attentionBadge; as badge) {
+                  <p-tag
+                    [severity]="row.attentionSeverity"
+                    [value]="badge"
+                  />
+                }
                 @if (row.statusReason; as reason) {
                   <span>{{ reason }}</span>
                 }
@@ -500,9 +495,15 @@
                 <dd>
                   <div class="status-cell">
                     <p-tag
-                      [severity]="lifecycleSeverity(row.displayStatus)"
-                      [value]="row.displayStatus"
+                      severity="secondary"
+                      [value]="row.presenceLabel"
                     />
+                    @if (row.attentionBadge; as badge) {
+                      <p-tag
+                        [severity]="row.attentionSeverity"
+                        [value]="badge"
+                      />
+                    }
                     @if (row.statusReason; as reason) {
                       <span>{{ reason }}</span>
                     }

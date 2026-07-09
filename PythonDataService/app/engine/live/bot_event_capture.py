@@ -28,7 +28,7 @@ def bot_event_wal_for_run(
 ) -> BotEventRawWal | None:
     if run_dir is None or not run_id or not strategy_instance_id:
         return None
-    return BotEventRawWal(run_bot_event_wal_path(run_dir))
+    return BotEventRawWal(run_bot_event_wal_path(run_dir), trusted_root=run_dir)
 
 
 def launch_identity_for_run(run_id: str) -> BotEventIdentity:
@@ -137,7 +137,11 @@ class BotEventTerminalRecorder:
     ) -> None:
         self._run_id = run_id
         self._strategy_instance_id = strategy_instance_id
-        self._wal = wal if wal is not None else BotEventRawWal(run_bot_event_wal_path(run_dir))
+        self._wal = (
+            wal
+            if wal is not None
+            else BotEventRawWal(run_bot_event_wal_path(run_dir), trusted_root=run_dir)
+        )
 
     @classmethod
     def for_run(
@@ -222,7 +226,11 @@ class BotEventGateStepRecorder:
     ) -> None:
         self._run_id = run_id
         self._strategy_instance_id = strategy_instance_id
-        self._wal = wal if wal is not None else BotEventRawWal(run_bot_event_wal_path(run_dir))
+        self._wal = (
+            wal
+            if wal is not None
+            else BotEventRawWal(run_bot_event_wal_path(run_dir), trusted_root=run_dir)
+        )
 
     @classmethod
     def for_run(
@@ -282,7 +290,11 @@ class BotEventSpineRecorder:
     ) -> None:
         self._run_id = run_id
         self._strategy_instance_id = strategy_instance_id
-        self._wal = wal if wal is not None else BotEventRawWal(run_bot_event_wal_path(run_dir))
+        self._wal = (
+            wal
+            if wal is not None
+            else BotEventRawWal(run_bot_event_wal_path(run_dir), trusted_root=run_dir)
+        )
 
     @classmethod
     def for_run(
