@@ -354,6 +354,8 @@ def _project_prior_run(last_exit: InstanceLastExit | None) -> OperatorSurfacePri
         return OperatorSurfacePriorRun(classification="UNKNOWN")
     if last_exit.halt_trigger is not None:
         return OperatorSurfacePriorRun(classification="HALT_TRIGGERED")
+    if last_exit.exit_reason in {"fatal_halt", "max_orders_exceeded"}:
+        return OperatorSurfacePriorRun(classification="HALT_TRIGGERED")
     if last_exit.exit_code == 0 or last_exit.exit_reason == "normal":
         return OperatorSurfacePriorRun(classification="CLEAN")
     if last_exit.exit_code is not None and last_exit.exit_code != 0:

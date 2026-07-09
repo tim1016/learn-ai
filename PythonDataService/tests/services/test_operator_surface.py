@@ -495,6 +495,8 @@ def _exit(**overrides):
     [
         (_exit(halt_trigger="OUTSIDE_MUTATION", exit_code=1), "HALT_TRIGGERED"),
         (_exit(halt_trigger="OPERATOR_DECLARED"), "HALT_TRIGGERED"),
+        (_exit(exit_reason="fatal_halt", exit_code=1), "HALT_TRIGGERED"),
+        (_exit(exit_reason="max_orders_exceeded", exit_code=1), "HALT_TRIGGERED"),
         (_exit(exit_code=0), "CLEAN"),
         (_exit(exit_reason="normal"), "CLEAN"),
         (_exit(exit_code=0, exit_reason="normal"), "CLEAN"),

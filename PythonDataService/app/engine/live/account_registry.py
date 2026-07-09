@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,7 @@ from app.engine.live.account_artifacts import (
     account_artifacts_root,
     read_account_events,
 )
+from app.engine.live.exit_taxonomy import false_crash_repair_source, read_run_exit_evidence
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
 from app.schemas.live_runs import GateResult
 
@@ -56,6 +58,18 @@ class AccountInstanceBindingIndex:
             for namespace, namespace_bindings in self.active_by_namespace.items()
             if len(namespace_bindings) > 1
         )
+
+
+@dataclass(frozen=True)
+class AccountRegistryFalseCrashBackfillResult:
+    """Summary of the append-only false-crash registry repair."""
+
+    accounts_scanned: int
+    candidate_rows: int
+    rows_repaired: int
+    rows_skipped_no_disproof: int
+    invalid_account_dirs: int
+    repaired_run_ids: tuple[str, ...]
 
 
 def bot_order_namespace_for_instance(strategy_instance_id: str) -> str:
@@ -217,6 +231,80 @@ def crash_retired_restart_blocking_binding(
     return latest
 
 
+def backfill_false_crash_registry_rows(
+    artifacts_root: Path,
+    *,
+    account_id: str | None = None,
+    now_ms: int | None = None,
+) -> AccountRegistryFalseCrashBackfillResult:
+    """Append corrected registry rows for latest crash labels disproven by status.
+
+    Historical registry rows are append-only. The repair therefore writes a
+    later ``RETIRED`` row with the corrected source only when the latest row for
+    an instance is still ``host_daemon.process_crashed`` and that run's own
+    ``run_status.json`` carries a non-crash exit reason. Rows without status
+    evidence are left untouched.
+    """
+
+    accounts = _account_ids_for_false_crash_backfill(artifacts_root, account_id=account_id)
+    accounts_scanned = 0
+    candidate_rows = 0
+    rows_repaired = 0
+    rows_skipped_no_disproof = 0
+    invalid_account_dirs = 0
+    repaired_run_ids: list[str] = []
+    next_recorded_at_ms = now_ms if now_ms is not None else int(time.time() * 1000)
+
+    for account in accounts:
+        try:
+            bindings = read_account_instance_registry(artifacts_root, account)
+        except AccountArtifactError:
+            invalid_account_dirs += 1
+            continue
+        accounts_scanned += 1
+        binding_index = index_account_instance_bindings(bindings, account_id=account)
+        for latest in binding_index.latest_by_instance.values():
+            if latest.lifecycle_state != "RETIRED" or latest.source not in CRASH_RETIRED_BINDING_SOURCES:
+                continue
+            candidate_rows += 1
+            evidence = read_run_exit_evidence(artifacts_root / "live_runs" / latest.run_id)
+            repaired_source = false_crash_repair_source(evidence)
+            if repaired_source is None:
+                rows_skipped_no_disproof += 1
+                continue
+            next_recorded_at_ms = max(next_recorded_at_ms, latest.recorded_at_ms + 1)
+            write_account_instance_binding(
+                artifacts_root,
+                latest.model_copy(
+                    update={
+                        "recorded_at_ms": next_recorded_at_ms,
+                        "source": repaired_source,
+                    }
+                ),
+            )
+            rows_repaired += 1
+            repaired_run_ids.append(latest.run_id)
+            next_recorded_at_ms += 1
+
+    return AccountRegistryFalseCrashBackfillResult(
+        accounts_scanned=accounts_scanned,
+        candidate_rows=candidate_rows,
+        rows_repaired=rows_repaired,
+        rows_skipped_no_disproof=rows_skipped_no_disproof,
+        invalid_account_dirs=invalid_account_dirs,
+        repaired_run_ids=tuple(repaired_run_ids),
+    )
+
+
+def _account_ids_for_false_crash_backfill(artifacts_root: Path, *, account_id: str | None) -> tuple[str, ...]:
+    if account_id is not None:
+        return (account_id,)
+    accounts_root = artifacts_root / "accounts"
+    if not accounts_root.exists():
+        return ()
+    return tuple(sorted(path.name for path in accounts_root.iterdir() if path.is_dir()))
+
+
 def compute_reconcile_namespaces(
     *,
     artifacts_root: Path,
@@ -331,6 +419,8 @@ __all__ = [
     "CRASH_RETIRED_BINDING_SOURCES",
     "AccountInstanceBinding",
     "AccountInstanceBindingIndex",
+    "AccountRegistryFalseCrashBackfillResult",
+    "backfill_false_crash_registry_rows",
     "bot_order_namespace_for_instance",
     "compute_reconcile_namespaces",
     "crash_retired_restart_blocking_binding",

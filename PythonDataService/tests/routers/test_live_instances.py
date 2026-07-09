@@ -2249,6 +2249,24 @@ async def test_bot_catalog_authors_trader_friendly_status_and_last_run_labels(
     assert row["last_run_detail"] == "Previous run exited with an error: runtime exception. Exit code 3."
 
 
+async def test_bot_catalog_labels_status_backed_fatal_halt_as_safety_halt(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-halt", "spy_halt_bot", 100)
+    _write_run_status(root, "run-halt", ended_at_ms=200, exit_code=1, exit_reason="fatal_halt")
+    _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/catalog")
+
+    assert response.status_code == 200
+    row = response.json()["bots"][0]
+    assert row["last_run_label"] == "Safety halt"
+    assert row["last_run_result"] == "HALT_TRIGGERED"
+    assert row["last_run_detail"] == "Previous run stopped on a safety halt: Safety halt. Exit code 1."
+
+
 async def test_bot_catalog_marks_when_only_fresh_run_is_available(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
