@@ -1,22 +1,16 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
 
 import type {
-  LifecycleChartAction,
-  LifecycleChartActionId,
+  BotLifecycleAction,
+  BotLifecycleActionId,
 } from '../../../../api/live-instances.types';
 
-const ACTION_ICON: Record<LifecycleChartActionId, string> = {
-  start_process: 'pi pi-play',
-  resume: 'pi pi-play',
-  pause: 'pi pi-pause',
-  flatten_and_pause: 'pi pi-stop-circle',
-  stop: 'pi pi-power-off',
-  mark_poisoned: 'pi pi-ban',
-  redeploy: 'pi pi-refresh',
-};
-
-const ACTION_LABEL: Partial<Record<LifecycleChartActionId, string>> = {
-  redeploy: 'Fresh run',
+const ACTION_ICON: Record<BotLifecycleActionId, string> = {
+  confirm_start: 'pi pi-play',
+  end_day_now: 'pi pi-power-off',
+  retire_replace: 'pi pi-refresh',
+  add_to_roster: 'pi pi-calendar-plus',
+  take_off_roster: 'pi pi-calendar-minus',
 };
 
 @Component({
@@ -26,10 +20,10 @@ const ACTION_LABEL: Partial<Record<LifecycleChartActionId, string>> = {
   styleUrl: './lifecycle-action-button.component.scss',
 })
 export class LifecycleActionButtonComponent {
-  readonly action = input.required<LifecycleChartAction>();
+  readonly action = input.required<BotLifecycleAction>();
   readonly busyAction = input<string | null>(null);
 
-  readonly actionInvoked = output<LifecycleChartActionId>();
+  readonly actionInvoked = output<BotLifecycleActionId>();
   readonly actionTargetHovered = output<string | null>();
 
   readonly isBackendDisabled = computed(() => !this.action().enabled);
@@ -37,15 +31,15 @@ export class LifecycleActionButtonComponent {
   readonly isDisabled = computed(() => this.isBackendDisabled() || this.isInteractionLocked());
   readonly statusHeadline = computed(() => {
     if (this.isInteractionLocked()) return 'Request in flight';
-    return this.action().reason_headline;
+    return this.action().enabled ? 'Available' : (this.action().reason ?? 'Unavailable');
   });
-  readonly statusDetail = computed(() =>
-    this.isInteractionLocked() ? null : this.action().reason_detail,
-  );
-  readonly displayLabel = computed(() => ACTION_LABEL[this.action().id] ?? this.action().label);
+  readonly statusDetail = computed(() => null);
+  readonly displayLabel = computed(() => this.action().label);
   readonly actionStateLabel = computed(() => this.isDisabled() ? 'Off' : 'On');
   readonly isOn = computed(() => !this.isDisabled());
   readonly isOff = computed(() => this.isDisabled());
+  readonly isPrimaryTone = computed(() => this.action().id === 'confirm_start');
+  readonly isDangerTone = computed(() => this.action().id === 'retire_replace');
   readonly iconClass = computed(() =>
     this.busyAction() === this.action().id ? 'pi pi-spinner pi-spin' : ACTION_ICON[this.action().id],
   );
@@ -64,6 +58,6 @@ export class LifecycleActionButtonComponent {
   }
 
   hoverAction(active: boolean): void {
-    this.actionTargetHovered.emit(active ? this.action().target_node_id : null);
+    this.actionTargetHovered.emit(active ? this.action().id : null);
   }
 }

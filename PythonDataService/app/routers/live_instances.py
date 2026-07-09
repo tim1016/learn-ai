@@ -37,6 +37,13 @@ from app.engine.live.account_artifacts import (
     read_account_freeze,
     read_account_owner_generation,
 )
+from app.engine.live.bot_lifecycle_state import (
+    BotLifecyclePhase,
+    BotLifecycleStateCorruptError,
+    BotLifecycleStateRecord,
+    BotLifecycleStateRepo,
+    stable_bot_lifecycle_state_path,
+)
 from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.daemon_connectivity_monitor import (
     get_monitor as get_daemon_connectivity_monitor,
@@ -103,6 +110,9 @@ from app.schemas.live_runs import (
     BotCatalogResponse,
     BotDeleteRequest,
     BotDeleteResponse,
+    BotLifecycleMutationResponse,
+    BotLifecycleRosterRequest,
+    BotRetireReplaceRequest,
     BrokerObservationConsistency,
     ChartOverlayNotice,
     ChartSnapshotResponse,
@@ -176,6 +186,10 @@ from app.services.activity_projection_contract import (
 )
 from app.services.activity_repair_projection import load_activity_repair_projection
 from app.services.bot_catalog_projection import compose_bot_catalog_row, trading_mode_from_configured_mode
+from app.services.bot_daily_lifecycle import (
+    BotDailyLifecycleEvidence,
+    project_bot_daily_lifecycle,
+)
 from app.services.bot_deletion import (
     BotDeletionCorruptError,
     BotDeletionRecord,
@@ -355,6 +369,48 @@ def _sid_has_soft_deletion(artifacts_root: Path, sid: str) -> bool:
             extra={"strategy_instance_id": sid, "exception": repr(exc)},
         )
         return False
+
+
+def _resolve_bot_lifecycle_state(root: Path, sid: str) -> BotLifecycleStateRecord | None:
+    try:
+        path = stable_bot_lifecycle_state_path(root.parent, sid)
+    except ValueError:
+        return None
+    try:
+        return BotLifecycleStateRepo(path).read()
+    except BotLifecycleStateCorruptError as exc:
+        logger.warning(
+            "failed to read bot lifecycle state",
+            extra={"strategy_instance_id": sid, "exception": repr(exc)},
+        )
+        return None
+
+
+def _bot_lifecycle_state_repo(root: Path, sid: str) -> BotLifecycleStateRepo:
+    try:
+        path = stable_bot_lifecycle_state_path(root.parent, sid)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
+    return BotLifecycleStateRepo(path)
+
+
+async def _daily_lifecycle_mutation_response(
+    sid: str,
+    root: Path,
+    settings: IbkrSettings,
+) -> BotLifecycleMutationResponse:
+    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
+    status_view = await _resolve_instance_status_from_process(
+        sid,
+        root,
+        settings,
+        daemon,
+        runs_by_instance=_visible_runs_by_instance(root),
+    )
+    return BotLifecycleMutationResponse(
+        strategy_instance_id=sid,
+        lifecycle=status_view.daily_lifecycle,
+    )
 
 
 def _visible_runs_by_instance(root: Path, runs_by_instance: dict[str, list[dict]] | None = None) -> dict[str, list[dict]]:
@@ -1603,6 +1659,19 @@ async def _resolve_instance_status_from_process(
         incident_headline_notice=incident_headline,
         now_ms=observed_at_ms,
     )
+    lifecycle_state = _resolve_bot_lifecycle_state(root, sid)
+    daily_lifecycle = project_bot_daily_lifecycle(
+        BotDailyLifecycleEvidence(
+            strategy_instance_id=sid,
+            process=process,
+            start_capability=operator_surface.host_process.start_capability,
+            latest_run_id=runs[0]["run_id"] if runs else None,
+            active_run_id=live_binding.run_id if live_binding is not None else None,
+            persisted_state=lifecycle_state,
+            condition_count=1 if account_freeze is not None else 0,
+            now_ms=observed_at_ms,
+        )
+    )
     redeploy_available = bool(
         start_defaults is not None
         and start_defaults.strategy_spec_path
@@ -1677,6 +1746,7 @@ async def _resolve_instance_status_from_process(
             lifecycle_events=lifecycle_events,
             receipt_context=receipt_context,
         ),
+        daily_lifecycle=daily_lifecycle,
         fetched_at_ms=observed_at_ms,
     )
 
@@ -2182,8 +2252,16 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
     response = _parse_action_response(result)
     await _maybe_start_broker_activity_publisher(response)
-    sid = _strategy_instance_id_for_run(root, run_id)
+    sid = _strategy_instance_id_for_run(root, run_id) or response.process.strategy_instance_id
     if sid is not None:
+        if response.accepted:
+            _bot_lifecycle_state_repo(root, sid).set_phase(
+                BotLifecyclePhase.ON_DUTY,
+                now_ms=_now_ms(),
+                updated_by="system",
+                active_run_id=run_id,
+                reason="start_accepted",
+            )
         receipt, warnings = await _mutation_rung_receipts_from_process(
             sid,
             root,
@@ -2265,8 +2343,16 @@ async def stop_run(run_id: str, body: HostRunnerStopRequest) -> HostRunnerAction
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
     response = _parse_action_response(result)
     root = Path(settings.live_runs_root)
-    sid = _strategy_instance_id_for_run(root, run_id)
+    sid = _strategy_instance_id_for_run(root, run_id) or response.process.strategy_instance_id
     if sid is not None:
+        if response.accepted:
+            _bot_lifecycle_state_repo(root, sid).set_phase(
+                BotLifecyclePhase.OFF_DUTY,
+                now_ms=_now_ms(),
+                updated_by="system",
+                active_run_id=None,
+                reason="stop_accepted",
+            )
         receipt, warnings = await _mutation_rung_receipts_from_process(
             sid,
             root,
@@ -2281,6 +2367,119 @@ async def stop_run(run_id: str, body: HostRunnerStopRequest) -> HostRunnerAction
             }
         )
     return response
+
+
+@router.post("/{strategy_instance_id}/end-day-now", response_model=HostRunnerActionResponse)
+async def end_day_now(
+    strategy_instance_id: str,
+    body: HostRunnerStopRequest | None = None,
+) -> HostRunnerActionResponse:
+    """Instance-addressed clean exit request for the daily lifecycle toolbar."""
+
+    sid = _validate_instance_id(strategy_instance_id)
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
+    process, live_binding = _interpret_daemon_process(daemon, root)
+    if live_binding is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "NO_LIVE_BINDING",
+                "message": "No bot process is running for this instance.",
+                "process_state": process.state,
+            },
+        )
+
+    request = body or HostRunnerStopRequest()
+    try:
+        result = await host_daemon_client.stop_run(
+            settings.live_runner_daemon_url,
+            live_binding.run_id,
+            request.model_dump(),
+        )
+    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
+        _raise_outcome_unknown("end_day_now", exc)
+    except host_daemon_client.HostDaemonError as exc:
+        raise HTTPException(exc.status_code, detail=exc.detail) from exc
+    response = _parse_action_response(result)
+    if response.accepted:
+        _bot_lifecycle_state_repo(root, sid).set_phase(
+            BotLifecyclePhase.OFF_DUTY,
+            now_ms=_now_ms(),
+            updated_by="operator",
+            active_run_id=None,
+            reason="end_day_now",
+        )
+    receipt, warnings = await _mutation_rung_receipts_from_process(
+        sid,
+        root,
+        settings,
+        response.process.model_dump(mode="json"),
+        mutation_key="stop",
+    )
+    return response.model_copy(
+        update={
+            "rung_receipt": receipt,
+            "rung_receipt_warnings": warnings,
+        }
+    )
+
+
+@router.post("/{strategy_instance_id}/lifecycle/roster", response_model=BotLifecycleMutationResponse)
+async def set_lifecycle_roster(
+    strategy_instance_id: str,
+    body: BotLifecycleRosterRequest,
+) -> BotLifecycleMutationResponse:
+    """Add/remove a bot from the duty roster."""
+
+    sid = _validate_instance_id(strategy_instance_id)
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    _bot_lifecycle_state_repo(root, sid).set_roster(
+        body.on_roster,
+        now_ms=_now_ms(),
+        updated_by=body.updated_by,
+        reason=body.reason,
+    )
+    return await _daily_lifecycle_mutation_response(sid, root, settings)
+
+
+@router.post("/{strategy_instance_id}/retire-and-replace", response_model=BotLifecycleMutationResponse)
+async def retire_and_replace(
+    strategy_instance_id: str,
+    body: BotRetireReplaceRequest,
+) -> BotLifecycleMutationResponse:
+    """Retire this bot's machinery before the UI continues to replacement deploy."""
+
+    sid = _validate_instance_id(strategy_instance_id)
+    if not body.confirm_account_flat:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "ACCOUNT_FLAT_ATTESTATION_REQUIRED",
+                "message": "Confirm the broker account is flat before retiring and replacing this bot.",
+            },
+        )
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
+    process, _live_binding = _interpret_daemon_process(daemon, root)
+    if process.state in {"running", "stopping"}:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "BOT_ON_DUTY",
+                "message": "End the day before retiring and replacing this bot.",
+                "process_state": process.state,
+            },
+        )
+    _bot_lifecycle_state_repo(root, sid).retire(
+        now_ms=_now_ms(),
+        updated_by=body.updated_by,
+        reason=body.reason,
+    )
+    return await _daily_lifecycle_mutation_response(sid, root, settings)
 
 
 def _instance_last_exit(runs: list[dict]) -> InstanceLastExit | None:

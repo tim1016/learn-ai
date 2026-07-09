@@ -9,8 +9,8 @@
   <button
     type="button"
     class="chart-action"
-    [class.tone-primary]="action().tone === 'primary'"
-    [class.tone-danger]="action().tone === 'danger'"
+    [class.tone-primary]="isPrimaryTone()"
+    [class.tone-danger]="isDangerTone()"
     [class.is-disabled]="isDisabled()"
     [class.is-on]="isOn()"
     [class.is-off]="isOff()"

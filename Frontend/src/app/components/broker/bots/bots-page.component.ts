@@ -20,7 +20,7 @@ import type {
 import type {
   BotCatalogRow,
   BotCatalogTradingMode,
-  ReadinessVerdictEnum,
+  BotLifecycleDisplayStatus,
 } from '../../../api/live-instances.types';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
@@ -30,7 +30,7 @@ import { fmtInteger, fmtSignedCurrency, fmtTimestampLocal } from '../format';
 
 type AttentionFilter = 'all' | 'needs-attention' | 'healthy';
 type BotModeTab = BotCatalogTradingMode;
-type ReadinessFilter = 'all' | ReadinessVerdictEnum;
+type LifecycleFilter = 'all' | BotLifecycleDisplayStatus;
 type TagSeverity = 'success' | 'warn' | 'danger' | 'secondary';
 
 interface BotTableRow {
@@ -39,8 +39,9 @@ interface BotTableRow {
   needsAttention: boolean;
   tradingMode: BotCatalogTradingMode;
   symbolsLabel: string;
-  readinessVerdict: ReadinessVerdictEnum;
-  onlyFreshRunAvailable: boolean;
+  displayStatus: BotLifecycleDisplayStatus;
+  statusReason: string | null;
+  presenceLabel: string;
   exposure: string;
   openPositions: number | null;
   totalPnl: number | null;
@@ -79,7 +80,7 @@ export class BotsPageComponent {
   readonly errorMessage = signal<string | null>(null);
   readonly searchQuery = signal<string>('');
   readonly attentionFilter = signal<AttentionFilter>('all');
-  readonly readinessFilter = signal<ReadinessFilter>('all');
+  readonly lifecycleFilter = signal<LifecycleFilter>('all');
   readonly activeModeTab = signal<BotModeTab>('paper');
   readonly selectedBotIds = signal<ReadonlySet<string>>(new Set<string>());
   readonly deleteConfirmationOpen = signal<boolean>(false);
@@ -89,7 +90,7 @@ export class BotsPageComponent {
   readonly visibleBots = computed<BotTableRow[]>(() => {
     const query = normalize(this.searchQuery());
     const attentionFilter = this.attentionFilter();
-    const readinessFilter = this.readinessFilter();
+    const lifecycleFilter = this.lifecycleFilter();
 
     return this.bots()
       .map(toTableRow)
@@ -97,7 +98,7 @@ export class BotsPageComponent {
         if (query && !row.searchText.includes(query)) return false;
         if (attentionFilter === 'needs-attention' && !row.needsAttention) return false;
         if (attentionFilter === 'healthy' && row.needsAttention) return false;
-        if (readinessFilter !== 'all' && row.readinessVerdict !== readinessFilter) return false;
+        if (lifecycleFilter !== 'all' && row.displayStatus !== lifecycleFilter) return false;
         return true;
       })
       .sort(compareRowsForTriage);
@@ -207,8 +208,8 @@ export class BotsPageComponent {
     this.attentionFilter.set(value);
   }
 
-  setReadinessFilter(value: ReadinessFilter): void {
-    this.readinessFilter.set(value);
+  setLifecycleFilter(value: LifecycleFilter): void {
+    this.lifecycleFilter.set(value);
   }
 
   setActiveModeTab(value: string | number | undefined): void {
@@ -220,7 +221,7 @@ export class BotsPageComponent {
   clearFilters(): void {
     this.searchQuery.set('');
     this.attentionFilter.set('all');
-    this.readinessFilter.set('all');
+    this.lifecycleFilter.set('all');
   }
 
   openAccountMonitor(): void {
@@ -322,15 +323,18 @@ export class BotsPageComponent {
     await this.router.navigate(['/broker/bots', id]);
   }
 
-  readinessSeverity(verdict: ReadinessVerdictEnum): TagSeverity {
-    switch (verdict) {
-      case 'READY':
+  lifecycleSeverity(status: BotLifecycleDisplayStatus): TagSeverity {
+    switch (status) {
+      case 'Ready':
+      case 'On duty':
         return 'success';
-      case 'DEGRADED':
+      case 'Clocking out':
+      case 'Off roster':
         return 'warn';
-      case 'BLOCKED':
+      case 'Sick bay':
         return 'danger';
-      case 'UNKNOWN':
+      case 'Off duty':
+      case 'Retired':
         return 'secondary';
     }
   }
@@ -381,8 +385,9 @@ function toTableRow(bot: BotCatalogRow): BotTableRow {
     needsAttention: bot.needs_attention,
     tradingMode: bot.trading_mode,
     symbolsLabel,
-    readinessVerdict: bot.readiness_verdict,
-    onlyFreshRunAvailable: bot.only_fresh_run_available,
+    displayStatus: bot.daily_lifecycle.display_status,
+    statusReason: bot.daily_lifecycle.reason ?? bot.status_detail,
+    presenceLabel: bot.daily_lifecycle.presence_label,
     exposure: bot.metrics.current_exposure,
     openPositions: bot.metrics.open_positions,
     totalPnl: bot.metrics.pnl.total,
@@ -396,12 +401,14 @@ function toTableRow(bot: BotCatalogRow): BotTableRow {
       symbolsLabel,
       bot.status_label,
       bot.status_detail,
+      bot.daily_lifecycle.display_status,
+      bot.daily_lifecycle.presence_label,
+      bot.daily_lifecycle.reason,
+      bot.daily_lifecycle.phase,
       bot.trading_mode,
       bot.engine,
       bot.engine_asset_class,
       bot.desired_state,
-      bot.readiness_verdict,
-      bot.only_fresh_run_available ? 'only fresh run available redeploy required' : null,
       bot.last_run_label,
       bot.last_run_result,
       bot.last_run_detail,

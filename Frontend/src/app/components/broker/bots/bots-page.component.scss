@@ -116,6 +116,7 @@ h1 {
 
 .segmented {
   display: inline-flex;
+  flex-wrap: wrap;
   min-height: 38px;
   padding: 3px;
   border: 1px solid var(--border-light);
@@ -260,30 +261,23 @@ h1 {
   white-space: nowrap;
 }
 
-.readiness-cell {
+.status-cell {
   display: inline-flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
   min-width: 0;
   white-space: normal;
-}
 
-.fresh-run-chip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 22px;
-  max-width: 100%;
-  padding: 1px 7px;
-  border: 1px solid var(--verdict-blocked);
-  border-radius: 6px;
-  background: var(--verdict-blocked-soft);
-  color: var(--verdict-blocked-text);
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 18px;
-  overflow-wrap: anywhere;
-  white-space: normal;
+  span {
+    display: block;
+    max-width: 16rem;
+    overflow: hidden;
+    color: var(--text-subtle);
+    font-size: 12px;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+  }
 }
 
 .numeric-cell {

@@ -45,7 +45,7 @@
         <input
           pInputText
           type="search"
-          placeholder="Name, symbol, readiness, engine..."
+          placeholder="Name, symbol, status, engine..."
           [value]="searchQuery()"
           (input)="setSearchQuery($event)"
         />
@@ -80,35 +80,56 @@
     </div>
 
     <div class="filter-group">
-      <span>Readiness</span>
-      <div class="segmented" aria-label="Readiness filter">
+      <span>Lifecycle</span>
+      <div class="segmented" aria-label="Lifecycle filter">
         <button
           type="button"
-          [class.active]="readinessFilter() === 'all'"
-          (click)="setReadinessFilter('all')"
+          [class.active]="lifecycleFilter() === 'all'"
+          (click)="setLifecycleFilter('all')"
         >
           All
         </button>
         <button
           type="button"
-          [class.active]="readinessFilter() === 'READY'"
-          (click)="setReadinessFilter('READY')"
+          [class.active]="lifecycleFilter() === 'Ready'"
+          (click)="setLifecycleFilter('Ready')"
         >
           Ready
         </button>
         <button
           type="button"
-          [class.active]="readinessFilter() === 'DEGRADED'"
-          (click)="setReadinessFilter('DEGRADED')"
+          [class.active]="lifecycleFilter() === 'Sick bay'"
+          (click)="setLifecycleFilter('Sick bay')"
         >
-          Degraded
+          Sick bay
         </button>
         <button
           type="button"
-          [class.active]="readinessFilter() === 'BLOCKED'"
-          (click)="setReadinessFilter('BLOCKED')"
+          [class.active]="lifecycleFilter() === 'On duty'"
+          (click)="setLifecycleFilter('On duty')"
         >
-          Blocked
+          On duty
+        </button>
+        <button
+          type="button"
+          [class.active]="lifecycleFilter() === 'Off duty'"
+          (click)="setLifecycleFilter('Off duty')"
+        >
+          Off duty
+        </button>
+        <button
+          type="button"
+          [class.active]="lifecycleFilter() === 'Off roster'"
+          (click)="setLifecycleFilter('Off roster')"
+        >
+          Off roster
+        </button>
+        <button
+          type="button"
+          [class.active]="lifecycleFilter() === 'Retired'"
+          (click)="setLifecycleFilter('Retired')"
+        >
+          Retired
         </button>
       </div>
     </div>
@@ -306,9 +327,9 @@
               Errors
               <p-sortIcon field="errorCount" />
             </th>
-            <th pSortableColumn="readinessVerdict">
-              Readiness
-              <p-sortIcon field="readinessVerdict" />
+            <th pSortableColumn="displayStatus">
+              Status
+              <p-sortIcon field="displayStatus" />
             </th>
             <th pSortableColumn="lastRunSortMs">
               Last Run
@@ -343,18 +364,13 @@
             <td class="numeric-cell">{{ formatMoney(row.totalPnl) }}</td>
             <td class="numeric-cell">{{ formatCount(row.errorCount) }}</td>
             <td>
-              <div class="readiness-cell">
+              <div class="status-cell" [title]="row.statusReason ?? row.presenceLabel">
                 <p-tag
-                  [severity]="readinessSeverity(row.readinessVerdict)"
-                  [value]="row.readinessVerdict"
+                  [severity]="lifecycleSeverity(row.displayStatus)"
+                  [value]="row.displayStatus"
                 />
-                @if (row.onlyFreshRunAvailable) {
-                  <span
-                    class="fresh-run-chip"
-                    title="All live controls are locked for this run. Use Fresh run."
-                  >
-                    Fresh run only
-                  </span>
+                @if (row.statusReason; as reason) {
+                  <span>{{ reason }}</span>
                 }
               </div>
             </td>
@@ -410,20 +426,15 @@
 
             <dl class="primary-meta">
               <div>
-                <dt>Readiness</dt>
+                <dt>Status</dt>
                 <dd>
-                  <div class="readiness-cell">
+                  <div class="status-cell">
                     <p-tag
-                      [severity]="readinessSeverity(row.readinessVerdict)"
-                      [value]="row.readinessVerdict"
+                      [severity]="lifecycleSeverity(row.displayStatus)"
+                      [value]="row.displayStatus"
                     />
-                    @if (row.onlyFreshRunAvailable) {
-                      <span
-                        class="fresh-run-chip"
-                        title="All live controls are locked for this run. Use Fresh run."
-                      >
-                        Fresh run only
-                      </span>
+                    @if (row.statusReason; as reason) {
+                      <span>{{ reason }}</span>
                     }
                   </div>
                 </dd>

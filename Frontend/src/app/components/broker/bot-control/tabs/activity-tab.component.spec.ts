@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import type { LiveInstanceStatus, OperatorSurfaceControlPlane } from '../../../../api/live-instances.types';
-import { makeLifecycleChartFixture } from '../../../../testing/live-instance-status-fixtures';
+import {
+  makeDailyLifecycleFixture,
+  makeLifecycleChartFixture,
+} from '../../../../testing/live-instance-status-fixtures';
 import type { LiveInstanceActivityProjection } from '../reused/bot-trade-chart-card/bot-trade-chart-card.types';
 import {
   activityProjectionForDisplay,
@@ -235,6 +238,7 @@ function status(
       },
     },
     lifecycle_chart: makeLifecycleChartFixture(),
+    daily_lifecycle: makeDailyLifecycleFixture(),
     fetched_at_ms: 123_456,
   };
 }

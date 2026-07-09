@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AccountTriageResponse } from '../../../api/account-reconciliation.types';
 import type {
+  BotDailyLifecycleProjection,
   BotCatalogResponse,
   BotCatalogRow,
 } from '../../../api/live-instances.types';
@@ -16,13 +17,50 @@ import { BotsPageComponent } from './bots-page.component';
 const OLD_RUN = 1_700_000_000_000;
 const NEW_RUN = 1_800_000_000_000;
 
+function lifecycle(
+  overrides: Partial<BotDailyLifecycleProjection> = {},
+): BotDailyLifecycleProjection {
+  return {
+    phase: 'OFF_DUTY',
+    presence_label: 'Off duty',
+    display_status: 'Ready',
+    attention_badge: 'Ready',
+    reason: 'Roll call can offer a fresh start.',
+    on_roster: true,
+    active_run_id: null,
+    latest_run_id: 'run-live-idle-spy',
+    drift_detected: false,
+    primary_action: {
+      id: 'confirm_start',
+      label: 'Start',
+      enabled: true,
+      reason: null,
+    },
+    ambient_actions: [
+      {
+        id: 'take_off_roster',
+        label: 'Take off roster',
+        enabled: true,
+        reason: null,
+      },
+      {
+        id: 'retire_replace',
+        label: 'Retire & Replace',
+        enabled: true,
+        reason: null,
+      },
+    ],
+    ...overrides,
+  };
+}
+
 function bot(overrides: Partial<BotCatalogRow> = {}): BotCatalogRow {
   return {
     strategy_instance_id: 'live-idle-spy',
     name: 'live-idle-spy',
     description: null,
-    status_label: 'Ready for paper trading',
-    status_detail: 'All readiness checks are passing.',
+    status_label: 'Ready',
+    status_detail: 'Roll call can offer a fresh start.',
     status_tone: 'positive',
     only_fresh_run_available: false,
     needs_attention: false,
@@ -39,6 +77,7 @@ function bot(overrides: Partial<BotCatalogRow> = {}): BotCatalogRow {
     process_state: 'IDLE',
     desired_state: 'PAUSED',
     readiness_verdict: 'READY',
+    daily_lifecycle: lifecycle(),
     metrics: {
       pnl: {
         realized: null,
@@ -91,14 +130,20 @@ async function setup(options: { triage?: AccountTriageResponse } = {}) {
         symbols: ['AAPL'],
         last_run_at_ms: NEW_RUN,
         needs_attention: true,
-        status_label: 'Needs operator review',
-        status_detail: 'Desired state has no durable intent.',
+        status_label: 'Sick bay',
+        status_detail: '1 condition needs a cure before start.',
         status_tone: 'danger',
         last_run_label: 'Exited with error',
         last_run_result: 'EXITED_WITH_ERROR',
         last_run_detail: 'Previous run exited with an error: runtime exception. Exit code 1.',
         process_state: 'RUNNING',
         readiness_verdict: 'DEGRADED',
+        daily_lifecycle: lifecycle({
+          display_status: 'Sick bay',
+          attention_badge: 'Sick bay',
+          reason: '1 condition needs a cure before start.',
+          primary_action: null,
+        }),
         metrics: {
           pnl: { realized: null, unrealized: -4, total: null },
           trade_count: null,
@@ -114,8 +159,30 @@ async function setup(options: { triage?: AccountTriageResponse } = {}) {
         symbols: ['MSFT'],
         last_run_at_ms: NEW_RUN,
         process_state: 'RUNNING',
-        status_label: 'Monitoring only',
-        status_tone: 'neutral',
+        status_label: 'On duty',
+        status_tone: 'positive',
+        daily_lifecycle: lifecycle({
+          phase: 'ON_DUTY',
+          presence_label: 'On duty',
+          display_status: 'On duty',
+          attention_badge: null,
+          reason: null,
+          active_run_id: 'run-paper-msft',
+          primary_action: {
+            id: 'end_day_now',
+            label: 'End day now',
+            enabled: true,
+            reason: null,
+          },
+          ambient_actions: [
+            {
+              id: 'take_off_roster',
+              label: 'Take off roster',
+              enabled: true,
+              reason: null,
+            },
+          ],
+        }),
       }),
     ],
   });
@@ -233,7 +300,7 @@ describe('BotsPageComponent', () => {
     const { fixture } = await setup();
     fixture.componentInstance.searchQuery.set('aapl');
     fixture.componentInstance.setAttentionFilter('needs-attention');
-    fixture.componentInstance.setReadinessFilter('DEGRADED');
+    fixture.componentInstance.setLifecycleFilter('Sick bay');
     fixture.detectChanges();
 
     expect(fixture.componentInstance.liveBots().map((row) => row.name)).toEqual([
@@ -263,8 +330,11 @@ describe('BotsPageComponent', () => {
 
     expect(text).toContain('live-running-aapl');
     expect(text).toContain('AAPL 10');
-    expect(text).toContain('DEGRADED');
+    expect(text).toContain('Sick bay');
     expect(text).toContain('Exited with error');
+    expect(text).not.toContain('DEGRADED');
+    expect(text).not.toContain('BLOCKED');
+    expect(text).not.toContain('Fresh run only');
     expect(text).not.toContain('RUNNING');
     expect(text).not.toContain('Needs operator review');
     expect(text).not.toContain('Desired state has no durable intent.');
@@ -293,7 +363,7 @@ describe('BotsPageComponent', () => {
     });
   });
 
-  it('surfaces catalog rows where Fresh run is the only available lifecycle action', async () => {
+  it('filters by lifecycle status without rendering banned readiness vocabulary', async () => {
     const { fixture } = await setup();
     fixture.componentInstance.bots.update((rows) =>
       rows.map((row) =>
@@ -302,15 +372,46 @@ describe('BotsPageComponent', () => {
               ...row,
               only_fresh_run_available: true,
               readiness_verdict: 'BLOCKED',
+              status_label: 'Off roster',
+              status_detail: 'This bot is intentionally left off tomorrow\'s duty roster.',
+              daily_lifecycle: lifecycle({
+                display_status: 'Off roster',
+                attention_badge: 'Off roster',
+                reason: 'This bot is intentionally left off tomorrow\'s duty roster.',
+                on_roster: false,
+                primary_action: null,
+                ambient_actions: [
+                  {
+                    id: 'add_to_roster',
+                    label: 'Add to roster',
+                    enabled: true,
+                    reason: null,
+                  },
+                  {
+                    id: 'retire_replace',
+                    label: 'Retire & Replace',
+                    enabled: true,
+                    reason: null,
+                  },
+                ],
+              }),
             }
           : row,
       ),
     );
+    fixture.componentInstance.setLifecycleFilter('Off roster');
     fixture.detectChanges();
 
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
-    expect(text).toContain('Fresh run only');
-    expect(fixture.componentInstance.paperBots()[0].searchText).toContain('only fresh run available');
+    expect(fixture.componentInstance.paperBots().map((row) => row.name)).toEqual([
+      'paper-msft',
+    ]);
+    expect(text).toContain('Off roster');
+    expect(text).not.toContain('Fresh run only');
+    expect(text).not.toContain('BLOCKED');
+    expect(fixture.componentInstance.paperBots()[0].searchText).not.toContain(
+      'only fresh run available',
+    );
   });
 
   it('navigates to the bot control page when a row is clicked', async () => {

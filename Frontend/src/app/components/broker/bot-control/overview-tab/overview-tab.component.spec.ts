@@ -3,7 +3,10 @@ import { TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { LiveInstanceStatus } from '../../../../api/live-instances.types';
-import { makeLifecycleChartFixture } from '../../../../testing/live-instance-status-fixtures';
+import {
+  makeDailyLifecycleFixture,
+  makeLifecycleChartFixture,
+} from '../../../../testing/live-instance-status-fixtures';
 import { makeOperatorSurfaceFixture } from '../../../../testing/operator-surface-fixtures';
 import { OverviewTabComponent } from './overview-tab.component';
 
@@ -31,6 +34,7 @@ function makeStatus(id = 'sid-x'): LiveInstanceStatus {
     lifecycle_chart: makeLifecycleChartFixture({
       selected_bot_id: id,
     }),
+    daily_lifecycle: makeDailyLifecycleFixture(),
     fetched_at_ms: 0,
   };
 }

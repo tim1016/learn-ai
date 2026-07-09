@@ -30,6 +30,7 @@ from app.engine.live.account_registry import (
     write_account_instance_binding,
 )
 from app.engine.live.artifacts import ExecutionRow, ExecutionWriter, TradeRow, TradeWriter
+from app.engine.live.bot_lifecycle_state import BotLifecycleStateRepo, stable_bot_lifecycle_state_path
 from app.engine.live.desired_state import DesiredState, DesiredStateRepo, stable_desired_state_path
 from app.engine.live.intent_events import IntentEvent, IntentEventType
 from app.engine.live.intent_wal import IntentWal
@@ -2179,7 +2180,10 @@ async def test_bot_catalog_returns_backend_composed_rows(app_with_root, monkeypa
     assert isinstance(row["status_label"], str)
     assert isinstance(row["status_detail"], str)
     assert row["status_tone"] in {"positive", "warning", "danger", "neutral"}
-    assert row["last_run_label"] == "No result yet"
+    assert row["status_label"] == "On duty"
+    assert row["daily_lifecycle"]["phase"] == "ON_DUTY"
+    assert row["daily_lifecycle"]["display_status"] == "On duty"
+    assert row["last_run_label"] == "Not yet proven"
     assert row["last_run_result"] == "UNKNOWN"
     assert row["last_run_detail"] == "No completed run has been recorded for this bot."
 
@@ -2229,7 +2233,7 @@ async def test_bot_catalog_reuses_run_scan_for_status_rows(app_with_root, monkey
     assert calls == 1
 
 
-async def test_bot_catalog_authors_trader_friendly_status_and_last_run_labels(
+async def test_bot_catalog_authors_closed_lifecycle_status_and_last_run_labels(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app, root = app_with_root
@@ -2242,7 +2246,17 @@ async def test_bot_catalog_authors_trader_friendly_status_and_last_run_labels(
 
     assert response.status_code == 200
     row = response.json()["bots"][0]
-    assert row["status_label"] in {"Blocked", "Degraded", "Unknown", "Ready"}
+    assert row["status_label"] in {
+        "Off duty",
+        "Ready",
+        "On duty",
+        "Clocking out",
+        "Sick bay",
+        "Off roster",
+        "Retired",
+    }
+    assert row["status_label"] not in {"Blocked", "Degraded", "Unknown", "Fresh run only"}
+    assert row["daily_lifecycle"]["display_status"] == row["status_label"]
     assert row["status_label"] != row["status_detail"]
     assert row["last_run_label"] == "Exited with error"
     assert row["last_run_result"] == "EXITED_WITH_ERROR"
@@ -2267,7 +2281,7 @@ async def test_bot_catalog_labels_status_backed_fatal_halt_as_safety_halt(
     assert row["last_run_detail"] == "Previous run stopped on a safety halt: Safety halt. Exit code 1."
 
 
-async def test_bot_catalog_marks_when_only_fresh_run_is_available(
+async def test_bot_catalog_does_not_surface_legacy_fresh_run_only_flag(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app, root = app_with_root
@@ -2300,7 +2314,16 @@ async def test_bot_catalog_marks_when_only_fresh_run_is_available(
     assert response.status_code == 200
     row = response.json()["bots"][0]
     assert row["strategy_instance_id"] == "stopped_bot"
-    assert row["only_fresh_run_available"] is True
+    assert row["only_fresh_run_available"] is False
+    assert row["status_label"] in {
+        "Off duty",
+        "Ready",
+        "On duty",
+        "Clocking out",
+        "Sick bay",
+        "Off roster",
+        "Retired",
+    }
     assert status_response.status_code == 200
     assert status_response.json()["lifecycle_chart"]["only_fresh_run_available"] is True
 
@@ -3705,7 +3728,7 @@ def _running_process(run_id: str) -> dict:
 
 
 async def test_start_run_forwards_and_returns_action(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
-    app, _ = app_with_root
+    app, root = app_with_root
     seen: dict = {}
 
     async def fake_start(_base_url: str, run_id: str, payload: dict) -> dict:
@@ -3729,6 +3752,12 @@ async def test_start_run_forwards_and_returns_action(app_with_root, monkeypatch:
     assert seen["run_id"] == "run-abc"
     assert seen["payload"]["readonly"] is False
     assert seen["payload"]["hydrate_policy"] == "optional"
+    lifecycle = BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper")
+    ).read()
+    assert lifecycle is not None
+    assert lifecycle.phase == "ON_DUTY"
+    assert lifecycle.active_run_id == "run-abc"
 
 
 async def test_start_run_rejects_when_poisoned(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3987,7 +4016,7 @@ async def test_start_run_proceeds_when_idle_and_not_poisoned(app_with_root, monk
 
 
 async def test_stop_run_forwards_and_returns_action(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
-    app, _ = app_with_root
+    app, root = app_with_root
 
     async def fake_stop(_base_url: str, run_id: str, _payload: dict) -> dict:
         proc = _running_process(run_id)
@@ -4001,6 +4030,116 @@ async def test_stop_run_forwards_and_returns_action(app_with_root, monkeypatch: 
 
     assert response.status_code == 200
     assert response.json()["process"]["state"] == "stopping"
+    lifecycle = BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper")
+    ).read()
+    assert lifecycle is not None
+    assert lifecycle.phase == "OFF_DUTY"
+    assert lifecycle.active_run_id is None
+
+
+async def test_end_day_now_resolves_live_binding_and_stops_current_run(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-live", "spy_ema_paper", 100)
+    _set_daemon(
+        monkeypatch,
+        process={"state": "running", "run_id": "run-live", "pid": 99, "started_at_ms": 100},
+    )
+    seen: dict = {}
+
+    async def fake_stop(_base_url: str, run_id: str, payload: dict) -> dict:
+        seen["run_id"] = run_id
+        seen["payload"] = payload
+        proc = _running_process(run_id)
+        proc["state"] = "stopping"
+        return {"accepted": True, "process": proc}
+
+    monkeypatch.setattr(host_daemon_client, "stop_run", fake_stop)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/spy_ema_paper/end-day-now", json={"force": False})
+
+    assert response.status_code == 200
+    assert seen == {"run_id": "run-live", "payload": {"force": False}}
+    lifecycle = BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper")
+    ).read()
+    assert lifecycle is not None
+    assert lifecycle.phase == "OFF_DUTY"
+
+
+async def test_lifecycle_roster_updates_daily_projection(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-idle", "spy_ema_paper", 100)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/spy_ema_paper/lifecycle/roster",
+            json={"on_roster": False, "updated_by": "operator", "reason": "rest day"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["strategy_instance_id"] == "spy_ema_paper"
+    assert body["lifecycle"]["on_roster"] is False
+    assert body["lifecycle"]["display_status"] == "Off roster"
+
+
+async def test_retire_and_replace_requires_flat_attestation_and_off_duty(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-idle", "spy_ema_paper", 100)
+    _set_daemon(monkeypatch, process={"state": "running", "run_id": "run-idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        missing_attestation = await client.post(
+            "/api/live-instances/spy_ema_paper/retire-and-replace",
+            json={"confirm_account_flat": False},
+        )
+        running = await client.post(
+            "/api/live-instances/spy_ema_paper/retire-and-replace",
+            json={"confirm_account_flat": True},
+        )
+
+    assert missing_attestation.status_code == 409
+    assert missing_attestation.json()["detail"]["reason_code"] == "ACCOUNT_FLAT_ATTESTATION_REQUIRED"
+    assert running.status_code == 409
+    assert running.json()["detail"]["reason_code"] == "BOT_ON_DUTY"
+
+
+async def test_retire_and_replace_marks_bot_retired(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-idle", "spy_ema_paper", 100)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/spy_ema_paper/retire-and-replace",
+            json={"confirm_account_flat": True, "updated_by": "operator", "reason": "machinery replaced"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["lifecycle"]["phase"] == "RETIRED"
+    assert body["lifecycle"]["display_status"] == "Retired"
+    lifecycle = BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper")
+    ).read()
+    assert lifecycle is not None
+    assert lifecycle.phase == "RETIRED"
+    assert lifecycle.retired_reason == "machinery replaced"
 
 
 async def test_start_run_propagates_daemon_404(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:

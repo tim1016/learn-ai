@@ -28,9 +28,12 @@ import type { DaemonDiagnosticReport } from '../api/daemon-diagnostics.types';
 import type {
   FleetAccountSummary,
   FleetContamination,
+  BotLifecycleMutationResponse,
+  BotLifecycleRosterRequest,
   BotCatalogResponse,
   BotDeleteRequest,
   BotDeleteResponse,
+  BotRetireReplaceRequest,
   CrashRecoveryOverrideRequest,
   CrashRecoveryOverrideResponse,
   InstanceDesiredStateRequest,
@@ -173,6 +176,42 @@ export class LiveRunsService {
     return firstValueFrom(
       this.http.post<HostRunnerActionResponse>(
         `${this.instancesBase}/runs/${encodeURIComponent(runId)}/stop`,
+        request,
+      ),
+    );
+  }
+
+  endDayNow(
+    instanceId: string,
+    request: HostRunnerStopRequest = { force: false },
+  ): Promise<HostRunnerActionResponse> {
+    return firstValueFrom(
+      this.http.post<HostRunnerActionResponse>(
+        `${this.instancesBase}/${encodeURIComponent(instanceId)}/end-day-now`,
+        request,
+      ),
+    );
+  }
+
+  setBotLifecycleRoster(
+    instanceId: string,
+    request: BotLifecycleRosterRequest,
+  ): Promise<BotLifecycleMutationResponse> {
+    return firstValueFrom(
+      this.http.post<BotLifecycleMutationResponse>(
+        `${this.instancesBase}/${encodeURIComponent(instanceId)}/lifecycle/roster`,
+        request,
+      ),
+    );
+  }
+
+  retireAndReplace(
+    instanceId: string,
+    request: BotRetireReplaceRequest,
+  ): Promise<BotLifecycleMutationResponse> {
+    return firstValueFrom(
+      this.http.post<BotLifecycleMutationResponse>(
+        `${this.instancesBase}/${encodeURIComponent(instanceId)}/retire-and-replace`,
         request,
       ),
     );

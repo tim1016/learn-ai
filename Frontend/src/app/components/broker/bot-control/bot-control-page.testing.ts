@@ -14,6 +14,7 @@ import { of, type Observable } from 'rxjs';
 import { vi } from 'vitest';
 
 import type {
+  BotLifecycleMutationResponse,
   CrashRecoveryOverrideResponse,
   FleetAccountSummary,
   LifecycleTimelineResponse,
@@ -110,6 +111,9 @@ export class FakeLiveRunsService {
   getLifecycleTimeline = vi.fn<LiveRunsService['getLifecycleTimeline']>();
   renewControlPlaneLease = vi.fn<LiveRunsService['renewControlPlaneLease']>();
   startHostRunner = vi.fn<LiveRunsService['startHostRunner']>();
+  endDayNow = vi.fn<LiveRunsService['endDayNow']>();
+  setBotLifecycleRoster = vi.fn<LiveRunsService['setBotLifecycleRoster']>();
+  retireAndReplace = vi.fn<LiveRunsService['retireAndReplace']>();
   setInstanceDesiredState = vi.fn<LiveRunsService['setInstanceDesiredState']>();
   flattenAndPause = vi.fn<LiveRunsService['flattenAndPause']>();
   issueInstanceCommand = vi.fn<LiveRunsService['issueInstanceCommand']>();
@@ -136,6 +140,21 @@ export function allowSetDesiredStateCall(
   response: SetInstanceDesiredStateResponse = makeDesiredStateResponse(),
 ): void {
   liveRuns.setInstanceDesiredState.mockResolvedValue(response);
+}
+
+export function allowEndDayNowCall(
+  liveRuns: FakeLiveRunsService,
+  response: HostRunnerActionResponse,
+): void {
+  liveRuns.endDayNow.mockResolvedValue(response);
+}
+
+export function allowBotLifecycleMutationCall(
+  liveRuns: FakeLiveRunsService,
+  response: BotLifecycleMutationResponse,
+): void {
+  liveRuns.setBotLifecycleRoster.mockResolvedValue(response);
+  liveRuns.retireAndReplace.mockResolvedValue(response);
 }
 
 export function rejectSetDesiredStateCall(liveRuns: FakeLiveRunsService, error: unknown): void {
@@ -228,6 +247,8 @@ type AsyncMockValue<T> = T | Promise<T>;
 interface BotControlMutationResponses {
   renewControlPlaneLease?: HostRunnerHealth;
   startHostRunner?: HostRunnerActionResponse;
+  endDayNow?: HostRunnerActionResponse;
+  botLifecycleMutation?: BotLifecycleMutationResponse;
   setInstanceDesiredState?: SetInstanceDesiredStateResponse;
   flattenAndPause?: SetInstanceDesiredStateResponse;
   issueInstanceCommand?: CommandWriteResponse;
@@ -307,6 +328,12 @@ function applyMutationResponses(
   if (responses.startHostRunner) {
     allowStartHostRunnerCall(liveRuns, responses.startHostRunner);
   }
+  if (responses.endDayNow) {
+    allowEndDayNowCall(liveRuns, responses.endDayNow);
+  }
+  if (responses.botLifecycleMutation) {
+    allowBotLifecycleMutationCall(liveRuns, responses.botLifecycleMutation);
+  }
   if (responses.setInstanceDesiredState) {
     allowSetDesiredStateCall(liveRuns, responses.setInstanceDesiredState);
   }
@@ -369,6 +396,9 @@ export function makeFailClosedLiveRuns(options: BotControlLiveRunsOptions = {}):
   }
   liveRuns.renewControlPlaneLease.mockRejectedValue(unexpectedMutation('renewControlPlaneLease'));
   liveRuns.startHostRunner.mockRejectedValue(unexpectedMutation('startHostRunner'));
+  liveRuns.endDayNow.mockRejectedValue(unexpectedMutation('endDayNow'));
+  liveRuns.setBotLifecycleRoster.mockRejectedValue(unexpectedMutation('setBotLifecycleRoster'));
+  liveRuns.retireAndReplace.mockRejectedValue(unexpectedMutation('retireAndReplace'));
   liveRuns.setInstanceDesiredState.mockRejectedValue(unexpectedMutation('setInstanceDesiredState'));
   liveRuns.flattenAndPause.mockRejectedValue(unexpectedMutation('flattenAndPause'));
   liveRuns.issueInstanceCommand.mockRejectedValue(unexpectedMutation('issueInstanceCommand'));

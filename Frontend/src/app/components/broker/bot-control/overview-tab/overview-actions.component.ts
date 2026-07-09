@@ -1,49 +1,45 @@
 import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
 
 import type {
-  LifecycleChartAction,
-  LifecycleChartActionId,
+  BotLifecycleAction,
+  BotLifecycleActionId,
 } from '../../../../api/live-instances.types';
 import { LifecycleActionButtonComponent } from './lifecycle-action-button.component';
 
-type ToolbarGroupId = 'run' | 'recover' | 'danger';
-type ToolbarActionId = Extract<
-  LifecycleChartActionId,
-  'start_process' | 'resume' | 'pause' | 'flatten_and_pause' | 'stop' | 'redeploy' | 'mark_poisoned'
->;
+type ToolbarGroupId = 'duty' | 'roster' | 'machinery';
 
 interface ToolbarGroupDefinition {
   readonly id: ToolbarGroupId;
   readonly label: string;
   readonly ariaLabel: string;
-  readonly actionIds: readonly ToolbarActionId[];
+  readonly actionIds: readonly BotLifecycleActionId[];
 }
 
 interface ToolbarGroup {
   readonly id: ToolbarGroupId;
   readonly label: string;
   readonly ariaLabel: string;
-  readonly actions: readonly LifecycleChartAction[];
+  readonly actions: readonly BotLifecycleAction[];
 }
 
 const TOOLBAR_GROUPS: readonly ToolbarGroupDefinition[] = [
   {
-    id: 'run',
-    label: 'Run',
-    ariaLabel: 'Run lifecycle controls',
-    actionIds: ['start_process', 'resume', 'pause'],
+    id: 'duty',
+    label: 'Duty',
+    ariaLabel: 'Duty lifecycle controls',
+    actionIds: ['confirm_start', 'end_day_now'],
   },
   {
-    id: 'recover',
-    label: 'Recover',
-    ariaLabel: 'Recovery lifecycle controls',
-    actionIds: ['flatten_and_pause', 'stop', 'redeploy'],
+    id: 'roster',
+    label: 'Roster',
+    ariaLabel: 'Roster controls',
+    actionIds: ['add_to_roster', 'take_off_roster'],
   },
   {
-    id: 'danger',
-    label: 'Danger',
-    ariaLabel: 'Danger lifecycle controls',
-    actionIds: ['mark_poisoned'],
+    id: 'machinery',
+    label: 'Machinery',
+    ariaLabel: 'Machinery lifecycle controls',
+    actionIds: ['retire_replace'],
   },
 ];
 
@@ -55,10 +51,9 @@ const TOOLBAR_GROUPS: readonly ToolbarGroupDefinition[] = [
   styleUrl: './overview-actions.component.scss',
 })
 export class OverviewActionsComponent {
-  readonly actions = input.required<LifecycleChartAction[]>();
-  readonly onlyFreshRunAvailable = input(false);
+  readonly actions = input.required<BotLifecycleAction[]>();
   readonly busyAction = input<string | null>(null);
-  readonly actionInvoked = output<LifecycleChartActionId>();
+  readonly actionInvoked = output<BotLifecycleActionId>();
   readonly actionTargetHovered = output<string | null>();
 
   readonly actionsById = computed(() => new Map(this.actions().map((action) => [action.id, action])));
@@ -71,12 +66,12 @@ export class OverviewActionsComponent {
         ariaLabel: group.ariaLabel,
         actions: group.actionIds
           .map((id) => byId.get(id))
-          .filter((action): action is LifecycleChartAction => action !== undefined),
+          .filter((action): action is BotLifecycleAction => action !== undefined),
       }))
       .filter((group) => group.actions.length > 0);
   });
 
-  trackAction(_: number, action: LifecycleChartAction): LifecycleChartActionId {
+  trackAction(_: number, action: BotLifecycleAction): BotLifecycleActionId {
     return action.id;
   }
 

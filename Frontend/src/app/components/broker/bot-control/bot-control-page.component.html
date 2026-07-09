@@ -63,8 +63,7 @@
 
       <app-overview-actions
         class="top-action-banner"
-        [actions]="s.lifecycle_chart.actions"
-        [onlyFreshRunAvailable]="s.lifecycle_chart.only_fresh_run_available"
+        [actions]="lifecycleToolbarActions()"
         [busyAction]="busyAction()"
         (actionInvoked)="dispatchOverviewAction($event)"
         (actionTargetHovered)="setHighlightedLifecycleNode($event)"
@@ -288,5 +287,15 @@
     confirmLabel="Record recovery override"
     (confirmed)="confirmCrashRecoveryOverride()"
     (cancelled)="cancelCrashRecoveryConfirm()"
+  />
+
+  <app-typed-halt-confirm
+    [open]="retireReplaceConfirmOpen()"
+    heading="Retire &amp; Replace"
+    [message]="retireReplaceConfirmMessage"
+    requiredToken=""
+    confirmLabel="Retire &amp; Replace"
+    (confirmed)="confirmRetireReplace()"
+    (cancelled)="cancelRetireReplaceConfirm()"
   />
 </section>

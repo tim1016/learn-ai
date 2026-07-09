@@ -24,14 +24,15 @@ def compose_bot_catalog_row(status: LiveInstanceStatus, trading_mode: TradingMod
     error_count = _error_count(status)
     readiness_verdict = status.readiness.verdict if status.readiness is not None else "UNKNOWN"
     prior_run_classification = status.operator_surface.prior_run.classification
+    daily_lifecycle = status.daily_lifecycle
     return BotCatalogRow(
         strategy_instance_id=status.strategy_instance_id,
         name=status.strategy_instance_id,
-        status_label=_status_label(status),
-        status_detail=_status_detail(status),
-        status_tone=_status_tone(readiness_verdict, error_count),
-        only_fresh_run_available=status.lifecycle_chart.only_fresh_run_available,
-        needs_attention=error_count > 0 or readiness_verdict in ("BLOCKED", "DEGRADED"),
+        status_label=daily_lifecycle.display_status,
+        status_detail=daily_lifecycle.reason or _status_detail(status),
+        status_tone=_status_tone(daily_lifecycle.display_status),
+        only_fresh_run_available=False,
+        needs_attention=daily_lifecycle.attention_badge == "Sick bay",
         trading_mode=trading_mode,
         symbols=_symbols(status),
         engine=status.start_defaults.strategy if status.start_defaults is not None else None,
@@ -45,6 +46,7 @@ def compose_bot_catalog_row(status: LiveInstanceStatus, trading_mode: TradingMod
         process_state=status.operator_surface.host_process.state,
         desired_state=status.desired_state.state if status.desired_state is not None else None,
         readiness_verdict=readiness_verdict,
+        daily_lifecycle=daily_lifecycle,
         metrics=BotCatalogMetrics(
             pnl=BotCatalogPnl(
                 unrealized=status.operator_surface.current_risk.unrealized_pnl,
@@ -96,12 +98,12 @@ def _error_count(status: LiveInstanceStatus) -> int:
     return count
 
 
-def _status_tone(readiness_verdict: str, error_count: int) -> CatalogTone:
-    if error_count > 0 or readiness_verdict == "BLOCKED":
+def _status_tone(display_status: str) -> CatalogTone:
+    if display_status == "Sick bay":
         return "danger"
-    if readiness_verdict == "DEGRADED":
+    if display_status == "Clocking out":
         return "warning"
-    if readiness_verdict == "READY":
+    if display_status in {"Ready", "On duty"}:
         return "positive"
     return "neutral"
 
@@ -116,7 +118,7 @@ def _status_label(status: LiveInstanceStatus) -> str:
             case "BLOCKED":
                 return "Blocked"
             case _:
-                return "Unknown"
+                return "Not yet proven"
     notice = status.operator_surface.host_process.notice
     if notice:
         return notice
@@ -138,7 +140,7 @@ def _last_run_label(classification: str) -> str:
         case "EXITED_WITH_ERROR":
             return "Exited with error"
         case _:
-            return "No result yet"
+            return "Not yet proven"
 
 
 def _last_run_detail(status: LiveInstanceStatus) -> str | None:
@@ -159,7 +161,7 @@ def _last_run_detail(status: LiveInstanceStatus) -> str | None:
         else:
             details.append("Previous run exited with an error.")
     else:
-        details.append("The previous run result is unknown.")
+        details.append("The previous run result is not yet proven.")
     if last_exit.exit_code is not None:
         details.append(f"Exit code {last_exit.exit_code}.")
     if last_exit.hydration_accepted is False:
@@ -185,7 +187,7 @@ def _exit_reason_label(reason: str) -> str:
 
 def _human_code(value: str | None) -> str:
     if not value:
-        return "unknown"
+        return "not yet proven"
     return value.replace("_", " ").replace("-", " ").strip().capitalize()
 
 

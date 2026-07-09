@@ -40,7 +40,7 @@ describe('BotControlPageComponent route and sidebar behavior', () => {
       ?.lifecycle_chart.global_graph.nodes.find((node) => node.id === 'recovery');
     if (!recovery) throw new Error('Expected recovery lifecycle node in fixture.');
     component.selectLifecycleNode(recovery);
-    component.dispatchOverviewAction('mark_poisoned');
+    component.openTypedHalt();
     fixture.detectChanges();
     expect(component.selectedLifecycleNodeId()).toBe('recovery');
     expect(component.typedHaltOpen()).toBe(true);
