@@ -21,7 +21,7 @@
           <span class="timeline-marker" aria-hidden="true"></span>
           <div class="timeline-row-header">
             <span>{{ timelineTimestamp(row) }}</span>
-            <span>{{ row.status ?? row.category }}</span>
+            <span>{{ (row.status ?? row.category) | receiptLabel }}</span>
           </div>
           <strong>{{ timelineHeadline(row) }}</strong>
           @if (row.why) {
@@ -31,12 +31,12 @@
             @if (row.node_id) {
               <div>
                 <dt>Node</dt>
-                <dd>{{ row.node_id }}</dd>
+                <dd>{{ row.node_id | receiptLabel }}</dd>
               </div>
             }
             <div>
               <dt>Source</dt>
-              <dd>{{ timelineSource(row) }}</dd>
+              <dd>{{ row.source_type | receiptLabel }}{{ timelineSourceSequence(row) }}</dd>
             </div>
             @if (row.operator_next_step) {
               <div class="timeline-next">

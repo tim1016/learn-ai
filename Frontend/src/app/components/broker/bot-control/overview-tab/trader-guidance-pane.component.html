@@ -55,7 +55,7 @@
           <li [class]="'tone-' + line.tone">
             <span class="proof-marker" aria-hidden="true"></span>
             <div>
-              <strong>{{ line.label }}</strong>
+              <strong>{{ line.label | receiptLabel }}</strong>
               <p>{{ line.message }}</p>
               <small>{{ line.detail }}</small>
             </div>

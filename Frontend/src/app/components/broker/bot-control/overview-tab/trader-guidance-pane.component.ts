@@ -16,11 +16,12 @@ import {
   buildDiagnosticEvidenceLines,
   type DiagnosticEvidenceLine,
 } from '../node-inspector-presenter';
+import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { TraderGuidanceTimelineComponent } from './trader-guidance-timeline.component';
 
 @Component({
   selector: 'app-trader-guidance-pane',
-  imports: [CommonModule, TraderGuidanceTimelineComponent],
+  imports: [CommonModule, ReceiptLabelPipe, TraderGuidanceTimelineComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './trader-guidance-pane.component.html',
   styleUrl: './trader-guidance-pane.component.scss',
