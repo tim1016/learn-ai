@@ -2560,6 +2560,27 @@ async def test_delete_instance_refuses_active_process(app_with_root, monkeypatch
     assert not (root.parent / "live_state" / "active-bot" / "bot_deletion.json").exists()
 
 
+async def test_delete_instance_allows_retired_bot_when_daemon_unreachable(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-retired", "retired-bot", 100)
+    BotLifecycleStateRepo(stable_bot_lifecycle_state_path(root.parent, "retired-bot")).retire(
+        now_ms=200,
+        updated_by="operator",
+        reason="Retire & Replace",
+    )
+    _set_daemon(monkeypatch, process=None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.request("DELETE", "/api/live-instances/retired-bot")
+
+    assert response.status_code == 200
+    assert response.json()["deleted_run_ids"] == ["run-retired"]
+    assert (root.parent / "live_state" / "retired-bot" / "bot_deletion.json").is_file()
+
+
 async def test_soft_deleted_instance_reappears_after_new_run_id(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -155,6 +155,7 @@ export class BotControlPageComponent {
       this.typedHaltInstanceId.set(null);
       this.crashRecoveryConfirmOpen.set(false);
       this.retireReplaceConfirmOpen.set(false);
+      this.removeBotConfirmOpen.set(false);
       if (id) {
         void this.refreshStatus(id).finally(() => this.scheduleNextPoll(id, token));
       }
@@ -377,6 +378,11 @@ export class BotControlPageComponent {
 
   openRetireReplaceConfirm(): void {
     if (this.isActionDisabled('retire_replace')) return;
+    this.retireReplaceConfirmOpen.set(true);
+  }
+
+  openTerminalRetireReplaceConfirm(): void {
+    if (!this.instanceId() || this.busyAction()) return;
     this.retireReplaceConfirmOpen.set(true);
   }
 

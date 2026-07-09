@@ -7,6 +7,7 @@ import type {
 } from '../../../../api/live-instances.types';
 import { makeStatus } from '../bot-control-page.fixtures';
 import { makeDailyLifecycleFixture } from '../../../../testing/live-instance-status-fixtures';
+import { addRetiredTerminalBlocker } from '../../../../testing/operator-surface-fixtures';
 import { formatPosition, resolveVerdictCardModel } from './verdict-card-model';
 
 function statusWith(
@@ -17,31 +18,6 @@ function statusWith(
   status.daily_lifecycle = makeDailyLifecycleFixture(lifecycle);
   mutate?.(status);
   return status;
-}
-
-function addRetiredTerminalBlocker(status: LiveInstanceStatus): void {
-  status.operator_surface.blockers = [
-    {
-      id: 'retired',
-      severity: 'blocking',
-      disposition: 'terminal',
-      headline: "Can't recover",
-      detail: 'This bot has been retired. Remove it from the catalog or replace it.',
-      primary_move: {
-        label: 'Remove',
-        action: { kind: 'remove' },
-        target: null,
-      },
-      secondary_moves: [
-        {
-          label: 'Replace',
-          action: { kind: 'retire_replace' },
-          target: null,
-        },
-      ],
-      applies_to: 'run',
-    },
-  ];
 }
 
 const RISK: OperatorSurfaceCurrentRisk = {
@@ -217,6 +193,7 @@ describe('resolveVerdictCardModel', () => {
     expect(model.verb).toEqual({ kind: 'none' });
     expect(model.ambientActions).toEqual([]);
     expect(model.showOverflow).toBe(false);
+    expect(model.showConditionCure).toBe(false);
     expect(model.terminalMoves.map((move) => move.action.kind)).toEqual([
       'retire_replace',
       'remove',

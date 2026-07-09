@@ -51,6 +51,7 @@ export class VerdictCardComponent {
   readonly settingsRequested = output();
   readonly accountMonitorRequested = output();
   readonly removeRequested = output();
+  readonly terminalRetireReplaceRequested = output();
 
   readonly whyOpen = signal(false);
   readonly historyOpen = signal(false);
@@ -94,6 +95,7 @@ export class VerdictCardComponent {
     () => this.status().operator_surface.daily_order_cap.limit,
   );
   readonly sickBayCondition = computed(() => {
+    if (!this.model().showConditionCure) return null;
     const lifecycle = this.status().daily_lifecycle;
     return lifecycle.display_status === 'Sick bay'
       ? lifecycle.conditions?.[0] ?? null
@@ -112,7 +114,7 @@ export class VerdictCardComponent {
   invokeTerminalMove(move: OperatorMove): void {
     if (this.busy()) return;
     if (move.action.kind === 'retire_replace') {
-      this.lifecycleAction.emit('retire_replace');
+      this.terminalRetireReplaceRequested.emit();
     } else if (move.action.kind === 'remove') {
       this.removeRequested.emit();
     }

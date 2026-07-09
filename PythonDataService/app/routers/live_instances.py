@@ -1905,6 +1905,11 @@ def _live_config_for_run_dir(run_dir: Path) -> Mapping[str, object] | None:
     return live_config if isinstance(live_config, Mapping) else None
 
 
+def _is_retired_bot(root: Path, sid: str) -> bool:
+    lifecycle_state = _resolve_bot_lifecycle_state(root, sid)
+    return lifecycle_state is not None and lifecycle_state.phase == BotLifecyclePhase.RETIRED
+
+
 @router.delete("/{strategy_instance_id}", response_model=BotDeleteResponse)
 async def delete_instance(
     strategy_instance_id: str,
@@ -1923,24 +1928,26 @@ async def delete_instance(
 
     _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
     if daemon is None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "HOST_SERVICE_OFFLINE",
-                "message": "Cannot delete this bot because the bot service is offline; stopped state is unproven.",
-            },
-        )
-    process, _live_binding = _interpret_daemon_process(daemon, root)
-    if process.state in _LIVE_STATES:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "BOT_PROCESS_ACTIVE",
-                "message": "Stop the bot process before deleting it from the catalog.",
-                "process_state": process.state,
-                "bound_run_id": process.bound_run_id,
-            },
-        )
+        if not _is_retired_bot(root, sid):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": "HOST_SERVICE_OFFLINE",
+                    "message": "Cannot delete this bot because the bot service is offline; stopped state is unproven.",
+                },
+            )
+    else:
+        process, _live_binding = _interpret_daemon_process(daemon, root)
+        if process.state in _LIVE_STATES:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": "BOT_PROCESS_ACTIVE",
+                    "message": "Stop the bot process before deleting it from the catalog.",
+                    "process_state": process.state,
+                    "bound_run_id": process.bound_run_id,
+                },
+            )
 
     runs = _scan_runs_by_instance(root).get(sid, [])
     existing = _read_bot_deletion_for_endpoint(root.parent, sid)

@@ -12,6 +12,7 @@ import type {
 import type { RenderedAction } from '../lib/suggested-action-renderer';
 import { makeStatus } from '../bot-control-page.fixtures';
 import { makeDailyLifecycleFixture } from '../../../../testing/live-instance-status-fixtures';
+import { addRetiredTerminalBlocker } from '../../../../testing/operator-surface-fixtures';
 import { ActivityTabComponent } from '../tabs/activity-tab.component';
 import { VerdictCardComponent } from './verdict-card.component';
 
@@ -44,31 +45,6 @@ function accountStaleCondition(): BotLifecycleCondition {
     cure_action: 'reconcile_now',
     cure_label: 'Run account reconcile',
   };
-}
-
-function addRetiredTerminalBlocker(status: LiveInstanceStatus): void {
-  status.operator_surface.blockers = [
-    {
-      id: 'retired',
-      severity: 'blocking',
-      disposition: 'terminal',
-      headline: "Can't recover",
-      detail: 'This bot has been retired. Remove it from the catalog or replace it.',
-      primary_move: {
-        label: 'Remove',
-        action: { kind: 'remove' },
-        target: null,
-      },
-      secondary_moves: [
-        {
-          label: 'Replace',
-          action: { kind: 'retire_replace' },
-          target: null,
-        },
-      ],
-      applies_to: 'run',
-    },
-  ];
 }
 
 function renderCard(
@@ -191,8 +167,10 @@ describe('VerdictCardComponent', () => {
     );
     const el = fixture.nativeElement as HTMLElement;
     const lifecycleAction = vi.fn();
+    const terminalRetireReplaceRequested = vi.fn();
     const removeRequested = vi.fn();
     fixture.componentInstance.lifecycleAction.subscribe(lifecycleAction);
+    fixture.componentInstance.terminalRetireReplaceRequested.subscribe(terminalRetireReplaceRequested);
     fixture.componentInstance.removeRequested.subscribe(removeRequested);
 
     expect(el.querySelector('.verdict-card')?.getAttribute('data-state')).toBe('Retired');
@@ -206,7 +184,25 @@ describe('VerdictCardComponent', () => {
     buttons[1]?.click();
 
     expect(removeRequested).toHaveBeenCalledTimes(1);
-    expect(lifecycleAction).toHaveBeenCalledWith('retire_replace');
+    expect(terminalRetireReplaceRequested).toHaveBeenCalledTimes(1);
+    expect(lifecycleAction).not.toHaveBeenCalledWith('retire_replace');
+  });
+
+  it('hides Sick bay condition cures when a terminal blocker owns the card', () => {
+    const fixture = renderCard(
+      statusWith(
+        {
+          display_status: 'Sick bay',
+          primary_action: null,
+          conditions: [accountStaleCondition()],
+        },
+        addRetiredTerminalBlocker,
+      ),
+    );
+    const el = fixture.nativeElement as HTMLElement;
+
+    expect(el.querySelector('.vc-condition')).toBeNull();
+    expect(el.querySelector('#verdict-state')?.textContent).toContain("Can't recover");
   });
 
   it('emits the ambient action id from the overflow menu', () => {
