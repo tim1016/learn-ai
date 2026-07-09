@@ -6,25 +6,64 @@
   [attr.data-submit-readiness]="submitReadiness().code"
 >
   <section class="summary-band">
-    <p class="eyebrow">Trader view</p>
+    <p class="eyebrow">Operator truth</p>
     <h3 data-testid="trader-guidance-headline">{{ traderGuidance().headline }}</h3>
     <p>{{ traderGuidance().explanation }}</p>
   </section>
 
-  <section class="readiness-band" [class.can-submit]="submitReadiness().can_submit">
-    <p class="eyebrow">Submit readiness</p>
-    <div class="readiness-line">
-      <span class="readiness-dot" aria-hidden="true"></span>
-      <strong>{{ submitReadiness().label }}</strong>
-    </div>
-    <p>{{ submitReadiness().explanation }}</p>
-  </section>
+  @if (renderedPrimary(); as action) {
+    <section class="next-step-band">
+      <div>
+        <p class="eyebrow">Recommended move</p>
+        <p>{{ traderGuidance().risk_headline }}</p>
+      </div>
+      <button
+        type="button"
+        class="primary-remediation"
+        [class.link-remediation]="action.variant === 'link'"
+        data-testid="trader-guidance-primary-remediation"
+        (click)="action.invoke()"
+      >
+        <span>{{ action.label }}</span>
+        <i class="pi pi-arrow-right" aria-hidden="true"></i>
+      </button>
+    </section>
+  }
 
-  <section class="risk-band">
-    <p class="eyebrow">Risk meaning</p>
-    <h3>{{ traderGuidance().risk_headline }}</h3>
-    <p>{{ traderGuidance().risk_explanation }}</p>
-  </section>
+  <div class="truth-grid">
+    <section class="readiness-band" [class.can-submit]="submitReadiness().can_submit">
+      <p class="eyebrow">Submit readiness</p>
+      <div class="readiness-line">
+        <span class="readiness-dot" aria-hidden="true"></span>
+        <strong>{{ submitReadiness().label }}</strong>
+      </div>
+      <p>{{ submitReadiness().explanation }}</p>
+    </section>
+
+    <section class="risk-band">
+      <p class="eyebrow">Risk meaning</p>
+      <h3>{{ traderGuidance().risk_headline }}</h3>
+      <p>{{ traderGuidance().risk_explanation }}</p>
+    </section>
+  </div>
+
+  @if (proofLines().length > 0) {
+    <section class="proof-band" aria-label="Backend proof stack">
+      <p class="eyebrow">Proof stack</p>
+      <ul>
+        @for (line of proofLines(); track trackProofLine($index, line)) {
+          <li [class]="'tone-' + line.tone">
+            <span class="proof-marker" aria-hidden="true"></span>
+            <div>
+              <strong>{{ line.label }}</strong>
+              <p>{{ line.message }}</p>
+              <small>{{ line.detail }}</small>
+            </div>
+          </li>
+        }
+      </ul>
+    </section>
+  }
 
   <app-trader-guidance-timeline
     [rows]="timelineRows()"
@@ -66,21 +105,6 @@
           </li>
         }
       </ul>
-    </section>
-  }
-
-  @if (renderedPrimary(); as action) {
-    <section class="next-step-band">
-      <p class="eyebrow">Next step</p>
-      <button
-        type="button"
-        class="primary-remediation"
-        [class.link-remediation]="action.variant === 'link'"
-        data-testid="trader-guidance-primary-remediation"
-        (click)="action.invoke()"
-      >
-        {{ action.label }}
-      </button>
     </section>
   }
 

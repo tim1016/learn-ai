@@ -58,6 +58,15 @@ describe('TraderGuidancePaneComponent', () => {
             explanation: 'The backend cannot prove the broker/session/reconciliation facts needed before a submit.',
             risk_headline: 'Do not treat stale or missing broker evidence as live truth',
             risk_explanation: 'Reconnect or reconcile until the broker evidence is fresh and explicit.',
+            proof_lines: [
+              {
+                id: 'broker-proof',
+                label: 'Broker',
+                message: 'Broker proof is not available yet.',
+                detail: 'Account safety proof is not recorded. Broker connection has not been proven.',
+                tone: 'attention',
+              },
+            ],
             advanced_evidence: [
               {
                 label: 'reconciliation.state',
@@ -77,6 +86,8 @@ describe('TraderGuidancePaneComponent', () => {
     expect(screen.getByText('The backend cannot prove the broker/session/reconciliation facts needed before a submit.')).toBeTruthy();
     expect(screen.getByText('Do not treat stale or missing broker evidence as live truth')).toBeTruthy();
     expect(screen.getByText('Reconnect or reconcile until the broker evidence is fresh and explicit.')).toBeTruthy();
+    expect(screen.getByText('Proof stack')).toBeTruthy();
+    expect(screen.getByText('Broker proof is not available yet.')).toBeTruthy();
     const diagnostics = screen.getByTestId('trader-guidance-advanced-evidence');
     expect(diagnostics.textContent).toContain('Technical diagnostics');
     expect(diagnostics.textContent).toContain('Reconciliation is not available.');

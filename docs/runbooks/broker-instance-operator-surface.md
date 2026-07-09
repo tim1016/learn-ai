@@ -1,8 +1,79 @@
 # Broker Instance Operator Surface — Runbook
 
-Status: shipping with #565 PR 13 (cleanup); IA revised 2026-06-17 via `grill-with-docs` (see "IA revision 2026-06-17" below).  
-Audience: operators (traders) running paper / live bots from `/broker/bots/:id`.
-Engineer view: keep this in lockstep with the per-card disclosures and the Detective section tabs.
+Status: active operator runbook. Last reviewed 2026-07-09 for the Bot Control
+truth surface, operator blockers, and trader-guidance pane.
+Audience: operators running paper/live bots from `/broker/bots/:id`, and
+engineers keeping that surface honest.
+
+## Operating principle
+
+This page is a **truth surface**, not a control dashboard that guesses.
+Treat every visible verdict as a claim from the backend-authored
+`operator_surface` contract. If the page cannot prove a fact, it must say
+`unknown`, `not proven`, or show the backend's blocker. It must not infer
+health from stale UI state, optimistic button state, browser polling success,
+or raw fields that are not part of `operator_surface`.
+
+Operationally:
+
+- **Trade only from proven state.** `submit_readiness.can_submit === true` is
+  the only green light for order submission. `safe_to_monitor` means observe,
+  not submit.
+- **Act on the primary blocker first.** `operator_surface.blockers[0]` owns the
+  headline, severity, disposition, and primary move. Do not chase lower
+  evidence until the top blocker is addressed.
+- **Use the recommended move as a launcher, not a second source of truth.**
+  `trader_guidance.primary_remediation` may focus a surface, open a runbook,
+  invoke reconciliation, or route to deploy/account monitor. The target
+  surface still re-checks its own eligibility before mutating anything.
+- **Unknown is unsafe by design.** Broker safety, broker connection,
+  reconciliation, runtime freshness, and AccountOwner generation all fail
+  closed when proof is missing.
+- **Manual overrides require receipts.** Crash recovery and reconciliation
+  adoption are operational assertions; record them only after independent
+  broker/account verification, then preserve the receipt.
+
+## Quick flow
+
+1. **Read the verdict card.** Start with the single state word, detail line,
+   and primary verb. If the verb is disabled, open `why?` before clicking
+   around.
+2. **Check submit readiness.** If it does not say that submission is safe,
+   treat the bot as monitor-only, even if the process is running.
+3. **Read the proof stack.** Broker proof, reconciliation proof,
+   AccountOwner proof, runtime freshness, and submit readiness must agree
+   before resuming or submitting.
+4. **Resolve the current blocker by disposition:**
+   - `fix_here` — use the move in this bot surface.
+   - `fix_elsewhere` — follow the move to Account Monitor, Broker, Engine, or
+     the named runbook.
+   - `wait` — do not invent a manual cure; wait for fresh evidence or the
+     named transition.
+   - `terminal` — replace/remove the bot; do not try to nurse it back to
+     trading.
+5. **Use the timeline to explain what changed.** The timeline is evidence
+   context, not a separate verdict. Prefer rows with resolved timestamps and
+   explicit source/sequence when reconstructing an incident.
+6. **Mutate only from canonical buttons.** Resume, End day, Flatten and pause,
+   Stop, Mark poisoned, and Start bot process each re-run server eligibility.
+   A stale open tab cannot grant permission.
+
+## Stop points
+
+Stop and reconcile manually when any of these are true:
+
+- Broker connection is `DISCONNECTED`, `DEGRADED`, or `UNKNOWN`.
+- Broker safety is not `PAPER_ONLY` for paper runs, or is `UNKNOWN`.
+- AccountOwner phase is `frozen`, `unknown`, or waiting for a newer generation.
+- Reconciliation is stale, divergent, unreadable, or unavailable when required.
+- Runtime freshness demotes posture or reports stale command/broker/bar/control
+  evidence.
+- A prior mutation outcome is unresolved or uncertain.
+- The primary blocker is `terminal`.
+
+Do not use browser refreshes, visual chart movement, or a locally enabled
+button as proof that any stop point cleared. Wait for a new backend projection
+or run the named recovery action.
 
 ## What this page answers
 
