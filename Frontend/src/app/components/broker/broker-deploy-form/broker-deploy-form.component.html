@@ -3,7 +3,7 @@
     <div>
       <p class="eyebrow"><i class="pi pi-send" aria-hidden="true"></i> Broker deploy</p>
       <h1>Deploy a strategy</h1>
-      <p class="subtitle">Create one live strategy instance from a validated receipt, then decide whether to start it now.</p>
+      <p class="subtitle">Create and run one live strategy instance from a validated receipt.</p>
     </div>
     <nav class="head-actions" aria-label="Deploy page links">
       <a routerLink="/strategy-validation" class="validation-link">Validation</a>
@@ -65,45 +65,50 @@
       />
       <small>{{ brokerAccountAvailable() ? 'Sourced from the connected broker session.' : 'Connect the broker session before deploying.' }}</small>
     </label>
-    <div class="deploy-readiness-strip" aria-label="Deploy readiness facts">
-      @for (fact of deployReadinessFacts(); track fact.key) {
-        <a [routerLink]="fact.link" [class]="'readiness-fact state-' + fact.state">
-          <span>{{ fact.label }}</span>
-          <strong>{{ fact.condition }}</strong>
-          <small>{{ fact.detail }}</small>
-        </a>
-      }
-    </div>
   </section>
 
   <div class="workspace">
     <aside class="readiness" aria-label="Deployment command">
       <section class="command-panel">
         <p class="eyebrow">Deploy command</p>
-        <h2>{{ commandTitle() }}</h2>
+        <h2>Deploy &amp; run</h2>
         <p>
           {{ selectedValidation()?.display_name ?? 'Select a validated strategy before deploying.' }}
         </p>
+        @if (blockers().length > 0) {
+          <ul class="deploy-blockers" aria-label="Deploy blockers">
+            @for (blocker of blockers(); track blocker.id) {
+              <li class="deploy-blocker" [class.deploy-blocker--blocking]="blocker.severity === 'blocking'">
+                <p class="deploy-blocker__headline">{{ blocker.headline }}</p>
+                @if (blocker.detail) {
+                  <p class="deploy-blocker__detail">{{ blocker.detail }}</p>
+                }
+                @let move = renderMove(blocker);
+                @if (move !== null) {
+                  <button
+                    type="button"
+                    class="deploy-blocker__move"
+                    [class.deploy-blocker__move--primary]="move.variant === 'primary'"
+                    (click)="move.invoke()"
+                  >
+                    {{ move.label }}
+                  </button>
+                }
+              </li>
+            }
+          </ul>
+        }
         <button type="button" class="primary" [disabled]="!canSubmit()" (click)="submit()">
           <i class="pi pi-send" aria-hidden="true"></i>
-          {{ commandButtonLabel() }}
+          Deploy &amp; run
         </button>
-        @let blocker = activeBlocker();
-        @if (blocker?.actionLink; as actionLink) {
-          <p class="blocked" role="status">
-            <span>{{ blocker?.message }}</span>
-            <a [routerLink]="actionLink.route" [fragment]="actionLink.fragment">{{ actionLink.linkText }}</a>
-          </p>
-        } @else {
-          <p class="blocked" role="status">{{ commandStatus() }}</p>
-        }
+        <p class="blocked" role="status">{{ commandStatus() }}</p>
         @if (identityCoherenceEvidence()) {
           <app-deploy-coherence-card
             title="Run identity"
             ariaLabel="Run identity confirmation"
             [facts]="identityCoherenceFacts()"
             [confirmed]="identityCoherenceConfirmed()"
-            [startNow]="effectiveStartNow()"
             confirmLabel="Confirm new run identity"
             (confirmationRequested)="confirmIdentityCoherence()"
           />
@@ -114,37 +119,10 @@
             ariaLabel="Exposure confirmation"
             [facts]="exposureCoherenceFacts()"
             [confirmed]="exposureCoherenceConfirmed()"
-            [startNow]="effectiveStartNow()"
             confirmLabel="Confirm exposure state"
             (confirmationRequested)="confirmExposureCoherence()"
           />
         }
-      </section>
-
-      <section>
-        <h2>Now</h2>
-        <ul>
-          @for (check of nowChecks(); track check.key) {
-            <li [class]="'state-' + check.state">
-              <span class="dot" aria-hidden="true"></span>
-              <span>{{ check.label }}</span>
-              <small>{{ check.detail }}</small>
-            </li>
-          }
-        </ul>
-      </section>
-
-      <section class="at-deploy">
-        <h2>At deploy</h2>
-        <ul>
-          @for (check of deployChecks(); track check.key) {
-            <li [class]="'state-' + check.state">
-              <span class="dot" aria-hidden="true"></span>
-              <span>{{ check.label }}</span>
-              <small>{{ check.detail }}</small>
-            </li>
-          }
-        </ul>
       </section>
     </aside>
 
@@ -368,15 +346,11 @@
       <section class="group" [class.step-hidden]="activeDeployTab() !== 'launch'" aria-labelledby="launch-section">
         <div class="group-head">
           <h2 id="launch-section">Launch options</h2>
-          @if (!effectiveStartNow()) {
-            <span class="scope-note">Applies only when starting now</span>
-          }
         </div>
         <fieldset
           class="mode"
           [class.orders-selected]="executionCapability() === 'paper_orders'"
           [class.live-selected]="executionCapability() === 'live'"
-          [disabled]="!effectiveStartNow()"
         >
           <legend>Execution capability</legend>
           <label>
@@ -407,10 +381,10 @@
             </span>
           </label>
         </fieldset>
-        <p class="capability-proof" [class.dimmed]="!effectiveStartNow()">
+        <p class="capability-proof">
           {{ executionCapabilityProof() }}
         </p>
-        @if (effectiveStartNow() && executionCapability() === 'paper_orders') {
+        @if (executionCapability() === 'paper_orders') {
           <p class="launch-warning" role="status">
             Paper orders are enabled for launch. Guardrail limit:
             {{ maxOrdersPerDay() }} orders/day.
@@ -423,33 +397,26 @@
             [decision]="exposureDecision"
             [facts]="exposureCoherenceFacts()"
             [busy]="busy()"
-            [startNow]="effectiveStartNow()"
             [confirmed]="exposureCoherenceConfirmed()"
-            (deployOnlyRequested)="deployWithoutStarting()"
             (confirmStartRequested)="confirmExposureAndDeployStart()"
           />
         }
 
-        <div class="launch-fields" [class.dimmed]="!effectiveStartNow()">
+        <div class="launch-fields">
           <label class="field inline">
             <span>Daily order limit</span>
-            <input type="number" min="0" max="100000" [value]="maxOrdersPerDay()" [disabled]="!effectiveStartNow()" (input)="setMaxOrders($event)" />
+            <input type="number" min="0" max="100000" [value]="maxOrdersPerDay()" (input)="setMaxOrders($event)" />
           </label>
 
           <label class="field inline">
             <span>Restore previous state <span class="hint" title="Controls whether the engine must load yesterday's saved indicator state before it starts.">ⓘ</span></span>
-            <select [value]="hydratePolicy()" [disabled]="!effectiveStartNow()" (change)="setHydratePolicy($event)">
+            <select [value]="hydratePolicy()" (change)="setHydratePolicy($event)">
               <option value="require">Required</option>
               <option value="optional">Optional</option>
               <option value="disabled">Off</option>
             </select>
           </label>
         </div>
-
-        <label class="check">
-          <input type="checkbox" [checked]="startNow()" (change)="setStartNow($event)" />
-          <span>Start trading immediately</span>
-        </label>
       </section>
 
       <section class="action-plan" [class.step-hidden]="activeDeployTab() !== 'legs'" aria-labelledby="action-plan-picker-heading">

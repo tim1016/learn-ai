@@ -37,7 +37,6 @@ export interface ExposureCoherenceConflict {
 export interface ExposureLaunchDecision {
   title: string;
   detail: string;
-  deployOnlyLabel: string;
   confirmAndStartLabel: string;
   reviewLabel: string;
 }
@@ -102,10 +101,9 @@ export function exposureLaunchDecision(
   return {
     title: unknown ? 'Exposure is not proven flat' : 'Existing exposure needs a launch decision',
     detail: unknown
-      ? `Current risk reports ${posture} posture, ${pending} pending orders, and positions ${evidence.positionsLabel}. Reconcile the account, deploy without starting, or confirm these exact values if you intentionally want to start now.`
-      : `Current risk reports ${posture} posture, ${pending} pending orders, and positions ${evidence.positionsLabel}. Deploy without starting, or confirm these exact values before starting now.`,
-    deployOnlyLabel: 'Deploy without starting',
-    confirmAndStartLabel: 'Confirm and deploy & start',
+      ? `Current risk reports ${posture} posture, ${pending} pending orders, and positions ${evidence.positionsLabel}. Reconcile the account, or confirm these exact values if you intentionally want to deploy and run now.`
+      : `Current risk reports ${posture} posture, ${pending} pending orders, and positions ${evidence.positionsLabel}. Confirm these exact values before deploying and running.`,
+    confirmAndStartLabel: 'Confirm and deploy & run',
     reviewLabel: 'Open account monitor',
   };
 }
@@ -145,7 +143,7 @@ export function buildIdentityCoherenceEvidence(input: {
   const evidenceFacts = [facts[0], ...conflictingFacts];
   const compared = conflictingFacts.map((fact) => `${fact.label} ${fact.value}`).join(' and ');
   return {
-    summary: `Inherited bot symbol ${inherited} conflicts with ${compared}. Confirm the new run identity before Deploy & start.`,
+    summary: `Inherited bot symbol ${inherited} conflicts with ${compared}. Confirm the new run identity before Deploy & run.`,
     signature: evidenceFacts.map((fact) => `${fact.label}:${fact.value}`).join('|'),
     facts: evidenceFacts,
   };
@@ -187,7 +185,7 @@ export function buildExposureCoherenceEvidence(input: {
     ownedPositions: input.ownedPositions,
     positionsLabel: exposurePositionsLabel(input.ownedPositions),
     source: input.source.trim() || 'request inherited exposure',
-    summary: `Inherited exposure is ${postureLabel} with ${pendingLabel} pending order(s). Confirm exposure before Deploy & start, or deploy without starting.`,
+    summary: `Inherited exposure is ${postureLabel} with ${pendingLabel} pending order(s). Confirm exposure before Deploy & run.`,
     signature: `${input.instanceId}:${input.parentRunId ?? ''}:${input.posture}:${pendingLabel}:${JSON.stringify(input.ownedPositions)}`,
   };
 }

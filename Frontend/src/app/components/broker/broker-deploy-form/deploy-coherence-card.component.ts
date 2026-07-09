@@ -15,10 +15,8 @@ export class DeployCoherenceCardComponent {
   readonly ariaLabel = input.required<string>();
   readonly facts = input.required<CoherenceConfirmationCardFact[]>();
   readonly confirmed = input<boolean>(false);
-  readonly startNow = input<boolean>(false);
   readonly confirmLabel = input.required<string>();
-  readonly confirmedText = input<string>('Confirmed for this Deploy & start.');
-  readonly deployOnlyText = input<string>('Deploy-only will stage these values without starting.');
+  readonly confirmedText = input<string>('Confirmed for this Deploy & run.');
 
   readonly confirmationRequested = output<boolean>();
 

@@ -23,13 +23,9 @@
       </div>
     }
   </dl>
-  @if (startNow()) {
-    @if (confirmed()) {
-      <p>{{ confirmedText() }}</p>
-    } @else {
-      <button type="button" class="text-button" (click)="confirm()">{{ confirmLabel() }}</button>
-    }
+  @if (confirmed()) {
+    <p>{{ confirmedText() }}</p>
   } @else {
-    <p>{{ deployOnlyText() }}</p>
+    <button type="button" class="text-button" (click)="confirm()">{{ confirmLabel() }}</button>
   }
 </div>

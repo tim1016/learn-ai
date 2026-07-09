@@ -164,6 +164,7 @@ from app.schemas.live_runs import (
     SignalTone,
     SizingAuditRow,
 )
+from app.schemas.operator_blocker import DeployPreflightResponse
 from app.services.account_crash_recovery import (
     CrashRecoveryNotRequiredError,
     crash_recovery_block_detail,
@@ -171,7 +172,7 @@ from app.services.account_crash_recovery import (
     crash_recovery_gate_for_instance,
     record_crash_recovery_override_evidence,
 )
-from app.services.account_truth_snapshot import get_account_truth_snapshot_provider
+from app.services.account_truth_snapshot import assess_account_truth, get_account_truth_snapshot_provider
 from app.services.activity_evidence_matching import (
     activity_evidence_ref_from_event,
     matching_evidence_refs,
@@ -239,6 +240,7 @@ from app.services.deploy_admission import (
     evaluate_deploy_start_admission,
     resolve_symbol_from_ledger,
 )
+from app.services.deploy_preflight import DeployPreflightSignals, author_deploy_blockers
 from app.services.instance_context import InstanceContext, load_instance_context
 from app.services.live_chart_window import (
     ChartWindowError,
@@ -267,6 +269,11 @@ from app.services.runtime_freshness import (
     RuntimeFreshness,
     evaluate_runtime_freshness,
     unavailable_runtime_freshness,
+)
+from app.services.strategy_validation_manifest import (
+    StrategyValidationManifestError,
+    load_strategy_validation_entries,
+    strategy_registry_seeds,
 )
 
 if TYPE_CHECKING:
@@ -1462,11 +1469,10 @@ def _provenance(root: Path, live_binding: LiveBinding | None, runs: list[dict]) 
     )
 
 
-@router.get("", response_model=list[LiveInstanceSummary])
-async def list_live_instances() -> list[LiveInstanceSummary]:
-    """Account fleet overview: every known strategy instance, live or not."""
-    settings = get_settings()
-    root = Path(settings.live_runs_root)
+async def _build_live_instance_summaries(
+    settings: IbkrSettings,
+    root: Path,
+) -> list[LiveInstanceSummary]:
     by_instance = _visible_runs_by_instance(root)
 
     _result, daemon = await host_daemon_client.fetch_instances(settings.live_runner_daemon_url)
@@ -1514,6 +1520,14 @@ async def list_live_instances() -> list[LiveInstanceSummary]:
             )
         )
     return summaries
+
+
+@router.get("", response_model=list[LiveInstanceSummary])
+async def list_live_instances() -> list[LiveInstanceSummary]:
+    """Account fleet overview: every known strategy instance, live or not."""
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    return await _build_live_instance_summaries(settings, root)
 
 
 def _daemon_process_from_instance(managed: dict | None) -> dict | None:
@@ -2074,6 +2088,77 @@ async def _host_deploy_request_from_public(
         },
     )
     return HostRunnerDeployRequest.model_validate({**payload, "account_id": broker_account})
+
+
+def _runtime_connection_state_value(snapshot: BrokerRuntimeSnapshot) -> str | None:
+    state = snapshot.connection_state
+    if isinstance(state, str):
+        return state
+    value = getattr(state, "value", None)
+    return value if isinstance(value, str) else None
+
+
+def _strategy_is_deployable(strategy_key: str) -> bool:
+    entries = load_strategy_validation_entries(strategy_registry_seeds())
+    return any(entry.strategy_key == strategy_key and entry.deployable for entry in entries)
+
+
+async def _gather_deploy_preflight_signals(
+    strategy_key: str,
+    account_id: str,
+    instance_id: str,
+) -> DeployPreflightSignals:
+    """Resolve the deploy preconditions server-side for the blocker author."""
+
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    artifacts_root = root.parent
+
+    daemon_result, _health = await host_daemon_client.fetch_health(settings.live_runner_daemon_url)
+    broker_snapshot = snapshot_data_plane_broker()
+    account_freeze = read_account_freeze(artifacts_root, account_id)
+    account_truth = get_account_truth_snapshot_provider().get(account_id)
+    fleet = await _compute_account_fleet_contamination(settings, root)
+    summaries = await _build_live_instance_summaries(settings, root)
+
+    return DeployPreflightSignals(
+        daemon_reachable=daemon_result.kind == "CONNECTED",
+        broker_connection_state=_runtime_connection_state_value(broker_snapshot),
+        account_frozen=account_freeze is not None,
+        account_proven=assess_account_truth(account_truth, now_ms=_now_ms()).status == "pass",
+        fleet_blocks_starts=fleet.policy_blocks_starts,
+        strategy_deployable=_strategy_is_deployable(strategy_key),
+        instance_already_running=any(
+            summary.strategy_instance_id == instance_id
+            and summary.process_state in {"running", "stopping"}
+            for summary in summaries
+        ),
+    )
+
+
+@router.get("/deploy-preflight", response_model=DeployPreflightResponse)
+async def deploy_preflight(
+    strategy_key: str,
+    account_id: str,
+    instance_id: str,
+) -> DeployPreflightResponse:
+    """Return backend-authored blockers standing between deploy and a running bot."""
+
+    try:
+        signals = await _gather_deploy_preflight_signals(
+            strategy_key.strip(),
+            account_id.strip(),
+            instance_id.strip(),
+        )
+    except AccountArtifactError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except StrategyValidationManifestError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    blockers = author_deploy_blockers(signals)
+    return DeployPreflightResponse(
+        ready=not any(blocker.severity == "blocking" for blocker in blockers),
+        blockers=blockers,
+    )
 
 
 @router.post("", response_model=HostRunnerDeployResponse, status_code=status.HTTP_201_CREATED)
@@ -2922,6 +3007,24 @@ async def _fetch_net_positions() -> dict[str, int] | None:
     return net
 
 
+async def _compute_account_fleet_contamination(
+    settings: IbkrSettings,
+    root: Path,
+) -> FleetContamination:
+    explained: dict[str, dict[str, int]] = {}
+    for sid in _scan_runs_by_instance(root):
+        broker = _instance_broker(root, sid)
+        if broker is not None and broker.owned_positions:
+            explained[sid] = broker.owned_positions
+    net = await _fetch_net_positions()
+    result = compute_fleet_contamination(
+        net,
+        explained,
+        policy_blocks_starts=settings.fleet_dirty_blocks_starts,
+    )
+    return FleetContamination(**result)
+
+
 @router.get("/audit-copy-sizing-lookup", response_model=AuditCopySizingLookup)
 async def get_audit_copy_sizing_lookup(
     audit_copy_path: str,
@@ -3150,14 +3253,7 @@ async def get_account_fleet() -> FleetContamination:
     """
     settings = get_settings()
     root = Path(settings.live_runs_root)
-    explained: dict[str, dict[str, int]] = {}
-    for sid in _scan_runs_by_instance(root):
-        broker = _instance_broker(root, sid)
-        if broker is not None and broker.owned_positions:
-            explained[sid] = broker.owned_positions
-    net = await _fetch_net_positions()
-    result = compute_fleet_contamination(net, explained, policy_blocks_starts=settings.fleet_dirty_blocks_starts)
-    return FleetContamination(**result)
+    return await _compute_account_fleet_contamination(settings, root)
 
 
 @router.get("/account-summary", response_model=FleetAccountSummary)

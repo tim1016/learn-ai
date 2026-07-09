@@ -15,9 +15,7 @@ export class ExposureLaunchDecisionComponent {
   readonly decision = input.required<ExposureLaunchDecision>();
   readonly facts = input.required<CoherenceConfirmationCardFact[]>();
   readonly busy = input(false);
-  readonly startNow = input(false);
   readonly confirmed = input(false);
 
-  readonly deployOnlyRequested = output();
   readonly confirmStartRequested = output();
 }

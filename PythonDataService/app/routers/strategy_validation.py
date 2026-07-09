@@ -4,7 +4,6 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.engine.strategy.registry import _STRATEGY_REGISTRY
 from app.schemas.strategy_validation import (
     StrategyValidationCatalog,
     StrategyValidationDetail,
@@ -14,7 +13,6 @@ from app.schemas.strategy_validation import (
 from app.services.strategy_validation_manifest import (
     DEFAULT_FLAG_EVENTS_PATH,
     DEFAULT_MANIFEST_PATH,
-    StrategyRegistrySeed,
     StrategyValidationManifestError,
     StrategyValidationNotFoundError,
     append_strategy_validation_flag_event,
@@ -22,20 +20,10 @@ from app.services.strategy_validation_manifest import (
     local_strategy_validation_actor,
     reference_code_for_entry,
     refresh_strategy_validation_manifest_evidence,
+    strategy_registry_seeds,
 )
 
 router = APIRouter()
-
-
-def _registry_seeds() -> list[StrategyRegistrySeed]:
-    return [
-        StrategyRegistrySeed(
-            strategy_key=key,
-            display_name=registration.display_name,
-            description=registration.description,
-        )
-        for key, registration in sorted(_STRATEGY_REGISTRY.items())
-    ]
 
 
 def get_strategy_validation_manifest_path() -> Path:
@@ -57,7 +45,7 @@ async def list_strategy_validations(
 ) -> StrategyValidationCatalog:
     try:
         entries = load_strategy_validation_entries(
-            _registry_seeds(),
+            strategy_registry_seeds(),
             manifest_path=manifest_path,
             flag_events_path=flag_events_path,
         )
@@ -74,7 +62,7 @@ async def get_strategy_validation(
 ) -> StrategyValidationDetail:
     try:
         entries = load_strategy_validation_entries(
-            _registry_seeds(),
+            strategy_registry_seeds(),
             manifest_path=manifest_path,
             flag_events_path=flag_events_path,
         )
@@ -98,7 +86,7 @@ async def refresh_strategy_validation(
     try:
         return refresh_strategy_validation_manifest_evidence(
             strategy_key,
-            _registry_seeds(),
+            strategy_registry_seeds(),
             manifest_path=manifest_path,
             flag_events_path=flag_events_path,
         )
@@ -120,7 +108,7 @@ async def flag_strategy_validation(
         entry = append_strategy_validation_flag_event(
             strategy_key,
             body,
-            _registry_seeds(),
+            strategy_registry_seeds(),
             manifest_path=manifest_path,
             flag_events_path=flag_events_path,
             flagged_by=flagged_by,

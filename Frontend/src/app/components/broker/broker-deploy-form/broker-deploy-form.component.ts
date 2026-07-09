@@ -10,10 +10,9 @@ import {
   resource,
   signal,
 } from '@angular/core';
-import { ActivatedRoute, RouterLink } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { InputTextModule } from 'primeng/inputtext';
 import type { AccountTriageResponse } from '../../../api/account-reconciliation.types';
-import type { LiveInstanceStatus } from '../../../api/live-instances.types';
 import {
   DEFAULT_MAX_ORDERS_PER_DAY,
   type ExposureCoherencePosture,
@@ -55,16 +54,17 @@ import {
   type IdentityCoherenceConflict,
 } from './deploy-coherence';
 import { DeployCoherenceCardComponent } from './deploy-coherence-card.component';
+import { actionPlanDeployReadiness } from './deploy-readiness';
 import {
-  type AccountProofBlock,
-  actionPlanDeployReadiness,
-  buildDeployChecks,
-  buildDeployReadinessFacts,
-  buildNowChecks,
-  type DeployBlocker,
-  deployBlocker,
-  stoppedStartLatchState,
-} from './deploy-readiness';
+  buildFormBlockers,
+  deployReady,
+  resolveBlockerMove,
+  type RenderedMove,
+} from './deploy-blockers';
+import type {
+  DeployPreflightResponse,
+  OperatorBlocker,
+} from '../../../api/operator-blocker.types';
 import {
   REFERENCE_PARITY_POLICY,
   type CustomSizingKind,
@@ -91,7 +91,6 @@ interface DeployCommandState {
   kind: 'busy' | 'accepted' | 'blocked' | 'ready';
   message: string;
   canSubmit: boolean;
-  actionLink?: AccountProofBlock;
 }
 
 @Component({
@@ -116,20 +115,13 @@ export class BrokerDeployFormComponent {
   private readonly strategyValidation = inject(StrategyValidationService);
   protected readonly connectivity = inject(BrokerConnectivityService);
   private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
   private readonly destroyRef = inject(DestroyRef);
 
   readonly strategies = resource({ loader: () => this.svc.getEngineStrategies() });
   readonly strategyValidations = resource({ loader: () => this.strategyValidation.getCatalog() });
   readonly specFixtures = resource({ loader: () => this.svc.getSpecStrategyFixtures() });
-  readonly instances = resource({ loader: () => this.svc.getInstances() });
-  readonly instanceStatus = resource<LiveInstanceStatus | null, string | null>({
-    params: () => {
-      const id = this.instanceId().trim();
-      return this.startNow() && id !== '' && INSTANCE_ID_RE.test(id) ? id : null;
-    },
-    loader: ({ params }) => this.loadInstanceStatus(params),
-  });
   readonly account = resource({ loader: () => this.broker.account() });
   readonly accountTruth = resource({ loader: () => this.broker.accountTruth() });
   readonly accountTriage = resource<AccountTriageResponse | null, string | null>({
@@ -142,6 +134,25 @@ export class BrokerDeployFormComponent {
   });
   // ADR 0009 § 9: symbol-scoped all-in coexistence guard.
   readonly positions = resource({ loader: () => this.broker.positions() });
+  readonly deployPreflight = resource<
+    DeployPreflightResponse | null,
+    { strategyKey: string; accountId: string; instanceId: string } | null
+  >({
+    params: () => {
+      const strategyKey = this.strategyKey().trim();
+      const accountId = this.accountId().trim();
+      const instanceId = this.instanceId().trim();
+      if (strategyKey === '' || accountId === '') return null;
+      return {
+        strategyKey,
+        accountId,
+        instanceId: instanceId === '' ? '__unnamed__' : instanceId,
+      };
+    },
+    loader: ({ params }) =>
+      params === null ? Promise.resolve(null) : this.svc.deployPreflight(params),
+    defaultValue: null,
+  });
 
   readonly strategyKey = signal<string>('');
   readonly specPath = signal<string>('');
@@ -160,7 +171,6 @@ export class BrokerDeployFormComponent {
   readonly executionMode = signal<ExecutionMode>('paper_orders');
   readonly hydratePolicy = signal<HydratePolicy>('require');
   readonly maxOrdersPerDay = signal<number>(DEFAULT_MAX_ORDERS_PER_DAY);
-  readonly startNow = signal<boolean>(true);
   readonly actionPlan = signal<ActionPlan>({ on_enter: [], on_exit: [] });
   readonly parentRunId = signal<string | null>(null);
   readonly sizingPreset = signal<SizingPreset>('safe_canary');
@@ -205,7 +215,6 @@ export class BrokerDeployFormComponent {
   readonly postSubmitCommandStatus = computed<string | null>(() => {
     const deployed = this.deployed();
     if (!deployed?.start?.accepted) return null;
-    if (!this.startNow()) return null;
     if (this.deployedInstanceId() !== this.instanceId().trim()) return null;
     return `Start accepted for run ${deployed.run_id}. View deployment to monitor the live run.`;
   });
@@ -217,24 +226,11 @@ export class BrokerDeployFormComponent {
     if (accepted !== null) {
       return { kind: 'accepted', message: accepted, canSubmit: false };
     }
-    const blocked = this.preSubmitBlocker();
-    if (blocked !== null) {
-      return {
-        kind: 'blocked',
-        message: blocked.message,
-        canSubmit: false,
-        actionLink: blocked.actionLink,
-      };
+    const top = this.topBlocker();
+    if (top !== null) {
+      return { kind: 'blocked', message: `Can't deploy - ${top.headline.toLowerCase()}.`, canSubmit: false };
     }
-    if (this.stoppedStartLatch()) {
-      return {
-        kind: 'ready',
-        message:
-          'This bot is off duty. This submit will deploy only; run roll call on the bot page before starting.',
-        canSubmit: true,
-      };
-    }
-    return { kind: 'ready', message: 'Ready to deploy.', canSubmit: true };
+    return { kind: 'ready', message: 'Ready to deploy & run.', canSubmit: true };
   });
   readonly commandStatus = computed<string>(() => this.commandState().message);
 
@@ -340,7 +336,7 @@ export class BrokerDeployFormComponent {
   );
   readonly identityCoherenceBlock = computed<IdentityCoherenceConflict | null>(() => {
     const evidence = this.identityCoherenceEvidence();
-    if (evidence === null || !this.effectiveStartNow() || this.identityCoherenceConfirmed()) {
+    if (evidence === null || this.identityCoherenceConfirmed()) {
       return null;
     }
     return evidence;
@@ -377,7 +373,7 @@ export class BrokerDeployFormComponent {
   );
   readonly exposureCoherenceBlock = computed<ExposureCoherenceConflict | null>(() => {
     const evidence = this.exposureCoherenceEvidence();
-    if (evidence === null || !this.effectiveStartNow() || this.exposureCoherenceConfirmed()) {
+    if (evidence === null || this.exposureCoherenceConfirmed()) {
       return null;
     }
     return evidence;
@@ -420,27 +416,6 @@ export class BrokerDeployFormComponent {
     },
   ]);
 
-  readonly deployReadinessFacts = computed(() =>
-    buildDeployReadinessFacts({
-      daemonState: this.connectivity.daemonState(),
-      daemonFreshness: this.connectivity.daemonFreshness(),
-      brokerState: this.connectivity.brokerState(),
-      brokerDetail: this.connectivity.brokerDetail(),
-      accountTruth: this.accountTruth.value(),
-      accountTriage: this.accountTriage.value(),
-      brokerAccountAvailable: this.brokerAccountAvailable(),
-      fleetState: this.connectivity.fleetState(),
-      nothingDeployed: this.connectivity.nothingDeployed(),
-    }),
-  );
-
-  readonly instanceAlreadyRunning = computed<boolean>(() => {
-    const id = this.instanceId().trim();
-    if (id === '') return false;
-    const match = this.instances.value()?.find((i) => i.strategy_instance_id === id);
-    return match?.process_state === 'running' || match?.process_state === 'stopping';
-  });
-
   readonly instanceIdInvalid = computed<boolean>(() => {
     const id = this.instanceId().trim();
     return id !== '' && !INSTANCE_ID_RE.test(id);
@@ -459,40 +434,43 @@ export class BrokerDeployFormComponent {
     return missing;
   });
 
-  readonly nowChecks = computed(() =>
-    buildNowChecks({
-      daemonState: this.connectivity.daemonState(),
-      brokerState: this.connectivity.brokerState(),
-      fieldsReady: this.fieldsReady(),
-      fleetState: this.connectivity.fleetState(),
-      nothingDeployed: this.connectivity.nothingDeployed(),
-      accountTriage: this.accountTriage.value(),
+  readonly formBlockers = computed<OperatorBlocker[]>(() =>
+    buildFormBlockers({
+      missingRequiredFields: this.missingRequiredFields(),
+      identityConflictSummary: this.identityCoherenceBlock()?.summary ?? null,
+      exposureConflictSummary: this.exposureCoherenceBlock()?.summary ?? null,
+      customSizingError: this.customSizingError(),
+      allInCoexistenceBlock: this.allInCoexistenceBlock(),
+      liveExecutionSelected: this.executionMode() === 'live',
+      actionPlanReady: this.actionPlanReadiness().canDeploy,
+      actionPlanMessage: this.actionPlanReadiness().message,
     }),
   );
 
-  readonly deployChecks = computed(() => buildDeployChecks(this.error()?.status));
-  readonly stoppedStartLatchStatus = computed(() => {
-    const statusUnavailable = this.instanceStatus.error() !== undefined;
-    const status = statusUnavailable ? null : this.instanceStatus.value();
-    const id = this.instanceId().trim();
-    return stoppedStartLatchState({
-      startNow: this.startNow(),
-      instanceId: id,
-      instanceIdValid: id !== '' && INSTANCE_ID_RE.test(id),
-      statusLoading: this.instanceStatus.isLoading(),
-      statusUnavailable,
-      desiredState: status?.desired_state,
-      startCapability: status?.operator_surface.host_process.start_capability,
-    });
+  readonly blockers = computed<OperatorBlocker[]>(() => [
+    ...(this.deployPreflight.value()?.blockers ?? []),
+    ...this.formBlockers(),
+  ]);
+
+  readonly ready = computed<boolean>(() => deployReady(this.blockers()));
+
+  readonly topBlocker = computed<OperatorBlocker | null>(() => {
+    const blocking = this.blockers().filter((b) => b.severity === 'blocking');
+    return blocking[0] ?? null;
   });
-  readonly stoppedStartLatch = computed<boolean>(() => this.stoppedStartLatchStatus() === 'blocked');
-  readonly effectiveStartNow = computed<boolean>(() => this.startNow() && !this.stoppedStartLatch());
-  readonly commandTitle = computed<string>(() =>
-    this.effectiveStartNow() ? 'Deploy & start' : 'Deploy only',
-  );
-  readonly commandButtonLabel = computed<string>(() =>
-    this.effectiveStartNow() ? 'Deploy & start' : 'Deploy',
-  );
+
+  renderMove(blocker: OperatorBlocker): RenderedMove | null {
+    const move = blocker.primary_move;
+    if (move === null) return null;
+    return resolveBlockerMove(move, {
+      navigate: (route, fragment) =>
+        void this.router.navigate([route], fragment ? { fragment } : {}),
+      focusAnchor: (anchor) => {
+        this.setActiveDeployTab('strategy');
+        this.host.nativeElement.querySelector(`#${anchor}`)?.scrollIntoView({ block: 'center' });
+      },
+    });
+  }
   constructor() {
     // Re-deploy URLs seed operator/runtime fields; validation receipts still win.
     const prefill = deployPrefillParamsFromQuery(this.route.snapshot.queryParamMap);
@@ -595,41 +573,7 @@ export class BrokerDeployFormComponent {
     );
   });
 
-  private readonly preSubmitBlocker = computed<DeployBlocker | null>(() =>
-    deployBlocker({
-      daemonDown: this.connectivity.daemonDown(),
-      effectiveStartNow: this.effectiveStartNow(),
-      executionMode: this.executionMode(),
-      allInCoexistenceBlock: this.allInCoexistenceBlock(),
-      fleetBlocksStarts: this.connectivity.fleetBlocksStarts(),
-      instanceAlreadyRunning: this.instanceAlreadyRunning(),
-      instanceId: this.instanceId().trim(),
-      brokerAccountAvailable: this.brokerAccountAvailable(),
-      accountTruth: this.accountTruth.value(),
-      accountTriage: this.accountTriage.value(),
-      strategyKey: this.strategyKey(),
-      strategySelected: this.selectedValidation() !== null,
-      required: this.required(),
-      missingRequiredFields: this.missingRequiredFields(),
-      identityConflictSummary: this.identityCoherenceBlock()?.summary ?? null,
-      exposureConflictSummary: this.exposureCoherenceBlock()?.summary ?? null,
-      actionPlanReadiness: this.actionPlanReadiness(),
-      customSizingError: this.customSizingError(),
-      stoppedStartLatchState: this.stoppedStartLatchStatus(),
-    }),
-  );
-
-  readonly activeBlocker = computed<DeployBlocker | null>(() => {
-    const state = this.commandState();
-    if (state.kind !== 'blocked') return null;
-    return { message: state.message, actionLink: state.actionLink };
-  });
-
-  readonly blockedReason = computed<string | null>(() => {
-    return this.activeBlocker()?.message ?? null;
-  });
-
-  readonly canSubmit = computed<boolean>(() => this.commandState().canSubmit);
+  readonly canSubmit = computed<boolean>(() => this.ready() && this.commandState().canSubmit);
 
   async submit(): Promise<void> {
     this.syncRenderedFieldValues();
@@ -652,7 +596,7 @@ export class BrokerDeployFormComponent {
         sizing: this.resolveSizingPolicy(),
         action: this.actionPlan(),
       },
-      start: this.effectiveStartNow(),
+      start: true,
     };
     const parent = this.parentRunId();
     if (parent) request.parent_run_id = parent;
@@ -678,26 +622,18 @@ export class BrokerDeployFormComponent {
     if (exposureConfirmation !== null) {
       request.exposure_coherence_confirmation = exposureConfirmation;
     }
-    // Only attach launch knobs when actually starting — otherwise a deploy-only
-    // request carries irrelevant start_options that still get validated (and a
-    // cleared "max orders" field would serialize NaN → null and fail).
-    if (this.effectiveStartNow()) {
-      const maxOrders = this.maxOrdersPerDay();
-      request.start_options = {
-        readonly: this.readonlyFlag(),
-        hydrate_policy: this.hydratePolicy(),
-        strategy: strategyKey,
-        max_orders_per_day: Number.isFinite(maxOrders) ? maxOrders : DEFAULT_MAX_ORDERS_PER_DAY,
-        ibkr_host: '127.0.0.1',
-      };
-    }
+    const maxOrders = this.maxOrdersPerDay();
+    request.start_options = {
+      readonly: this.readonlyFlag(),
+      hydrate_policy: this.hydratePolicy(),
+      strategy: strategyKey,
+      max_orders_per_day: Number.isFinite(maxOrders) ? maxOrders : DEFAULT_MAX_ORDERS_PER_DAY,
+      ibkr_host: '127.0.0.1',
+    };
     try {
       const response = await this.svc.deployInstance(request);
       this.deployed.set(response);
       this.deployedInstanceId.set(request.strategy_instance_id);
-      // A start-immediately deploy just made this instance live; refresh so the
-      // guard blocks an immediate second start rather than waiting on a 409.
-      this.instances.reload();
     } catch (err) {
       const identitySeeded = this.seedIdentityCoherenceEvidence(err);
       const exposureSeeded = this.seedExposureCoherenceEvidence(err);
@@ -741,10 +677,6 @@ export class BrokerDeployFormComponent {
       : '';
   }
 
-  private async loadInstanceStatus(instanceId: string | null): Promise<LiveInstanceStatus | null> {
-    if (instanceId === null) return null;
-    return this.svc.getInstanceStatus(instanceId);
-  }
   private renderedFieldValue(
     field:
       | 'strategyKey'
@@ -887,15 +819,6 @@ export class BrokerDeployFormComponent {
   setMaxOrders(e: Event): void {
     if (e.target instanceof HTMLInputElement) this.maxOrdersPerDay.set(e.target.valueAsNumber);
   }
-  setStartNow(e: Event): void {
-    if (e.target instanceof HTMLInputElement) {
-      this.startNow.set(e.target.checked);
-      if (!e.target.checked) {
-        this.clearCoherenceRecoveryError();
-      }
-    }
-  }
-
   confirmIdentityCoherence(): void {
     const evidence = this.identityCoherenceEvidence();
     if (evidence !== null) {
@@ -910,13 +833,6 @@ export class BrokerDeployFormComponent {
       this.exposureCoherenceConfirmedSignature.set(evidence.signature);
       this.clearCoherenceRecoveryError('exposure');
     }
-  }
-
-  async deployWithoutStarting(): Promise<void> {
-    if (this.busy()) return;
-    this.startNow.set(false);
-    this.clearCoherenceRecoveryError();
-    await this.submit();
   }
 
   async confirmExposureAndDeployStart(): Promise<void> {

@@ -30,16 +30,10 @@
   </dl>
 
   <div class="launch-decision-actions">
-    <button type="button" class="safe-action" [disabled]="busy()" (click)="deployOnlyRequested.emit()">
-      <i class="pi pi-pause-circle" aria-hidden="true"></i>
-      {{ decision().deployOnlyLabel }}
+    <button type="button" class="confirm-action" [disabled]="busy() || confirmed()" (click)="confirmStartRequested.emit()">
+      <i class="pi pi-check-circle" aria-hidden="true"></i>
+      {{ decision().confirmAndStartLabel }}
     </button>
-    @if (startNow()) {
-      <button type="button" class="confirm-action" [disabled]="busy() || confirmed()" (click)="confirmStartRequested.emit()">
-        <i class="pi pi-check-circle" aria-hidden="true"></i>
-        {{ decision().confirmAndStartLabel }}
-      </button>
-    }
     <a routerLink="/broker/account-monitor" fragment="account-reconciliation-action" class="review-link">
       {{ decision().reviewLabel }}
       <i class="pi pi-external-link" aria-hidden="true"></i>

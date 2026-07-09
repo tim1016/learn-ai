@@ -5,17 +5,15 @@ import { RouterTestingHarness } from '@angular/router/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AccountTriageResponse } from '../../../api/account-reconciliation.types';
 import type { AccountTruthResponse } from '../../../api/broker-models';
-import type { LiveInstanceStatus } from '../../../api/live-instances.types';
+import type { DeployPreflightResponse } from '../../../api/operator-blocker.types';
+import { ActionPlanPreviewService } from '../../../api/action-plan-preview.service';
 import { BrokerService } from '../../../services/broker.service';
 import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { StrategyValidationService } from '../../../services/strategy-validation.service';
 import type { StrategyValidationCatalog } from '../../../services/strategy-validation.types';
 import type { ActionPlan } from '../../../api/action-plan.types';
-import {
-  makeCleanAccountTriage,
-  makeFrozenAccountTriage,
-} from '../testing/account-triage-fixtures';
+import { makeCleanAccountTriage } from '../testing/account-triage-fixtures';
 import { BrokerDeployFormComponent } from './broker-deploy-form.component';
 
 let activeFixture: { destroy(): void; detectChanges(): void } | null = null;
@@ -97,8 +95,6 @@ function setup(
     daemonDown?: boolean;
     fleetBlocks?: boolean;
     qcEntries?: string[];
-    instances?: { strategy_instance_id: string; process_state: string }[];
-    instancesPromise?: Promise<{ strategy_instance_id: string; process_state: string }[]>;
     parityGate?: {
       verdict: 'proven_match' | 'proven_mismatch' | 'cannot_prove';
       detail: string;
@@ -123,11 +119,8 @@ function setup(
     accountPromise?: Promise<{ account_id: string } | null>;
     accountTruth?: AccountTruthFixture;
     accountTriage?: AccountTriageResponse;
-    instanceStatus?: LiveInstanceStatus | null;
-    instanceStatusPromise?: Promise<LiveInstanceStatus | null>;
-    instanceStatusError?: Error;
-    instanceStatusResolver?: (instanceId: string) => Promise<LiveInstanceStatus | null>;
     strategyValidationCatalog?: StrategyValidationCatalog;
+    deployPreflight?: DeployPreflightResponse;
   } = {},
 ) {
   const svc = {
@@ -177,14 +170,11 @@ function setup(
         scope_root: 'references/qc-shadow',
         entries: opts.qcEntries ?? ['references/qc-shadow/A.py'],
       }),
-    getInstances: vi.fn().mockImplementation(() => opts.instancesPromise ?? Promise.resolve(opts.instances ?? [])),
-    getInstanceStatus: vi.fn().mockImplementation((instanceId: string) => {
-      if (opts.instanceStatusResolver !== undefined) return opts.instanceStatusResolver(instanceId);
-      if (opts.instanceStatusError !== undefined) return Promise.reject(opts.instanceStatusError);
-      if (opts.instanceStatusPromise !== undefined) return opts.instanceStatusPromise;
-      if (opts.instanceStatus !== undefined) return Promise.resolve(opts.instanceStatus);
-      return Promise.resolve(clearStartStatus());
-    }),
+    getInstances: vi.fn().mockResolvedValue([]),
+    getInstanceStatus: vi.fn().mockRejectedValue(new Error('instance status is not used by deploy preflight')),
+    deployPreflight: vi.fn().mockResolvedValue(
+      opts.deployPreflight ?? { ready: true, blockers: [] },
+    ),
     deployInstance: vi
       .fn()
       .mockResolvedValue({ run_id: 'run-new', run_dir: '/runs/run-new', created: true, start: null }),
@@ -229,6 +219,9 @@ function setup(
       opts.strategyValidationCatalog ?? DEFAULT_STRATEGY_VALIDATION_CATALOG,
     ),
   };
+  const actionPlanPreview = {
+    preview: vi.fn().mockResolvedValue({ warnings: [] }),
+  };
   const queryParamMap = convertToParamMap(opts.queryParams ?? {});
   TestBed.configureTestingModule({
     providers: [
@@ -237,6 +230,7 @@ function setup(
       { provide: BrokerService, useValue: broker },
       { provide: BrokerConnectivityService, useValue: connectivity },
       { provide: StrategyValidationService, useValue: strategyValidation },
+      { provide: ActionPlanPreviewService, useValue: actionPlanPreview },
       {
         provide: ActivatedRoute,
         useValue: { snapshot: { queryParamMap } },
@@ -282,24 +276,6 @@ function cleanTriage(): AccountTriageResponse {
   return makeCleanAccountTriage({ accountId: 'DU123' });
 }
 
-function frozenTriage(): AccountTriageResponse {
-  return makeFrozenAccountTriage({
-    accountId: 'DU123',
-    conditionOptions: {
-      conditionType: 'exposure_freeze',
-      detail: 'watchdog.flatten_timed_out',
-      operatorNextStep: 'CHECK_IBKR',
-      source: 'watchdog_halt_executor',
-      affectedStrategyInstanceIds: ['DEPVALSPYJUL8'],
-      cureAction: 'resolve_exposure',
-    },
-    freezeBanner: {
-      headline: 'Account sick bay is gating new starts.',
-      detail: 'Resolve or audit broker exposure before starting another bot on this account.',
-    },
-  });
-}
-
 function fillRequired(component: BrokerDeployFormComponent) {
   component.strategyKey.set('deployment_validation');
   component.specPath.set(DEPLOYMENT_VALIDATION_SPEC_PATH);
@@ -309,79 +285,19 @@ function fillRequired(component: BrokerDeployFormComponent) {
   component.qcAuditCopyPath.set(DEPLOYMENT_VALIDATION_AUDIT_COPY);
   component.instanceId.set('deployment-validation-paper');
   component.actionPlan.set(validDeploymentValidationActionPlan());
-  component.startNow.set(false);
   activeFixture?.detectChanges();
-}
-
-function stoppedLatchStatus(): LiveInstanceStatus {
-  return {
-    desired_state: {
-      state: 'STOPPED',
-      updated_at_ms: 1_781_000_000_000,
-      updated_by: 'operator',
-      reason: 'stop_command',
-      version: 3,
-      path_status: 'ok',
-    },
-    operator_surface: {
-      host_process: {
-        start_capability: {
-          enabled: false,
-          run_id: null,
-          request: null,
-          disabled_reason_code: 'STOPPED_REQUIRES_RESUME',
-          gate_results: [
-            {
-              gate_id: 'desired_state.start',
-              status: 'block',
-              source: 'desired_state',
-              operator_reason: 'STOPPED',
-              operator_next_step: 'STOPPED_REQUIRES_RESUME',
-              evidence_at_ms: 1_781_000_000_000,
-            },
-          ],
-        },
-      },
-    },
-  } as unknown as LiveInstanceStatus;
-}
-
-function clearStartStatus(): LiveInstanceStatus {
-  return {
-    desired_state: {
-      state: 'RUNNING',
-      updated_at_ms: 1_781_000_000_000,
-      updated_by: 'operator',
-      reason: null,
-      version: 4,
-      path_status: 'ok',
-    },
-    operator_surface: {
-      host_process: {
-        start_capability: {
-          enabled: true,
-          run_id: 'run-minute',
-          request: null,
-          disabled_reason_code: null,
-          gate_results: [],
-        },
-      },
-    },
-  } as unknown as LiveInstanceStatus;
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
 }
 
 function deployButton(fixture: { nativeElement: HTMLElement }): HTMLButtonElement {
   const el = fixture.nativeElement.querySelector('button.primary');
   if (!(el instanceof HTMLButtonElement)) throw new Error('no submit button');
   return el;
+}
+
+function blockerText(component: BrokerDeployFormComponent): string | null {
+  const blocker = component.topBlocker();
+  if (blocker === null) return null;
+  return [blocker.headline, blocker.detail].filter((part): part is string => !!part).join(' ');
 }
 
 function buttonContaining(
@@ -480,16 +396,16 @@ describe('BrokerDeployFormComponent', () => {
     await flush();
     fixture.detectChanges();
 
-    expect(component.startNow()).toBe(true);
+    expect(fixture.nativeElement.textContent).toContain('Deploy & run');
     expect(component.executionCapability()).toBe('paper_orders');
     expect(component.readonlyFlag()).toBe(false);
     expect(component.maxOrdersPerDay()).toBe(2000);
     expect(fixture.nativeElement.textContent).toContain('PAPER_ORDERS_ENABLED');
     expect(fixture.nativeElement.textContent).toContain('Guardrail limit: 2000 orders/day');
-    expect(deployButton(fixture).textContent).toContain('Deploy & start');
+    expect(deployButton(fixture).textContent).toContain('Deploy & run');
   });
 
-  it('renders the deploy top strip, free-navigation tabs, and named readiness facts', async () => {
+  it('renders the deploy top strip and free-navigation tabs', async () => {
     const { fixture } = setup();
     await flush();
     fixture.detectChanges();
@@ -512,11 +428,7 @@ describe('BrokerDeployFormComponent', () => {
       ]),
     );
 
-    const readiness = host.querySelector('.deploy-readiness-strip');
-    expect(readiness?.textContent).toContain('Engine');
-    expect(readiness?.textContent).toContain('Broker');
-    expect(readiness?.textContent).toContain('Account');
-    expect(readiness?.textContent).toContain('Fleet');
+    expect(host.querySelector('.deploy-readiness-strip')).toBeNull();
   });
 
   it('reveals sizing controls when the Sizing step is selected', async () => {
@@ -559,12 +471,17 @@ describe('BrokerDeployFormComponent', () => {
       qc_cloud_backtest_id: DEPLOYMENT_VALIDATION_QC_BACKTEST_ID,
       strategy_instance_id: 'deployment-validation-paper',
       strategy_key: 'deployment_validation',
-      start: false,
+      start: true,
     });
     expect(req).not.toHaveProperty('account_id');
     expect(typeof req.start_date_ms).toBe('number');
-    // Deploy-only: launch knobs are omitted so they aren't validated.
-    expect(req.start_options).toBeUndefined();
+    expect(req.start_options).toMatchObject({
+      readonly: false,
+      hydrate_policy: 'require',
+      strategy: 'deployment_validation',
+      max_orders_per_day: 2000,
+      ibkr_host: '127.0.0.1',
+    });
     expect(fixture.nativeElement.textContent).toContain('Deployment created');
     expect(fixture.nativeElement.textContent).toContain('run-new');
     expect(fixture.nativeElement.querySelector('.back')?.getAttribute('href')).toBe('/broker/bots');
@@ -584,12 +501,8 @@ describe('BrokerDeployFormComponent', () => {
         process: { state: 'running', message: 'Host runner process is active.' },
       },
     });
-    svc.getInstances.mockResolvedValueOnce([
-      { strategy_instance_id: 'deployment-validation-paper', process_state: 'running' },
-    ]);
     await flush();
     fillRequired(component);
-    component.startNow.set(true);
     await settleResource(fixture);
 
     await component.submit();
@@ -602,20 +515,8 @@ describe('BrokerDeployFormComponent', () => {
     expect(text).toContain('Start accepted for run run-started. View deployment to monitor the live run.');
     expect(text).not.toContain('"deployment-validation-paper" is already running');
     expect(component.commandState().kind).toBe('accepted');
-    expect(component.blockedReason()).toBeNull();
+    expect(blockerText(component)).toBeNull();
     expect(deployButton(fixture).disabled).toBe(true);
-
-    component.startNow.set(false);
-    fixture.detectChanges();
-
-    expect(component.commandState().kind).toBe('ready');
-    expect(deployButton(fixture).disabled).toBe(false);
-
-    await component.submit();
-
-    const deployOnlyRetry = svc.deployInstance.mock.calls[1][0];
-    expect(deployOnlyRetry.start).toBe(false);
-    expect(deployOnlyRetry.start_options).toBeUndefined();
   });
 
   // PRD #593 Slice 1E (#598) — query-param-deep-linked redeploy carries
@@ -646,7 +547,7 @@ describe('BrokerDeployFormComponent', () => {
 
     await component.submit();
 
-    expect(component.blockedReason()).toContain('ON ENTER and ON EXIT are both empty');
+    expect(blockerText(component)).toContain('ON ENTER and ON EXIT are both empty');
     expect(component.deployTabs().find((tab) => tab.key === 'legs')?.complete).toBe(false);
     expect(deployButton(fixture).disabled).toBe(true);
     expect(svc.deployInstance).not.toHaveBeenCalled();
@@ -751,7 +652,6 @@ describe('BrokerDeployFormComponent', () => {
     component.qcBacktestId.set('bt-1');
     component.qcAuditCopyPath.set('references/qc-shadow/A.py');
     component.instanceId.set('opt-paper-1');
-    component.startNow.set(false);
     fixture.detectChanges();
     await flush();
 
@@ -811,7 +711,7 @@ describe('BrokerDeployFormComponent', () => {
 
     for (const bad of ['1.9', '25abc', '-3', '0', ' 5 5', '']) {
       component.customValue.set(bad);
-      expect(component.blockedReason()).not.toBeNull();
+      expect(blockerText(component)).not.toBeNull();
       expect(component.canSubmit()).toBe(false);
     }
     component.customValue.set('25');
@@ -850,7 +750,7 @@ describe('BrokerDeployFormComponent', () => {
     component.sizingPreset.set('reference_parity');
     fixture.detectChanges();
 
-    expect(component.blockedReason()).toMatch(/already holds 37/);
+    expect(blockerText(component)).toMatch(/already holds 37/);
   });
 
   it('refuses to switch to Reference parity when the gate is cannot_prove', async () => {
@@ -874,11 +774,10 @@ describe('BrokerDeployFormComponent', () => {
     expect(component.sizingPreset()).toBe('safe_canary');
   });
 
-  it('attaches start_options only when "Start now" is checked', async () => {
+  it('attaches start_options for every deploy-and-run request', async () => {
     const { fixture, svc, component } = setup();
     await flush();
     fillRequired(component);
-    component.startNow.set(true);
     await settleResource(fixture);
 
     await component.submit();
@@ -933,9 +832,7 @@ describe('BrokerDeployFormComponent', () => {
     component.actionPlan.set(validDeploymentValidationActionPlan());
     await settleResource(fixture);
 
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'Ready to deploy.',
-    );
+    expect(component.commandStatus()).toBe('Ready to deploy & run.');
     expect(deployButton(fixture).disabled).toBe(false);
   });
 
@@ -957,9 +854,7 @@ describe('BrokerDeployFormComponent', () => {
 
     expect(component.strategyKey()).toBe('deployment_validation');
     expect(component.specPath()).toBe(DEPLOYMENT_VALIDATION_SPEC_PATH);
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'Ready to deploy.',
-    );
+    expect(component.commandStatus()).toBe('Ready to deploy & run.');
   });
 
   it('imports visibly restored fields even when one signal was already prefilled', async () => {
@@ -983,9 +878,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(component.strategyKey()).toBe('deployment_validation');
     expect(component.specPath()).toBe(DEPLOYMENT_VALIDATION_SPEC_PATH);
     expect(component.accountId()).toBe('DUM284968');
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'Ready to deploy.',
-    );
+    expect(component.commandStatus()).toBe('Ready to deploy & run.');
     expect(deployButton(fixture).disabled).toBe(false);
   });
 
@@ -1005,9 +898,7 @@ describe('BrokerDeployFormComponent', () => {
     await flush();
     fixture.detectChanges();
 
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'Connected broker account unavailable.',
-    );
+    expect(blockerText(fixture.componentInstance)).toContain('Connected broker account');
     expect(deployButton(fixture).disabled).toBe(true);
   });
 
@@ -1032,7 +923,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(component.qcBacktestId()).toBe('');
     expect(component.qcAuditCopyPath()).toBe('');
     expect(component.instanceId()).toBe('');
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+    expect(blockerText(component)).toContain(
       'Missing: Strategy, Strategy settings file, Backtest ID, Algorithm audit copy, Deployment name.',
     );
     expect(deployButton(fixture).disabled).toBe(true);
@@ -1060,7 +951,7 @@ describe('BrokerDeployFormComponent', () => {
     await flush();
     fixture.detectChanges();
 
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+    expect(blockerText(component)).toContain(
       'Missing: Deployment name.',
     );
   });
@@ -1138,7 +1029,7 @@ describe('BrokerDeployFormComponent', () => {
 
     expect(component.fixtureSymbols()).toEqual(['SPY', 'QQQ']);
     expect(component.resolvedSignalStream()).toBe('');
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain('Signal stream');
+    expect(blockerText(component)).toContain('Signal stream');
 
     typeText(fixture, 'Signal stream', 'QQQ');
     fixture.detectChanges();
@@ -1150,7 +1041,6 @@ describe('BrokerDeployFormComponent', () => {
     const { fixture, svc, component } = setup();
     await flush();
     fillRequired(component);
-    component.startNow.set(true);
     await settleResource(fixture);
     chooseExecutionCapability(fixture, 'paper_orders');
     fixture.detectChanges();
@@ -1170,7 +1060,6 @@ describe('BrokerDeployFormComponent', () => {
     const { fixture, svc, component } = setup();
     await flush();
     fillRequired(component);
-    component.startNow.set(true);
     fixture.detectChanges();
 
     chooseExecutionCapability(fixture, 'live');
@@ -1178,7 +1067,7 @@ describe('BrokerDeployFormComponent', () => {
 
     expect(component.executionCapability()).toBe('live');
     expect(component.readonlyFlag()).toBe(false);
-    expect(component.blockedReason()).toContain('Live execution is not available');
+    expect(blockerText(component)).toContain('Live execution is unavailable');
     expect(deployButton(fixture).disabled).toBe(true);
 
     await component.submit();
@@ -1236,343 +1125,54 @@ describe('BrokerDeployFormComponent', () => {
     expect(alert?.textContent?.toLowerCase()).toContain('commit'); // remediation from (deploy, 409)
   });
 
-  it('disables Deploy with a visible reason when the daemon is down', async () => {
-    const { fixture, component } = setup({ daemonDown: true });
-    await flush();
-    fillRequired(component);
-    fixture.detectChanges();
-
-    expect(deployButton(fixture).disabled).toBe(true);
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain('Live engine unavailable');
-  });
-
-  it('blocks "Deploy & start" when fleet policy blocks starts, but allows deploy-only', async () => {
-    const { fixture, component } = setup({ fleetBlocks: true });
-    await flush();
-    fillRequired(component);
-    component.startNow.set(true);
-    fixture.detectChanges();
-    expect(deployButton(fixture).disabled).toBe(true);
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain('Fleet state blocks new starts');
-
-    component.startNow.set(false);
-    fixture.detectChanges();
-    expect(deployButton(fixture).disabled).toBe(false);
-  });
-
-  it('never renders Account Clean or Fleet Clear while account triage has an active freeze', async () => {
-    const { fixture, component } = setup({
-      accountTruth: {
-        final_verdict: 'clean',
-        status_label: 'Clean',
-        status_detail: 'Broker/account evidence is fresh enough to start.',
-      },
-      accountTriage: frozenTriage(),
-    });
-    await settleResource(fixture);
-    fillRequired(component);
-    component.startNow.set(true);
-    fixture.detectChanges();
-
-    const readiness = fixture.nativeElement.querySelector('.deploy-readiness-strip');
-    const readinessText = readiness?.textContent ?? '';
-    expect(readinessText).toContain('Account');
-    expect(readinessText).toContain('Fleet');
-    expect(readinessText).toContain('Frozen');
-    expect(readinessText).not.toContain('Clean');
-    expect(readinessText).not.toContain('Clear');
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'Account freeze active',
-    );
-    expect(deployButton(fixture).disabled).toBe(true);
-  });
-
-  it('blocks start when account truth is not proven but allows deploy-only staging', async () => {
-    const { fixture, component } = setup({
-      accountTruth: {
-        final_verdict: 'not_proven',
-        status_label: 'Not proven',
-        status_detail: 'Run account reconcile before starting.',
-        source_freshness: [
+  it('disables Deploy & run and names the backend preflight blocker', async () => {
+    const { fixture, svc, component } = setup({
+      deployPreflight: {
+        ready: false,
+        blockers: [
           {
-            source: 'positions',
-            label: 'Positions',
-            status: 'missing',
-            severity: 'critical',
-            fetched_at_ms: null,
-            age_ms: null,
-            hard_ttl_ms: 60_000,
-            reason_code: 'ACCOUNT_TRUTH_SOURCE_MISSING',
-            message: 'Positions source is missing.',
-          },
-          {
-            source: 'open_orders',
-            label: 'Open orders',
-            status: 'stale',
-            severity: 'critical',
-            fetched_at_ms: 1700000000000,
-            age_ms: 120_000,
-            hard_ttl_ms: 60_000,
-            reason_code: 'ACCOUNT_TRUTH_SOURCE_STALE',
-            message: 'Open orders source is stale.',
+            id: 'broker_disconnected',
+            severity: 'blocking',
+            disposition: 'fix_elsewhere',
+            headline: 'Broker disconnected',
+            detail: 'Connect the IBKR session before deploying.',
+            primary_move: {
+              label: 'Connect the broker',
+              action: { kind: 'navigate', route: '/broker', fragment: null },
+              target: null,
+            },
+            secondary_moves: [],
+            applies_to: 'both',
           },
         ],
       },
     });
     await flush();
     fillRequired(component);
-    component.startNow.set(true);
-    fixture.detectChanges();
+    await settleResource(fixture);
 
+    expect(svc.deployPreflight).toHaveBeenCalledWith({
+      strategyKey: 'deployment_validation',
+      accountId: 'DU123',
+      instanceId: 'deployment-validation-paper',
+    });
     expect(deployButton(fixture).disabled).toBe(true);
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'Account proof is not proven',
-    );
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'Missing evidence: Positions source is missing. Open orders source is stale.',
-    );
-    const reconcileLink = fixture.nativeElement.querySelector('.blocked a');
-    expect(reconcileLink?.textContent).toContain('Run account reconcile');
-    expect(reconcileLink?.getAttribute('href')).toBe(
-      '/broker/account-monitor#account-reconciliation-action',
-    );
-
-    component.startNow.set(false);
-    fixture.detectChanges();
-
-    expect(deployButton(fixture).disabled).toBe(false);
-  });
-
-  it('switches an off-duty start-now request to deploy-only before submit', async () => {
-    const { fixture, svc, component } = setup({
-      instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
-      instanceStatus: stoppedLatchStatus(),
-    });
-    await flush();
-    fillRequired(component);
-    component.startNow.set(true);
-    await settleResource(fixture);
-
-    expect(svc.getInstanceStatus).toHaveBeenCalledWith('deployment-validation-paper');
-    expect(fixture.nativeElement.textContent).toContain('Deploy only');
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'This bot is off duty',
-    );
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).not.toContain('Resume');
-    expect(deployButton(fixture).disabled).toBe(false);
-
-    await component.submit();
-
-    const req = svc.deployInstance.mock.calls[0][0];
-    expect(req.start).toBe(false);
-    expect(req.start_options).toBeUndefined();
-    expect(fieldControl(fixture, 'Daily order limit').disabled).toBe(true);
-    expect(fieldControl(fixture, 'Restore previous state').disabled).toBe(true);
-  });
-
-  it('does not submit start-now while the off-duty lookup is still loading', async () => {
-    const pending = deferred<LiveInstanceStatus | null>();
-    const { fixture, svc, component } = setup({
-      instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
-      instanceStatusPromise: pending.promise,
-    });
-    await flush();
-    fillRequired(component);
-    component.startNow.set(true);
-    fixture.detectChanges();
-
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'Checking durable desired state',
-    );
-    expect(deployButton(fixture).disabled).toBe(true);
-
-    await component.submit();
-
-    expect(svc.deployInstance).not.toHaveBeenCalled();
-
-    pending.resolve(stoppedLatchStatus());
-    await flush();
-    fixture.detectChanges();
-
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'This bot is off duty',
-    );
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).not.toContain('Resume');
-    expect(deployButton(fixture).disabled).toBe(false);
-  });
-
-  it('checks off-duty state even when the fleet list has not exposed the instance', async () => {
-    const pendingInstances = deferred<{ strategy_instance_id: string; process_state: string }[]>();
-    const { fixture, svc, component } = setup({
-      instancesPromise: pendingInstances.promise,
-      instanceStatus: clearStartStatus(),
-    });
-    await flush();
-    fillRequired(component);
-    component.startNow.set(true);
-    await settleResource(fixture);
-
-    expect(svc.getInstanceStatus).toHaveBeenCalledWith('deployment-validation-paper');
-    expect(deployButton(fixture).disabled).toBe(false);
-
-    pendingInstances.resolve([]);
-    await settleResource(fixture);
-
-    expect(svc.getInstanceStatus).toHaveBeenCalledTimes(1);
-    expect(deployButton(fixture).disabled).toBe(false);
-  });
-
-  it('does not carry prior off-duty evidence onto a new instance name', async () => {
-    const { fixture, svc, component } = setup({
-      instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
-      instanceStatusResolver: (instanceId) =>
-        Promise.resolve(
-          instanceId === 'deployment-validation-paper' ? stoppedLatchStatus() : clearStartStatus(),
-        ),
-    });
-    await flush();
-    fillRequired(component);
-    component.startNow.set(true);
-    await settleResource(fixture);
-
-    expect(component.stoppedStartLatch()).toBe(true);
-
-    component.instanceId.set('fresh-deployment-name');
-    await settleResource(fixture);
-
-    expect(svc.getInstanceStatus).toHaveBeenCalledTimes(2);
-    expect(svc.getInstanceStatus).toHaveBeenLastCalledWith('fresh-deployment-name');
-    expect(component.stoppedStartLatch()).toBe(false);
-    expect(deployButton(fixture).disabled).toBe(false);
-  });
-
-  it('fails closed when the off-duty status lookup errors', async () => {
-    const { fixture, svc, component } = setup({
-      instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
-      instanceStatusError: new Error('status lookup failed'),
-    });
-    await flush();
-    fillRequired(component);
-    component.startNow.set(true);
-    await settleResource(fixture);
-
-    expect(svc.getInstanceStatus).toHaveBeenCalledWith('deployment-validation-paper');
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'Could not verify durable desired state',
-    );
-    expect(deployButton(fixture).disabled).toBe(true);
-
-    await component.submit();
-
+    expect(fixture.nativeElement.textContent).toContain('Broker disconnected');
+    expect(fixture.nativeElement.textContent).toContain("Can't deploy - broker disconnected.");
     expect(svc.deployInstance).not.toHaveBeenCalled();
   });
 
-  it('shows the real deploy blocker when off-duty evidence is present but deploy-only is unavailable', async () => {
-    const { fixture, component } = setup({
-      instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
-      instanceStatus: stoppedLatchStatus(),
-      accountPromise: Promise.reject(new Error('broker account unavailable')),
-    });
+  it('enables Deploy & run when preflight is ready and the form is complete', async () => {
+    const { fixture, component } = setup();
     await flush();
     fillRequired(component);
-    component.accountId.set('');
-    component.startNow.set(true);
     await settleResource(fixture);
 
-    expect(component.stoppedStartLatch()).toBe(true);
-    expect(deployButton(fixture).disabled).toBe(true);
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'Connected broker account unavailable',
-    );
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).not.toContain(
-      'This submit will deploy only',
-    );
-  });
-
-  it('includes failing account truth invariants in the account-proof action detail', async () => {
-    const { fixture, component } = setup({
-      accountTruth: {
-        final_verdict: 'not_proven',
-        status_label: 'Not proven',
-        status_detail: 'Run account reconcile before starting.',
-        invariants: [
-          {
-            key: 'all_open_orders_owned',
-            label: 'All open orders owned',
-            status: 'fail',
-            severity: 'critical',
-            headline: 'Open order ownership is not proven.',
-            narrative: 'At least one broker order lacks a bot or manual owner receipt.',
-            checked_at_ms: 1_780_000_001_000,
-            evidence_count: 0,
-          },
-        ],
-      },
-    });
-    await flush();
-    fillRequired(component);
-    component.startNow.set(true);
-    fixture.detectChanges();
-
-    expect(deployButton(fixture).disabled).toBe(true);
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'Missing evidence: Open order ownership is not proven.',
-    );
-  });
-
-  it('keeps higher-priority blockers ahead of account-proof action links', async () => {
-    const { fixture, component } = setup({
-      daemonDown: true,
-      accountTruth: {
-        final_verdict: 'not_proven',
-        status_label: 'Not proven',
-        status_detail: 'Run account reconcile before starting.',
-        source_freshness: [
-          {
-            source: 'positions',
-            label: 'Positions',
-            status: 'missing',
-            severity: 'critical',
-            fetched_at_ms: null,
-            age_ms: null,
-            hard_ttl_ms: 60_000,
-            reason_code: 'ACCOUNT_TRUTH_SOURCE_MISSING',
-            message: 'Positions source is missing.',
-          },
-        ],
-      },
-    });
-    await flush();
-    fillRequired(component);
-    component.startNow.set(true);
-    fixture.detectChanges();
-
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'Live engine unavailable',
-    );
-    expect(fixture.nativeElement.querySelector('.blocked a')).toBeNull();
-  });
-
-  it('blocks "Deploy & start" onto an already-running instance, but allows deploy-only', async () => {
-    const { fixture, component } = setup({ instances: [{ strategy_instance_id: 'Minute', process_state: 'running' }] });
-    await flush();
-    fillRequired(component);
-    component.instanceId.set('Minute');
-    component.startNow.set(true);
-    fixture.detectChanges();
-
-    expect(deployButton(fixture).disabled).toBe(true);
-    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      '"Minute" is already running',
-    );
-
-    // Deploy-only is fine — only the immediate start would collide.
-    component.startNow.set(false);
-    fixture.detectChanges();
     expect(deployButton(fixture).disabled).toBe(false);
+    expect(component.commandStatus()).toBe('Ready to deploy & run.');
   });
 
-  it('blocks "Deploy & start" when inherited identity conflicts with the new signal or action plan until confirmed', async () => {
+  it('blocks "Deploy & run" when inherited identity conflicts with the new signal or action plan until confirmed', async () => {
     const { fixture, svc, component } = setup({
       queryParams: {
         inherited_symbol: 'mu',
@@ -1582,7 +1182,6 @@ describe('BrokerDeployFormComponent', () => {
     });
     await flush();
     fillRequired(component);
-    component.startNow.set(true);
     component.actionPlan.set({
       on_enter: [
         {
@@ -1601,8 +1200,8 @@ describe('BrokerDeployFormComponent', () => {
       'SPY',
       'AAPL',
     ]);
-    expect(component.blockedReason()).toContain('Inherited bot symbol MU conflicts');
-    expect(component.blockedReason()).toContain('Signal stream SPY and Action plan AAPL');
+    expect(blockerText(component)).toContain('Inherited bot symbol MU conflicts');
+    expect(blockerText(component)).toContain('Signal stream SPY and Action plan AAPL');
     expect(identityCoherenceCard(fixture)?.textContent).toContain(
       'Confirm new run identity',
     );
@@ -1612,9 +1211,9 @@ describe('BrokerDeployFormComponent', () => {
     fixture.detectChanges();
 
     expect(component.identityCoherenceConfirmed()).toBe(true);
-    expect(component.blockedReason()).toBeNull();
+    expect(blockerText(component)).toBeNull();
     expect(identityCoherenceCard(fixture)?.textContent).toContain(
-      'Confirmed for this Deploy & start.',
+      'Confirmed for this Deploy & run.',
     );
     expect(deployButton(fixture).disabled).toBe(false);
 
@@ -1633,7 +1232,7 @@ describe('BrokerDeployFormComponent', () => {
     fixture.detectChanges();
 
     expect(component.identityCoherenceConfirmed()).toBe(false);
-    expect(component.blockedReason()).toContain('Signal stream QQQ');
+    expect(blockerText(component)).toContain('Signal stream QQQ');
     expect(deployButton(fixture).disabled).toBe(true);
   });
 
@@ -1647,7 +1246,6 @@ describe('BrokerDeployFormComponent', () => {
     });
     await flush();
     fillRequired(component);
-    component.startNow.set(true);
     component.actionPlan.set({
       on_enter: [
         {
@@ -1665,13 +1263,13 @@ describe('BrokerDeployFormComponent', () => {
       'SPY',
       'AAPL',
     ]);
-    expect(component.blockedReason()).toContain('Action plan AAPL');
-    expect(component.blockedReason()).not.toContain('Signal stream SPY');
+    expect(blockerText(component)).toContain('Action plan AAPL');
+    expect(blockerText(component)).not.toContain('Signal stream SPY');
     expect(identityCoherenceCard(fixture)?.textContent).not.toContain('Signal stream');
     expect(deployButton(fixture).disabled).toBe(true);
   });
 
-  it('blocks "Deploy & start" when inherited exposure is not proven flat until confirmed', async () => {
+  it('blocks "Deploy & run" when inherited exposure is not proven flat until confirmed', async () => {
     const { fixture, svc, component } = setup({
       queryParams: {
         inherited_exposure_posture: 'LONG',
@@ -1682,12 +1280,11 @@ describe('BrokerDeployFormComponent', () => {
     });
     await flush();
     fillRequired(component);
-    component.startNow.set(true);
     await settleResource(fixture);
 
     expect(component.exposureCoherenceEvidence()?.posture).toBe('LONG');
     expect(component.exposureCoherenceEvidence()?.ownedPositions).toEqual({ SPY: 5 });
-    expect(component.blockedReason()).toContain('Inherited exposure is Long');
+    expect(blockerText(component)).toContain('Inherited exposure is Long');
     expect(exposureCoherenceCard(fixture)?.textContent).toContain('SPY 5');
     expect(exposureCoherenceCard(fixture)?.textContent).toContain(
       'Confirm exposure state',
@@ -1698,7 +1295,7 @@ describe('BrokerDeployFormComponent', () => {
     fixture.detectChanges();
 
     expect(component.exposureCoherenceConfirmed()).toBe(true);
-    expect(component.blockedReason()).toBeNull();
+    expect(blockerText(component)).toBeNull();
     expect(deployButton(fixture).disabled).toBe(false);
 
     await component.submit();
@@ -1721,7 +1318,6 @@ describe('BrokerDeployFormComponent', () => {
     const { fixture, svc, component } = setup();
     await flush();
     fillRequired(component);
-    component.startNow.set(true);
     await settleResource(fixture);
     svc.deployInstance.mockRejectedValueOnce(
       new HttpErrorResponse({
@@ -1778,7 +1374,6 @@ describe('BrokerDeployFormComponent', () => {
     const { fixture, svc, component } = setup();
     await flush();
     fillRequired(component);
-    component.startNow.set(true);
     await settleResource(fixture);
     svc.deployInstance.mockRejectedValueOnce(
       new HttpErrorResponse({
@@ -1834,7 +1429,6 @@ describe('BrokerDeployFormComponent', () => {
     const { fixture, svc, component } = setup();
     await flush();
     fillRequired(component);
-    component.startNow.set(true);
     await settleResource(fixture);
     svc.deployInstance.mockRejectedValueOnce(
       new HttpErrorResponse({
@@ -1844,7 +1438,7 @@ describe('BrokerDeployFormComponent', () => {
             reason_code: 'EXPOSURE_COHERENCE_UNCONFIRMED',
             gate_id: 'deploy.exposure_coherence',
             message:
-              'Deploy & start is blocked because existing exposure is not proven flat (posture=UNKNOWN, pending_order_count=None).',
+              'Deploy & run is blocked because existing exposure is not proven flat (posture=UNKNOWN, pending_order_count=None).',
             evidence: {
               posture: 'UNKNOWN',
               pending_order_count: null,
@@ -1854,7 +1448,7 @@ describe('BrokerDeployFormComponent', () => {
               run_id: null,
             },
             remediation:
-              'Review the bot current risk and account reconciliation, then confirm or turn off start.',
+              'Review the bot current risk and account reconciliation, then confirm before deploying and running.',
           },
         },
       }),
@@ -1868,9 +1462,8 @@ describe('BrokerDeployFormComponent', () => {
     expect(exposureLaunchDecision(fixture)?.textContent).toContain('Exposure is not proven flat');
     expect(exposureLaunchDecision(fixture)?.textContent).toContain('Pending orders');
     expect(exposureLaunchDecision(fixture)?.textContent).toContain('unknown');
-    expect(buttonContaining(fixture, 'Deploy without starting').disabled).toBe(false);
 
-    buttonContaining(fixture, 'Confirm and deploy & start').click();
+    buttonContaining(fixture, 'Confirm and deploy & run').click();
     await flush();
     fixture.detectChanges();
 
@@ -1886,75 +1479,6 @@ describe('BrokerDeployFormComponent', () => {
     });
   });
 
-  it('deploys without starting from the exposure launch decision', async () => {
-    const { fixture, svc, component } = setup({
-      queryParams: {
-        inherited_exposure_posture: 'UNKNOWN',
-        inherited_exposure_source: 'operator_surface.current_risk',
-      },
-    });
-    await flush();
-    fillRequired(component);
-    component.startNow.set(true);
-    component.activeDeployTab.set('launch');
-    await settleResource(fixture);
-
-    buttonContaining(fixture, 'Deploy without starting').click();
-    await flush();
-    fixture.detectChanges();
-
-    const request = svc.deployInstance.mock.calls[0][0];
-    expect(request.start).toBe(false);
-    expect(request.start_options).toBeUndefined();
-    expect(request.inherited_exposure_posture).toBe('UNKNOWN');
-    expect(request.inherited_exposure_pending_order_count).toBeNull();
-    expect(request.exposure_coherence_confirmation).toBeUndefined();
-  });
-
-  it('allows deploy-only staging when inherited identity conflicts with the new signal stream', async () => {
-    const { fixture, component } = setup({
-      queryParams: {
-        inherited_symbol: 'MU',
-        inherited_symbol_source: 'run_ledger.live_config.action stock target',
-        signal_stream: 'SPY',
-      },
-    });
-    await flush();
-    fillRequired(component);
-    component.startNow.set(false);
-    fixture.detectChanges();
-
-    expect(component.identityCoherenceEvidence()?.facts.map((fact) => fact.value)).toEqual([
-      'MU',
-      'SPY',
-      'SPY',
-    ]);
-    expect(component.blockedReason()).toBeNull();
-    expect(identityCoherenceCard(fixture)?.textContent).toContain(
-      'Deploy-only will stage these values without starting.',
-    );
-    expect(deployButton(fixture).disabled).toBe(false);
-  });
-
-  it('allows deploy-only staging when inherited exposure is unproven', async () => {
-    const { fixture, component } = setup({
-      queryParams: {
-        inherited_exposure_posture: 'UNKNOWN',
-        inherited_exposure_source: 'operator_surface.current_risk',
-      },
-    });
-    await flush();
-    fillRequired(component);
-    component.startNow.set(false);
-    fixture.detectChanges();
-
-    expect(component.blockedReason()).toBeNull();
-    expect(exposureCoherenceCard(fixture)?.textContent).toContain(
-      'Deploy-only will stage these values without starting.',
-    );
-    expect(deployButton(fixture).disabled).toBe(false);
-  });
-
   it('does not ask for identity confirmation when the inherited symbol matches the new signal stream', async () => {
     const { fixture, component } = setup({
       queryParams: {
@@ -1965,11 +1489,10 @@ describe('BrokerDeployFormComponent', () => {
     });
     await flush();
     fillRequired(component);
-    component.startNow.set(true);
     await settleResource(fixture);
 
     expect(component.identityCoherenceEvidence()).toBeNull();
-    expect(component.blockedReason()).toBeNull();
+    expect(blockerText(component)).toBeNull();
     expect(identityCoherenceCard(fixture)).toBeNull();
     expect(deployButton(fixture).disabled).toBe(false);
   });
@@ -1985,11 +1508,10 @@ describe('BrokerDeployFormComponent', () => {
     });
     await flush();
     fillRequired(component);
-    component.startNow.set(true);
     await settleResource(fixture);
 
     expect(component.exposureCoherenceEvidence()).toBeNull();
-    expect(component.blockedReason()).toBeNull();
+    expect(blockerText(component)).toBeNull();
     expect(exposureCoherenceCard(fixture)).toBeNull();
     expect(deployButton(fixture).disabled).toBe(false);
   });
@@ -2001,6 +1523,7 @@ describe('BrokerDeployFormComponent', () => {
       getQcAuditCopies: vi.fn().mockResolvedValue({ scope_root: 'references/qc-shadow', entries: [] }),
       getInstances: vi.fn().mockResolvedValue([]),
       getInstanceStatus: vi.fn().mockRejectedValue(new Error('instance not found')),
+      deployPreflight: vi.fn().mockResolvedValue({ ready: true, blockers: [] }),
       deployInstance: vi.fn(),
       getAuditCopySizingLookup: vi.fn().mockResolvedValue({
         verdict: 'cannot_prove',
@@ -2020,6 +1543,9 @@ describe('BrokerDeployFormComponent', () => {
     };
     const strategyValidation = {
       getCatalog: vi.fn().mockResolvedValue(DEFAULT_STRATEGY_VALIDATION_CATALOG),
+    };
+    const actionPlanPreview = {
+      preview: vi.fn().mockResolvedValue({ warnings: [] }),
     };
     const connectivity = {
       links: () => [],
@@ -2043,6 +1569,7 @@ describe('BrokerDeployFormComponent', () => {
         { provide: BrokerService, useValue: broker },
         { provide: BrokerConnectivityService, useValue: connectivity },
         { provide: StrategyValidationService, useValue: strategyValidation },
+        { provide: ActionPlanPreviewService, useValue: actionPlanPreview },
       ],
     });
     const harness = await RouterTestingHarness.create();
@@ -2070,21 +1597,17 @@ describe('BrokerDeployFormComponent', () => {
     expect(component.accountId()).toBe('');
   });
 
-  it('allows "Deploy & start" when the instance exists but is not live', async () => {
-    const { fixture, component } = setup({
-      instances: [{ strategy_instance_id: 'Minute', process_state: 'exited' }],
-      instanceStatus: clearStartStatus(),
-    });
+  it('allows "Deploy & run" when backend preflight is ready', async () => {
+    const { fixture, component } = setup();
     await flush();
     fillRequired(component);
     component.instanceId.set('Minute');
-    component.startNow.set(true);
     fixture.detectChanges();
     await fixture.whenStable();
     await flush();
     fixture.detectChanges();
 
-    expect(component.blockedReason()).toBeNull();
+    expect(blockerText(component)).toBeNull();
     expect(deployButton(fixture).disabled).toBe(false);
   });
 });

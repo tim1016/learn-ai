@@ -64,6 +64,19 @@ class StrategyEvidenceSeed:
     notes: list[str] = field(default_factory=list)
 
 
+def strategy_registry_seeds() -> list[StrategyRegistrySeed]:
+    from app.engine.strategy.registry import _STRATEGY_REGISTRY
+
+    return [
+        StrategyRegistrySeed(
+            strategy_key=key,
+            display_name=registration.display_name,
+            description=registration.description,
+        )
+        for key, registration in sorted(_STRATEGY_REGISTRY.items())
+    ]
+
+
 def seed_strategy_validation_manifest(
     registry: list[StrategyRegistrySeed],
     evidence: list[StrategyEvidenceSeed],
