@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from app.schemas.operator_blocker import (
     NavigateAction,
+    OpenRunbookAction,
     OperatorBlocker,
     OperatorMove,
     RemoveAction,
@@ -100,3 +101,23 @@ def test_terminal_blocker_accepts_replace_and_remove_moves() -> None:
     assert blocker.primary_move is not None
     assert blocker.primary_move.action.kind == "retire_replace"
     assert blocker.secondary_moves[0].action.kind == "remove"
+
+
+def test_fix_elsewhere_accepts_open_runbook_move() -> None:
+    blocker = OperatorBlocker(
+        id="orphaned_socket",
+        severity="blocking",
+        disposition="fix_elsewhere",
+        headline="Bot socket is orphaned",
+        detail="Review the broker session mirror before restarting.",
+        primary_move=OperatorMove(
+            label="Restart the launcher",
+            action=OpenRunbookAction(kind="open_runbook", slug="broker-session-orphaned-socket"),
+            target="broker-session-orphaned-socket",
+        ),
+        secondary_moves=[],
+        applies_to="run",
+    )
+
+    assert blocker.primary_move is not None
+    assert blocker.primary_move.action.kind == "open_runbook"

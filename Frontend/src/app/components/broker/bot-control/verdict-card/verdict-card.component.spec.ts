@@ -110,6 +110,40 @@ describe('VerdictCardComponent', () => {
     expect(remediationInvoked).toHaveBeenCalledTimes(1);
   });
 
+  it('renders a blocker move as the primary verb and emits it on click', () => {
+    const fixture = renderCard(
+      statusWith({ display_status: 'Sick bay', primary_action: null }, (status) => {
+        status.operator_surface.blockers = [
+          {
+            id: 'broker_disconnected',
+            severity: 'blocking',
+            disposition: 'fix_elsewhere',
+            headline: 'Broker disconnected',
+            detail: 'Connect the IBKR session before deploying or starting this bot.',
+            primary_move: {
+              label: 'Connect the broker',
+              action: { kind: 'navigate', route: '/broker', fragment: null },
+              target: null,
+            },
+            secondary_moves: [],
+            applies_to: 'both',
+          },
+        ];
+      }),
+    );
+    const el = fixture.nativeElement as HTMLElement;
+    const blockerMoveRequested = vi.fn();
+    fixture.componentInstance.blockerMoveRequested.subscribe(blockerMoveRequested);
+
+    const verb = el.querySelector<HTMLButtonElement>('[data-testid="verdict-verb"]');
+    expect(verb?.textContent?.trim()).toBe('Connect the broker');
+    verb?.click();
+
+    expect(blockerMoveRequested).toHaveBeenCalledWith(
+      expect.objectContaining({ label: 'Connect the broker' }),
+    );
+  });
+
   it('renders the Sick bay condition with its Account Monitor cure', () => {
     const fixture = renderCard(
       statusWith({

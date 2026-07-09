@@ -152,7 +152,7 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
                 severity="blocking",
                 disposition="fix_elsewhere",
                 headline="Broker disconnected",
-                detail="Connect the IBKR session before deploying.",
+                detail="Connect the IBKR session before deploying or starting this bot.",
                 primary_move=_nav("Connect the broker", "/broker"),
                 applies_to="both",
             )

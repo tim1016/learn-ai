@@ -9,6 +9,8 @@ const RUNBOOK_ROUTES: Readonly<Record<string, OperatorRunbookRoute>> = {
   'broker-instance-operator-surface': { commands: ['/broker/reconciliation'] },
   'watchdog-halt': { commands: ['/broker/bots'] },
   'runtime-freshness': { commands: ['/broker/bots'] },
+  'daemon-diagnostics': { commands: ['/broker/session-mirror'] },
+  'broker-session-orphaned-socket': { commands: ['/broker/session-mirror'] },
 };
 
 // Slugs whose runbook is "about this bot" — the resolver sends them to the

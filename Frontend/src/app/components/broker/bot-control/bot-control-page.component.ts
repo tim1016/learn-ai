@@ -15,6 +15,7 @@ import type {
   BotLifecycleActionId,
   LiveInstanceStatus,
 } from '../../../api/live-instances.types';
+import type { OperatorMove } from '../../../api/operator-blocker.types';
 import type { HostRunnerStartRequest } from '../../../api/live-runs.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { formatReceiptLabel } from '../../../shared/pipes/receipt-label.pipe';
@@ -341,10 +342,38 @@ export class BotControlPageComponent {
     void this.router.navigate(route.commands);
   }
 
+  invokeBlockerMove(move: OperatorMove): void {
+    switch (move.action.kind) {
+      case 'navigate':
+        void this.router.navigate([move.action.route], move.action.fragment ? { fragment: move.action.fragment } : {});
+        break;
+      case 'open_runbook':
+        this.onGateOpenRunbook(move.action.slug);
+        break;
+      case 'retire_replace':
+        this.openTerminalRetireReplaceConfirm();
+        break;
+      case 'remove':
+        this.openRemoveBotConfirm();
+        break;
+      case 'confirm_in_form':
+        this.openWhyForUnavailableMove();
+        break;
+      default: {
+        const unreachable: never = move.action;
+        this.mutationError.set(`Unsupported blocker move: ${String(unreachable)}`);
+      }
+    }
+  }
+
   openAccountMonitor(): void {
     void this.router.navigate(['/broker/account-monitor'], {
       fragment: 'account-reconciliation-action',
     });
+  }
+
+  private openWhyForUnavailableMove(): void {
+    this.mutationError.set('This blocker action is only available on the deploy form.');
   }
 
   openTypedHalt(): void {

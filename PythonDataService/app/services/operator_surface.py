@@ -32,6 +32,7 @@ from app.lean_sidecar.trading_calendar import next_trading_day, session_window_f
 from app.operator.notices.broker_activity_health import compose_broker_activity_health
 from app.operator.notices.runtime_freshness import compose_runtime_freshness_notices
 from app.operator.notices.schema import OperatorNotice
+from app.schemas.daemon_diagnostics import DaemonDominantCondition
 from app.schemas.live_runs import (
     ActionCapability,
     BrokerActivityHealth,
@@ -57,6 +58,7 @@ from app.schemas.live_runs import (
     OperatorSurfaceActionPlan,
     OperatorSurfaceActions,
     OperatorSurfaceBlockageLadder,
+    OperatorSurfaceBroker,
     OperatorSurfaceConfiguration,
     OperatorSurfaceControlPlane,
     OperatorSurfaceCurrentRisk,
@@ -77,12 +79,20 @@ from app.schemas.live_runs import (
     RedeployAction,
 )
 from app.schemas.operator_blocker import (
+    NavigateAction,
     OperatorBlocker,
     OperatorMove,
     RemoveAction,
     RetireReplaceAction,
 )
-from app.services.account_truth_snapshot import AccountTruthReadinessEvidence, assess_account_truth
+from app.schemas.operator_blocker import (
+    OpenRunbookAction as BlockerOpenRunbookAction,
+)
+from app.services.account_truth_snapshot import (
+    AccountTruthAssessment,
+    AccountTruthReadinessEvidence,
+    assess_account_truth,
+)
 from app.services.broker_activity_publisher import BrokerActivityPublisher
 from app.services.mutation_attempt import MutationAttempt
 from app.services.operator_blockage_ladder import author_blockage_ladder
@@ -163,10 +173,30 @@ def _remove_move() -> OperatorMove:
     )
 
 
+def _navigate_move(label: str, route: str, fragment: str | None = None) -> OperatorMove:
+    return OperatorMove(
+        label=label,
+        action=NavigateAction(kind="navigate", route=route, fragment=fragment),
+    )
+
+
+def _runbook_move(label: str, slug: str) -> OperatorMove:
+    return OperatorMove(
+        label=label,
+        action=BlockerOpenRunbookAction(kind="open_runbook", slug=slug),
+        target=slug,
+    )
+
+
 def _author_operator_blockers(
     *,
     poisoned: bool,
     bot_lifecycle_phase: BotLifecyclePhase | None,
+    host_process: OperatorSurfaceHostProcess,
+    broker: OperatorSurfaceBroker,
+    account_truth: AccountTruthAssessment,
+    fleet_blocks_starts: bool,
+    daemon_diagnostic_condition: DaemonDominantCondition | None,
 ) -> list[OperatorBlocker]:
     if bot_lifecycle_phase == BotLifecyclePhase.RETIRED:
         return [
@@ -194,7 +224,110 @@ def _author_operator_blockers(
                 applies_to="run",
             )
         ]
-    return []
+    blockers: list[OperatorBlocker] = []
+
+    if daemon_diagnostic_condition == DaemonDominantCondition.REGISTRY_AMNESIA:
+        blockers.append(
+            OperatorBlocker(
+                id="registry_amnesia",
+                severity="blocking",
+                disposition="fix_elsewhere",
+                headline="Launcher registry forgot this bot",
+                detail=(
+                    "The broker session mirror still sees this bot's socket, "
+                    "but the live-engine registry does not own a process for it."
+                ),
+                primary_move=_runbook_move("Restart the launcher", "daemon-diagnostics"),
+                applies_to="run",
+            )
+        )
+    elif daemon_diagnostic_condition == DaemonDominantCondition.ORPHANED_SOCKET:
+        blockers.append(
+            OperatorBlocker(
+                id="orphaned_socket",
+                severity="blocking",
+                disposition="fix_elsewhere",
+                headline="Bot socket is orphaned",
+                detail=(
+                    "A broker socket for this bot remains at the Gateway without "
+                    "a live owning process. Review it before starting another copy."
+                ),
+                primary_move=_runbook_move("Restart the launcher", "broker-session-orphaned-socket"),
+                applies_to="run",
+            )
+        )
+
+    if host_process.start_capability.disabled_reason_code == "HOST_SERVICE_OFFLINE":
+        blockers.append(
+            OperatorBlocker(
+                id="daemon_down",
+                severity="blocking",
+                disposition="fix_elsewhere",
+                headline="Live engine unavailable",
+                detail="Start the engine on this machine, then recheck.",
+                primary_move=_navigate_move("Start the engine", "/engine"),
+                applies_to="both",
+            )
+        )
+    if broker.connection == "DISCONNECTED":
+        blockers.append(
+            OperatorBlocker(
+                id="broker_disconnected",
+                severity="blocking",
+                disposition="fix_elsewhere",
+                headline="Broker disconnected",
+                detail="Connect the IBKR session before deploying or starting this bot.",
+                primary_move=_navigate_move("Connect the broker", "/broker"),
+                applies_to="both",
+            )
+        )
+    elif broker.connection == "DEGRADED":
+        blockers.append(
+            OperatorBlocker(
+                id="broker_reconnecting",
+                severity="blocking",
+                disposition="wait",
+                headline="Broker connection is recovering",
+                detail="Waiting for the broker session to recover before new submit activity.",
+                applies_to="both",
+            )
+        )
+
+    if fleet_blocks_starts:
+        blockers.append(
+            OperatorBlocker(
+                id="fleet_contaminated",
+                severity="blocking",
+                disposition="fix_elsewhere",
+                headline="Fleet state blocks starts",
+                detail="Clear the account fleet state before starting another bot.",
+                primary_move=_navigate_move(
+                    "Clear fleet state",
+                    "/broker/account-monitor",
+                    "account-reconciliation-action",
+                ),
+                applies_to="both",
+            )
+        )
+
+    if account_truth.status == "block":
+        blockers.append(
+            OperatorBlocker(
+                id="account_not_proven",
+                severity="blocking",
+                disposition="fix_elsewhere",
+                headline="Account not proven",
+                detail=account_truth.explanation,
+                primary_move=_navigate_move(
+                    "Open account monitor",
+                    "/broker/account-monitor",
+                    "account-reconciliation-action",
+                ),
+                applies_to="both",
+            )
+        )
+
+    return blockers
 
 
 def _project_host_start_capability(
@@ -1140,6 +1273,8 @@ def compute_operator_surface(
     latest_mutation: MutationAttempt | None = None,
     broker_observation_consistency: BrokerObservationConsistency | None = None,
     account_truth_snapshot: AccountTruthReadinessEvidence | None = None,
+    fleet_blocks_starts: bool = False,
+    daemon_diagnostic_condition: DaemonDominantCondition | None = None,
     host_start_command: str | None = None,
     start_run_id: str | None = None,
     account_freeze: AccountFreezeEvidence | None = None,
@@ -1289,6 +1424,11 @@ def compute_operator_surface(
     blockers = _author_operator_blockers(
         poisoned=poisoned,
         bot_lifecycle_phase=bot_lifecycle_phase,
+        host_process=host_process,
+        broker=broker_projection,
+        account_truth=account_truth_assessment,
+        fleet_blocks_starts=fleet_blocks_starts,
+        daemon_diagnostic_condition=daemon_diagnostic_condition,
     )
 
     return OperatorSurface(

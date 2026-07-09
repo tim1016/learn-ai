@@ -52,6 +52,7 @@ export class VerdictCardComponent {
   readonly accountMonitorRequested = output();
   readonly removeRequested = output();
   readonly terminalRetireReplaceRequested = output();
+  readonly blockerMoveRequested = output<OperatorMove>();
 
   readonly whyOpen = signal(false);
   readonly historyOpen = signal(false);
@@ -69,6 +70,7 @@ export class VerdictCardComponent {
   readonly verbLabel = computed<string | null>(() => {
     const verb = this.model().verb;
     if (verb.kind === 'lifecycle') return verb.action.label;
+    if (verb.kind === 'blocker_move') return verb.move.label;
     if (verb.kind === 'remediation') return this.renderedRemediation()?.label ?? null;
     if (verb.kind === 'crash_recovery') return CRASH_RECOVERY_VERB_LABEL;
     if (verb.kind === 'evidence') return EVIDENCE_VERB_LABEL;
@@ -79,6 +81,7 @@ export class VerdictCardComponent {
     if (this.busy()) return false;
     const verb = this.model().verb;
     if (verb.kind === 'lifecycle') return verb.action.enabled;
+    if (verb.kind === 'blocker_move') return true;
     if (verb.kind === 'remediation') return this.renderedRemediation() !== null;
     if (verb.kind === 'crash_recovery') return true;
     if (verb.kind === 'evidence') return true;
@@ -106,6 +109,7 @@ export class VerdictCardComponent {
     if (!this.verbEnabled()) return;
     const verb = this.model().verb;
     if (verb.kind === 'lifecycle') this.lifecycleAction.emit(verb.action.id);
+    else if (verb.kind === 'blocker_move') this.blockerMoveRequested.emit(verb.move);
     else if (verb.kind === 'remediation') this.remediationInvoked.emit();
     else if (verb.kind === 'crash_recovery') this.crashRecoveryRequested.emit();
     else if (verb.kind === 'evidence') this.openWhy();

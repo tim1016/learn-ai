@@ -46,6 +46,7 @@ export interface VerdictIdentity {
  *  own page, so navigating is a no-op — the verb opens the why-drawer instead. */
 export type VerdictVerbSource =
   | { readonly kind: 'lifecycle'; readonly action: BotLifecycleAction }
+  | { readonly kind: 'blocker_move'; readonly move: OperatorMove }
   | { readonly kind: 'remediation' }
   | { readonly kind: 'crash_recovery' }
   | { readonly kind: 'evidence' }
@@ -189,6 +190,8 @@ function resolveVitals(state: BotLifecycleDisplayStatus, status: LiveInstanceSta
 function resolveVerb(state: BotLifecycleDisplayStatus, status: LiveInstanceStatus): VerdictVerbSource {
   const blocker = primaryBlocker(status);
   if (blocker?.disposition === 'terminal') return { kind: 'none' };
+  if (blocker?.primary_move) return { kind: 'blocker_move', move: blocker.primary_move };
+  if (blocker?.disposition === 'wait') return { kind: 'none' };
   // Clocking out is the one state that never shows a verb — it is already doing
   // what the operator asked.
   if (state === 'Clocking out') return { kind: 'none' };
@@ -225,17 +228,19 @@ export function resolveVerdictCardModel(status: LiveInstanceStatus): VerdictCard
   const state = lifecycle.display_status;
   const blocker = primaryBlocker(status);
   const terminalBlocker = blocker?.disposition === 'terminal' ? blocker : null;
+  const blockerTone: VerdictTone | null =
+    blocker && !terminalBlocker ? (blocker.severity === 'blocking' ? 'danger' : 'warning') : null;
   return {
     state,
-    stateLabel: terminalBlocker?.headline ?? state,
-    tone: terminalBlocker ? 'danger' : TONE_BY_STATE[state],
+    stateLabel: blocker?.headline ?? state,
+    tone: terminalBlocker ? 'danger' : blockerTone ?? TONE_BY_STATE[state],
     layout: state === 'On duty' ? 'strip' : 'full',
     identity: {
       instanceId: status.strategy_instance_id,
       symbol: status.symbol,
       mode: resolveMode(status.operator_surface.broker.safety_verdict),
     },
-    reason: terminalBlocker?.detail ?? lifecycle.reason,
+    reason: blocker?.detail ?? lifecycle.reason,
     verb: resolveVerb(state, status),
     terminalBlocker,
     terminalMoves: terminalMoves(terminalBlocker),

@@ -13,6 +13,11 @@ export interface ConfirmInFormAction {
   anchor: string;
 }
 
+export interface OpenRunbookAction {
+  kind: 'open_runbook';
+  slug: string;
+}
+
 export interface RetireReplaceAction {
   kind: 'retire_replace';
 }
@@ -24,6 +29,7 @@ export interface RemoveAction {
 export type OperatorAction =
   | NavigateAction
   | ConfirmInFormAction
+  | OpenRunbookAction
   | RetireReplaceAction
   | RemoveAction;
 
