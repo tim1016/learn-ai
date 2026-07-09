@@ -35,7 +35,7 @@ import { ActivityTabComponent } from './tabs/activity-tab.component';
 import { TypedHaltConfirmComponent } from './reused/typed-halt-confirm/typed-halt-confirm.component';
 import { redeployQueryParamsForStatus } from './lib/redeploy-query-params';
 import { resolveOperatorRunbookRoute } from './lib/operator-runbook-routes';
-import { canStartHostProcess, startHostProcessFromCapability } from './lib/start-host-process';
+import { canStartHostProcess } from './lib/start-host-process';
 import {
   renderTraderRemediation,
   type RenderedAction,
@@ -54,13 +54,12 @@ import { WorkbenchAuditPanelComponent } from './workbench-audit-panel.component'
 import { BotControlSidePanelComponent } from './bot-control-side-panel.component';
 import { boundRunIdForStatus } from './lib/bound-run-id';
 import { OperatorNoticeComponent } from '../../operator-notice/operator-notice.component';
+import type { HostRunnerStartRequest } from '../../../api/live-runs.types';
 
 const POLL_INTERVAL_MS = 4_000;
 const TIMELINE_LIMIT = 5;
 const POISONED_CONFIRM_MESSAGE =
   'Flagging this instance as POISONED is IRREVERSIBLE: the current run can never resume on its run_id. Recovery requires a fresh deployment (new run_id) after you reconcile the account.';
-const FLATTEN_CONFIRM_MESSAGE =
-  'Flatten & pause sends a market-flattening request for any owned positions and then pauses the bot. Positions may be closed at the next available price. Confirm to proceed.';
 const CRASH_RECOVERY_CONFIRM_MESSAGE =
   'Recording recovery evidence clears the crash-retired start gate and lets this bot run again. Only confirm if you have verified in IBKR that the broker account is FLAT with no open orders. This writes audited safety evidence.';
 const RETIRE_REPLACE_CONFIRM_MESSAGE =
@@ -68,7 +67,7 @@ const RETIRE_REPLACE_CONFIRM_MESSAGE =
 const TIMELINE_PROJECTION_UNAVAILABLE =
   'Projection unavailable; current snapshot remains file-backed.';
 
-type LegacyBotControlAction = 'flatten_and_pause' | 'mark_poisoned';
+type LegacyBotControlAction = 'mark_poisoned';
 type WorkbenchTab = 'activity' | 'audit';
 type PosturePillTone = 'ok' | 'attention' | 'warn' | 'neutral' | 'muted';
 
@@ -154,12 +153,10 @@ export class BotControlPageComponent {
   readonly busyAction = signal<string | null>(null);
   readonly typedHaltOpen = signal<boolean>(false);
   private readonly typedHaltInstanceId = signal<string | null>(null);
-  readonly flattenConfirmOpen = signal<boolean>(false);
   readonly crashRecoveryConfirmOpen = signal<boolean>(false);
   readonly retireReplaceConfirmOpen = signal<boolean>(false);
   readonly activeWorkbenchTab = signal<WorkbenchTab>('activity');
   readonly poisonedConfirmMessage = POISONED_CONFIRM_MESSAGE;
-  readonly flattenConfirmMessage = FLATTEN_CONFIRM_MESSAGE;
   readonly crashRecoveryConfirmMessage = CRASH_RECOVERY_CONFIRM_MESSAGE;
   readonly retireReplaceConfirmMessage = RETIRE_REPLACE_CONFIRM_MESSAGE;
 
@@ -279,8 +276,8 @@ export class BotControlPageComponent {
 
   private readonly primaryRemediationDispatch: RendererDispatch = {
     invokeCapability: (capability) => {
-      if (capability === 'resume') void this.dispatchResume();
-      else void this.dispatchPause();
+      if (capability === 'resume') void this.dispatchStartProcess();
+      else void this.dispatchEndDayNow();
     },
     focus: (_tab, action) => {
       const targetNodeId = this.targetNodeForAction(action);
@@ -332,7 +329,6 @@ export class BotControlPageComponent {
       this.highlightedLifecycleNodeId.set(null);
       this.typedHaltOpen.set(false);
       this.typedHaltInstanceId.set(null);
-      this.flattenConfirmOpen.set(false);
       this.crashRecoveryConfirmOpen.set(false);
       this.retireReplaceConfirmOpen.set(false);
       this.mutationReceipt.set(null);
@@ -370,18 +366,19 @@ export class BotControlPageComponent {
     this.selectedLifecycleNodeId.set(node.id);
   }
 
-  async dispatchResume(): Promise<void> {
-    await this.setIntent('resume', 'Resume');
-  }
-
   async dispatchStartProcess(): Promise<void> {
     const id = this.instanceId();
     const cap = this.status()?.operator_surface.host_process.start_capability;
     if (!id || this.busyAction() || !cap || !canStartHostProcess(cap)) return;
+    const request = this.startRequestWithRollCallOffer(cap.request);
+    if (!request) {
+      this.mutationError.set('Run roll call before starting this bot.');
+      return;
+    }
     this.busyAction.set('start_process');
     this.clearMutationOutcome();
     try {
-      const response = await startHostProcessFromCapability(this.liveRuns, cap);
+      const response = await this.liveRuns.startHostRunner(cap.run_id, request);
       this.applyMutationReceipt(response);
       await this.refreshStatus(id);
     } catch (err) {
@@ -425,10 +422,6 @@ export class BotControlPageComponent {
     }
   }
 
-  async dispatchPause(): Promise<void> {
-    await this.setIntent('pause', 'Pause');
-  }
-
   async dispatchStop(): Promise<void> {
     await this.setIntent('stop', 'Stop');
   }
@@ -464,26 +457,6 @@ export class BotControlPageComponent {
       await this.refreshStatus(id);
     } catch (err) {
       this.mutationError.set(this.humanError(err));
-    } finally {
-      this.busyAction.set(null);
-    }
-  }
-
-  async dispatchFlattenAndPause(): Promise<void> {
-    const id = this.instanceId();
-    if (!id || this.busyAction()) return;
-    this.busyAction.set('flatten_and_pause');
-    this.clearMutationOutcome();
-    try {
-      const response = await this.liveRuns.flattenAndPause(id, {
-        action: 'pause',
-        reason: 'Flatten and pause',
-        updated_by: 'operator',
-      });
-      this.applyMutationReceipt(response);
-      await this.refreshStatus(id);
-    } catch (err) {
-      this.mutationError.set(this.operationErrorMessage('flatten', err));
     } finally {
       this.busyAction.set(null);
     }
@@ -634,25 +607,6 @@ export class BotControlPageComponent {
     return null;
   }
 
-  openFlattenConfirm(): void {
-    if (this.isLegacyActionDisabled('flatten_and_pause')) return;
-    this.flattenConfirmOpen.set(true);
-  }
-
-  cancelFlattenConfirm(): void {
-    this.flattenConfirmOpen.set(false);
-  }
-
-  async confirmFlatten(): Promise<void> {
-    if (!this.flattenConfirmOpen()) return;
-    this.flattenConfirmOpen.set(false);
-    // Re-check eligibility at confirm time: a poll may have disabled the action
-    // (lost live binding, positions already flat) while the dialog was open, so
-    // never fire the market-flattening mutation from a stale confirmation.
-    if (this.isLegacyActionDisabled('flatten_and_pause')) return;
-    await this.dispatchFlattenAndPause();
-  }
-
   openTypedHalt(): void {
     if (this.isLegacyActionDisabled('mark_poisoned')) return;
     const id = this.instanceId();
@@ -741,6 +695,14 @@ export class BotControlPageComponent {
     return lifecycle.ambient_actions.find((candidate) => candidate.id === action) ?? null;
   }
 
+  private startRequestWithRollCallOffer(
+    request: HostRunnerStartRequest,
+  ): HostRunnerStartRequest | null {
+    const offerId = this.lifecycleAction('confirm_start')?.offer_id ?? null;
+    if (!offerId) return null;
+    return { ...request, roll_call_offer_id: offerId };
+  }
+
   private async refresh(id: string): Promise<void> {
     await Promise.allSettled([this.refreshStatus(id), this.refreshAccountSummary()]);
   }
@@ -822,7 +784,7 @@ export class BotControlPageComponent {
   }
 
   private async setIntent(
-    action: 'resume' | 'pause' | 'stop',
+    action: 'stop',
     label: string,
   ): Promise<void> {
     const id = this.instanceId();

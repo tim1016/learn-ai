@@ -196,7 +196,7 @@ export class OverviewTabComponent {
       case 'freeze':
         return 'Freeze';
       case 'unknown':
-        return 'Unknown';
+        return 'Needs proof';
       case 'inactive':
         return 'Waiting';
     }

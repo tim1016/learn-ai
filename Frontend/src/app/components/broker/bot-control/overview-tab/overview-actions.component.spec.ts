@@ -10,6 +10,8 @@ const action = (
 ): BotLifecycleAction => ({
   enabled: true,
   reason: null,
+  offer_id: null,
+  expires_at_ms: null,
   ...overrides,
 });
 

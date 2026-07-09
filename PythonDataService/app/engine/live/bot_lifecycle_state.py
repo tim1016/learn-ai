@@ -11,9 +11,9 @@ import contextlib
 import os
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.engine.live.identity import validate_strategy_instance_id
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
@@ -50,9 +50,36 @@ class BotLifecycleStateRecord(BaseModel):
     version: int = 1
 
 
+class BotRollCallOfferRecord(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = 1
+    offer_id: str
+    strategy_instance_id: str
+    run_id: str
+    session_date: str
+    issued_at_ms: int
+    expires_at_ms: int
+    status: Literal["active", "consumed"] = "active"
+    evidence_snapshot: dict[str, Any] = Field(default_factory=dict)
+
+
+class BotRollCallOfferLedger(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = 1
+    offers: list[BotRollCallOfferRecord] = Field(default_factory=list)
+    version: int = 1
+
+
 def stable_bot_lifecycle_state_path(artifacts_root: Path, strategy_instance_id: str) -> Path:
     validate_strategy_instance_id(strategy_instance_id)
     return artifacts_root / "live_state" / strategy_instance_id / "lifecycle_state.json"
+
+
+def stable_bot_roll_call_offers_path(artifacts_root: Path, strategy_instance_id: str) -> Path:
+    validate_strategy_instance_id(strategy_instance_id)
+    return artifacts_root / "live_state" / strategy_instance_id / "roll_call_offers.json"
 
 
 class BotLifecycleStateRepo:
@@ -195,6 +222,78 @@ class BotLifecycleStateRepo:
         _fsync_parent_dir(self._path)
 
 
+class BotRollCallOfferRepo:
+    def __init__(self, path: Path) -> None:
+        self._path = path
+
+    def read(self) -> BotRollCallOfferLedger:
+        if not self._path.exists():
+            return BotRollCallOfferLedger()
+        try:
+            return BotRollCallOfferLedger.model_validate_json(
+                self._path.read_text(encoding="utf-8")
+            )
+        except (OSError, ValidationError, ValueError) as exc:
+            raise BotLifecycleStateCorruptError(self._path, exc) from exc
+
+    def active_offer(self, *, now_ms: int, session_date: str | None = None) -> BotRollCallOfferRecord | None:
+        ledger = self.read()
+        for offer in reversed(ledger.offers):
+            if session_date is not None and offer.session_date != session_date:
+                continue
+            if offer.status == "active" and offer.issued_at_ms <= now_ms < offer.expires_at_ms:
+                return offer
+        return None
+
+    def append(self, offer: BotRollCallOfferRecord) -> BotRollCallOfferRecord:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with _file_lock(self._path):
+            ledger = self.read()
+            next_ledger = BotRollCallOfferLedger(
+                offers=[*ledger.offers, offer],
+                version=ledger.version + 1,
+            )
+            self._write_locked(next_ledger)
+        return offer
+
+    def consume(self, offer_id: str) -> BotRollCallOfferRecord | None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with _file_lock(self._path):
+            ledger = self.read()
+            matched: BotRollCallOfferRecord | None = None
+            offers: list[BotRollCallOfferRecord] = []
+            for offer in ledger.offers:
+                if offer.offer_id == offer_id and offer.status == "active":
+                    matched = offer.model_copy(update={"status": "consumed"})
+                    offers.append(matched)
+                else:
+                    offers.append(offer)
+            if matched is None:
+                return None
+            self._write_locked(
+                BotRollCallOfferLedger(
+                    offers=offers,
+                    version=ledger.version + 1,
+                )
+            )
+            return matched
+
+    def _write_locked(self, ledger: BotRollCallOfferLedger) -> None:
+        tmp_path = self._path.with_suffix(self._path.suffix + ".tmp")
+        payload = ledger.model_dump_json().encode("utf-8")
+        with open(tmp_path, "wb") as fh:
+            fh.write(payload)
+            fh.flush()
+            os.fsync(fh.fileno())
+        try:
+            os.replace(tmp_path, self._path)
+        except Exception:
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()
+            raise
+        _fsync_parent_dir(self._path)
+
+
 def _next_active_run_id(
     *,
     phase: BotLifecyclePhase | None,
@@ -213,5 +312,8 @@ __all__ = [
     "BotLifecycleStateCorruptError",
     "BotLifecycleStateRecord",
     "BotLifecycleStateRepo",
+    "BotRollCallOfferRecord",
+    "BotRollCallOfferRepo",
     "stable_bot_lifecycle_state_path",
+    "stable_bot_roll_call_offers_path",
 ]

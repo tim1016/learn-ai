@@ -129,8 +129,8 @@ _DAEMON_STATE_TO_HOST_PROCESS_STATE: dict[str, str] = {
 
 _HOST_PROCESS_NOTICE_BY_STATE: dict[str, str] = {
     "STOPPING": "The bot is shutting down.",
-    "EXITED": "The previous bot process ended. Start this bot's process to resume trading.",
-    "IDLE": "The host is reachable but this bot has no active process. Start it to resume trading.",
+    "EXITED": "The previous bot process ended. Run roll call for a fresh start offer.",
+    "IDLE": "The host is reachable but this bot has no active process. Run roll call for a fresh start offer.",
     "WAITING_FOR_HOST": (
         "Trading was requested, but this bot's process has not started yet. Start it to begin trading."
     ),
@@ -172,12 +172,11 @@ def _project_host_start_capability(
             disabled_reason_code="CRASH_RECOVERY_REQUIRED",
             gate_results=[crash_recovery_gate],
         )
-    # Poisoned runs are dead and still require redeploy. Durable STOPPED is
-    # only a Resume-clearable latch when the run is otherwise recoverable.
+    # Poisoned runs are dead and still require redeploy. Durable STOPPED no
+    # longer blocks starts; the duty roster is the operator-owned "stay down"
+    # control in the daily lifecycle model.
     if poisoned:
         reason = "STOPPED_REQUIRES_REDEPLOY"
-    elif desired_state is not None and desired_state.state == "STOPPED":
-        reason = "STOPPED_REQUIRES_RESUME"
     elif state == "RUNNING":
         reason = "ALREADY_RUNNING"
     elif state == "STOPPING":
@@ -329,7 +328,7 @@ def _project_run_signal(
             state_label = "Stopping"
             tone = "transition"
         case "UNREACHABLE":
-            state_label = "Unknown"
+            state_label = "Needs proof"
             tone = "attention"
         case "EXITED" | "IDLE" | "WAITING_FOR_HOST":
             state_label = "Off"

@@ -1,7 +1,7 @@
 // PRD #617 — pure mapping from GateSuggestedAction → operator label +
 // dispatch handler.
 //
-// Destructive actions (Stop, Flatten-and-pause, Mark Poisoned) reach
+// Destructive actions (Stop, Mark Poisoned) reach
 // the operator only via `focus_action`, which is a *navigation hint*
 // to the canonical render site, never an inline invocation
 // (ADR-0010 §A2, ADR-0013 §1).  An unknown `kind` fails closed
@@ -34,12 +34,12 @@ export interface RenderedAction {
 }
 
 const _INVOKE_CAPABILITY_LABELS: Record<InvokeCapabilityAction['capability'], string> = {
-  resume: 'Resume',
-  pause: 'Pause',
+  resume: 'Start from roll call',
+  pause: 'End day now',
 };
 
 const _FOCUS_LABELS: Record<FocusAction['action'], string> = {
-  flatten_and_pause: 'Flatten and pause →',
+  flatten_and_pause: 'Open recovery action →',
   stop: 'Stop instance →',
   mark_poisoned: 'Mark poisoned →',
 };

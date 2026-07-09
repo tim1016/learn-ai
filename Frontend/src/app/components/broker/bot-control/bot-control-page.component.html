@@ -217,7 +217,7 @@
                           size="sm"
                         />
                       } @else {
-                        <span>Unknown symbol</span>
+                        <span>No symbol</span>
                       }
                       <span aria-hidden="true">·</span>
                       <span>{{ s.process.state }}</span>
@@ -267,16 +267,6 @@
     [message]="poisonedConfirmMessage"
     (confirmed)="confirmTypedHalt()"
     (cancelled)="closeTypedHalt()"
-  />
-
-  <app-typed-halt-confirm
-    [open]="flattenConfirmOpen()"
-    heading="Flatten &amp; pause this bot"
-    [message]="flattenConfirmMessage"
-    requiredToken=""
-    confirmLabel="Flatten &amp; pause"
-    (confirmed)="confirmFlatten()"
-    (cancelled)="cancelFlattenConfirm()"
   />
 
   <app-typed-halt-confirm

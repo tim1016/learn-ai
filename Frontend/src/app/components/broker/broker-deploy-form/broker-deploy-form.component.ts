@@ -222,7 +222,7 @@ export class BrokerDeployFormComponent {
       return {
         kind: 'ready',
         message:
-          'Durable STOPPED latch is set. This submit will deploy only; use Resume on the bot page to clear the latch before starting.',
+          'This bot is off duty. This submit will deploy only; run roll call on the bot page before starting.',
         canSubmit: true,
       };
     }

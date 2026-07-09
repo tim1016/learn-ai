@@ -113,6 +113,8 @@ export interface BotLifecycleAction {
   label: string;
   enabled: boolean;
   reason: string | null;
+  offer_id: string | null;
+  expires_at_ms: number | null;
 }
 
 export interface BotDailyLifecycleProjection {
@@ -145,6 +147,32 @@ export interface BotRetireReplaceRequest {
 export interface BotLifecycleMutationResponse {
   strategy_instance_id: string;
   lifecycle: BotDailyLifecycleProjection;
+}
+
+export interface BotRollCallSummary {
+  ready: number;
+  off_roster: number;
+  sick_bay: number;
+  on_duty: number;
+  off_duty: number;
+  retired: number;
+  generated_at_ms: number | null;
+  session_date: string | null;
+  effective_stop_ms: number | null;
+}
+
+export interface BotRollCallOffer {
+  offer_id: string;
+  strategy_instance_id: string;
+  run_id: string;
+  session_date: string;
+  issued_at_ms: number;
+  expires_at_ms: number;
+}
+
+export interface BotRollCallResponse {
+  summary: BotRollCallSummary;
+  offers: BotRollCallOffer[];
 }
 
 export interface ReadinessGate {
@@ -1043,6 +1071,33 @@ export interface BotCatalogMetrics {
   error_count: number;
 }
 
+export type BotAttendanceStatus = 'clean' | 'rested' | 'sick' | 'retired';
+
+export interface BotAttendanceCell {
+  session_date: string;
+  status: BotAttendanceStatus;
+  label: string;
+  receipt_ref: string | null;
+}
+
+export interface BotEveningReportRow {
+  strategy_instance_id: string;
+  label: string;
+  status: BotAttendanceStatus;
+  receipt_ref: string | null;
+}
+
+export interface BotEveningReport {
+  session_date: string;
+  generated_at_ms: number;
+  clean_exits: number;
+  rested: number;
+  sick: number;
+  retired: number;
+  summary: string;
+  rows: BotEveningReportRow[];
+}
+
 export interface BotCatalogRow {
   strategy_instance_id: string;
   name: string;
@@ -1066,11 +1121,15 @@ export interface BotCatalogRow {
   desired_state: string | null;
   readiness_verdict: ReadinessVerdictEnum;
   daily_lifecycle: BotDailyLifecycleProjection;
+  start_request: HostRunnerStartRequest | null;
+  attendance: BotAttendanceCell[];
   metrics: BotCatalogMetrics;
 }
 
 export interface BotCatalogResponse {
   bots: BotCatalogRow[];
+  roll_call: BotRollCallSummary;
+  evening_report: BotEveningReport | null;
 }
 
 export interface BotDeleteRequest {

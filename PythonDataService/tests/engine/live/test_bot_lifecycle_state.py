@@ -5,7 +5,10 @@ from pathlib import Path
 from app.engine.live.bot_lifecycle_state import (
     BotLifecyclePhase,
     BotLifecycleStateRepo,
+    BotRollCallOfferRecord,
+    BotRollCallOfferRepo,
     stable_bot_lifecycle_state_path,
+    stable_bot_roll_call_offers_path,
 )
 
 
@@ -59,3 +62,26 @@ def test_lifecycle_state_repo_clears_active_run_on_off_duty_and_retire(tmp_path:
     assert retired.active_run_id is None
     assert retired.retired_at_ms == 300
     assert retired.replacement_strategy_instance_id == "paper-vwap-v2"
+
+
+def test_roll_call_offer_repo_round_trips_active_and_consumed_offers(tmp_path: Path) -> None:
+    repo = BotRollCallOfferRepo(stable_bot_roll_call_offers_path(tmp_path, "paper-roll"))
+    offer = BotRollCallOfferRecord(
+        offer_id="offer-1",
+        strategy_instance_id="paper-roll",
+        run_id="run-1",
+        session_date="2026-07-08",
+        issued_at_ms=100,
+        expires_at_ms=200,
+        evidence_snapshot={"readiness_verdict": "READY"},
+    )
+
+    repo.append(offer)
+
+    assert repo.active_offer(now_ms=150) == offer
+    assert repo.active_offer(now_ms=200) is None
+    consumed = repo.consume("offer-1")
+
+    assert consumed is not None
+    assert consumed.status == "consumed"
+    assert repo.active_offer(now_ms=150) is None

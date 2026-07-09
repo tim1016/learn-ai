@@ -8,6 +8,8 @@ import type {
   BotDailyLifecycleProjection,
   BotCatalogResponse,
   BotCatalogRow,
+  BotLifecycleAction,
+  BotRollCallResponse,
 } from '../../../api/live-instances.types';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
@@ -16,6 +18,19 @@ import { BotsPageComponent } from './bots-page.component';
 
 const OLD_RUN = 1_700_000_000_000;
 const NEW_RUN = 1_800_000_000_000;
+const OFFER_EXPIRES_AT = 1_800_000_300_000;
+
+function action(
+  overrides: Partial<BotLifecycleAction> & Pick<BotLifecycleAction, 'id' | 'label'>,
+): BotLifecycleAction {
+  return {
+    enabled: true,
+    reason: null,
+    offer_id: null,
+    expires_at_ms: null,
+    ...overrides,
+  };
+}
 
 function lifecycle(
   overrides: Partial<BotDailyLifecycleProjection> = {},
@@ -30,25 +45,21 @@ function lifecycle(
     active_run_id: null,
     latest_run_id: 'run-live-idle-spy',
     drift_detected: false,
-    primary_action: {
+    primary_action: action({
       id: 'confirm_start',
       label: 'Start',
-      enabled: true,
-      reason: null,
-    },
+      offer_id: 'offer-live-idle-spy',
+      expires_at_ms: OFFER_EXPIRES_AT,
+    }),
     ambient_actions: [
-      {
+      action({
         id: 'take_off_roster',
         label: 'Take off roster',
-        enabled: true,
-        reason: null,
-      },
-      {
+      }),
+      action({
         id: 'retire_replace',
         label: 'Retire & Replace',
-        enabled: true,
-        reason: null,
-      },
+      }),
     ],
     ...overrides,
   };
@@ -78,6 +89,27 @@ function bot(overrides: Partial<BotCatalogRow> = {}): BotCatalogRow {
     desired_state: 'PAUSED',
     readiness_verdict: 'READY',
     daily_lifecycle: lifecycle(),
+    start_request: {
+      readonly: false,
+      hydrate_policy: 'require',
+      strategy: 'spy_ema',
+      max_orders_per_day: 2,
+      ibkr_host: '127.0.0.1',
+    },
+    attendance: [
+      {
+        session_date: '2026-07-08',
+        status: 'rested',
+        label: 'Rested',
+        receipt_ref: null,
+      },
+      {
+        session_date: '2026-07-07',
+        status: 'clean',
+        label: 'Clean exit',
+        receipt_ref: 'clean_exit:run-live-idle-spy',
+      },
+    ],
     metrics: {
       pnl: {
         realized: null,
@@ -93,9 +125,43 @@ function bot(overrides: Partial<BotCatalogRow> = {}): BotCatalogRow {
   };
 }
 
+function catalog(bots: BotCatalogRow[]): BotCatalogResponse {
+  return {
+    bots,
+    roll_call: {
+      ready: bots.filter((row) => row.daily_lifecycle.display_status === 'Ready').length,
+      off_roster: bots.filter((row) => row.daily_lifecycle.display_status === 'Off roster').length,
+      sick_bay: bots.filter((row) => row.daily_lifecycle.display_status === 'Sick bay').length,
+      on_duty: bots.filter((row) => row.daily_lifecycle.display_status === 'On duty').length,
+      off_duty: bots.filter((row) => row.daily_lifecycle.display_status === 'Off duty').length,
+      retired: bots.filter((row) => row.daily_lifecycle.display_status === 'Retired').length,
+      generated_at_ms: NEW_RUN,
+      session_date: '2026-07-08',
+      effective_stop_ms: OFFER_EXPIRES_AT,
+    },
+    evening_report: {
+      session_date: '2026-07-08',
+      generated_at_ms: NEW_RUN,
+      clean_exits: 1,
+      rested: 1,
+      sick: 1,
+      retired: 0,
+      summary: '1 clean exit · 1 rested · 1 in sick bay · 0 retired',
+      rows: bots.map((row) => ({
+        strategy_instance_id: row.strategy_instance_id,
+        label: row.attendance[0]?.label ?? 'Rested',
+        status: row.attendance[0]?.status ?? 'rested',
+        receipt_ref: row.attendance[0]?.receipt_ref ?? null,
+      })),
+    },
+  };
+}
+
 class FakeLiveRunsService {
   getBotCatalog = vi.fn<() => Promise<BotCatalogResponse>>();
   deleteBot = vi.fn<(instanceId: string, request?: unknown) => Promise<unknown>>();
+  runRollCall = vi.fn<() => Promise<BotRollCallResponse>>();
+  startHostRunner = vi.fn<(runId: string, request: unknown) => Promise<unknown>>();
 }
 
 class FakeBrokerService {
@@ -121,8 +187,8 @@ async function setup(options: { triage?: AccountTriageResponse } = {}) {
   const broker = new FakeBrokerService();
   const health = new FakeBrokerHealthService();
   broker.accountTriage.mockResolvedValue(options.triage ?? cleanTriage());
-  service.getBotCatalog.mockResolvedValue({
-    bots: [
+  service.getBotCatalog.mockResolvedValue(
+    catalog([
       bot(),
       bot({
         strategy_instance_id: 'live-running-aapl',
@@ -144,6 +210,15 @@ async function setup(options: { triage?: AccountTriageResponse } = {}) {
           reason: '1 condition needs a cure before start.',
           primary_action: null,
         }),
+        start_request: null,
+        attendance: [
+          {
+            session_date: '2026-07-08',
+            status: 'sick',
+            label: 'Sick bay',
+            receipt_ref: 'condition:broker_disconnected',
+          },
+        ],
         metrics: {
           pnl: { realized: null, unrealized: -4, total: null },
           trade_count: null,
@@ -168,23 +243,60 @@ async function setup(options: { triage?: AccountTriageResponse } = {}) {
           attention_badge: null,
           reason: null,
           active_run_id: 'run-paper-msft',
-          primary_action: {
+          primary_action: action({
             id: 'end_day_now',
             label: 'End day now',
-            enabled: true,
-            reason: null,
-          },
+          }),
           ambient_actions: [
-            {
+            action({
               id: 'take_off_roster',
               label: 'Take off roster',
-              enabled: true,
-              reason: null,
-            },
+            }),
           ],
         }),
+        start_request: null,
+        attendance: [
+          {
+            session_date: '2026-07-08',
+            status: 'clean',
+            label: 'Clean exit',
+            receipt_ref: 'clean_exit:run-paper-msft',
+          },
+        ],
       }),
+    ]),
+  );
+  service.runRollCall.mockResolvedValue({
+    summary: {
+      ready: 1,
+      off_roster: 0,
+      sick_bay: 1,
+      on_duty: 1,
+      off_duty: 0,
+      retired: 0,
+      generated_at_ms: NEW_RUN,
+      session_date: '2026-07-08',
+      effective_stop_ms: OFFER_EXPIRES_AT,
+    },
+    offers: [
+      {
+        offer_id: 'offer-live-idle-spy',
+        strategy_instance_id: 'live-idle-spy',
+        run_id: 'run-live-idle-spy',
+        session_date: '2026-07-08',
+        issued_at_ms: NEW_RUN,
+        expires_at_ms: OFFER_EXPIRES_AT,
+      },
     ],
+  });
+  service.startHostRunner.mockResolvedValue({
+    accepted: true,
+    process: {
+      state: 'running',
+      pid: 123,
+      bound_run_id: 'run-live-idle-spy',
+      started_at_ms: NEW_RUN,
+    },
   });
   service.deleteBot.mockResolvedValue({
     strategy_instance_id: 'paper-msft',
@@ -338,6 +450,34 @@ describe('BotsPageComponent', () => {
     expect(text).not.toContain('RUNNING');
     expect(text).not.toContain('Needs operator review');
     expect(text).not.toContain('Desired state has no durable intent.');
+    expect(text).toContain('1 ready · 1 on duty · 1 in sick bay · 0 off roster · 0 retired');
+    expect(fixture.nativeElement.querySelectorAll('[data-testid="bot-attendance-strip"]').length)
+      .toBeGreaterThan(0);
+  });
+
+  it('runs roll call and starts ready bots with their offer ids', async () => {
+    const { fixture, service } = await setup();
+
+    await fixture.componentInstance.runRollCall();
+    await settle(fixture);
+
+    expect(service.runRollCall).toHaveBeenCalledTimes(1);
+    expect(service.getBotCatalog).toHaveBeenCalledTimes(2);
+    expect(fixture.componentInstance.readyRows().map((row) => row.id)).toEqual([
+      'live-idle-spy',
+    ]);
+
+    await fixture.componentInstance.startReadyBots();
+    await settle(fixture);
+
+    expect(service.startHostRunner).toHaveBeenCalledWith('run-live-idle-spy', {
+      readonly: false,
+      hydrate_policy: 'require',
+      strategy: 'spy_ema',
+      max_orders_per_day: 2,
+      ibkr_host: '127.0.0.1',
+      roll_call_offer_id: 'offer-live-idle-spy',
+    });
   });
 
   it('renders the account freeze banner from account triage', async () => {
@@ -381,18 +521,14 @@ describe('BotsPageComponent', () => {
                 on_roster: false,
                 primary_action: null,
                 ambient_actions: [
-                  {
+                  action({
                     id: 'add_to_roster',
                     label: 'Add to roster',
-                    enabled: true,
-                    reason: null,
-                  },
-                  {
+                  }),
+                  action({
                     id: 'retire_replace',
                     label: 'Retire & Replace',
-                    enabled: true,
-                    reason: null,
-                  },
+                  }),
                 ],
               }),
             }
@@ -460,16 +596,16 @@ describe('BotsPageComponent', () => {
       }
       return Promise.reject(new Error('Bot is still running'));
     });
-    service.getBotCatalog.mockResolvedValueOnce({
-      bots: [
+    service.getBotCatalog.mockResolvedValueOnce(
+      catalog([
         bot({
           strategy_instance_id: 'live-running-aapl',
           name: 'live-running-aapl',
           symbols: ['AAPL'],
           last_run_at_ms: NEW_RUN,
         }),
-      ],
-    });
+      ]),
+    );
 
     fixture.componentInstance.toggleBotSelection('paper-msft', true);
     fixture.componentInstance.toggleBotSelection('live-running-aapl', true);

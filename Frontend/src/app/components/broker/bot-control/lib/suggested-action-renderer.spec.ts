@@ -48,7 +48,7 @@ describe('renderSuggestedAction', () => {
       { kind: 'invoke_capability', capability: 'resume' },
       dispatch,
     );
-    expect(rendered?.label).toBe('Resume');
+    expect(rendered?.label).toBe('Start from roll call');
     expect(rendered?.variant).toBe('primary');
     rendered?.invoke();
     expect(dispatch.calls.invokeCapability).toEqual(['resume']);

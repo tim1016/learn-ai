@@ -33,6 +33,7 @@ import type {
   BotCatalogResponse,
   BotDeleteRequest,
   BotDeleteResponse,
+  BotRollCallResponse,
   BotRetireReplaceRequest,
   CrashRecoveryOverrideRequest,
   CrashRecoveryOverrideResponse,
@@ -226,6 +227,12 @@ export class LiveRunsService {
 
   getBotCatalog(): Promise<BotCatalogResponse> {
     return firstValueFrom(this.http.get<BotCatalogResponse>(`${this.instancesBase}/catalog`));
+  }
+
+  runRollCall(): Promise<BotRollCallResponse> {
+    return firstValueFrom(
+      this.http.post<BotRollCallResponse>(`${this.instancesBase}/roll-call`, {}),
+    );
   }
 
   deleteBot(instanceId: string, request: BotDeleteRequest = { mode: 'soft' }): Promise<BotDeleteResponse> {

@@ -20,6 +20,7 @@ from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal, NoReturn, TypedDict
+from uuid import uuid4
 
 from fastapi import APIRouter, Body, HTTPException, Query, Response, status
 from pydantic import ValidationError
@@ -42,13 +43,16 @@ from app.engine.live.bot_lifecycle_state import (
     BotLifecycleStateCorruptError,
     BotLifecycleStateRecord,
     BotLifecycleStateRepo,
+    BotRollCallOfferRecord,
+    BotRollCallOfferRepo,
     stable_bot_lifecycle_state_path,
+    stable_bot_roll_call_offers_path,
 )
 from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.daemon_connectivity_monitor import (
     get_monitor as get_daemon_connectivity_monitor,
 )
-from app.engine.live.desired_state import DesiredState, DesiredStateRepo
+from app.engine.live.desired_state import DesiredState, DesiredStateCorruptError, DesiredStateRepo
 from app.engine.live.engine_runtime import (
     ENGINE_RUNTIME_FILENAME,
     EngineRuntimeSnapshot,
@@ -107,12 +111,18 @@ from app.schemas.live_runs import (
     ActivityPositionSnapshot,
     ActivityReconciliationWarning,
     AuditCopySizingLookup,
+    BotAttendanceCell,
     BotCatalogResponse,
     BotDeleteRequest,
     BotDeleteResponse,
+    BotEveningReport,
+    BotEveningReportRow,
     BotLifecycleMutationResponse,
     BotLifecycleRosterRequest,
     BotRetireReplaceRequest,
+    BotRollCallOffer,
+    BotRollCallResponse,
+    BotRollCallSummary,
     BrokerObservationConsistency,
     ChartOverlayNotice,
     ChartSnapshotResponse,
@@ -214,6 +224,7 @@ from app.services.daemon_diagnostics import (
     project_daemon_diagnostic_report,
     redact_host_runner_health,
 )
+from app.services.daily_session_schedule import start_boundary_verdict
 from app.services.deploy_admission import (
     SymbolResolution,
     evaluate_deploy_start_admission,
@@ -392,6 +403,25 @@ def _bot_lifecycle_state_repo(root: Path, sid: str) -> BotLifecycleStateRepo:
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
     return BotLifecycleStateRepo(path)
+
+
+def _bot_roll_call_offer_repo(root: Path, sid: str) -> BotRollCallOfferRepo:
+    try:
+        path = stable_bot_roll_call_offers_path(root.parent, sid)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
+    return BotRollCallOfferRepo(path)
+
+
+def _active_roll_call_offer(root: Path, sid: str, *, now_ms: int) -> BotRollCallOfferRecord | None:
+    try:
+        return _bot_roll_call_offer_repo(root, sid).active_offer(now_ms=now_ms)
+    except BotLifecycleStateCorruptError as exc:
+        logger.warning(
+            "failed to read bot roll-call offers",
+            extra={"strategy_instance_id": sid, "exception": repr(exc)},
+        )
+        return None
 
 
 async def _daily_lifecycle_mutation_response(
@@ -1660,6 +1690,7 @@ async def _resolve_instance_status_from_process(
         now_ms=observed_at_ms,
     )
     lifecycle_state = _resolve_bot_lifecycle_state(root, sid)
+    roll_call_offer = _active_roll_call_offer(root, sid, now_ms=observed_at_ms)
     daily_lifecycle = project_bot_daily_lifecycle(
         BotDailyLifecycleEvidence(
             strategy_instance_id=sid,
@@ -1668,6 +1699,7 @@ async def _resolve_instance_status_from_process(
             latest_run_id=runs[0]["run_id"] if runs else None,
             active_run_id=live_binding.run_id if live_binding is not None else None,
             persisted_state=lifecycle_state,
+            roll_call_offer=roll_call_offer,
             condition_count=1 if account_freeze is not None else 0,
             now_ms=observed_at_ms,
         )
@@ -1778,9 +1810,314 @@ async def list_bot_catalog() -> BotCatalogResponse:
             _daemon_process_from_instance(daemon_by_sid.get(sid)),
             runs_by_instance=by_instance,
         )
-        rows.append(compose_bot_catalog_row(status_view, trading_mode))
+        row = compose_bot_catalog_row(status_view, trading_mode)
+        rows.append(
+            row.model_copy(
+                update={
+                    "attendance": _attendance_for_instance(
+                        sid=sid,
+                        runs=by_instance.get(sid, []),
+                        lifecycle_state=_resolve_bot_lifecycle_state(root, sid),
+                    )
+                }
+            )
+        )
     rows.sort(key=lambda row: (row.created_at_ms or row.last_run_at_ms or 0, row.name), reverse=True)
-    return BotCatalogResponse(bots=rows)
+    return BotCatalogResponse(
+        bots=rows,
+        roll_call=_roll_call_summary_from_rows(rows, now_ms=_now_ms()),
+        evening_report=_evening_report_from_rows(rows, now_ms=_now_ms()),
+    )
+
+
+@router.post("/roll-call", response_model=BotRollCallResponse)
+async def run_roll_call() -> BotRollCallResponse:
+    """Persist the morning roll-call offers for all eligible non-retired bots."""
+
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    by_instance = await asyncio.to_thread(_visible_runs_by_instance, root)
+    _result, daemon = await host_daemon_client.fetch_instances(settings.live_runner_daemon_url)
+    daemon_by_sid: dict[str, dict] = {}
+    if daemon:
+        for inst in daemon.get("instances", []):
+            sid = inst.get("strategy_instance_id")
+            if sid:
+                daemon_by_sid[sid] = inst
+
+    now_ms = _now_ms()
+    offers: list[BotRollCallOffer] = []
+    display_counts: dict[str, int] = {
+        "Ready": 0,
+        "Off roster": 0,
+        "Sick bay": 0,
+        "On duty": 0,
+        "Clocking out": 0,
+        "Off duty": 0,
+        "Retired": 0,
+    }
+    summary_session_date: str | None = None
+    summary_effective_stop_ms: int | None = None
+    for sid in sorted(set(by_instance) | set(daemon_by_sid)):
+        lifecycle_state = _resolve_bot_lifecycle_state(root, sid)
+        if lifecycle_state is not None and lifecycle_state.phase == BotLifecyclePhase.RETIRED:
+            display_counts["Retired"] += 1
+            continue
+        status_view = await _resolve_instance_status_from_process(
+            sid,
+            root,
+            settings,
+            _daemon_process_from_instance(daemon_by_sid.get(sid)),
+            runs_by_instance=by_instance,
+        )
+        display_counts[status_view.daily_lifecycle.display_status] = (
+            display_counts.get(status_view.daily_lifecycle.display_status, 0) + 1
+        )
+        if not _status_is_roll_call_eligible(status_view):
+            continue
+        runs = by_instance.get(sid, [])
+        if not runs:
+            continue
+        run_dir = Path(runs[0]["run_dir"])
+        boundary = start_boundary_verdict(now_ms, _live_config_for_run_dir(run_dir))
+        if not boundary.allowed or boundary.effective_stop_ms is None or boundary.session_date is None:
+            continue
+        offer = _ensure_roll_call_offer(
+            root,
+            sid=sid,
+            run_id=status_view.operator_surface.host_process.start_capability.run_id or str(runs[0]["run_id"]),
+            session_date=boundary.session_date,
+            issued_at_ms=now_ms,
+            expires_at_ms=boundary.effective_stop_ms,
+            evidence_snapshot={
+                "readiness_verdict": (
+                    status_view.readiness.verdict if status_view.readiness is not None else None
+                ),
+                "process_state": status_view.process.state,
+                "display_status": status_view.daily_lifecycle.display_status,
+            },
+        )
+        offers.append(_roll_call_offer_schema(offer))
+        summary_session_date = summary_session_date or boundary.session_date
+        summary_effective_stop_ms = (
+            boundary.effective_stop_ms
+            if summary_effective_stop_ms is None
+            else min(summary_effective_stop_ms, boundary.effective_stop_ms)
+        )
+
+    return BotRollCallResponse(
+        summary=BotRollCallSummary(
+            ready=len(offers),
+            off_roster=display_counts["Off roster"],
+            sick_bay=display_counts["Sick bay"],
+            on_duty=display_counts["On duty"] + display_counts["Clocking out"],
+            off_duty=display_counts["Off duty"],
+            retired=display_counts["Retired"],
+            generated_at_ms=now_ms,
+            session_date=summary_session_date,
+            effective_stop_ms=summary_effective_stop_ms,
+        ),
+        offers=offers,
+    )
+
+
+def _status_is_roll_call_eligible(status_view: LiveInstanceStatus) -> bool:
+    lifecycle = status_view.daily_lifecycle
+    start = status_view.operator_surface.host_process.start_capability
+    return (
+        lifecycle.phase == "OFF_DUTY"
+        and lifecycle.on_roster
+        and lifecycle.attention_badge != "Sick bay"
+        and start.enabled
+        and start.run_id is not None
+        and start.request is not None
+    )
+
+
+def _ensure_roll_call_offer(
+    root: Path,
+    *,
+    sid: str,
+    run_id: str,
+    session_date: str,
+    issued_at_ms: int,
+    expires_at_ms: int,
+    evidence_snapshot: dict[str, object],
+) -> BotRollCallOfferRecord:
+    repo = _bot_roll_call_offer_repo(root, sid)
+    active = repo.active_offer(now_ms=issued_at_ms, session_date=session_date)
+    if active is not None and active.run_id == run_id and active.expires_at_ms == expires_at_ms:
+        return active
+    return repo.append(
+        BotRollCallOfferRecord(
+            offer_id=f"{session_date}-{uuid4().hex}",
+            strategy_instance_id=sid,
+            run_id=run_id,
+            session_date=session_date,
+            issued_at_ms=issued_at_ms,
+            expires_at_ms=expires_at_ms,
+            evidence_snapshot=evidence_snapshot,
+        )
+    )
+
+
+def _roll_call_offer_schema(offer: BotRollCallOfferRecord) -> BotRollCallOffer:
+    return BotRollCallOffer(
+        offer_id=offer.offer_id,
+        strategy_instance_id=offer.strategy_instance_id,
+        run_id=offer.run_id,
+        session_date=offer.session_date,
+        issued_at_ms=offer.issued_at_ms,
+        expires_at_ms=offer.expires_at_ms,
+    )
+
+
+def _live_config_for_run_dir(run_dir: Path) -> Mapping[str, object] | None:
+    try:
+        ledger = _read_ledger(run_dir)
+    except (OSError, json.JSONDecodeError):
+        return None
+    live_config = ledger.get("live_config")
+    return live_config if isinstance(live_config, Mapping) else None
+
+
+def _attendance_for_instance(
+    *,
+    sid: str,
+    runs: list[dict],
+    lifecycle_state: BotLifecycleStateRecord | None,
+) -> list[BotAttendanceCell]:
+    cells: list[BotAttendanceCell] = []
+    for run in sorted(runs, key=lambda item: item.get("created_at_ms") or 0)[-7:]:
+        run_dir = Path(str(run.get("run_dir") or ""))
+        run_id = str(run.get("run_id") or run_dir.name)
+        sidecar = _read_sidecar(run_dir)
+        created_at_ms = _positive_int(run.get("created_at_ms"))
+        timestamp_ms = (
+            sidecar.ended_at_ms
+            if sidecar is not None and sidecar.ended_at_ms is not None
+            else sidecar.started_at_ms
+            if sidecar is not None
+            else created_at_ms
+        )
+        if timestamp_ms is None:
+            continue
+        session_date = datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC).astimezone(_NY_TZ).date().isoformat()
+        clean = sidecar is not None and (
+            sidecar.exit_code == 0
+            or (sidecar.exit_reason is not None and str(sidecar.exit_reason) in {"normal", "force_flat_complete"})
+        )
+        cells.append(
+            BotAttendanceCell(
+                session_date=session_date,
+                status="clean" if clean else "sick",
+                label="Clean day" if clean else "Sick bay",
+                receipt_ref=f"{run_id}/run_status.json",
+            )
+        )
+    if lifecycle_state is not None and lifecycle_state.phase == BotLifecyclePhase.RETIRED:
+        today = _today_ny().isoformat()
+        if not cells or cells[-1].session_date != today or cells[-1].status != "retired":
+            cells.append(
+                BotAttendanceCell(
+                    session_date=today,
+                    status="retired",
+                    label="Retired",
+                    receipt_ref=None,
+                )
+            )
+    if not cells and lifecycle_state is not None and not lifecycle_state.on_roster:
+        cells.append(
+            BotAttendanceCell(
+                session_date=_today_ny().isoformat(),
+                status="rested",
+                label="Rested",
+                receipt_ref=None,
+            )
+        )
+    return cells
+
+
+def _roll_call_summary_from_rows(rows: list, *, now_ms: int) -> BotRollCallSummary:
+    counts = {
+        "Ready": 0,
+        "Off roster": 0,
+        "Sick bay": 0,
+        "On duty": 0,
+        "Clocking out": 0,
+        "Off duty": 0,
+        "Retired": 0,
+    }
+    session_date: str | None = None
+    effective_stop_ms: int | None = None
+    for row in rows:
+        status_label = row.daily_lifecycle.display_status
+        counts[status_label] = counts.get(status_label, 0) + 1
+        action = row.daily_lifecycle.primary_action
+        if action is not None and action.id == "confirm_start":
+            session_date = session_date or _today_ny().isoformat()
+            if action.expires_at_ms is not None:
+                effective_stop_ms = (
+                    action.expires_at_ms
+                    if effective_stop_ms is None
+                    else min(effective_stop_ms, action.expires_at_ms)
+                )
+    return BotRollCallSummary(
+        ready=counts["Ready"],
+        off_roster=counts["Off roster"],
+        sick_bay=counts["Sick bay"],
+        on_duty=counts["On duty"] + counts["Clocking out"],
+        off_duty=counts["Off duty"],
+        retired=counts["Retired"],
+        generated_at_ms=now_ms,
+        session_date=session_date,
+        effective_stop_ms=effective_stop_ms,
+    )
+
+
+def _evening_report_from_rows(rows: list, *, now_ms: int) -> BotEveningReport:
+    report_date = datetime.fromtimestamp(now_ms / 1000, tz=UTC).astimezone(_NY_TZ).date().isoformat()
+    report_rows: list[BotEveningReportRow] = []
+    for row in rows:
+        latest = row.attendance[-1] if row.attendance else None
+        if latest is None:
+            status_value: Literal["clean", "rested", "sick", "retired"] = (
+                "retired" if row.daily_lifecycle.phase == "RETIRED" else "rested"
+            )
+            label = "Retired" if status_value == "retired" else "Rested"
+            receipt_ref = None
+        else:
+            status_value = latest.status
+            label = latest.label
+            receipt_ref = latest.receipt_ref
+        report_rows.append(
+            BotEveningReportRow(
+                strategy_instance_id=row.strategy_instance_id,
+                label=label,
+                status=status_value,
+                receipt_ref=receipt_ref,
+            )
+        )
+    clean = sum(1 for row in report_rows if row.status == "clean")
+    rested = sum(1 for row in report_rows if row.status == "rested")
+    sick = sum(1 for row in report_rows if row.status == "sick")
+    retired = sum(1 for row in report_rows if row.status == "retired")
+    return BotEveningReport(
+        session_date=report_date,
+        generated_at_ms=now_ms,
+        clean_exits=clean,
+        rested=rested,
+        sick=sick,
+        retired=retired,
+        summary=f"{clean} clean exits · {sick} sick bay · {rested} rested · {retired} retired",
+        rows=report_rows,
+    )
+
+
+def _positive_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    return value if isinstance(value, int) and value >= 0 else None
 
 
 @router.delete("/{strategy_instance_id}", response_model=BotDeleteResponse)
@@ -1970,11 +2307,20 @@ async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -
         Path(settings.live_runs_root),
         body,
     )
-    if daemon_request.start and daemon_request.strategy_instance_id:
-        _raise_if_stopped_blocks_start(
-            Path(settings.live_runs_root),
-            daemon_request.strategy_instance_id,
-        )
+    if daemon_request.start:
+        verdict = start_boundary_verdict(_now_ms(), daemon_request.live_config)
+        if not verdict.allowed:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": verdict.reason_code,
+                    "message": verdict.message,
+                    "gate_id": "daily_lifecycle.effective_stop",
+                    "strategy_instance_id": daemon_request.strategy_instance_id or None,
+                    "session_date": verdict.session_date,
+                    "effective_stop_ms": verdict.effective_stop_ms,
+                },
+            )
     try:
         result = await host_daemon_client.deploy(
             settings.live_runner_daemon_url,
@@ -2077,32 +2423,6 @@ _START_DAEMON_STATE_REASON: dict[str, str] = {
 }
 
 
-def _stopped_requires_resume_detail(sid: str) -> dict:
-    return {
-        "reason_code": "STOPPED_REQUIRES_RESUME",
-        "message": (
-            f"{sid} is durably STOPPED. Resume the bot to clear the stop latch "
-            "before starting or using Deploy & start."
-        ),
-        "remediation": (
-            "Use Resume to set desired_state=RUNNING, then start the bot. "
-            "Use Deploy only when you want to stage a new run without starting it."
-        ),
-        "gate_id": "desired_state.start",
-        "desired_state": "STOPPED",
-        "strategy_instance_id": sid,
-    }
-
-
-def _raise_if_stopped_blocks_start(root: Path, sid: str) -> None:
-    desired = _resolve_desired_state(root, sid)
-    if desired.state == "STOPPED":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail=_stopped_requires_resume_detail(sid),
-        )
-
-
 def _bot_soft_deleted_detail(sid: str, run_id: str | None = None) -> dict[str, str]:
     detail = {
         "reason_code": "BOT_SOFT_DELETED",
@@ -2114,7 +2434,132 @@ def _bot_soft_deleted_detail(sid: str, run_id: str | None = None) -> dict[str, s
     return detail
 
 
-async def _assert_start_allowed(run_id: str, settings) -> None:
+def _raise_if_start_boundary_blocks(root: Path, sid: str, *, now_ms: int) -> None:
+    runs = _visible_runs_by_instance(root).get(sid, [])
+    if not runs:
+        return
+    run_dir = Path(runs[0]["run_dir"])
+    verdict = start_boundary_verdict(now_ms, _live_config_for_run_dir(run_dir))
+    if verdict.allowed:
+        return
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        detail={
+            "reason_code": verdict.reason_code,
+            "message": verdict.message,
+            "gate_id": "daily_lifecycle.effective_stop",
+            "strategy_instance_id": sid,
+            "session_date": verdict.session_date,
+            "effective_stop_ms": verdict.effective_stop_ms,
+        },
+    )
+
+
+def _assert_roll_call_offer_allows_start(
+    root: Path,
+    sid: str,
+    body: HostRunnerStartRequest,
+    *,
+    now_ms: int,
+) -> None:
+    if body.roll_call_offer_id is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "ROLL_CALL_OFFER_REQUIRED",
+                "message": "Run roll call and start from the current offer.",
+                "gate_id": "daily_lifecycle.roll_call_offer",
+                "strategy_instance_id": sid,
+            },
+        )
+    active = _active_roll_call_offer(root, sid, now_ms=now_ms)
+    if active is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "ROLL_CALL_OFFER_EXPIRED",
+                "message": "The roll-call start offer is absent or expired. Run roll call again.",
+                "gate_id": "daily_lifecycle.roll_call_offer",
+                "strategy_instance_id": sid,
+            },
+        )
+    if active.offer_id != body.roll_call_offer_id:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "ROLL_CALL_OFFER_STALE",
+                "message": "This start request does not match the current roll-call offer.",
+                "gate_id": "daily_lifecycle.roll_call_offer",
+                "strategy_instance_id": sid,
+                "current_offer_id": active.offer_id,
+            },
+        )
+
+
+def _raise_if_lifecycle_retired(root: Path, sid: str) -> None:
+    try:
+        record = _bot_lifecycle_state_repo(root, sid).read()
+    except BotLifecycleStateCorruptError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "BOT_LIFECYCLE_STATE_UNREADABLE",
+                "message": "The bot lifecycle state is unreadable. Repair it before starting.",
+                "gate_id": "daily_lifecycle.phase",
+                "strategy_instance_id": sid,
+            },
+        ) from exc
+    if record is not None and record.phase == BotLifecyclePhase.RETIRED:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "BOT_RETIRED",
+                "message": "This bot is retired. Deploy a replacement bot before starting.",
+                "gate_id": "daily_lifecycle.phase",
+                "strategy_instance_id": sid,
+            },
+        )
+
+
+def _persist_start_intent(root: Path, sid: str) -> None:
+    """Persist the single Start path's durable intent before daemon launch."""
+
+    artifacts_root = _desired_state_root(root)
+    try:
+        sidecar_dir = _confine(artifacts_root / "live_state", sid)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
+
+    try:
+        DesiredStateRepo(sidecar_dir / _DESIRED_STATE_FILE).set(
+            DesiredState.RUNNING,
+            updated_by="system",
+            reason="daily_lifecycle.start",
+            now_ms=_now_ms(),
+        )
+    except DesiredStateCorruptError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "DESIRED_STATE_UNREADABLE",
+                "message": "The durable desired-state sidecar is unreadable. Repair it before starting.",
+                "gate_id": "desired_state.start",
+                "strategy_instance_id": sid,
+            },
+        ) from exc
+    except OSError as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "reason_code": "DESIRED_STATE_WRITE_FAILED",
+                "message": "Could not persist the start intent before launching the bot.",
+                "gate_id": "desired_state.start",
+                "strategy_instance_id": sid,
+            },
+        ) from exc
+
+
+async def _assert_start_allowed(run_id: str, body: HostRunnerStartRequest, settings) -> None:
     """Re-evaluate the start gates before forwarding /runs/{run_id}/start.
 
     ADR 0013 amendment 2026-06-22 + design "Architectural permission for
@@ -2153,6 +2598,7 @@ async def _assert_start_allowed(run_id: str, settings) -> None:
             status.HTTP_410_GONE,
             detail=_bot_soft_deleted_detail(sid, run_id),
         )
+    _raise_if_lifecycle_retired(root, sid)
 
     account_freeze = _resolve_account_freeze(
         root.parent,
@@ -2183,8 +2629,6 @@ async def _assert_start_allowed(run_id: str, settings) -> None:
                 "message": "This run is permanently retired. Redeploy the bot to trade again.",
             },
         )
-    _raise_if_stopped_blocks_start(root, sid)
-
     _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
     if daemon is None:
         raise HTTPException(
@@ -2209,6 +2653,9 @@ async def _assert_start_allowed(run_id: str, settings) -> None:
             },
         )
     # idle / exited / unrecognised -> proceed; daemon performs its own start gates.
+    now_ms = _now_ms()
+    _raise_if_start_boundary_blocks(root, sid, now_ms=now_ms)
+    _assert_roll_call_offer_allows_start(root, sid, body, now_ms=now_ms)
 
 
 @router.post("/runs/{run_id}/start", response_model=HostRunnerActionResponse)
@@ -2224,9 +2671,9 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
 
     Before forwarding, the data plane re-evaluates the same start gates the
     cockpit's ``host_process.start_capability`` projection used (ADR 0013
-    amendment 2026-06-22): poisoned-flag, durable ``STOPPED``, daemon
-    ``running`` / ``stopping``, host service unreachable. A stale
-    ``enabled=true`` projection cannot bypass them — see
+    amendment 2026-06-22): poisoned-flag, account freeze, daemon ``running`` /
+    ``stopping``, host service unreachable, roll-call offer, and session
+    boundary. A stale ``enabled=true`` projection cannot bypass them — see
     ``_assert_start_allowed``.
 
     Slice 3 (ADR 0011 amendment) — broker-activity publisher start. After
@@ -2243,18 +2690,27 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
 
     settings = get_settings()
     root = Path(settings.live_runs_root)
-    await _assert_start_allowed(run_id, settings)
+    await _assert_start_allowed(run_id, body, settings)
+    sid = _strategy_instance_id_for_run(root, run_id)
+    if sid is not None:
+        _persist_start_intent(root, sid)
     try:
-        result = await host_daemon_client.start_run(settings.live_runner_daemon_url, run_id, body.model_dump())
+        result = await host_daemon_client.start_run(
+            settings.live_runner_daemon_url,
+            run_id,
+            body.model_dump(exclude={"roll_call_offer_id"}),
+        )
     except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
         _raise_outcome_unknown("start_run", exc)
     except host_daemon_client.HostDaemonError as exc:
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
     response = _parse_action_response(result)
     await _maybe_start_broker_activity_publisher(response)
-    sid = _strategy_instance_id_for_run(root, run_id) or response.process.strategy_instance_id
+    sid = sid or response.process.strategy_instance_id
     if sid is not None:
         if response.accepted:
+            if body.roll_call_offer_id is not None:
+                _bot_roll_call_offer_repo(root, sid).consume(body.roll_call_offer_id)
             _bot_lifecycle_state_repo(root, sid).set_phase(
                 BotLifecyclePhase.ON_DUTY,
                 now_ms=_now_ms(),

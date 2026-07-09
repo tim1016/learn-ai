@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.engine.live.bot_lifecycle_state import BotLifecyclePhase, BotLifecycleStateRecord
+from app.engine.live.bot_lifecycle_state import (
+    BotLifecyclePhase,
+    BotLifecycleStateRecord,
+    BotRollCallOfferRecord,
+)
 from app.schemas.live_runs import (
     BotDailyLifecycleProjection,
     BotLifecycleAction,
@@ -21,6 +25,7 @@ class BotDailyLifecycleEvidence:
     latest_run_id: str | None
     active_run_id: str | None
     persisted_state: BotLifecycleStateRecord | None = None
+    roll_call_offer: BotRollCallOfferRecord | None = None
     condition_count: int = 0
     now_ms: int = 0
 
@@ -41,6 +46,7 @@ def project_bot_daily_lifecycle(evidence: BotDailyLifecycleEvidence) -> BotDaily
         on_roster=on_roster,
         condition_count=evidence.condition_count,
         start_enabled=evidence.start_capability.enabled,
+        offer_available=evidence.roll_call_offer is not None,
     )
     primary_action = _primary_action(phase, display_status, evidence)
     ambient_actions = _ambient_actions(phase, on_roster)
@@ -84,6 +90,7 @@ def _display_status(
     on_roster: bool,
     condition_count: int,
     start_enabled: bool,
+    offer_available: bool,
 ) -> str:
     if phase == BotLifecyclePhase.RETIRED:
         return "Retired"
@@ -93,7 +100,7 @@ def _display_status(
         return "Sick bay"
     if not on_roster:
         return "Off roster"
-    if start_enabled:
+    if start_enabled and offer_available:
         return "Ready"
     return "Off duty"
 
@@ -104,7 +111,7 @@ def _attention_badge(display_status: str) -> str | None:
 
 def _reason(display_status: str, evidence: BotDailyLifecycleEvidence) -> str | None:
     if display_status == "Ready":
-        return "Roll call can offer a fresh start."
+        return "Roll call offered a fresh start before stop-time."
     if display_status == "Off roster":
         return "This bot is intentionally left off tomorrow's duty roster."
     if display_status == "Sick bay":
@@ -112,6 +119,12 @@ def _reason(display_status: str, evidence: BotDailyLifecycleEvidence) -> str | N
         return f"{count} condition{'s' if count != 1 else ''} need a cure before start."
     if display_status == "Off duty" and not evidence.start_capability.enabled:
         return evidence.start_capability.disabled_reason_code or "Start is not yet proven safe."
+    if (
+        display_status == "Off duty"
+        and evidence.start_capability.enabled
+        and evidence.roll_call_offer is None
+    ):
+        return "Run roll call to issue a start offer."
     if display_status == "Clocking out":
         return "Clean-exit procedure is in progress."
     return None
@@ -124,8 +137,17 @@ def _primary_action(
 ) -> BotLifecycleAction | None:
     if phase == BotLifecyclePhase.ON_DUTY:
         return BotLifecycleAction(id="end_day_now", label="End day now")
-    if display_status == "Ready" and evidence.start_capability.enabled:
-        return BotLifecycleAction(id="confirm_start", label="Start")
+    if (
+        display_status == "Ready"
+        and evidence.start_capability.enabled
+        and evidence.roll_call_offer is not None
+    ):
+        return BotLifecycleAction(
+            id="confirm_start",
+            label="Start",
+            offer_id=evidence.roll_call_offer.offer_id,
+            expires_at_ms=evidence.roll_call_offer.expires_at_ms,
+        )
     return None
 
 

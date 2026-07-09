@@ -1366,7 +1366,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(deployButton(fixture).disabled).toBe(false);
   });
 
-  it('switches a durable STOPPED start-now request to deploy-only before submit', async () => {
+  it('switches an off-duty start-now request to deploy-only before submit', async () => {
     const { fixture, svc, component } = setup({
       instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
       instanceStatus: stoppedLatchStatus(),
@@ -1379,8 +1379,9 @@ describe('BrokerDeployFormComponent', () => {
     expect(svc.getInstanceStatus).toHaveBeenCalledWith('deployment-validation-paper');
     expect(fixture.nativeElement.textContent).toContain('Deploy only');
     expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'Durable STOPPED latch is set',
+      'This bot is off duty',
     );
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).not.toContain('Resume');
     expect(deployButton(fixture).disabled).toBe(false);
 
     await component.submit();
@@ -1392,7 +1393,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(fieldControl(fixture, 'Restore previous state').disabled).toBe(true);
   });
 
-  it('does not submit start-now while the durable STOPPED lookup is still loading', async () => {
+  it('does not submit start-now while the off-duty lookup is still loading', async () => {
     const pending = deferred<LiveInstanceStatus | null>();
     const { fixture, svc, component } = setup({
       instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
@@ -1417,12 +1418,13 @@ describe('BrokerDeployFormComponent', () => {
     fixture.detectChanges();
 
     expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'Durable STOPPED latch is set',
+      'This bot is off duty',
     );
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).not.toContain('Resume');
     expect(deployButton(fixture).disabled).toBe(false);
   });
 
-  it('checks durable STOPPED state even when the fleet list has not exposed the instance', async () => {
+  it('checks off-duty state even when the fleet list has not exposed the instance', async () => {
     const pendingInstances = deferred<{ strategy_instance_id: string; process_state: string }[]>();
     const { fixture, svc, component } = setup({
       instancesPromise: pendingInstances.promise,
@@ -1443,7 +1445,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(deployButton(fixture).disabled).toBe(false);
   });
 
-  it('does not carry a prior STOPPED latch onto a new instance name', async () => {
+  it('does not carry prior off-duty evidence onto a new instance name', async () => {
     const { fixture, svc, component } = setup({
       instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
       instanceStatusResolver: (instanceId) =>
@@ -1467,7 +1469,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(deployButton(fixture).disabled).toBe(false);
   });
 
-  it('fails closed when the durable STOPPED status lookup errors', async () => {
+  it('fails closed when the off-duty status lookup errors', async () => {
     const { fixture, svc, component } = setup({
       instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
       instanceStatusError: new Error('status lookup failed'),
@@ -1488,7 +1490,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(svc.deployInstance).not.toHaveBeenCalled();
   });
 
-  it('shows the real deploy blocker when STOPPED latch is present but deploy-only is unavailable', async () => {
+  it('shows the real deploy blocker when off-duty evidence is present but deploy-only is unavailable', async () => {
     const { fixture, component } = setup({
       instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
       instanceStatus: stoppedLatchStatus(),

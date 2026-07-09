@@ -8,7 +8,7 @@ import type {
   PriorRunClassification,
 } from '../../../../../api/live-instances.types';
 import { LiveRunsService } from '../../../../../services/live-runs.service';
-import { toOperationError } from '../../../operation-error';
+import { readPreconditionBody, toOperationError } from '../../../operation-error';
 import { canStartHostProcess, startHostProcessFromCapability } from '../../lib/start-host-process';
 
 const HEADING_BY_STATE: Record<HostProcessState, string> = {
@@ -44,7 +44,7 @@ const START_DISABLED_COPY: Record<HostProcessStartDisabledReasonCode, string> = 
   HOST_SERVICE_OFFLINE:
     'The bot service is offline. Start it on the host machine first, then try again.',
   STOPPED_REQUIRES_RESUME:
-    'This bot is stopped. Use Resume to clear the stop latch before starting.',
+    'This bot is off duty. Run roll call for a fresh start offer before starting.',
   STOPPED_REQUIRES_REDEPLOY:
     'This run is dead or retired. Redeploy the bot before starting again.',
   START_SETTINGS_INCOMPLETE:
@@ -148,7 +148,13 @@ export class HostProcessNoticeComponent {
   }
 
   private _formatStartError(err: unknown): string {
-    if (err instanceof HttpErrorResponse) return toOperationError('start', err).detail;
+    if (err instanceof HttpErrorResponse) {
+      const precondition = readPreconditionBody(err.error);
+      if (precondition?.reason_code === 'STOPPED_REQUIRES_RESUME') {
+        return START_DISABLED_COPY.STOPPED_REQUIRES_RESUME;
+      }
+      return toOperationError('start', err).detail;
+    }
     if (err instanceof Error) {
       return err.message;
     }

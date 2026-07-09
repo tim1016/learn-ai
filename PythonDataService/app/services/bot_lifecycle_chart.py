@@ -213,7 +213,7 @@ SUBGRAPH_DEFS: Mapping[str, GraphDef] = {
         primary_node_id="desired_state",
         nodes=(
             NodeDef("desired_state", "Desired state", "bot"),
-            NodeDef("resume_gate", "Resume capability", "bot", "Shared action gate"),
+            NodeDef("resume_gate", "Start offer gate", "bot", "Shared action gate"),
             NodeDef("command_loop", "Command loop", "bot", "Child runtime freshness"),
         ),
     ),
@@ -1163,9 +1163,9 @@ def _actions(surface: OperatorSurface, *, redeploy_available: bool) -> list[Life
             target_node_id="deploy",
             tone="primary",
         ),
-        _action("resume", "Resume trading", surface.actions.resume, "activate", "primary"),
-        _action("pause", "Pause trading", surface.actions.pause, "active", "secondary"),
-        _action("flatten_and_pause", "Flatten and pause", surface.actions.flatten_and_pause, "recovery", "danger"),
+        _action("resume", "Start from roll call", surface.actions.resume, "activate", "primary"),
+        _action("pause", "End day now", surface.actions.pause, "active", "secondary"),
+        _action("flatten_and_pause", "Open recovery action", surface.actions.flatten_and_pause, "recovery", "danger"),
         _action("stop", "Stop bot", surface.actions.stop, "recovery", "danger"),
         _action(
             "mark_poisoned",

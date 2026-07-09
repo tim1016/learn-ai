@@ -20,8 +20,12 @@ import type {
 import type {
   BotCatalogRow,
   BotCatalogTradingMode,
+  BotAttendanceCell,
+  BotEveningReport,
   BotLifecycleDisplayStatus,
+  BotRollCallSummary,
 } from '../../../api/live-instances.types';
+import type { HostRunnerStartRequest } from '../../../api/live-runs.types';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
@@ -33,9 +37,22 @@ type BotModeTab = BotCatalogTradingMode;
 type LifecycleFilter = 'all' | BotLifecycleDisplayStatus;
 type TagSeverity = 'success' | 'warn' | 'danger' | 'secondary';
 
+const EMPTY_ROLL_CALL_SUMMARY: BotRollCallSummary = {
+  ready: 0,
+  off_roster: 0,
+  sick_bay: 0,
+  on_duty: 0,
+  off_duty: 0,
+  retired: 0,
+  generated_at_ms: null,
+  session_date: null,
+  effective_stop_ms: null,
+};
+
 interface BotTableRow {
   id: string;
   name: string;
+  latestRunId: string | null;
   needsAttention: boolean;
   tradingMode: BotCatalogTradingMode;
   symbolsLabel: string;
@@ -49,6 +66,10 @@ interface BotTableRow {
   lastRunSortMs: number;
   lastRunAtMs: number | null;
   lastRunLabel: string;
+  startRequest: HostRunnerStartRequest | null;
+  startOfferId: string | null;
+  startOfferExpiresAtMs: number | null;
+  attendance: readonly BotAttendanceCell[];
   searchText: string;
 }
 
@@ -75,9 +96,14 @@ export class BotsPageComponent {
 
   readonly bots = signal<BotCatalogRow[]>([]);
   readonly accountTriage = signal<AccountTriageResponse | null>(null);
+  readonly rollCall = signal<BotRollCallSummary>(EMPTY_ROLL_CALL_SUMMARY);
+  readonly eveningReport = signal<BotEveningReport | null>(null);
   readonly accountTriageError = signal<string | null>(null);
   readonly isLoading = signal<boolean>(true);
+  readonly isRunningRollCall = signal<boolean>(false);
+  readonly isStartingReady = signal<boolean>(false);
   readonly errorMessage = signal<string | null>(null);
+  readonly startAllErrorMessage = signal<string | null>(null);
   readonly searchQuery = signal<string>('');
   readonly attentionFilter = signal<AttentionFilter>('all');
   readonly lifecycleFilter = signal<LifecycleFilter>('all');
@@ -128,6 +154,27 @@ export class BotsPageComponent {
   });
 
   readonly activeTabCount = computed(() => this.activeRows().length);
+  readonly readyRows = computed<BotTableRow[]>(() =>
+    this.visibleBots().filter((row) => {
+      return (
+        row.displayStatus === 'Ready' &&
+        row.latestRunId !== null &&
+        row.startRequest !== null &&
+        row.startOfferId !== null
+      );
+    }),
+  );
+  readonly rollCallSummaryLine = computed(() => {
+    const summary = this.rollCall();
+    return [
+      `${summary.ready} ready`,
+      `${summary.on_duty} on duty`,
+      `${summary.sick_bay} in sick bay`,
+      `${summary.off_roster} off roster`,
+      `${summary.retired} retired`,
+    ].join(' · ');
+  });
+  readonly eveningReportLine = computed(() => this.eveningReport()?.summary ?? null);
   readonly accountFreezeCondition = computed<AccountConditionRow | null>(() => {
     return (
       this.accountTriage()?.conditions.find(
@@ -170,6 +217,8 @@ export class BotsPageComponent {
     try {
       const catalog = await this.liveRuns.getBotCatalog();
       this.bots.set(catalog.bots);
+      this.rollCall.set(catalog.roll_call);
+      this.eveningReport.set(catalog.evening_report);
       this.retainKnownSelections(catalog.bots);
       await this.refreshAccountTriage();
     } catch (err) {
@@ -194,6 +243,44 @@ export class BotsPageComponent {
     } catch (err) {
       this.accountTriage.set(null);
       this.accountTriageError.set(this.humanError(err));
+    }
+  }
+
+  async runRollCall(): Promise<void> {
+    if (this.isRunningRollCall()) return;
+    this.isRunningRollCall.set(true);
+    this.startAllErrorMessage.set(null);
+    this.errorMessage.set(null);
+    try {
+      const response = await this.liveRuns.runRollCall();
+      this.rollCall.set(response.summary);
+      await this.refresh();
+    } catch (err) {
+      this.errorMessage.set(this.humanError(err));
+    } finally {
+      this.isRunningRollCall.set(false);
+    }
+  }
+
+  async startReadyBots(): Promise<void> {
+    const rows = this.readyRows();
+    if (rows.length === 0 || this.isStartingReady()) return;
+    this.isStartingReady.set(true);
+    this.startAllErrorMessage.set(null);
+    let started = false;
+    try {
+      for (const row of rows) {
+        const request = this.startRequestForRow(row);
+        if (!row.latestRunId || !request) continue;
+        await this.liveRuns.startHostRunner(row.latestRunId, request);
+        started = true;
+      }
+      await this.refresh();
+    } catch (err) {
+      if (started) await this.refresh();
+      this.startAllErrorMessage.set(this.humanError(err));
+    } finally {
+      this.isStartingReady.set(false);
     }
   }
 
@@ -351,7 +438,17 @@ export class BotsPageComponent {
     return fmtTimestampLocal(value);
   }
 
+  attendanceClass(cell: BotAttendanceCell): string {
+    return `attendance-dot is-${cell.status}`;
+  }
+
+  attendanceTitle(cell: BotAttendanceCell): string {
+    return `${cell.session_date} · ${cell.label}`;
+  }
+
   readonly trackByBotId = (_index: number, row: BotTableRow): string => row.id;
+  readonly trackByAttendance = (_index: number, cell: BotAttendanceCell): string =>
+    `${cell.session_date}:${cell.status}`;
 
   private closeDeleteConfirmation(): void {
     this.deleteConfirmationOpen.set(false);
@@ -370,6 +467,14 @@ export class BotsPageComponent {
     if (err instanceof Error && err.message) return err.message;
     return 'Could not load bots.';
   }
+
+  private startRequestForRow(row: BotTableRow): HostRunnerStartRequest | null {
+    if (!row.startRequest || !row.startOfferId) return null;
+    return {
+      ...row.startRequest,
+      roll_call_offer_id: row.startOfferId,
+    };
+  }
 }
 
 function normalize(value: string): string {
@@ -382,6 +487,7 @@ function toTableRow(bot: BotCatalogRow): BotTableRow {
   return {
     id: bot.strategy_instance_id,
     name: bot.name,
+    latestRunId: bot.daily_lifecycle.latest_run_id,
     needsAttention: bot.needs_attention,
     tradingMode: bot.trading_mode,
     symbolsLabel,
@@ -395,6 +501,10 @@ function toTableRow(bot: BotCatalogRow): BotTableRow {
     lastRunSortMs: bot.last_run_at_ms ?? 0,
     lastRunAtMs: bot.last_run_at_ms,
     lastRunLabel: bot.last_run_label,
+    startRequest: bot.start_request,
+    startOfferId: bot.daily_lifecycle.primary_action?.offer_id ?? null,
+    startOfferExpiresAtMs: bot.daily_lifecycle.primary_action?.expires_at_ms ?? null,
+    attendance: bot.attendance,
     searchText: normalize([
       bot.name,
       bot.strategy_instance_id,
@@ -413,6 +523,7 @@ function toTableRow(bot: BotCatalogRow): BotTableRow {
       bot.last_run_result,
       bot.last_run_detail,
       bot.metrics.current_exposure,
+      ...bot.attendance.map((cell) => `${cell.session_date} ${cell.label} ${cell.status}`),
     ].filter((value): value is string => typeof value === 'string').join(' ')),
   };
 }

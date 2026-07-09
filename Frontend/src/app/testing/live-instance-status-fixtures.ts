@@ -195,6 +195,8 @@ export function makeDailyLifecycleFixture(
       label: 'Start',
       enabled: true,
       reason: null,
+      offer_id: 'offer-run-x',
+      expires_at_ms: 1_700_000_600_000,
     },
     ambient_actions: [
       {
@@ -202,12 +204,16 @@ export function makeDailyLifecycleFixture(
         label: 'Take off roster',
         enabled: true,
         reason: null,
+        offer_id: null,
+        expires_at_ms: null,
       },
       {
         id: 'retire_replace',
         label: 'Retire & Replace',
         enabled: true,
         reason: null,
+        offer_id: null,
+        expires_at_ms: null,
       },
     ],
     ...overrides,

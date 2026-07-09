@@ -231,7 +231,7 @@ export function makeStatus(options: {
         ],
       },
       run_signal: options.runSignal ?? {
-        state_label: 'Unknown',
+        state_label: 'Needs proof',
         tone: 'attention',
         title: 'Host process',
         detail: hostNotice,

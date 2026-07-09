@@ -47,6 +47,12 @@ def compose_bot_catalog_row(status: LiveInstanceStatus, trading_mode: TradingMod
         desired_state=status.desired_state.state if status.desired_state is not None else None,
         readiness_verdict=readiness_verdict,
         daily_lifecycle=daily_lifecycle,
+        start_request=(
+            status.operator_surface.host_process.start_capability.request
+            if daily_lifecycle.primary_action is not None
+            and daily_lifecycle.primary_action.id == "confirm_start"
+            else None
+        ),
         metrics=BotCatalogMetrics(
             pnl=BotCatalogPnl(
                 unrealized=status.operator_surface.current_risk.unrealized_pnl,
