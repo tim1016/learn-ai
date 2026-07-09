@@ -433,6 +433,9 @@ def test_triage_marks_crashed_and_no_status_retired_bots_for_retire_replace(
         ("ended_without_status", "bot", "nostatus-bot", "RETIRED", "retire_replace"),
     ]
     assert all(row.severity == "critical" for row in triage.conditions)
+    assert triage.overall_gate_result.status == "block"
+    assert triage.summary_headline == "Account recovery needs attention"
+    assert "crashed-bot ended from a crash" in triage.summary_detail
 
 
 def test_triage_closes_terminal_retired_conditions_after_recovery_evidence(

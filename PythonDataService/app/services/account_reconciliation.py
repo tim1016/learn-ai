@@ -375,6 +375,7 @@ class AccountReconciliationService:
 
         overall = _overall_gate(
             gate_rows,
+            conditions,
             account_id=canonical_account_id,
             generated_at_ms=generated_at_ms,
         )
@@ -908,6 +909,7 @@ def _reconciliation_triage_row(
 
 def _overall_gate(
     gate_rows: list[AccountTriageGateRow],
+    conditions: list[AccountConditionRow],
     *,
     account_id: str,
     generated_at_ms: int,
@@ -923,6 +925,24 @@ def _overall_gate(
                 operator_next_step=row.operator_next_step,
                 evidence_at_ms=row.evidence_at_ms,
             )
+    condition = next(
+        (
+            candidate
+            for severity in ("critical", "warning")
+            for candidate in conditions
+            if candidate.severity == severity
+        ),
+        None,
+    )
+    if condition is not None:
+        return GateResult(
+            gate_id="account.triage",
+            status="block" if condition.severity == "critical" else "unknown",
+            source=condition.source,
+            operator_reason=condition.detail,
+            operator_next_step=condition.operator_next_step,
+            evidence_at_ms=condition.evidence_at_ms,
+        )
     return GateResult(
         gate_id="account.triage",
         status="pass",

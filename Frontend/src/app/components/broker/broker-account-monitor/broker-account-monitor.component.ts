@@ -381,10 +381,6 @@ export class BrokerAccountMonitorComponent {
         return 'Clear freeze';
       case 'reconcile_now':
         return 'Run account reconcile';
-      case 'prove_evidence':
-        return 'Prove now';
-      case 'retire_replace':
-        return 'Retire & Replace';
     }
     return condition.cure_action;
   }

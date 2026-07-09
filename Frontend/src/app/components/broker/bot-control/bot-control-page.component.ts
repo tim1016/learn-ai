@@ -276,7 +276,7 @@ export class BotControlPageComponent {
 
   private readonly primaryRemediationDispatch: RendererDispatch = {
     invokeCapability: (capability) => {
-      if (capability === 'resume') void this.dispatchStartProcess();
+      if (capability === 'resume') void this.dispatchResumeIntent();
       else void this.dispatchEndDayNow();
     },
     focus: (_tab, action) => {
@@ -424,6 +424,10 @@ export class BotControlPageComponent {
 
   async dispatchStop(): Promise<void> {
     await this.setIntent('stop', 'Stop');
+  }
+
+  async dispatchResumeIntent(): Promise<void> {
+    await this.setIntent('resume', 'Resume');
   }
 
   async dispatchEndDayNow(): Promise<void> {
@@ -784,7 +788,7 @@ export class BotControlPageComponent {
   }
 
   private async setIntent(
-    action: 'stop',
+    action: 'resume' | 'stop',
     label: string,
   ): Promise<void> {
     const id = this.instanceId();

@@ -150,6 +150,16 @@ class DesiredStateRepo:
         with _file_lock(path, trusted_root=self._trusted_root):
             self._write_locked(path, record)
 
+    def delete(self) -> None:
+        """Remove the sidecar when restoring an absent pre-mutation state."""
+
+        path = self._confined_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _file_lock(path, trusted_root=self._trusted_root):
+            with contextlib.suppress(FileNotFoundError):
+                path.unlink()
+            _fsync_parent_dir(path)
+
     def set(
         self,
         state: DesiredState,

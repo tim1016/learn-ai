@@ -52,6 +52,7 @@ from app.engine.live.daemon_connectivity_monitor import (
 from app.engine.live.desired_state import (
     DesiredState,
     DesiredStateCorruptError,
+    DesiredStateRecord,
     DesiredStateRepo,
     stable_desired_state_path,
 )
@@ -170,6 +171,7 @@ from app.services.account_crash_recovery import (
     crash_recovery_gate_for_instance,
     record_crash_recovery_override_evidence,
 )
+from app.services.account_reconciliation import AccountReconciliationService
 from app.services.account_truth_snapshot import get_account_truth_snapshot_provider
 from app.services.activity_evidence_matching import (
     activity_evidence_ref_from_event,
@@ -514,6 +516,41 @@ def _visible_live_run_dir(root: Path, live_binding: LiveBinding) -> Path | None:
         except OSError:
             return None
     return run_dir if run_dir.is_dir() else None
+
+
+def _lifecycle_condition_count(
+    root: Path,
+    *,
+    account_id: str | None,
+    sid: str,
+    account_freeze: AccountFreezeEvidence | None,
+    now_ms: int,
+) -> int:
+    fallback = 1 if account_freeze is not None else 0
+    if account_id is None:
+        return fallback
+    try:
+        triage = AccountReconciliationService(artifacts_root=root.parent).triage(
+            account_id=account_id,
+            now_ms=now_ms,
+        )
+    except Exception as exc:
+        logger.warning(
+            "failed to project account triage conditions for lifecycle status",
+            extra={
+                "strategy_instance_id": sid,
+                "account_id": account_id,
+                "error": str(exc),
+            },
+        )
+        return fallback
+    return sum(
+        1
+        for condition in triage.conditions
+        if condition.scope == "account"
+        or condition.owner.strategy_instance_id == sid
+        or sid in condition.affected_strategy_instance_ids
+    )
 
 
 def _resolve_readiness(
@@ -1691,6 +1728,13 @@ async def _resolve_instance_status_from_process(
     )
     lifecycle_state = _resolve_bot_lifecycle_state(root, sid)
     roll_call_offer = _active_roll_call_offer(root, sid, now_ms=observed_at_ms)
+    lifecycle_condition_count = _lifecycle_condition_count(
+        root,
+        account_id=instance_account_id,
+        sid=sid,
+        account_freeze=account_freeze,
+        now_ms=observed_at_ms,
+    )
     daily_lifecycle = project_bot_daily_lifecycle(
         BotDailyLifecycleEvidence(
             strategy_instance_id=sid,
@@ -1700,7 +1744,7 @@ async def _resolve_instance_status_from_process(
             active_run_id=live_binding.run_id if live_binding is not None else None,
             persisted_state=lifecycle_state,
             roll_call_offer=roll_call_offer,
-            condition_count=1 if account_freeze is not None else 0,
+            condition_count=lifecycle_condition_count,
             now_ms=observed_at_ms,
         )
     )
@@ -2120,6 +2164,7 @@ async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -
                     "effective_stop_ms": verdict.effective_stop_ms,
                 },
             )
+        daemon_request = daemon_request.model_copy(update={"start": False})
     try:
         result = await host_daemon_client.deploy(
             settings.live_runner_daemon_url,
@@ -2257,6 +2302,7 @@ def _raise_if_start_boundary_blocks(root: Path, sid: str, *, now_ms: int) -> Non
 def _assert_roll_call_offer_allows_start(
     root: Path,
     sid: str,
+    run_id: str,
     body: HostRunnerStartRequest,
     *,
     now_ms: int,
@@ -2293,6 +2339,18 @@ def _assert_roll_call_offer_allows_start(
                 "current_offer_id": active.offer_id,
             },
         )
+    if active.run_id != run_id:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "ROLL_CALL_OFFER_RUN_MISMATCH",
+                "message": "This roll-call offer belongs to a different run. Run roll call again.",
+                "gate_id": "daily_lifecycle.roll_call_offer",
+                "strategy_instance_id": sid,
+                "run_id": run_id,
+                "offer_run_id": active.run_id,
+            },
+        )
 
 
 def _raise_if_lifecycle_retired(root: Path, sid: str) -> None:
@@ -2320,17 +2378,22 @@ def _raise_if_lifecycle_retired(root: Path, sid: str) -> None:
         )
 
 
-def _persist_start_intent(root: Path, sid: str) -> None:
-    """Persist the single Start path's durable intent before daemon launch."""
-
+def _start_intent_repo(root: Path, sid: str) -> DesiredStateRepo:
     artifacts_root = _desired_state_root(root)
     try:
         sidecar_path = stable_desired_state_path(artifacts_root, sid)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
+    return DesiredStateRepo(sidecar_path, trusted_root=artifacts_root / "live_state")
 
+
+def _persist_start_intent(root: Path, sid: str) -> DesiredStateRecord | None:
+    """Persist the single Start path's durable intent before daemon launch."""
+
+    repo = _start_intent_repo(root, sid)
     try:
-        DesiredStateRepo(sidecar_path, trusted_root=artifacts_root / "live_state").set(
+        previous = repo.read()
+        repo.set(
             DesiredState.RUNNING,
             updated_by="system",
             reason="daily_lifecycle.start",
@@ -2356,6 +2419,28 @@ def _persist_start_intent(root: Path, sid: str) -> None:
                 "strategy_instance_id": sid,
             },
         ) from exc
+    return previous
+
+
+def _restore_start_intent(
+    root: Path,
+    sid: str,
+    previous: DesiredStateRecord | None,
+) -> None:
+    repo = _start_intent_repo(root, sid)
+    try:
+        if previous is None:
+            repo.delete()
+        else:
+            repo.write(previous)
+    except (OSError, ValueError) as exc:
+        logger.warning(
+            "failed to restore start intent after rejected start",
+            extra={
+                "strategy_instance_id": sid,
+                "error": str(exc),
+            },
+        )
 
 
 async def _assert_start_allowed(run_id: str, body: HostRunnerStartRequest, settings) -> None:
@@ -2454,7 +2539,7 @@ async def _assert_start_allowed(run_id: str, body: HostRunnerStartRequest, setti
     # idle / exited / unrecognised -> proceed; daemon performs its own start gates.
     now_ms = _now_ms()
     _raise_if_start_boundary_blocks(root, sid, now_ms=now_ms)
-    _assert_roll_call_offer_allows_start(root, sid, body, now_ms=now_ms)
+    _assert_roll_call_offer_allows_start(root, sid, run_id, body, now_ms=now_ms)
 
 
 @router.post("/runs/{run_id}/start", response_model=HostRunnerActionResponse)
@@ -2491,8 +2576,9 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
     root = Path(settings.live_runs_root)
     await _assert_start_allowed(run_id, body, settings)
     sid = _strategy_instance_id_for_run(root, run_id)
+    previous_start_intent: DesiredStateRecord | None = None
     if sid is not None:
-        _persist_start_intent(root, sid)
+        previous_start_intent = _persist_start_intent(root, sid)
     try:
         result = await host_daemon_client.start_run(
             settings.live_runner_daemon_url,
@@ -2502,8 +2588,12 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
     except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
         _raise_outcome_unknown("start_run", exc)
     except host_daemon_client.HostDaemonError as exc:
+        if sid is not None:
+            _restore_start_intent(root, sid, previous_start_intent)
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
     response = _parse_action_response(result)
+    if sid is not None and not response.accepted:
+        _restore_start_intent(root, sid, previous_start_intent)
     await _maybe_start_broker_activity_publisher(response)
     sid = sid or response.process.strategy_instance_id
     if sid is not None:
@@ -2720,6 +2810,15 @@ async def retire_and_replace(
     root = Path(settings.live_runs_root)
     _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
     process, _live_binding = _interpret_daemon_process(daemon, root)
+    if process.state == "unreachable":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "HOST_SERVICE_OFFLINE",
+                "message": "The bot service is unreachable. Reconnect it before retiring and replacing this bot.",
+                "process_state": process.state,
+            },
+        )
     if process.state in {"running", "stopping"}:
         raise HTTPException(
             status.HTTP_409_CONFLICT,

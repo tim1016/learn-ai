@@ -34,7 +34,7 @@ export interface RenderedAction {
 }
 
 const _INVOKE_CAPABILITY_LABELS: Record<InvokeCapabilityAction['capability'], string> = {
-  resume: 'Start from roll call',
+  resume: 'Resume',
   pause: 'End day now',
 };
 

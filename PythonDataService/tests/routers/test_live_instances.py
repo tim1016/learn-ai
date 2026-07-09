@@ -2309,6 +2309,37 @@ async def test_roll_call_tick_persists_start_offer_and_catalog_reads_it(
     assert catalog.json()["evening_report"]["summary"].endswith("0 retired")
 
 
+async def test_status_marks_bot_sick_bay_for_terminal_account_condition(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    sid = "spy_sick_bot"
+    run_id = "run-sick-bot"
+    _write_ledger(root, run_id, sid, 100, account_id="DU1234567")
+    write_account_instance_binding(
+        root.parent,
+        AccountInstanceBinding(
+            account_id="DU1234567",
+            strategy_instance_id=sid,
+            run_id=run_id,
+            bot_order_namespace=f"learn-ai/{sid}/v1",
+            lifecycle_state="RETIRED",
+            recorded_at_ms=1_780_000_002_500,
+            source="host_daemon.ended_without_status",
+        ),
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/status")
+
+    assert response.status_code == 200
+    lifecycle = response.json()["daily_lifecycle"]
+    assert lifecycle["display_status"] == "Sick bay"
+    assert lifecycle["attention_badge"] == "Sick bay"
+
+
 async def test_bot_catalog_authors_closed_lifecycle_status_and_last_run_labels(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -3092,7 +3123,7 @@ async def test_deploy_instance_rejects_when_account_is_frozen(app_with_root, mon
     assert called is False
 
 
-async def test_deploy_and_start_ignores_legacy_stopped_latch(
+async def test_deploy_and_start_stages_after_legacy_stopped_latch_check(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app, root = app_with_root
@@ -3106,11 +3137,10 @@ async def test_deploy_and_start_ignores_legacy_stopped_latch(
         reason="regression",
         now_ms=1_700_000_000_000,
     )
-    called = False
+    captured: dict = {}
 
-    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
-        nonlocal called
-        called = True
+    async def fake_deploy(_base_url: str, payload: dict) -> dict:
+        captured.update(payload)
         return {"run_id": "run-new", "run_dir": "/runs/run-new", "created": True, "start": None}
 
     monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
@@ -3121,7 +3151,7 @@ async def test_deploy_and_start_ignores_legacy_stopped_latch(
         response = await client.post("/api/live-instances", json=body)
 
     assert response.status_code == 201
-    assert called is True
+    assert captured["start"] is False
 
 
 def _write_identity_source_run(root: Path, sid: str, symbol: str) -> None:
@@ -3217,6 +3247,7 @@ async def test_deploy_and_start_allows_confirmed_identity_incoherence(
 
     assert response.status_code == 201
     assert captured["account_id"] == "DU111"
+    assert captured["start"] is False
     assert "identity_coherence_confirmation" not in captured
 
 
@@ -3245,6 +3276,7 @@ async def test_deploy_and_start_ignores_soft_deleted_inherited_identity(
     assert delete_response.status_code == 200
     assert deploy_response.status_code == 201
     assert captured["strategy_instance_id"] == "spy_ema_paper"
+    assert captured["start"] is False
 
 
 async def test_deploy_and_start_ignores_request_inherited_symbol_for_new_instance(
@@ -3270,6 +3302,7 @@ async def test_deploy_and_start_ignores_request_inherited_symbol_for_new_instanc
 
     assert response.status_code == 201
     assert captured["strategy_instance_id"] == "spy_ema_paper"
+    assert captured["start"] is False
 
 
 async def test_deploy_and_start_rejects_unconfirmed_nonflat_exposure(
@@ -3338,6 +3371,7 @@ async def test_deploy_and_start_allows_confirmed_nonflat_exposure(
 
     assert response.status_code == 201
     assert captured["account_id"] == "DU111"
+    assert captured["start"] is False
     assert "exposure_coherence_confirmation" not in captured
 
 
@@ -4179,6 +4213,36 @@ async def test_start_run_requires_current_roll_call_offer(app_with_root, monkeyp
     assert called is False
 
 
+async def test_start_run_rejects_roll_call_offer_for_different_run(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-offered", "spy_ema_paper", 100)
+    _write_ledger(root, "run-requested", "spy_ema_paper", 110)
+    offer_id = _write_roll_call_offer(root.parent, run_id="run-offered")
+    _set_startable_now(monkeypatch)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+    called = False
+
+    async def fake_start(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return {"accepted": True, "process": {}}
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/runs/run-requested/start",
+            json={"roll_call_offer_id": offer_id},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "ROLL_CALL_OFFER_RUN_MISMATCH"
+    assert called is False
+
+
 async def test_start_run_rejects_at_effective_stop_boundary(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-stop-boundary", "spy_ema_paper", 100)
@@ -4204,6 +4268,38 @@ async def test_start_run_rejects_at_effective_stop_boundary(app_with_root, monke
     assert response.status_code == 409
     assert response.json()["detail"]["reason_code"] == "SESSION_STOP_REACHED"
     assert called is False
+
+
+async def test_start_run_rolls_back_desired_state_when_daemon_rejects(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-reject", "spy_ema_paper", 100)
+    offer_id = _write_roll_call_offer(root.parent, run_id="run-reject")
+    _set_startable_now(monkeypatch)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+    repo = DesiredStateRepo(stable_desired_state_path(root.parent, "spy_ema_paper"))
+    previous = repo.set(
+        DesiredState.PAUSED,
+        updated_by="operator",
+        reason="halt_clear_pending",
+        now_ms=200,
+    )
+
+    async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
+        raise host_daemon_client.HostDaemonError(409, "launch rejected")
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/runs/run-reject/start",
+            json={"roll_call_offer_id": offer_id},
+        )
+
+    assert response.status_code == 409
+    assert repo.read() == previous
 
 
 async def test_stop_run_forwards_and_returns_action(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -4305,6 +4401,30 @@ async def test_retire_and_replace_requires_flat_attestation_and_off_duty(
     assert missing_attestation.json()["detail"]["reason_code"] == "ACCOUNT_FLAT_ATTESTATION_REQUIRED"
     assert running.status_code == 409
     assert running.json()["detail"]["reason_code"] == "BOT_ON_DUTY"
+
+
+async def test_retire_and_replace_rejects_unreachable_daemon(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-idle", "spy_ema_paper", 100)
+    _set_daemon(monkeypatch, process=None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/spy_ema_paper/retire-and-replace",
+            json={"confirm_account_flat": True},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "HOST_SERVICE_OFFLINE"
+    assert (
+        BotLifecycleStateRepo(
+            stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper")
+        ).read()
+        is None
+    )
 
 
 async def test_retire_and_replace_marks_bot_retired(

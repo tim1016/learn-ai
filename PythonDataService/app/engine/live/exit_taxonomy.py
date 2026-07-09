@@ -107,6 +107,12 @@ def classify_run_exit(
             registry_source=STOP_EXITED_REGISTRY_SOURCE,
         )
 
+    if not evidence.status_present:
+        return RunExitTaxonomyVerdict(
+            category="ended_without_status",
+            registry_source=ENDED_WITHOUT_STATUS_REGISTRY_SOURCE,
+        )
+
     code = evidence.exit_code if evidence.exit_code is not None else returncode
     if evidence.exit_reason in _NON_CRASH_EXIT_REASONS:
         category, source = _NON_CRASH_EXIT_REASONS[evidence.exit_reason]

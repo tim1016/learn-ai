@@ -10,6 +10,7 @@ import type {
 import {
   makeBotLifecycleMutationResponse,
   makeCommandWriteResponse,
+  makeDesiredStateResponse,
   makeHostRunnerProcess,
   makeHostRunnerHealth,
   makeIncidentHeadline,
@@ -687,6 +688,33 @@ describe('BotControlPageComponent', () => {
     await flush(fixture);
 
     expect(liveRuns.reconcileInstance).toHaveBeenCalledWith('sid-x');
+  });
+
+  it('routes trader guidance resume capability to the desired-state resume path', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = makeStatus();
+    status.operator_surface.trader_guidance.primary_remediation = {
+      kind: 'invoke_capability',
+      capability: 'resume',
+    };
+    const { fixture, element, liveRuns } = await setupBotControlPage({
+      status,
+      mutationResponses: { setInstanceDesiredState: makeDesiredStateResponse() },
+    });
+
+    const action = element.querySelector(
+      '[data-testid="trader-guidance-primary-remediation"]',
+    ) as HTMLButtonElement | null;
+    expect(action?.textContent).toContain('Resume');
+    action?.click();
+    await flush(fixture);
+
+    expect(liveRuns.setInstanceDesiredState).toHaveBeenCalledWith('sid-x', {
+      action: 'resume',
+      reason: 'Resume',
+      updated_by: 'operator',
+    });
+    expect(liveRuns.startHostRunner).not.toHaveBeenCalled();
   });
 
   it('does not render attention-row actions after folding attention into the ladder', async () => {

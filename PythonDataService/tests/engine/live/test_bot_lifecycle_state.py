@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from app.engine.live.bot_lifecycle_state import (
     BotLifecyclePhase,
     BotLifecycleStateRepo,
@@ -85,3 +87,16 @@ def test_roll_call_offer_repo_round_trips_active_and_consumed_offers(tmp_path: P
     assert consumed is not None
     assert consumed.status == "consumed"
     assert repo.active_offer(now_ms=150) is None
+
+
+def test_lifecycle_sidecar_paths_reject_symlink_escape(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    live_state = tmp_path / "live_state"
+    live_state.mkdir()
+    (live_state / "paper-escape").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError):
+        stable_bot_lifecycle_state_path(tmp_path, "paper-escape")
+    with pytest.raises(ValueError):
+        stable_bot_roll_call_offers_path(tmp_path, "paper-escape")

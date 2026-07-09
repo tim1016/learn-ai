@@ -25,10 +25,16 @@ def test_exit_taxonomy_separates_halt_crash_and_missing_status() -> None:
         returncode=-9,
         stopping=False,
     )
+    missing_status_zero = classify_run_exit(
+        RunExitEvidence(status_present=False),
+        returncode=0,
+        stopping=False,
+    )
 
     assert fatal_halt.registry_source == "host_daemon.process_halted"
     assert exception.registry_source == "host_daemon.process_crashed"
     assert missing_status.registry_source == "host_daemon.ended_without_status"
+    assert missing_status_zero.registry_source == "host_daemon.ended_without_status"
 
 
 def test_exit_taxonomy_keeps_unclassified_statuses_ambiguous() -> None:

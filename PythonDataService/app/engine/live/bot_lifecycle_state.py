@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.engine.live.identity import validate_strategy_instance_id
+from app.engine.live.identity import strategy_instance_artifact_dir
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
 
 
@@ -83,13 +83,21 @@ class BotRollCallOfferLedger(BaseModel):
 
 
 def stable_bot_lifecycle_state_path(artifacts_root: Path, strategy_instance_id: str) -> Path:
-    validate_strategy_instance_id(strategy_instance_id)
-    return artifacts_root / "live_state" / strategy_instance_id / "lifecycle_state.json"
+    return (
+        strategy_instance_artifact_dir(
+            artifacts_root, "live_state", strategy_instance_id
+        )
+        / "lifecycle_state.json"
+    )
 
 
 def stable_bot_roll_call_offers_path(artifacts_root: Path, strategy_instance_id: str) -> Path:
-    validate_strategy_instance_id(strategy_instance_id)
-    return artifacts_root / "live_state" / strategy_instance_id / "roll_call_offers.json"
+    return (
+        strategy_instance_artifact_dir(
+            artifacts_root, "live_state", strategy_instance_id
+        )
+        / "roll_call_offers.json"
+    )
 
 
 class BotLifecycleStateRepo:
