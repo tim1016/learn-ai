@@ -133,7 +133,7 @@ def classify_run_exit(
         )
     return RunExitTaxonomyVerdict(
         category="unclassified",
-        registry_source=PROCESS_EXITED_REGISTRY_SOURCE,
+        registry_source=ENDED_WITHOUT_STATUS_REGISTRY_SOURCE,
     )
 
 
@@ -143,7 +143,7 @@ def false_crash_repair_source(evidence: RunExitEvidence) -> str | None:
     if not evidence.status_present or evidence.exit_reason is None:
         return None
     verdict = classify_run_exit(evidence, returncode=evidence.exit_code, stopping=False)
-    if verdict.registry_source == PROCESS_CRASHED_REGISTRY_SOURCE:
+    if verdict.category in ("crashed", "unclassified"):
         return None
     return verdict.registry_source
 

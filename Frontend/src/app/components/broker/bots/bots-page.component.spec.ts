@@ -14,6 +14,10 @@ import type {
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
+import {
+  makeCleanAccountTriage,
+  makeFrozenAccountTriage,
+} from '../testing/account-triage-fixtures';
 import { BotsPageComponent } from './bots-page.component';
 
 const OLD_RUN = 1_700_000_000_000;
@@ -332,71 +336,22 @@ async function settle(fixture: ComponentFixture<BotsPageComponent>): Promise<voi
 }
 
 function cleanTriage(): AccountTriageResponse {
-  return {
-    schema_version: 1,
-    generated_at_ms: NEW_RUN,
-    account_id: 'DU1234567',
-    strategy_instance_id: null,
-    summary_headline: 'Account recovery gates passing',
-    summary_detail: 'Account DU1234567 has no blocking account triage rows.',
-    overall_gate_result: {
-      gate_id: 'account.triage',
-      status: 'pass',
-      source: 'account_triage',
-      operator_reason: 'Account DU1234567 has no blocking account triage rows.',
-      operator_next_step: 'ACCOUNT_TRIAGE_PASSING',
-      evidence_at_ms: NEW_RUN,
-    },
-    account_reconciliation_receipt: null,
-    gate_rows: [],
-    conditions: [],
-    freeze_banner: null,
-    clear_freeze_actionable: false,
-    affected_bots: [],
-  };
+  return makeCleanAccountTriage({ generatedAtMs: NEW_RUN });
 }
 
 function frozenTriage(): AccountTriageResponse {
-  return {
-    ...cleanTriage(),
-    summary_headline: 'Account recovery needs attention',
-    summary_detail: 'manual_freeze',
-    overall_gate_result: {
-      gate_id: 'account.triage',
-      status: 'freeze',
-      source: 'manual_freeze',
-      operator_reason: 'manual_freeze',
-      operator_next_step: 'CLEAR_FREEZE',
-      evidence_at_ms: NEW_RUN,
+  return makeFrozenAccountTriage({
+    generatedAtMs: NEW_RUN,
+    conditionOptions: {
+      generatedAtMs: NEW_RUN,
+      affectedStrategyInstanceIds: ['live-running-aapl'],
     },
-    conditions: [
-      {
-        condition_type: 'account_freeze',
-        scope: 'account',
-        owner: {
-          owner_type: 'account',
-          owner_id: 'DU1234567',
-          label: 'Account DU1234567',
-          strategy_instance_id: null,
-          run_id: null,
-          lifecycle_state: null,
-        },
-        severity: 'critical',
-        title: 'Account freeze active',
-        detail: 'manual_freeze',
-        operator_next_step: 'CLEAR_FREEZE',
-        source: 'manual_freeze',
-        evidence_at_ms: NEW_RUN,
-        evidence_refs: [],
-        affected_strategy_instance_ids: ['live-running-aapl'],
-        cure_action: 'clear_freeze',
-      },
-    ],
-    freeze_banner: {
+    freezeBanner: {
       headline: 'Account sick bay is gating new starts.',
       detail: 'Run account reconciliation and clear the active account freeze before deploying.',
     },
-  };
+    clearFreezeActionable: false,
+  });
 }
 
 describe('BotsPageComponent', () => {

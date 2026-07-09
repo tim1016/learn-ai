@@ -207,6 +207,11 @@ export function deployBlocker(input: DeployBlockerInput): DeployBlocker | null {
     };
   }
   if (input.allInCoexistenceBlock !== null) return { message: input.allInCoexistenceBlock };
+  if (input.effectiveStartNow && input.accountTriage === undefined) {
+    return {
+      message: 'Account sick bay is still loading. Wait for account readiness, or turn off "Start trading immediately" to deploy only.',
+    };
+  }
   const freeze = activeAccountFreezeCondition(input.accountTriage);
   if (input.effectiveStartNow && freeze !== null) {
     return {

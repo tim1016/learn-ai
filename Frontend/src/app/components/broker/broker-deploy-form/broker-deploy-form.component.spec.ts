@@ -12,6 +12,10 @@ import { LiveRunsService } from '../../../services/live-runs.service';
 import { StrategyValidationService } from '../../../services/strategy-validation.service';
 import type { StrategyValidationCatalog } from '../../../services/strategy-validation.types';
 import type { ActionPlan } from '../../../api/action-plan.types';
+import {
+  makeCleanAccountTriage,
+  makeFrozenAccountTriage,
+} from '../testing/account-triage-fixtures';
 import { BrokerDeployFormComponent } from './broker-deploy-form.component';
 
 let activeFixture: { destroy(): void; detectChanges(): void } | null = null;
@@ -271,71 +275,25 @@ function validDeploymentValidationActionPlan(): ActionPlan {
 }
 
 function cleanTriage(): AccountTriageResponse {
-  return {
-    schema_version: 1,
-    generated_at_ms: 1_780_000_002_000,
-    account_id: 'DU123',
-    strategy_instance_id: null,
-    summary_headline: 'Account recovery gates passing',
-    summary_detail: 'Account DU123 has no blocking account triage rows.',
-    overall_gate_result: {
-      gate_id: 'account.triage',
-      status: 'pass',
-      source: 'account_triage',
-      operator_reason: 'Account DU123 has no blocking account triage rows.',
-      operator_next_step: 'ACCOUNT_TRIAGE_PASSING',
-      evidence_at_ms: 1_780_000_002_000,
-    },
-    account_reconciliation_receipt: null,
-    gate_rows: [],
-    conditions: [],
-    freeze_banner: null,
-    clear_freeze_actionable: false,
-    affected_bots: [],
-  };
+  return makeCleanAccountTriage({ accountId: 'DU123' });
 }
 
 function frozenTriage(): AccountTriageResponse {
-  return {
-    ...cleanTriage(),
-    summary_headline: 'Account recovery needs attention',
-    summary_detail: 'watchdog.flatten_timed_out',
-    overall_gate_result: {
-      gate_id: 'account.triage',
-      status: 'freeze',
+  return makeFrozenAccountTriage({
+    accountId: 'DU123',
+    conditionOptions: {
+      conditionType: 'exposure_freeze',
+      detail: 'watchdog.flatten_timed_out',
+      operatorNextStep: 'CHECK_IBKR',
       source: 'watchdog_halt_executor',
-      operator_reason: 'watchdog.flatten_timed_out',
-      operator_next_step: 'CHECK_IBKR',
-      evidence_at_ms: 1_780_000_002_500,
+      affectedStrategyInstanceIds: ['DEPVALSPYJUL8'],
+      cureAction: 'resolve_exposure',
     },
-    conditions: [
-      {
-        condition_type: 'exposure_freeze',
-        scope: 'account',
-        owner: {
-          owner_type: 'account',
-          owner_id: 'DU123',
-          label: 'Account DU123',
-          strategy_instance_id: null,
-          run_id: null,
-          lifecycle_state: null,
-        },
-        severity: 'critical',
-        title: 'Account freeze active',
-        detail: 'watchdog.flatten_timed_out',
-        operator_next_step: 'CHECK_IBKR',
-        source: 'watchdog_halt_executor',
-        evidence_at_ms: 1_780_000_002_500,
-        evidence_refs: [],
-        affected_strategy_instance_ids: ['DEPVALSPYJUL8'],
-        cure_action: 'resolve_exposure',
-      },
-    ],
-    freeze_banner: {
+    freezeBanner: {
       headline: 'Account sick bay is gating new starts.',
       detail: 'Resolve or audit broker exposure before starting another bot on this account.',
     },
-  };
+  });
 }
 
 function fillRequired(component: BrokerDeployFormComponent) {

@@ -352,8 +352,6 @@ def _project_run_signal(
 def _project_prior_run(last_exit: InstanceLastExit | None) -> OperatorSurfacePriorRun:
     if last_exit is None:
         return OperatorSurfacePriorRun(classification="UNKNOWN")
-    if last_exit.halt_trigger is not None:
-        return OperatorSurfacePriorRun(classification="HALT_TRIGGERED")
     verdict = classify_run_exit(
         RunExitEvidence(
             status_present=True,
@@ -363,7 +361,7 @@ def _project_prior_run(last_exit: InstanceLastExit | None) -> OperatorSurfacePri
         returncode=last_exit.exit_code,
         stopping=False,
     )
-    if verdict.category == "halted":
+    if last_exit.halt_trigger is not None or verdict.category == "halted":
         return OperatorSurfacePriorRun(classification="HALT_TRIGGERED")
     if last_exit.exit_code == 0 or last_exit.exit_reason == "normal":
         return OperatorSurfacePriorRun(classification="CLEAN")

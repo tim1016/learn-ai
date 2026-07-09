@@ -4,6 +4,7 @@ import { firstValueFrom } from 'rxjs';
 import type {
   AccountAcceptExposureOverrideRequest,
   AccountAcceptExposureOverrideResponse,
+  AccountClearFreezeRequest,
   AccountClearFreezeResponse,
   AccountReconciliationReceipt,
   AccountTriageResponse,
@@ -132,7 +133,7 @@ export class BrokerService {
 
   clearAccountFreeze(
     accountId: string,
-    payload: { requested_by?: string; receipt_id?: string | null; reason?: string | null } = {},
+    payload: AccountClearFreezeRequest = {},
   ): Promise<AccountClearFreezeResponse> {
     return firstValueFrom(
       this.http.post<AccountClearFreezeResponse>(

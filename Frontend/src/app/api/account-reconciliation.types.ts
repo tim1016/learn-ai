@@ -113,6 +113,12 @@ export interface AccountTriageResponse {
   affected_bots: AccountTriageBotRef[];
 }
 
+export interface AccountClearFreezeRequest {
+  requested_by?: string;
+  receipt_id?: string | null;
+  reason?: string | null;
+}
+
 export interface AccountClearFreezeResponse {
   schema_version: number;
   account_id: string;

@@ -131,62 +131,55 @@
           <p class="muted">Not yet proven: account sick bay has not loaded for this account.</p>
         }
       </article>
-      @if (exposureResolutionCondition(); as condition) {
-        <div class="modal-backdrop">
-          <section
-            class="resolve-exposure-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="resolve-exposure-title"
-          >
-            <header>
-              <h2 id="resolve-exposure-title">Resolve exposure</h2>
-              <button
-                type="button"
-                class="icon-btn"
-                aria-label="Close resolve exposure"
-                (click)="closeExposureResolution()"
-              >
-                <i class="pi pi-times" aria-hidden="true"></i>
-              </button>
-            </header>
-            <p class="receipt-reason">{{ condition.detail | receiptLabel }}</p>
-            <p class="condition-owner">Owner {{ condition.owner.label }}</p>
-            <div class="resolve-actions">
-              <button
-                type="button"
-                class="danger-btn"
-                [disabled]="
-                  exposureResolutionLoading() !== null || !condition.owner.strategy_instance_id
-                "
-                (click)="flattenExposureFromDialog()"
-              >
-                <i class="pi pi-arrow-down" aria-hidden="true"></i>
-                Flatten then reconcile
-              </button>
-              <label class="override-reason">
-                Override reason
-                <textarea
-                  rows="3"
-                  [value]="exposureOverrideReason()"
-                  (input)="setExposureOverrideReasonFromEvent($event)"
-                ></textarea>
-              </label>
-              <button
-                type="button"
-                class="ghost-btn"
-                [disabled]="
-                  exposureResolutionLoading() !== null || exposureOverrideReasonMissing()
-                "
-                (click)="acceptExposureOverrideFromDialog()"
-              >
-                <i class="pi pi-check-circle" aria-hidden="true"></i>
-                Accept exposure
-              </button>
-            </div>
-          </section>
-        </div>
-      }
+      <p-dialog
+        [visible]="exposureResolutionCondition() !== null"
+        [modal]="true"
+        [closable]="true"
+        [dismissableMask]="true"
+        [draggable]="false"
+        [resizable]="false"
+        [style]="{ width: '560px', maxWidth: 'calc(100vw - 2rem)' }"
+        styleClass="resolve-exposure-dialog"
+        (onHide)="closeExposureResolution()"
+      >
+        <ng-template pTemplate="header" let-ariaLabelledBy="ariaLabelledBy">
+          <h2 [id]="ariaLabelledBy" class="resolve-exposure-title">Resolve exposure</h2>
+        </ng-template>
+        @if (exposureResolutionCondition(); as condition) {
+          <p class="receipt-reason">{{ condition.detail | receiptLabel }}</p>
+          <p class="condition-owner">Owner {{ condition.owner.label }}</p>
+          <div class="resolve-actions">
+            <button
+              type="button"
+              class="danger-btn"
+              [disabled]="
+                exposureResolutionLoading() !== null || !condition.owner.strategy_instance_id
+              "
+              (click)="flattenExposureFromDialog()"
+            >
+              <i class="pi pi-arrow-down" aria-hidden="true"></i>
+              Flatten then reconcile
+            </button>
+            <label class="override-reason">
+              Override reason
+              <textarea
+                rows="3"
+                [value]="exposureOverrideReason()"
+                (input)="setExposureOverrideReasonFromEvent($event)"
+              ></textarea>
+            </label>
+            <button
+              type="button"
+              class="ghost-btn"
+              [disabled]="exposureOverrideActionDisabled(condition)"
+              (click)="acceptExposureOverrideFromDialog()"
+            >
+              <i class="pi pi-check-circle" aria-hidden="true"></i>
+              Accept exposure
+            </button>
+          </div>
+        }
+      </p-dialog>
       <article
         class="account-reconcile-card"
         [class.receipt-pass]="accountReconciliationTone() === 'pass'"

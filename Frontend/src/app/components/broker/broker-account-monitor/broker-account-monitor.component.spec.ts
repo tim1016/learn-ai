@@ -13,6 +13,11 @@ import type { GateResult } from '../../../api/live-instances.types';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
+import {
+  makeAccountFreezeCondition,
+  makeCleanAccountTriage,
+  makeFrozenAccountTriage,
+} from '../testing/account-triage-fixtures';
 import { BrokerAccountMonitorComponent } from './broker-account-monitor.component';
 
 class StubEventSource {
@@ -202,6 +207,7 @@ describe('BrokerAccountMonitorComponent', () => {
     });
 
     fireEvent.click(await screen.findByRole('button', { name: /resolve exposure/i }));
+    broker.accountTriage.mockClear();
     fireEvent.click(screen.getByRole('button', { name: /flatten then reconcile/i }));
 
     await waitFor(() => {
@@ -213,6 +219,27 @@ describe('BrokerAccountMonitorComponent', () => {
     await waitFor(() => {
       expect(broker.reconcileAccount).toHaveBeenCalledWith('DU1234567');
     });
+    expect(broker.accountTriage).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables audited exposure override when the exposure owner is ambiguous', async () => {
+    const broker = new FakeBrokerService();
+    broker.accountTriage.mockResolvedValue(ambiguousExposureFrozenTriage());
+    await render(BrokerAccountMonitorComponent, {
+      providers: [
+        { provide: BrokerService, useValue: broker },
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useClass: FakeLiveRunsService },
+        routeFragment(),
+      ],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /resolve exposure/i }));
+
+    const acceptButton = screen.getByRole('button', { name: /accept exposure/i }) as HTMLButtonElement;
+    expect(acceptButton.disabled).toBe(true);
+    fireEvent.click(acceptButton);
+    expect(broker.acceptExposureOverride).not.toHaveBeenCalled();
   });
 
   it('renders unsupported condition cures without dead action buttons', async () => {
@@ -328,74 +355,18 @@ function accountReconciliationReceipt(
 }
 
 function cleanTriage(receipt: AccountReconciliationReceipt | null = null): AccountTriageResponse {
-  const generatedAtMs = Date.now();
-  return {
-    schema_version: 1,
-    generated_at_ms: generatedAtMs,
-    account_id: 'DU1234567',
-    strategy_instance_id: null,
-    summary_headline: 'Account recovery gates passing',
-    summary_detail: 'Account DU1234567 has no blocking account triage rows.',
-    overall_gate_result: {
-      gate_id: 'account.triage',
-      status: 'pass',
-      source: 'account_triage',
-      operator_reason: 'Account DU1234567 has no blocking account triage rows.',
-      operator_next_step: 'ACCOUNT_TRIAGE_PASSING',
-      evidence_at_ms: generatedAtMs,
-    },
-    account_reconciliation_receipt: receipt,
-    gate_rows: [],
-    conditions: [],
-    freeze_banner: null,
-    clear_freeze_actionable: false,
-    affected_bots: [],
-  };
+  return makeCleanAccountTriage({ receipt });
 }
 
 function frozenTriage(): AccountTriageResponse {
   const receipt = accountReconciliationReceipt();
-  return {
-    ...cleanTriage(receipt),
-    summary_headline: 'Account recovery needs attention',
-    summary_detail: 'manual_freeze',
-    overall_gate_result: {
-      gate_id: 'account.triage',
-      status: 'freeze',
-      source: 'manual_freeze',
-      operator_reason: 'manual_freeze',
-      operator_next_step: 'CLEAR_FREEZE',
-      evidence_at_ms: 1_780_000_002_500,
-    },
-    conditions: [
-      {
-        condition_type: 'account_freeze',
-        scope: 'account',
-        owner: {
-          owner_type: 'account',
-          owner_id: 'DU1234567',
-          label: 'Account DU1234567',
-          strategy_instance_id: null,
-          run_id: null,
-          lifecycle_state: null,
-        },
-        severity: 'critical',
-        title: 'Account freeze active',
-        detail: 'manual_freeze',
-        operator_next_step: 'CLEAR_FREEZE',
-        source: 'manual_freeze',
-        evidence_at_ms: 1_780_000_002_500,
-        evidence_refs: [],
-        affected_strategy_instance_ids: ['DEPVALSPYJUL8'],
-        cure_action: 'clear_freeze',
-      },
-    ],
-    freeze_banner: {
+  return makeFrozenAccountTriage({
+    receipt,
+    freezeBanner: {
       headline: 'Account sick bay is gating new starts.',
       detail: 'Run account reconciliation and clear the active account freeze before deploying.',
     },
-    clear_freeze_actionable: true,
-    affected_bots: [
+    affectedBots: [
       {
         strategy_instance_id: 'DEPVALSPYJUL8',
         run_id: 'run-1',
@@ -403,58 +374,59 @@ function frozenTriage(): AccountTriageResponse {
         lifecycle_state: 'ACTIVE',
       },
     ],
-  };
+  });
 }
 
 function exposureFrozenTriage(): AccountTriageResponse {
   const receipt = accountReconciliationReceipt();
-  return {
-    ...cleanTriage(receipt),
-    summary_headline: 'Account recovery needs attention',
-    summary_detail: 'watchdog.flatten_timed_out',
-    overall_gate_result: {
-      gate_id: 'account.triage',
-      status: 'freeze',
-      source: 'watchdog_halt_executor',
-      operator_reason: 'watchdog.flatten_timed_out',
-      operator_next_step: 'CHECK_IBKR',
-      evidence_at_ms: 1_780_000_002_500,
-    },
-    conditions: [
-      {
-        condition_type: 'exposure_freeze',
-        scope: 'account',
-        owner: {
-          owner_type: 'bot',
-          owner_id: 'retired-freezer',
-          label: 'Bot retired-freezer',
-          strategy_instance_id: 'retired-freezer',
-          run_id: 'run-freeze',
-          lifecycle_state: 'RETIRED',
-        },
-        severity: 'critical',
-        title: 'Account freeze active',
-        detail: 'watchdog.flatten_timed_out',
-        operator_next_step: 'CHECK_IBKR',
-        source: 'watchdog_halt_executor',
-        evidence_at_ms: 1_780_000_002_500,
-        evidence_refs: [],
-        affected_strategy_instance_ids: [],
-        cure_action: 'resolve_exposure',
+  return makeFrozenAccountTriage({
+    receipt,
+    conditionOptions: {
+      conditionType: 'exposure_freeze',
+      owner: {
+        owner_type: 'bot',
+        owner_id: 'retired-freezer',
+        label: 'Bot retired-freezer',
+        strategy_instance_id: 'retired-freezer',
+        run_id: 'run-freeze',
+        lifecycle_state: 'RETIRED',
       },
-    ],
-    freeze_banner: {
+      detail: 'watchdog.flatten_timed_out',
+      operatorNextStep: 'CHECK_IBKR',
+      source: 'watchdog_halt_executor',
+      affectedStrategyInstanceIds: [],
+      cureAction: 'resolve_exposure',
+    },
+    freezeBanner: {
       headline: 'Account sick bay is gating new starts.',
       detail: 'Resolve or audit broker exposure before starting another bot on this account.',
     },
-    clear_freeze_actionable: false,
-    affected_bots: [],
-  };
+    clearFreezeActionable: false,
+  });
+}
+
+function ambiguousExposureFrozenTriage(): AccountTriageResponse {
+  return makeFrozenAccountTriage({
+    receipt: accountReconciliationReceipt(),
+    condition: makeAccountFreezeCondition({
+      conditionType: 'exposure_freeze',
+      detail: 'watchdog.flatten_timed_out',
+      operatorNextStep: 'CHECK_IBKR',
+      source: 'watchdog_halt_executor',
+      affectedStrategyInstanceIds: [],
+      cureAction: 'resolve_exposure',
+    }),
+    freezeBanner: {
+      headline: 'Account sick bay is gating new starts.',
+      detail: 'Resolve or audit broker exposure before starting another bot on this account.',
+    },
+    clearFreezeActionable: false,
+  });
 }
 
 function terminalTriage(): AccountTriageResponse {
   return {
-    ...cleanTriage(accountReconciliationReceipt()),
+    ...makeCleanAccountTriage({ receipt: accountReconciliationReceipt() }),
     summary_headline: 'Account recovery needs attention',
     summary_detail: 'A retired bot needs operator attention.',
     conditions: [

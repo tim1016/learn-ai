@@ -82,36 +82,31 @@
   font-size: 0.84rem;
 }
 
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-  display: grid;
-  place-items: center;
-  padding: 1rem;
-  background: rgba(0, 0, 0, 0.56);
-}
-
-.resolve-exposure-dialog {
-  width: min(560px, 100%);
+:host ::ng-deep .resolve-exposure-dialog {
   border: 1px solid var(--border-light, #2a2e39);
   border-radius: 8px;
   background: var(--bg-surface, #131722);
   color: var(--text-primary, #f0f3fa);
-  padding: 1rem;
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
 
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 1rem;
+  .p-dialog-header,
+  .p-dialog-content {
+    background: var(--bg-surface, #131722);
+    color: var(--text-primary, #f0f3fa);
   }
 
-  h2 {
-    margin: 0;
-    font-size: 1rem;
+  .p-dialog-header {
+    padding: 1rem 1rem 0;
   }
+
+  .p-dialog-content {
+    padding: 0 1rem 1rem;
+  }
+}
+
+.resolve-exposure-title {
+  margin: 0;
+  font-size: 1rem;
 }
 
 .resolve-actions {
@@ -256,8 +251,7 @@
   }
 }
 
-.danger-btn,
-.icon-btn {
+.danger-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -280,14 +274,7 @@
 
 .danger-btn {
   padding: 0.45rem 0.9rem;
-  background: #b3261e;
-}
-
-.icon-btn {
-  width: 2rem;
-  height: 2rem;
-  background: var(--bg-sunken, #070a11);
-  border-color: var(--border-light, #2a2e39);
+  background: var(--bear, #b3261e);
 }
 
 .table-wrap {

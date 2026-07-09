@@ -5,9 +5,11 @@ import {
   buildDeployChecks,
   buildDeployReadinessFacts,
   buildNowChecks,
+  deployBlocker,
   stoppedStartLatchState,
 } from './deploy-readiness';
 import snapshotJson from './action-plan-deploy-readiness.snapshot.json';
+import { makeFrozenAccountTriage } from '../testing/account-triage-fixtures';
 
 interface ActionPlanDeployReadinessSnapshot {
   readonly $comment: string;
@@ -177,31 +179,17 @@ describe('deploy readiness helpers', () => {
         final_verdict: 'clean',
         status_detail: 'Account Truth is clean.',
       },
-      accountTriage: {
-        conditions: [
-          {
-            condition_type: 'exposure_freeze',
-            scope: 'account',
-            owner: {
-              owner_type: 'account',
-              owner_id: 'DU123',
-              label: 'Account DU123',
-              strategy_instance_id: null,
-              run_id: null,
-              lifecycle_state: null,
-            },
-            severity: 'critical',
-            title: 'Account freeze active',
-            detail: 'watchdog.flatten_timed_out',
-            operator_next_step: 'CHECK_IBKR',
-            source: 'watchdog_halt_executor',
-            evidence_at_ms: 1,
-            evidence_refs: [],
-            affected_strategy_instance_ids: ['bot-a'],
-            cure_action: 'resolve_exposure',
-          },
-        ],
-      },
+      accountTriage: makeFrozenAccountTriage({
+        accountId: 'DU123',
+        conditionOptions: {
+          conditionType: 'exposure_freeze',
+          detail: 'watchdog.flatten_timed_out',
+          operatorNextStep: 'CHECK_IBKR',
+          source: 'watchdog_halt_executor',
+          affectedStrategyInstanceIds: ['bot-a'],
+          cureAction: 'resolve_exposure',
+        },
+      }),
       brokerAccountAvailable: true,
       fleetState: 'ok',
       nothingDeployed: false,
@@ -215,6 +203,45 @@ describe('deploy readiness helpers', () => {
     );
     expect(facts).not.toContainEqual(expect.objectContaining({ condition: 'Clean' }));
     expect(facts).not.toContainEqual(expect.objectContaining({ condition: 'Clear' }));
+  });
+
+  it('warns live-start now checks when account sick bay freezes the fleet', () => {
+    const checks = buildNowChecks({
+      daemonState: 'ok',
+      brokerState: 'ok',
+      fieldsReady: true,
+      fleetState: 'ok',
+      nothingDeployed: false,
+      accountTriage: makeFrozenAccountTriage(),
+    });
+
+    expect(checks).toContainEqual(
+      expect.objectContaining({
+        key: 'fleet',
+        state: 'warn',
+        detail: 'Account frozen',
+      }),
+    );
+  });
+
+  it('blocks start-now deploys while account sick bay triage is loading', () => {
+    expect(deployBlocker(baseDeployBlockerInput({ accountTriage: undefined }))).toEqual({
+      message: 'Account sick bay is still loading. Wait for account readiness, or turn off "Start trading immediately" to deploy only.',
+    });
+  });
+
+  it('blocks start-now deploys on active account freeze with the account monitor action', () => {
+    expect(
+      deployBlocker(baseDeployBlockerInput({ accountTriage: makeFrozenAccountTriage() })),
+    ).toEqual({
+      message: 'Account freeze active. Resolve the account sick-bay condition before starting.',
+      actionLink: {
+        message: 'Account freeze active.',
+        route: '/broker/account-monitor',
+        fragment: 'account-reconciliation-action',
+        linkText: 'Open account monitor',
+      },
+    });
   });
 
   it('preserves legacy now/deploy check semantics', () => {
@@ -299,3 +326,34 @@ describe('deploy readiness helpers', () => {
     ).toBe('blocked');
   });
 });
+
+function baseDeployBlockerInput(
+  overrides: Partial<Parameters<typeof deployBlocker>[0]> = {},
+): Parameters<typeof deployBlocker>[0] {
+  return {
+    daemonDown: false,
+    effectiveStartNow: true,
+    executionMode: 'paper_orders',
+    allInCoexistenceBlock: null,
+    fleetBlocksStarts: false,
+    instanceAlreadyRunning: false,
+    instanceId: 'deployment-validation-paper',
+    brokerAccountAvailable: true,
+    accountTruth: null,
+    accountTriage: null,
+    strategyKey: 'deployment_validation',
+    strategySelected: true,
+    required: true,
+    missingRequiredFields: [],
+    identityConflictSummary: null,
+    exposureConflictSummary: null,
+    actionPlanReadiness: {
+      canDeploy: true,
+      reasonCode: null,
+      message: 'Action plan is ready for deployment.',
+    },
+    customSizingError: null,
+    stoppedStartLatchState: 'clear',
+    ...overrides,
+  };
+}

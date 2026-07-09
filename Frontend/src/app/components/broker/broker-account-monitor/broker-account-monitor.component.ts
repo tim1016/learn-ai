@@ -13,6 +13,7 @@ import { PageHeaderComponent } from '../../../shared/page-header/page-header.com
 import { PageGuideComponent } from '../../../shared/page-guide/page-guide.component';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
+import { DialogModule } from 'primeng/dialog';
 import { DataSourceComponent } from '../../../shared/data-source/data-source.component';
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
@@ -70,6 +71,7 @@ interface PositionRow {
     DataSourceComponent,
     SectionErrorComponent,
     RouterLink,
+    DialogModule,
     AccountTruthBoardComponent,
     AccountFreezeBannerComponent,
     ReceiptLabelPipe,
@@ -332,7 +334,6 @@ export class BrokerAccountMonitorComponent {
         confirm: true,
       });
       await this.runAccountReconciliation();
-      await this.loadAccountTriage(accountId);
       this.exposureResolutionCondition.set(null);
     } catch (err) {
       this.accountCureError.set(err);
@@ -347,6 +348,8 @@ export class BrokerAccountMonitorComponent {
     if (
       !condition ||
       !accountId ||
+      !condition.owner.strategy_instance_id ||
+      !condition.owner.run_id ||
       this.exposureResolutionLoading() !== null ||
       this.exposureOverrideReasonMissing()
     ) {
@@ -383,6 +386,7 @@ export class BrokerAccountMonitorComponent {
       case 'retire_replace':
         return 'Retire & Replace';
     }
+    return condition.cure_action;
   }
 
   hasConditionAction(condition: AccountConditionRow): boolean {
@@ -404,6 +408,15 @@ export class BrokerAccountMonitorComponent {
       return !this.accountTriage()?.clear_freeze_actionable || this.accountFreezeClearLoading();
     }
     return true;
+  }
+
+  exposureOverrideActionDisabled(condition: AccountConditionRow): boolean {
+    return (
+      this.exposureResolutionLoading() !== null ||
+      this.exposureOverrideReasonMissing() ||
+      !condition.owner.strategy_instance_id ||
+      !condition.owner.run_id
+    );
   }
 
   runConditionAction(condition: AccountConditionRow): void {

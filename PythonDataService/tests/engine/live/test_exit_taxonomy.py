@@ -31,6 +31,17 @@ def test_exit_taxonomy_separates_halt_crash_and_missing_status() -> None:
     assert missing_status.registry_source == "host_daemon.ended_without_status"
 
 
+def test_exit_taxonomy_keeps_unclassified_statuses_ambiguous() -> None:
+    unclassified = classify_run_exit(
+        RunExitEvidence(status_present=True, exit_code=0, exit_reason="legacy_unknown"),
+        returncode=0,
+        stopping=False,
+    )
+
+    assert unclassified.category == "unclassified"
+    assert unclassified.registry_source == "host_daemon.ended_without_status"
+
+
 def test_false_crash_repair_requires_positive_non_crash_status() -> None:
     assert (
         false_crash_repair_source(
@@ -45,3 +56,9 @@ def test_false_crash_repair_requires_positive_non_crash_status() -> None:
         is None
     )
     assert false_crash_repair_source(RunExitEvidence(status_present=False)) is None
+    assert (
+        false_crash_repair_source(
+            RunExitEvidence(status_present=True, exit_code=0, exit_reason="legacy_unknown")
+        )
+        is None
+    )
