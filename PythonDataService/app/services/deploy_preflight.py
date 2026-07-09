@@ -2,27 +2,48 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from app.broker.ibkr.config import get_settings
+from app.broker.runtime_snapshot import BrokerRuntimeSnapshot, snapshot_data_plane_broker
+from app.engine.live import host_daemon_client
+from app.engine.live.account_artifacts import read_account_freeze
 from app.schemas.operator_blocker import NavigateAction, OperatorBlocker, OperatorMove
+from app.services.account_truth_snapshot import assess_account_truth, get_account_truth_snapshot_provider
+from app.services.fleet_contamination import compute_account_fleet_contamination
+from app.services.strategy_validation_manifest import (
+    load_strategy_validation_entries,
+    strategy_registry_seeds,
+)
 
 BrokerDeployConnectionState = Literal[
     "connected",
     "soft_lost",
     "subscriptions_stale",
     "degraded_data_farm",
-    "reconnecting",
-    "recovering",
-    "hard_down",
     "disconnected",
-    "disabled",
-    "unknown",
 ]
 
-_BROKER_DOWN_STATES = frozenset({"hard_down", "disconnected", "disabled", "unknown"})
-_BROKER_WAIT_STATES = frozenset({"reconnecting", "recovering", "soft_lost"})
+_BROKER_DEPLOY_STATES: frozenset[BrokerDeployConnectionState] = frozenset(
+    {
+        "connected",
+        "soft_lost",
+        "subscriptions_stale",
+        "degraded_data_farm",
+        "disconnected",
+    }
+)
+_LIVE_PROCESS_STATES = frozenset({"running", "stopping"})
+
+
+def _now_ms() -> int:
+    """Current wall-clock as int64 ms UTC for account-truth freshness checks."""
+
+    return int(datetime.now(UTC).timestamp() * 1000)
 
 
 class DeployPreflightSignals(BaseModel):
@@ -35,6 +56,67 @@ class DeployPreflightSignals(BaseModel):
     fleet_blocks_starts: bool
     strategy_deployable: bool
     instance_already_running: bool
+
+
+def _runtime_connection_state_value(
+    snapshot: BrokerRuntimeSnapshot,
+) -> BrokerDeployConnectionState | None:
+    """Deploy preflight uses the data-plane ``IbkrClient`` state only.
+
+    Broader cockpit states such as ``hard_down``, ``disabled``, or
+    ``reconnecting`` are authored by broker-health overlays. They are not
+    observable at this boundary, so keeping them out of this type prevents dead
+    blocker policy from drifting away from real inputs.
+    """
+
+    state = snapshot.connection_state
+    return state if state in _BROKER_DEPLOY_STATES else None
+
+
+def _strategy_is_deployable(strategy_key: str) -> bool:
+    entries = load_strategy_validation_entries(strategy_registry_seeds())
+    return any(entry.strategy_key == strategy_key and entry.deployable for entry in entries)
+
+
+async def _instance_is_running_or_stopping(instance_id: str) -> bool:
+    settings = get_settings()
+    _result, daemon = await host_daemon_client.fetch_instances(settings.live_runner_daemon_url)
+    if daemon is None:
+        return False
+    for inst in daemon.get("instances", []):
+        if inst.get("strategy_instance_id") != instance_id:
+            continue
+        process = inst.get("process")
+        if isinstance(process, dict) and process.get("state") in _LIVE_PROCESS_STATES:
+            return True
+    return False
+
+
+async def gather_deploy_preflight_signals(
+    strategy_key: str,
+    account_id: str,
+    instance_id: str,
+) -> DeployPreflightSignals:
+    """Resolve deploy preconditions server-side for the blocker author."""
+
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    artifacts_root = root.parent
+
+    daemon_result, _health = await host_daemon_client.fetch_health(settings.live_runner_daemon_url)
+    account_freeze = read_account_freeze(artifacts_root, account_id)
+    account_truth = get_account_truth_snapshot_provider().get(account_id)
+    fleet = await compute_account_fleet_contamination(settings, root)
+
+    return DeployPreflightSignals(
+        daemon_reachable=daemon_result.kind == "CONNECTED",
+        broker_connection_state=_runtime_connection_state_value(snapshot_data_plane_broker()),
+        account_frozen=account_freeze is not None,
+        account_proven=assess_account_truth(account_truth, now_ms=_now_ms()).status == "pass",
+        fleet_blocks_starts=fleet.policy_blocks_starts,
+        strategy_deployable=_strategy_is_deployable(strategy_key),
+        instance_already_running=await _instance_is_running_or_stopping(instance_id),
+    )
 
 
 def _nav(label: str, route: str, fragment: str | None = None) -> OperatorMove:
@@ -63,7 +145,7 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
         )
 
     broker_state = signals.broker_connection_state
-    if broker_state is None or broker_state in _BROKER_DOWN_STATES:
+    if broker_state is None or broker_state == "disconnected":
         blockers.append(
             OperatorBlocker(
                 id="broker_disconnected",
@@ -75,14 +157,14 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
                 applies_to="both",
             )
         )
-    elif broker_state in _BROKER_WAIT_STATES:
+    elif broker_state == "soft_lost":
         blockers.append(
             OperatorBlocker(
-                id="broker_reconnecting",
+                id="broker_soft_lost",
                 severity="blocking",
                 disposition="wait",
-                headline="Broker reconnecting",
-                detail="Waiting for the broker session to reconnect.",
+                headline="Broker connection temporarily lost",
+                detail="Waiting for the broker session to recover.",
                 applies_to="both",
             )
         )

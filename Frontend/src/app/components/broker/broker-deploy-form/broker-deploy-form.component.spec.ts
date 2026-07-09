@@ -3,8 +3,6 @@ import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AccountTriageResponse } from '../../../api/account-reconciliation.types';
-import type { AccountTruthResponse } from '../../../api/broker-models';
 import type { DeployPreflightResponse } from '../../../api/operator-blocker.types';
 import { ActionPlanPreviewService } from '../../../api/action-plan-preview.service';
 import { BrokerService } from '../../../services/broker.service';
@@ -13,7 +11,6 @@ import { LiveRunsService } from '../../../services/live-runs.service';
 import { StrategyValidationService } from '../../../services/strategy-validation.service';
 import type { StrategyValidationCatalog } from '../../../services/strategy-validation.types';
 import type { ActionPlan } from '../../../api/action-plan.types';
-import { makeCleanAccountTriage } from '../testing/account-triage-fixtures';
 import { BrokerDeployFormComponent } from './broker-deploy-form.component';
 
 let activeFixture: { destroy(): void; detectChanges(): void } | null = null;
@@ -35,8 +32,6 @@ function exposureLaunchDecision(fixture: { nativeElement: HTMLElement }): HTMLEl
   return fixture.nativeElement.querySelector('.launch-decision');
 }
 
-type AccountTruthFixture = Pick<AccountTruthResponse, 'final_verdict' | 'status_label' | 'status_detail'> &
-  Partial<Pick<AccountTruthResponse, 'blockers' | 'evidence_gaps' | 'invariants' | 'source_freshness'>>;
 const DEFAULT_STRATEGY_VALIDATION_CATALOG: StrategyValidationCatalog = {
   strategies: [
     {
@@ -92,8 +87,6 @@ const DEFAULT_STRATEGY_VALIDATION_CATALOG: StrategyValidationCatalog = {
 
 function setup(
   opts: {
-    daemonDown?: boolean;
-    fleetBlocks?: boolean;
     qcEntries?: string[];
     parityGate?: {
       verdict: 'proven_match' | 'proven_mismatch' | 'cannot_prove';
@@ -117,8 +110,6 @@ function setup(
       description: string | null;
     }[];
     accountPromise?: Promise<{ account_id: string } | null>;
-    accountTruth?: AccountTruthFixture;
-    accountTriage?: AccountTriageResponse;
     strategyValidationCatalog?: StrategyValidationCatalog;
     deployPreflight?: DeployPreflightResponse;
   } = {},
@@ -189,14 +180,6 @@ function setup(
   };
   const broker = {
     account: vi.fn().mockReturnValue(opts.accountPromise ?? Promise.resolve({ account_id: 'DU123' })),
-    accountTruth: vi.fn().mockResolvedValue(
-      opts.accountTruth ?? {
-        final_verdict: 'clean',
-        status_label: 'Clean',
-        status_detail: 'Broker/account evidence is fresh enough to start.',
-      },
-    ),
-    accountTriage: vi.fn().mockResolvedValue(opts.accountTriage ?? cleanTriage()),
     positions: vi
       .fn()
       .mockResolvedValue({ positions: opts.positions ?? [] }),
@@ -204,13 +187,13 @@ function setup(
   const connectivity = {
     links: () => [],
     blockers: () => [],
-    daemonState: () => (opts.daemonDown ? 'down' : 'ok'),
+    daemonState: () => 'ok',
     brokerState: () => 'ok',
     brokerDetail: () => 'Connected',
-    fleetState: () => (opts.fleetBlocks ? 'warn' : 'ok'),
+    fleetState: () => 'ok',
     nothingDeployed: () => false,
-    daemonDown: () => opts.daemonDown ?? false,
-    fleetBlocksStarts: () => opts.fleetBlocks ?? false,
+    daemonDown: () => false,
+    fleetBlocksStarts: () => false,
     daemonFreshness: () => ({ state: 'unknown', sha: null, commitsBehind: null }),
     reload: vi.fn(),
   };
@@ -270,10 +253,6 @@ function validDeploymentValidationActionPlan(): ActionPlan {
     ],
     on_exit: [{ kind: 'close_leg', entry_leg_id: 'spy_long' }],
   };
-}
-
-function cleanTriage(): AccountTriageResponse {
-  return makeCleanAccountTriage({ accountId: 'DU123' });
 }
 
 function fillRequired(component: BrokerDeployFormComponent) {
@@ -427,8 +406,6 @@ describe('BrokerDeployFormComponent', () => {
         expect.stringContaining('Launch'),
       ]),
     );
-
-    expect(host.querySelector('.deploy-readiness-strip')).toBeNull();
   });
 
   it('reveals sizing controls when the Sizing step is selected', async () => {
@@ -1162,6 +1139,21 @@ describe('BrokerDeployFormComponent', () => {
     expect(svc.deployInstance).not.toHaveBeenCalled();
   });
 
+  it('moves a form blocker to the tab that owns its anchor', async () => {
+    const { fixture, component } = setup();
+    await flush();
+    fillRequired(component);
+    component.sizingPreset.set('custom');
+    component.customKind.set('FixedShares');
+    component.customValue.set('1.5');
+    component.setActiveDeployTab('strategy');
+    fixture.detectChanges();
+
+    buttonContaining(fixture, 'Fix sizing').click();
+
+    expect(component.activeDeployTab()).toBe('sizing');
+  });
+
   it('enables Deploy & run when preflight is ready and the form is complete', async () => {
     const { fixture, component } = setup();
     await flush();
@@ -1534,11 +1526,6 @@ describe('BrokerDeployFormComponent', () => {
     };
     const broker = {
       account: vi.fn().mockResolvedValue(null),
-      accountTruth: vi.fn().mockResolvedValue({
-        final_verdict: 'not_proven',
-        status_label: 'Not proven',
-        status_detail: 'No connected account proof.',
-      }),
       positions: vi.fn().mockResolvedValue({ positions: [] }),
     };
     const strategyValidation = {

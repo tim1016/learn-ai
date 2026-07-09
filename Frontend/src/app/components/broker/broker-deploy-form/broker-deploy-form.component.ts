@@ -12,7 +12,6 @@ import {
 } from '@angular/core';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { InputTextModule } from 'primeng/inputtext';
-import type { AccountTriageResponse } from '../../../api/account-reconciliation.types';
 import {
   DEFAULT_MAX_ORDERS_PER_DAY,
   type ExposureCoherencePosture,
@@ -26,7 +25,6 @@ import {
 import type { ActionPlan } from '../../../api/action-plan.types';
 import { ActionPlanPickerComponent } from './action-plan-picker/action-plan-picker.component';
 import { BrokerService } from '../../../services/broker.service';
-import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { StrategyValidationService } from '../../../services/strategy-validation.service';
 import type { StrategyValidationSummary } from '../../../services/strategy-validation.types';
@@ -80,6 +78,16 @@ type DeployTabKey = 'strategy' | 'signal' | 'sizing' | 'legs' | 'launch';
 type ExecutionMode = 'read_only' | 'paper_orders' | 'live';
 type CoherenceRecoveryKind = 'identity' | 'exposure';
 
+const DEPLOY_ANCHOR_TABS: Record<string, DeployTabKey | null> = {
+  'strategy-section': 'strategy',
+  'identity-coherence-card': null,
+  'signal-section': 'signal',
+  'sizing-section': 'sizing',
+  'action-plan-picker-heading': 'legs',
+  'launch-section': 'launch',
+  'exposure-launch-decision': 'launch',
+};
+
 interface DeployTab {
   key: DeployTabKey;
   label: string;
@@ -113,7 +121,6 @@ export class BrokerDeployFormComponent {
   private readonly svc = inject(LiveRunsService);
   private readonly broker = inject(BrokerService);
   private readonly strategyValidation = inject(StrategyValidationService);
-  protected readonly connectivity = inject(BrokerConnectivityService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
@@ -123,15 +130,6 @@ export class BrokerDeployFormComponent {
   readonly strategyValidations = resource({ loader: () => this.strategyValidation.getCatalog() });
   readonly specFixtures = resource({ loader: () => this.svc.getSpecStrategyFixtures() });
   readonly account = resource({ loader: () => this.broker.account() });
-  readonly accountTruth = resource({ loader: () => this.broker.accountTruth() });
-  readonly accountTriage = resource<AccountTriageResponse | null, string | null>({
-    params: () => {
-      const accountId = this.brokerAccountId();
-      return accountId === '' ? null : accountId;
-    },
-    loader: ({ params }) => (params === null ? Promise.resolve(null) : this.broker.accountTriage(params)),
-    defaultValue: null,
-  });
   // ADR 0009 § 9: symbol-scoped all-in coexistence guard.
   readonly positions = resource({ loader: () => this.broker.positions() });
   readonly deployPreflight = resource<
@@ -465,10 +463,7 @@ export class BrokerDeployFormComponent {
     return resolveBlockerMove(move, {
       navigate: (route, fragment) =>
         void this.router.navigate([route], fragment ? { fragment } : {}),
-      focusAnchor: (anchor) => {
-        this.setActiveDeployTab('strategy');
-        this.host.nativeElement.querySelector(`#${anchor}`)?.scrollIntoView({ block: 'center' });
-      },
+      focusAnchor: (anchor) => this.focusDeployAnchor(anchor),
     });
   }
   constructor() {
@@ -851,6 +846,16 @@ export class BrokerDeployFormComponent {
 
   setActiveDeployTab(key: DeployTabKey): void {
     this.activeDeployTab.set(key);
+  }
+
+  private focusDeployAnchor(anchor: string): void {
+    const tab = DEPLOY_ANCHOR_TABS[anchor];
+    if (tab) {
+      this.setActiveDeployTab(tab);
+    }
+    queueMicrotask(() => {
+      this.host.nativeElement.querySelector<HTMLElement>(`#${anchor}`)?.scrollIntoView?.({ block: 'center' });
+    });
   }
 
   /** ADR 0009 — preset selector. Reference parity is gated by the audit-copy

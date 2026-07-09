@@ -105,6 +105,7 @@
         <p class="blocked" role="status">{{ commandStatus() }}</p>
         @if (identityCoherenceEvidence()) {
           <app-deploy-coherence-card
+            id="identity-coherence-card"
             title="Run identity"
             ariaLabel="Run identity confirmation"
             [facts]="identityCoherenceFacts()"
@@ -115,6 +116,7 @@
         }
         @if (exposureCoherenceEvidence()) {
           <app-deploy-coherence-card
+            id="exposure-coherence-card"
             title="Inherited exposure"
             ariaLabel="Exposure confirmation"
             [facts]="exposureCoherenceFacts()"
@@ -394,6 +396,7 @@
         @let exposureDecision = exposureLaunchDecision();
         @if (exposureDecision) {
           <app-exposure-launch-decision
+            id="exposure-launch-decision"
             [decision]="exposureDecision"
             [facts]="exposureCoherenceFacts()"
             [busy]="busy()"

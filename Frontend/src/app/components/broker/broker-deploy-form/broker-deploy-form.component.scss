@@ -133,62 +133,6 @@ small code {
   padding: var(--space-3);
 }
 
-.deploy-readiness-strip {
-  display: grid;
-  grid-column: 1 / -1;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--space-2);
-}
-
-.readiness-fact {
-  display: grid;
-  gap: 0.12rem;
-  min-width: 0;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  color: inherit;
-  text-decoration: none;
-}
-
-.readiness-fact span,
-.readiness-fact strong,
-.readiness-fact small {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.readiness-fact span {
-  color: var(--text-subtle);
-  font-size: var(--fs-xs);
-}
-
-.readiness-fact strong {
-  color: var(--text-primary);
-  font-size: var(--fs-sm);
-}
-
-.readiness-fact small {
-  font-size: var(--fs-xs);
-  line-height: 1.25;
-}
-
-.readiness-fact.state-ok {
-  border-color: color-mix(in srgb, var(--bull) 45%, var(--border));
-  background: var(--bull-soft);
-}
-
-.readiness-fact.state-warn {
-  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
-  background: var(--warn-soft);
-}
-
-.readiness-fact.state-down {
-  border-color: color-mix(in srgb, var(--bear) 45%, var(--border));
-  background: var(--bear-soft);
-}
-
 .form-tabs {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -569,30 +513,6 @@ small code {
   color: var(--text-subtle);
 }
 
-.dot {
-  width: 0.55rem;
-  height: 0.55rem;
-  border-radius: 50%;
-  background: var(--dot, var(--text-muted));
-}
-
-.state-ok {
-  --dot: var(--bull);
-}
-
-.state-down {
-  --dot: var(--bear);
-}
-
-.state-warn {
-  --dot: var(--warn);
-}
-
-.state-unknown,
-.state-pending {
-  --dot: var(--text-muted);
-}
-
 .at-deploy {
   opacity: 0.9;
 }
@@ -749,7 +669,6 @@ small code {
 @media (max-width: 960px) {
   .workspace,
   .deploy-top-strip,
-  .deploy-readiness-strip,
   .form-tabs,
   .validation-summary,
   .mode {
@@ -764,10 +683,6 @@ small code {
 
   .readiness {
     position: static;
-  }
-
-  .deploy-readiness-strip {
-    display: none;
   }
 
   .field.inline {

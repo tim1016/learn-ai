@@ -11,7 +11,7 @@ from app.main import app
 
 @pytest.fixture
 def patch_signals(monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
-    from app.routers import live_instances
+    from app.services import deploy_preflight
     from app.services.deploy_preflight import DeployPreflightSignals
 
     def install(**overrides: object) -> None:
@@ -33,7 +33,7 @@ def patch_signals(monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
         ) -> DeployPreflightSignals:
             return DeployPreflightSignals(**base)
 
-        monkeypatch.setattr(live_instances, "_gather_deploy_preflight_signals", fake)
+        monkeypatch.setattr(deploy_preflight, "gather_deploy_preflight_signals", fake)
 
     return install
 
@@ -58,7 +58,7 @@ async def test_preflight_ready_when_all_healthy(patch_signals: Callable[..., Non
 
 
 async def test_preflight_blocks_when_broker_down(patch_signals: Callable[..., None]) -> None:
-    patch_signals(broker_connection_state="hard_down")
+    patch_signals(broker_connection_state="disconnected")
 
     resp = await _get(
         {"strategy_key": "spy_ema", "account_id": "DUM1", "instance_id": "bot1"}

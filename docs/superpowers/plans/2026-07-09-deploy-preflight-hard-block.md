@@ -94,10 +94,10 @@ def test_fix_elsewhere_requires_primary_move():
 def test_wait_must_not_carry_a_move():
     with pytest.raises(ValidationError, match="must not carry a primary_move"):
         OperatorBlocker(
-            id="broker_reconnecting",
+            id="broker_soft_lost",
             severity="blocking",
             disposition="wait",
-            headline="Waiting for broker to reconnect",
+            headline="Broker connection temporarily lost",
             detail=None,
             primary_move=_nav_move(),
             secondary_moves=[],
@@ -250,7 +250,14 @@ git commit -m "feat: add OperatorBlocker disposition contract + pairing invarian
 - Produces: `DeployPreflightSignals` (frozen dataclass of already-resolved primitives) and `author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBlocker]`.
 
 Signal fields and their sources (wired in Task 3):
-`daemon_reachable: bool` · `broker_connection_state: str | None` (`connected|hard_down|disconnected|disabled|reconnecting|recovering|soft_lost|degraded_data_farm|subscriptions_stale`; `None`=unknown) · `account_frozen: bool` · `account_proven: bool` · `fleet_blocks_starts: bool` · `strategy_deployable: bool` · `instance_already_running: bool`.
+`daemon_reachable: bool` · `broker_connection_state: str | None` (`connected|soft_lost|subscriptions_stale|degraded_data_farm|disconnected`; `None`=unavailable data-plane broker snapshot) · `account_frozen: bool` · `account_proven: bool` · `fleet_blocks_starts: bool` · `strategy_deployable: bool` · `instance_already_running: bool`.
+
+Boundary note from the implementation review: deploy-preflight reads
+`snapshot_data_plane_broker().connection_state`, the `IbkrClient` state subset.
+Broader cockpit states such as `hard_down`, `disabled`, `reconnecting`, and
+`recovering` come from broker-health monitor overlays and must not be authored
+as deploy-preflight-only branches unless this endpoint is rewired to that
+broader source.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -286,15 +293,15 @@ def test_daemon_down_is_blocking_fix_elsewhere():
     assert ids["daemon_down"].primary_move is not None
 
 
-def test_broker_hard_down_blocks_deploy():
-    blockers = author_deploy_blockers(_healthy().model_copy(update={"broker_connection_state": "hard_down"}))
+def test_broker_disconnected_blocks_deploy():
+    blockers = author_deploy_blockers(_healthy().model_copy(update={"broker_connection_state": "disconnected"}))
     ids = {b.id for b in blockers}
     assert "broker_disconnected" in ids
 
 
-def test_broker_reconnecting_is_wait_with_no_move():
-    blockers = author_deploy_blockers(_healthy().model_copy(update={"broker_connection_state": "reconnecting"}))
-    match = next(b for b in blockers if b.id == "broker_reconnecting")
+def test_broker_soft_lost_is_wait_with_no_move():
+    blockers = author_deploy_blockers(_healthy().model_copy(update={"broker_connection_state": "soft_lost"}))
+    match = next(b for b in blockers if b.id == "broker_soft_lost")
     assert match.severity == "blocking"
     assert match.disposition == "wait"
     assert match.primary_move is None
@@ -372,19 +379,26 @@ verbatim. Deploy-context blockers are all ``fix_elsewhere`` (navigate) or
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict
 
 from app.schemas.operator_blocker import NavigateAction, OperatorBlocker, OperatorMove
 
-_BROKER_DOWN_STATES = frozenset({"hard_down", "disconnected", "disabled"})
-_BROKER_WAIT_STATES = frozenset({"reconnecting", "recovering", "soft_lost"})
+BrokerDeployConnectionState = Literal[
+    "connected",
+    "soft_lost",
+    "subscriptions_stale",
+    "degraded_data_farm",
+    "disconnected",
+]
 
 
 class DeployPreflightSignals(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     daemon_reachable: bool
-    broker_connection_state: str | None
+    broker_connection_state: BrokerDeployConnectionState | None
     account_frozen: bool
     account_proven: bool
     fleet_blocks_starts: bool
@@ -413,7 +427,7 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
         )
 
     state = signals.broker_connection_state
-    if state in _BROKER_DOWN_STATES or state is None:
+    if state is None or state == "disconnected":
         blockers.append(
             OperatorBlocker(
                 id="broker_disconnected",
@@ -425,14 +439,14 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
                 applies_to="both",
             )
         )
-    elif state in _BROKER_WAIT_STATES:
+    elif state == "soft_lost":
         blockers.append(
             OperatorBlocker(
-                id="broker_reconnecting",
+                id="broker_soft_lost",
                 severity="blocking",
                 disposition="wait",
-                headline="Broker reconnecting",
-                detail="Waiting for the broker session to reconnect.",
+                headline="Broker connection temporarily lost",
+                detail="Waiting for the broker session to recover.",
                 applies_to="both",
             )
         )
@@ -614,7 +628,7 @@ async def test_preflight_ready_when_all_healthy(_patch_signals):
 
 
 async def test_preflight_blocks_when_broker_down(_patch_signals):
-    _patch_signals(broker_connection_state="hard_down")
+    _patch_signals(broker_connection_state="disconnected")
     resp = await _get({"strategy_key": "spy_ema", "account_id": "DUM1", "instance_id": "bot1"})
     assert resp.status_code == 200
     body = resp.json()
@@ -1284,7 +1298,7 @@ Expected: clean.
 - [ ] **Step 4: DoD walk-through (manual, documented in the PR description)**
 
 Confirm each acceptance criterion, with the mechanism:
-- Broker `hard_down` → `deploy_preflight` returns `ready:false` + `broker_disconnected` → button disabled, "Connect the broker →" shown. ✓
+- Broker `disconnected` → `deploy_preflight` returns `ready:false` + `broker_disconnected` → button disabled, "Connect the broker →" shown. ✓
 - Daemon down → `daemon_down` blocker → "Start the engine →". ✓
 - Account frozen → `account_frozen` blocker → "Open account monitor →". ✓
 - Account not proven / fleet contaminated / strategy not validated → each newly enforced (were unchecked before). ✓

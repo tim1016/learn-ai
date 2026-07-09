@@ -122,6 +122,13 @@ The just-built verdict card (`2026-07-08-bot-control-verdict-card-design.md`) is
 
 Every failure mode found in the code, pinned to disposition + move. **★ = broken/missing today.**
 
+Slice 1 deploy-preflight consumes the data-plane `IbkrClient` connection state
+only (`connected|soft_lost|subscriptions_stale|degraded_data_farm|disconnected`;
+`None` means the broker snapshot is unavailable). Broader cockpit states such as
+`hard_down`, `disabled`, `reconnecting`, and `recovering` are authored by the
+broker-health monitor overlay and remain catalog concepts for bot-control/run
+surfaces, not deploy-preflight inputs.
+
 ### `fix_elsewhere` — real fix, off this screen (link + one sentence)
 
 | id | applies | sev | primary_move | note |

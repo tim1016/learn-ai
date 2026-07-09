@@ -29,19 +29,19 @@ def test_daemon_down_is_blocking_fix_elsewhere() -> None:
     assert ids["daemon_down"].primary_move is not None
 
 
-def test_broker_hard_down_blocks_deploy() -> None:
+def test_broker_disconnected_blocks_deploy() -> None:
     blockers = author_deploy_blockers(
-        _healthy().model_copy(update={"broker_connection_state": "hard_down"})
+        _healthy().model_copy(update={"broker_connection_state": "disconnected"})
     )
 
     assert "broker_disconnected" in {blocker.id for blocker in blockers}
 
 
-def test_broker_reconnecting_is_wait_with_no_move() -> None:
+def test_broker_soft_lost_is_wait_with_no_move() -> None:
     blockers = author_deploy_blockers(
-        _healthy().model_copy(update={"broker_connection_state": "reconnecting"})
+        _healthy().model_copy(update={"broker_connection_state": "soft_lost"})
     )
-    match = next(blocker for blocker in blockers if blocker.id == "broker_reconnecting")
+    match = next(blocker for blocker in blockers if blocker.id == "broker_soft_lost")
 
     assert match.severity == "blocking"
     assert match.disposition == "wait"
