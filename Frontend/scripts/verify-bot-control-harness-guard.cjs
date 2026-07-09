@@ -36,6 +36,7 @@ const mutationMethods = [
   'issueInstanceCommand',
   'reconcileInstance',
   'recordCrashRecoveryOverride',
+  'deleteBot',
 ];
 const mutationMethodSet = new Set(mutationMethods);
 const mutationHelperNames = [
@@ -49,6 +50,7 @@ const mutationHelperNames = [
   'allowIssueInstanceCommandCall',
   'allowReconcileInstanceCall',
   'allowCrashRecoveryOverrideCall',
+  'allowDeleteBotCall',
   'rejectReconcileInstanceCall',
 ];
 const mutationMockNames = new Set([
