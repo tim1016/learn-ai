@@ -1187,6 +1187,40 @@ describe('BrokerDeployFormComponent', () => {
     expect(deployButton(fixture).disabled).toBe(false);
   });
 
+  it('keeps deploy command copy and validity stable while a deployment-name preflight reloads', async () => {
+    const pendingReload = deferred<DeployPreflightResponse>();
+    const { fixture, svc, component } = setup();
+    svc.deployPreflight
+      .mockResolvedValueOnce({ ready: true, blockers: [] })
+      .mockImplementation(() => pendingReload.promise);
+    await flush();
+    fillRequired(component);
+    await settleResource(fixture);
+
+    expect(component.commandStatus()).toBe('Ready to deploy & run.');
+    expect(deployButton(fixture).disabled).toBe(false);
+
+    typeText(fixture, 'Deployment name', 'deployment-validation-paper-next');
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    expect(svc.deployPreflight).toHaveBeenLastCalledWith({
+      strategyKey: 'deployment_validation',
+      accountId: 'DU123',
+      instanceId: 'deployment-validation-paper-next',
+    });
+    expect(component.deployPreflight.isLoading()).toBe(true);
+    expect(component.commandStatus()).toBe('Ready to deploy & run.');
+    expect(deployButton(fixture).disabled).toBe(false);
+
+    pendingReload.resolve({ ready: true, blockers: [] });
+    await settleResource(fixture);
+
+    expect(component.commandStatus()).toBe('Ready to deploy & run.');
+    expect(deployButton(fixture).disabled).toBe(false);
+  });
+
   it('moves a form blocker to the tab that owns its anchor', async () => {
     const { fixture, component } = setup();
     await flush();

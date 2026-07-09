@@ -101,6 +101,17 @@ interface DeployCommandState {
   canSubmit: boolean;
 }
 
+interface DeployPreflightParams {
+  strategyKey: string;
+  accountId: string;
+  instanceId: string;
+}
+
+interface SettledDeployPreflight {
+  params: DeployPreflightParams;
+  response: DeployPreflightResponse;
+}
+
 @Component({
   selector: 'app-broker-deploy-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -134,23 +145,14 @@ export class BrokerDeployFormComponent {
   readonly positions = resource({ loader: () => this.broker.positions() });
   readonly deployPreflight = resource<
     DeployPreflightResponse | null,
-    { strategyKey: string; accountId: string; instanceId: string } | null
+    DeployPreflightParams | null
   >({
-    params: () => {
-      const strategyKey = this.strategyKey().trim();
-      const accountId = this.accountId().trim();
-      const instanceId = this.instanceId().trim();
-      if (strategyKey === '' || accountId === '') return null;
-      return {
-        strategyKey,
-        accountId,
-        instanceId: instanceId === '' ? '__unnamed__' : instanceId,
-      };
-    },
+    params: () => this.deployPreflightRequest(),
     loader: ({ params }) =>
       params === null ? Promise.resolve(null) : this.svc.deployPreflight(params),
     defaultValue: null,
   });
+  private readonly settledDeployPreflight = signal<SettledDeployPreflight | null>(null);
 
   readonly strategyKey = signal<string>('');
   readonly specPath = signal<string>('');
@@ -216,6 +218,20 @@ export class BrokerDeployFormComponent {
     if (this.deployedInstanceId() !== this.instanceId().trim()) return null;
     return `Start accepted for run ${deployed.run_id}. View deployment to monitor the live run.`;
   });
+  readonly visibleDeployPreflight = computed<DeployPreflightResponse | null>(() => {
+    const current = this.deployPreflight.value();
+    if (current !== null) return current;
+    const settled = this.settledDeployPreflight();
+    const params = this.deployPreflightRequest();
+    if (params === null || settled === null) return null;
+    if (
+      settled.params.strategyKey !== params.strategyKey ||
+      settled.params.accountId !== params.accountId
+    ) {
+      return null;
+    }
+    return settled.response;
+  });
   readonly commandState = computed<DeployCommandState>(() => {
     if (this.busy()) {
       return { kind: 'busy', message: 'Submitting deployment.', canSubmit: false };
@@ -224,7 +240,7 @@ export class BrokerDeployFormComponent {
     if (accepted !== null) {
       return { kind: 'accepted', message: accepted, canSubmit: false };
     }
-    if (this.deployPreflight.isLoading()) {
+    if (this.deployPreflight.isLoading() && this.visibleDeployPreflight() === null) {
       return { kind: 'blocked', message: 'Checking deploy preflight.', canSubmit: false };
     }
     const top = this.topBlocker();
@@ -449,7 +465,7 @@ export class BrokerDeployFormComponent {
   );
 
   readonly blockers = computed<OperatorBlocker[]>(() => [
-    ...(this.deployPreflight.value()?.blockers ?? []),
+    ...(this.visibleDeployPreflight()?.blockers ?? []),
     ...this.formBlockers(),
   ]);
 
@@ -533,6 +549,12 @@ export class BrokerDeployFormComponent {
       if (this.sizingPreset() === 'reference_parity' && !this.referenceParityAvailable()) {
         this.sizingPreset.set('safe_canary');
       }
+    });
+    effect(() => {
+      const response = this.deployPreflight.value();
+      const params = this.deployPreflightRequest();
+      if (this.deployPreflight.isLoading() || response === null || params === null) return;
+      this.settledDeployPreflight.set({ params, response });
     });
 
     afterEveryRender(() => {
@@ -673,6 +695,18 @@ export class BrokerDeployFormComponent {
     return e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement
       ? e.target.value
       : '';
+  }
+
+  private deployPreflightRequest(): DeployPreflightParams | null {
+    const strategyKey = this.strategyKey().trim();
+    const accountId = this.accountId().trim();
+    const instanceId = this.instanceId().trim();
+    if (strategyKey === '' || accountId === '') return null;
+    return {
+      strategyKey,
+      accountId,
+      instanceId: instanceId === '' ? '__unnamed__' : instanceId,
+    };
   }
 
   private renderedFieldValue(
