@@ -1,5 +1,7 @@
 import type {
   ActionCapability,
+  BotDailyLifecycleProjection,
+  BotLifecycleAction,
   FleetAccountSummary,
   GateSuggestedAction,
   HostProcessState,
@@ -57,6 +59,8 @@ export interface BotControlScenarioOptions {
   poisoned?: boolean;
   readinessGates?: ScenarioReadinessGate[];
 }
+
+type ScenarioProcessState = NonNullable<BotControlScenarioOptions['processState']>;
 
 export function buildScenarioStatus(opts: BotControlScenarioOptions): LiveInstanceStatus {
   const processState = opts.processState ?? 'running';
@@ -262,7 +266,76 @@ export function buildScenarioStatus(opts: BotControlScenarioOptions): LiveInstan
           },
     }),
     lifecycle_chart: chart,
+    daily_lifecycle: dailyLifecycleForScenario({
+      processState,
+      readinessVerdict,
+      poisoned: !!opts.poisoned,
+    }),
     fetched_at_ms: NOW_MS,
+  };
+}
+
+function dailyLifecycleAction(
+  overrides: Pick<BotLifecycleAction, 'id' | 'label'> & Partial<BotLifecycleAction>,
+): BotLifecycleAction {
+  return {
+    enabled: true,
+    reason: null,
+    offer_id: null,
+    expires_at_ms: null,
+    ...overrides,
+  };
+}
+
+function dailyLifecycleForScenario(opts: {
+  processState: ScenarioProcessState;
+  readinessVerdict: ReadinessVerdict;
+  poisoned: boolean;
+}): BotDailyLifecycleProjection {
+  const onDuty = opts.processState === 'running' || opts.processState === 'stopping';
+  if (onDuty) {
+    return {
+      phase: 'ON_DUTY',
+      presence_label: 'On duty',
+      display_status: opts.processState === 'stopping' ? 'Clocking out' : 'On duty',
+      attention_badge: null,
+      reason: opts.processState === 'stopping' ? 'Clean-exit procedure is in progress.' : null,
+      on_roster: true,
+      active_run_id: 'run-1',
+      latest_run_id: 'run-1',
+      drift_detected: false,
+      primary_action: dailyLifecycleAction({ id: 'end_day_now', label: 'End day now' }),
+      ambient_actions: [
+        dailyLifecycleAction({ id: 'take_off_roster', label: 'Take off roster' }),
+      ],
+    };
+  }
+
+  const readyForStart = opts.readinessVerdict === 'READY' && !opts.poisoned;
+  return {
+    phase: 'OFF_DUTY',
+    presence_label: 'Off duty',
+    display_status: readyForStart ? 'Ready' : 'Off duty',
+    attention_badge: readyForStart ? 'Ready' : null,
+    reason: readyForStart
+      ? 'Roll call offered a fresh start before stop-time.'
+      : 'Run roll call to issue a start offer.',
+    on_roster: true,
+    active_run_id: null,
+    latest_run_id: 'run-1',
+    drift_detected: false,
+    primary_action: readyForStart
+      ? dailyLifecycleAction({
+          id: 'confirm_start',
+          label: 'Start',
+          offer_id: 'offer-run-1',
+          expires_at_ms: NOW_MS + 600_000,
+        })
+      : null,
+    ambient_actions: [
+      dailyLifecycleAction({ id: 'take_off_roster', label: 'Take off roster' }),
+      dailyLifecycleAction({ id: 'retire_replace', label: 'Retire & Replace' }),
+    ],
   };
 }
 

@@ -257,6 +257,7 @@ interface BotControlMutationResponses {
 }
 
 interface BotControlMutationFailures {
+  endDayNow?: unknown;
   setInstanceDesiredState?: unknown;
   reconcileInstance?: unknown;
 }
@@ -360,6 +361,9 @@ function applyMutationFailures(
   failures: BotControlMutationFailures | undefined,
 ): void {
   if (!failures) return;
+  if (hasOwn(failures, 'endDayNow')) {
+    liveRuns.endDayNow.mockRejectedValue(failures.endDayNow);
+  }
   if (hasOwn(failures, 'setInstanceDesiredState')) {
     rejectSetDesiredStateCall(liveRuns, failures.setInstanceDesiredState);
   }

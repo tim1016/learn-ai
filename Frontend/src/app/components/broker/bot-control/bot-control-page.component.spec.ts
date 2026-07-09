@@ -967,8 +967,8 @@ describe('BotControlPageComponent', () => {
       },
     });
     const { fixture, component, element } = await setupBotControlPage({
-      configureLiveRuns: (liveRuns) => {
-        liveRuns.endDayNow.mockRejectedValue(stopError);
+      mutationFailures: {
+        endDayNow: stopError,
       },
     });
 

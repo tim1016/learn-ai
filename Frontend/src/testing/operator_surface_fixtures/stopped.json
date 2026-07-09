@@ -119,7 +119,7 @@
         ],
         "severity": "warning",
         "state": "warning",
-        "summary": "The host is reachable but this bot has no active process. Start it to resume trading.",
+        "summary": "The host is reachable but this bot has no active process. Run roll call for a fresh start offer.",
         "title": "Bot process is not running"
       },
       {
@@ -256,7 +256,7 @@
     "last_exit_error_code": null,
     "last_exit_error_detail": {},
     "last_exit_error_message": null,
-    "notice": "The host is reachable but this bot has no active process. Start it to resume trading.",
+    "notice": "The host is reachable but this bot has no active process. Run roll call for a fresh start offer.",
     "start_capability": {
       "disabled_reason_code": "START_SETTINGS_INCOMPLETE",
       "enabled": false,
@@ -361,7 +361,7 @@
     "state": "NOT_AVAILABLE"
   },
   "run_signal": {
-    "detail": "The host is reachable but this bot has no active process. Start it to resume trading.",
+    "detail": "The host is reachable but this bot has no active process. Run roll call for a fresh start offer.",
     "state_label": "Off",
     "title": "Bot process is not running",
     "tone": "off"
