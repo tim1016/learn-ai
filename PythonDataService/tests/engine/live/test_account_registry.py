@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ from app.engine.live.account_artifacts import (
 )
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
+    backfill_false_crash_registry_rows,
     compute_reconcile_namespaces,
     crash_retired_restart_blocking_binding,
     evaluate_account_instance_binding,
@@ -39,6 +41,32 @@ def _binding(
         lifecycle_state="ACTIVE",
         recorded_at_ms=recorded_at_ms,
         source="host_daemon.start",
+    )
+
+
+def _write_run_status(
+    artifacts_root: Path,
+    run_id: str,
+    *,
+    exit_reason: str | None,
+    exit_code: int | None,
+) -> None:
+    run_dir = artifacts_root / "live_runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "run_status.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "run_id": run_id,
+                "started_at_ms": 1_700_000_000_000,
+                "last_update_ms": 1_700_000_010_000,
+                "ended_at_ms": 1_700_000_010_000,
+                "exit_code": exit_code,
+                "exit_reason": exit_reason,
+                "host_pid": 4242,
+            }
+        ),
+        encoding="utf-8",
     )
 
 
@@ -320,6 +348,129 @@ def test_crash_retired_restart_recovery_allows_non_crash_retirement(tmp_path: Pa
     )
 
     assert blocking_binding is None
+
+
+def test_backfill_false_crash_registry_rows_repairs_disproven_latest_crash(tmp_path: Path) -> None:
+    active = _binding(run_id="run-halt", recorded_at_ms=1_700_000_000_000)
+    retired = active.model_copy(
+        update={
+            "lifecycle_state": "RETIRED",
+            "recorded_at_ms": 1_700_000_010_000,
+            "source": "host_daemon.process_crashed",
+        }
+    )
+    write_account_instance_binding(tmp_path, active)
+    write_account_instance_binding(tmp_path, retired)
+    _write_run_status(tmp_path, "run-halt", exit_reason="fatal_halt", exit_code=1)
+
+    result = backfill_false_crash_registry_rows(
+        tmp_path,
+        account_id="DU123456",
+        now_ms=1_700_000_010_001,
+    )
+
+    assert result.accounts_scanned == 1
+    assert result.candidate_rows == 1
+    assert result.rows_repaired == 1
+    assert result.rows_skipped_no_disproof == 0
+    assert result.repaired_run_ids == ("run-halt",)
+    repaired = latest_account_instance_binding(
+        read_account_instance_registry(tmp_path, "DU123456"),
+        account_id="DU123456",
+        strategy_instance_id="spy-ema-paper-1",
+    )
+    assert repaired is not None
+    assert repaired.source == "host_daemon.process_halted"
+    assert repaired.recorded_at_ms == 1_700_000_010_001
+
+    second = backfill_false_crash_registry_rows(
+        tmp_path,
+        account_id="DU123456",
+        now_ms=1_700_000_010_002,
+    )
+
+    assert second.candidate_rows == 0
+    assert second.rows_repaired == 0
+    assert len(read_account_instance_registry(tmp_path, "DU123456")) == 3
+
+
+def test_backfill_false_crash_registry_rows_leaves_exception_and_missing_status(
+    tmp_path: Path,
+) -> None:
+    exception_binding = _binding(
+        sid="exception-bot",
+        run_id="run-exception",
+        namespace="learn-ai/exception-bot/v1",
+        recorded_at_ms=1_700_000_010_000,
+    ).model_copy(
+        update={
+            "lifecycle_state": "RETIRED",
+            "source": "host_daemon.process_crashed",
+        }
+    )
+    missing_status_binding = _binding(
+        sid="missing-status-bot",
+        run_id="run-missing-status",
+        namespace="learn-ai/missing-status-bot/v1",
+        recorded_at_ms=1_700_000_010_001,
+    ).model_copy(
+        update={
+            "lifecycle_state": "RETIRED",
+            "source": "host_daemon.process_crashed",
+        }
+    )
+    write_account_instance_binding(tmp_path, exception_binding)
+    write_account_instance_binding(tmp_path, missing_status_binding)
+    _write_run_status(tmp_path, "run-exception", exit_reason="exception", exit_code=3)
+
+    result = backfill_false_crash_registry_rows(
+        tmp_path,
+        account_id="DU123456",
+        now_ms=1_700_000_020_000,
+    )
+
+    assert result.candidate_rows == 2
+    assert result.rows_repaired == 0
+    assert result.rows_skipped_no_disproof == 2
+    bindings = read_account_instance_registry(tmp_path, "DU123456")
+    assert len(bindings) == 2
+    assert {binding.source for binding in bindings} == {"host_daemon.process_crashed"}
+
+
+def test_backfill_false_crash_registry_rows_ignores_superseded_crash_rows(
+    tmp_path: Path,
+) -> None:
+    retired = _binding(
+        run_id="run-old-halt",
+        recorded_at_ms=1_700_000_010_000,
+    ).model_copy(
+        update={
+            "lifecycle_state": "RETIRED",
+            "source": "host_daemon.process_crashed",
+        }
+    )
+    active = _binding(
+        run_id="run-new",
+        recorded_at_ms=1_700_000_020_000,
+    )
+    write_account_instance_binding(tmp_path, retired)
+    write_account_instance_binding(tmp_path, active)
+    _write_run_status(tmp_path, "run-old-halt", exit_reason="fatal_halt", exit_code=1)
+
+    result = backfill_false_crash_registry_rows(
+        tmp_path,
+        account_id="DU123456",
+        now_ms=1_700_000_030_000,
+    )
+
+    assert result.candidate_rows == 0
+    assert result.rows_repaired == 0
+    latest = latest_account_instance_binding(
+        read_account_instance_registry(tmp_path, "DU123456"),
+        account_id="DU123456",
+        strategy_instance_id="spy-ema-paper-1",
+    )
+    assert latest == active
 
 
 def test_account_instance_registry_blocks_unknown_instance(tmp_path: Path) -> None:

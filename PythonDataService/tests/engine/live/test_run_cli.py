@@ -226,8 +226,8 @@ def test_live_state_writer_does_not_lose_audit_rows_when_write_fails(tmp_path: P
     # class temporarily.
     original_init = monkey_patch.__init__
 
-    def _swap_init(self, path):
-        original_init(self, path)
+    def _swap_init(self, path, *, trusted_root=None):
+        original_init(self, path, trusted_root=trusted_root)
         # Override the methods on the instance with the failing repo's behaviour.
         self.read = _FailingRepo().read
         self.write = _FailingRepo().write

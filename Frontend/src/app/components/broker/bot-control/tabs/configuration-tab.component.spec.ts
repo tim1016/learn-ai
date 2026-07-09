@@ -4,7 +4,10 @@ import { provideRouter } from '@angular/router';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { GateResult, LiveInstanceStatus } from '../../../../api/live-instances.types';
-import { makeLifecycleChartFixture } from '../../../../testing/live-instance-status-fixtures';
+import {
+  makeDailyLifecycleFixture,
+  makeLifecycleChartFixture,
+} from '../../../../testing/live-instance-status-fixtures';
 import { ConfigurationTabComponent } from './configuration-tab.component';
 
 function gateResult(gateId: string, status: GateResult['status']): GateResult {
@@ -249,6 +252,7 @@ function status(): LiveInstanceStatus {
       },
     },
     lifecycle_chart: makeLifecycleChartFixture(),
+    daily_lifecycle: makeDailyLifecycleFixture(),
     fetched_at_ms: 1_700_000_000_000,
   };
 }

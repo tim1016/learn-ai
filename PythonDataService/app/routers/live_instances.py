@@ -37,11 +37,25 @@ from app.engine.live.account_artifacts import (
     read_account_freeze,
     read_account_owner_generation,
 )
+from app.engine.live.bot_lifecycle_state import (
+    BotLifecyclePhase,
+    BotLifecycleStateCorruptError,
+    BotLifecycleStateRecord,
+    BotLifecycleStateRepo,
+    BotRollCallOfferRecord,
+    stable_bot_lifecycle_state_path,
+)
 from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.daemon_connectivity_monitor import (
     get_monitor as get_daemon_connectivity_monitor,
 )
-from app.engine.live.desired_state import DesiredState, DesiredStateRepo
+from app.engine.live.desired_state import (
+    DesiredState,
+    DesiredStateCorruptError,
+    DesiredStateRecord,
+    DesiredStateRepo,
+    stable_desired_state_path,
+)
 from app.engine.live.engine_runtime import (
     ENGINE_RUNTIME_FILENAME,
     EngineRuntimeSnapshot,
@@ -103,6 +117,10 @@ from app.schemas.live_runs import (
     BotCatalogResponse,
     BotDeleteRequest,
     BotDeleteResponse,
+    BotLifecycleMutationResponse,
+    BotLifecycleRosterRequest,
+    BotRetireReplaceRequest,
+    BotRollCallResponse,
     BrokerObservationConsistency,
     ChartOverlayNotice,
     ChartSnapshotResponse,
@@ -153,6 +171,7 @@ from app.services.account_crash_recovery import (
     crash_recovery_gate_for_instance,
     record_crash_recovery_override_evidence,
 )
+from app.services.account_reconciliation import AccountReconciliationService
 from app.services.account_truth_snapshot import get_account_truth_snapshot_provider
 from app.services.activity_evidence_matching import (
     activity_evidence_ref_from_event,
@@ -176,6 +195,10 @@ from app.services.activity_projection_contract import (
 )
 from app.services.activity_repair_projection import load_activity_repair_projection
 from app.services.bot_catalog_projection import compose_bot_catalog_row, trading_mode_from_configured_mode
+from app.services.bot_daily_lifecycle import (
+    BotDailyLifecycleEvidence,
+    project_bot_daily_lifecycle,
+)
 from app.services.bot_deletion import (
     BotDeletionCorruptError,
     BotDeletionRecord,
@@ -193,6 +216,16 @@ from app.services.bot_lifecycle_projection import (
     sort_lifecycle_events,
 )
 from app.services.bot_lifecycle_receipts import LifecycleReceiptContext
+from app.services.bot_roll_call import (
+    active_roll_call_offer,
+    attendance_for_instance,
+    bot_roll_call_offer_repo,
+    ensure_roll_call_offer,
+    evening_report_from_rows,
+    roll_call_offer_schema,
+    roll_call_summary_from_rows,
+    status_is_roll_call_eligible,
+)
 from app.services.broker_activity_publisher_registry import get_publisher_registry
 from app.services.broker_activity_wal import BrokerActivityWal, instance_broker_activity_wal_path
 from app.services.daemon_diagnostics import (
@@ -200,6 +233,7 @@ from app.services.daemon_diagnostics import (
     project_daemon_diagnostic_report,
     redact_host_runner_health,
 )
+from app.services.daily_session_schedule import start_boundary_verdict
 from app.services.deploy_admission import (
     SymbolResolution,
     evaluate_deploy_start_admission,
@@ -251,9 +285,6 @@ _ACTION_TO_VERB = {
     DesiredStateAction.stop: CommandVerb.STOP,
 }
 
-# Filename of the durable desired-state sidecar (the stable
-# <artifacts>/live_state/<sid>/ layout owned by desired_state.py).
-_DESIRED_STATE_FILE = "desired_state.json"
 _STATUS_ACTIVITY_BOOTSTRAP_TIMEOUT_S = 2.0
 
 logger = logging.getLogger(__name__)
@@ -357,6 +388,59 @@ def _sid_has_soft_deletion(artifacts_root: Path, sid: str) -> bool:
         return False
 
 
+def _resolve_bot_lifecycle_state(root: Path, sid: str) -> BotLifecycleStateRecord | None:
+    try:
+        path = stable_bot_lifecycle_state_path(root.parent, sid)
+    except ValueError:
+        return None
+    try:
+        return BotLifecycleStateRepo(path).read()
+    except BotLifecycleStateCorruptError as exc:
+        logger.warning(
+            "failed to read bot lifecycle state",
+            extra={"strategy_instance_id": sid, "exception": repr(exc)},
+        )
+        return None
+
+
+def _bot_lifecycle_state_repo(root: Path, sid: str) -> BotLifecycleStateRepo:
+    try:
+        path = stable_bot_lifecycle_state_path(root.parent, sid)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
+    return BotLifecycleStateRepo(path)
+
+
+def _active_roll_call_offer(root: Path, sid: str, *, now_ms: int) -> BotRollCallOfferRecord | None:
+    try:
+        return active_roll_call_offer(root, sid, now_ms=now_ms)
+    except BotLifecycleStateCorruptError as exc:
+        logger.warning(
+            "failed to read bot roll-call offers",
+            extra={"strategy_instance_id": sid, "exception": repr(exc)},
+        )
+        return None
+
+
+async def _daily_lifecycle_mutation_response(
+    sid: str,
+    root: Path,
+    settings: IbkrSettings,
+) -> BotLifecycleMutationResponse:
+    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
+    status_view = await _resolve_instance_status_from_process(
+        sid,
+        root,
+        settings,
+        daemon,
+        runs_by_instance=_visible_runs_by_instance(root),
+    )
+    return BotLifecycleMutationResponse(
+        strategy_instance_id=sid,
+        lifecycle=status_view.daily_lifecycle,
+    )
+
+
 def _visible_runs_by_instance(root: Path, runs_by_instance: dict[str, list[dict]] | None = None) -> dict[str, list[dict]]:
     source = runs_by_instance if runs_by_instance is not None else _scan_runs_by_instance(root)
     visible: dict[str, list[dict]] = {}
@@ -432,6 +516,41 @@ def _visible_live_run_dir(root: Path, live_binding: LiveBinding) -> Path | None:
         except OSError:
             return None
     return run_dir if run_dir.is_dir() else None
+
+
+def _lifecycle_condition_count(
+    root: Path,
+    *,
+    account_id: str | None,
+    sid: str,
+    account_freeze: AccountFreezeEvidence | None,
+    now_ms: int,
+) -> int:
+    fallback = 1 if account_freeze is not None else 0
+    if account_id is None:
+        return fallback
+    try:
+        triage = AccountReconciliationService(artifacts_root=root.parent).triage(
+            account_id=account_id,
+            now_ms=now_ms,
+        )
+    except Exception as exc:
+        logger.warning(
+            "failed to project account triage conditions for lifecycle status",
+            extra={
+                "strategy_instance_id": sid,
+                "account_id": account_id,
+                "error": str(exc),
+            },
+        )
+        return fallback
+    return sum(
+        1
+        for condition in triage.conditions
+        if condition.scope == "account"
+        or condition.owner.strategy_instance_id == sid
+        or sid in condition.affected_strategy_instance_ids
+    )
 
 
 def _resolve_readiness(
@@ -736,11 +855,13 @@ def _resolve_reconciliation_inputs(root: Path, live_binding: LiveBinding | None)
 def _read_instance_live_state(root: Path, sid: str) -> LiveStateEnvelope | None:
     artifacts_root = _desired_state_root(root)
     try:
-        sidecar_dir = _confine(artifacts_root / "live_state", sid)
+        sidecar_path = stable_live_state_path(artifacts_root, sid)
     except ValueError:
         return None
     try:
-        return LiveStateSidecarRepo(sidecar_dir / "live_state.json").read()
+        return LiveStateSidecarRepo(
+            sidecar_path, trusted_root=artifacts_root / "live_state"
+        ).read()
     except (LiveStateSidecarCorruptError, OSError):
         return None
 
@@ -1071,7 +1192,9 @@ def _sizing_audit_rows(strategy_instance_id: str) -> list[dict]:
     except ValueError:
         return []
     try:
-        envelope = LiveStateSidecarRepo(sidecar_path).read()
+        envelope = LiveStateSidecarRepo(
+            sidecar_path, trusted_root=artifacts_root / "live_state"
+        ).read()
     except (LiveStateSidecarCorruptError, OSError):
         return []
     if envelope is None:
@@ -1603,6 +1726,28 @@ async def _resolve_instance_status_from_process(
         incident_headline_notice=incident_headline,
         now_ms=observed_at_ms,
     )
+    lifecycle_state = _resolve_bot_lifecycle_state(root, sid)
+    roll_call_offer = _active_roll_call_offer(root, sid, now_ms=observed_at_ms)
+    lifecycle_condition_count = _lifecycle_condition_count(
+        root,
+        account_id=instance_account_id,
+        sid=sid,
+        account_freeze=account_freeze,
+        now_ms=observed_at_ms,
+    )
+    daily_lifecycle = project_bot_daily_lifecycle(
+        BotDailyLifecycleEvidence(
+            strategy_instance_id=sid,
+            process=process,
+            start_capability=operator_surface.host_process.start_capability,
+            latest_run_id=runs[0]["run_id"] if runs else None,
+            active_run_id=live_binding.run_id if live_binding is not None else None,
+            persisted_state=lifecycle_state,
+            roll_call_offer=roll_call_offer,
+            condition_count=lifecycle_condition_count,
+            now_ms=observed_at_ms,
+        )
+    )
     redeploy_available = bool(
         start_defaults is not None
         and start_defaults.strategy_spec_path
@@ -1677,6 +1822,7 @@ async def _resolve_instance_status_from_process(
             lifecycle_events=lifecycle_events,
             receipt_context=receipt_context,
         ),
+        daily_lifecycle=daily_lifecycle,
         fetched_at_ms=observed_at_ms,
     )
 
@@ -1708,9 +1854,113 @@ async def list_bot_catalog() -> BotCatalogResponse:
             _daemon_process_from_instance(daemon_by_sid.get(sid)),
             runs_by_instance=by_instance,
         )
-        rows.append(compose_bot_catalog_row(status_view, trading_mode))
+        row = compose_bot_catalog_row(status_view, trading_mode)
+        rows.append(
+            row.model_copy(
+                update={
+                    "attendance": attendance_for_instance(
+                        runs=by_instance.get(sid, []),
+                        lifecycle_state=_resolve_bot_lifecycle_state(root, sid),
+                        read_sidecar=_read_sidecar,
+                    )
+                }
+            )
+        )
     rows.sort(key=lambda row: (row.created_at_ms or row.last_run_at_ms or 0, row.name), reverse=True)
-    return BotCatalogResponse(bots=rows)
+    return BotCatalogResponse(
+        bots=rows,
+        roll_call=roll_call_summary_from_rows(rows, now_ms=_now_ms()),
+        evening_report=evening_report_from_rows(rows, now_ms=_now_ms()),
+    )
+
+
+@router.post("/roll-call", response_model=BotRollCallResponse)
+async def run_roll_call() -> BotRollCallResponse:
+    """Persist the morning roll-call offers for all eligible non-retired bots."""
+
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    by_instance = await asyncio.to_thread(_visible_runs_by_instance, root)
+    _result, daemon = await host_daemon_client.fetch_instances(settings.live_runner_daemon_url)
+    daemon_by_sid: dict[str, dict] = {}
+    if daemon:
+        for inst in daemon.get("instances", []):
+            sid = inst.get("strategy_instance_id")
+            if sid:
+                daemon_by_sid[sid] = inst
+
+    now_ms = _now_ms()
+    rows = []
+    offers = []
+    retired_count = 0
+    trading_mode = trading_mode_from_configured_mode(getattr(settings, "mode", None))
+    summary_session_date: str | None = None
+    summary_effective_stop_ms: int | None = None
+    for sid in sorted(set(by_instance) | set(daemon_by_sid)):
+        lifecycle_state = _resolve_bot_lifecycle_state(root, sid)
+        if lifecycle_state is not None and lifecycle_state.phase == BotLifecyclePhase.RETIRED:
+            retired_count += 1
+            continue
+        status_view = await _resolve_instance_status_from_process(
+            sid,
+            root,
+            settings,
+            _daemon_process_from_instance(daemon_by_sid.get(sid)),
+            runs_by_instance=by_instance,
+        )
+        rows.append(compose_bot_catalog_row(status_view, trading_mode))
+        if not status_is_roll_call_eligible(status_view):
+            continue
+        runs = by_instance.get(sid, [])
+        if not runs:
+            continue
+        run_dir = Path(runs[0]["run_dir"])
+        boundary = start_boundary_verdict(now_ms, _live_config_for_run_dir(run_dir))
+        if not boundary.allowed or boundary.effective_stop_ms is None or boundary.session_date is None:
+            continue
+        offer = ensure_roll_call_offer(
+            root,
+            sid=sid,
+            run_id=status_view.operator_surface.host_process.start_capability.run_id or str(runs[0]["run_id"]),
+            session_date=boundary.session_date,
+            issued_at_ms=now_ms,
+            expires_at_ms=boundary.effective_stop_ms,
+            evidence_snapshot={
+                "readiness_verdict": (
+                    status_view.readiness.verdict if status_view.readiness is not None else None
+                ),
+                "process_state": status_view.process.state,
+                "display_status": status_view.daily_lifecycle.display_status,
+            },
+        )
+        offers.append(roll_call_offer_schema(offer))
+        summary_session_date = summary_session_date or boundary.session_date
+        summary_effective_stop_ms = (
+            boundary.effective_stop_ms
+            if summary_effective_stop_ms is None
+            else min(summary_effective_stop_ms, boundary.effective_stop_ms)
+        )
+
+    return BotRollCallResponse(
+        summary=roll_call_summary_from_rows(rows, now_ms=now_ms).model_copy(
+            update={
+                "ready": len(offers),
+                "retired": retired_count,
+                "session_date": summary_session_date,
+                "effective_stop_ms": summary_effective_stop_ms,
+            }
+        ),
+        offers=offers,
+    )
+
+
+def _live_config_for_run_dir(run_dir: Path) -> Mapping[str, object] | None:
+    try:
+        ledger = _read_ledger(run_dir)
+    except (OSError, json.JSONDecodeError):
+        return None
+    live_config = ledger.get("live_config")
+    return live_config if isinstance(live_config, Mapping) else None
 
 
 @router.delete("/{strategy_instance_id}", response_model=BotDeleteResponse)
@@ -1900,11 +2150,21 @@ async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -
         Path(settings.live_runs_root),
         body,
     )
-    if daemon_request.start and daemon_request.strategy_instance_id:
-        _raise_if_stopped_blocks_start(
-            Path(settings.live_runs_root),
-            daemon_request.strategy_instance_id,
-        )
+    if daemon_request.start:
+        verdict = start_boundary_verdict(_now_ms(), daemon_request.live_config)
+        if not verdict.allowed:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": verdict.reason_code,
+                    "message": verdict.message,
+                    "gate_id": "daily_lifecycle.effective_stop",
+                    "strategy_instance_id": daemon_request.strategy_instance_id or None,
+                    "session_date": verdict.session_date,
+                    "effective_stop_ms": verdict.effective_stop_ms,
+                },
+            )
+        daemon_request = daemon_request.model_copy(update={"start": False})
     try:
         result = await host_daemon_client.deploy(
             settings.live_runner_daemon_url,
@@ -2007,32 +2267,6 @@ _START_DAEMON_STATE_REASON: dict[str, str] = {
 }
 
 
-def _stopped_requires_resume_detail(sid: str) -> dict:
-    return {
-        "reason_code": "STOPPED_REQUIRES_RESUME",
-        "message": (
-            f"{sid} is durably STOPPED. Resume the bot to clear the stop latch "
-            "before starting or using Deploy & start."
-        ),
-        "remediation": (
-            "Use Resume to set desired_state=RUNNING, then start the bot. "
-            "Use Deploy only when you want to stage a new run without starting it."
-        ),
-        "gate_id": "desired_state.start",
-        "desired_state": "STOPPED",
-        "strategy_instance_id": sid,
-    }
-
-
-def _raise_if_stopped_blocks_start(root: Path, sid: str) -> None:
-    desired = _resolve_desired_state(root, sid)
-    if desired.state == "STOPPED":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail=_stopped_requires_resume_detail(sid),
-        )
-
-
 def _bot_soft_deleted_detail(sid: str, run_id: str | None = None) -> dict[str, str]:
     detail = {
         "reason_code": "BOT_SOFT_DELETED",
@@ -2044,7 +2278,172 @@ def _bot_soft_deleted_detail(sid: str, run_id: str | None = None) -> dict[str, s
     return detail
 
 
-async def _assert_start_allowed(run_id: str, settings) -> None:
+def _raise_if_start_boundary_blocks(root: Path, sid: str, *, now_ms: int) -> None:
+    runs = _visible_runs_by_instance(root).get(sid, [])
+    if not runs:
+        return
+    run_dir = Path(runs[0]["run_dir"])
+    verdict = start_boundary_verdict(now_ms, _live_config_for_run_dir(run_dir))
+    if verdict.allowed:
+        return
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        detail={
+            "reason_code": verdict.reason_code,
+            "message": verdict.message,
+            "gate_id": "daily_lifecycle.effective_stop",
+            "strategy_instance_id": sid,
+            "session_date": verdict.session_date,
+            "effective_stop_ms": verdict.effective_stop_ms,
+        },
+    )
+
+
+def _assert_roll_call_offer_allows_start(
+    root: Path,
+    sid: str,
+    run_id: str,
+    body: HostRunnerStartRequest,
+    *,
+    now_ms: int,
+) -> None:
+    if body.roll_call_offer_id is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "ROLL_CALL_OFFER_REQUIRED",
+                "message": "Run roll call and start from the current offer.",
+                "gate_id": "daily_lifecycle.roll_call_offer",
+                "strategy_instance_id": sid,
+            },
+        )
+    active = _active_roll_call_offer(root, sid, now_ms=now_ms)
+    if active is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "ROLL_CALL_OFFER_EXPIRED",
+                "message": "The roll-call start offer is absent or expired. Run roll call again.",
+                "gate_id": "daily_lifecycle.roll_call_offer",
+                "strategy_instance_id": sid,
+            },
+        )
+    if active.offer_id != body.roll_call_offer_id:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "ROLL_CALL_OFFER_STALE",
+                "message": "This start request does not match the current roll-call offer.",
+                "gate_id": "daily_lifecycle.roll_call_offer",
+                "strategy_instance_id": sid,
+                "current_offer_id": active.offer_id,
+            },
+        )
+    if active.run_id != run_id:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "ROLL_CALL_OFFER_RUN_MISMATCH",
+                "message": "This roll-call offer belongs to a different run. Run roll call again.",
+                "gate_id": "daily_lifecycle.roll_call_offer",
+                "strategy_instance_id": sid,
+                "run_id": run_id,
+                "offer_run_id": active.run_id,
+            },
+        )
+
+
+def _raise_if_lifecycle_retired(root: Path, sid: str) -> None:
+    try:
+        record = _bot_lifecycle_state_repo(root, sid).read()
+    except BotLifecycleStateCorruptError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "BOT_LIFECYCLE_STATE_UNREADABLE",
+                "message": "The bot lifecycle state is unreadable. Repair it before starting.",
+                "gate_id": "daily_lifecycle.phase",
+                "strategy_instance_id": sid,
+            },
+        ) from exc
+    if record is not None and record.phase == BotLifecyclePhase.RETIRED:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "BOT_RETIRED",
+                "message": "This bot is retired. Deploy a replacement bot before starting.",
+                "gate_id": "daily_lifecycle.phase",
+                "strategy_instance_id": sid,
+            },
+        )
+
+
+def _start_intent_repo(root: Path, sid: str) -> DesiredStateRepo:
+    artifacts_root = _desired_state_root(root)
+    try:
+        sidecar_path = stable_desired_state_path(artifacts_root, sid)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
+    return DesiredStateRepo(sidecar_path, trusted_root=artifacts_root / "live_state")
+
+
+def _persist_start_intent(root: Path, sid: str) -> DesiredStateRecord | None:
+    """Persist the single Start path's durable intent before daemon launch."""
+
+    repo = _start_intent_repo(root, sid)
+    try:
+        previous = repo.read()
+        repo.set(
+            DesiredState.RUNNING,
+            updated_by="system",
+            reason="daily_lifecycle.start",
+            now_ms=_now_ms(),
+        )
+    except DesiredStateCorruptError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "DESIRED_STATE_UNREADABLE",
+                "message": "The durable desired-state sidecar is unreadable. Repair it before starting.",
+                "gate_id": "desired_state.start",
+                "strategy_instance_id": sid,
+            },
+        ) from exc
+    except OSError as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "reason_code": "DESIRED_STATE_WRITE_FAILED",
+                "message": "Could not persist the start intent before launching the bot.",
+                "gate_id": "desired_state.start",
+                "strategy_instance_id": sid,
+            },
+        ) from exc
+    return previous
+
+
+def _restore_start_intent(
+    root: Path,
+    sid: str,
+    previous: DesiredStateRecord | None,
+) -> None:
+    repo = _start_intent_repo(root, sid)
+    try:
+        if previous is None:
+            repo.delete()
+        else:
+            repo.write(previous)
+    except (OSError, ValueError) as exc:
+        logger.warning(
+            "failed to restore start intent after rejected start",
+            extra={
+                "strategy_instance_id": sid,
+                "error": str(exc),
+            },
+        )
+
+
+async def _assert_start_allowed(run_id: str, body: HostRunnerStartRequest, settings) -> None:
     """Re-evaluate the start gates before forwarding /runs/{run_id}/start.
 
     ADR 0013 amendment 2026-06-22 + design "Architectural permission for
@@ -2083,6 +2482,7 @@ async def _assert_start_allowed(run_id: str, settings) -> None:
             status.HTTP_410_GONE,
             detail=_bot_soft_deleted_detail(sid, run_id),
         )
+    _raise_if_lifecycle_retired(root, sid)
 
     account_freeze = _resolve_account_freeze(
         root.parent,
@@ -2113,8 +2513,6 @@ async def _assert_start_allowed(run_id: str, settings) -> None:
                 "message": "This run is permanently retired. Redeploy the bot to trade again.",
             },
         )
-    _raise_if_stopped_blocks_start(root, sid)
-
     _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
     if daemon is None:
         raise HTTPException(
@@ -2139,6 +2537,9 @@ async def _assert_start_allowed(run_id: str, settings) -> None:
             },
         )
     # idle / exited / unrecognised -> proceed; daemon performs its own start gates.
+    now_ms = _now_ms()
+    _raise_if_start_boundary_blocks(root, sid, now_ms=now_ms)
+    _assert_roll_call_offer_allows_start(root, sid, run_id, body, now_ms=now_ms)
 
 
 @router.post("/runs/{run_id}/start", response_model=HostRunnerActionResponse)
@@ -2154,9 +2555,9 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
 
     Before forwarding, the data plane re-evaluates the same start gates the
     cockpit's ``host_process.start_capability`` projection used (ADR 0013
-    amendment 2026-06-22): poisoned-flag, durable ``STOPPED``, daemon
-    ``running`` / ``stopping``, host service unreachable. A stale
-    ``enabled=true`` projection cannot bypass them — see
+    amendment 2026-06-22): poisoned-flag, account freeze, daemon ``running`` /
+    ``stopping``, host service unreachable, roll-call offer, and session
+    boundary. A stale ``enabled=true`` projection cannot bypass them — see
     ``_assert_start_allowed``.
 
     Slice 3 (ADR 0011 amendment) — broker-activity publisher start. After
@@ -2173,17 +2574,39 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
 
     settings = get_settings()
     root = Path(settings.live_runs_root)
-    await _assert_start_allowed(run_id, settings)
+    await _assert_start_allowed(run_id, body, settings)
+    sid = _strategy_instance_id_for_run(root, run_id)
+    previous_start_intent: DesiredStateRecord | None = None
+    if sid is not None:
+        previous_start_intent = _persist_start_intent(root, sid)
     try:
-        result = await host_daemon_client.start_run(settings.live_runner_daemon_url, run_id, body.model_dump())
+        result = await host_daemon_client.start_run(
+            settings.live_runner_daemon_url,
+            run_id,
+            body.model_dump(exclude={"roll_call_offer_id"}),
+        )
     except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
         _raise_outcome_unknown("start_run", exc)
     except host_daemon_client.HostDaemonError as exc:
+        if sid is not None:
+            _restore_start_intent(root, sid, previous_start_intent)
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
     response = _parse_action_response(result)
+    if sid is not None and not response.accepted:
+        _restore_start_intent(root, sid, previous_start_intent)
     await _maybe_start_broker_activity_publisher(response)
-    sid = _strategy_instance_id_for_run(root, run_id)
+    sid = sid or response.process.strategy_instance_id
     if sid is not None:
+        if response.accepted:
+            if body.roll_call_offer_id is not None:
+                bot_roll_call_offer_repo(root, sid).consume(body.roll_call_offer_id)
+            _bot_lifecycle_state_repo(root, sid).set_phase(
+                BotLifecyclePhase.ON_DUTY,
+                now_ms=_now_ms(),
+                updated_by="system",
+                active_run_id=run_id,
+                reason="start_accepted",
+            )
         receipt, warnings = await _mutation_rung_receipts_from_process(
             sid,
             root,
@@ -2265,8 +2688,16 @@ async def stop_run(run_id: str, body: HostRunnerStopRequest) -> HostRunnerAction
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
     response = _parse_action_response(result)
     root = Path(settings.live_runs_root)
-    sid = _strategy_instance_id_for_run(root, run_id)
+    sid = _strategy_instance_id_for_run(root, run_id) or response.process.strategy_instance_id
     if sid is not None:
+        if response.accepted:
+            _bot_lifecycle_state_repo(root, sid).set_phase(
+                BotLifecyclePhase.OFF_DUTY,
+                now_ms=_now_ms(),
+                updated_by="system",
+                active_run_id=None,
+                reason="stop_accepted",
+            )
         receipt, warnings = await _mutation_rung_receipts_from_process(
             sid,
             root,
@@ -2281,6 +2712,128 @@ async def stop_run(run_id: str, body: HostRunnerStopRequest) -> HostRunnerAction
             }
         )
     return response
+
+
+@router.post("/{strategy_instance_id}/end-day-now", response_model=HostRunnerActionResponse)
+async def end_day_now(
+    strategy_instance_id: str,
+    body: HostRunnerStopRequest | None = None,
+) -> HostRunnerActionResponse:
+    """Instance-addressed clean exit request for the daily lifecycle toolbar."""
+
+    sid = _validate_instance_id(strategy_instance_id)
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
+    process, live_binding = _interpret_daemon_process(daemon, root)
+    if live_binding is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "NO_LIVE_BINDING",
+                "message": "No bot process is running for this instance.",
+                "process_state": process.state,
+            },
+        )
+
+    request = body or HostRunnerStopRequest()
+    try:
+        result = await host_daemon_client.stop_run(
+            settings.live_runner_daemon_url,
+            live_binding.run_id,
+            request.model_dump(),
+        )
+    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
+        _raise_outcome_unknown("end_day_now", exc)
+    except host_daemon_client.HostDaemonError as exc:
+        raise HTTPException(exc.status_code, detail=exc.detail) from exc
+    response = _parse_action_response(result)
+    if response.accepted:
+        _bot_lifecycle_state_repo(root, sid).set_phase(
+            BotLifecyclePhase.OFF_DUTY,
+            now_ms=_now_ms(),
+            updated_by="operator",
+            active_run_id=None,
+            reason="end_day_now",
+        )
+    receipt, warnings = await _mutation_rung_receipts_from_process(
+        sid,
+        root,
+        settings,
+        response.process.model_dump(mode="json"),
+        mutation_key="stop",
+    )
+    return response.model_copy(
+        update={
+            "rung_receipt": receipt,
+            "rung_receipt_warnings": warnings,
+        }
+    )
+
+
+@router.post("/{strategy_instance_id}/lifecycle/roster", response_model=BotLifecycleMutationResponse)
+async def set_lifecycle_roster(
+    strategy_instance_id: str,
+    body: BotLifecycleRosterRequest,
+) -> BotLifecycleMutationResponse:
+    """Add/remove a bot from the duty roster."""
+
+    sid = _validate_instance_id(strategy_instance_id)
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    _bot_lifecycle_state_repo(root, sid).set_roster(
+        body.on_roster,
+        now_ms=_now_ms(),
+        updated_by=body.updated_by,
+        reason=body.reason,
+    )
+    return await _daily_lifecycle_mutation_response(sid, root, settings)
+
+
+@router.post("/{strategy_instance_id}/retire-and-replace", response_model=BotLifecycleMutationResponse)
+async def retire_and_replace(
+    strategy_instance_id: str,
+    body: BotRetireReplaceRequest,
+) -> BotLifecycleMutationResponse:
+    """Retire this bot's machinery before the UI continues to replacement deploy."""
+
+    sid = _validate_instance_id(strategy_instance_id)
+    if not body.confirm_account_flat:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "ACCOUNT_FLAT_ATTESTATION_REQUIRED",
+                "message": "Confirm the broker account is flat before retiring and replacing this bot.",
+            },
+        )
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
+    process, _live_binding = _interpret_daemon_process(daemon, root)
+    if process.state == "unreachable":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "HOST_SERVICE_OFFLINE",
+                "message": "The bot service is unreachable. Reconnect it before retiring and replacing this bot.",
+                "process_state": process.state,
+            },
+        )
+    if process.state in {"running", "stopping"}:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "BOT_ON_DUTY",
+                "message": "End the day before retiring and replacing this bot.",
+                "process_state": process.state,
+            },
+        )
+    _bot_lifecycle_state_repo(root, sid).retire(
+        now_ms=_now_ms(),
+        updated_by=body.updated_by,
+        reason=body.reason,
+    )
+    return await _daily_lifecycle_mutation_response(sid, root, settings)
 
 
 def _instance_last_exit(runs: list[dict]) -> InstanceLastExit | None:
@@ -3138,13 +3691,19 @@ def _position_effect_for_fill(
 
 
 def _read_activity_wal_rows(*, artifacts_root: Path, sid: str, start_ms: int, end_ms: int) -> list:
-    wal = BrokerActivityWal(instance_broker_activity_wal_path(artifacts_root, sid))
+    wal = BrokerActivityWal(
+        instance_broker_activity_wal_path(artifacts_root, sid),
+        trusted_root=artifacts_root / "live_instances",
+    )
     rows = wal.read_all()
     return [row for row in rows if start_ms <= _activity_row_time_ms(row) < end_ms]
 
 
 def _latest_activity_wal_day(*, artifacts_root: Path, sid: str) -> date | None:
-    wal = BrokerActivityWal(instance_broker_activity_wal_path(artifacts_root, sid))
+    wal = BrokerActivityWal(
+        instance_broker_activity_wal_path(artifacts_root, sid),
+        trusted_root=artifacts_root / "live_instances",
+    )
     rows = wal.read_all()
     if not rows:
         return None
@@ -3949,15 +4508,9 @@ async def set_instance_desired_state(
     settings = get_settings()
     root = Path(settings.live_runs_root)
 
-    # The id is a remote (URL) value flowing into a filesystem write. Build the
-    # sidecar path through `_confine` (resolve + relative_to on the validated
-    # literal, return used) exactly as `_validate_run_id` does for the
-    # CodeQL-clean command-channel write — this is the form the scanner
-    # recognizes as breaking py/path-injection. `_safe_desired_state_path`
-    # discards `_confine`'s confined return, so the scanner can't see it.
     artifacts_root = _desired_state_root(root)
     try:
-        sidecar_dir = _confine(artifacts_root / "live_state", sid)
+        sidecar_path = stable_desired_state_path(artifacts_root, sid)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
 
@@ -4000,7 +4553,7 @@ async def set_instance_desired_state(
             },
         )
 
-    repo = DesiredStateRepo(sidecar_dir / _DESIRED_STATE_FILE)
+    repo = DesiredStateRepo(sidecar_path, trusted_root=artifacts_root / "live_state")
     record = repo.set(
         _ACTION_TO_STATE[body.action],
         updated_by=body.updated_by,
@@ -4099,7 +4652,7 @@ async def flatten_and_pause_instance(
 
     artifacts_root = _desired_state_root(root)
     try:
-        sidecar_dir = _confine(artifacts_root / "live_state", sid)
+        sidecar_path = stable_desired_state_path(artifacts_root, sid)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="invalid strategy_instance_id") from exc
 
@@ -4129,7 +4682,7 @@ async def flatten_and_pause_instance(
         reason="flatten-and-pause",
         updated_by="operator",
     )
-    repo = DesiredStateRepo(sidecar_dir / _DESIRED_STATE_FILE)
+    repo = DesiredStateRepo(sidecar_path, trusted_root=artifacts_root / "live_state")
     try:
         record = repo.set(
             DesiredState.PAUSED,

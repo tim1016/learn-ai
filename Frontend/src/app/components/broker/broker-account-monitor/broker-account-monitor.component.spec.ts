@@ -1,15 +1,23 @@
-import { HttpErrorResponse } from '@angular/common/http';
 import { signal } from '@angular/core';
 import { ActivatedRoute } from '@angular/router';
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { of } from 'rxjs';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 
-import type { AccountReconciliationReceipt } from '../../../api/account-reconciliation.types';
+import type {
+  AccountReconciliationReceipt,
+  AccountTriageResponse,
+} from '../../../api/account-reconciliation.types';
 import type { AccountTruthResponse, IbkrPositionsSnapshot } from '../../../api/broker-models';
 import type { GateResult } from '../../../api/live-instances.types';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
+import { LiveRunsService } from '../../../services/live-runs.service';
+import {
+  makeAccountFreezeCondition,
+  makeCleanAccountTriage,
+  makeFrozenAccountTriage,
+} from '../testing/account-triage-fixtures';
 import { BrokerAccountMonitorComponent } from './broker-account-monitor.component';
 
 class StubEventSource {
@@ -37,9 +45,34 @@ class FakeBrokerHealthService {
 
 class FakeBrokerService {
   accountTruth = vi.fn().mockResolvedValue(accountTruthResponse());
-  latestAccountReconciliation = vi.fn().mockRejectedValue(new HttpErrorResponse({ status: 404 }));
+  accountTriage = vi.fn().mockResolvedValue(cleanTriage(accountReconciliationReceipt()));
+  clearAccountFreeze = vi.fn().mockResolvedValue({
+    schema_version: 1,
+    account_id: 'DU1234567',
+    cleared: true,
+    cleared_source: 'account_recovery_proof',
+    recovery_id: 'acct-recovery-DU1234567-1',
+    receipt_id: 'acct-recon-DU1234567-1',
+    gate_result: gateResult(),
+    triage: cleanTriage(accountReconciliationReceipt()),
+  });
+  acceptExposureOverride = vi.fn().mockResolvedValue({
+    schema_version: 1,
+    account_id: 'DU1234567',
+    cleared: true,
+    cleared_source: 'account_audited_override',
+    override_id: 'acct-exposure-override-DU1234567-1',
+    triage: cleanTriage(accountReconciliationReceipt()),
+  });
   reconcileAccount = vi.fn().mockResolvedValue(accountReconciliationReceipt());
   positions = vi.fn().mockResolvedValue(positionsSnapshot());
+}
+
+class FakeLiveRunsService {
+  emergencyFlattenAccount = vi.fn().mockResolvedValue({
+    accepted: true,
+    process: { state: 'idle' },
+  });
 }
 
 function routeFragment(fragment: string | null = null) {
@@ -53,6 +86,7 @@ describe('BrokerAccountMonitorComponent', () => {
       providers: [
         { provide: BrokerService, useValue: broker },
         { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useClass: FakeLiveRunsService },
         routeFragment(),
       ],
     });
@@ -67,20 +101,21 @@ describe('BrokerAccountMonitorComponent', () => {
     });
     expect(await screen.findByText('Account Truth is clean.')).toBeTruthy();
     expect(screen.getAllByText('Clean').length).toBeGreaterThan(0);
-    expect(screen.getByText('Pass')).toBeTruthy();
+    expect(screen.getAllByText('Pass').length).toBeGreaterThan(0);
     expect(screen.queryByText('CLEAN')).toBeNull();
   });
 
   it('marks a latest receipt stale when the monitor clock passes its expiry', async () => {
     const broker = new FakeBrokerService();
     const expiresAtMs = Date.now() + 60_000;
-    broker.latestAccountReconciliation.mockResolvedValue(
-      accountReconciliationReceipt({ expiresAtMs }),
+    broker.accountTriage.mockResolvedValue(
+      cleanTriage(accountReconciliationReceipt({ expiresAtMs })),
     );
     const view = await render(BrokerAccountMonitorComponent, {
       providers: [
         { provide: BrokerService, useValue: broker },
         { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useClass: FakeLiveRunsService },
         routeFragment(),
       ],
     });
@@ -90,11 +125,137 @@ describe('BrokerAccountMonitorComponent', () => {
     view.fixture.componentInstance.accountReconciliationNowMs.set(expiresAtMs + 1);
     view.fixture.detectChanges();
 
-    expect(screen.getByText('Stale')).toBeTruthy();
+    expect(screen.getByText('Not Proven')).toBeTruthy();
     expect(
-      screen.getByText('Receipt expired before this account monitor snapshot. Run account reconcile again.'),
+      screen.getByText(
+        'Not yet proven: the account reconciliation receipt is stale. Run account reconcile again.',
+      ),
     ).toBeTruthy();
-    expect(screen.getByText('Unknown')).toBeTruthy();
+    expect(screen.getByText('Not yet proven')).toBeTruthy();
+    expect(screen.queryByText('Unknown')).toBeNull();
+  });
+
+  it('renders sick-bay conditions with their cure action and refreshes after clearing freeze', async () => {
+    const broker = new FakeBrokerService();
+    broker.accountTriage.mockResolvedValue(frozenTriage());
+    await render(BrokerAccountMonitorComponent, {
+      providers: [
+        { provide: BrokerService, useValue: broker },
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useClass: FakeLiveRunsService },
+        routeFragment(),
+      ],
+    });
+
+    expect(await screen.findByText('Account freeze active')).toBeTruthy();
+    expect(screen.getAllByText('Manual Freeze').length).toBeGreaterThan(0);
+    expect(screen.getByText('Owner Account DU1234567')).toBeTruthy();
+    expect(screen.getByText(/Account sick bay is gating new starts/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /clear freeze/i }));
+
+    await waitFor(() => {
+      expect(broker.clearAccountFreeze).toHaveBeenCalledWith('DU1234567');
+    });
+    await waitFor(() => {
+      expect(screen.queryByText('Account freeze active')).toBeNull();
+    });
+    expect(screen.getByText('No open account conditions.')).toBeTruthy();
+  });
+
+  it('opens resolve exposure and records an audited override', async () => {
+    const broker = new FakeBrokerService();
+    broker.accountTriage.mockResolvedValue(exposureFrozenTriage());
+    await render(BrokerAccountMonitorComponent, {
+      providers: [
+        { provide: BrokerService, useValue: broker },
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useClass: FakeLiveRunsService },
+        routeFragment(),
+      ],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /resolve exposure/i }));
+
+    expect(screen.getByRole('dialog', { name: /resolve exposure/i })).toBeTruthy();
+    expect(screen.getAllByText('Owner Bot retired-freezer').length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('button', { name: /accept exposure/i }));
+
+    await waitFor(() => {
+      expect(broker.acceptExposureOverride).toHaveBeenCalledWith(
+        'DU1234567',
+        expect.objectContaining({
+          strategy_instance_id: 'retired-freezer',
+          run_id: 'run-freeze',
+        }),
+      );
+    });
+  });
+
+  it('opens resolve exposure and flattens through the owner bot', async () => {
+    const broker = new FakeBrokerService();
+    const liveRuns = new FakeLiveRunsService();
+    broker.accountTriage.mockResolvedValue(exposureFrozenTriage());
+    await render(BrokerAccountMonitorComponent, {
+      providers: [
+        { provide: BrokerService, useValue: broker },
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useValue: liveRuns },
+        routeFragment(),
+      ],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /resolve exposure/i }));
+    broker.accountTriage.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /flatten then reconcile/i }));
+
+    await waitFor(() => {
+      expect(liveRuns.emergencyFlattenAccount).toHaveBeenCalledWith(
+        'retired-freezer',
+        { account: 'DU1234567', confirm: true },
+      );
+    });
+    await waitFor(() => {
+      expect(broker.reconcileAccount).toHaveBeenCalledWith('DU1234567');
+    });
+    expect(broker.accountTriage).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables audited exposure override when the exposure owner is ambiguous', async () => {
+    const broker = new FakeBrokerService();
+    broker.accountTriage.mockResolvedValue(ambiguousExposureFrozenTriage());
+    await render(BrokerAccountMonitorComponent, {
+      providers: [
+        { provide: BrokerService, useValue: broker },
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useClass: FakeLiveRunsService },
+        routeFragment(),
+      ],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /resolve exposure/i }));
+
+    const acceptButton = screen.getByRole('button', { name: /accept exposure/i }) as HTMLButtonElement;
+    expect(acceptButton.disabled).toBe(true);
+    fireEvent.click(acceptButton);
+    expect(broker.acceptExposureOverride).not.toHaveBeenCalled();
+  });
+
+  it('renders unsupported condition cures without dead action buttons', async () => {
+    const broker = new FakeBrokerService();
+    broker.accountTriage.mockResolvedValue(terminalTriage());
+    await render(BrokerAccountMonitorComponent, {
+      providers: [
+        { provide: BrokerService, useValue: broker },
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useClass: FakeLiveRunsService },
+        routeFragment(),
+      ],
+    });
+
+    expect(await screen.findByText('Bot crashed')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /retire/i })).toBeNull();
   });
 
   it('runs fail-closed reconciliation from broker health account when truth account is unknown', async () => {
@@ -106,6 +267,7 @@ describe('BrokerAccountMonitorComponent', () => {
       providers: [
         { provide: BrokerService, useValue: broker },
         { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useClass: FakeLiveRunsService },
         routeFragment(),
       ],
     });
@@ -136,6 +298,7 @@ describe('BrokerAccountMonitorComponent', () => {
       providers: [
         { provide: BrokerService, useValue: broker },
         { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useClass: FakeLiveRunsService },
         routeFragment('account-reconciliation-action'),
       ],
     });
@@ -181,12 +344,114 @@ function accountReconciliationReceipt(
     account_truth_verdict: 'clean',
     account_truth_severity: 'ok',
     final_gate_result: gateResult(),
+    exposure_resolution: 'flat',
     account_truth: truth,
     evidence_refs: [],
     generated_at_ms: generatedAtMs,
     account_truth_generated_at_ms: truth.generated_at_ms,
     expires_at_ms: overrides.expiresAtMs ?? generatedAtMs + 60_000,
     ttl_ms: 60_000,
+  };
+}
+
+function cleanTriage(receipt: AccountReconciliationReceipt | null = null): AccountTriageResponse {
+  return makeCleanAccountTriage({ receipt });
+}
+
+function frozenTriage(): AccountTriageResponse {
+  const receipt = accountReconciliationReceipt();
+  return makeFrozenAccountTriage({
+    receipt,
+    freezeBanner: {
+      headline: 'Account sick bay is gating new starts.',
+      detail: 'Run account reconciliation and clear the active account freeze before deploying.',
+    },
+    affectedBots: [
+      {
+        strategy_instance_id: 'DEPVALSPYJUL8',
+        run_id: 'run-1',
+        bot_order_namespace: 'bot.DEPVALSPYJUL8',
+        lifecycle_state: 'ACTIVE',
+      },
+    ],
+  });
+}
+
+function exposureFrozenTriage(): AccountTriageResponse {
+  const receipt = accountReconciliationReceipt();
+  return makeFrozenAccountTriage({
+    receipt,
+    conditionOptions: {
+      conditionType: 'exposure_freeze',
+      owner: {
+        owner_type: 'bot',
+        owner_id: 'retired-freezer',
+        label: 'Bot retired-freezer',
+        strategy_instance_id: 'retired-freezer',
+        run_id: 'run-freeze',
+        lifecycle_state: 'RETIRED',
+      },
+      detail: 'watchdog.flatten_timed_out',
+      operatorNextStep: 'CHECK_IBKR',
+      source: 'watchdog_halt_executor',
+      affectedStrategyInstanceIds: [],
+      cureAction: 'resolve_exposure',
+    },
+    freezeBanner: {
+      headline: 'Account sick bay is gating new starts.',
+      detail: 'Resolve or audit broker exposure before starting another bot on this account.',
+    },
+    clearFreezeActionable: false,
+  });
+}
+
+function ambiguousExposureFrozenTriage(): AccountTriageResponse {
+  return makeFrozenAccountTriage({
+    receipt: accountReconciliationReceipt(),
+    condition: makeAccountFreezeCondition({
+      conditionType: 'exposure_freeze',
+      detail: 'watchdog.flatten_timed_out',
+      operatorNextStep: 'CHECK_IBKR',
+      source: 'watchdog_halt_executor',
+      affectedStrategyInstanceIds: [],
+      cureAction: 'resolve_exposure',
+    }),
+    freezeBanner: {
+      headline: 'Account sick bay is gating new starts.',
+      detail: 'Resolve or audit broker exposure before starting another bot on this account.',
+    },
+    clearFreezeActionable: false,
+  });
+}
+
+function terminalTriage(): AccountTriageResponse {
+  return {
+    ...makeCleanAccountTriage({ receipt: accountReconciliationReceipt() }),
+    summary_headline: 'Account recovery needs attention',
+    summary_detail: 'A retired bot needs operator attention.',
+    conditions: [
+      {
+        condition_type: 'crashed',
+        scope: 'bot',
+        owner: {
+          owner_type: 'bot',
+          owner_id: 'retired-freezer',
+          label: 'Bot retired-freezer',
+          strategy_instance_id: 'retired-freezer',
+          run_id: 'run-freeze',
+          lifecycle_state: 'RETIRED',
+        },
+        severity: 'critical',
+        title: 'Bot crashed',
+        detail: 'retired-freezer ended from a crash in run run-freeze.',
+        operator_next_step: 'RETIRE_REPLACE',
+        source: 'host_daemon.process_crashed',
+        evidence_at_ms: 1_780_000_002_500,
+        evidence_refs: [],
+        affected_strategy_instance_ids: [],
+        cure_action: 'retire_replace',
+      },
+    ],
   };
 }
 

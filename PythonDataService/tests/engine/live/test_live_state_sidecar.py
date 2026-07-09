@@ -268,6 +268,18 @@ def test_stable_live_state_path_rejects_unsafe_strategy_instance_id(
         stable_live_state_path(tmp_path / "artifacts", bad_sid)
 
 
+def test_stable_live_state_path_rejects_symlink_escape(tmp_path: Path) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    live_state_root = artifacts_root / "live_state"
+    live_state_root.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (live_state_root / "x").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError):
+        stable_live_state_path(artifacts_root, "x")
+
+
 def test_update_after_flush_holds_lock_across_full_rmw(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

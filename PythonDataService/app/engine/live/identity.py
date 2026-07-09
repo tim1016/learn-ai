@@ -87,6 +87,16 @@ def safe_strategy_instance_path_segment(value: str) -> str:
     return safe
 
 
+def confine_path_to_root(path: Path, root: Path, *, label: str) -> Path:
+    """Return ``path`` only after proving its real path stays under ``root``."""
+    root_real = os.path.realpath(os.fspath(root))
+    candidate = os.path.realpath(os.fspath(path))
+    root_prefix = root_real.rstrip(os.sep) + os.sep
+    if candidate != root_real and not candidate.startswith(root_prefix):
+        raise ValueError(f"{label} path {candidate} escapes root {root_real}")
+    return Path(candidate)
+
+
 def strategy_instance_artifact_dir(
     artifacts_root: Path, namespace: str, strategy_instance_id: str
 ) -> Path:
@@ -95,7 +105,8 @@ def strategy_instance_artifact_dir(
     ``namespace`` is a trusted literal such as ``live_state`` or
     ``live_instances``. ``strategy_instance_id`` is caller/operator input and
     is reconstructed through :func:`safe_strategy_instance_path_segment` before
-    joining. The realpath/commonpath check catches symlink escapes.
+    joining. The realpath/root-prefix check catches symlink escapes and
+    follows the sanitizer shape CodeQL documents for py/path-injection.
     """
     if not namespace or namespace != Path(namespace).name:
         raise ValueError(f"artifact namespace must be a single path segment: {namespace!r}")
@@ -104,14 +115,8 @@ def strategy_instance_artifact_dir(
         os.path.join(os.fspath(artifacts_root), namespace)
     )
     candidate = os.path.realpath(os.path.join(namespace_root, safe_sid))
-    try:
-        common = os.path.commonpath([namespace_root, candidate])
-    except ValueError as exc:
-        raise ValueError(
-            f"strategy instance artifact path {candidate} cannot share a root with {namespace_root}"
-        ) from exc
-    if common != namespace_root:
-        raise ValueError(
-            f"strategy instance artifact path {candidate} escapes {namespace_root}"
-        )
-    return Path(candidate)
+    return confine_path_to_root(
+        Path(candidate),
+        Path(namespace_root),
+        label="strategy instance artifact",
+    )

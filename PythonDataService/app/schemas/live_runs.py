@@ -374,6 +374,7 @@ class HostRunnerStartRequest(BaseModel):
     strategy: str = Field(default="spy_ema_crossover", pattern=r"^[a-z][a-z0-9_]{0,63}$")
     max_orders_per_day: int = Field(default=DEFAULT_MAX_ORDERS_PER_DAY, ge=0, le=100_000)
     ibkr_host: str = Field(default="127.0.0.1", min_length=1, max_length=255)
+    roll_call_offer_id: str | None = Field(default=None, min_length=1, max_length=128)
 
     @field_validator("ibkr_host")
     @classmethod
@@ -2315,6 +2316,174 @@ class BotLifecycleChartView(BaseModel):
     only_fresh_run_available: bool = False
 
 
+BotLifecyclePhaseValue = Literal["OFF_DUTY", "ON_DUTY", "RETIRED"]
+BotLifecyclePresenceLabel = Literal["Off duty", "On duty", "Retired"]
+BotLifecycleDisplayStatus = Literal[
+    "Off duty",
+    "Ready",
+    "On duty",
+    "Clocking out",
+    "Sick bay",
+    "Off roster",
+    "Retired",
+]
+BotLifecycleActionId = Literal[
+    "confirm_start",
+    "end_day_now",
+    "retire_replace",
+    "add_to_roster",
+    "take_off_roster",
+]
+
+
+class BotLifecycleAction(BaseModel):
+    """One rendered lifecycle action.
+
+    The Button Rule relies on actions being a closed vocabulary. A disabled
+    action is not a graveyard button; it exists only when the backend must carry
+    a refusal reason for the single primary action.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: BotLifecycleActionId
+    label: str
+    enabled: bool = True
+    reason: str | None = None
+    offer_id: str | None = None
+    expires_at_ms: int | None = None
+
+
+class BotDailyLifecycleProjection(BaseModel):
+    """Rev-3 daily lifecycle projection for one bot.
+
+    ``phase`` tracks presence only. Health is derived by the evaluator from
+    receipts and open conditions; the display status is the closed vocabulary the
+    UI renders.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    phase: BotLifecyclePhaseValue
+    presence_label: BotLifecyclePresenceLabel
+    display_status: BotLifecycleDisplayStatus
+    attention_badge: Literal["Sick bay", "Ready", "Off roster"] | None = None
+    reason: str | None = None
+    on_roster: bool = True
+    active_run_id: str | None = None
+    latest_run_id: str | None = None
+    drift_detected: bool = False
+    primary_action: BotLifecycleAction | None = None
+    ambient_actions: list[BotLifecycleAction] = Field(default_factory=list)
+
+
+class BotRollCallSummary(BaseModel):
+    """Fleet-level counts for the morning roll-call sheet."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ready: int = 0
+    off_roster: int = 0
+    sick_bay: int = 0
+    on_duty: int = 0
+    off_duty: int = 0
+    retired: int = 0
+    generated_at_ms: int | None = None
+    session_date: str | None = None
+    effective_stop_ms: int | None = None
+
+
+class BotRollCallOffer(BaseModel):
+    """One persisted roll-call start offer returned from the tick endpoint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    offer_id: str
+    strategy_instance_id: str
+    run_id: str
+    session_date: str
+    issued_at_ms: int
+    expires_at_ms: int
+
+
+class BotRollCallResponse(BaseModel):
+    """Response for the operator/scheduler roll-call tick."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    summary: BotRollCallSummary
+    offers: list[BotRollCallOffer] = Field(default_factory=list)
+
+
+class BotLifecycleRosterRequest(BaseModel):
+    """Operator roster mutation for the next roll call."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    on_roster: bool
+    updated_by: str = Field(default="operator", min_length=1, max_length=128)
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class BotRetireReplaceRequest(BaseModel):
+    """Retire & Replace attestation.
+
+    Replacement is default-on: the endpoint retires this instance and the UI
+    immediately continues to the deploy form with existing lineage defaults.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    confirm_account_flat: bool
+    replacement_requested: bool = True
+    updated_by: str = Field(default="operator", min_length=1, max_length=128)
+    reason: str = Field(default="Retire & Replace", min_length=1, max_length=500)
+
+
+class BotLifecycleMutationResponse(BaseModel):
+    """Response returned after a lifecycle write persist point."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    strategy_instance_id: str
+    lifecycle: BotDailyLifecycleProjection
+
+
+class BotAttendanceCell(BaseModel):
+    """One per-session attendance marker rendered on the bot catalog."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_date: str
+    status: Literal["clean", "rested", "sick", "retired"]
+    label: str
+    receipt_ref: str | None = None
+
+
+class BotEveningReportRow(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    strategy_instance_id: str
+    label: str
+    status: Literal["clean", "rested", "sick", "retired"]
+    receipt_ref: str | None = None
+
+
+class BotEveningReport(BaseModel):
+    """Backend-authored day report for the fleet page."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_date: str
+    generated_at_ms: int
+    clean_exits: int = 0
+    rested: int = 0
+    sick: int = 0
+    retired: int = 0
+    summary: str
+    rows: list[BotEveningReportRow] = Field(default_factory=list)
+
+
 class LiveInstanceStatus(BaseModel):
     """Instance-addressed status: the operator's control-room subject (ADR 0004).
 
@@ -2384,6 +2553,9 @@ class LiveInstanceStatus(BaseModel):
     # renders this graph directly; it does not infer lifecycle, gate, or
     # action truth from lower-level fields.
     lifecycle_chart: BotLifecycleChartView
+    # Rev 3 daily lifecycle projection: three durable phases, closed display
+    # vocabulary, roster flag, and Button Rule action ids.
+    daily_lifecycle: BotDailyLifecycleProjection
     fetched_at_ms: int
 
 
@@ -2813,6 +2985,9 @@ class BotCatalogRow(BaseModel):
     process_state: str
     desired_state: str | None = None
     readiness_verdict: Literal["READY", "BLOCKED", "DEGRADED", "UNKNOWN"] = "UNKNOWN"
+    daily_lifecycle: BotDailyLifecycleProjection
+    start_request: HostRunnerStartRequest | None = None
+    attendance: list[BotAttendanceCell] = Field(default_factory=list)
     metrics: BotCatalogMetrics
 
 
@@ -2820,6 +2995,8 @@ class BotCatalogResponse(BaseModel):
     """Fleet-wide bot catalog projection."""
 
     bots: list[BotCatalogRow] = Field(default_factory=list)
+    roll_call: BotRollCallSummary = Field(default_factory=BotRollCallSummary)
+    evening_report: BotEveningReport | None = None
 
 
 class BotDeleteRequest(BaseModel):

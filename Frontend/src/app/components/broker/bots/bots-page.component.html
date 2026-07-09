@@ -4,17 +4,63 @@
       <p class="eyebrow">Broker fleet</p>
       <h1 id="bots-title">Bots</h1>
     </div>
-    <button
-      pButton
-      type="button"
-      severity="secondary"
-      icon="pi pi-refresh"
-      [loading]="isLoading()"
-      (click)="refresh()"
-    >
-      <span class="p-button-label">Refresh</span>
-    </button>
+    <div class="page-actions">
+      <button
+        pButton
+        type="button"
+        severity="secondary"
+        icon="pi pi-check-circle"
+        [loading]="isRunningRollCall()"
+        (click)="runRollCall()"
+      >
+        <span class="p-button-label">Roll call</span>
+      </button>
+      @if (readyRows().length > 0) {
+        <button
+          pButton
+          type="button"
+          icon="pi pi-play"
+          [loading]="isStartingReady()"
+          (click)="startReadyBots()"
+        >
+          <span class="p-button-label">Start ready</span>
+        </button>
+      }
+      <button
+        pButton
+        type="button"
+        severity="secondary"
+        icon="pi pi-refresh"
+        [loading]="isLoading()"
+        (click)="refresh()"
+      >
+        <span class="p-button-label">Refresh</span>
+      </button>
+    </div>
   </header>
+
+  @if (accountFreezeBanner(); as banner) {
+    <app-account-freeze-banner
+      [banner]="banner"
+      actionLabel="Open Account Monitor"
+      (actionClicked)="openAccountMonitor()"
+    />
+  } @else if (accountTriageError(); as message) {
+    <p class="load-error" role="status">{{ message }}</p>
+  }
+
+  <section class="roll-call-strip" aria-label="Daily bot roll call">
+    <div>
+      <strong>Roll call</strong>
+      <span>{{ rollCallSummaryLine() }}</span>
+    </div>
+    @if (eveningReportLine(); as report) {
+      <div>
+        <strong>Evening report</strong>
+        <span>{{ report }}</span>
+      </div>
+    }
+  </section>
 
   <section class="filters" aria-label="Bot filters">
     <label class="filter-field search-field">
@@ -24,7 +70,7 @@
         <input
           pInputText
           type="search"
-          placeholder="Name, symbol, readiness, engine..."
+          placeholder="Name, symbol, status, engine..."
           [value]="searchQuery()"
           (input)="setSearchQuery($event)"
         />
@@ -59,35 +105,56 @@
     </div>
 
     <div class="filter-group">
-      <span>Readiness</span>
-      <div class="segmented" aria-label="Readiness filter">
+      <span>Lifecycle</span>
+      <div class="segmented" aria-label="Lifecycle filter">
         <button
           type="button"
-          [class.active]="readinessFilter() === 'all'"
-          (click)="setReadinessFilter('all')"
+          [class.active]="lifecycleFilter() === 'all'"
+          (click)="setLifecycleFilter('all')"
         >
           All
         </button>
         <button
           type="button"
-          [class.active]="readinessFilter() === 'READY'"
-          (click)="setReadinessFilter('READY')"
+          [class.active]="lifecycleFilter() === 'Ready'"
+          (click)="setLifecycleFilter('Ready')"
         >
           Ready
         </button>
         <button
           type="button"
-          [class.active]="readinessFilter() === 'DEGRADED'"
-          (click)="setReadinessFilter('DEGRADED')"
+          [class.active]="lifecycleFilter() === 'Sick bay'"
+          (click)="setLifecycleFilter('Sick bay')"
         >
-          Degraded
+          Sick bay
         </button>
         <button
           type="button"
-          [class.active]="readinessFilter() === 'BLOCKED'"
-          (click)="setReadinessFilter('BLOCKED')"
+          [class.active]="lifecycleFilter() === 'On duty'"
+          (click)="setLifecycleFilter('On duty')"
         >
-          Blocked
+          On duty
+        </button>
+        <button
+          type="button"
+          [class.active]="lifecycleFilter() === 'Off duty'"
+          (click)="setLifecycleFilter('Off duty')"
+        >
+          Off duty
+        </button>
+        <button
+          type="button"
+          [class.active]="lifecycleFilter() === 'Off roster'"
+          (click)="setLifecycleFilter('Off roster')"
+        >
+          Off roster
+        </button>
+        <button
+          type="button"
+          [class.active]="lifecycleFilter() === 'Retired'"
+          (click)="setLifecycleFilter('Retired')"
+        >
+          Retired
         </button>
       </div>
     </div>
@@ -105,6 +172,10 @@
   </section>
 
   @if (errorMessage(); as message) {
+    <p class="load-error" role="alert">{{ message }}</p>
+  }
+
+  @if (startAllErrorMessage(); as message) {
     <p class="load-error" role="alert">{{ message }}</p>
   }
 
@@ -285,9 +356,9 @@
               Errors
               <p-sortIcon field="errorCount" />
             </th>
-            <th pSortableColumn="readinessVerdict">
-              Readiness
-              <p-sortIcon field="readinessVerdict" />
+            <th pSortableColumn="displayStatus">
+              Status
+              <p-sortIcon field="displayStatus" />
             </th>
             <th pSortableColumn="lastRunSortMs">
               Last Run
@@ -315,6 +386,21 @@
             </td>
             <td class="bot-name-cell">
               <strong>{{ row.name }}</strong>
+              @if (row.attendance.length > 0) {
+                <span
+                  class="attendance-strip"
+                  data-testid="bot-attendance-strip"
+                  aria-label="Attendance"
+                >
+                  @for (cell of row.attendance; track trackByAttendance($index, cell)) {
+                    <span
+                      [class]="attendanceClass(cell)"
+                      [title]="attendanceTitle(cell)"
+                      [attr.aria-label]="attendanceTitle(cell)"
+                    ></span>
+                  }
+                </span>
+              }
             </td>
             <td>{{ row.symbolsLabel }}</td>
             <td>{{ row.exposure }}</td>
@@ -322,18 +408,19 @@
             <td class="numeric-cell">{{ formatMoney(row.totalPnl) }}</td>
             <td class="numeric-cell">{{ formatCount(row.errorCount) }}</td>
             <td>
-              <div class="readiness-cell">
+              <div class="status-cell" [title]="row.statusReason ?? row.presenceLabel">
                 <p-tag
-                  [severity]="readinessSeverity(row.readinessVerdict)"
-                  [value]="row.readinessVerdict"
+                  severity="secondary"
+                  [value]="row.presenceLabel"
                 />
-                @if (row.onlyFreshRunAvailable) {
-                  <span
-                    class="fresh-run-chip"
-                    title="All live controls are locked for this run. Use Fresh run."
-                  >
-                    Fresh run only
-                  </span>
+                @if (row.attentionBadge; as badge) {
+                  <p-tag
+                    [severity]="row.attentionSeverity"
+                    [value]="badge"
+                  />
+                }
+                @if (row.statusReason; as reason) {
+                  <span>{{ reason }}</span>
                 }
               </div>
             </td>
@@ -384,25 +471,41 @@
               <div>
                 <h2>{{ row.name }}</h2>
                 <p>{{ row.symbolsLabel }}</p>
+                @if (row.attendance.length > 0) {
+                  <span
+                    class="attendance-strip"
+                    data-testid="bot-attendance-strip"
+                    aria-label="Attendance"
+                  >
+                    @for (cell of row.attendance; track trackByAttendance($index, cell)) {
+                      <span
+                        [class]="attendanceClass(cell)"
+                        [title]="attendanceTitle(cell)"
+                        [attr.aria-label]="attendanceTitle(cell)"
+                      ></span>
+                    }
+                  </span>
+                }
               </div>
             </div>
 
             <dl class="primary-meta">
               <div>
-                <dt>Readiness</dt>
+                <dt>Status</dt>
                 <dd>
-                  <div class="readiness-cell">
+                  <div class="status-cell">
                     <p-tag
-                      [severity]="readinessSeverity(row.readinessVerdict)"
-                      [value]="row.readinessVerdict"
+                      severity="secondary"
+                      [value]="row.presenceLabel"
                     />
-                    @if (row.onlyFreshRunAvailable) {
-                      <span
-                        class="fresh-run-chip"
-                        title="All live controls are locked for this run. Use Fresh run."
-                      >
-                        Fresh run only
-                      </span>
+                    @if (row.attentionBadge; as badge) {
+                      <p-tag
+                        [severity]="row.attentionSeverity"
+                        [value]="badge"
+                      />
+                    }
+                    @if (row.statusReason; as reason) {
+                      <span>{{ reason }}</span>
                     }
                   </div>
                 </dd>

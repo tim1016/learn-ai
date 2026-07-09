@@ -89,6 +89,7 @@ class AccountFreezeEvidence(BaseModel):
 
     schema_version: int = 1
     account_id: str = Field(min_length=1, max_length=64)
+    freeze_kind: Literal["account", "exposure"] = "account"
     reason: str = Field(min_length=1)
     source: str = Field(min_length=1)
     recorded_at_ms: int = Field(ge=0)
@@ -199,11 +200,13 @@ def write_account_freeze(artifacts_root: Path, evidence: AccountFreezeEvidence) 
     path = root / ACCOUNT_FREEZE_FILENAME
     _atomic_write_json(path, evidence.model_dump())
     _append_account_event(
-        root,
+        artifacts_root,
+        evidence.account_id,
         {
             "event_type": "account_freeze_recorded",
             "account_id": evidence.account_id,
             "reason": evidence.reason,
+            "freeze_kind": evidence.freeze_kind,
             "source": evidence.source,
             "recorded_at_ms": evidence.recorded_at_ms,
             "operator_next_step": evidence.operator_next_step,
@@ -244,7 +247,8 @@ def clear_account_freeze(
         if recovery_proof.reconciliation_result != "clean" or recovery_proof.final_gate_result.status != "pass":
             raise AccountArtifactError("recovery proof must have clean reconciliation and passing final gate")
         _append_account_event(
-            root,
+            artifacts_root,
+            account_id,
             {
                 "event_type": "account_recovery_proof_recorded",
                 "account_id": account_id,
@@ -268,7 +272,8 @@ def clear_account_freeze(
         cleared_reason = f"override:{audited_override.override_id}:{audited_override.approved_decision}"
         cleared_source = "account_audited_override"
         _append_account_event(
-            root,
+            artifacts_root,
+            account_id,
             {
                 "event_type": "account_audited_override_recorded",
                 "account_id": account_id,
@@ -295,7 +300,8 @@ def clear_account_freeze(
     )
     _atomic_write_json(path, cleared.model_dump())
     _append_account_event(
-        root,
+        artifacts_root,
+        account_id,
         {
             "event_type": "account_freeze_cleared",
             "account_id": account_id,
@@ -385,8 +391,7 @@ def append_account_event(
     account_id: str,
     payload: dict,
 ) -> None:
-    root = account_artifacts_root(artifacts_root, account_id)
-    _append_account_event(root, {**payload, "account_id": account_id})
+    _append_account_event(artifacts_root, account_id, {**payload, "account_id": account_id})
 
 
 def write_account_owner_generation(
@@ -398,7 +403,8 @@ def write_account_owner_generation(
     path = root / ACCOUNT_OWNER_GENERATION_FILENAME
     _atomic_write_json(path, generation.model_dump())
     _append_account_event(
-        root,
+        artifacts_root,
+        generation.account_id,
         {
             "event_type": "account_owner_generation_recorded",
             "account_id": generation.account_id,
@@ -475,9 +481,9 @@ def evaluate_restart_intensity(
                 }
             )
         )
-        root = account_artifacts_root(artifacts_root, account_id)
         _append_account_event(
-            root,
+            artifacts_root,
+            account_id,
             {
                 "event_type": "account_restart_intensity_breached",
                 "account_id": account_id,
@@ -494,6 +500,7 @@ def evaluate_restart_intensity(
             artifacts_root,
             AccountFreezeEvidence(
                 account_id=account_id,
+                freeze_kind="account",
                 reason=reason,
                 source=policy.source,
                 recorded_at_ms=now_ms,
@@ -540,9 +547,17 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
         _fsync_parent_dir(path)
 
 
-def _append_account_event(root: Path, payload: dict) -> None:
-    path = root / ACCOUNT_EVENTS_FILENAME
-    root.mkdir(parents=True, exist_ok=True)
+def _append_account_event(artifacts_root: Path, account_id: str, payload: dict) -> None:
+    safe_account_id = _safe_account_path_segment(account_id)
+    accounts_root = os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts"))
+    root_real = os.path.realpath(os.path.join(accounts_root, safe_account_id))
+    event_filename = os.path.basename(ACCOUNT_EVENTS_FILENAME)
+    event_path_real = os.path.realpath(os.path.join(root_real, event_filename))
+    root_prefix = root_real if root_real.endswith(os.sep) else f"{root_real}{os.sep}"
+    if not event_path_real.startswith(root_prefix):
+        raise AccountArtifactError(f"event path traversal detected for account_id: {account_id!r}")
+    path = Path(event_path_real)
+    path.parent.mkdir(parents=True, exist_ok=True)
     with _file_lock(path):
         enriched = dict(payload)
         enriched["seq"] = _next_account_event_seq_locked(path)

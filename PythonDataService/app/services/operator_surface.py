@@ -26,6 +26,7 @@ from pydantic import ValidationError
 from app.engine.live.account_artifacts import AccountFreezeEvidence
 from app.engine.live.daemon_connectivity_monitor import DaemonConnectivityState
 from app.engine.live.daemon_transport import DaemonResultKind
+from app.engine.live.exit_taxonomy import RunExitEvidence, classify_run_exit
 from app.lean_sidecar.trading_calendar import next_trading_day, session_window_for_date
 from app.operator.notices.broker_activity_health import compose_broker_activity_health
 from app.operator.notices.runtime_freshness import compose_runtime_freshness_notices
@@ -129,8 +130,8 @@ _DAEMON_STATE_TO_HOST_PROCESS_STATE: dict[str, str] = {
 
 _HOST_PROCESS_NOTICE_BY_STATE: dict[str, str] = {
     "STOPPING": "The bot is shutting down.",
-    "EXITED": "The previous bot process ended. Start this bot's process to resume trading.",
-    "IDLE": "The host is reachable but this bot has no active process. Start it to resume trading.",
+    "EXITED": "The previous bot process ended. Run roll call for a fresh start offer.",
+    "IDLE": "The host is reachable but this bot has no active process. Run roll call for a fresh start offer.",
     "WAITING_FOR_HOST": (
         "Trading was requested, but this bot's process has not started yet. Start it to begin trading."
     ),
@@ -172,12 +173,11 @@ def _project_host_start_capability(
             disabled_reason_code="CRASH_RECOVERY_REQUIRED",
             gate_results=[crash_recovery_gate],
         )
-    # Poisoned runs are dead and still require redeploy. Durable STOPPED is
-    # only a Resume-clearable latch when the run is otherwise recoverable.
+    # Poisoned runs are dead and still require redeploy. Durable STOPPED no
+    # longer blocks starts; the duty roster is the operator-owned "stay down"
+    # control in the daily lifecycle model.
     if poisoned:
         reason = "STOPPED_REQUIRES_REDEPLOY"
-    elif desired_state is not None and desired_state.state == "STOPPED":
-        reason = "STOPPED_REQUIRES_RESUME"
     elif state == "RUNNING":
         reason = "ALREADY_RUNNING"
     elif state == "STOPPING":
@@ -329,7 +329,7 @@ def _project_run_signal(
             state_label = "Stopping"
             tone = "transition"
         case "UNREACHABLE":
-            state_label = "Unknown"
+            state_label = "Needs proof"
             tone = "attention"
         case "EXITED" | "IDLE" | "WAITING_FOR_HOST":
             state_label = "Off"
@@ -352,7 +352,16 @@ def _project_run_signal(
 def _project_prior_run(last_exit: InstanceLastExit | None) -> OperatorSurfacePriorRun:
     if last_exit is None:
         return OperatorSurfacePriorRun(classification="UNKNOWN")
-    if last_exit.halt_trigger is not None:
+    verdict = classify_run_exit(
+        RunExitEvidence(
+            status_present=True,
+            exit_code=last_exit.exit_code,
+            exit_reason=last_exit.exit_reason,
+        ),
+        returncode=last_exit.exit_code,
+        stopping=False,
+    )
+    if last_exit.halt_trigger is not None or verdict.category == "halted":
         return OperatorSurfacePriorRun(classification="HALT_TRIGGERED")
     if last_exit.exit_code == 0 or last_exit.exit_reason == "normal":
         return OperatorSurfacePriorRun(classification="CLEAN")

@@ -3,21 +3,31 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import get_args
+
+import pytest
 
 from app.broker.ibkr.account_recovery import AccountRecoveryState
 from app.broker.ibkr.account_truth import compose_account_truth
 from app.broker.ibkr.models import (
     IbkrAccountSummary,
     IbkrConnectionHealth,
+    IbkrPosition,
     IbkrPositionsSnapshot,
 )
 from app.engine.live.account_artifacts import (
+    RESTART_INTENSITY_SOURCE,
+    AccountArtifactError,
     AccountFreezeEvidence,
     AccountInstanceBinding,
     account_artifacts_root,
+    append_account_event,
+    read_account_events,
+    read_account_freeze,
     write_account_freeze,
     write_account_instance_binding,
 )
+from app.schemas.account_reconciliation import AccountConditionType, AccountCureAction
 from app.schemas.account_truth import AccountTruthEvidenceGap
 from app.services.account_reconciliation import AccountReconciliationService
 
@@ -49,11 +59,23 @@ def _account_summary() -> IbkrAccountSummary:
     )
 
 
-def _positions_snapshot() -> IbkrPositionsSnapshot:
+def _position(*, symbol: str = "SPY", quantity: float = 1.0) -> IbkrPosition:
+    return IbkrPosition(
+        account_id="DU1234567",
+        con_id=756733,
+        symbol=symbol,
+        sec_type="STK",
+        quantity=quantity,
+        avg_cost=500.0,
+        fetched_at_ms=1_780_000_000_400,
+    )
+
+
+def _positions_snapshot(positions: list[IbkrPosition] | None = None) -> IbkrPositionsSnapshot:
     return IbkrPositionsSnapshot(
         account_id="DU1234567",
         is_paper=True,
-        positions=[],
+        positions=positions or [],
         fetched_at_ms=1_780_000_000_400,
     )
 
@@ -62,6 +84,7 @@ def _truth(
     *,
     account_id: str = "DU1234567",
     connected: bool = True,
+    positions: list[IbkrPosition] | None = None,
     evidence_gaps: list[AccountTruthEvidenceGap] | None = None,
 ):
     return compose_account_truth(
@@ -69,7 +92,7 @@ def _truth(
         account_instance_bindings=[],
         account_recovery_state=AccountRecoveryState.clear(account_id),
         account=_account_summary(),
-        positions_snapshot=_positions_snapshot(),
+        positions_snapshot=_positions_snapshot(positions),
         open_orders=[],
         completed_orders=[],
         executions=[],
@@ -90,6 +113,24 @@ def _binding() -> AccountInstanceBinding:
     )
 
 
+def _retired_binding(
+    *,
+    sid: str = "bot-a",
+    run_id: str = "run-a",
+    source: str = "host_daemon.process_crashed",
+    recorded_at_ms: int = 1_780_000_002_500,
+) -> AccountInstanceBinding:
+    return AccountInstanceBinding(
+        account_id="DU1234567",
+        strategy_instance_id=sid,
+        run_id=run_id,
+        bot_order_namespace=f"learn-ai/{sid}/v1",
+        lifecycle_state="RETIRED",
+        recorded_at_ms=recorded_at_ms,
+        source=source,
+    )
+
+
 def test_write_receipt_wraps_clean_account_truth(tmp_path: Path) -> None:
     service = AccountReconciliationService(artifacts_root=tmp_path, ttl_ms=60_000)
 
@@ -100,6 +141,7 @@ def test_write_receipt_wraps_clean_account_truth(tmp_path: Path) -> None:
     )
 
     assert receipt.state == "CLEAN"
+    assert receipt.exposure_resolution == "flat"
     assert receipt.account_truth_verdict == "clean"
     assert receipt.final_gate_result.status == "pass"
     assert receipt.expires_at_ms == 1_780_000_062_000
@@ -119,6 +161,22 @@ def test_write_receipt_uses_canonical_account_id_for_storage(tmp_path: Path) -> 
     assert receipt.requested_account_id == "DU1234567"
     assert service.read_latest_receipt("DU1234567") == receipt
     assert service.read_latest_receipt("du1234567") == receipt
+
+
+def test_receipt_refuses_clean_when_broker_exposure_is_not_flat(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path, ttl_ms=60_000)
+
+    receipt = service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(positions=[_position(quantity=1.0)]),
+        now_ms=1_780_000_002_000,
+    )
+
+    assert receipt.state == "NOT_PROVEN"
+    assert receipt.exposure_resolution == "unresolved"
+    assert receipt.final_gate_result.status == "block"
+    assert receipt.final_gate_result.operator_next_step == "RESOLVE_EXPOSURE"
+    assert "exposure_resolution=unresolved" in receipt.final_gate_result.operator_reason
 
 
 def test_receipt_blocks_connected_account_mismatch(tmp_path: Path) -> None:
@@ -197,6 +255,9 @@ def test_triage_without_receipt_is_unknown(tmp_path: Path) -> None:
     assert triage.overall_gate_result.status == "unknown"
     assert triage.gate_rows[0].gate_id == "account.reconciliation"
     assert triage.gate_rows[0].status == "unknown"
+    assert [(row.condition_type, row.cure_action) for row in triage.conditions] == [
+        ("evidence_stale", "reconcile_now")
+    ]
 
 
 def test_triage_marks_corrupt_instance_registry_unknown(tmp_path: Path) -> None:
@@ -230,6 +291,9 @@ def test_triage_marks_expired_receipt_unknown(tmp_path: Path) -> None:
 
     assert triage.overall_gate_result.status == "unknown"
     assert triage.gate_rows[0].title == "Account reconciliation receipt stale"
+    assert [(row.condition_type, row.cure_action) for row in triage.conditions] == [
+        ("evidence_stale", "reconcile_now")
+    ]
 
 
 def test_triage_freeze_dominates_clean_receipt(tmp_path: Path) -> None:
@@ -244,18 +308,404 @@ def test_triage_freeze_dominates_clean_receipt(tmp_path: Path) -> None:
         tmp_path,
         AccountFreezeEvidence(
             account_id="DU1234567",
-            reason="restart_intensity.threshold_breached",
-            source="account_restart_intensity",
+            freeze_kind="exposure",
+            reason="watchdog.flatten_timed_out",
+            source="watchdog_halt_executor",
             recorded_at_ms=1_780_000_002_500,
-            operator_next_step="STOP_RESTARTING_AND_RECOVER_ACCOUNT",
+            operator_next_step="CHECK_IBKR",
         ),
     )
 
     triage = service.triage(account_id="DU1234567", now_ms=1_780_000_003_000)
 
     assert triage.overall_gate_result.status == "freeze"
+    assert triage.clear_freeze_actionable is False
     assert [bot.strategy_instance_id for bot in triage.affected_bots] == ["bot-a"]
     assert {row.gate_id for row in triage.gate_rows} == {
         "account.reconciliation",
         "account.unresolved_exposure",
     }
+    assert [(row.condition_type, row.cure_action) for row in triage.conditions] == [
+        ("exposure_freeze", "resolve_exposure")
+    ]
+
+
+def test_triage_marks_non_exposure_freeze_with_clear_action(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(),
+        now_ms=1_780_000_003_000,
+    )
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id="DU1234567",
+            reason="restart_intensity.threshold_breached",
+            source=RESTART_INTENSITY_SOURCE,
+            recorded_at_ms=1_780_000_002_500,
+            operator_next_step="STOP_RESTARTING_AND_RECOVER_ACCOUNT",
+        ),
+    )
+
+    triage = service.triage(account_id="DU1234567", now_ms=1_780_000_003_100)
+
+    assert triage.clear_freeze_actionable is True
+    assert [(row.condition_type, row.cure_action) for row in triage.conditions] == [
+        ("account_freeze", "clear_freeze")
+    ]
+
+
+def test_triage_defaults_untyped_freeze_to_clearable_account_freeze(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(),
+        now_ms=1_780_000_003_000,
+    )
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id="DU1234567",
+            reason="watchdog.flatten_timed_out",
+            source="watchdog_halt_executor",
+            recorded_at_ms=1_780_000_002_500,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+
+    triage = service.triage(account_id="DU1234567", now_ms=1_780_000_003_100)
+
+    assert triage.clear_freeze_actionable is True
+    assert [(row.condition_type, row.cure_action) for row in triage.conditions] == [
+        ("account_freeze", "clear_freeze")
+    ]
+    with pytest.raises(AccountArtifactError, match="only clear an exposure freeze"):
+        service.accept_exposure_override(
+            account_id="DU1234567",
+            requested_by="operator",
+            reason="Default freeze classification should be account-scoped.",
+            now_ms=1_780_000_003_200,
+        )
+
+
+def test_triage_marks_crashed_and_no_status_retired_bots_for_retire_replace(
+    tmp_path: Path,
+) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(),
+        now_ms=1_780_000_003_000,
+    )
+    write_account_instance_binding(
+        tmp_path,
+        _retired_binding(
+            sid="crashed-bot",
+            run_id="run-crashed",
+            source="host_daemon.process_crashed",
+            recorded_at_ms=1_780_000_002_500,
+        ),
+    )
+    write_account_instance_binding(
+        tmp_path,
+        _retired_binding(
+            sid="nostatus-bot",
+            run_id="run-nostatus",
+            source="host_daemon.ended_without_status",
+            recorded_at_ms=1_780_000_002_600,
+        ),
+    )
+
+    triage = service.triage(account_id="DU1234567", now_ms=1_780_000_003_100)
+
+    assert [
+        (
+            row.condition_type,
+            row.scope,
+            row.owner.owner_id,
+            row.owner.lifecycle_state,
+            row.cure_action,
+        )
+        for row in triage.conditions
+    ] == [
+        ("crashed", "bot", "crashed-bot", "RETIRED", "retire_replace"),
+        ("ended_without_status", "bot", "nostatus-bot", "RETIRED", "retire_replace"),
+    ]
+    assert all(row.severity == "critical" for row in triage.conditions)
+    assert triage.overall_gate_result.status == "block"
+    assert triage.summary_headline == "Account recovery needs attention"
+    assert "crashed-bot ended from a crash" in triage.summary_detail
+
+
+def test_triage_closes_terminal_retired_conditions_after_recovery_evidence(
+    tmp_path: Path,
+) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(),
+        now_ms=1_780_000_003_000,
+    )
+    write_account_instance_binding(
+        tmp_path,
+        _retired_binding(
+            sid="crashed-bot",
+            run_id="run-crashed",
+            source="host_daemon.process_crashed",
+            recorded_at_ms=1_780_000_002_500,
+        ),
+    )
+    write_account_instance_binding(
+        tmp_path,
+        _retired_binding(
+            sid="nostatus-bot",
+            run_id="run-nostatus",
+            source="host_daemon.ended_without_status",
+            recorded_at_ms=1_780_000_002_600,
+        ),
+    )
+    append_account_event(
+        tmp_path,
+        "DU1234567",
+        {
+            "event_type": "account_recovery_proof_recorded",
+            "recovery_id": "acct-recovery-DU1234567",
+            "recorded_at_ms": 1_780_000_002_700,
+        },
+    )
+
+    triage = service.triage(account_id="DU1234567", now_ms=1_780_000_003_100)
+
+    assert triage.conditions == []
+
+
+def test_triage_exposure_freeze_names_retired_owner_when_unambiguous(
+    tmp_path: Path,
+) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(),
+        now_ms=1_780_000_003_000,
+    )
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id="DU1234567",
+            freeze_kind="exposure",
+            reason="watchdog.flatten_timed_out",
+            source="watchdog_halt_executor",
+            recorded_at_ms=1_780_000_002_500,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+    write_account_instance_binding(
+        tmp_path,
+        _retired_binding(
+            sid="retired-freezer",
+            run_id="run-freeze",
+            source="host_daemon.process_halted",
+            recorded_at_ms=1_780_000_002_700,
+        ),
+    )
+
+    triage = service.triage(account_id="DU1234567", now_ms=1_780_000_003_100)
+
+    freeze = next(row for row in triage.conditions if row.condition_type == "exposure_freeze")
+    assert freeze.scope == "account"
+    assert freeze.owner.owner_type == "bot"
+    assert freeze.owner.owner_id == "retired-freezer"
+    assert freeze.owner.lifecycle_state == "RETIRED"
+    assert freeze.cure_action == "resolve_exposure"
+
+
+def test_condition_contract_uses_closed_type_and_single_cure_action(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    triage = service.triage(account_id="DU1234567", now_ms=1_780_000_002_000)
+
+    condition_types = set(get_args(AccountConditionType))
+    cure_actions = set(get_args(AccountCureAction))
+    assert condition_types == {
+        "exposure_freeze",
+        "account_freeze",
+        "evidence_stale",
+        "daemon_unreachable",
+        "evidence_missing",
+        "exit_flatten_failed",
+        "exit_lease_stuck",
+        "crashed",
+        "ended_without_status",
+        "repeated_unclean_start",
+    }
+    assert cure_actions == {
+        "resolve_exposure",
+        "clear_freeze",
+        "reconcile_now",
+        "prove_evidence",
+        "retire_replace",
+    }
+    assert all(condition.cure_action in cure_actions for condition in triage.conditions)
+
+
+def test_clear_freeze_refuses_receipt_that_predates_active_freeze(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path, ttl_ms=60_000)
+    receipt = service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(),
+        now_ms=1_780_000_002_000,
+    )
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id="DU1234567",
+            freeze_kind="exposure",
+            reason="watchdog.flatten_timed_out",
+            source="watchdog_halt_executor",
+            recorded_at_ms=1_780_000_002_500,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+
+    with pytest.raises(AccountArtifactError, match="newer than the active freeze"):
+        service.clear_freeze_from_latest_receipt(
+            account_id="DU1234567",
+            requested_by="operator",
+            receipt_id=receipt.receipt_id,
+            now_ms=1_780_000_003_000,
+        )
+
+    assert read_account_freeze(tmp_path, "DU1234567") is not None
+
+
+def test_clear_freeze_refuses_unresolved_exposure_resolution(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path, ttl_ms=60_000)
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id="DU1234567",
+            freeze_kind="exposure",
+            reason="watchdog.flatten_timed_out",
+            source="watchdog_halt_executor",
+            recorded_at_ms=1_780_000_001_000,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+    receipt = service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(positions=[_position(quantity=1.0)]),
+        now_ms=1_780_000_002_000,
+    )
+
+    with pytest.raises(AccountArtifactError, match="exposure resolution is unresolved"):
+        service.clear_freeze_from_latest_receipt(
+            account_id="DU1234567",
+            requested_by="operator",
+            receipt_id=receipt.receipt_id,
+            now_ms=1_780_000_003_000,
+        )
+
+    assert read_account_freeze(tmp_path, "DU1234567") is not None
+
+
+def test_clear_freeze_accepts_fresh_flat_receipt_newer_than_freeze(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path, ttl_ms=60_000)
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id="DU1234567",
+            freeze_kind="exposure",
+            reason="watchdog.flatten_timed_out",
+            source="watchdog_halt_executor",
+            recorded_at_ms=1_780_000_001_000,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+    receipt = service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(),
+        now_ms=1_780_000_002_000,
+    )
+
+    response = service.clear_freeze_from_latest_receipt(
+        account_id="DU1234567",
+        requested_by="operator",
+        receipt_id=receipt.receipt_id,
+        now_ms=1_780_000_003_000,
+    )
+
+    assert response.cleared is True
+    assert response.receipt_id == receipt.receipt_id
+    assert response.triage.overall_gate_result.status == "pass"
+    assert read_account_freeze(tmp_path, "DU1234567") is None
+
+
+def test_accept_exposure_override_clears_exposure_freeze_with_audit_event(
+    tmp_path: Path,
+) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path, ttl_ms=60_000)
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id="DU1234567",
+            freeze_kind="exposure",
+            reason="watchdog.flatten_timed_out",
+            source="watchdog_halt_executor",
+            recorded_at_ms=1_780_000_001_000,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+    write_account_instance_binding(
+        tmp_path,
+        _retired_binding(
+            sid="retired-freezer",
+            run_id="run-freeze",
+            source="host_daemon.process_halted",
+            recorded_at_ms=1_780_000_001_100,
+        ),
+    )
+
+    response = service.accept_exposure_override(
+        account_id="DU1234567",
+        requested_by="operator",
+        reason="Operator verified the exposure belongs to the account.",
+        now_ms=1_780_000_002_000,
+    )
+
+    assert response.cleared is True
+    assert response.cleared_source == "account_audited_override"
+    assert response.triage.overall_gate_result.status == "unknown"
+    assert read_account_freeze(tmp_path, "DU1234567") is None
+    override_event = next(
+        event
+        for event in read_account_events(tmp_path, "DU1234567")
+        if event["event_type"] == "account_audited_override_recorded"
+    )
+    assert override_event["approved_decision"] == "continue"
+    assert override_event["strategy_instance_id"] == "retired-freezer"
+    assert override_event["run_id"] == "run-freeze"
+    assert override_event["prior_evidence"]["freeze_source"] == "watchdog_halt_executor"
+
+
+def test_accept_exposure_override_refuses_non_exposure_freeze(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path, ttl_ms=60_000)
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id="DU1234567",
+            reason="restart_intensity.threshold_breached",
+            source=RESTART_INTENSITY_SOURCE,
+            recorded_at_ms=1_780_000_001_000,
+            operator_next_step="STOP_RESTARTING_AND_RECOVER_ACCOUNT",
+        ),
+    )
+
+    with pytest.raises(AccountArtifactError, match="only clear an exposure freeze"):
+        service.accept_exposure_override(
+            account_id="DU1234567",
+            requested_by="operator",
+            reason="Wrong cure for this freeze.",
+            now_ms=1_780_000_002_000,
+        )
+
+    assert read_account_freeze(tmp_path, "DU1234567") is not None

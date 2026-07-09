@@ -3,6 +3,7 @@ import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { RouterTestingHarness } from '@angular/router/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { AccountTriageResponse } from '../../../api/account-reconciliation.types';
 import type { AccountTruthResponse } from '../../../api/broker-models';
 import type { LiveInstanceStatus } from '../../../api/live-instances.types';
 import { BrokerService } from '../../../services/broker.service';
@@ -11,6 +12,10 @@ import { LiveRunsService } from '../../../services/live-runs.service';
 import { StrategyValidationService } from '../../../services/strategy-validation.service';
 import type { StrategyValidationCatalog } from '../../../services/strategy-validation.types';
 import type { ActionPlan } from '../../../api/action-plan.types';
+import {
+  makeCleanAccountTriage,
+  makeFrozenAccountTriage,
+} from '../testing/account-triage-fixtures';
 import { BrokerDeployFormComponent } from './broker-deploy-form.component';
 
 let activeFixture: { destroy(): void; detectChanges(): void } | null = null;
@@ -113,6 +118,7 @@ function setup(
     }[];
     accountPromise?: Promise<{ account_id: string } | null>;
     accountTruth?: AccountTruthFixture;
+    accountTriage?: AccountTriageResponse;
     instanceStatus?: LiveInstanceStatus | null;
     instanceStatusPromise?: Promise<LiveInstanceStatus | null>;
     instanceStatusError?: Error;
@@ -196,6 +202,7 @@ function setup(
         status_detail: 'Broker/account evidence is fresh enough to start.',
       },
     ),
+    accountTriage: vi.fn().mockResolvedValue(opts.accountTriage ?? cleanTriage()),
     positions: vi
       .fn()
       .mockResolvedValue({ positions: opts.positions ?? [] }),
@@ -265,6 +272,28 @@ function validDeploymentValidationActionPlan(): ActionPlan {
     ],
     on_exit: [{ kind: 'close_leg', entry_leg_id: 'spy_long' }],
   };
+}
+
+function cleanTriage(): AccountTriageResponse {
+  return makeCleanAccountTriage({ accountId: 'DU123' });
+}
+
+function frozenTriage(): AccountTriageResponse {
+  return makeFrozenAccountTriage({
+    accountId: 'DU123',
+    conditionOptions: {
+      conditionType: 'exposure_freeze',
+      detail: 'watchdog.flatten_timed_out',
+      operatorNextStep: 'CHECK_IBKR',
+      source: 'watchdog_halt_executor',
+      affectedStrategyInstanceIds: ['DEPVALSPYJUL8'],
+      cureAction: 'resolve_exposure',
+    },
+    freezeBanner: {
+      headline: 'Account sick bay is gating new starts.',
+      detail: 'Resolve or audit broker exposure before starting another bot on this account.',
+    },
+  });
 }
 
 function fillRequired(component: BrokerDeployFormComponent) {
@@ -1217,6 +1246,33 @@ describe('BrokerDeployFormComponent', () => {
     expect(deployButton(fixture).disabled).toBe(false);
   });
 
+  it('never renders Account Clean or Fleet Clear while account triage has an active freeze', async () => {
+    const { fixture, component } = setup({
+      accountTruth: {
+        final_verdict: 'clean',
+        status_label: 'Clean',
+        status_detail: 'Broker/account evidence is fresh enough to start.',
+      },
+      accountTriage: frozenTriage(),
+    });
+    await settleResource(fixture);
+    fillRequired(component);
+    component.startNow.set(true);
+    fixture.detectChanges();
+
+    const readiness = fixture.nativeElement.querySelector('.deploy-readiness-strip');
+    const readinessText = readiness?.textContent ?? '';
+    expect(readinessText).toContain('Account');
+    expect(readinessText).toContain('Fleet');
+    expect(readinessText).toContain('Frozen');
+    expect(readinessText).not.toContain('Clean');
+    expect(readinessText).not.toContain('Clear');
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
+      'Account freeze active',
+    );
+    expect(deployButton(fixture).disabled).toBe(true);
+  });
+
   it('blocks start when account truth is not proven but allows deploy-only staging', async () => {
     const { fixture, component } = setup({
       accountTruth: {
@@ -1273,7 +1329,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(deployButton(fixture).disabled).toBe(false);
   });
 
-  it('switches a durable STOPPED start-now request to deploy-only before submit', async () => {
+  it('switches an off-duty start-now request to deploy-only before submit', async () => {
     const { fixture, svc, component } = setup({
       instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
       instanceStatus: stoppedLatchStatus(),
@@ -1286,8 +1342,9 @@ describe('BrokerDeployFormComponent', () => {
     expect(svc.getInstanceStatus).toHaveBeenCalledWith('deployment-validation-paper');
     expect(fixture.nativeElement.textContent).toContain('Deploy only');
     expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'Durable STOPPED latch is set',
+      'This bot is off duty',
     );
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).not.toContain('Resume');
     expect(deployButton(fixture).disabled).toBe(false);
 
     await component.submit();
@@ -1299,7 +1356,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(fieldControl(fixture, 'Restore previous state').disabled).toBe(true);
   });
 
-  it('does not submit start-now while the durable STOPPED lookup is still loading', async () => {
+  it('does not submit start-now while the off-duty lookup is still loading', async () => {
     const pending = deferred<LiveInstanceStatus | null>();
     const { fixture, svc, component } = setup({
       instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
@@ -1324,12 +1381,13 @@ describe('BrokerDeployFormComponent', () => {
     fixture.detectChanges();
 
     expect(fixture.nativeElement.querySelector('.blocked')?.textContent).toContain(
-      'Durable STOPPED latch is set',
+      'This bot is off duty',
     );
+    expect(fixture.nativeElement.querySelector('.blocked')?.textContent).not.toContain('Resume');
     expect(deployButton(fixture).disabled).toBe(false);
   });
 
-  it('checks durable STOPPED state even when the fleet list has not exposed the instance', async () => {
+  it('checks off-duty state even when the fleet list has not exposed the instance', async () => {
     const pendingInstances = deferred<{ strategy_instance_id: string; process_state: string }[]>();
     const { fixture, svc, component } = setup({
       instancesPromise: pendingInstances.promise,
@@ -1350,7 +1408,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(deployButton(fixture).disabled).toBe(false);
   });
 
-  it('does not carry a prior STOPPED latch onto a new instance name', async () => {
+  it('does not carry prior off-duty evidence onto a new instance name', async () => {
     const { fixture, svc, component } = setup({
       instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
       instanceStatusResolver: (instanceId) =>
@@ -1374,7 +1432,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(deployButton(fixture).disabled).toBe(false);
   });
 
-  it('fails closed when the durable STOPPED status lookup errors', async () => {
+  it('fails closed when the off-duty status lookup errors', async () => {
     const { fixture, svc, component } = setup({
       instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
       instanceStatusError: new Error('status lookup failed'),
@@ -1395,7 +1453,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(svc.deployInstance).not.toHaveBeenCalled();
   });
 
-  it('shows the real deploy blocker when STOPPED latch is present but deploy-only is unavailable', async () => {
+  it('shows the real deploy blocker when off-duty evidence is present but deploy-only is unavailable', async () => {
     const { fixture, component } = setup({
       instances: [{ strategy_instance_id: 'deployment-validation-paper', process_state: 'exited' }],
       instanceStatus: stoppedLatchStatus(),

@@ -1,4 +1,5 @@
 import type {
+  BotLifecycleMutationResponse,
   FleetAccountSummary,
   HostProcessState,
   LifecycleTimelineResponse,
@@ -15,7 +16,10 @@ import type {
   HostRunnerStartRequest,
   ReconcileAckResponse,
 } from '../../../api/live-runs.types';
-import { makeLifecycleChartFixture } from '../../../testing/live-instance-status-fixtures';
+import {
+  makeDailyLifecycleFixture,
+  makeLifecycleChartFixture,
+} from '../../../testing/live-instance-status-fixtures';
 
 export function makeStatus(options: {
   id?: string;
@@ -227,7 +231,7 @@ export function makeStatus(options: {
         ],
       },
       run_signal: options.runSignal ?? {
-        state_label: 'Unknown',
+        state_label: 'Needs proof',
         tone: 'attention',
         title: 'Host process',
         detail: hostNotice,
@@ -300,6 +304,7 @@ export function makeStatus(options: {
       },
     },
     lifecycle_chart: makeLifecycleChartFixture(),
+    daily_lifecycle: makeDailyLifecycleFixture(),
     fetched_at_ms: 0,
   };
 }
@@ -432,6 +437,16 @@ export function makeDesiredStateResponse(): SetInstanceDesiredStateResponse {
     },
     rung_receipt: makeMutationRungReceipt(),
     rung_receipt_warnings: [],
+  };
+}
+
+export function makeBotLifecycleMutationResponse(
+  overrides: Partial<BotLifecycleMutationResponse> = {},
+): BotLifecycleMutationResponse {
+  return {
+    strategy_instance_id: 'sid-x',
+    lifecycle: makeDailyLifecycleFixture(),
+    ...overrides,
   };
 }
 

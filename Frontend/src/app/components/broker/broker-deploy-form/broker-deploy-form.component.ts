@@ -13,6 +13,7 @@ import {
 } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { InputTextModule } from 'primeng/inputtext';
+import type { AccountTriageResponse } from '../../../api/account-reconciliation.types';
 import type { LiveInstanceStatus } from '../../../api/live-instances.types';
 import {
   DEFAULT_MAX_ORDERS_PER_DAY,
@@ -124,6 +125,14 @@ export class BrokerDeployFormComponent {
   });
   readonly account = resource({ loader: () => this.broker.account() });
   readonly accountTruth = resource({ loader: () => this.broker.accountTruth() });
+  readonly accountTriage = resource<AccountTriageResponse | null, string | null>({
+    params: () => {
+      const accountId = this.brokerAccountId();
+      return accountId === '' ? null : accountId;
+    },
+    loader: ({ params }) => (params === null ? Promise.resolve(null) : this.broker.accountTriage(params)),
+    defaultValue: null,
+  });
   // ADR 0009 § 9: symbol-scoped all-in coexistence guard.
   readonly positions = resource({ loader: () => this.broker.positions() });
 
@@ -213,7 +222,7 @@ export class BrokerDeployFormComponent {
       return {
         kind: 'ready',
         message:
-          'Durable STOPPED latch is set. This submit will deploy only; use Resume on the bot page to clear the latch before starting.',
+          'This bot is off duty. This submit will deploy only; run roll call on the bot page before starting.',
         canSubmit: true,
       };
     }
@@ -407,6 +416,7 @@ export class BrokerDeployFormComponent {
       brokerState: this.connectivity.brokerState(),
       brokerDetail: this.connectivity.brokerDetail(),
       accountTruth: this.accountTruth.value(),
+      accountTriage: this.accountTriage.value(),
       brokerAccountAvailable: this.brokerAccountAvailable(),
       fleetState: this.connectivity.fleetState(),
       nothingDeployed: this.connectivity.nothingDeployed(),
@@ -445,6 +455,7 @@ export class BrokerDeployFormComponent {
       fieldsReady: this.fieldsReady(),
       fleetState: this.connectivity.fleetState(),
       nothingDeployed: this.connectivity.nothingDeployed(),
+      accountTriage: this.accountTriage.value(),
     }),
   );
 
@@ -584,6 +595,7 @@ export class BrokerDeployFormComponent {
       instanceId: this.instanceId().trim(),
       brokerAccountAvailable: this.brokerAccountAvailable(),
       accountTruth: this.accountTruth.value(),
+      accountTriage: this.accountTriage.value(),
       strategyKey: this.strategyKey(),
       strategySelected: this.selectedValidation() !== null,
       required: this.required(),

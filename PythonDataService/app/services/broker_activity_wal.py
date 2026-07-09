@@ -26,7 +26,7 @@ from pathlib import Path
 
 from app.engine.live.identity import strategy_instance_artifact_dir
 from app.schemas.broker_activity import BrokerActivityRow
-from app.services.jsonl_wal import JsonlWal
+from app.services.jsonl_wal import JsonlWal, confined_wal_path
 
 
 class BrokerActivityWalCorruptError(RuntimeError):
@@ -51,7 +51,7 @@ def legacy_per_run_broker_activity_wal_path(run_dir: Path) -> Path:
     ``instance_broker_activity_wal_path`` instead — see the docstring on
     that function for the why.
     """
-    return run_dir / "broker_activity.jsonl"
+    return confined_wal_path(run_dir, "broker_activity.jsonl")
 
 
 def instance_broker_activity_wal_path(
@@ -83,13 +83,14 @@ def instance_broker_activity_wal_path(
 class BrokerActivityWal:
     """Append-only WAL writer/reader scoped to one strategy-instance run dir."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, trusted_root: Path | None = None) -> None:
         self._wal = JsonlWal(
             path,
             record_model=BrokerActivityRow,
             corrupt_error=BrokerActivityWalCorruptError,
             seq_of=lambda row: row.seq,
             label="broker-activity",
+            trusted_root=trusted_root,
         )
 
     @property

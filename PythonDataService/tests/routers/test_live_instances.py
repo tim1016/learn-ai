@@ -30,6 +30,13 @@ from app.engine.live.account_registry import (
     write_account_instance_binding,
 )
 from app.engine.live.artifacts import ExecutionRow, ExecutionWriter, TradeRow, TradeWriter
+from app.engine.live.bot_lifecycle_state import (
+    BotLifecycleStateRepo,
+    BotRollCallOfferRecord,
+    BotRollCallOfferRepo,
+    stable_bot_lifecycle_state_path,
+    stable_bot_roll_call_offers_path,
+)
 from app.engine.live.desired_state import DesiredState, DesiredStateRepo, stable_desired_state_path
 from app.engine.live.intent_events import IntentEvent, IntentEventType
 from app.engine.live.intent_wal import IntentWal
@@ -57,6 +64,7 @@ def _write_ledger(
     created_at_ms: int,
     spec_path: Path | None = None,
     account_id: str | None = None,
+    strategy_key: str | None = None,
 ) -> None:
     run_dir = root / run_id
     run_dir.mkdir(parents=True)
@@ -65,7 +73,36 @@ def _write_ledger(
         payload["account_id"] = account_id
     if spec_path is not None:
         payload["strategy_spec_path"] = str(spec_path)
+    if strategy_key is not None:
+        payload["strategy_key"] = strategy_key
     (run_dir / "run_ledger.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _write_roll_call_offer(
+    artifacts_root: Path,
+    *,
+    sid: str = "spy_ema_paper",
+    run_id: str,
+    offer_id: str = "offer-active",
+    issued_at_ms: int = 1_783_519_200_000,
+    expires_at_ms: int = 1_783_540_500_000,
+) -> str:
+    BotRollCallOfferRepo(stable_bot_roll_call_offers_path(artifacts_root, sid)).append(
+        BotRollCallOfferRecord(
+            offer_id=offer_id,
+            strategy_instance_id=sid,
+            run_id=run_id,
+            session_date="2026-07-08",
+            issued_at_ms=issued_at_ms,
+            expires_at_ms=expires_at_ms,
+            evidence_snapshot={"readiness_verdict": "READY"},
+        )
+    )
+    return offer_id
+
+
+def _set_startable_now(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(live_instances, "_now_ms", lambda: 1_783_533_600_000)
 
 
 def _write_crash_retired_binding(
@@ -2167,7 +2204,9 @@ async def test_bot_catalog_returns_backend_composed_rows(app_with_root, monkeypa
 
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {"bots"}
+    assert set(body) == {"bots", "roll_call", "evening_report"}
+    assert body["roll_call"]["on_duty"] == 1
+    assert body["evening_report"]["rows"][0]["strategy_instance_id"] == "spy_ema_paper"
     row = body["bots"][0]
     assert row["strategy_instance_id"] == "spy_ema_paper"
     assert row["name"] == "spy_ema_paper"
@@ -2179,7 +2218,10 @@ async def test_bot_catalog_returns_backend_composed_rows(app_with_root, monkeypa
     assert isinstance(row["status_label"], str)
     assert isinstance(row["status_detail"], str)
     assert row["status_tone"] in {"positive", "warning", "danger", "neutral"}
-    assert row["last_run_label"] == "No result yet"
+    assert row["status_label"] == "On duty"
+    assert row["daily_lifecycle"]["phase"] == "ON_DUTY"
+    assert row["daily_lifecycle"]["display_status"] == "On duty"
+    assert row["last_run_label"] == "Not yet proven"
     assert row["last_run_result"] == "UNKNOWN"
     assert row["last_run_detail"] == "No completed run has been recorded for this bot."
 
@@ -2229,7 +2271,76 @@ async def test_bot_catalog_reuses_run_scan_for_status_rows(app_with_root, monkey
     assert calls == 1
 
 
-async def test_bot_catalog_authors_trader_friendly_status_and_last_run_labels(
+async def test_roll_call_tick_persists_start_offer_and_catalog_reads_it(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-offer", "spy_ema_paper", 100, strategy_key="spy_ema")
+    _set_startable_now(monkeypatch)
+    _set_daemon(
+        monkeypatch,
+        instances={
+            "instances": [
+                {
+                    "strategy_instance_id": "spy_ema_paper",
+                    "run_id": "run-offer",
+                    "run_dir": str(root / "run-offer"),
+                    "process": {"state": "idle", "run_id": "run-offer"},
+                }
+            ],
+            "fetched_at_ms": 1,
+        },
+        process={"state": "idle"},
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        roll_call = await client.post("/api/live-instances/roll-call")
+        catalog = await client.get("/api/live-instances/catalog")
+
+    assert roll_call.status_code == 200
+    body = roll_call.json()
+    assert body["summary"]["ready"] == 1
+    assert body["offers"][0]["strategy_instance_id"] == "spy_ema_paper"
+    row = catalog.json()["bots"][0]
+    assert row["daily_lifecycle"]["display_status"] == "Ready"
+    assert row["daily_lifecycle"]["primary_action"]["offer_id"] == body["offers"][0]["offer_id"]
+    assert row["start_request"]["roll_call_offer_id"] is None
+    assert catalog.json()["roll_call"]["ready"] == 1
+    assert catalog.json()["evening_report"]["summary"].endswith("0 retired")
+
+
+async def test_status_marks_bot_sick_bay_for_terminal_account_condition(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    sid = "spy_sick_bot"
+    run_id = "run-sick-bot"
+    _write_ledger(root, run_id, sid, 100, account_id="DU1234567")
+    write_account_instance_binding(
+        root.parent,
+        AccountInstanceBinding(
+            account_id="DU1234567",
+            strategy_instance_id=sid,
+            run_id=run_id,
+            bot_order_namespace=f"learn-ai/{sid}/v1",
+            lifecycle_state="RETIRED",
+            recorded_at_ms=1_780_000_002_500,
+            source="host_daemon.ended_without_status",
+        ),
+    )
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/status")
+
+    assert response.status_code == 200
+    lifecycle = response.json()["daily_lifecycle"]
+    assert lifecycle["display_status"] == "Sick bay"
+    assert lifecycle["attention_badge"] == "Sick bay"
+
+
+async def test_bot_catalog_authors_closed_lifecycle_status_and_last_run_labels(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app, root = app_with_root
@@ -2242,14 +2353,42 @@ async def test_bot_catalog_authors_trader_friendly_status_and_last_run_labels(
 
     assert response.status_code == 200
     row = response.json()["bots"][0]
-    assert row["status_label"] in {"Blocked", "Degraded", "Unknown", "Ready"}
+    assert row["status_label"] in {
+        "Off duty",
+        "Ready",
+        "On duty",
+        "Clocking out",
+        "Sick bay",
+        "Off roster",
+        "Retired",
+    }
+    assert row["status_label"] not in {"Blocked", "Degraded", "Unknown", "Fresh run only"}
+    assert row["daily_lifecycle"]["display_status"] == row["status_label"]
     assert row["status_label"] != row["status_detail"]
     assert row["last_run_label"] == "Exited with error"
     assert row["last_run_result"] == "EXITED_WITH_ERROR"
     assert row["last_run_detail"] == "Previous run exited with an error: runtime exception. Exit code 3."
 
 
-async def test_bot_catalog_marks_when_only_fresh_run_is_available(
+async def test_bot_catalog_labels_status_backed_fatal_halt_as_safety_halt(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-halt", "spy_halt_bot", 100)
+    _write_run_status(root, "run-halt", ended_at_ms=200, exit_code=1, exit_reason="fatal_halt")
+    _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/catalog")
+
+    assert response.status_code == 200
+    row = response.json()["bots"][0]
+    assert row["last_run_label"] == "Safety halt"
+    assert row["last_run_result"] == "HALT_TRIGGERED"
+    assert row["last_run_detail"] == "Previous run stopped on a safety halt: Safety halt. Exit code 1."
+
+
+async def test_bot_catalog_does_not_surface_legacy_fresh_run_only_flag(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app, root = app_with_root
@@ -2282,7 +2421,16 @@ async def test_bot_catalog_marks_when_only_fresh_run_is_available(
     assert response.status_code == 200
     row = response.json()["bots"][0]
     assert row["strategy_instance_id"] == "stopped_bot"
-    assert row["only_fresh_run_available"] is True
+    assert row["only_fresh_run_available"] is False
+    assert row["status_label"] in {
+        "Off duty",
+        "Ready",
+        "On duty",
+        "Clocking out",
+        "Sick bay",
+        "Off roster",
+        "Retired",
+    }
     assert status_response.status_code == 200
     assert status_response.json()["lifecycle_chart"]["only_fresh_run_available"] is True
 
@@ -2975,10 +3123,11 @@ async def test_deploy_instance_rejects_when_account_is_frozen(app_with_root, mon
     assert called is False
 
 
-async def test_deploy_and_start_rejects_when_desired_state_is_stopped(
+async def test_deploy_and_start_stages_after_legacy_stopped_latch_check(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app, root = app_with_root
+    _set_startable_now(monkeypatch)
     _set_connected_broker_account(monkeypatch, "DU111")
     DesiredStateRepo(
         stable_desired_state_path(root.parent, "spy_ema_paper")
@@ -2988,11 +3137,10 @@ async def test_deploy_and_start_rejects_when_desired_state_is_stopped(
         reason="regression",
         now_ms=1_700_000_000_000,
     )
-    called = False
+    captured: dict = {}
 
-    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
-        nonlocal called
-        called = True
+    async def fake_deploy(_base_url: str, payload: dict) -> dict:
+        captured.update(payload)
         return {"run_id": "run-new", "run_dir": "/runs/run-new", "created": True, "start": None}
 
     monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
@@ -3002,12 +3150,8 @@ async def test_deploy_and_start_rejects_when_desired_state_is_stopped(
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/api/live-instances", json=body)
 
-    assert response.status_code == 409
-    detail = response.json()["detail"]
-    assert detail["reason_code"] == "STOPPED_REQUIRES_RESUME"
-    assert detail["gate_id"] == "desired_state.start"
-    assert "Resume" in detail["message"]
-    assert called is False
+    assert response.status_code == 201
+    assert captured["start"] is False
 
 
 def _write_identity_source_run(root: Path, sid: str, symbol: str) -> None:
@@ -3080,6 +3224,7 @@ async def test_deploy_and_start_allows_confirmed_identity_incoherence(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app, root = app_with_root
+    _set_startable_now(monkeypatch)
     _set_connected_broker_account(monkeypatch, "DU111")
     _write_identity_source_run(root, "spy_ema_paper", "MU")
     captured: dict = {}
@@ -3102,6 +3247,7 @@ async def test_deploy_and_start_allows_confirmed_identity_incoherence(
 
     assert response.status_code == 201
     assert captured["account_id"] == "DU111"
+    assert captured["start"] is False
     assert "identity_coherence_confirmation" not in captured
 
 
@@ -3109,6 +3255,7 @@ async def test_deploy_and_start_ignores_soft_deleted_inherited_identity(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app, root = app_with_root
+    _set_startable_now(monkeypatch)
     _set_connected_broker_account(monkeypatch, "DU111")
     _write_identity_source_run(root, "spy_ema_paper", "MU")
     _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1}, process={"state": "idle"})
@@ -3129,12 +3276,14 @@ async def test_deploy_and_start_ignores_soft_deleted_inherited_identity(
     assert delete_response.status_code == 200
     assert deploy_response.status_code == 201
     assert captured["strategy_instance_id"] == "spy_ema_paper"
+    assert captured["start"] is False
 
 
 async def test_deploy_and_start_ignores_request_inherited_symbol_for_new_instance(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app, _root = app_with_root
+    _set_startable_now(monkeypatch)
     _set_connected_broker_account(monkeypatch, "DU111")
     captured: dict = {}
 
@@ -3153,6 +3302,7 @@ async def test_deploy_and_start_ignores_request_inherited_symbol_for_new_instanc
 
     assert response.status_code == 201
     assert captured["strategy_instance_id"] == "spy_ema_paper"
+    assert captured["start"] is False
 
 
 async def test_deploy_and_start_rejects_unconfirmed_nonflat_exposure(
@@ -3195,6 +3345,7 @@ async def test_deploy_and_start_allows_confirmed_nonflat_exposure(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app, root = app_with_root
+    _set_startable_now(monkeypatch)
     _set_connected_broker_account(monkeypatch, "DU111")
     _write_ledger(root, "run-exposure", "spy_ema_paper", 1_700_000_000_000)
     _write_live_state(root, "spy_ema_paper", "run-exposure", {"SPY": -3})
@@ -3220,6 +3371,7 @@ async def test_deploy_and_start_allows_confirmed_nonflat_exposure(
 
     assert response.status_code == 201
     assert captured["account_id"] == "DU111"
+    assert captured["start"] is False
     assert "exposure_coherence_confirmation" not in captured
 
 
@@ -3256,6 +3408,7 @@ async def test_deploy_and_start_allows_flat_existing_exposure(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app, root = app_with_root
+    _set_startable_now(monkeypatch)
     _set_connected_broker_account(monkeypatch, "DU111")
     _write_ledger(root, "run-exposure", "spy_ema_paper", 1_700_000_000_000)
     _write_live_state(root, "spy_ema_paper", "run-exposure", {"SPY": 0})
@@ -3687,7 +3840,7 @@ def _running_process(run_id: str) -> dict:
 
 
 async def test_start_run_forwards_and_returns_action(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
-    app, _ = app_with_root
+    app, root = app_with_root
     seen: dict = {}
 
     async def fake_start(_base_url: str, run_id: str, payload: dict) -> dict:
@@ -3711,6 +3864,12 @@ async def test_start_run_forwards_and_returns_action(app_with_root, monkeypatch:
     assert seen["run_id"] == "run-abc"
     assert seen["payload"]["readonly"] is False
     assert seen["payload"]["hydrate_policy"] == "optional"
+    lifecycle = BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper")
+    ).read()
+    assert lifecycle is not None
+    assert lifecycle.phase == "ON_DUTY"
+    assert lifecycle.active_run_id == "run-abc"
 
 
 async def test_start_run_rejects_when_poisoned(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3738,21 +3897,79 @@ async def test_start_run_rejects_when_poisoned(app_with_root, monkeypatch: pytes
     assert called is False  # daemon never reached
 
 
-async def test_start_run_rejects_when_desired_state_is_stopped(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_start_run_ignores_legacy_stopped_latch_when_roll_call_offer_is_current(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-perma", "spy_ema_paper", 100)
+    offer_id = _write_roll_call_offer(root.parent, run_id="run-perma")
+    _set_startable_now(monkeypatch)
     _set_daemon(monkeypatch, process={"state": "idle"})
+    repo = DesiredStateRepo(stable_desired_state_path(root.parent, "spy_ema_paper"))
+    repo.set(
+        DesiredState.STOPPED,
+        updated_by="operator",
+        reason="legacy_stop_latch",
+        now_ms=200,
+    )
+    forwarded_payload: dict | None = None
+
+    async def fake_start(_base_url: str, run_id: str, payload: dict) -> dict:
+        nonlocal forwarded_payload
+        forwarded_payload = payload
+        return {"accepted": True, "process": _running_process(run_id)}
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        # Write durable STOPPED via the public API so the on-disk shape matches prod.
-        await client.post(
-            "/api/live-instances/spy_ema_paper/desired-state",
-            json={"action": "stop", "updated_by": "op"},
+        response = await client.post(
+            "/api/live-instances/runs/run-perma/start",
+            json={"roll_call_offer_id": offer_id},
         )
-        response = await client.post("/api/live-instances/runs/run-perma/start", json={})
+
+    assert response.status_code == 200
+    assert response.json()["accepted"] is True
+    assert forwarded_payload is not None
+    assert "roll_call_offer_id" not in forwarded_payload
+    record = repo.read()
+    assert record is not None
+    assert record.desired_state is DesiredState.RUNNING
+    assert record.reason == "daily_lifecycle.start"
+    assert record.updated_by == "system"
+
+
+async def test_start_run_rejects_retired_bot_even_with_stale_roll_call_offer(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-retired", "spy_ema_paper", 100)
+    offer_id = _write_roll_call_offer(root.parent, run_id="run-retired")
+    _set_startable_now(monkeypatch)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+    BotLifecycleStateRepo(stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper")).retire(
+        now_ms=300,
+        updated_by="operator",
+        reason="machinery replaced",
+    )
+    called = False
+
+    async def fake_start(*_args, **_kwargs) -> dict:
+        nonlocal called
+        called = True
+        return {"accepted": True, "process": _running_process("run-retired")}
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/runs/run-retired/start",
+            json={"roll_call_offer_id": offer_id},
+        )
 
     assert response.status_code == 409
-    assert response.json()["detail"]["reason_code"] == "STOPPED_REQUIRES_RESUME"
+    assert response.json()["detail"]["reason_code"] == "BOT_RETIRED"
+    assert called is False
 
 
 async def test_start_run_rejects_when_account_is_frozen(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3954,6 +4171,8 @@ async def test_start_run_proceeds_when_idle_and_not_poisoned(app_with_root, monk
     durable STOPPED, no poison, daemon reachable -> proceed to the daemon."""
     app, root = app_with_root
     _write_ledger(root, "run-fresh", "spy_ema_paper", 100)
+    offer_id = _write_roll_call_offer(root.parent, run_id="run-fresh")
+    _set_startable_now(monkeypatch)
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async def fake_start(_base_url: str, run_id: str, _payload: dict) -> dict:
@@ -3962,14 +4181,129 @@ async def test_start_run_proceeds_when_idle_and_not_poisoned(app_with_root, monk
     monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post("/api/live-instances/runs/run-fresh/start", json={})
+        response = await client.post(
+            "/api/live-instances/runs/run-fresh/start",
+            json={"roll_call_offer_id": offer_id},
+        )
 
     assert response.status_code == 200
     assert response.json()["accepted"] is True
 
 
+async def test_start_run_requires_current_roll_call_offer(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-no-offer", "spy_ema_paper", 100)
+    _set_startable_now(monkeypatch)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    called = False
+
+    async def fake_start(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return {"accepted": True, "process": {}}
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/runs/run-no-offer/start", json={})
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "ROLL_CALL_OFFER_REQUIRED"
+    assert called is False
+
+
+async def test_start_run_rejects_roll_call_offer_for_different_run(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-offered", "spy_ema_paper", 100)
+    _write_ledger(root, "run-requested", "spy_ema_paper", 110)
+    offer_id = _write_roll_call_offer(root.parent, run_id="run-offered")
+    _set_startable_now(monkeypatch)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+    called = False
+
+    async def fake_start(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return {"accepted": True, "process": {}}
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/runs/run-requested/start",
+            json={"roll_call_offer_id": offer_id},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "ROLL_CALL_OFFER_RUN_MISMATCH"
+    assert called is False
+
+
+async def test_start_run_rejects_at_effective_stop_boundary(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-stop-boundary", "spy_ema_paper", 100)
+    offer_id = _write_roll_call_offer(root.parent, run_id="run-stop-boundary")
+    monkeypatch.setattr(live_instances, "_now_ms", lambda: 1_783_540_500_000)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    called = False
+
+    async def fake_start(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return {"accepted": True, "process": {}}
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/runs/run-stop-boundary/start",
+            json={"roll_call_offer_id": offer_id},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "SESSION_STOP_REACHED"
+    assert called is False
+
+
+async def test_start_run_rolls_back_desired_state_when_daemon_rejects(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-reject", "spy_ema_paper", 100)
+    offer_id = _write_roll_call_offer(root.parent, run_id="run-reject")
+    _set_startable_now(monkeypatch)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+    repo = DesiredStateRepo(stable_desired_state_path(root.parent, "spy_ema_paper"))
+    previous = repo.set(
+        DesiredState.PAUSED,
+        updated_by="operator",
+        reason="halt_clear_pending",
+        now_ms=200,
+    )
+
+    async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
+        raise host_daemon_client.HostDaemonError(409, "launch rejected")
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/runs/run-reject/start",
+            json={"roll_call_offer_id": offer_id},
+        )
+
+    assert response.status_code == 409
+    assert repo.read() == previous
+
+
 async def test_stop_run_forwards_and_returns_action(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
-    app, _ = app_with_root
+    app, root = app_with_root
 
     async def fake_stop(_base_url: str, run_id: str, _payload: dict) -> dict:
         proc = _running_process(run_id)
@@ -3983,6 +4317,140 @@ async def test_stop_run_forwards_and_returns_action(app_with_root, monkeypatch: 
 
     assert response.status_code == 200
     assert response.json()["process"]["state"] == "stopping"
+    lifecycle = BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper")
+    ).read()
+    assert lifecycle is not None
+    assert lifecycle.phase == "OFF_DUTY"
+    assert lifecycle.active_run_id is None
+
+
+async def test_end_day_now_resolves_live_binding_and_stops_current_run(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-live", "spy_ema_paper", 100)
+    _set_daemon(
+        monkeypatch,
+        process={"state": "running", "run_id": "run-live", "pid": 99, "started_at_ms": 100},
+    )
+    seen: dict = {}
+
+    async def fake_stop(_base_url: str, run_id: str, payload: dict) -> dict:
+        seen["run_id"] = run_id
+        seen["payload"] = payload
+        proc = _running_process(run_id)
+        proc["state"] = "stopping"
+        return {"accepted": True, "process": proc}
+
+    monkeypatch.setattr(host_daemon_client, "stop_run", fake_stop)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/spy_ema_paper/end-day-now", json={"force": False})
+
+    assert response.status_code == 200
+    assert seen == {"run_id": "run-live", "payload": {"force": False}}
+    lifecycle = BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper")
+    ).read()
+    assert lifecycle is not None
+    assert lifecycle.phase == "OFF_DUTY"
+
+
+async def test_lifecycle_roster_updates_daily_projection(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-idle", "spy_ema_paper", 100)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/spy_ema_paper/lifecycle/roster",
+            json={"on_roster": False, "updated_by": "operator", "reason": "rest day"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["strategy_instance_id"] == "spy_ema_paper"
+    assert body["lifecycle"]["on_roster"] is False
+    assert body["lifecycle"]["display_status"] == "Off roster"
+
+
+async def test_retire_and_replace_requires_flat_attestation_and_off_duty(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-idle", "spy_ema_paper", 100)
+    _set_daemon(monkeypatch, process={"state": "running", "run_id": "run-idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        missing_attestation = await client.post(
+            "/api/live-instances/spy_ema_paper/retire-and-replace",
+            json={"confirm_account_flat": False},
+        )
+        running = await client.post(
+            "/api/live-instances/spy_ema_paper/retire-and-replace",
+            json={"confirm_account_flat": True},
+        )
+
+    assert missing_attestation.status_code == 409
+    assert missing_attestation.json()["detail"]["reason_code"] == "ACCOUNT_FLAT_ATTESTATION_REQUIRED"
+    assert running.status_code == 409
+    assert running.json()["detail"]["reason_code"] == "BOT_ON_DUTY"
+
+
+async def test_retire_and_replace_rejects_unreachable_daemon(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-idle", "spy_ema_paper", 100)
+    _set_daemon(monkeypatch, process=None)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/spy_ema_paper/retire-and-replace",
+            json={"confirm_account_flat": True},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "HOST_SERVICE_OFFLINE"
+    assert (
+        BotLifecycleStateRepo(
+            stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper")
+        ).read()
+        is None
+    )
+
+
+async def test_retire_and_replace_marks_bot_retired(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-idle", "spy_ema_paper", 100)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/spy_ema_paper/retire-and-replace",
+            json={"confirm_account_flat": True, "updated_by": "operator", "reason": "machinery replaced"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["lifecycle"]["phase"] == "RETIRED"
+    assert body["lifecycle"]["display_status"] == "Retired"
+    lifecycle = BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper")
+    ).read()
+    assert lifecycle is not None
+    assert lifecycle.phase == "RETIRED"
+    assert lifecycle.retired_reason == "machinery replaced"
 
 
 async def test_start_run_propagates_daemon_404(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:

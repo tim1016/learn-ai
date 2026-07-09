@@ -58,6 +58,128 @@
         [showExecutionHistory]="true"
         [showSymbolExposures]="true"
       />
+      @if (accountFreezeBanner(); as banner) {
+        <app-account-freeze-banner [banner]="banner" />
+      }
+      <article class="account-sick-bay-card">
+        <header class="card-header">
+          Account sick bay
+          @if (accountTriage(); as triage) {
+            <span class="badge mono">{{ gateStatusLabel(triage.overall_gate_result.status) | receiptLabel }}</span>
+          }
+        </header>
+
+        @if (accountTriageError(); as err) {
+          <app-section-error
+            [error]="err"
+            contextWhat="We couldn't load account sick bay."
+            (retry)="retryAccountTriage()"
+          />
+        }
+        @if (accountCureError(); as err) {
+          <app-section-error
+            [error]="err"
+            contextWhat="We couldn't apply the account cure."
+            [canRetry]="false"
+          />
+        }
+
+        @if (accountTriageLoading()) {
+          <p class="muted">Loading account sick bay…</p>
+        } @else if (accountTriage(); as triage) {
+          <p class="receipt-reason">{{ triage.summary_detail | receiptLabel }}</p>
+
+          @if (accountConditions().length === 0) {
+            <p class="muted">No open account conditions.</p>
+          } @else {
+            <div class="condition-list">
+              @for (condition of accountConditions(); track condition.condition_type + condition.owner.owner_id) {
+                <article class="condition-row" [class.critical]="condition.severity === 'critical'">
+                  <div>
+                    <h3>{{ condition.title }}</h3>
+                    <p>{{ condition.detail | receiptLabel }}</p>
+                    <p class="condition-owner">
+                      Owner {{ condition.owner.label }}
+                    </p>
+                    <p class="condition-meta">
+                      {{ condition.condition_type | receiptLabel }}
+                      · {{ condition.source | receiptLabel }}
+                      · {{ fmtDateNy(condition.evidence_at_ms) }}
+                    </p>
+                    @if (condition.affected_strategy_instance_ids.length > 0) {
+                      <p class="condition-meta mono">
+                        Affects {{ condition.affected_strategy_instance_ids.join(', ') }}
+                      </p>
+                    }
+                  </div>
+                  @if (hasConditionAction(condition)) {
+                    <button
+                      type="button"
+                      class="ghost-btn"
+                      [disabled]="conditionActionDisabled(condition)"
+                      (click)="runConditionAction(condition)"
+                    >
+                      <i class="pi pi-wrench" aria-hidden="true"></i>
+                      {{ conditionActionLabel(condition) }}
+                    </button>
+                  }
+                </article>
+              }
+            </div>
+          }
+        } @else {
+          <p class="muted">Not yet proven: account sick bay has not loaded for this account.</p>
+        }
+      </article>
+      <p-dialog
+        [visible]="exposureResolutionCondition() !== null"
+        [modal]="true"
+        [closable]="true"
+        [dismissableMask]="true"
+        [draggable]="false"
+        [resizable]="false"
+        [style]="{ width: '560px', maxWidth: 'calc(100vw - 2rem)' }"
+        styleClass="resolve-exposure-dialog"
+        (onHide)="closeExposureResolution()"
+      >
+        <ng-template pTemplate="header" let-ariaLabelledBy="ariaLabelledBy">
+          <h2 [id]="ariaLabelledBy" class="resolve-exposure-title">Resolve exposure</h2>
+        </ng-template>
+        @if (exposureResolutionCondition(); as condition) {
+          <p class="receipt-reason">{{ condition.detail | receiptLabel }}</p>
+          <p class="condition-owner">Owner {{ condition.owner.label }}</p>
+          <div class="resolve-actions">
+            <button
+              type="button"
+              class="danger-btn"
+              [disabled]="
+                exposureResolutionLoading() !== null || !condition.owner.strategy_instance_id
+              "
+              (click)="flattenExposureFromDialog()"
+            >
+              <i class="pi pi-arrow-down" aria-hidden="true"></i>
+              Flatten then reconcile
+            </button>
+            <label class="override-reason">
+              Override reason
+              <textarea
+                rows="3"
+                [value]="exposureOverrideReason()"
+                (input)="setExposureOverrideReasonFromEvent($event)"
+              ></textarea>
+            </label>
+            <button
+              type="button"
+              class="ghost-btn"
+              [disabled]="exposureOverrideActionDisabled(condition)"
+              (click)="acceptExposureOverrideFromDialog()"
+            >
+              <i class="pi pi-check-circle" aria-hidden="true"></i>
+              Accept exposure
+            </button>
+          </div>
+        }
+      </p-dialog>
       <article
         class="account-reconcile-card"
         [class.receipt-pass]="accountReconciliationTone() === 'pass'"
@@ -89,7 +211,7 @@
             <dt>State</dt>
             <dd class="mono">{{ accountReconciliationDisplayState() | receiptLabel }}</dd>
             <dt>Final gate</dt>
-            <dd class="mono">{{ accountReconciliationDisplayGate() | receiptLabel }}</dd>
+            <dd class="mono">{{ accountReconciliationDisplayGateLabel() | receiptLabel }}</dd>
             <dt>Generated</dt>
             <dd class="mono">{{ fmtDateNy(receipt.generated_at_ms) }}</dd>
             <dt>Expires</dt>
@@ -98,7 +220,7 @@
           <p class="receipt-reason">{{ accountReconciliationReason() }}</p>
         } @else {
           <p class="muted">
-            No account-level reconciliation receipt has been recorded for this account.
+            Not yet proven: no account-level reconciliation receipt has been recorded for this account.
           </p>
         }
       </article>

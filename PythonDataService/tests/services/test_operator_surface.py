@@ -186,7 +186,7 @@ def test_host_process_base_state_mapping(daemon_state: str, expected: str, expec
         ("stopping", "Stopping", "transition"),
         ("idle", "Off", "off"),
         ("exited", "Off", "off"),
-        ("unreachable", "Unknown", "attention"),
+        ("unreachable", "Needs proof", "attention"),
     ],
 )
 def test_run_signal_is_backend_authored_from_resolved_host_state(
@@ -370,9 +370,9 @@ def test_host_process_start_capability_disabled_per_state(daemon_state: str, wan
     assert gate.evidence_at_ms == _NOW_MS
 
 
-def test_host_process_start_capability_intent_stopped_overrides_state() -> None:
-    # Durable STOPPED is an operator latch. Automatic Start stays blocked
-    # until Resume clears it, even when the process state is otherwise startable.
+def test_host_process_start_capability_ignores_legacy_stopped_latch() -> None:
+    # Rev 3 deletes the durable STOPPED latch from the start gate; roster and
+    # roll-call offers are the operator-owned controls now.
     surface = _surface(
         process=InstanceProcessView(state="exited"),
         desired_state=_desired("STOPPED"),
@@ -381,8 +381,8 @@ def test_host_process_start_capability_intent_stopped_overrides_state() -> None:
     )
     assert surface.host_process.state == "EXITED"
     cap = surface.host_process.start_capability
-    assert cap.enabled is False
-    assert cap.disabled_reason_code == "STOPPED_REQUIRES_RESUME"
+    assert cap.enabled is True
+    assert cap.disabled_reason_code is None
 
 
 def test_host_process_start_capability_poisoned_overrides_state() -> None:
@@ -495,6 +495,8 @@ def _exit(**overrides):
     [
         (_exit(halt_trigger="OUTSIDE_MUTATION", exit_code=1), "HALT_TRIGGERED"),
         (_exit(halt_trigger="OPERATOR_DECLARED"), "HALT_TRIGGERED"),
+        (_exit(exit_reason="fatal_halt", exit_code=1), "HALT_TRIGGERED"),
+        (_exit(exit_reason="max_orders_exceeded", exit_code=1), "HALT_TRIGGERED"),
         (_exit(exit_code=0), "CLEAN"),
         (_exit(exit_reason="normal"), "CLEAN"),
         (_exit(exit_code=0, exit_reason="normal"), "CLEAN"),

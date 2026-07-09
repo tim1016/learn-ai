@@ -1,4 +1,6 @@
 import { HttpErrorResponse } from '@angular/common/http';
+import { TestBed } from '@angular/core/testing';
+import { Router } from '@angular/router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -6,9 +8,10 @@ import type {
   LifecycleTimelineResponse,
 } from '../../../api/live-instances.types';
 import {
-  allowFlattenAndPause,
+  makeBotLifecycleMutationResponse,
   makeCommandWriteResponse,
   makeDesiredStateResponse,
+  makeHostRunnerProcess,
   makeHostRunnerHealth,
   makeIncidentHeadline,
   makeLifecycleTimeline,
@@ -103,6 +106,44 @@ describe('BotControlPageComponent', () => {
     );
   });
 
+  it('renders the global account freeze banner from backend gate evidence', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = makeStatus();
+    status.operator_surface.readiness_gates = [
+      {
+        name: 'Account freeze',
+        status: 'freeze',
+        severity: 'critical',
+        detail: 'manual_freeze',
+        gate_result: {
+          gate_id: 'account.unresolved_exposure',
+          status: 'freeze',
+          source: 'manual_freeze',
+          operator_reason: 'manual_freeze',
+          operator_next_step: 'CLEAR_FREEZE',
+          evidence_at_ms: 1_780_000_002_500,
+        },
+        suggested_action: null,
+        suggested_action_unavailable_reason: 'handled_by_account_monitor',
+      },
+    ];
+    const { element } = await setupBotControlPage({ status });
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+
+    expect(element.textContent).toContain('Account sick bay is gating new starts.');
+    expect(element.textContent).toContain('Manual Freeze');
+
+    const button = Array.from(element.querySelectorAll('button')).find((candidate) =>
+      candidate.textContent?.includes('Open Account Monitor'),
+    );
+    expect(button).toBeDefined();
+    button?.click();
+
+    expect(navigate).toHaveBeenCalledWith(['/broker/account-monitor'], {
+      fragment: 'account-reconciliation-action',
+    });
+  });
+
   it('runs the backend-authored renew-lease action from runtime freshness notices', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();
@@ -169,10 +210,10 @@ describe('BotControlPageComponent', () => {
       .toContain('Off');
     expect(el.querySelector('.top-action-banner')?.textContent).toContain('Controls');
     const startAction = el.querySelector(
-      '.top-action-banner .chart-action[aria-label="Start bot process"]',
+      '.top-action-banner .chart-action[aria-label="Start"]',
     ) as HTMLButtonElement | null;
     expect(startAction).not.toBeNull();
-    expect(startAction?.textContent?.trim()).toBe('Start bot process');
+    expect(startAction?.textContent?.trim()).toBe('Start');
     expect(el.querySelector('app-overview-tab')).not.toBeNull();
     expect(el.querySelector('app-overview-tab app-trader-guidance-pane')).toBeNull();
     expect(el.querySelector('[data-testid="bot-control-context-header"]')?.textContent)
@@ -186,7 +227,7 @@ describe('BotControlPageComponent', () => {
 
     const dispatch = vi.spyOn(component, 'dispatchOverviewAction');
     startAction?.click();
-    expect(dispatch).toHaveBeenCalledWith('start_process');
+    expect(dispatch).toHaveBeenCalledWith('confirm_start');
 
     const recovery = component.status()
       ?.lifecycle_chart.global_graph.nodes.find((node) => node.id === 'recovery');
@@ -218,12 +259,12 @@ describe('BotControlPageComponent', () => {
         state_label: 'Off',
         tone: 'off',
         title: 'Bot process is not running',
-        detail: 'The host is reachable but this bot has no active process. Start it to resume trading.',
+        detail: 'The host is reachable but this bot has no active process. Run roll call for a fresh start offer.',
       },
     });
     stopped.operator_surface.blockage_ladder = {
       headline: 'Bot process is not running',
-      summary: 'The host is reachable but this bot has no active process. Start it to resume trading.',
+      summary: 'The host is reachable but this bot has no active process. Run roll call for a fresh start offer.',
       current_stage_id: 'host_process',
       stages: [
         {
@@ -233,7 +274,7 @@ describe('BotControlPageComponent', () => {
           severity: 'warning',
           current: true,
           title: 'Bot process is not running',
-          summary: 'The host is reachable but this bot has no active process. Start it to resume trading.',
+          summary: 'The host is reachable but this bot has no active process. Run roll call for a fresh start offer.',
           next_step: null,
           reason_codes: ['HOST_PROCESS_IDLE'],
         },
@@ -246,7 +287,7 @@ describe('BotControlPageComponent', () => {
     expect(offSignal?.textContent).toContain('Off');
     expect(offSignal?.textContent).toContain('Bot process is not running');
     expect(offSignal?.classList.contains('tone-off')).toBe(true);
-    expect(element.querySelector('.chart-action[aria-label="Start bot process"]')).not.toBeNull();
+    expect(element.querySelector('.chart-action[aria-label="Start"]')).not.toBeNull();
 
     const running = makeStatus({
       hostState: 'RUNNING',
@@ -264,6 +305,35 @@ describe('BotControlPageComponent', () => {
     expect(onSignal?.textContent).toContain('On');
     expect(onSignal?.textContent).toContain('Bot process is running');
     expect(onSignal?.classList.contains('tone-on')).toBe(true);
+  });
+
+  it('starts a bot process with the current roll-call offer id', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = makeStatus({
+      hostState: 'IDLE',
+      startCapabilityEnabled: true,
+    });
+    const { fixture, component, liveRuns } = await setupBotControlPage({
+      status,
+      mutationResponses: {
+        startHostRunner: {
+          accepted: true,
+          process: makeHostRunnerProcess(),
+        },
+      },
+    });
+
+    await component.dispatchStartProcess();
+    await flush(fixture);
+
+    expect(liveRuns.startHostRunner).toHaveBeenCalledWith('run-x', {
+      readonly: false,
+      hydrate_policy: 'require',
+      strategy: 'deployment_validation',
+      max_orders_per_day: 2,
+      ibkr_host: '127.0.0.1',
+      roll_call_offer_id: 'offer-run-x',
+    });
   });
 
   it('renders human-labelled posture pills in the header and omits the execution pill', async () => {
@@ -290,16 +360,14 @@ describe('BotControlPageComponent', () => {
   it('renders backend-authored disabled action prose in the action tooltip', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();
-    status.lifecycle_chart.actions = [
+    status.daily_lifecycle.ambient_actions = [
       {
-        id: 'flatten_and_pause',
-        label: 'Flatten and pause',
+        id: 'retire_replace',
+        label: 'Retire & Replace',
         enabled: false,
-        reason_code: 'NO_LIVE_BINDING',
-        reason_headline: 'No live binding',
-        reason_detail: 'The lifecycle action contract says the runner is not bound.',
-        target_node_id: 'recovery',
-        tone: 'danger',
+        reason: 'End the day before retiring and replacing this bot.',
+        offer_id: null,
+        expires_at_ms: null,
       },
     ];
     status.operator_surface.actions.flatten_and_pause = {
@@ -310,11 +378,10 @@ describe('BotControlPageComponent', () => {
       gate_results: [],
     };
     const { element: el } = await setupBotControlPage({ status });
-    const actionButton = el.querySelector<HTMLButtonElement>('[aria-label="Flatten and pause"]');
+    const actionButton = el.querySelector<HTMLButtonElement>('[aria-label="Retire & Replace"]');
     expect(actionButton?.disabled).toBe(true);
     const title = lifecycleActionTitle(actionButton);
-    expect(title).toContain('No live binding');
-    expect(title).toContain('The lifecycle action contract says the runner is not bound.');
+    expect(title).toContain('End the day before retiring and replacing this bot.');
     expect(title).not.toContain('NO_LIVE_BINDING');
     const traderCopy = Array.from(el.querySelectorAll('[data-trader-copy]'))
       .map((node) => node.textContent ?? '')
@@ -331,16 +398,14 @@ describe('BotControlPageComponent', () => {
   it('keeps node selection explanatory and never gates enabled emergency actions', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();
-    status.lifecycle_chart.actions = [
+    status.daily_lifecycle.ambient_actions = [
       {
-        id: 'pause',
-        label: 'Pause',
+        id: 'take_off_roster',
+        label: 'Take off roster',
         enabled: true,
-        reason_code: null,
-        reason_headline: 'Available',
-        reason_detail: 'Backend gates currently allow this action.',
-        target_node_id: 'active',
-        tone: 'secondary',
+        reason: null,
+        offer_id: null,
+        expires_at_ms: null,
       },
     ];
     const { fixture, component, element } = await setupBotControlPage({ status });
@@ -350,10 +415,10 @@ describe('BotControlPageComponent', () => {
     component.selectLifecycleNode(recovery);
     fixture.detectChanges();
 
-    const pause = element.querySelector<HTMLButtonElement>('.chart-action[aria-label="Pause"]');
-    expect(pause?.getAttribute('aria-disabled')).toBe('false');
-    expect(lifecycleActionTitle(pause)).toContain('Pause On. Available');
-    expect(pause?.textContent?.trim()).toBe('Pause');
+    const roster = element.querySelector<HTMLButtonElement>('.chart-action[aria-label="Take off roster"]');
+    expect(roster?.getAttribute('aria-disabled')).toBe('false');
+    expect(lifecycleActionTitle(roster)).toContain('Take off roster On. Available');
+    expect(roster?.textContent?.trim()).toBe('Take off roster');
   });
 
   it('renders redeploy settings as one concise row and hides raw strategy keys', async () => {
@@ -625,6 +690,33 @@ describe('BotControlPageComponent', () => {
     expect(liveRuns.reconcileInstance).toHaveBeenCalledWith('sid-x');
   });
 
+  it('routes trader guidance resume capability to the desired-state resume path', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const status = makeStatus();
+    status.operator_surface.trader_guidance.primary_remediation = {
+      kind: 'invoke_capability',
+      capability: 'resume',
+    };
+    const { fixture, element, liveRuns } = await setupBotControlPage({
+      status,
+      mutationResponses: { setInstanceDesiredState: makeDesiredStateResponse() },
+    });
+
+    const action = element.querySelector(
+      '[data-testid="trader-guidance-primary-remediation"]',
+    ) as HTMLButtonElement | null;
+    expect(action?.textContent).toContain('Resume');
+    action?.click();
+    await flush(fixture);
+
+    expect(liveRuns.setInstanceDesiredState).toHaveBeenCalledWith('sid-x', {
+      action: 'resume',
+      reason: 'Resume',
+      updated_by: 'operator',
+    });
+    expect(liveRuns.startHostRunner).not.toHaveBeenCalled();
+  });
+
   it('does not render attention-row actions after folding attention into the ladder', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const status = makeStatus();
@@ -716,29 +808,12 @@ describe('BotControlPageComponent', () => {
     expect(element.textContent).toContain('QQQ');
   });
 
-  it('renders the post-resume crash-recovery rung receipt with inline override action', async () => {
-    const initial = makeStatus();
-    initial.operator_surface.actions.resume = {
-      enabled: true,
-      effect: 'DURABLE_ONLY',
-      disabled_reason_code: null,
-      disabled_reasons: [],
-      gate_results: [],
-    };
-    const refreshed = makeStatus();
-    refreshed.operator_surface.host_process.start_capability = {
-      enabled: false,
-      run_id: null,
-      request: null,
-      disabled_reason_code: 'CRASH_RECOVERY_REQUIRED',
-      gate_results: [],
-    };
-    const resumeResponse = makeDesiredStateResponse();
-    resumeResponse.rung_receipt = makeMutationRungReceipt({
+  it('renders the crash-recovery rung receipt with inline override action', async () => {
+    const crashRecoveryReceipt = makeMutationRungReceipt({
       code: 'mutation.next_blocking_rung',
       tier: 'critical',
-      title: "Stop latch cleared. The bot still won't run: previous host runner crashed — record crash-recovery evidence",
-      message: 'Resume persisted desired_state=RUNNING, but Start remains blocked.',
+      title: 'Previous host runner crashed — record crash-recovery evidence',
+      message: 'Start remains blocked until audited recovery evidence is recorded.',
       rung_id: 'host_process',
       source_codes: ['CRASH_RECOVERY_REQUIRED'],
       actionability: 'actuatable',
@@ -762,19 +837,17 @@ describe('BotControlPageComponent', () => {
       rung_receipt_warnings: [],
     };
     const { fixture, component, liveRuns, element } = await setupBotControlPage({
-      statusSequence: [initial, refreshed, refreshed],
       mutationResponses: {
-        setInstanceDesiredState: resumeResponse,
         recordCrashRecoveryOverride: overrideResponse,
       },
     });
 
-    await component.dispatchResume();
-    await flush(fixture);
+    component.mutationReceipt.set(crashRecoveryReceipt);
+    fixture.detectChanges();
 
     const receipt = element.querySelector('[data-testid="bot-control-mutation-receipt"]');
     expect(receipt?.textContent).toContain(
-      "Stop latch cleared. The bot still won't run: previous host runner crashed — record crash-recovery evidence",
+      'Previous host runner crashed — record crash-recovery evidence',
     );
     const action = element.querySelector<HTMLButtonElement>(
       '[data-testid="bot-control-mutation-receipt"] [data-testid="operator-notice-action"]',
@@ -823,50 +896,92 @@ describe('BotControlPageComponent', () => {
     expect(error?.textContent).not.toContain('Could not load bot control data');
   });
 
-  it('derives destructive action completion from refreshed backend status', async () => {
-    const initial = makeStatus({ markPoisonedEnabled: true });
-    allowFlattenAndPause(initial);
-    const refreshed = makeStatus({ markPoisonedEnabled: true });
-    allowFlattenAndPause(refreshed);
+  it('derives daily lifecycle action completion from refreshed backend status', async () => {
+    const initial = makeStatus();
+    initial.daily_lifecycle = {
+      ...initial.daily_lifecycle,
+      phase: 'ON_DUTY',
+      presence_label: 'On duty',
+      display_status: 'On duty',
+      attention_badge: null,
+      primary_action: {
+        id: 'end_day_now',
+        label: 'End day now',
+        enabled: true,
+        reason: null,
+        offer_id: null,
+        expires_at_ms: null,
+      },
+      ambient_actions: [
+        {
+          id: 'take_off_roster',
+          label: 'Take off roster',
+          enabled: true,
+          reason: null,
+          offer_id: null,
+          expires_at_ms: null,
+        },
+        {
+          id: 'retire_replace',
+          label: 'Retire & Replace',
+          enabled: true,
+          reason: null,
+          offer_id: null,
+          expires_at_ms: null,
+        },
+      ],
+    };
+    const refreshed = makeStatus();
     refreshed.symbol = 'QQQ';
     const { fixture, component, liveRuns, element } = await setupBotControlPage({
       statusSequence: [initial, refreshed],
       mutationResponses: {
-        setInstanceDesiredState: makeDesiredStateResponse(),
-        flattenAndPause: makeDesiredStateResponse(),
-        issueInstanceCommand: makeCommandWriteResponse(),
+        endDayNow: {
+          accepted: true,
+          process: makeHostRunnerProcess(),
+        },
+        botLifecycleMutation: makeBotLifecycleMutationResponse(),
       },
     });
 
-    component.dispatchOverviewAction('stop');
+    component.dispatchOverviewAction('end_day_now');
     await flush(fixture);
-    component.dispatchOverviewAction('flatten_and_pause');
-    expect(component.flattenConfirmOpen()).toBe(true);
-    await component.confirmFlatten();
+    component.dispatchOverviewAction('take_off_roster');
     await flush(fixture);
-    component.dispatchOverviewAction('mark_poisoned');
-    expect(component.typedHaltOpen()).toBe(true);
-    await component.confirmTypedHalt();
+    component.dispatchOverviewAction('retire_replace');
+    expect(component.retireReplaceConfirmOpen()).toBe(true);
+    const navigate = vi.spyOn(TestBed.inject(Router), 'navigate').mockResolvedValue(true);
+    await component.confirmRetireReplace();
     await flush(fixture);
 
-    expect(liveRuns.setInstanceDesiredState).toHaveBeenCalledWith('sid-x', {
-      action: 'stop',
-      reason: 'Stop',
+    expect(liveRuns.endDayNow).toHaveBeenCalledWith('sid-x', { force: false });
+    expect(liveRuns.setBotLifecycleRoster).toHaveBeenCalledWith('sid-x', {
+      on_roster: false,
       updated_by: 'operator',
+      reason: 'Take off roster',
     });
-    expect(liveRuns.flattenAndPause).toHaveBeenCalledWith('sid-x', {
-      action: 'pause',
-      reason: 'Flatten and pause',
+    expect(liveRuns.retireAndReplace).toHaveBeenCalledWith('sid-x', {
+      confirm_account_flat: true,
+      replacement_requested: true,
       updated_by: 'operator',
+      reason: 'Retire & Replace',
     });
-    expect(liveRuns.issueInstanceCommand).toHaveBeenCalledWith('sid-x', { verb: 'MARK_POISONED' });
+    expect(navigate).toHaveBeenCalledWith(
+      ['/broker/deploy'],
+      {
+        queryParams: expect.objectContaining({
+          inherited_symbol: 'QQQ',
+          inherited_exposure_source: 'operator_surface.current_risk',
+        }),
+      },
+    );
     expect(liveRuns.getInstanceStatus).toHaveBeenCalledTimes(4);
 
     const text = element.textContent ?? '';
     expect(text).toContain('QQQ');
-    expect(text).not.toContain('Stop succeeded');
-    expect(text).not.toContain('Flatten succeeded');
-    expect(text).not.toContain('Marked poisoned successfully');
+    expect(text).not.toContain('End day succeeded');
+    expect(text).not.toContain('Roster updated');
+    expect(text).not.toContain('Retired successfully');
   });
 
   it('renders outcome-unknown destructive mutation results as operator copy', async () => {
@@ -880,10 +995,12 @@ describe('BotControlPageComponent', () => {
       },
     });
     const { fixture, component, element } = await setupBotControlPage({
-      mutationFailures: { setInstanceDesiredState: stopError },
+      mutationFailures: {
+        endDayNow: stopError,
+      },
     });
 
-    component.dispatchOverviewAction('stop');
+    component.dispatchOverviewAction('end_day_now');
     await flush(fixture);
 
     const error = element.querySelector('.error-banner');
@@ -922,7 +1039,7 @@ describe('BotControlPageComponent', () => {
       status: makeStatus({ markPoisonedEnabled: true }),
       mutationResponses: { issueInstanceCommand: makeCommandWriteResponse() },
     });
-    component.dispatchOverviewAction('mark_poisoned');
+    component.openTypedHalt();
     fixture.detectChanges();
 
     const submit = el.querySelector('[data-testid="typed-halt-confirm-submit"]') as HTMLButtonElement;
@@ -935,29 +1052,6 @@ describe('BotControlPageComponent', () => {
     await flush(fixture);
 
     expect(liveRuns.issueInstanceCommand).toHaveBeenCalledWith('sid-x', { verb: 'MARK_POISONED' });
-  });
-
-  it('confirms Flatten & pause through a dialog before calling the mutation', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const status = makeStatus();
-    allowFlattenAndPause(status);
-    const { fixture, component, liveRuns } = await setupBotControlPage({
-      status,
-      mutationResponses: { flattenAndPause: makeDesiredStateResponse() },
-    });
-
-    // Dispatching flatten opens the confirm dialog and does not call the mutation yet.
-    component.dispatchOverviewAction('flatten_and_pause');
-    fixture.detectChanges();
-    expect(component.flattenConfirmOpen()).toBe(true);
-    expect(liveRuns.flattenAndPause).not.toHaveBeenCalled();
-
-    await component.confirmFlatten();
-    expect(liveRuns.flattenAndPause).toHaveBeenCalledWith('sid-x', {
-      action: 'pause',
-      reason: 'Flatten and pause',
-      updated_by: 'operator',
-    });
   });
 
   it('folds concurrent critical notices behind the dominant banner', async () => {
@@ -977,31 +1071,6 @@ describe('BotControlPageComponent', () => {
     const fold = el.querySelector('[data-testid="bot-control-dominant-notice-fold"]');
     expect(fold?.textContent).toContain('+1 more critical');
     expect(fold?.textContent).toContain('Control-plane lease is stale');
-  });
-
-  it('does not flatten when the action became disabled while the confirm dialog was open', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const status = makeStatus();
-    allowFlattenAndPause(status);
-    const { fixture, component, liveRuns } = await setupBotControlPage({ status });
-
-    component.dispatchOverviewAction('flatten_and_pause');
-    fixture.detectChanges();
-    expect(component.flattenConfirmOpen()).toBe(true);
-
-    // A poll disables the action while the dialog is still open.
-    const disabled = makeStatus();
-    disabled.operator_surface.actions.flatten_and_pause = {
-      enabled: false,
-      effect: 'LIVE_ACTUATION',
-      disabled_reason_code: 'NO_OWNED_POSITIONS',
-      disabled_reasons: ['NO_OWNED_POSITIONS'],
-      gate_results: [],
-    };
-    component.status.set(disabled);
-
-    await component.confirmFlatten();
-    expect(liveRuns.flattenAndPause).not.toHaveBeenCalled();
   });
 
   it('updates inline attention content when a new critical group arrives', async () => {

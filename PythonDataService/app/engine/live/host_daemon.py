@@ -58,6 +58,7 @@ from app.engine.live.desired_state import (
     DesiredStateRepo,
     stable_desired_state_path,
 )
+from app.engine.live.exit_taxonomy import classify_run_exit, read_run_exit_evidence
 from app.engine.live.host_daemon_bot_events import (
     record_child_crash_launch_failure,
     record_spawn_launch_failure,
@@ -923,7 +924,9 @@ class RunnerProcessManager:
             return
         try:
             path = stable_desired_state_path(self.artifacts_root, strategy_instance_id)
-            desired_state = DesiredStateRepo(path).read_state()
+            desired_state = DesiredStateRepo(
+                path, trusted_root=self.artifacts_root / "live_state"
+            ).read_state()
         except (DesiredStateCorruptError, OSError, ValueError) as exc:
             raise HostRunnerError(
                 status.HTTP_409_CONFLICT,
@@ -1358,12 +1361,13 @@ class RunnerProcessManager:
 
     @staticmethod
     def _account_registry_retirement_source(managed: ManagedProcess) -> str:
-        if managed.stopping:
-            return "host_daemon.stop_exited"
-        returncode = managed.process.returncode
-        if returncode == 0:
-            return "host_daemon.process_exited"
-        return "host_daemon.process_crashed"
+        evidence = read_run_exit_evidence(managed.run_dir)
+        verdict = classify_run_exit(
+            evidence,
+            returncode=managed.process.returncode,
+            stopping=managed.stopping,
+        )
+        return verdict.registry_source
 
     def _resolve_strategy_instance_id(self, run_dir: Path) -> str:
         """Read ``strategy_instance_id`` from the run ledger (UI-0 binding).

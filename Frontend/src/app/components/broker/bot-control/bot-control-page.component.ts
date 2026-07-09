@@ -13,9 +13,10 @@ import { ActivatedRoute, Router } from '@angular/router';
 import { TabsModule } from 'primeng/tabs';
 
 import type {
+  BotLifecycleAction,
+  BotLifecycleActionId,
   BrokerSafetyVerdict,
   FleetAccountSummary,
-  LifecycleChartActionId,
   LifecycleChartNode,
   LifecycleProjectionEventRow,
   LiveInstanceStatus,
@@ -34,7 +35,7 @@ import { ActivityTabComponent } from './tabs/activity-tab.component';
 import { TypedHaltConfirmComponent } from './reused/typed-halt-confirm/typed-halt-confirm.component';
 import { redeployQueryParamsForStatus } from './lib/redeploy-query-params';
 import { resolveOperatorRunbookRoute } from './lib/operator-runbook-routes';
-import { canStartHostProcess, startHostProcessFromCapability } from './lib/start-host-process';
+import { canStartHostProcess } from './lib/start-host-process';
 import {
   renderTraderRemediation,
   type RenderedAction,
@@ -53,19 +54,20 @@ import { WorkbenchAuditPanelComponent } from './workbench-audit-panel.component'
 import { BotControlSidePanelComponent } from './bot-control-side-panel.component';
 import { boundRunIdForStatus } from './lib/bound-run-id';
 import { OperatorNoticeComponent } from '../../operator-notice/operator-notice.component';
+import type { HostRunnerStartRequest } from '../../../api/live-runs.types';
 
 const POLL_INTERVAL_MS = 4_000;
 const TIMELINE_LIMIT = 5;
 const POISONED_CONFIRM_MESSAGE =
   'Flagging this instance as POISONED is IRREVERSIBLE: the current run can never resume on its run_id. Recovery requires a fresh deployment (new run_id) after you reconcile the account.';
-const FLATTEN_CONFIRM_MESSAGE =
-  'Flatten & pause sends a market-flattening request for any owned positions and then pauses the bot. Positions may be closed at the next available price. Confirm to proceed.';
 const CRASH_RECOVERY_CONFIRM_MESSAGE =
   'Recording recovery evidence clears the crash-retired start gate and lets this bot run again. Only confirm if you have verified in IBKR that the broker account is FLAT with no open orders. This writes audited safety evidence.';
+const RETIRE_REPLACE_CONFIRM_MESSAGE =
+  'Retire & Replace permanently retires this bot instance, then opens replacement deploy with the current lineage. Confirm only after you have verified the broker account is flat with no open orders.';
 const TIMELINE_PROJECTION_UNAVAILABLE =
   'Projection unavailable; current snapshot remains file-backed.';
 
-type BotControlAction = 'resume' | 'pause' | 'flatten_and_pause' | 'stop' | 'mark_poisoned';
+type LegacyBotControlAction = 'mark_poisoned';
 type WorkbenchTab = 'activity' | 'audit';
 type PosturePillTone = 'ok' | 'attention' | 'warn' | 'neutral' | 'muted';
 
@@ -151,12 +153,12 @@ export class BotControlPageComponent {
   readonly busyAction = signal<string | null>(null);
   readonly typedHaltOpen = signal<boolean>(false);
   private readonly typedHaltInstanceId = signal<string | null>(null);
-  readonly flattenConfirmOpen = signal<boolean>(false);
   readonly crashRecoveryConfirmOpen = signal<boolean>(false);
+  readonly retireReplaceConfirmOpen = signal<boolean>(false);
   readonly activeWorkbenchTab = signal<WorkbenchTab>('activity');
   readonly poisonedConfirmMessage = POISONED_CONFIRM_MESSAGE;
-  readonly flattenConfirmMessage = FLATTEN_CONFIRM_MESSAGE;
   readonly crashRecoveryConfirmMessage = CRASH_RECOVERY_CONFIRM_MESSAGE;
+  readonly retireReplaceConfirmMessage = RETIRE_REPLACE_CONFIRM_MESSAGE;
 
   readonly errorMessage = computed<string | null>(
     () => this.mutationError() ?? this.statusError() ?? this.accountSummaryError(),
@@ -229,6 +231,19 @@ export class BotControlPageComponent {
       tone: operatorPillTone(condition.severity),
     };
   });
+  readonly accountFreezeGate = computed(() => {
+    return (
+      this.status()?.operator_surface.readiness_gates.find(
+        (gate) =>
+          gate.gate_result.status === 'freeze' &&
+          gate.gate_result.gate_id.startsWith('account.'),
+      )?.gate_result ?? null
+    );
+  });
+  readonly accountFreezeReason = computed(() => {
+    const reason = this.accountFreezeGate()?.operator_reason;
+    return reason ? formatReceiptLabel(reason) : null;
+  });
 
   readonly rightPaneNode = computed<LifecycleChartNode | null>(() => {
     const status = this.status();
@@ -250,11 +265,19 @@ export class BotControlPageComponent {
   readonly timelineProjectionAvailable = computed(() => this.lifecycleTimeline().projectionAvailable);
   readonly timelineCanonicalFallbackRequired = computed(() => this.lifecycleTimeline().canonicalFallbackRequired);
   readonly timelineNotice = computed(() => this.lifecycleTimeline().notice);
+  readonly lifecycleToolbarActions = computed<BotLifecycleAction[]>(() => {
+    const lifecycle = this.status()?.daily_lifecycle;
+    if (!lifecycle) return [];
+    return [
+      ...(lifecycle.primary_action ? [lifecycle.primary_action] : []),
+      ...lifecycle.ambient_actions,
+    ];
+  });
 
   private readonly primaryRemediationDispatch: RendererDispatch = {
     invokeCapability: (capability) => {
-      if (capability === 'resume') void this.dispatchResume();
-      else void this.dispatchPause();
+      if (capability === 'resume') void this.dispatchResumeIntent();
+      else void this.dispatchEndDayNow();
     },
     focus: (_tab, action) => {
       const targetNodeId = this.targetNodeForAction(action);
@@ -266,6 +289,12 @@ export class BotControlPageComponent {
       if (endpoint === 'reconcile_instance') void this.dispatchReconcileNow();
     },
   };
+
+  openAccountMonitor(): void {
+    void this.router.navigate(['/broker/account-monitor'], {
+      fragment: 'account-reconciliation-action',
+    });
+  }
 
   private readonly runtimeNoticeDispatch: OperatorNoticeDispatch = {
     redeploy: () => this.onGateRedeploy(),
@@ -300,8 +329,8 @@ export class BotControlPageComponent {
       this.highlightedLifecycleNodeId.set(null);
       this.typedHaltOpen.set(false);
       this.typedHaltInstanceId.set(null);
-      this.flattenConfirmOpen.set(false);
       this.crashRecoveryConfirmOpen.set(false);
+      this.retireReplaceConfirmOpen.set(false);
       this.mutationReceipt.set(null);
       this.mutationReceiptWarnings.set([]);
       this.activeWorkbenchTab.set('activity');
@@ -337,18 +366,19 @@ export class BotControlPageComponent {
     this.selectedLifecycleNodeId.set(node.id);
   }
 
-  async dispatchResume(): Promise<void> {
-    await this.setIntent('resume', 'Resume');
-  }
-
   async dispatchStartProcess(): Promise<void> {
     const id = this.instanceId();
     const cap = this.status()?.operator_surface.host_process.start_capability;
     if (!id || this.busyAction() || !cap || !canStartHostProcess(cap)) return;
+    const request = this.startRequestWithRollCallOffer(cap.request);
+    if (!request) {
+      this.mutationError.set('Run roll call before starting this bot.');
+      return;
+    }
     this.busyAction.set('start_process');
     this.clearMutationOutcome();
     try {
-      const response = await startHostProcessFromCapability(this.liveRuns, cap);
+      const response = await this.liveRuns.startHostRunner(cap.run_id, request);
       this.applyMutationReceipt(response);
       await this.refreshStatus(id);
     } catch (err) {
@@ -392,29 +422,45 @@ export class BotControlPageComponent {
     }
   }
 
-  async dispatchPause(): Promise<void> {
-    await this.setIntent('pause', 'Pause');
-  }
-
   async dispatchStop(): Promise<void> {
     await this.setIntent('stop', 'Stop');
   }
 
-  async dispatchFlattenAndPause(): Promise<void> {
+  async dispatchResumeIntent(): Promise<void> {
+    await this.setIntent('resume', 'Resume');
+  }
+
+  async dispatchEndDayNow(): Promise<void> {
     const id = this.instanceId();
     if (!id || this.busyAction()) return;
-    this.busyAction.set('flatten_and_pause');
+    this.busyAction.set('end_day_now');
     this.clearMutationOutcome();
     try {
-      const response = await this.liveRuns.flattenAndPause(id, {
-        action: 'pause',
-        reason: 'Flatten and pause',
-        updated_by: 'operator',
-      });
+      const response = await this.liveRuns.endDayNow(id, { force: false });
       this.applyMutationReceipt(response);
       await this.refreshStatus(id);
     } catch (err) {
-      this.mutationError.set(this.operationErrorMessage('flatten', err));
+      this.mutationError.set(this.operationErrorMessage('stop', err));
+    } finally {
+      this.busyAction.set(null);
+    }
+  }
+
+  async dispatchRosterChange(onRoster: boolean): Promise<void> {
+    const id = this.instanceId();
+    if (!id || this.busyAction()) return;
+    const action: BotLifecycleActionId = onRoster ? 'add_to_roster' : 'take_off_roster';
+    this.busyAction.set(action);
+    this.clearMutationOutcome();
+    try {
+      await this.liveRuns.setBotLifecycleRoster(id, {
+        on_roster: onRoster,
+        updated_by: 'operator',
+        reason: onRoster ? 'Add to roster' : 'Take off roster',
+      });
+      await this.refreshStatus(id);
+    } catch (err) {
+      this.mutationError.set(this.humanError(err));
     } finally {
       this.busyAction.set(null);
     }
@@ -439,28 +485,22 @@ export class BotControlPageComponent {
     return route.commands.map((part) => encodeURI(part)).join('/');
   }
 
-  dispatchOverviewAction(action: LifecycleChartActionId): void {
+  dispatchOverviewAction(action: BotLifecycleActionId): void {
     switch (action) {
-      case 'start_process':
+      case 'confirm_start':
         void this.dispatchStartProcess();
         break;
-      case 'resume':
-        void this.dispatchResume();
+      case 'end_day_now':
+        void this.dispatchEndDayNow();
         break;
-      case 'pause':
-        void this.dispatchPause();
+      case 'add_to_roster':
+        void this.dispatchRosterChange(true);
         break;
-      case 'flatten_and_pause':
-        this.openFlattenConfirm();
+      case 'take_off_roster':
+        void this.dispatchRosterChange(false);
         break;
-      case 'stop':
-        void this.dispatchStop();
-        break;
-      case 'mark_poisoned':
-        this.openTypedHalt();
-        break;
-      case 'redeploy':
-        this.onGateRedeploy();
+      case 'retire_replace':
+        this.openRetireReplaceConfirm();
         break;
       default: {
         const unreachable: never = action;
@@ -571,31 +611,44 @@ export class BotControlPageComponent {
     return null;
   }
 
-  openFlattenConfirm(): void {
-    if (this.isActionDisabled('flatten_and_pause')) return;
-    this.flattenConfirmOpen.set(true);
-  }
-
-  cancelFlattenConfirm(): void {
-    this.flattenConfirmOpen.set(false);
-  }
-
-  async confirmFlatten(): Promise<void> {
-    if (!this.flattenConfirmOpen()) return;
-    this.flattenConfirmOpen.set(false);
-    // Re-check eligibility at confirm time: a poll may have disabled the action
-    // (lost live binding, positions already flat) while the dialog was open, so
-    // never fire the market-flattening mutation from a stale confirmation.
-    if (this.isActionDisabled('flatten_and_pause')) return;
-    await this.dispatchFlattenAndPause();
-  }
-
   openTypedHalt(): void {
-    if (this.isActionDisabled('mark_poisoned')) return;
+    if (this.isLegacyActionDisabled('mark_poisoned')) return;
     const id = this.instanceId();
     if (!id) return;
     this.typedHaltInstanceId.set(id);
     this.typedHaltOpen.set(true);
+  }
+
+  openRetireReplaceConfirm(): void {
+    if (this.isActionDisabled('retire_replace')) return;
+    this.retireReplaceConfirmOpen.set(true);
+  }
+
+  cancelRetireReplaceConfirm(): void {
+    this.retireReplaceConfirmOpen.set(false);
+  }
+
+  async confirmRetireReplace(): Promise<void> {
+    if (!this.retireReplaceConfirmOpen()) return;
+    this.retireReplaceConfirmOpen.set(false);
+    const id = this.instanceId();
+    if (!id || this.busyAction()) return;
+    this.busyAction.set('retire_replace');
+    this.clearMutationOutcome();
+    try {
+      await this.liveRuns.retireAndReplace(id, {
+        confirm_account_flat: true,
+        replacement_requested: true,
+        updated_by: 'operator',
+        reason: 'Retire & Replace',
+      });
+      await this.refreshStatus(id);
+      this.onGateRedeploy();
+    } catch (err) {
+      this.mutationError.set(this.humanError(err));
+    } finally {
+      this.busyAction.set(null);
+    }
   }
 
   closeTypedHalt(): void {
@@ -627,10 +680,31 @@ export class BotControlPageComponent {
     return redeployQueryParamsForStatus(s);
   }
 
-  isActionDisabled(action: BotControlAction): boolean {
+  isActionDisabled(action: BotLifecycleActionId): boolean {
+    const status = this.status();
+    if (status === null || this.busyAction() !== null) return true;
+    return !this.lifecycleAction(action)?.enabled;
+  }
+
+  isLegacyActionDisabled(action: LegacyBotControlAction): boolean {
     const status = this.status();
     if (status === null || this.busyAction() !== null) return true;
     return !status.operator_surface.actions[action].enabled;
+  }
+
+  private lifecycleAction(action: BotLifecycleActionId): BotLifecycleAction | null {
+    const lifecycle = this.status()?.daily_lifecycle;
+    if (!lifecycle) return null;
+    if (lifecycle.primary_action?.id === action) return lifecycle.primary_action;
+    return lifecycle.ambient_actions.find((candidate) => candidate.id === action) ?? null;
+  }
+
+  private startRequestWithRollCallOffer(
+    request: HostRunnerStartRequest,
+  ): HostRunnerStartRequest | null {
+    const offerId = this.lifecycleAction('confirm_start')?.offer_id ?? null;
+    if (!offerId) return null;
+    return { ...request, roll_call_offer_id: offerId };
   }
 
   private async refresh(id: string): Promise<void> {
@@ -714,7 +788,7 @@ export class BotControlPageComponent {
   }
 
   private async setIntent(
-    action: 'resume' | 'pause' | 'stop',
+    action: 'resume' | 'stop',
     label: string,
   ): Promise<void> {
     const id = this.instanceId();

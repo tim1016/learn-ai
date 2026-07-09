@@ -194,7 +194,7 @@ describe('HostProcessNoticeComponent — Start bot process button', () => {
     ['ALREADY_RUNNING', 'already running'],
     ['STOPPING', 'shutting down'],
     ['HOST_SERVICE_OFFLINE', 'bot service is offline'],
-    ['STOPPED_REQUIRES_RESUME', 'use resume'],
+    ['STOPPED_REQUIRES_RESUME', 'run roll call'],
     ['STOPPED_REQUIRES_REDEPLOY', 'dead or retired'],
     ['START_SETTINGS_INCOMPLETE', 'saved start settings are incomplete'],
   ] as const)('maps disabled_reason_code %s to trader copy', (code, fragment) => {
@@ -243,8 +243,8 @@ describe('HostProcessNoticeComponent — Start bot process button', () => {
       error: {
         detail: {
           reason_code: 'STOPPED_REQUIRES_RESUME',
-          message: 'spy_ema_paper is durably STOPPED. Resume the bot to clear the stop latch.',
-          remediation: 'Use Resume to set desired_state=RUNNING, then start the bot.',
+          message: 'legacy daemon start refusal',
+          remediation: 'legacy durable-intent remediation',
           gate_id: 'desired_state.start',
         },
       },
@@ -258,8 +258,8 @@ describe('HostProcessNoticeComponent — Start bot process button', () => {
     btn?.click();
     await new Promise<void>((r) => setTimeout(r, 0));
     const errMsg = el.querySelector('[data-testid="host-process-start-error"]');
-    expect(errMsg?.textContent ?? '').toContain('durably STOPPED');
-    expect(errMsg?.textContent ?? '').toContain('Resume the bot');
+    expect(errMsg?.textContent ?? '').toContain('Run roll call');
+    expect(errMsg?.textContent ?? '').not.toContain('Resume');
   });
 
   it('does not call the service when start_capability is disabled', async () => {

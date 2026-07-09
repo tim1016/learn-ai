@@ -121,7 +121,9 @@ async def bootstrap_publisher_for_instance(
     artifacts_root = FsPath(settings.live_runs_root).parent
     envelope_path = stable_live_state_path(artifacts_root, safe_strategy_instance_id)
     try:
-        envelope = LiveStateSidecarRepo(envelope_path).read()
+        envelope = LiveStateSidecarRepo(
+            envelope_path, trusted_root=artifacts_root / "live_state"
+        ).read()
     except LiveStateSidecarCorruptError as exc:
         raise PublisherBootstrapError(
             "envelope_corrupt", f"live envelope is corrupt: {exc}"

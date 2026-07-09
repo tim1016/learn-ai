@@ -402,6 +402,7 @@ export interface HostRunnerStartRequest {
   strategy: string;
   max_orders_per_day: number;
   ibkr_host: string;
+  roll_call_offer_id?: string | null;
 }
 
 export const DEFAULT_MAX_ORDERS_PER_DAY = 2000;

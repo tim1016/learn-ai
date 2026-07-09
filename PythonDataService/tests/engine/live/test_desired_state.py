@@ -25,6 +25,26 @@ def test_stable_path_layout(tmp_path: Path) -> None:
     assert path == tmp_path / "live_state" / "spy_ema_crossover" / "desired_state.json"
 
 
+@pytest.mark.parametrize("bad_sid", ["../escape", "nested/id", "", " spy", ".", ".."])
+def test_stable_desired_state_path_rejects_unsafe_strategy_instance_id(
+    tmp_path: Path, bad_sid: str
+) -> None:
+    with pytest.raises(ValueError):
+        stable_desired_state_path(tmp_path, bad_sid)
+
+
+def test_stable_desired_state_path_rejects_symlink_escape(tmp_path: Path) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    live_state_root = artifacts_root / "live_state"
+    live_state_root.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (live_state_root / "x").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ValueError):
+        stable_desired_state_path(artifacts_root, "x")
+
+
 def test_read_returns_none_when_absent(tmp_path: Path) -> None:
     repo = DesiredStateRepo(tmp_path / "live_state" / "x" / "desired_state.json")
     assert repo.read() is None

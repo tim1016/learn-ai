@@ -28,9 +28,13 @@ import type { DaemonDiagnosticReport } from '../api/daemon-diagnostics.types';
 import type {
   FleetAccountSummary,
   FleetContamination,
+  BotLifecycleMutationResponse,
+  BotLifecycleRosterRequest,
   BotCatalogResponse,
   BotDeleteRequest,
   BotDeleteResponse,
+  BotRollCallResponse,
+  BotRetireReplaceRequest,
   CrashRecoveryOverrideRequest,
   CrashRecoveryOverrideResponse,
   InstanceDesiredStateRequest,
@@ -178,6 +182,42 @@ export class LiveRunsService {
     );
   }
 
+  endDayNow(
+    instanceId: string,
+    request: HostRunnerStopRequest = { force: false },
+  ): Promise<HostRunnerActionResponse> {
+    return firstValueFrom(
+      this.http.post<HostRunnerActionResponse>(
+        `${this.instancesBase}/${encodeURIComponent(instanceId)}/end-day-now`,
+        request,
+      ),
+    );
+  }
+
+  setBotLifecycleRoster(
+    instanceId: string,
+    request: BotLifecycleRosterRequest,
+  ): Promise<BotLifecycleMutationResponse> {
+    return firstValueFrom(
+      this.http.post<BotLifecycleMutationResponse>(
+        `${this.instancesBase}/${encodeURIComponent(instanceId)}/lifecycle/roster`,
+        request,
+      ),
+    );
+  }
+
+  retireAndReplace(
+    instanceId: string,
+    request: BotRetireReplaceRequest,
+  ): Promise<BotLifecycleMutationResponse> {
+    return firstValueFrom(
+      this.http.post<BotLifecycleMutationResponse>(
+        `${this.instancesBase}/${encodeURIComponent(instanceId)}/retire-and-replace`,
+        request,
+      ),
+    );
+  }
+
   // --- Instance-addressed operator console (ADR 0004) ---
 
   /** Account fleet overview: every known strategy instance, live or not. */
@@ -187,6 +227,12 @@ export class LiveRunsService {
 
   getBotCatalog(): Promise<BotCatalogResponse> {
     return firstValueFrom(this.http.get<BotCatalogResponse>(`${this.instancesBase}/catalog`));
+  }
+
+  runRollCall(): Promise<BotRollCallResponse> {
+    return firstValueFrom(
+      this.http.post<BotRollCallResponse>(`${this.instancesBase}/roll-call`, {}),
+    );
   }
 
   deleteBot(instanceId: string, request: BotDeleteRequest = { mode: 'soft' }): Promise<BotDeleteResponse> {

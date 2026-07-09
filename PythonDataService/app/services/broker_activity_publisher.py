@@ -195,7 +195,7 @@ def _migrate_per_run_wals_to_instance_wal(
         if not legacy_path.exists():
             continue
         try:
-            rows = BrokerActivityWal(legacy_path).read_all()
+            rows = BrokerActivityWal(legacy_path, trusted_root=live_runs).read_all()
         except BrokerActivityWalCorruptError as exc:
             logger.warning(
                 "broker-activity migration: skipping corrupt legacy WAL",
@@ -304,10 +304,15 @@ class BrokerActivityPublisher:
                 strategy_instance_id=strategy_instance_id,
                 target_path=instance_wal_path,
             )
-        self._wal = BrokerActivityWal(instance_wal_path)
-        self._bot_event_wal = BotEventRawWal(run_bot_event_wal_path(run_dir))
+        self._wal = BrokerActivityWal(
+            instance_wal_path, trusted_root=artifacts_root / "live_instances"
+        )
+        self._bot_event_wal = BotEventRawWal(
+            run_bot_event_wal_path(run_dir), trusted_root=run_dir
+        )
         self._sidecar = LiveStateSidecarRepo(
-            stable_live_state_path(artifacts_root, strategy_instance_id)
+            stable_live_state_path(artifacts_root, strategy_instance_id),
+            trusted_root=artifacts_root / "live_state",
         )
         # Intent WAL — the durable record of every submit-lifecycle event.
         # We fold it into the submitted-orders projection so a fresh fill

@@ -5,9 +5,11 @@ import {
   buildDeployChecks,
   buildDeployReadinessFacts,
   buildNowChecks,
+  deployBlocker,
   stoppedStartLatchState,
 } from './deploy-readiness';
 import snapshotJson from './action-plan-deploy-readiness.snapshot.json';
+import { makeFrozenAccountTriage } from '../testing/account-triage-fixtures';
 
 interface ActionPlanDeployReadinessSnapshot {
   readonly $comment: string;
@@ -133,6 +135,7 @@ describe('deploy readiness helpers', () => {
         final_verdict: 'not_proven',
         status_detail: 'Run account reconcile before starting.',
       },
+      accountTriage: null,
       brokerAccountAvailable: true,
       fleetState: 'warn',
       nothingDeployed: false,
@@ -166,6 +169,81 @@ describe('deploy readiness helpers', () => {
     ]);
   });
 
+  it('lets active account freeze override clean account and fleet facts', () => {
+    const facts = buildDeployReadinessFacts({
+      daemonState: 'ok',
+      daemonFreshness: { state: 'fresh', sha: 'abc1234', commitsBehind: null },
+      brokerState: 'ok',
+      brokerDetail: 'Connected',
+      accountTruth: {
+        final_verdict: 'clean',
+        status_detail: 'Account Truth is clean.',
+      },
+      accountTriage: makeFrozenAccountTriage({
+        accountId: 'DU123',
+        conditionOptions: {
+          conditionType: 'exposure_freeze',
+          detail: 'watchdog.flatten_timed_out',
+          operatorNextStep: 'CHECK_IBKR',
+          source: 'watchdog_halt_executor',
+          affectedStrategyInstanceIds: ['bot-a'],
+          cureAction: 'resolve_exposure',
+        },
+      }),
+      brokerAccountAvailable: true,
+      fleetState: 'ok',
+      nothingDeployed: false,
+    });
+
+    expect(facts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: 'account', condition: 'Frozen', state: 'down' }),
+        expect.objectContaining({ key: 'fleet', condition: 'Frozen', state: 'warn' }),
+      ]),
+    );
+    expect(facts).not.toContainEqual(expect.objectContaining({ condition: 'Clean' }));
+    expect(facts).not.toContainEqual(expect.objectContaining({ condition: 'Clear' }));
+  });
+
+  it('warns live-start now checks when account sick bay freezes the fleet', () => {
+    const checks = buildNowChecks({
+      daemonState: 'ok',
+      brokerState: 'ok',
+      fieldsReady: true,
+      fleetState: 'ok',
+      nothingDeployed: false,
+      accountTriage: makeFrozenAccountTriage(),
+    });
+
+    expect(checks).toContainEqual(
+      expect.objectContaining({
+        key: 'fleet',
+        state: 'warn',
+        detail: 'Account frozen',
+      }),
+    );
+  });
+
+  it('blocks start-now deploys while account sick bay triage is loading', () => {
+    expect(deployBlocker(baseDeployBlockerInput({ accountTriage: undefined }))).toEqual({
+      message: 'Account sick bay is still loading. Wait for account readiness, or turn off "Start trading immediately" to deploy only.',
+    });
+  });
+
+  it('blocks start-now deploys on active account freeze with the account monitor action', () => {
+    expect(
+      deployBlocker(baseDeployBlockerInput({ accountTriage: makeFrozenAccountTriage() })),
+    ).toEqual({
+      message: 'Account freeze active. Resolve the account sick-bay condition before starting.',
+      actionLink: {
+        message: 'Account freeze active.',
+        route: '/broker/account-monitor',
+        fragment: 'account-reconciliation-action',
+        linkText: 'Open account monitor',
+      },
+    });
+  });
+
   it('preserves legacy now/deploy check semantics', () => {
     expect(
       buildNowChecks({
@@ -174,6 +252,7 @@ describe('deploy readiness helpers', () => {
         fieldsReady: false,
         fleetState: 'unknown',
         nothingDeployed: true,
+        accountTriage: null,
       }),
     ).toEqual([
       expect.objectContaining({ key: 'engine', detail: 'Checking' }),
@@ -247,3 +326,34 @@ describe('deploy readiness helpers', () => {
     ).toBe('blocked');
   });
 });
+
+function baseDeployBlockerInput(
+  overrides: Partial<Parameters<typeof deployBlocker>[0]> = {},
+): Parameters<typeof deployBlocker>[0] {
+  return {
+    daemonDown: false,
+    effectiveStartNow: true,
+    executionMode: 'paper_orders',
+    allInCoexistenceBlock: null,
+    fleetBlocksStarts: false,
+    instanceAlreadyRunning: false,
+    instanceId: 'deployment-validation-paper',
+    brokerAccountAvailable: true,
+    accountTruth: null,
+    accountTriage: null,
+    strategyKey: 'deployment_validation',
+    strategySelected: true,
+    required: true,
+    missingRequiredFields: [],
+    identityConflictSummary: null,
+    exposureConflictSummary: null,
+    actionPlanReadiness: {
+      canDeploy: true,
+      reasonCode: null,
+      message: 'Action plan is ready for deployment.',
+    },
+    customSizingError: null,
+    stoppedStartLatchState: 'clear',
+    ...overrides,
+  };
+}

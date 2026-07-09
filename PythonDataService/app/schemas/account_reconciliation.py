@@ -14,6 +14,26 @@ from app.schemas.account_truth import (
 from app.schemas.live_runs import GateResult
 
 AccountReconciliationState = Literal["CLEAN", "NOT_PROVEN"]
+AccountExposureResolution = Literal["flat", "intended", "accepted_override", "unresolved"]
+AccountConditionType = Literal[
+    "exposure_freeze",
+    "account_freeze",
+    "evidence_stale",
+    "daemon_unreachable",
+    "evidence_missing",
+    "exit_flatten_failed",
+    "exit_lease_stuck",
+    "crashed",
+    "ended_without_status",
+    "repeated_unclean_start",
+]
+AccountCureAction = Literal[
+    "resolve_exposure",
+    "clear_freeze",
+    "reconcile_now",
+    "prove_evidence",
+    "retire_replace",
+]
 
 
 class AccountReconciliationEvidenceRef(BaseModel):
@@ -40,6 +60,7 @@ class AccountReconciliationReceipt(BaseModel):
     account_truth_verdict: AccountTruthFinalVerdict
     account_truth_severity: AccountTruthSeverity
     final_gate_result: GateResult
+    exposure_resolution: AccountExposureResolution = "unresolved"
     account_truth: AccountTruthResponse
     evidence_refs: list[AccountReconciliationEvidenceRef] = Field(default_factory=list)
     generated_at_ms: int = Field(ge=0)
@@ -78,6 +99,47 @@ class AccountTriageGateRow(BaseModel):
     primary_remediation: str | None = None
 
 
+class AccountConditionOwner(BaseModel):
+    """Owner of a derived sick-bay condition."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    owner_type: Literal["account", "bot"]
+    owner_id: str = Field(min_length=1, max_length=128)
+    label: str = Field(min_length=1, max_length=256)
+    strategy_instance_id: str | None = Field(default=None, max_length=128)
+    run_id: str | None = Field(default=None, max_length=128)
+    lifecycle_state: str | None = Field(default=None, max_length=32)
+
+
+class AccountConditionRow(BaseModel):
+    """ADR-0026 sick-bay condition row with exactly one cure action."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    condition_type: AccountConditionType
+    scope: Literal["account", "bot"]
+    owner: AccountConditionOwner
+    severity: Literal["warning", "critical"]
+    title: str = Field(min_length=1)
+    detail: str = Field(min_length=1)
+    operator_next_step: str | None = None
+    source: str = Field(min_length=1)
+    evidence_at_ms: int = Field(ge=0)
+    evidence_refs: list[AccountReconciliationEvidenceRef] = Field(default_factory=list)
+    affected_strategy_instance_ids: list[str] = Field(default_factory=list)
+    cure_action: AccountCureAction
+
+
+class AccountFreezeBanner(BaseModel):
+    """Backend-authored banner copy for active account freezes."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    headline: str = Field(min_length=1, max_length=160)
+    detail: str = Field(min_length=1, max_length=512)
+
+
 class AccountTriageResponse(BaseModel):
     """Thin account-scoped recovery projection over existing authorities."""
 
@@ -92,4 +154,71 @@ class AccountTriageResponse(BaseModel):
     overall_gate_result: GateResult
     account_reconciliation_receipt: AccountReconciliationReceipt | None = None
     gate_rows: list[AccountTriageGateRow] = Field(default_factory=list)
+    conditions: list[AccountConditionRow] = Field(default_factory=list)
+    freeze_banner: AccountFreezeBanner | None = None
+    clear_freeze_actionable: bool = False
     affected_bots: list[AccountTriageBotRef] = Field(default_factory=list)
+
+
+class AccountClearFreezeRequest(BaseModel):
+    """Operator request to clear an active freeze using the latest clean receipt."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    requested_by: str = Field(default="account-monitor.operator", min_length=1, max_length=128)
+    receipt_id: str | None = Field(default=None, min_length=1, max_length=160)
+    reason: str | None = Field(default=None, max_length=512)
+
+
+class AccountClearFreezeResponse(BaseModel):
+    """Receipt for a guarded account-freeze clear."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    cleared: bool = True
+    cleared_source: Literal["account_recovery_proof"] = "account_recovery_proof"
+    recovery_id: str = Field(min_length=1, max_length=128)
+    receipt_id: str = Field(min_length=1, max_length=160)
+    gate_result: GateResult
+    triage: AccountTriageResponse
+
+
+class AccountAcceptExposureOverrideRequest(BaseModel):
+    """Operator request to accept exposure and clear an exposure freeze."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    requested_by: str = Field(default="account-monitor.operator", min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=512)
+    strategy_instance_id: str | None = Field(default=None, max_length=128)
+    run_id: str | None = Field(default=None, max_length=128)
+    bot_order_namespace: str | None = Field(default=None, max_length=256)
+
+
+class AccountAcceptExposureOverrideResponse(BaseModel):
+    """Receipt for an audited exposure override that clears a freeze."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    cleared: bool = True
+    cleared_source: Literal["account_audited_override"] = "account_audited_override"
+    override_id: str = Field(min_length=1, max_length=128)
+    triage: AccountTriageResponse
+
+
+class AccountFalseCrashBackfillResponse(BaseModel):
+    """Summary of the append-only false-crash registry repair."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    accounts_scanned: int = Field(ge=0)
+    candidate_rows: int = Field(ge=0)
+    rows_repaired: int = Field(ge=0)
+    rows_skipped_no_disproof: int = Field(ge=0)
+    invalid_account_dirs: int = Field(ge=0)
+    repaired_run_ids: list[str] = Field(default_factory=list)

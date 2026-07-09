@@ -2224,7 +2224,8 @@ class LiveEngine:
 
             bot_order_namespace = f"learn-ai/{self._strategy_instance_id}/v1"
             sidecar_repo = LiveStateSidecarRepo(
-                stable_live_state_path(self._artifacts_root, self._strategy_instance_id)
+                stable_live_state_path(self._artifacts_root, self._strategy_instance_id),
+                trusted_root=self._artifacts_root / "live_state",
             )
             owned_namespaces, known_sibling_namespaces = compute_reconcile_namespaces(
                 artifacts_root=self._artifacts_root,

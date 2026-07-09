@@ -221,7 +221,7 @@ test.describe('Bot Control route and page shell', () => {
       'Broker activity publisher is not running',
     );
     await expect(page.getByTestId('bot-run-signal')).toContainText('On');
-    await expect(page.locator('.top-action-banner')).toContainText('Pause');
+    await expect(page.locator('.top-action-banner')).toContainText('End day now');
     await expect(page.locator('.posture-pills')).toContainText('Unsafe');
     await expect(page.locator('.posture-pills')).toContainText('Blocked before submit');
     await expect(page.locator('.connection-pill')).toContainText('Broker session disconnected');

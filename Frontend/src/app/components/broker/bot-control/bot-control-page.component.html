@@ -63,8 +63,7 @@
 
       <app-overview-actions
         class="top-action-banner"
-        [actions]="s.lifecycle_chart.actions"
-        [onlyFreshRunAvailable]="s.lifecycle_chart.only_fresh_run_available"
+        [actions]="lifecycleToolbarActions()"
         [busyAction]="busyAction()"
         (actionInvoked)="dispatchOverviewAction($event)"
         (actionTargetHovered)="setHighlightedLifecycleNode($event)"
@@ -84,6 +83,20 @@
         </button>
       }
     </div>
+
+    @if (accountFreezeGate(); as freezeGate) {
+      <section class="account-freeze-banner" role="status">
+        <i class="pi pi-ban" aria-hidden="true"></i>
+        <div>
+          <strong>Account sick bay is gating new starts.</strong>
+          <span>{{ accountFreezeReason() ?? freezeGate.operator_reason }}</span>
+        </div>
+        <button type="button" (click)="openAccountMonitor()">
+          Open Account Monitor
+          <i class="pi pi-arrow-right" aria-hidden="true"></i>
+        </button>
+      </section>
+    }
 
     @if (dominantNotice(); as notice) {
       <section class="dominant-notice" data-testid="bot-control-dominant-notice">
@@ -204,7 +217,7 @@
                           size="sm"
                         />
                       } @else {
-                        <span>Unknown symbol</span>
+                        <span>No symbol</span>
                       }
                       <span aria-hidden="true">·</span>
                       <span>{{ s.process.state }}</span>
@@ -257,16 +270,6 @@
   />
 
   <app-typed-halt-confirm
-    [open]="flattenConfirmOpen()"
-    heading="Flatten &amp; pause this bot"
-    [message]="flattenConfirmMessage"
-    requiredToken=""
-    confirmLabel="Flatten &amp; pause"
-    (confirmed)="confirmFlatten()"
-    (cancelled)="cancelFlattenConfirm()"
-  />
-
-  <app-typed-halt-confirm
     [open]="crashRecoveryConfirmOpen()"
     heading="Confirm the broker account is flat"
     [message]="crashRecoveryConfirmMessage"
@@ -274,5 +277,15 @@
     confirmLabel="Record recovery override"
     (confirmed)="confirmCrashRecoveryOverride()"
     (cancelled)="cancelCrashRecoveryConfirm()"
+  />
+
+  <app-typed-halt-confirm
+    [open]="retireReplaceConfirmOpen()"
+    heading="Retire &amp; Replace"
+    [message]="retireReplaceConfirmMessage"
+    requiredToken=""
+    confirmLabel="Retire &amp; Replace"
+    (confirmed)="confirmRetireReplace()"
+    (cancelled)="cancelRetireReplaceConfirm()"
   />
 </section>

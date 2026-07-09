@@ -1,4 +1,5 @@
 import type {
+  BotDailyLifecycleProjection,
   BotLifecycleChartView,
   LifecycleChartNode,
 } from '../api/live-instances.types';
@@ -174,4 +175,47 @@ export function makeLifecycleChartFixture(
     ],
   };
   return { ...chart, ...overrides };
+}
+
+export function makeDailyLifecycleFixture(
+  overrides: Partial<BotDailyLifecycleProjection> = {},
+): BotDailyLifecycleProjection {
+  return {
+    phase: 'OFF_DUTY',
+    presence_label: 'Off duty',
+    display_status: 'Ready',
+    attention_badge: 'Ready',
+    reason: 'Roll call can offer a fresh start.',
+    on_roster: true,
+    active_run_id: null,
+    latest_run_id: 'run-x',
+    drift_detected: false,
+    primary_action: {
+      id: 'confirm_start',
+      label: 'Start',
+      enabled: true,
+      reason: null,
+      offer_id: 'offer-run-x',
+      expires_at_ms: 1_700_000_600_000,
+    },
+    ambient_actions: [
+      {
+        id: 'take_off_roster',
+        label: 'Take off roster',
+        enabled: true,
+        reason: null,
+        offer_id: null,
+        expires_at_ms: null,
+      },
+      {
+        id: 'retire_replace',
+        label: 'Retire & Replace',
+        enabled: true,
+        reason: null,
+        offer_id: null,
+        expires_at_ms: null,
+      },
+    ],
+    ...overrides,
+  };
 }

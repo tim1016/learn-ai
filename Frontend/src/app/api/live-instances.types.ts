@@ -91,6 +91,90 @@ export interface EvidenceBinding {
 
 export type ReadinessVerdict = 'READY' | 'BLOCKED' | 'DEGRADED' | 'UNKNOWN';
 
+export type BotLifecyclePhaseValue = 'OFF_DUTY' | 'ON_DUTY' | 'RETIRED';
+export type BotLifecyclePresenceLabel = 'Off duty' | 'On duty' | 'Retired';
+export type BotLifecycleDisplayStatus =
+  | 'Off duty'
+  | 'Ready'
+  | 'On duty'
+  | 'Clocking out'
+  | 'Sick bay'
+  | 'Off roster'
+  | 'Retired';
+export type BotLifecycleActionId =
+  | 'confirm_start'
+  | 'end_day_now'
+  | 'retire_replace'
+  | 'add_to_roster'
+  | 'take_off_roster';
+
+export interface BotLifecycleAction {
+  id: BotLifecycleActionId;
+  label: string;
+  enabled: boolean;
+  reason: string | null;
+  offer_id: string | null;
+  expires_at_ms: number | null;
+}
+
+export interface BotDailyLifecycleProjection {
+  phase: BotLifecyclePhaseValue;
+  presence_label: BotLifecyclePresenceLabel;
+  display_status: BotLifecycleDisplayStatus;
+  attention_badge: 'Sick bay' | 'Ready' | 'Off roster' | null;
+  reason: string | null;
+  on_roster: boolean;
+  active_run_id: string | null;
+  latest_run_id: string | null;
+  drift_detected: boolean;
+  primary_action: BotLifecycleAction | null;
+  ambient_actions: BotLifecycleAction[];
+}
+
+export interface BotLifecycleRosterRequest {
+  on_roster: boolean;
+  updated_by?: string;
+  reason?: string | null;
+}
+
+export interface BotRetireReplaceRequest {
+  confirm_account_flat: boolean;
+  replacement_requested?: boolean;
+  updated_by?: string;
+  reason?: string;
+}
+
+export interface BotLifecycleMutationResponse {
+  strategy_instance_id: string;
+  lifecycle: BotDailyLifecycleProjection;
+}
+
+export interface BotRollCallSummary {
+  ready: number;
+  off_roster: number;
+  sick_bay: number;
+  on_duty: number;
+  off_duty: number;
+  retired: number;
+  generated_at_ms: number | null;
+  session_date: string | null;
+  effective_stop_ms: number | null;
+}
+
+export interface BotRollCallOffer {
+  offer_id: string;
+  strategy_instance_id: string;
+  run_id: string;
+  session_date: string;
+  issued_at_ms: number;
+  expires_at_ms: number;
+}
+
+export interface BotRollCallResponse {
+  summary: BotRollCallSummary;
+  offers: BotRollCallOffer[];
+}
+
 export interface ReadinessGate {
   name: string;
   status: 'pass' | 'fail' | 'unknown';
@@ -214,6 +298,9 @@ export interface LiveInstanceStatus {
   /** Backend-authored chart contract for the Overview tab. The frontend
    * renders nodes, edges, statuses, and action enablement verbatim. */
   lifecycle_chart: BotLifecycleChartView;
+  /** Rev 3 daily lifecycle projection: three phases, closed display
+   * vocabulary, roster flag, and Button Rule action ids. */
+  daily_lifecycle: BotDailyLifecycleProjection;
   fetched_at_ms: number;
 }
 
@@ -984,6 +1071,33 @@ export interface BotCatalogMetrics {
   error_count: number;
 }
 
+export type BotAttendanceStatus = 'clean' | 'rested' | 'sick' | 'retired';
+
+export interface BotAttendanceCell {
+  session_date: string;
+  status: BotAttendanceStatus;
+  label: string;
+  receipt_ref: string | null;
+}
+
+export interface BotEveningReportRow {
+  strategy_instance_id: string;
+  label: string;
+  status: BotAttendanceStatus;
+  receipt_ref: string | null;
+}
+
+export interface BotEveningReport {
+  session_date: string;
+  generated_at_ms: number;
+  clean_exits: number;
+  rested: number;
+  sick: number;
+  retired: number;
+  summary: string;
+  rows: BotEveningReportRow[];
+}
+
 export interface BotCatalogRow {
   strategy_instance_id: string;
   name: string;
@@ -1006,11 +1120,16 @@ export interface BotCatalogRow {
   process_state: string;
   desired_state: string | null;
   readiness_verdict: ReadinessVerdictEnum;
+  daily_lifecycle: BotDailyLifecycleProjection;
+  start_request: HostRunnerStartRequest | null;
+  attendance: BotAttendanceCell[];
   metrics: BotCatalogMetrics;
 }
 
 export interface BotCatalogResponse {
   bots: BotCatalogRow[];
+  roll_call: BotRollCallSummary;
+  evening_report: BotEveningReport | null;
 }
 
 export interface BotDeleteRequest {

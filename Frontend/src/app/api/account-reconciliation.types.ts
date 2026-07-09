@@ -2,6 +2,24 @@ import type { AccountTruthResponse } from './broker-models';
 import type { GateResult } from './live-instances.types';
 
 export type AccountReconciliationState = 'CLEAN' | 'NOT_PROVEN';
+export type AccountExposureResolution = 'flat' | 'intended' | 'accepted_override' | 'unresolved';
+export type AccountConditionType =
+  | 'exposure_freeze'
+  | 'account_freeze'
+  | 'evidence_stale'
+  | 'daemon_unreachable'
+  | 'evidence_missing'
+  | 'exit_flatten_failed'
+  | 'exit_lease_stuck'
+  | 'crashed'
+  | 'ended_without_status'
+  | 'repeated_unclean_start';
+export type AccountCureAction =
+  | 'resolve_exposure'
+  | 'clear_freeze'
+  | 'reconcile_now'
+  | 'prove_evidence'
+  | 'retire_replace';
 
 export interface AccountReconciliationEvidenceRef {
   source: string;
@@ -19,10 +37,112 @@ export interface AccountReconciliationReceipt {
   account_truth_verdict: AccountTruthResponse['final_verdict'];
   account_truth_severity: AccountTruthResponse['final_severity'];
   final_gate_result: GateResult;
+  exposure_resolution: AccountExposureResolution;
   account_truth: AccountTruthResponse;
   evidence_refs: AccountReconciliationEvidenceRef[];
   generated_at_ms: number;
   account_truth_generated_at_ms: number;
   expires_at_ms: number;
   ttl_ms: number;
+}
+
+export interface AccountConditionOwner {
+  owner_type: 'account' | 'bot';
+  owner_id: string;
+  label: string;
+  strategy_instance_id: string | null;
+  run_id: string | null;
+  lifecycle_state: string | null;
+}
+
+export interface AccountConditionRow {
+  condition_type: AccountConditionType;
+  scope: 'account' | 'bot';
+  owner: AccountConditionOwner;
+  severity: 'warning' | 'critical';
+  title: string;
+  detail: string;
+  operator_next_step: string | null;
+  source: string;
+  evidence_at_ms: number;
+  evidence_refs: AccountReconciliationEvidenceRef[];
+  affected_strategy_instance_ids: string[];
+  cure_action: AccountCureAction;
+}
+
+export interface AccountFreezeBanner {
+  headline: string;
+  detail: string;
+}
+
+export interface AccountTriageBotRef {
+  strategy_instance_id: string;
+  run_id: string;
+  bot_order_namespace: string;
+  lifecycle_state: string;
+}
+
+export interface AccountTriageGateRow {
+  gate_id: string;
+  status: 'pass' | 'block' | 'freeze' | 'unknown';
+  scope: 'account' | 'reconciliation';
+  severity: 'ok' | 'warning' | 'critical';
+  title: string;
+  detail: string;
+  operator_next_step: string | null;
+  source: string;
+  evidence_at_ms: number;
+  affected_strategy_instance_ids: string[];
+  evidence_refs: AccountReconciliationEvidenceRef[];
+  primary_remediation: string | null;
+}
+
+export interface AccountTriageResponse {
+  schema_version: number;
+  generated_at_ms: number;
+  account_id: string;
+  strategy_instance_id: string | null;
+  summary_headline: string;
+  summary_detail: string;
+  overall_gate_result: GateResult;
+  account_reconciliation_receipt: AccountReconciliationReceipt | null;
+  gate_rows: AccountTriageGateRow[];
+  conditions: AccountConditionRow[];
+  freeze_banner: AccountFreezeBanner | null;
+  clear_freeze_actionable: boolean;
+  affected_bots: AccountTriageBotRef[];
+}
+
+export interface AccountClearFreezeRequest {
+  requested_by?: string;
+  receipt_id?: string | null;
+  reason?: string | null;
+}
+
+export interface AccountClearFreezeResponse {
+  schema_version: number;
+  account_id: string;
+  cleared: boolean;
+  cleared_source: 'account_recovery_proof';
+  recovery_id: string;
+  receipt_id: string;
+  gate_result: GateResult;
+  triage: AccountTriageResponse;
+}
+
+export interface AccountAcceptExposureOverrideRequest {
+  requested_by?: string;
+  reason: string;
+  strategy_instance_id?: string | null;
+  run_id?: string | null;
+  bot_order_namespace?: string | null;
+}
+
+export interface AccountAcceptExposureOverrideResponse {
+  schema_version: number;
+  account_id: string;
+  cleared: boolean;
+  cleared_source: 'account_audited_override';
+  override_id: string;
+  triage: AccountTriageResponse;
 }

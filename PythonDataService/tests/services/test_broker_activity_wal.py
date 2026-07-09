@@ -17,6 +17,7 @@ from app.services.broker_activity_wal import (
     BrokerActivityWalCorruptError,
     legacy_per_run_broker_activity_wal_path,
 )
+from app.services.jsonl_wal import confined_wal_path
 
 
 def _row(seq: int) -> BrokerActivityRow:
@@ -38,6 +39,11 @@ def _row(seq: int) -> BrokerActivityRow:
 def test_canonical_path_is_sibling_of_intent_events(tmp_path: Path) -> None:
     run_dir = tmp_path / "run-abc"
     assert legacy_per_run_broker_activity_wal_path(run_dir) == run_dir / "broker_activity.jsonl"
+
+
+def test_confined_wal_path_rejects_non_literal_filename(tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        confined_wal_path(tmp_path, "../escape.jsonl")
 
 
 def test_append_and_read_round_trip(tmp_path: Path) -> None:

@@ -741,7 +741,7 @@ async def test_start_retires_account_registry_binding_when_spawn_fails(
     assert [incident.notice.code for incident in incidents] == ["submit.launch_failed"]
 
 
-async def test_child_crash_retires_account_registry_binding_when_observed(
+async def test_child_without_status_retires_account_registry_binding_as_ended_without_status(
     daemon_context: tuple[RunnerProcessManager, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -772,7 +772,7 @@ async def test_child_crash_retires_account_registry_binding_when_observed(
     assert status.exit_reason == "exited(-9)"
     bindings = read_account_instance_registry(manager.artifacts_root, "DU111")
     assert [binding.lifecycle_state for binding in bindings[-2:]] == ["ACTIVE", "RETIRED"]
-    assert bindings[-1].source == "host_daemon.process_crashed"
+    assert bindings[-1].source == "host_daemon.ended_without_status"
     events = BotEventRawWal(run_bot_event_wal_path(run_dir)).read_all()
     assert len(events) == 1
     event = events[0]
@@ -836,7 +836,53 @@ async def test_child_controlled_halt_does_not_emit_launch_failed_event(
     status = manager.process_status(RUN_ID)
 
     assert status.state == HostRunnerProcessState.exited
+    bindings = read_account_instance_registry(manager.artifacts_root, "DU111")
+    assert [binding.lifecycle_state for binding in bindings[-2:]] == ["ACTIVE", "RETIRED"]
+    assert bindings[-1].source == "host_daemon.process_halted"
     assert BotEventRawWal(run_bot_event_wal_path(run_dir)).read_all() == []
+
+
+async def test_child_unclassified_exit_does_not_write_clean_retirement_source(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, run_dir = daemon_context
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": RUN_ID,
+                "strategy_instance_id": "spy_ema_paper",
+                "account_id": "DU111",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "run_status.json").write_text(
+        json.dumps(
+            {
+                "run_id": RUN_ID,
+                "started_at_ms": 1_700_000_000_000,
+                "last_update_ms": 1_700_000_010_000,
+                "ended_at_ms": 1_700_000_010_000,
+                "exit_code": 0,
+                "exit_reason": "legacy_unknown",
+                "host_pid": 4242,
+            }
+        ),
+        encoding="utf-8",
+    )
+    fake_process = FakeProcess()
+    monkeypatch.setattr(subprocess, "Popen", lambda command, **kwargs: fake_process)
+
+    manager.start(RUN_ID, request=HostRunnerStartRequest())
+    fake_process.returncode = 0
+
+    status = manager.process_status(RUN_ID)
+
+    assert status.state == HostRunnerProcessState.exited
+    bindings = read_account_instance_registry(manager.artifacts_root, "DU111")
+    assert [binding.lifecycle_state for binding in bindings[-2:]] == ["ACTIVE", "RETIRED"]
+    assert bindings[-1].source == "host_daemon.ended_without_status"
 
 
 async def test_start_blocks_after_crash_retire_until_later_recovery_proof(
@@ -866,6 +912,18 @@ async def test_start_blocks_after_crash_retire_until_later_recovery_proof(
     monkeypatch.setattr(subprocess, "Popen", lambda command, **kwargs: next(popen_results))
 
     manager.start(RUN_ID, request=HostRunnerStartRequest())
+    write_run_status(
+        run_dir,
+        RunStatusSidecar(
+            run_id=RUN_ID,
+            started_at_ms=1_700_000_000_000,
+            last_update_ms=1_700_000_010_000,
+            ended_at_ms=1_700_000_010_000,
+            exit_code=3,
+            exit_reason=ExitReason.exception,
+            host_pid=4242,
+        ),
+    )
     first_process.returncode = -9
     manager.process_status(RUN_ID)
 
