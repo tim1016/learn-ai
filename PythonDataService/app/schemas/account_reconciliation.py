@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.account_condition_actions import AccountCureAction
 from app.schemas.account_truth import (
     AccountTruthFinalVerdict,
     AccountTruthResponse,
@@ -26,13 +27,6 @@ AccountConditionType = Literal[
     "crashed",
     "ended_without_status",
     "repeated_unclean_start",
-]
-AccountCureAction = Literal[
-    "resolve_exposure",
-    "clear_freeze",
-    "reconcile_now",
-    "prove_evidence",
-    "retire_replace",
 ]
 
 

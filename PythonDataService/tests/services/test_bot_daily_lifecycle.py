@@ -23,7 +23,6 @@ def _project(
     start_enabled: bool = False,
     persisted_state: BotLifecycleStateRecord | None = None,
     roll_call_offer: BotRollCallOfferRecord | None = None,
-    condition_count: int = 0,
     conditions: tuple[BotLifecycleCondition, ...] = (),
 ) -> BotDailyLifecycleProjection:
     return project_bot_daily_lifecycle(
@@ -39,7 +38,6 @@ def _project(
             active_run_id="run-1" if process_state in {"running", "stopping"} else None,
             persisted_state=persisted_state,
             roll_call_offer=roll_call_offer,
-            condition_count=condition_count,
             conditions=conditions,
             now_ms=1_700_000_000_000,
         )
@@ -72,15 +70,20 @@ def _offer() -> BotRollCallOfferRecord:
     )
 
 
-def _condition() -> BotLifecycleCondition:
+def _condition(
+    *,
+    title: str = "Account evidence stale",
+    cure_action: str = "reconcile_now",
+    cure_label: str = "Run account reconcile",
+) -> BotLifecycleCondition:
     return BotLifecycleCondition(
         scope="account",
         severity="warning",
-        title="Account evidence stale",
+        title=title,
         detail="Receipt acct-recon-1 expired before this triage snapshot.",
         owner_label="Account DU1234567",
-        cure_action="reconcile_now",
-        cure_label="Run account reconcile",
+        cure_action=cure_action,
+        cure_label=cure_label,
     )
 
 
@@ -168,7 +171,14 @@ def test_project_bot_daily_lifecycle_conditions_put_off_duty_bot_in_sick_bay() -
         start_enabled=True,
         persisted_state=_state(),
         roll_call_offer=_offer(),
-        condition_count=2,
+        conditions=(
+            _condition(),
+            _condition(
+                title="Account freeze active",
+                cure_action="clear_freeze",
+                cure_label="Clear account freeze",
+            ),
+        ),
     )
 
     assert projection.phase == "OFF_DUTY"

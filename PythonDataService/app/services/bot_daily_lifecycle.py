@@ -28,7 +28,6 @@ class BotDailyLifecycleEvidence:
     active_run_id: str | None
     persisted_state: BotLifecycleStateRecord | None = None
     roll_call_offer: BotRollCallOfferRecord | None = None
-    condition_count: int = 0
     conditions: tuple[BotLifecycleCondition, ...] = ()
     now_ms: int = 0
 
@@ -43,12 +42,11 @@ def project_bot_daily_lifecycle(evidence: BotDailyLifecycleEvidence) -> BotDaily
     phase = _observed_phase(evidence)
     persisted_phase = evidence.persisted_state.phase if evidence.persisted_state is not None else None
     on_roster = evidence.persisted_state.on_roster if evidence.persisted_state is not None else True
-    condition_count = max(evidence.condition_count, len(evidence.conditions))
     display_status = _display_status(
         phase=phase,
         process_state=evidence.process.state,
         on_roster=on_roster,
-        condition_count=condition_count,
+        condition_count=len(evidence.conditions),
         start_enabled=evidence.start_capability.enabled,
         offer_available=evidence.roll_call_offer is not None,
     )
@@ -101,11 +99,7 @@ def _display_status(
     if phase == BotLifecyclePhase.RETIRED:
         return BotDisplayStatus.RETIRED
     if phase == BotLifecyclePhase.ON_DUTY:
-        return (
-            BotDisplayStatus.CLOCKING_OUT
-            if process_state == "stopping"
-            else BotDisplayStatus.ON_DUTY
-        )
+        return BotDisplayStatus.CLOCKING_OUT if process_state == "stopping" else BotDisplayStatus.ON_DUTY
     if condition_count > 0:
         return BotDisplayStatus.SICK_BAY
     if not on_roster:
@@ -131,7 +125,7 @@ def _reason(display_status: BotDisplayStatus, evidence: BotDailyLifecycleEvidenc
     if display_status == BotDisplayStatus.OFF_ROSTER:
         return "This bot is intentionally left off tomorrow's duty roster."
     if display_status == BotDisplayStatus.SICK_BAY:
-        count = max(evidence.condition_count, len(evidence.conditions))
+        count = len(evidence.conditions)
         noun = "condition" if count == 1 else "conditions"
         verb = "needs" if count == 1 else "need"
         return f"{count} {noun} {verb} a cure before start."

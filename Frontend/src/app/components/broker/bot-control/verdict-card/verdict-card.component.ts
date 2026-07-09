@@ -21,6 +21,7 @@ import {
   EVIDENCE_VERB_LABEL,
   resolveVerdictCardModel,
 } from '../lib/verdict-card-model';
+import { lifecycleConditionCureTarget } from '../../lib/condition-cure-actions';
 
 /** The Verdict Card — the trader-first face of `/broker/bots/:id`
  *  (docs/superpowers/specs/2026-07-08-bot-control-verdict-card-design.md).
@@ -132,7 +133,11 @@ export class VerdictCardComponent {
 
   invokeConditionCure(): void {
     const condition = this.sickBayCondition();
-    if (condition?.cure_action === 'retire_replace') {
+    if (!condition) {
+      this.accountMonitorRequested.emit();
+      return;
+    }
+    if (lifecycleConditionCureTarget(condition) === 'retireReplace') {
       this.lifecycleAction.emit('retire_replace');
       return;
     }

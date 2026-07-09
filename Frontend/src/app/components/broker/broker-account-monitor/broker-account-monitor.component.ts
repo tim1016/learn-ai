@@ -42,6 +42,7 @@ import {
   fmtSignedCurrency,
   fmtSignedNumber,
 } from '../format';
+import { accountConditionActionKind, conditionActionLabel } from '../lib/condition-cure-actions';
 
 interface PositionRow {
   position: IbkrPosition;
@@ -508,29 +509,18 @@ export class BrokerAccountMonitorComponent {
   }
 
   conditionActionLabel(condition: AccountConditionRow): string {
-    switch (condition.cure_action) {
-      case 'resolve_exposure':
-        return 'Resolve exposure';
-      case 'clear_freeze':
-        return 'Clear freeze';
-      case 'reconcile_now':
-        return 'Run account reconcile';
-    }
-    return condition.cure_action;
+    return conditionActionLabel(condition.cure_action);
   }
 
   hasConditionAction(condition: AccountConditionRow): boolean {
-    if (
-      condition.cure_action === 'clear_freeze' &&
-      this.accountTriage()?.clear_freeze_actionable === true
-    ) {
+    const actionKind = accountConditionActionKind(condition);
+    if (actionKind === null) {
       return false;
     }
-    return (
-      condition.cure_action === 'resolve_exposure' ||
-      condition.cure_action === 'clear_freeze' ||
-      condition.cure_action === 'reconcile_now'
-    );
+    if (actionKind === 'clearFreeze' && this.accountTriage()?.clear_freeze_actionable === true) {
+      return false;
+    }
+    return true;
   }
 
   gateStatusLabel(status: GateResultStatus): string {
@@ -538,9 +528,10 @@ export class BrokerAccountMonitorComponent {
   }
 
   conditionActionDisabled(condition: AccountConditionRow): boolean {
-    if (condition.cure_action === 'resolve_exposure') return this.exposureResolutionLoading() !== null;
-    if (condition.cure_action === 'reconcile_now') return this.accountReconciliationLoading();
-    if (condition.cure_action === 'clear_freeze') {
+    const actionKind = accountConditionActionKind(condition);
+    if (actionKind === 'resolveExposure') return this.exposureResolutionLoading() !== null;
+    if (actionKind === 'reconcile') return this.accountReconciliationLoading();
+    if (actionKind === 'clearFreeze') {
       return !this.accountTriage()?.clear_freeze_actionable || this.accountFreezeClearLoading();
     }
     return true;
@@ -584,11 +575,12 @@ export class BrokerAccountMonitorComponent {
   }
 
   runConditionAction(condition: AccountConditionRow): void {
-    if (condition.cure_action === 'reconcile_now') {
+    const actionKind = accountConditionActionKind(condition);
+    if (actionKind === 'reconcile') {
       void this.runAccountReconciliation();
-    } else if (condition.cure_action === 'clear_freeze') {
+    } else if (actionKind === 'clearFreeze') {
       void this.clearAccountFreeze();
-    } else if (condition.cure_action === 'resolve_exposure') {
+    } else if (actionKind === 'resolveExposure') {
       this.openExposureResolution(condition);
     }
   }

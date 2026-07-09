@@ -117,13 +117,20 @@ export interface BotLifecycleAction {
   expires_at_ms: number | null;
 }
 
+export type BotLifecycleCureAction =
+  | 'resolve_exposure'
+  | 'clear_freeze'
+  | 'reconcile_now'
+  | 'prove_evidence'
+  | 'retire_replace';
+
 export interface BotLifecycleCondition {
   scope: 'account' | 'bot';
   severity: 'warning' | 'critical';
   title: string;
   detail: string;
   owner_label: string;
-  cure_action: string;
+  cure_action: BotLifecycleCureAction;
   cure_label: string;
 }
 

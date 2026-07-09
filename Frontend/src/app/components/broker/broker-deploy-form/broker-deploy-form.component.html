@@ -23,7 +23,10 @@
         <p>Nothing changed; your inputs match the existing deployment.</p>
       }
       @if (d.start) {
-        <p>Start {{ d.start.accepted ? 'accepted' : 'rejected' }}: {{ d.start.process.message ?? d.start.process.state }}</p>
+        <p>
+          Start {{ d.start.accepted ? 'accepted' : 'rejected' }}:
+          {{ d.start.process.message ?? d.start.process.state }}
+        </p>
       }
       <details>
         <summary>Run id</summary>
@@ -36,13 +39,30 @@
   <section class="deploy-top-strip" aria-label="Deployment setup">
     <label class="field">
       <span>Deployment name</span>
-      <input data-deploy-field="instanceId" type="text" [value]="instanceId()" (input)="setInstanceId($event)" required
-        placeholder="deployment-validation-paper" autocomplete="off" spellcheck="false" />
+      <input
+        data-deploy-field="instanceId"
+        type="text"
+        [value]="instanceId()"
+        (input)="setInstanceId($event)"
+        required
+        placeholder="deployment-validation-paper"
+        autocomplete="off"
+        spellcheck="false"
+      />
     </label>
     <label class="field">
       <span>Connected broker account</span>
-      <input pInputText data-deploy-field="accountId" type="text" [value]="accountId()" readonly required
-        placeholder="Broker account unavailable" autocomplete="off" aria-readonly="true" />
+      <input
+        pInputText
+        data-deploy-field="accountId"
+        type="text"
+        [value]="accountId()"
+        readonly
+        required
+        placeholder="Broker account unavailable"
+        autocomplete="off"
+        aria-readonly="true"
+      />
       <small>{{ brokerAccountAvailable() ? 'Sourced from the connected broker session.' : 'Connect the broker session before deploying.' }}</small>
     </label>
     <div class="deploy-readiness-strip" aria-label="Deploy readiness facts">
@@ -61,7 +81,9 @@
       <section class="command-panel">
         <p class="eyebrow">Deploy command</p>
         <h2>{{ commandTitle() }}</h2>
-        <p>{{ selectedValidation()?.display_name ?? 'Select a validated strategy before deploying.' }}</p>
+        <p>
+          {{ selectedValidation()?.display_name ?? 'Select a validated strategy before deploying.' }}
+        </p>
         <button type="button" class="primary" [disabled]="!canSubmit()" (click)="submit()">
           <i class="pi pi-send" aria-hidden="true"></i>
           {{ commandButtonLabel() }}
@@ -159,25 +181,40 @@
 
         <label class="field">
           <span>Strategy settings file</span>
-          <input data-deploy-field="specPath" type="text" [value]="specPath()" readonly required
-            placeholder="Select a validated strategy first" autocomplete="off" spellcheck="false" aria-readonly="true" />
+          <input
+            data-deploy-field="specPath"
+            type="text"
+            [value]="specPath()"
+            readonly
+            required
+            placeholder="Select a validated strategy first"
+            autocomplete="off"
+            spellcheck="false"
+            aria-readonly="true"
+          />
           @if (selectedValidation(); as validation) {
-            <small>Locked by validation receipt. SHA-256: <code>{{ validation.settings_file_sha256 }}</code></small>
+            <small
+              >Locked by validation receipt. SHA-256: <code>{{ validation.settings_file_sha256 }}</code></small
+            >
           } @else {
             <small>Promote a strategy in Strategy Validation before deploying it.</small>
           }
         </label>
-
       </section>
 
       <section class="group" [class.step-hidden]="activeDeployTab() !== 'strategy'" aria-labelledby="verification-section">
         <h2 id="verification-section">Backtest verification</h2>
-        <p class="plain-help">Deploy binds to the QuantConnect backtest and audit source promoted by Strategy Validation. The signal stream below stays independent from the validation-case symbol.</p>
+        <p class="plain-help">
+          Deploy binds to the QuantConnect backtest and audit source promoted by Strategy Validation. The signal stream below stays independent from the
+          validation-case symbol.
+        </p>
         @if (selectedValidation(); as validation) {
           <dl class="validation-summary">
             <div>
               <dt>Status</dt>
-              <dd>{{ (validation.reconciliation_status ?? validation.validation_state) | receiptLabel }}</dd>
+              <dd>
+                {{ validation.reconciliation_status ?? validation.validation_state | receiptLabel }}
+              </dd>
             </div>
             <div>
               <dt>Validation case</dt>
@@ -191,17 +228,49 @@
           <a routerLink="/strategy-validation" class="validation-link">View full validation</a>
         }
         <label class="field">
-          <span>Backtest ID <span class="hint" title="The id QuantConnect assigns to a Cloud backtest. Open the backtest on quantconnect.com and copy the id from the page URL (…/backtests/&lt;id&gt;).">ⓘ</span></span>
-          <input data-deploy-field="qcBacktestId" type="text" [value]="qcBacktestId()" readonly required
-            placeholder="e.g. 1a2b3c4d…" autocomplete="off" spellcheck="false" />
+          <span
+            >Backtest ID
+            <span
+              class="hint"
+              title="The id QuantConnect assigns to a Cloud backtest. Open the backtest on quantconnect.com and copy the id from the page URL (…/backtests/&lt;id&gt;)."
+              >ⓘ</span
+            ></span
+          >
+          <input
+            data-deploy-field="qcBacktestId"
+            type="text"
+            [value]="qcBacktestId()"
+            readonly
+            required
+            placeholder="e.g. 1a2b3c4d…"
+            autocomplete="off"
+            spellcheck="false"
+          />
           <small>Locked to the promoted QC Cloud backtest.</small>
         </label>
 
         <label class="field">
-          <span>Algorithm audit copy <span class="hint" title="The committed algorithm source you uploaded to QuantConnect, under references/qc-shadow/. It is hashed into the run id to prove the deployed code matches the backtest.">ⓘ</span></span>
-          <input data-deploy-field="qcAuditCopyPath" type="text" [value]="qcAuditCopyPath()" readonly required
-            placeholder="references/qc-shadow/<Algorithm>.py" autocomplete="off" spellcheck="false" />
-          <small>Committed QC algorithm source, not a results CSV. SHA-256: <code>{{ selectedValidation()?.audit_copy_sha256 ?? 'pending' }}</code></small>
+          <span
+            >Algorithm audit copy
+            <span
+              class="hint"
+              title="The committed algorithm source you uploaded to QuantConnect, under references/qc-shadow/. It is hashed into the run id to prove the deployed code matches the backtest."
+              >ⓘ</span
+            ></span
+          >
+          <input
+            data-deploy-field="qcAuditCopyPath"
+            type="text"
+            [value]="qcAuditCopyPath()"
+            readonly
+            required
+            placeholder="references/qc-shadow/<Algorithm>.py"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <small
+            >Committed QC algorithm source, not a results CSV. SHA-256: <code>{{ selectedValidation()?.audit_copy_sha256 ?? 'pending' }}</code></small
+          >
         </label>
       </section>
 
@@ -228,41 +297,24 @@
         <h2 id="sizing-section">Position sizing</h2>
         @if (sizingSurfaceIsExplicit()) {
           <p class="plain-help self-sized" role="status">
-            <strong>Self-sized strategy.</strong> {{ strategyKey() }} supplies its own quantity / contracts
-            (options accounting, explicit market orders). <code>live_config.sizing</code> is recorded as
-            <code>StrategyExplicit</code> — the deploy-form sizing selector below is disabled because no
-            policy can meaningfully reinterpret this strategy's quantity.
+            <strong>Self-sized strategy.</strong> {{ strategyKey() }} supplies its own quantity / contracts (options accounting, explicit market orders).
+            <code>live_config.sizing</code> is recorded as <code>StrategyExplicit</code> — the deploy-form sizing selector below is disabled because no policy
+            can meaningfully reinterpret this strategy's quantity.
           </p>
         } @else {
           <p class="plain-help">
-            How big should each entry be? Safe canary is the default — every signal trades one share, so a misconfigured
-            bot can't surprise your account.
+            How big should each entry be? Safe canary is the default — every signal trades one share, so a misconfigured bot can't surprise your account.
           </p>
         }
-        <fieldset
-          class="sizing-presets"
-          role="radiogroup"
-          aria-labelledby="sizing-section"
-          [disabled]="sizingSurfaceIsExplicit()"
-        >
+        <fieldset class="sizing-presets" role="radiogroup" aria-labelledby="sizing-section" [disabled]="sizingSurfaceIsExplicit()">
           <label class="sizing-option" [class.selected]="sizingPreset() === 'safe_canary'">
-            <input
-              type="radio"
-              name="sizing-preset"
-              value="safe_canary"
-              [checked]="sizingPreset() === 'safe_canary'"
-              (change)="setSizingPreset($event)"
-            />
+            <input type="radio" name="sizing-preset" value="safe_canary" [checked]="sizingPreset() === 'safe_canary'" (change)="setSizingPreset($event)" />
             <span class="sizing-label">
               <strong>Safe canary</strong>
               <small>1 share per signal — proves the wiring without risking capital.</small>
             </span>
           </label>
-          <label
-            class="sizing-option"
-            [class.disabled]="!referenceParityAvailable()"
-            [class.selected]="sizingPreset() === 'reference_parity'"
-          >
+          <label class="sizing-option" [class.disabled]="!referenceParityAvailable()" [class.selected]="sizingPreset() === 'reference_parity'">
             <input
               type="radio"
               name="sizing-preset"
@@ -278,13 +330,7 @@
             </span>
           </label>
           <label class="sizing-option" [class.selected]="sizingPreset() === 'custom'">
-            <input
-              type="radio"
-              name="sizing-preset"
-              value="custom"
-              [checked]="sizingPreset() === 'custom'"
-              (change)="setSizingPreset($event)"
-            />
+            <input type="radio" name="sizing-preset" value="custom" [checked]="sizingPreset() === 'custom'" (change)="setSizingPreset($event)" />
             <span class="sizing-label">
               <strong>Custom</strong>
               <small>Fixed shares (n &gt; 1) or fixed notional. No reference promise.</small>
@@ -312,8 +358,8 @@
               />
             </label>
             <small class="custom-help">
-              FixedNotional floors <code>value / latest price</code> to a whole share. Values that round to
-              zero shares are logged as a sizing skip and never submit a zero order.
+              FixedNotional floors <code>value / latest price</code> to a whole share. Values that round to zero shares are logged as a sizing skip and never
+              submit a zero order.
             </small>
           </div>
         }
@@ -326,7 +372,12 @@
             <span class="scope-note">Applies only when starting now</span>
           }
         </div>
-        <fieldset class="mode" [class.orders-selected]="executionCapability() === 'paper_orders'" [class.live-selected]="executionCapability() === 'live'" [disabled]="!effectiveStartNow()">
+        <fieldset
+          class="mode"
+          [class.orders-selected]="executionCapability() === 'paper_orders'"
+          [class.live-selected]="executionCapability() === 'live'"
+          [disabled]="!effectiveStartNow()"
+        >
           <legend>Execution capability</legend>
           <label>
             <input type="radio" name="launch-mode" value="read_only" [checked]="executionCapability() === 'read_only'" (change)="setExecutionMode($event)" />
@@ -336,7 +387,13 @@
             </span>
           </label>
           <label>
-            <input type="radio" name="launch-mode" value="paper_orders" [checked]="executionCapability() === 'paper_orders'" (change)="setExecutionMode($event)" />
+            <input
+              type="radio"
+              name="launch-mode"
+              value="paper_orders"
+              [checked]="executionCapability() === 'paper_orders'"
+              (change)="setExecutionMode($event)"
+            />
             <span>
               <strong>PAPER ORDERS ENABLED</strong>
               <small>Sets <code>readonly</code> false for this start.</small>
@@ -350,66 +407,27 @@
             </span>
           </label>
         </fieldset>
-        <p class="capability-proof" [class.dimmed]="!effectiveStartNow()">{{ executionCapabilityProof() }}</p>
+        <p class="capability-proof" [class.dimmed]="!effectiveStartNow()">
+          {{ executionCapabilityProof() }}
+        </p>
         @if (effectiveStartNow() && executionCapability() === 'paper_orders') {
           <p class="launch-warning" role="status">
-            Paper orders are enabled for launch. Guardrail limit: {{ maxOrdersPerDay() }} orders/day.
+            Paper orders are enabled for launch. Guardrail limit:
+            {{ maxOrdersPerDay() }} orders/day.
           </p>
         }
 
         @let exposureDecision = exposureLaunchDecision();
         @if (exposureDecision) {
-          <section class="launch-decision" aria-labelledby="exposure-launch-decision-title">
-            <div class="launch-decision-copy">
-              <p class="eyebrow"><i class="pi pi-shield" aria-hidden="true"></i> Exposure check</p>
-              <h3 id="exposure-launch-decision-title">{{ exposureDecision.title }}</h3>
-              <p>{{ exposureDecision.detail }}</p>
-            </div>
-            <dl class="launch-decision-facts">
-              @for (fact of exposureCoherenceFacts(); track fact.label) {
-                <div>
-                  <dt>{{ fact.label }}</dt>
-                  <dd>
-                    @if (fact.valueReceiptLabel) {
-                      {{ fact.value | receiptLabel }}
-                    } @else {
-                      {{ fact.value }}
-                    }
-                    @if (fact.source) {
-                      <small>
-                        @if (fact.sourceReceiptLabel) {
-                          {{ fact.source | receiptLabel }}
-                        } @else {
-                          {{ fact.source }}
-                        }
-                      </small>
-                    }
-                  </dd>
-                </div>
-              }
-            </dl>
-            <div class="launch-decision-actions">
-              <button type="button" class="safe-action" [disabled]="busy()" (click)="deployWithoutStarting()">
-                <i class="pi pi-pause-circle" aria-hidden="true"></i>
-                {{ exposureDecision.deployOnlyLabel }}
-              </button>
-              @if (effectiveStartNow()) {
-                <button
-                  type="button"
-                  class="confirm-action"
-                  [disabled]="busy() || exposureCoherenceConfirmed()"
-                  (click)="confirmExposureAndDeployStart()"
-                >
-                  <i class="pi pi-check-circle" aria-hidden="true"></i>
-                  {{ exposureDecision.confirmAndStartLabel }}
-                </button>
-              }
-              <a routerLink="/broker/account-monitor" fragment="account-reconciliation-action" class="review-link">
-                {{ exposureDecision.reviewLabel }}
-                <i class="pi pi-external-link" aria-hidden="true"></i>
-              </a>
-            </div>
-          </section>
+          <app-exposure-launch-decision
+            [decision]="exposureDecision"
+            [facts]="exposureCoherenceFacts()"
+            [busy]="busy()"
+            [startNow]="effectiveStartNow()"
+            [confirmed]="exposureCoherenceConfirmed()"
+            (deployOnlyRequested)="deployWithoutStarting()"
+            (confirmStartRequested)="confirmExposureAndDeployStart()"
+          />
         }
 
         <div class="launch-fields" [class.dimmed]="!effectiveStartNow()">

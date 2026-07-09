@@ -22,6 +22,7 @@ from app.operator.notices.schema import (
     RuntimeFreshnessReasonCode,
     validate_actionability_action_pairing,
 )
+from app.schemas.account_condition_actions import AccountCureAction
 
 
 class RunState(StrEnum):
@@ -2364,7 +2365,7 @@ class BotLifecycleCondition(BaseModel):
     title: str
     detail: str
     owner_label: str
-    cure_action: str
+    cure_action: AccountCureAction
     cure_label: str
 
 

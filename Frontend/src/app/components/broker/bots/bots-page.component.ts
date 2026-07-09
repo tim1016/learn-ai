@@ -30,6 +30,7 @@ import { BrokerService } from '../../../services/broker.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { AccountFreezeBannerComponent } from '../account-freeze-banner/account-freeze-banner.component';
 import { fmtInteger, fmtSignedCurrency, fmtTimestampLocal } from '../format';
+import { lifecycleConditionCureTarget } from '../lib/condition-cure-actions';
 
 type AttentionFilter = 'all' | 'needs-attention' | 'healthy';
 type BotModeTab = BotCatalogTradingMode;
@@ -320,7 +321,10 @@ export class BotsPageComponent {
 
   runConditionCure(row: BotTableRow, event: Event): void {
     event.stopPropagation();
-    if (row.sickBayCondition?.cure_action === 'retire_replace') {
+    if (
+      row.sickBayCondition &&
+      lifecycleConditionCureTarget(row.sickBayCondition) === 'retireReplace'
+    ) {
       void this.openBot(row.id);
       return;
     }

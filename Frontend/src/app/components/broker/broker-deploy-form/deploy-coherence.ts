@@ -1,10 +1,16 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import type {
   ExposureCoherenceConfirmation,
   ExposureCoherencePosture,
   IdentityCoherenceConfirmation,
 } from '../../../api/live-runs.types';
 import { formatReceiptLabel } from '../../../shared/pipes/receipt-label.pipe';
-import { exposurePositionsLabel, normalizedSymbol } from '../lib/deploy-prefill-params';
+import {
+  exposurePositionsLabel,
+  isExposurePosture,
+  normalizeExposurePositionsRecord,
+  normalizedSymbol,
+} from '../lib/deploy-prefill-params';
 
 export interface IdentitySymbolEvidence {
   label: string;
@@ -44,6 +50,19 @@ export interface CoherenceConfirmationCardFact {
   sourceReceiptLabel?: boolean;
 }
 
+export interface IdentityCoherenceSeed {
+  inheritedSymbol: string;
+  inheritedSymbolSource: string;
+}
+
+export interface ExposureCoherenceSeed {
+  posture: ExposureCoherencePosture;
+  pendingOrderCount: number | null;
+  ownedPositions: Record<string, number>;
+  source: string;
+  parentRunId: string | null;
+}
+
 export function identityCoherenceCardFacts(
   evidence: IdentityCoherenceConflict | null,
 ): CoherenceConfirmationCardFact[] {
@@ -77,7 +96,8 @@ export function exposureLaunchDecision(
 ): ExposureLaunchDecision | null {
   if (evidence === null) return null;
   const posture = formatReceiptLabel(evidence.posture);
-  const pending = evidence.pendingOrderCount === null ? 'unknown' : String(evidence.pendingOrderCount);
+  const pending =
+    evidence.pendingOrderCount === null ? 'unknown' : String(evidence.pendingOrderCount);
   const unknown = evidence.posture === 'UNKNOWN' || evidence.pendingOrderCount === null;
   return {
     title: unknown ? 'Exposure is not proven flat' : 'Existing exposure needs a launch decision',
@@ -158,7 +178,8 @@ export function buildExposureCoherenceEvidence(input: {
   if (!input.posture) return null;
   const blocks = input.posture !== 'FLAT' || input.pendingOrderCount !== 0;
   if (!blocks) return null;
-  const pendingLabel = input.pendingOrderCount === null ? 'unknown' : String(input.pendingOrderCount);
+  const pendingLabel =
+    input.pendingOrderCount === null ? 'unknown' : String(input.pendingOrderCount);
   const postureLabel = formatReceiptLabel(input.posture);
   return {
     posture: input.posture,
@@ -185,4 +206,60 @@ export function buildExposureCoherenceConfirmation(input: {
     strategy_instance_id: input.instanceId || null,
     run_id: input.parentRunId,
   };
+}
+
+export function identityCoherenceSeedFromDeployError(err: unknown): IdentityCoherenceSeed | null {
+  const payload = deployErrorDetail(err);
+  if (payload === null || payload['reason_code'] !== 'IDENTITY_COHERENCE_UNCONFIRMED') {
+    return null;
+  }
+  const evidence = payload['evidence'];
+  if (!Array.isArray(evidence)) return null;
+  const inherited = evidence.find(
+    (fact): fact is Record<string, unknown> =>
+      Boolean(fact) &&
+      typeof fact === 'object' &&
+      (fact as Record<string, unknown>)['label'] === 'inherited_symbol',
+  );
+  const inheritedSymbol = normalizedSymbol(
+    typeof inherited?.['value'] === 'string' ? inherited['value'] : '',
+  );
+  if (!inheritedSymbol) return null;
+  return {
+    inheritedSymbol,
+    inheritedSymbolSource: typeof inherited?.['source'] === 'string' ? inherited['source'] : '',
+  };
+}
+
+export function exposureCoherenceSeedFromDeployError(err: unknown): ExposureCoherenceSeed | null {
+  const payload = deployErrorDetail(err);
+  if (payload === null || payload['reason_code'] !== 'EXPOSURE_COHERENCE_UNCONFIRMED') {
+    return null;
+  }
+  const evidence = payload['evidence'];
+  if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) return null;
+  const facts = evidence as Record<string, unknown>;
+  const posture = facts['posture'];
+  if (typeof posture !== 'string' || !isExposurePosture(posture)) return null;
+  const pendingOrderCount = facts['pending_order_count'];
+  return {
+    posture,
+    pendingOrderCount:
+      typeof pendingOrderCount === 'number' &&
+      Number.isInteger(pendingOrderCount) &&
+      pendingOrderCount >= 0
+        ? pendingOrderCount
+        : null,
+    ownedPositions: normalizeExposurePositionsRecord(facts['owned_positions']) ?? {},
+    source: typeof facts['source'] === 'string' ? facts['source'] : '',
+    parentRunId:
+      typeof facts['run_id'] === 'string' && facts['run_id'].trim() ? facts['run_id'].trim() : null,
+  };
+}
+
+function deployErrorDetail(err: unknown): Record<string, unknown> | null {
+  if (!(err instanceof HttpErrorResponse)) return null;
+  const detail = (err.error as { detail?: unknown } | null | undefined)?.detail;
+  if (!detail || typeof detail !== 'object') return null;
+  return detail as Record<string, unknown>;
 }

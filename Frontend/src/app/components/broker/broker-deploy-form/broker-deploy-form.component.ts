@@ -1,4 +1,3 @@
-import { HttpErrorResponse } from '@angular/common/http';
 import {
   afterEveryRender,
   ChangeDetectionStrategy,
@@ -38,8 +37,6 @@ import { BrokerOperationResultComponent } from '../broker-operation-result/broke
 import { type OperationError, toOperationError } from '../operation-error';
 import {
   deployPrefillParamsFromQuery,
-  isExposurePosture,
-  normalizeExposurePositionsRecord,
   normalizedSymbol,
   singleLongStockActionSymbol,
 } from '../lib/deploy-prefill-params';
@@ -48,11 +45,13 @@ import {
   buildExposureCoherenceEvidence,
   buildIdentityCoherenceConfirmation,
   buildIdentityCoherenceEvidence,
+  exposureCoherenceSeedFromDeployError,
   exposureCoherenceCardFacts,
   exposureLaunchDecision as buildExposureLaunchDecision,
   type ExposureCoherenceConflict,
   type ExposureLaunchDecision,
   identityCoherenceCardFacts,
+  identityCoherenceSeedFromDeployError,
   type IdentityCoherenceConflict,
 } from './deploy-coherence';
 import { DeployCoherenceCardComponent } from './deploy-coherence-card.component';
@@ -66,6 +65,13 @@ import {
   deployBlocker,
   stoppedStartLatchState,
 } from './deploy-readiness';
+import {
+  REFERENCE_PARITY_POLICY,
+  type CustomSizingKind,
+  customSizingValidationMessage,
+  resolveDeploySizingPolicy,
+} from './deploy-sizing';
+import { ExposureLaunchDecisionComponent } from './exposure-launch-decision.component';
 
 // Mirror the backend single-segment deployment name guard.
 const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
@@ -88,9 +94,6 @@ interface DeployCommandState {
   actionLink?: AccountProofBlock;
 }
 
-// ADR 0009 § 3: gate lookup and submit share the same Reference parity policy.
-const REFERENCE_PARITY_POLICY: SizingPolicy = { kind: 'SetHoldings', fraction: '1.0' };
-
 @Component({
   selector: 'app-broker-deploy-form',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -102,6 +105,7 @@ const REFERENCE_PARITY_POLICY: SizingPolicy = { kind: 'SetHoldings', fraction: '
     InputTextModule,
     ReceiptLabelPipe,
     DeployCoherenceCardComponent,
+    ExposureLaunchDecisionComponent,
   ],
   templateUrl: './broker-deploy-form.component.html',
   styleUrl: './broker-deploy-form.component.scss',
@@ -188,7 +192,7 @@ export class BrokerDeployFormComponent {
   });
 
   // PR4: Custom values stay decimal-string-friendly until submit.
-  readonly customKind = signal<'FixedShares' | 'FixedNotional'>('FixedShares');
+  readonly customKind = signal<CustomSizingKind>('FixedShares');
   readonly customValue = signal<string>('1');
   readonly busy = signal<boolean>(false);
   readonly error = signal<OperationError | null>(null);
@@ -707,63 +711,24 @@ export class BrokerDeployFormComponent {
     }
   }
 
-  private deployErrorDetail(err: unknown): Record<string, unknown> | null {
-    if (!(err instanceof HttpErrorResponse)) return null;
-    const detail = (err.error as { detail?: unknown } | null | undefined)?.detail;
-    if (!detail || typeof detail !== 'object') return null;
-    return detail as Record<string, unknown>;
-  }
-
   private seedIdentityCoherenceEvidence(err: unknown): boolean {
-    const payload = this.deployErrorDetail(err);
-    if (payload === null) return false;
-    if (payload['reason_code'] !== 'IDENTITY_COHERENCE_UNCONFIRMED') return false;
-    const evidence = payload['evidence'];
-    if (!Array.isArray(evidence)) return false;
-    const inherited = evidence.find(
-      (fact): fact is Record<string, unknown> =>
-        Boolean(fact) &&
-        typeof fact === 'object' &&
-        (fact as Record<string, unknown>)['label'] === 'inherited_symbol',
-    );
-    const inheritedSymbol = normalizedSymbol(
-      typeof inherited?.['value'] === 'string' ? inherited['value'] : '',
-    );
-    if (!inheritedSymbol) return false;
-    this.inheritedSymbol.set(inheritedSymbol);
-    this.inheritedSymbolSource.set(
-      typeof inherited?.['source'] === 'string' ? inherited['source'] : '',
-    );
+    const seed = identityCoherenceSeedFromDeployError(err);
+    if (seed === null) return false;
+    this.inheritedSymbol.set(seed.inheritedSymbol);
+    this.inheritedSymbolSource.set(seed.inheritedSymbolSource);
     this.identityCoherenceConfirmedSignature.set(null);
     return true;
   }
 
   private seedExposureCoherenceEvidence(err: unknown): boolean {
-    const payload = this.deployErrorDetail(err);
-    if (payload === null) return false;
-    if (payload['reason_code'] !== 'EXPOSURE_COHERENCE_UNCONFIRMED') return false;
-    const evidence = payload['evidence'];
-    if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) return false;
-    const facts = evidence as Record<string, unknown>;
-    const posture = facts['posture'];
-    if (typeof posture !== 'string' || !isExposurePosture(posture)) return false;
-
-    const pendingOrderCount = facts['pending_order_count'];
-    const ownedPositions = normalizeExposurePositionsRecord(facts['owned_positions']) ?? {};
-    const source = facts['source'];
-    const runId = facts['run_id'];
-    const normalizedPendingOrderCount =
-      typeof pendingOrderCount === 'number' &&
-      Number.isInteger(pendingOrderCount) &&
-      pendingOrderCount >= 0
-        ? pendingOrderCount
-        : null;
-    this.inheritedExposurePosture.set(posture);
-    this.inheritedExposurePendingOrderCount.set(normalizedPendingOrderCount);
-    this.inheritedExposurePositions.set(ownedPositions);
-    this.inheritedExposureSource.set(typeof source === 'string' ? source : '');
-    if (typeof runId === 'string' && runId.trim()) {
-      this.parentRunId.set(runId.trim());
+    const seed = exposureCoherenceSeedFromDeployError(err);
+    if (seed === null) return false;
+    this.inheritedExposurePosture.set(seed.posture);
+    this.inheritedExposurePendingOrderCount.set(seed.pendingOrderCount);
+    this.inheritedExposurePositions.set(seed.ownedPositions);
+    this.inheritedExposureSource.set(seed.source);
+    if (seed.parentRunId !== null) {
+      this.parentRunId.set(seed.parentRunId);
     }
     this.exposureCoherenceConfirmedSignature.set(null);
     return true;
@@ -986,65 +951,21 @@ export class BrokerDeployFormComponent {
     }
   }
 
-  /** PR4 reviewer fix — strict integer regex so values like "1.9" or "25abc"
-   * (which `Number.parseInt` happily truncates to 1 or 25) are rejected at
-   * the form boundary, not silently truncated into a live order. */
-  private static readonly FIXED_SHARES_INTEGER_RE = /^[1-9]\d*$/;
-  /** PR4 reviewer fix — strict positive-decimal regex for FixedNotional. The
-   * value travels to Python as a decimal string (no float on the wire), so we
-   * only need to enforce a positive decimal shape here. */
-  private static readonly FIXED_NOTIONAL_DECIMAL_RE = /^(?:\d+\.\d+|\d+\.?|\.\d+)$/;
+  readonly customSizingError = computed<string | null>(() =>
+    customSizingValidationMessage({
+      preset: this.sizingPreset(),
+      kind: this.customKind(),
+      rawValue: this.customValue(),
+    }),
+  );
 
-  /** Validate the Custom preset's raw value against its kind. Returns a
-   * user-facing error string when invalid (rendered via `blockedReason` so the
-   * deploy button disables); returns `null` when the value is acceptable.
-   * Centralizing this here means `submit()` never throws mid-flight after
-   * setting `busy=true` (the PR4 reviewer's wedged-state concern). */
-  readonly customSizingError = computed<string | null>(() => {
-    if (this.sizingPreset() !== 'custom') return null;
-    const raw = this.customValue().trim();
-    if (raw === '') return 'Custom sizing value is required.';
-    if (this.customKind() === 'FixedShares') {
-      if (!BrokerDeployFormComponent.FIXED_SHARES_INTEGER_RE.test(raw)) {
-        return `FixedShares value must be a whole number ≥ 1 (no decimals, letters, or signs). Got "${raw}".`;
-      }
-      const n = Number.parseInt(raw, 10);
-      if (n < 1) return `FixedShares value must be ≥ 1. Got "${raw}".`;
-      return null;
-    }
-    // FixedNotional
-    if (!BrokerDeployFormComponent.FIXED_NOTIONAL_DECIMAL_RE.test(raw)) {
-      return `FixedNotional value must be a positive number. Got "${raw}".`;
-    }
-    const n = Number.parseFloat(raw);
-    if (!Number.isFinite(n) || n <= 0) {
-      return `FixedNotional value must be a positive number. Got "${raw}".`;
-    }
-    return null;
-  });
-
-  /** Map the selected preset into the canonical `SizingPolicy`. Custom inputs
-   * are validated upstream by `customSizingError`, which gates `canSubmit` —
-   * so this method only runs when validation already passed and never
-   * throws. */
   private resolveSizingPolicy(): SizingPolicy {
-    // ADR 0009 § 6 — explicit-surface strategies submit the honest
-    // `StrategyExplicit` policy, never a misleading FixedShares(1).
-    if (this.sizingSurfaceIsExplicit()) {
-      return { kind: 'StrategyExplicit' };
-    }
-    const preset = this.sizingPreset();
-    if (preset === 'reference_parity') {
-      return REFERENCE_PARITY_POLICY;
-    }
-    if (preset === 'custom') {
-      const raw = this.customValue().trim();
-      if (this.customKind() === 'FixedShares') {
-        return { kind: 'FixedShares', value: Number.parseInt(raw, 10) };
-      }
-      return { kind: 'FixedNotional', value: raw };
-    }
-    return { kind: 'FixedShares', value: 1 };
+    return resolveDeploySizingPolicy({
+      sizingSurfaceIsExplicit: this.sizingSurfaceIsExplicit(),
+      preset: this.sizingPreset(),
+      customKind: this.customKind(),
+      customValue: this.customValue(),
+    });
   }
 
   setCustomKind(e: Event): void {
@@ -1062,5 +983,4 @@ export class BrokerDeployFormComponent {
       this.customValue.set(e.target.value);
     }
   }
-
 }
