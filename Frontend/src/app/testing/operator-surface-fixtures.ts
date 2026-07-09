@@ -197,6 +197,7 @@ export function makeOperatorSurfaceFixture(
       as_of_ms: 1_800_000_000_000,
     },
     readiness_gates: [],
+    blockers: [],
     runtime_freshness: null,
     control_plane: null,
     broker_observation_consistency: null,

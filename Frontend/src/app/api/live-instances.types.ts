@@ -20,6 +20,7 @@ import type {
   OperatorSurfaceBlockageLadder,
   OperatorSurfaceNamedCondition,
 } from './operator-observability.types';
+import type { OperatorBlocker } from './operator-blocker.types';
 
 export type {
   MutationRungReceipt,
@@ -876,6 +877,8 @@ export interface OperatorSurface {
    *  server-authored remediation metadata.  Empty list when no readiness
    *  vector is available.  Order preserves the engine's gate order. */
   readiness_gates: OperatorGate[];
+  /** Shared backend-authored blocker contract for deploy/control guidance. */
+  blockers: OperatorBlocker[];
   /** Child-authored runtime evidence composed by the backend. Null when
    * no child is currently bound to the instance. */
   runtime_freshness: OperatorSurfaceRuntimeFreshness | null;

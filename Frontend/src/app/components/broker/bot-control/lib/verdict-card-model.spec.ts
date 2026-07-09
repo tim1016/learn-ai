@@ -19,6 +19,31 @@ function statusWith(
   return status;
 }
 
+function addRetiredTerminalBlocker(status: LiveInstanceStatus): void {
+  status.operator_surface.blockers = [
+    {
+      id: 'retired',
+      severity: 'blocking',
+      disposition: 'terminal',
+      headline: "Can't recover",
+      detail: 'This bot has been retired. Remove it from the catalog or replace it.',
+      primary_move: {
+        label: 'Remove',
+        action: { kind: 'remove' },
+        target: 'delete',
+      },
+      secondary_moves: [
+        {
+          label: 'Replace',
+          action: { kind: 'retire_replace' },
+          target: 'retire_replace',
+        },
+      ],
+      applies_to: 'run',
+    },
+  ];
+}
+
 const RISK: OperatorSurfaceCurrentRisk = {
   posture: 'LONG',
   owned_positions: { SPY: 40 },
@@ -140,15 +165,24 @@ describe('resolveVerdictCardModel', () => {
     expect(model.verb).toEqual({ kind: 'crash_recovery' });
   });
 
-  it('marks a Retired bot read-only and suppresses remediation verbs', () => {
+  it('renders a retired terminal blocker as the dead-end with only terminal moves', () => {
     // The default status carries a reconcile remediation; a retired bot must
-    // still show no verb because remediations never become its primary verb.
+    // still show no hopeful verb because the backend authored terminal moves.
     const model = resolveVerdictCardModel(
-      statusWith({ display_status: 'Retired', phase: 'RETIRED', primary_action: null }),
+      statusWith(
+        { display_status: 'Retired', phase: 'RETIRED', primary_action: null },
+        addRetiredTerminalBlocker,
+      ),
     );
 
     expect(model.readOnly).toBe(true);
+    expect(model.stateLabel).toBe("Can't recover");
+    expect(model.tone).toBe('danger');
     expect(model.verb).toEqual({ kind: 'none' });
+    expect(model.terminalMoves.map((move) => move.action.kind)).toEqual([
+      'remove',
+      'retire_replace',
+    ]);
   });
 });
 

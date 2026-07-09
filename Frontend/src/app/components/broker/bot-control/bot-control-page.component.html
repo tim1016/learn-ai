@@ -15,6 +15,7 @@
       (crashRecoveryRequested)="dispatchCrashRecoveryOverride()"
       (settingsRequested)="onSettingsRequested()"
       (accountMonitorRequested)="openAccountMonitor()"
+      (removeRequested)="dispatchRemoveBot()"
     />
   } @else if (!errorMessage()) {
     <p class="loading">Loading bot control...</p>

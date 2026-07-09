@@ -49,7 +49,7 @@
       <span class="vc-identity__mode">{{ m.identity.mode }}</span>
     </p>
 
-    <p class="vc-state" id="verdict-state" role="status">{{ m.state }}</p>
+    <p class="vc-state" id="verdict-state" role="status">{{ m.stateLabel }}</p>
 
     <p class="vc-reason">
       @if (m.reason; as reason) {
@@ -83,6 +83,22 @@
       >
         {{ label }}
       </button>
+    }
+
+    @if (m.terminalMoves.length > 0) {
+      <div class="vc-terminal-actions" aria-label="Terminal bot actions">
+        @for (move of m.terminalMoves; track move.label + move.action.kind) {
+          <button
+            type="button"
+            class="vc-terminal-action"
+            [class.vc-terminal-action--secondary]="move.action.kind === 'remove'"
+            [disabled]="busy()"
+            (click)="invokeTerminalMove(move)"
+          >
+            {{ move.label }}
+          </button>
+        }
+      </div>
     }
 
     @if (m.showChecklist) {
@@ -133,5 +149,6 @@
   [open]="whyOpen()"
   [guidance]="guidance()"
   [gates]="gates()"
+  [blockers]="status().operator_surface.blockers"
   (closed)="closeWhy()"
 />

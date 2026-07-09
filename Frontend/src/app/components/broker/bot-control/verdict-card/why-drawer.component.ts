@@ -13,6 +13,7 @@ import type {
   OperatorGate,
   OperatorSurfaceTraderGuidance,
 } from '../../../../api/live-instances.types';
+import type { Disposition, OperatorBlocker } from '../../../../api/operator-blocker.types';
 import { fmtTimestampLocal } from '../../format';
 import {
   formatReceiptLabel,
@@ -24,6 +25,26 @@ interface DrawerEvidenceRow {
   readonly value: string;
   readonly meta: string | null;
 }
+
+interface DrawerBlockerGroup {
+  readonly disposition: Disposition;
+  readonly label: string;
+  readonly blockers: readonly OperatorBlocker[];
+}
+
+const BLOCKER_GROUP_LABEL: Record<Disposition, string> = {
+  terminal: "Can't recover",
+  fix_here: 'Fix on this screen',
+  fix_elsewhere: 'Fix elsewhere',
+  wait: 'Waiting',
+};
+
+const BLOCKER_GROUP_ORDER: readonly Disposition[] = [
+  'terminal',
+  'fix_here',
+  'fix_elsewhere',
+  'wait',
+];
 
 /** Scoped "why?" drawer (spec §Why-drawer contract). Renders only the receipts
  *  behind the state's current verdict: the trader-guidance claim, its proof
@@ -41,6 +62,7 @@ export class WhyDrawerComponent {
   readonly open = input.required<boolean>();
   readonly guidance = input<OperatorSurfaceTraderGuidance | null>(null);
   readonly gates = input<readonly OperatorGate[]>([]);
+  readonly blockers = input<readonly OperatorBlocker[]>([]);
 
   readonly closed = output();
 
@@ -53,6 +75,16 @@ export class WhyDrawerComponent {
   readonly failingGates = computed(() =>
     this.gates().filter((gate) => gate.gate_result.status !== 'pass'),
   );
+  readonly blockerGroups = computed<DrawerBlockerGroup[]>(() => {
+    const blockers = this.blockers();
+    return BLOCKER_GROUP_ORDER
+      .map((disposition) => ({
+        disposition,
+        label: BLOCKER_GROUP_LABEL[disposition],
+        blockers: blockers.filter((blocker) => blocker.disposition === disposition),
+      }))
+      .filter((group) => group.blockers.length > 0);
+  });
 
   readonly evidence = computed<DrawerEvidenceRow[]>(() => {
     const facts = this.guidance()?.advanced_evidence ?? [];
@@ -66,6 +98,7 @@ export class WhyDrawerComponent {
   readonly hasContent = computed(
     () =>
       this.headline() !== null ||
+      this.blockerGroups().length > 0 ||
       this.proofLines().length > 0 ||
       this.failingGates().length > 0 ||
       this.evidence().length > 0,

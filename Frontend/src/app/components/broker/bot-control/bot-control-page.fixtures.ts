@@ -281,6 +281,7 @@ export function makeStatus(options: {
         as_of_ms: 0,
       },
       readiness_gates: [],
+      blockers: [],
       runtime_freshness: null,
       control_plane: {
         state: 'UNREACHABLE',

@@ -46,6 +46,31 @@ function accountStaleCondition(): BotLifecycleCondition {
   };
 }
 
+function addRetiredTerminalBlocker(status: LiveInstanceStatus): void {
+  status.operator_surface.blockers = [
+    {
+      id: 'retired',
+      severity: 'blocking',
+      disposition: 'terminal',
+      headline: "Can't recover",
+      detail: 'This bot has been retired. Remove it from the catalog or replace it.',
+      primary_move: {
+        label: 'Remove',
+        action: { kind: 'remove' },
+        target: 'delete',
+      },
+      secondary_moves: [
+        {
+          label: 'Replace',
+          action: { kind: 'retire_replace' },
+          target: 'retire_replace',
+        },
+      ],
+      applies_to: 'run',
+    },
+  ];
+}
+
 function renderCard(
   status: LiveInstanceStatus,
   remediation: RenderedAction | null = null,
@@ -155,16 +180,32 @@ describe('VerdictCardComponent', () => {
     expect(el.querySelector('[data-testid="why-drawer"]')).not.toBeNull();
   });
 
-  it('renders a Retired bot read-only with no verb', () => {
-    // Default status has a reconcile remediation; retired must still show no verb.
+  it('renders a retired terminal blocker with Replace and Remove moves', () => {
+    // Default status has a reconcile remediation; terminal blockers own the card.
     const fixture = renderCard(
-      statusWith({ display_status: 'Retired', phase: 'RETIRED', primary_action: null }),
+      statusWith(
+        { display_status: 'Retired', phase: 'RETIRED', primary_action: null },
+        addRetiredTerminalBlocker,
+      ),
       { label: 'Reconcile now', variant: 'primary', invoke: vi.fn() },
     );
     const el = fixture.nativeElement as HTMLElement;
+    const lifecycleAction = vi.fn();
+    const removeRequested = vi.fn();
+    fixture.componentInstance.lifecycleAction.subscribe(lifecycleAction);
+    fixture.componentInstance.removeRequested.subscribe(removeRequested);
 
     expect(el.querySelector('.verdict-card')?.getAttribute('data-state')).toBe('Retired');
+    expect(el.querySelector('#verdict-state')?.textContent).toContain("Can't recover");
     expect(el.querySelector('[data-testid="verdict-verb"]')).toBeNull();
+    const buttons = Array.from(el.querySelectorAll<HTMLButtonElement>('.vc-terminal-action'));
+    expect(buttons.map((button) => button.textContent?.trim())).toEqual(['Remove', 'Replace']);
+
+    buttons[0]?.click();
+    buttons[1]?.click();
+
+    expect(removeRequested).toHaveBeenCalledTimes(1);
+    expect(lifecycleAction).toHaveBeenCalledWith('retire_replace');
   });
 
   it('emits the ambient action id from the overflow menu', () => {

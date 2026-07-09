@@ -1630,6 +1630,7 @@ async def _resolve_instance_status_from_process(
         live_binding,
     )
     incident_headline = _resolve_incident_headline(root, live_binding, runs)
+    lifecycle_state = _resolve_bot_lifecycle_state(root, sid)
     operator_surface = compute_operator_surface(
         process=process,
         last_exit=last_exit,
@@ -1643,6 +1644,7 @@ async def _resolve_instance_status_from_process(
         instance_broker_self_consistent=None,
         live_binding=live_binding,
         poisoned=poisoned,
+        bot_lifecycle_phase=(lifecycle_state.phase.value if lifecycle_state is not None else None),
         desired_state=desired,
         guard_state=guard_state,
         runtime_freshness=runtime_freshness,
@@ -1667,7 +1669,6 @@ async def _resolve_instance_status_from_process(
         incident_headline_notice=incident_headline,
         now_ms=observed_at_ms,
     )
-    lifecycle_state = _resolve_bot_lifecycle_state(root, sid)
     roll_call_offer = _active_roll_call_offer(root, sid, now_ms=observed_at_ms)
     lifecycle_conditions = lifecycle_conditions_for_instance(
         root,

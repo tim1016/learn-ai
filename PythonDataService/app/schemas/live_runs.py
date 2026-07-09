@@ -23,6 +23,7 @@ from app.operator.notices.schema import (
     validate_actionability_action_pairing,
 )
 from app.schemas.account_condition_actions import AccountCureAction
+from app.schemas.operator_blocker import OperatorBlocker
 
 
 class RunState(StrEnum):
@@ -2137,6 +2138,9 @@ class OperatorSurface(BaseModel):
     # the engine has no readiness vector (e.g. nothing-deployed).  The
     # ordering preserves the engine's gate order.
     readiness_gates: list[OperatorGate] = Field(default_factory=list)
+    # OperatorBlocker is the shared deploy/control blocker atom. Empty when no
+    # backend-authored operator blocker applies to this runtime surface.
+    blockers: list[OperatorBlocker] = Field(default_factory=list)
     runtime_freshness: OperatorSurfaceRuntimeFreshness | None = None
     # PRD #619-C3 — host-daemon connectivity surface. ``None`` when the
     # data plane was booted without a daemon URL (live_runner_daemon_url

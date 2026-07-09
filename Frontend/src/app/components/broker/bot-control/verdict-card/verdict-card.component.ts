@@ -12,6 +12,7 @@ import type {
   BotLifecycleActionId,
   LiveInstanceStatus,
 } from '../../../../api/live-instances.types';
+import type { OperatorMove } from '../../../../api/operator-blocker.types';
 import type { RenderedAction } from '../lib/suggested-action-renderer';
 import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { ActivityTabComponent } from '../tabs/activity-tab.component';
@@ -49,6 +50,7 @@ export class VerdictCardComponent {
   readonly crashRecoveryRequested = output();
   readonly settingsRequested = output();
   readonly accountMonitorRequested = output();
+  readonly removeRequested = output();
 
   readonly whyOpen = signal(false);
   readonly historyOpen = signal(false);
@@ -105,6 +107,15 @@ export class VerdictCardComponent {
     else if (verb.kind === 'remediation') this.remediationInvoked.emit();
     else if (verb.kind === 'crash_recovery') this.crashRecoveryRequested.emit();
     else if (verb.kind === 'evidence') this.openWhy();
+  }
+
+  invokeTerminalMove(move: OperatorMove): void {
+    if (this.busy()) return;
+    if (move.action.kind === 'retire_replace') {
+      this.lifecycleAction.emit('retire_replace');
+    } else if (move.action.kind === 'remove') {
+      this.removeRequested.emit();
+    }
   }
 
   invokeAmbient(action: BotLifecycleAction): void {

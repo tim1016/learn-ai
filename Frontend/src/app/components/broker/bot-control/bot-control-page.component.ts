@@ -403,6 +403,21 @@ export class BotControlPageComponent {
     }
   }
 
+  async dispatchRemoveBot(): Promise<void> {
+    const id = this.instanceId();
+    if (!id || this.busyAction()) return;
+    this.busyAction.set('remove');
+    this.mutationError.set(null);
+    try {
+      await this.liveRuns.deleteBot(id, { mode: 'soft', deleted_by: 'operator' });
+      void this.router.navigate(['/broker/bots']);
+    } catch (err) {
+      this.mutationError.set(this.humanError(err));
+    } finally {
+      this.busyAction.set(null);
+    }
+  }
+
   private redeployQueryParams(): Record<string, string> {
     const s = this.status();
     if (!s) return {};
