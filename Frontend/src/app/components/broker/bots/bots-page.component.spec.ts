@@ -9,6 +9,7 @@ import type {
   BotCatalogResponse,
   BotCatalogRow,
   BotLifecycleAction,
+  BotLifecycleCondition,
   BotRollCallResponse,
 } from '../../../api/live-instances.types';
 import { BrokerHealthService } from '../../../services/broker-health.service';
@@ -66,6 +67,18 @@ function lifecycle(
       }),
     ],
     ...overrides,
+  };
+}
+
+function accountStaleCondition(): BotLifecycleCondition {
+  return {
+    scope: 'account',
+    severity: 'warning',
+    title: 'Account evidence stale',
+    detail: 'Receipt acct-recon-DU1234567 expired before this triage snapshot.',
+    owner_label: 'Account DU1234567',
+    cure_action: 'reconcile_now',
+    cure_label: 'Run account reconcile',
   };
 }
 
@@ -212,6 +225,7 @@ async function setup(options: { triage?: AccountTriageResponse } = {}) {
           display_status: 'Sick bay',
           attention_badge: 'Sick bay',
           reason: '1 condition needs a cure before start.',
+          conditions: [accountStaleCondition()],
           primary_action: null,
         }),
         start_request: null,
@@ -418,6 +432,29 @@ describe('BotsPageComponent', () => {
     ).find((cell) => cell.textContent?.includes('1 condition needs a cure before start.'));
     expect(sickStatusCell?.textContent).toContain('Off duty');
     expect(sickStatusCell?.textContent).toContain('Sick bay');
+  });
+
+  it('renders the sick-bay condition and routes its cure to Account Monitor', async () => {
+    const { fixture, router } = await setup();
+    const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
+    const root = fixture.nativeElement as HTMLElement;
+
+    expect(root.textContent).toContain('Account evidence stale');
+    expect(root.textContent).toContain(
+      'Receipt acct-recon-DU1234567 expired before this triage snapshot.',
+    );
+    const button = root.querySelector<HTMLButtonElement>(
+      '[data-testid="bot-condition-action-live-running-aapl"]',
+    );
+    expect(button?.textContent).toContain('Run account reconcile');
+
+    button?.click();
+    await settle(fixture);
+
+    expect(navigate).toHaveBeenCalledWith(['/broker/account-monitor'], {
+      fragment: 'account-reconciliation-action',
+    });
+    expect(navigate).not.toHaveBeenCalledWith(['/broker/bots', 'live-running-aapl']);
   });
 
   it('runs roll call and starts ready bots with their offer ids', async () => {

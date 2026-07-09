@@ -1,5 +1,6 @@
 import { type ComponentFixture, TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
+import { ActivatedRoute, convertToParamMap } from '@angular/router';
 import { describe, expect, it, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 import { BrokerService } from '../../../services/broker.service';
 import { BrokerHealthService } from '../../../services/broker-health.service';
@@ -9,6 +10,7 @@ import type {
   AccountTruthOrderCancelAction,
   AccountTruthOrderCancelReasonCode,
   AccountTruthOrderRow,
+  AccountTruthPositionRow,
   AccountTruthResponse,
   IbkrOpenOrder,
   IbkrOrderWhatIfPreview,
@@ -151,6 +153,7 @@ function deferred<T>(): {
 function setup(
   openOrders: IbkrOpenOrder[] = [],
   truthResponses?: AccountTruthResponse[],
+  queryParams: Record<string, string> = {},
 ) {
   const broker = new FakeBrokerService();
   broker.openOrders.mockResolvedValue(openOrders);
@@ -164,6 +167,14 @@ function setup(
     providers: [
       { provide: BrokerService, useValue: broker },
       { provide: BrokerHealthService, useValue: health },
+      {
+        provide: ActivatedRoute,
+        useValue: {
+          snapshot: {
+            queryParamMap: convertToParamMap(queryParams),
+          },
+        },
+      },
     ],
   });
   const fixture = TestBed.createComponent(BrokerOrdersComponent);
@@ -286,6 +297,34 @@ function accountTruthExecution(
   };
 }
 
+function accountTruthPosition(
+  overrides: Partial<AccountTruthPositionRow> = {},
+): AccountTruthPositionRow {
+  return {
+    fact_kind: 'position',
+    account_id: 'DU1234567',
+    con_id: 756733,
+    symbol: 'SPY',
+    sec_type: 'STK',
+    quantity: 1,
+    avg_cost: 450,
+    market_value: 450,
+    owner: {
+      owner_class: 'bot',
+      owner_key: 'test-bot',
+      owner_label: 'Bot test-bot',
+      evidence_tier: 'bot_order_ref',
+      evidence_label: 'Bot-stamped order ref',
+      owner_binding_state: 'ACTIVE',
+      severity: 'ok',
+    },
+    headline: 'Bot test-bot current position',
+    detail: 'Ownership is proven by bot-stamped order ref.',
+    fetched_at_ms: 1,
+    ...overrides,
+  };
+}
+
 function openOrderTruthRow(order: IbkrOpenOrder): AccountTruthOrderRow {
   return accountTruthOrder({
     ...order,
@@ -298,6 +337,7 @@ function accountTruthResponse(
   orders: AccountTruthOrderRow[] = [],
   evidenceGaps: AccountTruthResponse['evidence_gaps'] = [],
   executions: AccountTruthExecutionRow[] = [],
+  positions: AccountTruthPositionRow[] = [],
 ): AccountTruthResponse {
   return {
     account_id: 'DU1234567',
@@ -329,7 +369,7 @@ function accountTruthResponse(
     symbol_exposures: [],
     orders,
     executions,
-    positions: [],
+    positions,
     evidence_gaps: evidenceGaps,
     source_freshness: [],
   };
@@ -421,6 +461,23 @@ describe('BrokerOrdersComponent — confirm dialog accessibility', () => {
     component.openConfirmDialog();
     fixture.detectChanges();
     expect(component['placeError']()).toBeNull();
+  });
+
+  it('explains why the final place action is disabled', async () => {
+    const { fixture, component } = setup();
+    component.openConfirmDialog();
+    await flushAsyncWork();
+    fixture.detectChanges();
+
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text).toContain('Tick the paper-order confirmation checkbox.');
+
+    component.confirmCheckbox.set(true);
+    fixture.detectChanges();
+
+    const checkedText = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(checkedText).toContain('Safety pause:');
+    component.cancelConfirmDialog();
   });
 });
 
@@ -551,6 +608,54 @@ describe('BrokerOrdersComponent — broker provenance', () => {
     expect(text).toContain('Live order stream unavailable');
     expect(text).toContain('not using live stream rows');
     expect(text).toContain('learn-ai/test-bot/v1:intent-42');
+  });
+
+  it('shows COI guidance and pre-fills the flatten cure for one stock position', async () => {
+    const { fixture, broker, component } = setup([], [
+      accountTruthResponse([], [], [], [accountTruthPosition()]),
+    ]);
+
+    await flushAsyncWork();
+    fixture.detectChanges();
+
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(text).toContain('COI guidance');
+    expect(text).toContain('Current open inventory: SPY +1');
+    expect(text).toContain('Cure: prefill SELL 1 SPY MKT DAY');
+
+    const button = Array.from(
+      (fixture.nativeElement as HTMLElement).querySelectorAll('button'),
+    ).find((candidate) => candidate.textContent?.includes('Prefill flatten order'));
+    expect(button).toBeTruthy();
+    component.prefillOpenExposureCure();
+    fixture.detectChanges();
+
+    expect(component.action()).toBe('SELL');
+    expect(component.quantity()).toBe(1);
+    expect(
+      ((fixture.nativeElement as HTMLElement).querySelector('[name="symbol"]') as HTMLInputElement)
+        .value,
+    ).toBe('SPY');
+    expect(broker.placeOrder).not.toHaveBeenCalled();
+  });
+
+  it('auto-prefills the flatten cure from the account-monitor deep link', async () => {
+    const { fixture, broker, component } = setup(
+      [],
+      [accountTruthResponse([], [], [], [accountTruthPosition()])],
+      { flatten: 'open-exposure' },
+    );
+
+    await flushAsyncWork();
+    fixture.detectChanges();
+
+    expect(component.action()).toBe('SELL');
+    expect(component.quantity()).toBe(1);
+    expect(
+      ((fixture.nativeElement as HTMLElement).querySelector('[name="symbol"]') as HTMLInputElement)
+        .value,
+    ).toBe('SPY');
+    expect(broker.placeOrder).not.toHaveBeenCalled();
   });
 });
 

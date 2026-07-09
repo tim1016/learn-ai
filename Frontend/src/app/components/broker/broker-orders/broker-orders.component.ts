@@ -14,7 +14,7 @@ import {
 import { FormsModule } from '@angular/forms';
 import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
-import { RouterLink } from '@angular/router';
+import { ActivatedRoute, RouterLink } from '@angular/router';
 import { PaperOnlyDirective } from '../../../shared/directives/paper-only.directive';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { BrokerHealthService } from '../../../services/broker-health.service';
@@ -24,6 +24,7 @@ import type {
   AccountTruthEvidenceGap,
   AccountTruthExecutionRow,
   AccountTruthOrderRow,
+  AccountTruthPositionRow,
   AccountTruthResponse,
   IbkrOrderAck,
   IbkrOrderEvidenceFields,
@@ -58,6 +59,19 @@ interface LedgerOrderRow {
   executionIds: string[];
 }
 
+interface OpenExposureGuidance {
+  headline: string;
+  cause: string;
+  cure: string;
+  prefill: OpenExposurePrefill | null;
+}
+
+interface OpenExposurePrefill {
+  symbol: string;
+  action: OrderAction;
+  quantity: number;
+}
+
 /**
  * /broker/orders — paper order placement, list, cancel, event stream.
  *
@@ -85,6 +99,10 @@ export class BrokerOrdersComponent {
   readonly bannerState = this.health.bannerState;
   private readonly injector = inject(Injector);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly route = inject(ActivatedRoute);
+  private readonly autoPrefillOpenExposure =
+    this.route.snapshot.queryParamMap.get('flatten') === 'open-exposure';
+  private autoPrefilledOpenExposure = false;
 
   // Form state
   readonly symbol = signal('SPY');
@@ -135,6 +153,27 @@ export class BrokerOrdersComponent {
       !this.submitting() &&
       this.isPaperConnected(),
   );
+  readonly confirmDisabledReason = computed(() => {
+    if (!this.confirmDialogOpen() || this.confirmCanPlace()) return null;
+    if (!this.isPaperConnected()) {
+      return 'Order placement requires a connected paper broker session.';
+    }
+    if (this.submitting()) return 'Submitting the paper order request.';
+    if (this.whatIfLoading()) return 'Waiting for the IBKR what-if preview.';
+    if (this.whatIfError() !== null) {
+      return 'IBKR could not preview this order; close the dialog and adjust the ticket.';
+    }
+    if (!this.hasCurrentWhatIfPreview()) {
+      return 'Waiting for a current what-if preview for this ticket.';
+    }
+    if (!this.confirmCheckbox()) {
+      return 'Tick the paper-order confirmation checkbox.';
+    }
+    if (this.confirmCooldownMs() > 0) {
+      return `Safety pause: ${(this.confirmCooldownMs() / 1000).toFixed(1)}s remaining.`;
+    }
+    return 'Review the order ticket before placing.';
+  });
 
   // Order ledger
   readonly ledgerLoading = signal(false);
@@ -155,6 +194,9 @@ export class BrokerOrdersComponent {
   );
   readonly ledgerSourceNotices = computed<LedgerSourceNotice[]>(() =>
     this.buildLedgerSourceNotices(),
+  );
+  readonly openExposureGuidance = computed<OpenExposureGuidance | null>(() =>
+    this.buildOpenExposureGuidance(this.accountTruth()?.positions ?? []),
   );
 
   // Order events SSE
@@ -312,6 +354,7 @@ export class BrokerOrdersComponent {
         try {
           const truth = await this.broker.accountTruth();
           this.applyAccountTruth(truth);
+          this.prefillOpenExposureFromDeepLink();
         } catch (err) {
           this.ledgerError.set(err);
         }
@@ -383,6 +426,29 @@ export class BrokerOrdersComponent {
         this.whatIfLoading.set(false);
       }
     }
+  }
+
+  prefillOpenExposureCure(): void {
+    const prefill = this.openExposureGuidance()?.prefill;
+    if (prefill === null || prefill === undefined) return;
+    this.symbol.set(prefill.symbol);
+    this.secType.set('STK');
+    this.action.set(prefill.action);
+    this.quantity.set(prefill.quantity);
+    this.orderType.set('MKT');
+    this.limitPrice.set(null);
+    this.tif.set('DAY');
+    this.clearWhatIfPreview();
+    this.placeError.set(null);
+    this.lastAck.set(null);
+  }
+
+  private prefillOpenExposureFromDeepLink(): void {
+    if (!this.autoPrefillOpenExposure || this.autoPrefilledOpenExposure) return;
+    const prefill = this.openExposureGuidance()?.prefill;
+    if (prefill === null || prefill === undefined) return;
+    this.prefillOpenExposureCure();
+    this.autoPrefilledOpenExposure = true;
   }
 
   private buildOrderSpec(confirmPaper: boolean): IbkrOrderSpec {
@@ -551,6 +617,57 @@ export class BrokerOrdersComponent {
     }
 
     return notices;
+  }
+
+  private buildOpenExposureGuidance(
+    positions: AccountTruthPositionRow[],
+  ): OpenExposureGuidance | null {
+    const openPositions = positions.filter((position) => position.quantity !== 0);
+    if (openPositions.length === 0) return null;
+
+    if (openPositions.length !== 1) {
+      return {
+        headline: `Current open inventory: ${openPositions.length} positions`,
+        cause:
+          'Account reconcile can run, but it cannot clear an active freeze while broker exposure is non-flat.',
+        cure:
+          'Cure: flatten every live broker position from UI order tickets, wait for fills, run account reconcile again, then clear freeze.',
+        prefill: null,
+      };
+    }
+
+    const position = openPositions[0];
+    const quantity = Math.abs(position.quantity);
+    const action: OrderAction = position.quantity > 0 ? 'SELL' : 'BUY';
+    const quantityLabel = this.formatQuantity(quantity);
+    const signedQuantityLabel = fmtSignedNumber(
+      position.quantity,
+      Number.isInteger(position.quantity) ? 0 : 2,
+    );
+    const headline = `Current open inventory: ${position.symbol} ${signedQuantityLabel}`;
+    const cause =
+      'Account reconcile can run, but it cannot clear an active freeze while broker exposure is non-flat.';
+
+    if (position.sec_type !== 'STK') {
+      return {
+        headline,
+        cause,
+        cure:
+          'Cure: flatten this broker position from an approved UI order ticket for the exact contract, wait for the fill, run account reconcile again, then clear freeze.',
+        prefill: null,
+      };
+    }
+
+    return {
+      headline,
+      cause,
+      cure: `Cure: prefill ${action} ${quantityLabel} ${position.symbol} MKT DAY, review the what-if, place the paper order, wait for the fill, run account reconcile again, then clear freeze.`,
+      prefill: {
+        symbol: position.symbol,
+        action,
+        quantity,
+      },
+    };
   }
 
   private buildLedgerRows(

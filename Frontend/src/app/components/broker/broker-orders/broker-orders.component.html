@@ -29,6 +29,27 @@
   <article class="card form-card">
     <header class="card-header">Manual paper order</header>
 
+    @if (openExposureGuidance(); as guidance) {
+      <section class="coi-guidance" aria-label="COI guidance">
+        <div>
+          <span class="guidance-eyebrow">COI guidance</span>
+          <h2>{{ guidance.headline }}</h2>
+          <p>{{ guidance.cause }}</p>
+          <p>{{ guidance.cure }}</p>
+        </div>
+        @if (guidance.prefill !== null) {
+          <button
+            type="button"
+            class="ghost-btn"
+            (click)="prefillOpenExposureCure()"
+          >
+            <i class="pi pi-arrow-right-arrow-left" aria-hidden="true"></i>
+            Prefill flatten order
+          </button>
+        }
+      </section>
+    }
+
     <form
       class="order-form"
       (submit)="$event.preventDefault(); openConfirmDialog()"
@@ -465,6 +486,9 @@
       }
     }
   </section>
+  @if (confirmDisabledReason(); as reason) {
+    <p class="confirm-disabled-reason" role="status">{{ reason }}</p>
+  }
   <div class="confirm-actions">
     <button
       type="button"

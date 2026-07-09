@@ -117,6 +117,16 @@ export interface BotLifecycleAction {
   expires_at_ms: number | null;
 }
 
+export interface BotLifecycleCondition {
+  scope: 'account' | 'bot';
+  severity: 'warning' | 'critical';
+  title: string;
+  detail: string;
+  owner_label: string;
+  cure_action: string;
+  cure_label: string;
+}
+
 export interface BotDailyLifecycleProjection {
   phase: BotLifecyclePhaseValue;
   presence_label: BotLifecyclePresenceLabel;
@@ -127,6 +137,7 @@ export interface BotDailyLifecycleProjection {
   active_run_id: string | null;
   latest_run_id: string | null;
   drift_detected: boolean;
+  conditions?: BotLifecycleCondition[];
   primary_action: BotLifecycleAction | null;
   ambient_actions: BotLifecycleAction[];
 }

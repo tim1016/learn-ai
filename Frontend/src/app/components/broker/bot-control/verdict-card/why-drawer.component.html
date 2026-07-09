@@ -1,0 +1,89 @@
+@if (open()) {
+  <div class="why-drawer__scrim" data-testid="why-drawer">
+    <button
+      type="button"
+      class="why-drawer__backdrop"
+      aria-label="Close evidence drawer"
+      (click)="close()"
+    ></button>
+    <aside
+      class="why-drawer__panel"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="why-drawer-title"
+    >
+      <header class="why-drawer__head">
+        <div>
+          <p class="why-drawer__kicker">Why this state</p>
+          <h2 id="why-drawer-title" class="why-drawer__title">
+            {{ headline() ?? 'The evidence behind this bot' }}
+          </h2>
+        </div>
+        <button
+          #closeButton
+          type="button"
+          class="why-drawer__close"
+          aria-label="Close evidence drawer"
+          (click)="close()"
+        >
+          <i class="pi pi-times" aria-hidden="true"></i>
+        </button>
+      </header>
+
+      <div class="why-drawer__body">
+        @if (explanation(); as explanation) {
+          <p class="why-drawer__explanation">{{ explanation }}</p>
+        }
+
+        @if (proofLines().length > 0) {
+          <section class="why-drawer__section" aria-label="Proof lines">
+            <p class="why-drawer__section-label">What we can prove</p>
+            @for (line of proofLines(); track line.id) {
+              <article class="why-drawer__proof" [class]="'tone-' + line.tone">
+                <strong>{{ line.label }}</strong>
+                <span>{{ line.message }}</span>
+              </article>
+            }
+          </section>
+        }
+
+        @if (failingGates().length > 0) {
+          <section class="why-drawer__section" aria-label="Failing checks">
+            <p class="why-drawer__section-label">What's blocking</p>
+            @for (gate of failingGates(); track gate.name) {
+              <article class="why-drawer__gate">
+                <strong>{{ gateLabel(gate) }}</strong>
+                <span>{{ gate.gate_result.operator_reason }}</span>
+              </article>
+            }
+          </section>
+        }
+
+        @if (evidence().length > 0) {
+          <section class="why-drawer__section" aria-label="Evidence">
+            <p class="why-drawer__section-label">Evidence</p>
+            <dl class="why-drawer__evidence">
+              @for (row of evidence(); track row.label) {
+                <div class="why-drawer__evidence-row">
+                  <dt>{{ row.label }}</dt>
+                  <dd>
+                    <span data-trader-copy>{{ row.value }}</span>
+                    @if (row.meta; as meta) {
+                      <time class="why-drawer__evidence-time">{{ meta }}</time>
+                    }
+                  </dd>
+                </div>
+              }
+            </dl>
+          </section>
+        }
+
+        @if (!hasContent()) {
+          <p class="why-drawer__empty">
+            Not yet proven — no evidence has been recorded for this bot's current state.
+          </p>
+        }
+      </div>
+    </aside>
+  </div>
+}

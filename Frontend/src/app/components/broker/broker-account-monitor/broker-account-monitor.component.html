@@ -51,6 +51,45 @@
     } @else if (truthLoading()) {
       <p class="muted">Loading account truth…</p>
     } @else if (accountTruth(); as truth) {
+      @if (accountPrimaryAction(); as action) {
+        <article
+          class="primary-action-card"
+          aria-labelledby="account-primary-action-title"
+        >
+          <div>
+            <p class="action-kicker">Next account action</p>
+            <h2 id="account-primary-action-title">{{ action.title }}</h2>
+            <p>{{ action.detail }}</p>
+          </div>
+          @if (action.kind === 'openOrders') {
+            <a
+              id="account-primary-action"
+              routerLink="/broker/orders"
+              [queryParams]="{ flatten: 'open-exposure' }"
+              class="primary-action-btn"
+            >
+              <i class="pi pi-arrow-right-arrow-left" aria-hidden="true"></i>
+              {{ action.buttonLabel }}
+            </a>
+          } @else {
+            <button
+              [id]="action.kind === 'clearFreeze' ? 'account-clear-freeze-action' : 'account-reconciliation-action'"
+              type="button"
+              class="primary-action-btn"
+              [disabled]="primaryActionDisabled(action)"
+              (click)="runPrimaryAccountAction(action)"
+            >
+              <i
+                class="pi"
+                [class.pi-shield]="action.kind === 'reconcile'"
+                [class.pi-lock-open]="action.kind === 'clearFreeze'"
+                aria-hidden="true"
+              ></i>
+              {{ primaryActionButtonLabel(action) }}
+            </button>
+          }
+        </article>
+      }
       <app-account-truth-board
         [truth]="truth"
         [showAccountMetrics]="true"
@@ -87,45 +126,90 @@
         @if (accountTriageLoading()) {
           <p class="muted">Loading account sick bay…</p>
         } @else if (accountTriage(); as triage) {
-          <p class="receipt-reason">{{ triage.summary_detail | receiptLabel }}</p>
+          <p class="receipt-reason">{{ accountSickBayDetail() | receiptLabel }}</p>
+          @let conditionGroups = accountConditionGroups();
 
-          @if (accountConditions().length === 0) {
+          @if (conditionGroups.account.length === 0 && conditionGroups.bot.length === 0) {
             <p class="muted">No open account conditions.</p>
           } @else {
-            <div class="condition-list">
-              @for (condition of accountConditions(); track condition.condition_type + condition.owner.owner_id) {
-                <article class="condition-row" [class.critical]="condition.severity === 'critical'">
-                  <div>
-                    <h3>{{ condition.title }}</h3>
-                    <p>{{ condition.detail | receiptLabel }}</p>
-                    <p class="condition-owner">
-                      Owner {{ condition.owner.label }}
-                    </p>
-                    <p class="condition-meta">
-                      {{ condition.condition_type | receiptLabel }}
-                      · {{ condition.source | receiptLabel }}
-                      · {{ fmtDateNy(condition.evidence_at_ms) }}
-                    </p>
-                    @if (condition.affected_strategy_instance_ids.length > 0) {
-                      <p class="condition-meta mono">
-                        Affects {{ condition.affected_strategy_instance_ids.join(', ') }}
+            @if (conditionGroups.account.length > 0) {
+              <div class="condition-list">
+                @for (condition of conditionGroups.account; track trackCondition($index, condition)) {
+                  <article class="condition-row" [class.critical]="condition.severity === 'critical'">
+                    <div>
+                      <h3>{{ condition.title }}</h3>
+                      <p>{{ condition.detail | receiptLabel }}</p>
+                      <p class="condition-owner">
+                        Owner {{ condition.owner.label }}
                       </p>
+                      <p class="condition-meta">
+                        {{ condition.condition_type | receiptLabel }}
+                        · {{ condition.source | receiptLabel }}
+                        · {{ fmtDateNy(condition.evidence_at_ms) }}
+                      </p>
+                      @if (condition.affected_strategy_instance_ids.length > 0) {
+                        <p class="condition-meta mono">
+                          Affects {{ condition.affected_strategy_instance_ids.join(', ') }}
+                        </p>
+                      }
+                    </div>
+                    @if (hasConditionAction(condition)) {
+                      <button
+                        type="button"
+                        class="ghost-btn"
+                        [disabled]="conditionActionDisabled(condition)"
+                        (click)="runConditionAction(condition)"
+                      >
+                        <i class="pi pi-wrench" aria-hidden="true"></i>
+                        {{ conditionActionLabel(condition) }}
+                      </button>
                     }
-                  </div>
-                  @if (hasConditionAction(condition)) {
-                    <button
-                      type="button"
-                      class="ghost-btn"
-                      [disabled]="conditionActionDisabled(condition)"
-                      (click)="runConditionAction(condition)"
-                    >
-                      <i class="pi pi-wrench" aria-hidden="true"></i>
-                      {{ conditionActionLabel(condition) }}
-                    </button>
+                  </article>
+                }
+              </div>
+            }
+            @if (conditionGroups.bot.length > 0) {
+              <details class="bot-condition-details">
+                <summary>
+                  Bot-specific history
+                  <span class="badge mono">{{ conditionGroups.bot.length }}</span>
+                </summary>
+                <div class="condition-list secondary">
+                  @for (condition of conditionGroups.bot; track trackCondition($index, condition)) {
+                    <article class="condition-row" [class.critical]="condition.severity === 'critical'">
+                      <div>
+                        <h3>{{ condition.title }}</h3>
+                        <p>{{ condition.detail | receiptLabel }}</p>
+                        <p class="condition-owner">
+                          Owner {{ condition.owner.label }}
+                        </p>
+                        <p class="condition-meta">
+                          {{ condition.condition_type | receiptLabel }}
+                          · {{ condition.source | receiptLabel }}
+                          · {{ fmtDateNy(condition.evidence_at_ms) }}
+                        </p>
+                        @if (condition.affected_strategy_instance_ids.length > 0) {
+                          <p class="condition-meta mono">
+                            Affects {{ condition.affected_strategy_instance_ids.join(', ') }}
+                          </p>
+                        }
+                      </div>
+                      @if (hasConditionAction(condition)) {
+                        <button
+                          type="button"
+                          class="ghost-btn"
+                          [disabled]="conditionActionDisabled(condition)"
+                          (click)="runConditionAction(condition)"
+                        >
+                          <i class="pi pi-wrench" aria-hidden="true"></i>
+                          {{ conditionActionLabel(condition) }}
+                        </button>
+                      }
+                    </article>
                   }
-                </article>
-              }
-            </div>
+                </div>
+              </details>
+            }
           }
         } @else {
           <p class="muted">Not yet proven: account sick bay has not loaded for this account.</p>
@@ -188,16 +272,18 @@
       >
         <header class="card-header">
           Account reconciliation receipt
-          <button
-            id="account-reconciliation-action"
-            type="button"
-            class="ghost-btn"
-            [disabled]="accountReconciliationLoading() || !accountReconciliationAccountId()"
-            (click)="runAccountReconciliation()"
-          >
-            <i class="pi pi-shield" aria-hidden="true"></i>
-            {{ accountReconciliationLoading() ? 'Reconciling…' : 'Run account reconcile' }}
-          </button>
+          @if (accountPrimaryAction()?.kind !== 'reconcile') {
+            <button
+              id="account-reconciliation-action"
+              type="button"
+              class="ghost-btn"
+              [disabled]="accountReconciliationLoading() || !accountReconciliationAccountId()"
+              (click)="runAccountReconciliation()"
+            >
+              <i class="pi pi-shield" aria-hidden="true"></i>
+              {{ accountReconciliationLoading() ? 'Reconciling…' : 'Run account reconcile' }}
+            </button>
+          }
         </header>
 
         @if (accountReconciliationError(); as err) {
