@@ -212,6 +212,26 @@
     ],
     "summary": "Safety verdict is UNKNOWN."
   },
+  "blockers": [
+    {
+      "applies_to": "both",
+      "detail": "No cached Account Truth projection is available for this account.",
+      "disposition": "fix_elsewhere",
+      "headline": "Account not proven",
+      "id": "account_not_proven",
+      "primary_move": {
+        "action": {
+          "fragment": "account-reconciliation-action",
+          "kind": "navigate",
+          "route": "/broker/account-monitor"
+        },
+        "label": "Open account monitor",
+        "target": null
+      },
+      "secondary_moves": [],
+      "severity": "blocking"
+    }
+  ],
   "broker": {
     "connection": "UNKNOWN",
     "connection_condition": {
@@ -376,7 +396,6 @@
   "prior_run": {
     "classification": "UNKNOWN"
   },
-  "blockers": [],
   "readiness_gates": [
     {
       "detail": "no durable intent recorded",
