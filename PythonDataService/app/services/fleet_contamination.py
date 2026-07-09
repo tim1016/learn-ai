@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from app.broker.ibkr.config import IbkrSettings
@@ -17,6 +18,7 @@ from app.engine.live.live_state_sidecar import (
 from app.schemas.live_runs import FleetContamination, InstanceBrokerView
 
 logger = logging.getLogger(__name__)
+NetPositionFetcher = Callable[[], Awaitable[dict[str, int] | None]]
 
 
 def scan_runs_by_instance(root: Path) -> dict[str, list[dict]]:
@@ -105,9 +107,11 @@ async def fetch_net_positions() -> dict[str, int] | None:
 async def compute_account_fleet_contamination(
     settings: IbkrSettings,
     root: Path,
+    fetch_positions: NetPositionFetcher | None = None,
 ) -> FleetContamination:
+    resolve_net_positions = fetch_positions or fetch_net_positions
     result = compute_fleet_contamination(
-        await fetch_net_positions(),
+        await resolve_net_positions(),
         collect_fleet_position_explanations(root),
         policy_blocks_starts=settings.fleet_dirty_blocks_starts,
     )

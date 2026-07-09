@@ -115,6 +115,8 @@ describe('BotControlPageComponent', () => {
 
   it('shows an error banner when the status request fails', async () => {
     const { element } = await setupBotControlPage({
+      // bot-control-allow-configure-live-runs: this spec intentionally bypasses
+      // the typed happy-path setup to exercise the page's request-error branch.
       configureLiveRuns: (liveRuns) => {
         liveRuns.getInstanceStatus.mockRejectedValue(new Error('status boom'));
       },

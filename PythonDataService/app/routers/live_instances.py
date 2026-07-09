@@ -163,6 +163,7 @@ from app.schemas.live_runs import (
 )
 from app.schemas.operator_blocker import DeployPreflightResponse
 from app.services import deploy_preflight as deploy_preflight_service
+from app.services import fleet_contamination as fleet_contamination_service
 from app.services.account_crash_recovery import (
     CrashRecoveryNotRequiredError,
     crash_recovery_block_detail,
@@ -240,9 +241,6 @@ from app.services.deploy_admission import (
 )
 from app.services.fleet_contamination import (
     collect_fleet_position_explanations,
-)
-from app.services.fleet_contamination import (
-    compute_account_fleet_contamination as _compute_account_fleet_contamination,
 )
 from app.services.fleet_contamination import (
     fetch_net_positions as _fetch_net_positions,
@@ -3101,6 +3099,17 @@ async def _fetch_broker_connected_account(
     if isinstance(account, str) and account.strip():
         return account.strip(), True
     return None, True
+
+
+async def _compute_account_fleet_contamination(
+    settings: IbkrSettings,
+    root: Path,
+) -> FleetContamination:
+    return await fleet_contamination_service.compute_account_fleet_contamination(
+        settings,
+        root,
+        fetch_positions=_fetch_net_positions,
+    )
 
 
 @router.get("/account", response_model=FleetContamination)
