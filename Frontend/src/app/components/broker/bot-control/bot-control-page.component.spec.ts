@@ -120,10 +120,21 @@ describe('BotControlPageComponent', () => {
   });
 
   it('renders the Verdict Card and none of the deleted surfaces', async () => {
-    const { element } = await setupBotControlPage({ status: startableReadyStatus() });
+    const { fixture, element, liveRuns } = await setupBotControlPage({
+      status: startableReadyStatus(),
+    });
+    await flush(fixture);
 
     expect(element.querySelector('app-verdict-card')).not.toBeNull();
+    expect(element.querySelector('app-trader-guidance-pane')).not.toBeNull();
     expect(element.querySelector('#verdict-state')?.textContent).toContain('Ready');
+    expect(liveRuns.getLifecycleTimeline).toHaveBeenCalledWith({
+      account_id: null,
+      strategy_instance_id: 'sid-x',
+      run_id: 'run-x',
+      limit: 8,
+    });
+    expect(element.querySelector('app-trader-guidance-pane')?.textContent).toContain('Broker Ack #7');
     // Deleted surfaces must not return.
     expect(element.querySelector('app-overview-tab')).toBeNull();
     expect(element.querySelector('[data-testid="bot-control-workbench-tabs"]')).toBeNull();

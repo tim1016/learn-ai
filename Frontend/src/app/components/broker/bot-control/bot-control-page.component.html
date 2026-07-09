@@ -6,19 +6,29 @@
   }
 
   @if (status(); as s) {
-    <app-verdict-card
-      [status]="s"
-      [busy]="busyAction() !== null"
-      [renderedRemediation]="renderedPrimaryRemediation()"
-      (lifecycleAction)="dispatchOverviewAction($event)"
-      (remediationInvoked)="invokePrimaryRemediation()"
-      (crashRecoveryRequested)="dispatchCrashRecoveryOverride()"
-      (settingsRequested)="onSettingsRequested()"
-      (accountMonitorRequested)="openAccountMonitor()"
-      (removeRequested)="openRemoveBotConfirm()"
-      (terminalRetireReplaceRequested)="openTerminalRetireReplaceConfirm()"
-      (blockerMoveRequested)="invokeBlockerMove($event)"
-    />
+    <div class="operator-truth-layout">
+      <app-verdict-card
+        [status]="s"
+        [busy]="busyAction() !== null"
+        [renderedRemediation]="renderedPrimaryRemediation()"
+        (lifecycleAction)="dispatchOverviewAction($event)"
+        (remediationInvoked)="invokePrimaryRemediation()"
+        (crashRecoveryRequested)="dispatchCrashRecoveryOverride()"
+        (settingsRequested)="onSettingsRequested()"
+        (accountMonitorRequested)="openAccountMonitor()"
+        (removeRequested)="openRemoveBotConfirm()"
+        (terminalRetireReplaceRequested)="openTerminalRetireReplaceConfirm()"
+        (blockerMoveRequested)="invokeBlockerMove($event)"
+      />
+      <app-trader-guidance-pane
+        [surface]="s.operator_surface"
+        [timelineRows]="timelineRows()"
+        [timelineProjectionAvailable]="timelineProjectionAvailable()"
+        [timelineCanonicalFallbackRequired]="timelineCanonicalFallbackRequired()"
+        [timelineNotice]="timelineNotice()"
+        (primaryRemediationSelected)="invokeTraderRemediation($event)"
+      />
+    </div>
   } @else if (!errorMessage()) {
     <p class="loading">Loading bot control...</p>
   }

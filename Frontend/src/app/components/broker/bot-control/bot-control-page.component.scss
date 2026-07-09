@@ -35,8 +35,26 @@
   font-size: var(--fs-sm);
 }
 
+.operator-truth-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(22rem, 0.85fr);
+  gap: 1rem;
+  align-items: stretch;
+}
+
+.operator-truth-layout app-verdict-card,
+.operator-truth-layout app-trader-guidance-pane {
+  min-width: 0;
+}
+
 .loading {
   margin: 2rem auto;
   color: var(--text-muted);
   font-size: var(--fs-sm);
+}
+
+@media (max-width: 1080px) {
+  .operator-truth-layout {
+    grid-template-columns: 1fr;
+  }
 }

@@ -60,7 +60,7 @@ Operationally:
 
 ## Stop points
 
-Stop and reconcile manually when any of these are true:
+Stop before trading when any of these are true:
 
 - Broker connection is `DISCONNECTED`, `DEGRADED`, or `UNKNOWN`.
 - Broker safety is not `PAPER_ONLY` for paper runs, or is `UNKNOWN`.
@@ -69,11 +69,14 @@ Stop and reconcile manually when any of these are true:
 - Runtime freshness demotes posture or reports stale command/broker/bar/control
   evidence.
 - A prior mutation outcome is unresolved or uncertain.
-- The primary blocker is `terminal`.
+
+For non-terminal stop points, reconcile manually or run the named recovery
+action before resuming. For `terminal` blockers, do not reconcile as a cure:
+use the backend-authored Replace/Remove move.
 
 Do not use browser refreshes, visual chart movement, or a locally enabled
-button as proof that any stop point cleared. Wait for a new backend projection
-or run the named recovery action.
+button as proof that any stop point cleared. Wait for a new backend projection,
+the named recovery action, or the terminal Replace/Remove outcome.
 
 ## What this page answers
 
