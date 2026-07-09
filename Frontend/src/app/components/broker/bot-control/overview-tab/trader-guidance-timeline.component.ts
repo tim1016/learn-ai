@@ -2,11 +2,12 @@ import { CommonModule } from '@angular/common';
 import { ChangeDetectionStrategy, Component, input } from '@angular/core';
 
 import type { LifecycleProjectionEventRow } from '../../../../api/live-instances.types';
+import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 import { fmtTimestampNy } from '../../format';
 
 @Component({
   selector: 'app-trader-guidance-timeline',
-  imports: [CommonModule],
+  imports: [CommonModule, ReceiptLabelPipe],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './trader-guidance-timeline.component.html',
   styleUrl: './trader-guidance-timeline.component.scss',
@@ -29,8 +30,7 @@ export class TraderGuidanceTimelineComponent {
     return row.ts_ms_resolved ? fmtTimestampNy(row.ts_ms) : 'Time not available';
   }
 
-  timelineSource(row: LifecycleProjectionEventRow): string {
-    const seq = row.source_seq === null ? '' : ` #${row.source_seq}`;
-    return `${row.source_type}${seq}`;
+  timelineSourceSequence(row: LifecycleProjectionEventRow): string {
+    return row.source_seq === null ? '' : ` #${row.source_seq}`;
   }
 }

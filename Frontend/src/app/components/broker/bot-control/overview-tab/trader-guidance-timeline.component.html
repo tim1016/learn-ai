@@ -3,7 +3,12 @@
   data-testid="trader-guidance-timeline"
   [class.fallback]="canonicalFallbackRequired()"
 >
-  <p class="eyebrow">What changed recently</p>
+  <div class="timeline-heading">
+    <p class="eyebrow">What changed recently</p>
+    @if (rows().length > 0) {
+      <span>{{ rows().length }} events</span>
+    }
+  </div>
   @if (notice(); as currentNotice) {
     <p class="timeline-notice">{{ currentNotice }}</p>
   }
@@ -13,23 +18,33 @@
     <ol>
       @for (row of rows(); track trackTimelineRow($index, row)) {
         <li [class]="'severity-' + row.severity">
+          <span class="timeline-marker" aria-hidden="true"></span>
           <div class="timeline-row-header">
             <span>{{ timelineTimestamp(row) }}</span>
-            <span>{{ row.status ?? row.category }}</span>
+            <span>{{ (row.status ?? row.category) | receiptLabel }}</span>
           </div>
           <strong>{{ timelineHeadline(row) }}</strong>
           @if (row.why) {
             <p>{{ row.why }}</p>
           }
-          <div class="timeline-meta">
+          <dl class="timeline-meta">
             @if (row.node_id) {
-              <span>{{ row.node_id }}</span>
+              <div>
+                <dt>Node</dt>
+                <dd>{{ row.node_id | receiptLabel }}</dd>
+              </div>
             }
-            <span>{{ timelineSource(row) }}</span>
+            <div>
+              <dt>Source</dt>
+              <dd>{{ row.source_type | receiptLabel }}{{ timelineSourceSequence(row) }}</dd>
+            </div>
             @if (row.operator_next_step) {
-              <span>{{ row.operator_next_step }}</span>
+              <div class="timeline-next">
+                <dt>Next</dt>
+                <dd>{{ row.operator_next_step }}</dd>
+              </div>
             }
-          </div>
+          </dl>
         </li>
       }
     </ol>

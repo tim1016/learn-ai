@@ -58,6 +58,15 @@ describe('TraderGuidancePaneComponent', () => {
             explanation: 'The backend cannot prove the broker/session/reconciliation facts needed before a submit.',
             risk_headline: 'Do not treat stale or missing broker evidence as live truth',
             risk_explanation: 'Reconnect or reconcile until the broker evidence is fresh and explicit.',
+            proof_lines: [
+              {
+                id: 'broker-proof',
+                label: 'broker.connection',
+                message: 'Broker proof is not available yet.',
+                detail: 'Account safety proof is not recorded. Broker connection has not been proven.',
+                tone: 'attention',
+              },
+            ],
             advanced_evidence: [
               {
                 label: 'reconciliation.state',
@@ -77,6 +86,9 @@ describe('TraderGuidancePaneComponent', () => {
     expect(screen.getByText('The backend cannot prove the broker/session/reconciliation facts needed before a submit.')).toBeTruthy();
     expect(screen.getByText('Do not treat stale or missing broker evidence as live truth')).toBeTruthy();
     expect(screen.getByText('Reconnect or reconcile until the broker evidence is fresh and explicit.')).toBeTruthy();
+    expect(screen.getByText('Proof stack')).toBeTruthy();
+    expect(screen.getByText('Broker Connection')).toBeTruthy();
+    expect(screen.getByText('Broker proof is not available yet.')).toBeTruthy();
     const diagnostics = screen.getByTestId('trader-guidance-advanced-evidence');
     expect(diagnostics.textContent).toContain('Technical diagnostics');
     expect(diagnostics.textContent).toContain('Reconciliation is not available.');
@@ -145,9 +157,12 @@ describe('TraderGuidancePaneComponent', () => {
     expect(timeline.textContent).toContain('What changed recently');
     expect(timeline.textContent).toContain('Broker acknowledgment failed; submit outcome is uncertain.');
     expect(timeline.textContent).toContain('Probe broker before retrying this intent.');
-    expect(timeline.textContent).toContain('blocked');
-    expect(timeline.textContent).toContain('broker_ack #1');
+    expect(timeline.textContent).toContain('Blocked');
+    expect(timeline.textContent).toContain('Ack Or Reconcile');
+    expect(timeline.textContent).toContain('Broker Ack #1');
     expect(timeline.textContent).toContain('PROBE_BROKER_BEFORE_RETRY');
+    expect(timeline.textContent).not.toContain('broker_ack #1');
+    expect(timeline.textContent).not.toContain('ack_or_reconcile');
     expect(timeline.textContent).toContain('ET');
   });
 
