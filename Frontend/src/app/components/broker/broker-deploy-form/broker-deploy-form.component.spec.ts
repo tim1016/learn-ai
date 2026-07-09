@@ -85,6 +85,20 @@ const DEFAULT_STRATEGY_VALIDATION_CATALOG: StrategyValidationCatalog = {
   ],
 };
 
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 function setup(
   opts: {
     qcEntries?: string[];
@@ -111,9 +125,10 @@ function setup(
     }[];
     accountPromise?: Promise<{ account_id: string } | null>;
     strategyValidationCatalog?: StrategyValidationCatalog;
-    deployPreflight?: DeployPreflightResponse;
+    deployPreflight?: DeployPreflightResponse | Promise<DeployPreflightResponse>;
   } = {},
 ) {
+  const deployPreflight = opts.deployPreflight ?? { ready: true, blockers: [] };
   const svc = {
     getEngineStrategies: vi.fn().mockResolvedValue(
       opts.strategies ?? [
@@ -163,9 +178,7 @@ function setup(
       }),
     getInstances: vi.fn().mockResolvedValue([]),
     getInstanceStatus: vi.fn().mockRejectedValue(new Error('instance status is not used by deploy preflight')),
-    deployPreflight: vi.fn().mockResolvedValue(
-      opts.deployPreflight ?? { ready: true, blockers: [] },
-    ),
+    deployPreflight: vi.fn().mockImplementation(() => Promise.resolve(deployPreflight)),
     deployInstance: vi
       .fn()
       .mockResolvedValue({ run_id: 'run-new', run_dir: '/runs/run-new', created: true, start: null }),
@@ -435,7 +448,7 @@ describe('BrokerDeployFormComponent', () => {
     const { fixture, svc, component } = setup();
     await flush();
     fillRequired(component);
-    fixture.detectChanges();
+    await settleResource(fixture);
 
     await component.submit();
     fixture.detectChanges();
@@ -500,9 +513,10 @@ describe('BrokerDeployFormComponent', () => {
   // the parent_run_id at the top level of the submit payload (NOT
   // inside live_config — lineage is unhashed).
   it('flows parent_run_id from the route query param into the submit payload at the top level', async () => {
-    const { svc, component } = setup({ queryParams: { parent_run_id: 'run-parent-abc' } });
+    const { fixture, svc, component } = setup({ queryParams: { parent_run_id: 'run-parent-abc' } });
     await flush();
     fillRequired(component);
+    await settleResource(fixture);
 
     await component.submit();
 
@@ -531,9 +545,10 @@ describe('BrokerDeployFormComponent', () => {
   });
 
   it('submits the operator-built stock plan via live_config.action', async () => {
-    const { svc, component } = setup();
+    const { fixture, svc, component } = setup();
     await flush();
     fillRequired(component);
+    await settleResource(fixture);
 
     component.actionPlan.set({
       on_enter: [
@@ -564,9 +579,10 @@ describe('BrokerDeployFormComponent', () => {
   });
 
   it('defaults the sizing preset to Safe canary and submits FixedShares(1)', async () => {
-    const { svc, component } = setup();
+    const { fixture, svc, component } = setup();
     await flush();
     fillRequired(component);
+    await settleResource(fixture);
     await component.submit();
 
     const req = svc.deployInstance.mock.calls[0][0];
@@ -633,6 +649,7 @@ describe('BrokerDeployFormComponent', () => {
     await flush();
 
     expect(component.sizingSurfaceIsExplicit()).toBe(true);
+    await settleResource(fixture);
     await component.submit();
 
     const req = svc.deployInstance.mock.calls[0][0];
@@ -644,9 +661,10 @@ describe('BrokerDeployFormComponent', () => {
   });
 
   it('emits a Custom FixedShares policy from the kind/value inputs', async () => {
-    const { svc, component } = setup();
+    const { fixture, svc, component } = setup();
     await flush();
     fillRequired(component);
+    await settleResource(fixture);
     component.sizingPreset.set('custom');
     component.customKind.set('FixedShares');
     component.customValue.set('25');
@@ -662,9 +680,10 @@ describe('BrokerDeployFormComponent', () => {
   });
 
   it('emits a Custom FixedNotional policy with the value as a decimal string', async () => {
-    const { svc, component } = setup();
+    const { fixture, svc, component } = setup();
     await flush();
     fillRequired(component);
+    await settleResource(fixture);
     component.sizingPreset.set('custom');
     component.customKind.set('FixedNotional');
     component.customValue.set('1500.50');
@@ -938,6 +957,7 @@ describe('BrokerDeployFormComponent', () => {
     await flush();
     fillRequired(component);
     typeText(fixture, 'Signal stream', 'SPY');
+    await settleResource(fixture);
     component.actionPlan.set({
       on_enter: [
         {
@@ -1053,9 +1073,10 @@ describe('BrokerDeployFormComponent', () => {
   });
 
   it('reuses a stable start_date_ms across retries (idempotency)', async () => {
-    const { svc, component } = setup();
+    const { fixture, svc, component } = setup();
     await flush();
     fillRequired(component);
+    await settleResource(fixture);
 
     await component.submit();
     await component.submit();
@@ -1075,6 +1096,7 @@ describe('BrokerDeployFormComponent', () => {
     });
     await flush();
     fillRequired(component);
+    await settleResource(fixture);
 
     await component.submit();
     fixture.detectChanges();
@@ -1093,6 +1115,7 @@ describe('BrokerDeployFormComponent', () => {
     );
     await flush();
     fillRequired(component);
+    await settleResource(fixture);
 
     await component.submit();
     fixture.detectChanges();
@@ -1135,8 +1158,33 @@ describe('BrokerDeployFormComponent', () => {
     });
     expect(deployButton(fixture).disabled).toBe(true);
     expect(fixture.nativeElement.textContent).toContain('Broker disconnected');
-    expect(fixture.nativeElement.textContent).toContain("Can't deploy - broker disconnected.");
+    expect(fixture.nativeElement.textContent).toContain("Can't deploy - Broker disconnected.");
     expect(svc.deployInstance).not.toHaveBeenCalled();
+  });
+
+  it('keeps Deploy & run disabled while backend preflight is loading', async () => {
+    const pending = deferred<DeployPreflightResponse>();
+    const { fixture, svc, component } = setup({ deployPreflight: pending.promise });
+    await flush();
+    fillRequired(component);
+    fixture.detectChanges();
+    await flush();
+    fixture.detectChanges();
+
+    expect(svc.deployPreflight).toHaveBeenCalledWith({
+      strategyKey: 'deployment_validation',
+      accountId: 'DU123',
+      instanceId: 'deployment-validation-paper',
+    });
+    expect(component.commandStatus()).toBe('Checking deploy preflight.');
+    expect(deployButton(fixture).disabled).toBe(true);
+    expect(component.canSubmit()).toBe(false);
+
+    pending.resolve({ ready: true, blockers: [] });
+    await settleResource(fixture);
+
+    expect(component.commandStatus()).toBe('Ready to deploy & run.');
+    expect(deployButton(fixture).disabled).toBe(false);
   });
 
   it('moves a form blocker to the tab that owns its anchor', async () => {

@@ -146,6 +146,7 @@ export class BotControlPageComponent {
       this.status.set(null);
       this.statusError.set(null);
       this.mutationError.set(null);
+      this.busyAction.set(null);
       this.typedHaltOpen.set(false);
       this.typedHaltInstanceId.set(null);
       this.crashRecoveryConfirmOpen.set(false);

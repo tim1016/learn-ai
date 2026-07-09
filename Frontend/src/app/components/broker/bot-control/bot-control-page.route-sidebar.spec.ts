@@ -37,6 +37,7 @@ describe('BotControlPageComponent route and sidebar behavior', () => {
     await flush(fixture);
 
     component.openTypedHalt();
+    component.busyAction.set('start_process');
     fixture.detectChanges();
     expect(component.typedHaltOpen()).toBe(true);
 
@@ -44,6 +45,7 @@ describe('BotControlPageComponent route and sidebar behavior', () => {
     await flush(fixture);
 
     expect(component.typedHaltOpen()).toBe(false);
+    expect(component.busyAction()).toBeNull();
     await component.confirmTypedHalt();
     expect(liveRuns.issueInstanceCommand).not.toHaveBeenCalled();
   });

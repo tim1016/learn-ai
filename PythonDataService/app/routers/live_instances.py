@@ -2077,6 +2077,39 @@ async def deploy_preflight(
     )
 
 
+async def _raise_if_deploy_preflight_blocks_start(
+    request: HostRunnerDeployRequest,
+) -> None:
+    if not request.start:
+        return
+    try:
+        signals = await deploy_preflight_service.gather_deploy_preflight_signals(
+            request.strategy_key.strip(),
+            request.account_id.strip(),
+            request.strategy_instance_id.strip(),
+        )
+    except AccountArtifactError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except StrategyValidationManifestError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    blockers = [
+        blocker
+        for blocker in deploy_preflight_service.author_deploy_blockers(signals)
+        if blocker.severity == "blocking"
+    ]
+    if not blockers:
+        return
+    first = blockers[0]
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        detail={
+            "reason_code": "DEPLOY_PREFLIGHT_BLOCKED",
+            "message": f"Deploy preflight blocked deploy & run: {first.headline}.",
+            "blockers": [blocker.model_dump(mode="json") for blocker in blockers],
+        },
+    )
+
+
 @router.post("", response_model=HostRunnerDeployResponse, status_code=status.HTTP_201_CREATED)
 async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -> HostRunnerDeployResponse:
     """Create a run (deploy a strategy) by forwarding to the host daemon (ADR 0006).
@@ -2116,6 +2149,7 @@ async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -
         Path(settings.live_runs_root),
         body,
     )
+    await _raise_if_deploy_preflight_blocks_start(daemon_request)
     if daemon_request.start:
         verdict = start_boundary_verdict(_now_ms(), daemon_request.live_config)
         if not verdict.allowed:

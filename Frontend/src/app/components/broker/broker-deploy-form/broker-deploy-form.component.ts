@@ -224,9 +224,12 @@ export class BrokerDeployFormComponent {
     if (accepted !== null) {
       return { kind: 'accepted', message: accepted, canSubmit: false };
     }
+    if (this.deployPreflight.isLoading()) {
+      return { kind: 'blocked', message: 'Checking deploy preflight.', canSubmit: false };
+    }
     const top = this.topBlocker();
     if (top !== null) {
-      return { kind: 'blocked', message: `Can't deploy - ${top.headline.toLowerCase()}.`, canSubmit: false };
+      return { kind: 'blocked', message: `Can't deploy - ${top.headline}.`, canSubmit: false };
     }
     return { kind: 'ready', message: 'Ready to deploy & run.', canSubmit: true };
   });
