@@ -2354,6 +2354,20 @@ class BotLifecycleAction(BaseModel):
     expires_at_ms: int | None = None
 
 
+class BotLifecycleCondition(BaseModel):
+    """One open condition explaining why daily lifecycle shows Sick bay."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scope: Literal["account", "bot"]
+    severity: Literal["warning", "critical"]
+    title: str
+    detail: str
+    owner_label: str
+    cure_action: str
+    cure_label: str
+
+
 class BotDailyLifecycleProjection(BaseModel):
     """Rev-3 daily lifecycle projection for one bot.
 
@@ -2373,6 +2387,7 @@ class BotDailyLifecycleProjection(BaseModel):
     active_run_id: str | None = None
     latest_run_id: str | None = None
     drift_detected: bool = False
+    conditions: list[BotLifecycleCondition] = Field(default_factory=list)
     primary_action: BotLifecycleAction | None = None
     ambient_actions: list[BotLifecycleAction] = Field(default_factory=list)
 

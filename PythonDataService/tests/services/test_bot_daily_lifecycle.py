@@ -7,6 +7,7 @@ from app.engine.live.bot_lifecycle_state import (
 )
 from app.schemas.live_runs import (
     BotDailyLifecycleProjection,
+    BotLifecycleCondition,
     HostProcessStartCapability,
     InstanceProcessView,
 )
@@ -23,6 +24,7 @@ def _project(
     persisted_state: BotLifecycleStateRecord | None = None,
     roll_call_offer: BotRollCallOfferRecord | None = None,
     condition_count: int = 0,
+    conditions: tuple[BotLifecycleCondition, ...] = (),
 ) -> BotDailyLifecycleProjection:
     return project_bot_daily_lifecycle(
         BotDailyLifecycleEvidence(
@@ -38,6 +40,7 @@ def _project(
             persisted_state=persisted_state,
             roll_call_offer=roll_call_offer,
             condition_count=condition_count,
+            conditions=conditions,
             now_ms=1_700_000_000_000,
         )
     )
@@ -66,6 +69,18 @@ def _offer() -> BotRollCallOfferRecord:
         issued_at_ms=1_700_000_000_000,
         expires_at_ms=1_700_010_000_000,
         evidence_snapshot={"readiness_verdict": "READY"},
+    )
+
+
+def _condition() -> BotLifecycleCondition:
+    return BotLifecycleCondition(
+        scope="account",
+        severity="warning",
+        title="Account evidence stale",
+        detail="Receipt acct-recon-1 expired before this triage snapshot.",
+        owner_label="Account DU1234567",
+        cure_action="reconcile_now",
+        cure_label="Run account reconcile",
     )
 
 
@@ -160,6 +175,20 @@ def test_project_bot_daily_lifecycle_conditions_put_off_duty_bot_in_sick_bay() -
     assert projection.display_status == "Sick bay"
     assert projection.attention_badge == "Sick bay"
     assert projection.reason == "2 conditions need a cure before start."
+    assert projection.primary_action is None
+
+
+def test_project_bot_daily_lifecycle_returns_condition_cure_copy() -> None:
+    projection = _project(
+        start_enabled=True,
+        persisted_state=_state(),
+        roll_call_offer=_offer(),
+        conditions=(_condition(),),
+    )
+
+    assert projection.display_status == "Sick bay"
+    assert projection.reason == "1 condition needs a cure before start."
+    assert projection.conditions == [_condition()]
     assert projection.primary_action is None
 
 

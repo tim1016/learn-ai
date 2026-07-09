@@ -2338,6 +2338,27 @@ async def test_status_marks_bot_sick_bay_for_terminal_account_condition(
     lifecycle = response.json()["daily_lifecycle"]
     assert lifecycle["display_status"] == "Sick bay"
     assert lifecycle["attention_badge"] == "Sick bay"
+    assert lifecycle["conditions"][0] == {
+        "scope": "bot",
+        "severity": "critical",
+        "title": "Bot ended without status",
+        "detail": (
+            f"{sid} exited without a run-status receipt for run {run_id}. "
+            "Retire & Replace is required."
+        ),
+        "owner_label": f"Bot {sid}",
+        "cure_action": "retire_replace",
+        "cure_label": "Retire & Replace",
+    }
+    assert {
+        "scope": "account",
+        "severity": "warning",
+        "title": "Account evidence not yet proven",
+        "detail": "No account-level reconciliation receipt exists for DU1234567.",
+        "owner_label": "Account DU1234567",
+        "cure_action": "reconcile_now",
+        "cure_label": "Run account reconcile",
+    } in lifecycle["conditions"]
 
 
 async def test_bot_catalog_authors_closed_lifecycle_status_and_last_run_labels(

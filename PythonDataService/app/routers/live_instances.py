@@ -100,6 +100,7 @@ from app.routers.live_runs import (
     _validate_path_segment,
     build_command_timeline,
 )
+from app.schemas.account_reconciliation import AccountConditionRow
 from app.schemas.account_recovery import CrashRecoveryOverrideRequest, CrashRecoveryOverrideResponse
 from app.schemas.action_plan import ActionPlan, ActionPlanPreviewResponse
 from app.schemas.daemon_diagnostics import DaemonDiagnosticReport
@@ -117,6 +118,7 @@ from app.schemas.live_runs import (
     BotCatalogResponse,
     BotDeleteRequest,
     BotDeleteResponse,
+    BotLifecycleCondition,
     BotLifecycleMutationResponse,
     BotLifecycleRosterRequest,
     BotRetireReplaceRequest,
@@ -518,17 +520,26 @@ def _visible_live_run_dir(root: Path, live_binding: LiveBinding) -> Path | None:
     return run_dir if run_dir.is_dir() else None
 
 
-def _lifecycle_condition_count(
+_LIFECYCLE_CONDITION_CURE_LABELS: dict[str, str] = {
+    "resolve_exposure": "Resolve exposure",
+    "clear_freeze": "Clear account freeze",
+    "reconcile_now": "Run account reconcile",
+    "prove_evidence": "Prove broker evidence",
+    "retire_replace": "Retire & Replace",
+}
+
+
+def _lifecycle_conditions(
     root: Path,
     *,
     account_id: str | None,
     sid: str,
     account_freeze: AccountFreezeEvidence | None,
     now_ms: int,
-) -> int:
-    fallback = 1 if account_freeze is not None else 0
+) -> tuple[list[BotLifecycleCondition], int]:
+    fallback_count = 1 if account_freeze is not None else 0
     if account_id is None:
-        return fallback
+        return [], fallback_count
     try:
         triage = AccountReconciliationService(artifacts_root=root.parent).triage(
             account_id=account_id,
@@ -543,13 +554,42 @@ def _lifecycle_condition_count(
                 "error": str(exc),
             },
         )
-        return fallback
-    return sum(
-        1
+        return [], fallback_count
+    conditions = [
+        condition
         for condition in triage.conditions
-        if condition.scope == "account"
+        if _condition_applies_to_instance(condition, sid)
+    ]
+    conditions.sort(key=_lifecycle_condition_sort_key)
+    return [_to_lifecycle_condition(condition) for condition in conditions], len(conditions)
+
+
+def _condition_applies_to_instance(condition: AccountConditionRow, sid: str) -> bool:
+    return (
+        condition.scope == "account"
         or condition.owner.strategy_instance_id == sid
         or sid in condition.affected_strategy_instance_ids
+    )
+
+
+def _lifecycle_condition_sort_key(condition: AccountConditionRow) -> tuple[int, int, int, str]:
+    severity_rank = 0 if condition.severity == "critical" else 1
+    scope_rank = 0 if condition.scope == "bot" else 1
+    return (severity_rank, scope_rank, -condition.evidence_at_ms, condition.condition_type)
+
+
+def _to_lifecycle_condition(condition: AccountConditionRow) -> BotLifecycleCondition:
+    return BotLifecycleCondition(
+        scope=condition.scope,
+        severity=condition.severity,
+        title=condition.title,
+        detail=condition.detail,
+        owner_label=condition.owner.label,
+        cure_action=condition.cure_action,
+        cure_label=_LIFECYCLE_CONDITION_CURE_LABELS.get(
+            condition.cure_action,
+            condition.cure_action,
+        ),
     )
 
 
@@ -1728,7 +1768,7 @@ async def _resolve_instance_status_from_process(
     )
     lifecycle_state = _resolve_bot_lifecycle_state(root, sid)
     roll_call_offer = _active_roll_call_offer(root, sid, now_ms=observed_at_ms)
-    lifecycle_condition_count = _lifecycle_condition_count(
+    lifecycle_conditions, lifecycle_condition_count = _lifecycle_conditions(
         root,
         account_id=instance_account_id,
         sid=sid,
@@ -1745,6 +1785,7 @@ async def _resolve_instance_status_from_process(
             persisted_state=lifecycle_state,
             roll_call_offer=roll_call_offer,
             condition_count=lifecycle_condition_count,
+            conditions=tuple(lifecycle_conditions),
             now_ms=observed_at_ms,
         )
     )
