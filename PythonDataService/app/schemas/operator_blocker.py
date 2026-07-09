@@ -1,8 +1,8 @@
 """Backend-authored OperatorBlocker contract.
 
-This is the shared atom for deploy-preflight now and bot-control blockers in a
-later slice. The disposition/move invariant prevents a blocker from rendering
-without an honest recovery move.
+This is the shared atom for deploy-preflight and bot-control blockers. The
+disposition/move invariant prevents a blocker from rendering without an honest
+recovery move.
 """
 
 from __future__ import annotations
@@ -33,6 +33,15 @@ class ConfirmInFormAction(BaseModel):
     anchor: str
 
 
+class OpenRunbookAction(BaseModel):
+    """Move: open an operator runbook by backend-authored slug."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["open_runbook"]
+    slug: str
+
+
 class RetireReplaceAction(BaseModel):
     """Move: retire this bot and start a fresh deploy flow with lineage kept."""
 
@@ -50,7 +59,7 @@ class RemoveAction(BaseModel):
 
 
 OperatorAction = Annotated[
-    NavigateAction | ConfirmInFormAction | RetireReplaceAction | RemoveAction,
+    NavigateAction | ConfirmInFormAction | OpenRunbookAction | RetireReplaceAction | RemoveAction,
     Field(discriminator="kind"),
 ]
 

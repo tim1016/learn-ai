@@ -25,6 +25,7 @@ from app.schemas.account_truth import (
     AccountTruthMessage,
     AccountTruthResponse,
 )
+from app.schemas.daemon_diagnostics import DaemonDominantCondition
 from app.schemas.live_runs import (
     DesiredStateView,
     GateResult,
@@ -40,6 +41,7 @@ from app.schemas.live_runs import (
 )
 from app.services import operator_surface as operator_surface_module
 from app.services.account_truth_snapshot import AccountTruthSnapshot
+from app.services.deploy_preflight import DeployPreflightSignals, author_deploy_blockers
 from app.services.operator_capability import REASON_CODES, evaluate_action
 from app.services.operator_surface import compute_operator_surface
 from app.services.resume_guard_state import (
@@ -436,6 +438,83 @@ def test_operator_surface_authors_retired_terminal_blocker() -> None:
     assert blocker.primary_move is not None
     assert blocker.primary_move.action.kind == "remove"
     assert [move.action.kind for move in blocker.secondary_moves] == ["retire_replace"]
+
+
+def test_operator_surface_authors_broker_disconnected_blocker() -> None:
+    surface = _surface(
+        process=_IDLE_PROC,
+        broker_connection_state="disconnected",
+    )
+
+    blocker = next(blocker for blocker in surface.blockers if blocker.id == "broker_disconnected")
+
+    assert blocker.severity == "blocking"
+    assert blocker.disposition == "fix_elsewhere"
+    assert blocker.primary_move is not None
+    assert blocker.primary_move.label == "Connect the broker"
+    assert blocker.primary_move.action.kind == "navigate"
+
+
+def test_broker_disconnected_blocker_matches_deploy_and_run_surfaces() -> None:
+    deploy_blocker = next(
+        blocker
+        for blocker in author_deploy_blockers(
+            DeployPreflightSignals(
+                daemon_reachable=True,
+                broker_connection_state="disconnected",
+                account_frozen=False,
+                account_proven=True,
+                fleet_blocks_starts=False,
+                strategy_deployable=True,
+                instance_already_running=False,
+            )
+        )
+        if blocker.id == "broker_disconnected"
+    )
+    run_blocker = next(
+        blocker
+        for blocker in _surface(process=_IDLE_PROC, broker_connection_state="disconnected").blockers
+        if blocker.id == "broker_disconnected"
+    )
+
+    assert run_blocker.headline == deploy_blocker.headline
+    assert run_blocker.detail == deploy_blocker.detail
+    assert run_blocker.primary_move is not None
+    assert deploy_blocker.primary_move is not None
+    assert run_blocker.primary_move.label == deploy_blocker.primary_move.label
+    assert run_blocker.primary_move.action == deploy_blocker.primary_move.action
+
+
+def test_operator_surface_authors_fleet_contamination_blocker() -> None:
+    surface = _surface(fleet_blocks_starts=True)
+
+    blocker = next(blocker for blocker in surface.blockers if blocker.id == "fleet_contaminated")
+
+    assert blocker.disposition == "fix_elsewhere"
+    assert blocker.primary_move is not None
+    assert blocker.primary_move.label == "Clear fleet state"
+    assert blocker.primary_move.action.kind == "navigate"
+
+
+@pytest.mark.parametrize(
+    ("condition", "expected_id"),
+    [
+        (DaemonDominantCondition.REGISTRY_AMNESIA, "registry_amnesia"),
+        (DaemonDominantCondition.ORPHANED_SOCKET, "orphaned_socket"),
+    ],
+)
+def test_operator_surface_authors_daemon_diagnostic_blockers(
+    condition: DaemonDominantCondition,
+    expected_id: str,
+) -> None:
+    surface = _surface(daemon_diagnostic_condition=condition)
+
+    blocker = next(blocker for blocker in surface.blockers if blocker.id == expected_id)
+
+    assert blocker.disposition == "fix_elsewhere"
+    assert blocker.primary_move is not None
+    assert blocker.primary_move.label == "Restart the launcher"
+    assert blocker.primary_move.action.kind == "open_runbook"
 
 
 def test_host_process_start_capability_crash_recovery_required_blocks_start() -> None:

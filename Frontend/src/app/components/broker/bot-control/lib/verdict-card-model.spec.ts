@@ -125,7 +125,7 @@ describe('resolveVerdictCardModel', () => {
     expect(model.showChecklist).toBe(true);
   });
 
-  it('treats a crash-recovery start gate as the top-priority verb', () => {
+  it('treats a crash-recovery start gate as the top-priority verb when no blocker owns the card', () => {
     const model = resolveVerdictCardModel(
       statusWith({ display_status: 'Sick bay', primary_action: null }, (status) => {
         status.operator_surface.host_process.start_capability = {
@@ -139,6 +139,58 @@ describe('resolveVerdictCardModel', () => {
     );
 
     expect(model.verb).toEqual({ kind: 'crash_recovery' });
+  });
+
+  it('renders a non-terminal blocker as the primary card verb', () => {
+    const model = resolveVerdictCardModel(
+      statusWith({ display_status: 'Sick bay', primary_action: null }, (status) => {
+        status.operator_surface.blockers = [
+          {
+            id: 'broker_disconnected',
+            severity: 'blocking',
+            disposition: 'fix_elsewhere',
+            headline: 'Broker disconnected',
+            detail: 'Connect the IBKR session before deploying or starting this bot.',
+            primary_move: {
+              label: 'Connect the broker',
+              action: { kind: 'navigate', route: '/broker', fragment: null },
+              target: null,
+            },
+            secondary_moves: [],
+            applies_to: 'both',
+          },
+        ];
+      }),
+    );
+
+    expect(model.stateLabel).toBe('Broker disconnected');
+    expect(model.reason).toBe('Connect the IBKR session before deploying or starting this bot.');
+    expect(model.verb).toEqual({
+      kind: 'blocker_move',
+      move: expect.objectContaining({ label: 'Connect the broker' }),
+    });
+  });
+
+  it('renders a wait blocker without falling through to another verb', () => {
+    const model = resolveVerdictCardModel(
+      statusWith({ display_status: 'Ready' }, (status) => {
+        status.operator_surface.blockers = [
+          {
+            id: 'broker_reconnecting',
+            severity: 'blocking',
+            disposition: 'wait',
+            headline: 'Broker connection is recovering',
+            detail: 'Waiting for the broker session to recover before new submit activity.',
+            primary_move: null,
+            secondary_moves: [],
+            applies_to: 'both',
+          },
+        ];
+      }),
+    );
+
+    expect(model.stateLabel).toBe('Broker connection is recovering');
+    expect(model.verb).toEqual({ kind: 'none' });
   });
 
   it('renders a retired terminal blocker as the dead-end with only terminal moves', () => {

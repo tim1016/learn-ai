@@ -37,6 +37,22 @@ def test_broker_disconnected_blocks_deploy() -> None:
     assert "broker_disconnected" in {blocker.id for blocker in blockers}
 
 
+def test_broker_disconnected_blocker_contract() -> None:
+    blocker = next(
+        blocker
+        for blocker in author_deploy_blockers(
+            _healthy().model_copy(update={"broker_connection_state": "disconnected"})
+        )
+        if blocker.id == "broker_disconnected"
+    )
+
+    assert blocker.headline == "Broker disconnected"
+    assert blocker.detail == "Connect the IBKR session before deploying or starting this bot."
+    assert blocker.primary_move is not None
+    assert blocker.primary_move.label == "Connect the broker"
+    assert blocker.primary_move.action.kind == "navigate"
+
+
 def test_broker_soft_lost_is_wait_with_no_move() -> None:
     blockers = author_deploy_blockers(
         _healthy().model_copy(update={"broker_connection_state": "soft_lost"})

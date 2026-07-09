@@ -100,7 +100,7 @@ from app.routers.live_runs import (
 )
 from app.schemas.account_recovery import CrashRecoveryOverrideRequest, CrashRecoveryOverrideResponse
 from app.schemas.action_plan import ActionPlan, ActionPlanPreviewResponse
-from app.schemas.daemon_diagnostics import DaemonDiagnosticReport
+from app.schemas.daemon_diagnostics import DaemonDiagnosticReport, DaemonDominantCondition
 from app.schemas.live_runs import (
     ActiveDateEntry,
     ActivityBrokerCategorySummary,
@@ -304,6 +304,7 @@ _ACTION_TO_VERB = {
 }
 
 _STATUS_ACTIVITY_BOOTSTRAP_TIMEOUT_S = 2.0
+_STATUS_DAEMON_DIAGNOSTICS_TIMEOUT_S = 1.5
 
 logger = logging.getLogger(__name__)
 
@@ -1551,6 +1552,44 @@ async def _resolve_activity_publisher_for_status(
     return publisher, registry.registered_at_ms(sid)
 
 
+async def _resolve_daemon_diagnostic_condition_for_status(
+    sid: str,
+) -> DaemonDominantCondition | None:
+    try:
+        report = await asyncio.wait_for(
+            get_daemon_diagnostics_service().report(strategy_instance_id=sid),
+            timeout=_STATUS_DAEMON_DIAGNOSTICS_TIMEOUT_S,
+        )
+    except Exception as exc:
+        logger.warning(
+            "status-time daemon diagnostics deferred (%s)",
+            exc,
+            extra={"strategy_instance_id": sid},
+        )
+        return None
+    instance = next(
+        (row for row in report.per_instance if row.strategy_instance_id == sid),
+        None,
+    )
+    if instance is None:
+        return None
+    return instance.dominant_condition
+
+
+async def _resolve_fleet_blocks_starts_for_status(
+    settings: IbkrSettings,
+    root: Path,
+) -> bool:
+    if not settings.fleet_dirty_blocks_starts:
+        return False
+    try:
+        fleet = await _compute_account_fleet_contamination(settings, root)
+    except Exception as exc:
+        logger.warning("status-time fleet contamination deferred (%s)", exc)
+        return False
+    return fleet.policy_blocks_starts
+
+
 async def _resolve_instance_status_from_process(
     sid: str,
     root: Path,
@@ -1629,6 +1668,10 @@ async def _resolve_instance_status_from_process(
         sid,
         live_binding,
     )
+    fleet_blocks_starts, daemon_diagnostic_condition = await asyncio.gather(
+        _resolve_fleet_blocks_starts_for_status(settings, root),
+        _resolve_daemon_diagnostic_condition_for_status(sid),
+    )
     incident_headline = _resolve_incident_headline(root, live_binding, runs)
     lifecycle_state = _resolve_bot_lifecycle_state(root, sid)
     operator_surface = compute_operator_surface(
@@ -1652,6 +1695,8 @@ async def _resolve_instance_status_from_process(
         latest_mutation=latest_mutation,
         broker_observation_consistency=broker_observation_consistency,
         account_truth_snapshot=account_truth_snapshot,
+        fleet_blocks_starts=fleet_blocks_starts,
+        daemon_diagnostic_condition=daemon_diagnostic_condition,
         host_start_command=settings.live_runner_host_start_command,
         start_run_id=_resolve_start_run_id(root, live_binding, runs),
         account_freeze=account_freeze,

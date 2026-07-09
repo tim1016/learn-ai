@@ -17,6 +17,7 @@
       (accountMonitorRequested)="openAccountMonitor()"
       (removeRequested)="openRemoveBotConfirm()"
       (terminalRetireReplaceRequested)="openTerminalRetireReplaceConfirm()"
+      (blockerMoveRequested)="invokeBlockerMove($event)"
     />
   } @else if (!errorMessage()) {
     <p class="loading">Loading bot control...</p>

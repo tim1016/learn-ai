@@ -41,6 +41,7 @@ The layout is now ranked by the six trader questions above. Cards default to a o
 - **Daily cap** — the count is read verbatim from `readiness.gates` where `name === 'orders_cap'`. When the engine has not emitted a typed cap, the card says so honestly ("Daily cap status not reported by the engine") — no fabricated counter.
 - **Incidents** — backend `IncidentCategory` enum + `parse_incidents` classifier (#565 PR 1, #566) is the single source of truth. The frontend `INCIDENT_COPY` map (PR6) is operator-language presentation only; unknown categories degrade to "Unknown error — see raw traceback."
 - **Readiness** — gate-by-gate detail strings are surfaced verbatim. The Can-It-Trade card leads with the verdict and proportional count; the floating Pre-Trade Checklist renders the affordance-per-gate UX.
+- **Operator blockers** — deploy preflight and bot control both render the backend-authored `OperatorBlocker[]` contract (ADR-0027). A blocker carries one disposition: `fix_here`, `fix_elsewhere`, `wait`, or `terminal`. `fix_here` and `fix_elsewhere` must carry a `primary_move`; `wait` must not carry a move; `terminal` must carry at least one terminal move. The page never invents copy or a cure from raw reason codes.
 - **Page-wide collapse rule** (added 2026-06-17) — cards collapse to a one-line summary in steady state and **auto-expand when the operator needs to act**. The expansion trigger is *always a server-authored verdict* (readiness verdict, posture computed from server-side filtered positions, prior-run exit class) — never a frontend-derived heuristic. This is the same single-source-of-truth principle ADR 0011 applies to the broker safety verdict, generalized to the page's reactive layout. Implications: (a) a new card MUST identify its server-authored expand trigger before being added; (b) two clients viewing the same status payload MUST resolve to the same expanded/collapsed configuration; (c) "feels off, let me expand it ambient-style" is not a valid trigger — if a card has no verdict-driven expand condition, it doesn't belong in the page flow.
 - **Disabled-action tooltip rule** (added 2026-06-17) — every disabled banner action renders an operator-language reason from a `DISABLED_REASON_COPY` map keyed by the structured reason code returned by the API (e.g. `broker_safety_not_paper_only` per ADR 0011, `unresolved_uncertain_intent` per ADR 0008, `reconciliation_not_clean` per ADR 0010 § Decision 3). The tooltip is verdict-level only; per-gate detail lives in the Can-It-Trade card. Unknown reason codes degrade to "*This action can't be taken right now — see Can-It-Trade card.*" The tooltip never invents a reason — same pattern as `INCIDENT_COPY`.
 - **Banner operator-action contract** (added 2026-06-17) — the banner action toolbar contains exactly **Resume, Pause, Flatten-and-pause**, plus a kebab for **Stop**. Mark-poisoned lives in the Detective Diagnostics tab header (not the banner). All five affordances and their primitives are governed by ADR 0010 — the cosmetic Stop-into-kebab decision is the only deviation and does not revise the ADR (it is a UI layout call, not a contract change).
@@ -54,6 +55,26 @@ The 13-PR sequence intentionally defers the following beyond #565:
 - **Per-gate affordances on the Readiness card** (User Stories #11 – #13) — button / nav-link / read-only note per gate. The existing Pre-Trade Checklist already renders these via the parent's `fixAction()` taxonomy; full extraction to the new card lands after the sticky bar takes ownership of Start / Pause / Stop.
 - **Next-evaluation timestamp on the signal strip** (User Story #24) — needs a new backend contract field; today the strip is a no-new-math addition.
 - **Per-resource transport staleness outside child runtime** (User Stories #41 – #44) — PRD #619-B now supplies child `runtime_freshness` from `engine_runtime.json`, including a `LAST-KNOWN` banner and backend-authored Resume / Flatten gating. PRD #619-C still owns typed data-plane↔daemon transport state (`RETRYING`, `UNREACHABLE`, auth/protocol errors) and browser poll-failure age.
+
+## Operator blocker dispositions (2026-07-09)
+
+`operator_surface.blockers[0]` owns the verdict-card headline, detail, tone, and primary verb when present. The same blocker id and move shape is emitted by deploy preflight where the condition applies to both surfaces; for example, `broker_disconnected` renders as `fix_elsewhere` with the backend-authored `Connect the broker` move on deploy and run surfaces.
+
+The current run-surface catalog:
+
+| id | disposition | move |
+|---|---|---|
+| `retired` | `terminal` | `Remove`; secondary `Replace` |
+| `run_poisoned` | `terminal` | `Replace`; secondary `Remove` |
+| `daemon_down` | `fix_elsewhere` | Navigate to `/engine` |
+| `broker_disconnected` | `fix_elsewhere` | Navigate to `/broker` |
+| `broker_reconnecting` | `wait` | no move |
+| `fleet_contaminated` | `fix_elsewhere` | Navigate to Account Monitor reconciliation action |
+| `account_not_proven` | `fix_elsewhere` | Navigate to Account Monitor reconciliation action |
+| `registry_amnesia` | `fix_elsewhere` | Open daemon diagnostics runbook |
+| `orphaned_socket` | `fix_elsewhere` | Open broker session orphaned socket runbook |
+
+`registry_amnesia` and `orphaned_socket` deliberately route to runbooks in the broker session mirror area. The operator action is launcher/session recovery, not a fake one-click bot restart. `fleet_contaminated` deliberately routes to Account Monitor because fleet policy is account-scoped, not owned by a single bot card.
 
 ## Post-merge cleanup (the actual #565 PR 13 sweep)
 

@@ -10,6 +10,12 @@ describe('resolveOperatorRunbookRoute', () => {
     expect(resolveOperatorRunbookRoute('cross-client-execution')).toEqual({
       commands: ['/broker/reconciliation'],
     });
+    expect(resolveOperatorRunbookRoute('broker-session-orphaned-socket')).toEqual({
+      commands: ['/broker/session-mirror'],
+    });
+    expect(resolveOperatorRunbookRoute('daemon-diagnostics')).toEqual({
+      commands: ['/broker/session-mirror'],
+    });
   });
 
   it('keeps bot-scoped runbooks on the current bot when an instance id is available', () => {
