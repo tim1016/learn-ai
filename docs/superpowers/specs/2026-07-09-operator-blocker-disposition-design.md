@@ -56,9 +56,7 @@ disposition ∈ { fix_here | fix_elsewhere | wait | terminal }   # closed enum
 ```python
 class OperatorMove(BaseModel):           # backend-authored
     label: str                           # trader prose, e.g. "Connect the broker"
-    action: OperatorAction               # closed union: existing capability / endpoint /
-                                         #   focus-nav / runbook / redeploy / retire / remove /
-                                         #   confirm-in-form
+    action: OperatorAction               # canonical SUPERSET union (see below)
     target: str | None                   # route + fragment / runbook slug / endpoint id
 
 class OperatorBlocker(BaseModel):        # backend-authored, closed
@@ -71,6 +69,8 @@ class OperatorBlocker(BaseModel):        # backend-authored, closed
     secondary_moves: list[OperatorMove]  # e.g. terminal offers both Replace and Remove
     applies_to: Literal["deploy", "run", "both"]
 ```
+
+**`OperatorAction` is a canonical superset, not a rename of an existing union.** Today the two action unions in `schemas/live_runs.py` differ: `GateSuggestedAction` (line 1703) is `InvokeCapabilityAction | FocusAction | RedeployAction | OpenRunbookAction` (**no** `invoke_endpoint`), while `TraderPrimaryRemediation` **includes** `InvokeEndpointAction`. We define `OperatorAction` as the superset — the existing members plus `InvokeEndpointAction` and the new `RetireReplaceAction` / `RemoveAction` / `ConfirmInFormAction` — and keep `GateSuggestedAction` / `TraderPrimaryRemediation` as narrower subsets where those seams already constrain the choices. No parallel taxonomy; one superset, existing subsets preserved.
 
 **severity ≠ disposition** (orthogonal). A `wait` blocker is still `blocking` at deploy time — you genuinely cannot run yet — it just renders muted with no fake button.
 
@@ -133,7 +133,8 @@ Every failure mode found in the code, pinned to disposition + move. **★ = brok
 | `instance_already_running` (`ALREADY_RUNNING`) | deploy | blocking | "Go to the running bot →" | |
 | `daemon_incompatible_contract` | run | blocking | "Rebuild & redeploy the daemon →" (runbook) | infra |
 | `orphaned_socket` / `registry_amnesia` | run | blocking | "Restart the launcher →" (runbook) | ★ no clear guidance today |
-| `account_exposure_unresolved` (`resolve_exposure`) | both | blocking | "Flatten at broker →" | ★ dead-ends today (ticket only) |
+| `account_exposure_unresolved` (`resolve_exposure`) | both | blocking | "Flatten exposure (Account Monitor) →" | routed, **not** a ticket — Account Monitor already has flatten + audited override (`flattenExposureFromDialog` → `emergencyFlattenAccount`, `broker-account-monitor.component.ts:459`) |
+| `broker_evidence_unproven` (`prove_evidence`) | run | blocking | "Refresh broker evidence (Account Monitor) →" | ★ demoted from `fix_here` — **no one-call endpoint exists** (`InvokeEndpointAction.endpoint` is `reconcile_instance` only). Honest link, not a fake button. Do **not** reuse the crash-recovery override — that is `CRASH_RECOVERY_REQUIRED`-specific, not generic broker-evidence proof |
 
 ### `fix_here` — in-UI button, on the bot's own screen
 
@@ -146,7 +147,6 @@ Every failure mode found in the code, pinned to disposition + move. **★ = brok
 | `positions_inconsistent` (`positions_self_consistent`) | run | blocking | [Flatten & pause] | |
 | `identity_coherence_unconfirmed` | deploy | blocking | [Confirm identity & deploy] | in-form |
 | `exposure_coherence_unconfirmed` | deploy | blocking | [Confirm exposure & deploy] | in-form |
-| `broker_evidence_unproven` (`prove_evidence`) | run | blocking | [Prove broker evidence] | ★ dead-ends today — needs endpoint, else demote to `fix_elsewhere` |
 | `waiting_for_host` (`WAITING_FOR_HOST`/`IDLE`) | run | warning | [Start] | roll-call / start offer |
 
 ### `wait` — transient, muted, no button (button stays disabled but honest)
@@ -154,6 +154,8 @@ Every failure mode found in the code, pinned to disposition + move. **★ = brok
 | id | applies | sev | shows |
 |---|---|---|---|
 | `broker_reconnecting` (`reconnecting`/`recovering`/`soft_lost`) | both | blocking | "Waiting for broker to reconnect…" |
+| `broker_data_farm_degraded` (`degraded_data_farm`) | both | **blocking** | "Waiting for IBKR data farm to recover — don't submit until healthy" — backend already marks this `severity="critical"` / "do not submit until healthy" (`operator_broker_projection.py:110`) |
+| `broker_subscriptions_stale` (`subscriptions_stale`) | both | blocking (deploy) / warning (run) | "Resubscribe required — waiting for streams" — backend `severity="warning"`; on the single-button deploy path we treat resubscribe-required as `wait`-blocking (don't start into it) |
 | `session_closed` / `calendar` / `warmup` / `instrument_surface` (`WAIT_FOR_CONDITION`) | run | blocking | "Waiting for market open / warmup…" |
 | `daily_cap_reached` (`daily_order_cap`) | run | warning | "Order cap hit — resets next session" |
 | `roll_call_pending` | run | warning | "Run roll call for a fresh start offer" |
@@ -165,6 +167,8 @@ Every failure mode found in the code, pinned to disposition + move. **★ = brok
 | `run_poisoned` (`STOPPED_REQUIRES_REDEPLOY`, `poison_sentinel`) | run | blocking | [Replace] (retire + fresh deploy) · [Remove] | redeploy is the only path |
 | `retired` (phase `RETIRED`) | run | blocking | [Remove] (soft-delete) · [Replace] | read-only today; now honest |
 | `exited_unrecoverable` (redeploy-required exits) | run | blocking | [Replace] · [Remove] | |
+
+**Terminal moves map to existing endpoints** (no new mutations): **Replace** → `POST /api/live-instances/{id}/retire-and-replace` (`live_instances.py:2758`; requires `confirm_account_flat` attestation, else 409 `ACCOUNT_FLAT_ATTESTATION_REQUIRED`). **Remove** → `DELETE /api/live-instances/{id}` (soft-delete via `deleteBot`, `live-runs.service.ts:238`) — **not** `POST …/delete`.
 
 **Not terminal:** `spec_signature` / `indicator_state_hydration` are redeploy-fixable but not dead → `fix_here`-via-Replace (Replace offered, bot not declared unrecoverable). `crash_recovery_required` is `fix_here` (attestation), not terminal.
 
@@ -185,7 +189,7 @@ Every failure mode found in the code, pinned to disposition + move. **★ = brok
 
 ### Slice 3 — Residual cures + anti-drift + docs → closes the tail of *scattered recovery*
 
-- Wire the ★ dead-ends: `prove_evidence` endpoint (or honest demote to `fix_elsewhere`); `fleet` clear path; orphaned-socket guidance.
+- Wire the residual ★ rows: `fleet_contaminated` clear path; `orphaned_socket` / `registry_amnesia` launcher-restart guidance. (`prove_evidence` and `resolve_exposure` are already resolved as routed `fix_elsewhere` in Slice 2; a first-class `prove_evidence` endpoint remains deferred.)
 - **Parity test:** a shared blocker id (`broker_disconnected`) renders identically on deploy-preflight and run surfaces — the structural anti-drift guarantee.
 - Update `docs/runbooks/broker-instance-operator-surface.md`; add an ADR recording the disposition taxonomy.
 
@@ -196,9 +200,11 @@ Every failure mode found in the code, pinned to disposition + move. **★ = brok
 - New recovery *mechanics* beyond wiring existing capabilities/endpoints to blockers (Slice 3 only wires what already exists or is a thin endpoint).
 - Real-time liveness semantics — halts remain owned by the live feed per `temporal-rigor.md`; blockers render the projected state.
 
-## 9. Open decisions (resolve during spec review / planning)
+## 9. Decisions (resolved during spec review 2026-07-09)
 
-1. **`broker_evidence_unproven` (`prove_evidence`):** wire a real in-UI endpoint (`fix_here`) or demote to an honest `fix_elsewhere` link? Default: demote unless a one-call endpoint already exists.
-2. **`OperatorAction` union membership:** reuse the existing `GateSuggestedAction` union (`invoke_capability` / `focus_action` / `redeploy` / `open_runbook` / `invoke_endpoint`) and extend with `retire` / `remove` / `confirm_in_form`, vs. define a fresh union. Default: extend the existing union to avoid a parallel taxonomy.
-3. **Blocker ordering / dominance:** `blockers[0]` drives the single verb. Reuse the existing blockage-ladder / notice-placement ordering (ADR-0025 single-dominant-headline) rather than a new sort. Default: reuse.
-4. **Terminal `Remove` semantics:** confirm `Remove` maps to the existing soft-delete (`POST …/delete`, hide-from-catalog), and `Replace` maps to retire-and-replace with lineage.
+1. **`broker_evidence_unproven` (`prove_evidence`) → `fix_elsewhere` (RESOLVED).** No one-call endpoint exists (`InvokeEndpointAction.endpoint` is `reconcile_instance` only, `live_runs.py:1681`). Demote to an honest routed link (Account Monitor / refresh broker evidence). Do **not** reuse the crash-recovery override — it is `CRASH_RECOVERY_REQUIRED`-specific, not generic broker-evidence proof. A real `fix_here` endpoint is deferred (out of scope for Slices 1–2).
+2. **`OperatorAction` = canonical superset (RESOLVED).** The two existing unions differ — `GateSuggestedAction` (`live_runs.py:1703`) excludes `invoke_endpoint`; `TraderPrimaryRemediation` includes it. Define `OperatorAction` as the superset (existing members + `InvokeEndpointAction` + new `RetireReplaceAction`/`RemoveAction`/`ConfirmInFormAction`) and keep `GateSuggestedAction` / `TraderPrimaryRemediation` as narrower subsets. No fresh parallel taxonomy, no lossy rename of `GateSuggestedAction`.
+3. **Blocker ordering / dominance (RESOLVED, default kept).** `blockers[0]` drives the single verb; reuse the existing blockage-ladder / notice-placement ordering (ADR-0025 single-dominant-headline) rather than a new sort.
+4. **Terminal semantics (RESOLVED).** `Replace` → `POST /api/live-instances/{id}/retire-and-replace` (lineage kept, `confirm_account_flat` attestation, `live_instances.py:2758`). `Remove` → `DELETE /api/live-instances/{id}` (soft-delete / hide-from-catalog via `deleteBot`, `live-runs.service.ts:238`). `resolve_exposure` is a routed `fix_elsewhere` (Account Monitor flatten + audited override, `broker-account-monitor.component.ts:459`), not a ticket dead-end.
+
+No blocking questions remain for Slice 1 execution.
