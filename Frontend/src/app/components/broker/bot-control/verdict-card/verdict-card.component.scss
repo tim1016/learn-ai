@@ -249,6 +249,46 @@
   }
 }
 
+.vc-terminal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+}
+
+.vc-terminal-action {
+  min-width: 7.5rem;
+  padding: 0.75rem 1.35rem;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--vc-accent);
+  color: var(--text-on-accent, #fff);
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    filter: brightness(1.05);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--vc-accent);
+    outline-offset: 3px;
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+.vc-terminal-action--secondary {
+  border: 1px solid var(--vc-accent);
+  background: var(--bg-surface);
+  color: var(--vc-accent);
+}
+
 .vc-checklist-note {
   margin: 0.5rem 0 0;
   font-size: var(--fs-sm);

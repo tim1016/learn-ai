@@ -223,6 +223,7 @@ function status(
         as_of_ms: 0,
       },
       readiness_gates: [],
+      blockers: [],
       runtime_freshness: null,
       control_plane: controlPlaneState === null ? null : controlPlane(controlPlaneState),
       broker_observation_consistency: null,

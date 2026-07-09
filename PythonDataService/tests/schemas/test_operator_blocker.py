@@ -7,6 +7,8 @@ from app.schemas.operator_blocker import (
     NavigateAction,
     OperatorBlocker,
     OperatorMove,
+    RemoveAction,
+    RetireReplaceAction,
 )
 
 
@@ -73,3 +75,28 @@ def test_valid_fix_elsewhere_blocker_constructs() -> None:
 
     assert blocker.primary_move is not None
     assert blocker.primary_move.action.kind == "navigate"
+
+
+def test_terminal_blocker_accepts_replace_and_remove_moves() -> None:
+    blocker = OperatorBlocker(
+        id="run_poisoned",
+        severity="blocking",
+        disposition="terminal",
+        headline="Can't recover",
+        detail="This run is poisoned and cannot be restarted safely.",
+        primary_move=OperatorMove(
+            label="Replace",
+            action=RetireReplaceAction(kind="retire_replace"),
+        ),
+        secondary_moves=[
+            OperatorMove(
+                label="Remove",
+                action=RemoveAction(kind="remove"),
+            )
+        ],
+        applies_to="run",
+    )
+
+    assert blocker.primary_move is not None
+    assert blocker.primary_move.action.kind == "retire_replace"
+    assert blocker.secondary_moves[0].action.kind == "remove"

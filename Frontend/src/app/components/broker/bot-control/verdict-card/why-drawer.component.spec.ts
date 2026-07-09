@@ -3,6 +3,7 @@ import { TestBed, type ComponentFixture } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { OperatorGate } from '../../../../api/live-instances.types';
+import type { OperatorBlocker } from '../../../../api/operator-blocker.types';
 import { makeStatus } from '../bot-control-page.fixtures';
 import { WhyDrawerComponent } from './why-drawer.component';
 
@@ -30,6 +31,27 @@ const failingGate: OperatorGate = {
   },
   suggested_action: null,
   suggested_action_unavailable_reason: 'none',
+};
+
+const terminalBlocker: OperatorBlocker = {
+  id: 'retired',
+  severity: 'blocking',
+  disposition: 'terminal',
+  headline: "Can't recover",
+  detail: 'This bot has been retired. Remove it from the catalog or replace it.',
+  primary_move: {
+    label: 'Remove',
+    action: { kind: 'remove' },
+    target: null,
+  },
+  secondary_moves: [
+    {
+      label: 'Replace',
+      action: { kind: 'retire_replace' },
+      target: null,
+    },
+  ],
+  applies_to: 'run',
 };
 
 describe('WhyDrawerComponent', () => {
@@ -67,6 +89,21 @@ describe('WhyDrawerComponent', () => {
     const text = (fixture.nativeElement as HTMLElement).textContent ?? '';
     expect(text).toContain('Not yet proven');
     expect(text).not.toContain('Unknown');
+  });
+
+  it('groups operator blockers by disposition without adding drawer actions', () => {
+    const fixture = renderDrawer();
+    fixture.componentRef.setInput('guidance', null);
+    fixture.componentRef.setInput('blockers', [terminalBlocker]);
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    const text = el.textContent ?? '';
+    expect(text).toContain("Can't recover");
+    expect(text).toContain('This bot has been retired.');
+    expect(text).toContain('Remove');
+    expect(text).toContain('Replace');
+    expect(el.querySelector('.why-drawer__blocker button')).toBeNull();
   });
 
   it('emits closed when the close button is clicked', () => {

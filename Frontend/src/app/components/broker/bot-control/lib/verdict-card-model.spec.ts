@@ -7,6 +7,7 @@ import type {
 } from '../../../../api/live-instances.types';
 import { makeStatus } from '../bot-control-page.fixtures';
 import { makeDailyLifecycleFixture } from '../../../../testing/live-instance-status-fixtures';
+import { addRetiredTerminalBlocker } from '../../../../testing/operator-surface-fixtures';
 import { formatPosition, resolveVerdictCardModel } from './verdict-card-model';
 
 function statusWith(
@@ -140,15 +141,63 @@ describe('resolveVerdictCardModel', () => {
     expect(model.verb).toEqual({ kind: 'crash_recovery' });
   });
 
-  it('marks a Retired bot read-only and suppresses remediation verbs', () => {
+  it('renders a retired terminal blocker as the dead-end with only terminal moves', () => {
     // The default status carries a reconcile remediation; a retired bot must
-    // still show no verb because remediations never become its primary verb.
+    // still show no hopeful verb because the backend authored terminal moves.
     const model = resolveVerdictCardModel(
-      statusWith({ display_status: 'Retired', phase: 'RETIRED', primary_action: null }),
+      statusWith(
+        { display_status: 'Retired', phase: 'RETIRED', primary_action: null },
+        addRetiredTerminalBlocker,
+      ),
     );
 
     expect(model.readOnly).toBe(true);
+    expect(model.stateLabel).toBe("Can't recover");
+    expect(model.tone).toBe('danger');
     expect(model.verb).toEqual({ kind: 'none' });
+    expect(model.terminalMoves.map((move) => move.action.kind)).toEqual([
+      'remove',
+      'retire_replace',
+    ]);
+  });
+
+  it('suppresses lifecycle overflow for a poisoned non-retired terminal blocker', () => {
+    const model = resolveVerdictCardModel(
+      statusWith({ display_status: 'Off duty', phase: 'OFF_DUTY' }, (status) => {
+        status.operator_surface.blockers = [
+          {
+            id: 'run_poisoned',
+            severity: 'blocking',
+            disposition: 'terminal',
+            headline: "Can't recover",
+            detail: 'This run is poisoned and cannot be restarted safely.',
+            primary_move: {
+              label: 'Replace',
+              action: { kind: 'retire_replace' },
+              target: null,
+            },
+            secondary_moves: [
+              {
+                label: 'Remove',
+                action: { kind: 'remove' },
+                target: null,
+              },
+            ],
+            applies_to: 'run',
+          },
+        ];
+      }),
+    );
+
+    expect(model.stateLabel).toBe("Can't recover");
+    expect(model.verb).toEqual({ kind: 'none' });
+    expect(model.ambientActions).toEqual([]);
+    expect(model.showOverflow).toBe(false);
+    expect(model.showConditionCure).toBe(false);
+    expect(model.terminalMoves.map((move) => move.action.kind)).toEqual([
+      'retire_replace',
+      'remove',
+    ]);
   });
 });
 

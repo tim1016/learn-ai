@@ -33,8 +33,24 @@ class ConfirmInFormAction(BaseModel):
     anchor: str
 
 
+class RetireReplaceAction(BaseModel):
+    """Move: retire this bot and start a fresh deploy flow with lineage kept."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["retire_replace"]
+
+
+class RemoveAction(BaseModel):
+    """Move: soft-delete this bot from the operator catalog."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["remove"]
+
+
 OperatorAction = Annotated[
-    NavigateAction | ConfirmInFormAction,
+    NavigateAction | ConfirmInFormAction | RetireReplaceAction | RemoveAction,
     Field(discriminator="kind"),
 ]
 

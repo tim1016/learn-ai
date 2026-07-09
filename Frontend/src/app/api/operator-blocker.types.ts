@@ -13,8 +13,19 @@ export interface ConfirmInFormAction {
   anchor: string;
 }
 
-// Superset grows in Slice 2.
-export type OperatorAction = NavigateAction | ConfirmInFormAction;
+export interface RetireReplaceAction {
+  kind: 'retire_replace';
+}
+
+export interface RemoveAction {
+  kind: 'remove';
+}
+
+export type OperatorAction =
+  | NavigateAction
+  | ConfirmInFormAction
+  | RetireReplaceAction
+  | RemoveAction;
 
 export interface OperatorMove {
   label: string;

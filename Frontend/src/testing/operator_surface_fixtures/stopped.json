@@ -286,6 +286,7 @@
   "prior_run": {
     "classification": "UNKNOWN"
   },
+  "blockers": [],
   "readiness_gates": [
     {
       "detail": "no durable intent recorded",

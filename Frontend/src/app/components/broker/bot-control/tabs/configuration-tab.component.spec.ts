@@ -237,6 +237,7 @@ function status(): LiveInstanceStatus {
         as_of_ms: 1_700_000_000_000,
       },
       readiness_gates: [],
+      blockers: [],
       runtime_freshness: null,
       control_plane: null,
       broker_observation_consistency: null,

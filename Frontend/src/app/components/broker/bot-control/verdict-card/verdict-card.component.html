@@ -8,35 +8,37 @@
   [attr.data-state]="m.state"
   aria-labelledby="verdict-state"
 >
-  <div class="vc-overflow">
-    <button
-      type="button"
-      class="vc-overflow__trigger"
-      aria-haspopup="menu"
-      [attr.aria-expanded]="overflowOpen()"
-      aria-label="More actions"
-      (click)="toggleOverflow()"
-    >
-      <i class="pi pi-ellipsis-h" aria-hidden="true"></i>
-    </button>
-    @if (overflowOpen()) {
-      <div class="vc-overflow__menu" role="menu">
-        @for (action of m.ambientActions; track action.id) {
-          <button
-            type="button"
-            role="menuitem"
-            [disabled]="!action.enabled || busy()"
-            [attr.title]="action.reason"
-            (click)="invokeAmbient(action)"
-          >
-            {{ action.label }}
-          </button>
-        }
-        <button type="button" role="menuitem" (click)="requestSettings()">Change settings…</button>
-        <button type="button" role="menuitem" (click)="openHistory()">Full history</button>
-      </div>
-    }
-  </div>
+  @if (m.showOverflow) {
+    <div class="vc-overflow">
+      <button
+        type="button"
+        class="vc-overflow__trigger"
+        aria-haspopup="menu"
+        [attr.aria-expanded]="overflowOpen()"
+        aria-label="More actions"
+        (click)="toggleOverflow()"
+      >
+        <i class="pi pi-ellipsis-h" aria-hidden="true"></i>
+      </button>
+      @if (overflowOpen()) {
+        <div class="vc-overflow__menu" role="menu">
+          @for (action of m.ambientActions; track action.id) {
+            <button
+              type="button"
+              role="menuitem"
+              [disabled]="!action.enabled || busy()"
+              [attr.title]="action.reason"
+              (click)="invokeAmbient(action)"
+            >
+              {{ action.label }}
+            </button>
+          }
+          <button type="button" role="menuitem" (click)="requestSettings()">Change settings…</button>
+          <button type="button" role="menuitem" (click)="openHistory()">Full history</button>
+        </div>
+      }
+    </div>
+  }
 
   <div class="vc-main">
     <p class="vc-identity">
@@ -49,7 +51,7 @@
       <span class="vc-identity__mode">{{ m.identity.mode }}</span>
     </p>
 
-    <p class="vc-state" id="verdict-state" role="status">{{ m.state }}</p>
+    <p class="vc-state" id="verdict-state" role="status">{{ m.stateLabel }}</p>
 
     <p class="vc-reason">
       @if (m.reason; as reason) {
@@ -83,6 +85,22 @@
       >
         {{ label }}
       </button>
+    }
+
+    @if (m.terminalMoves.length > 0) {
+      <div class="vc-terminal-actions" aria-label="Terminal bot actions">
+        @for (move of m.terminalMoves; track move.label + move.action.kind) {
+          <button
+            type="button"
+            class="vc-terminal-action"
+            [class.vc-terminal-action--secondary]="move.action.kind === 'remove'"
+            [disabled]="busy()"
+            (click)="invokeTerminalMove(move)"
+          >
+            {{ move.label }}
+          </button>
+        }
+      </div>
     }
 
     @if (m.showChecklist) {
@@ -133,5 +151,6 @@
   [open]="whyOpen()"
   [guidance]="guidance()"
   [gates]="gates()"
+  [blockers]="status().operator_surface.blockers"
   (closed)="closeWhy()"
 />

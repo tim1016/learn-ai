@@ -1,10 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { convertToParamMap } from '@angular/router';
+import { Subject } from 'rxjs';
 
 import type {
+  BotDeleteResponse,
   CrashRecoveryOverrideResponse,
   LiveInstanceStatus,
 } from '../../../api/live-instances.types';
-import { makeHostRunnerHealth, makeStatus } from './bot-control-page.fixtures';
+import {
+  makeBotLifecycleMutationResponse,
+  makeHostRunnerHealth,
+  makeStatus,
+} from './bot-control-page.fixtures';
 import {
   flush,
   installBotControlPageTestStubs,
@@ -44,6 +51,62 @@ function crashRecoveryResponse(): CrashRecoveryOverrideResponse {
     rung_receipt: null,
     rung_receipt_warnings: [],
   };
+}
+
+function removeBotResponse(): BotDeleteResponse {
+  return {
+    strategy_instance_id: 'sid-x',
+    mode: 'soft',
+    deleted_at_ms: 0,
+    deleted_by: 'operator',
+    reason: null,
+    deleted_run_ids: [],
+    marker_path: '/tmp/sid-x.deleted',
+    hidden_from_catalog: true,
+  };
+}
+
+function terminalRemoveStatus(): LiveInstanceStatus {
+  const status = makeStatus();
+  status.operator_surface.blockers = [
+    {
+      id: 'retired',
+      severity: 'blocking',
+      disposition: 'terminal',
+      headline: "Can't recover",
+      detail: 'This bot has been retired. Remove it from the catalog or replace it.',
+      primary_move: {
+        label: 'Remove',
+        action: { kind: 'remove' },
+        target: null,
+      },
+      secondary_moves: [],
+      applies_to: 'run',
+    },
+  ];
+  return status;
+}
+
+function terminalReplaceStatus(): LiveInstanceStatus {
+  const status = makeStatus();
+  status.daily_lifecycle.primary_action = null;
+  status.operator_surface.blockers = [
+    {
+      id: 'run_poisoned',
+      severity: 'blocking',
+      disposition: 'terminal',
+      headline: "Can't recover",
+      detail: 'This run is poisoned and cannot be restarted safely.',
+      primary_move: {
+        label: 'Replace',
+        action: { kind: 'retire_replace' },
+        target: null,
+      },
+      secondary_moves: [],
+      applies_to: 'run',
+    },
+  ];
+  return status;
 }
 
 describe('BotControlPageComponent', () => {
@@ -111,6 +174,72 @@ describe('BotControlPageComponent', () => {
       confirm_account_flat: true,
       approved_by: 'operator',
     });
+  });
+
+  it('confirms before removing a terminal bot', async () => {
+    const { fixture, component, element, liveRuns } = await setupBotControlPage({
+      status: terminalRemoveStatus(),
+      mutationResponses: { deleteBot: removeBotResponse() },
+    });
+
+    const remove = element.querySelector<HTMLButtonElement>('.vc-terminal-action');
+    expect(remove?.textContent?.trim()).toBe('Remove');
+
+    remove?.click();
+    await flush(fixture);
+
+    expect(component.removeBotConfirmOpen()).toBe(true);
+    expect(liveRuns.deleteBot).not.toHaveBeenCalled();
+
+    await component.confirmRemoveBot();
+
+    expect(liveRuns.deleteBot).toHaveBeenCalledWith('sid-x', {
+      mode: 'soft',
+      deleted_by: 'operator',
+    });
+  });
+
+  it('opens Retire & Replace from a terminal move even without a lifecycle action', async () => {
+    const { fixture, component, element, liveRuns } = await setupBotControlPage({
+      status: terminalReplaceStatus(),
+      mutationResponses: { botLifecycleMutation: makeBotLifecycleMutationResponse() },
+    });
+
+    const replace = element.querySelector<HTMLButtonElement>('.vc-terminal-action');
+    expect(replace?.textContent?.trim()).toBe('Replace');
+
+    replace?.click();
+    await flush(fixture);
+
+    expect(component.retireReplaceConfirmOpen()).toBe(true);
+
+    await component.confirmRetireReplace();
+
+    expect(liveRuns.retireAndReplace).toHaveBeenCalledWith('sid-x', {
+      confirm_account_flat: true,
+      replacement_requested: true,
+      updated_by: 'operator',
+      reason: 'Retire & Replace',
+    });
+  });
+
+  it('closes the remove confirmation when the route instance changes', async () => {
+    const routeParamMap$ = new Subject<ReturnType<typeof convertToParamMap>>();
+    const { fixture, component } = await setupBotControlPage({
+      routeParamMap$,
+      status: terminalRemoveStatus(),
+      mutationResponses: { deleteBot: removeBotResponse() },
+    });
+
+    routeParamMap$.next(convertToParamMap({ id: 'sid-x' }));
+    await flush(fixture);
+    component.openRemoveBotConfirm();
+    expect(component.removeBotConfirmOpen()).toBe(true);
+
+    routeParamMap$.next(convertToParamMap({ id: 'sid-y' }));
+    await flush(fixture);
+
+    expect(component.removeBotConfirmOpen()).toBe(false);
   });
 
   it('shows an error banner when the status request fails', async () => {

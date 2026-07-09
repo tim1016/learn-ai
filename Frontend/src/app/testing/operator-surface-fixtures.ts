@@ -1,4 +1,4 @@
-import type { OperatorSurface } from '../api/live-instances.types';
+import type { LiveInstanceStatus, OperatorSurface } from '../api/live-instances.types';
 
 export function makeOperatorSurfaceFixture(
   overrides: Partial<OperatorSurface> = {},
@@ -197,6 +197,7 @@ export function makeOperatorSurfaceFixture(
       as_of_ms: 1_800_000_000_000,
     },
     readiness_gates: [],
+    blockers: [],
     runtime_freshness: null,
     control_plane: null,
     broker_observation_consistency: null,
@@ -219,4 +220,29 @@ export function makeOperatorSurfaceFixture(
     },
   };
   return { ...surface, ...overrides };
+}
+
+export function addRetiredTerminalBlocker(status: LiveInstanceStatus): void {
+  status.operator_surface.blockers = [
+    {
+      id: 'retired',
+      severity: 'blocking',
+      disposition: 'terminal',
+      headline: "Can't recover",
+      detail: 'This bot has been retired. Remove it from the catalog or replace it.',
+      primary_move: {
+        label: 'Remove',
+        action: { kind: 'remove' },
+        target: null,
+      },
+      secondary_moves: [
+        {
+          label: 'Replace',
+          action: { kind: 'retire_replace' },
+          target: null,
+        },
+      ],
+      applies_to: 'run',
+    },
+  ];
 }

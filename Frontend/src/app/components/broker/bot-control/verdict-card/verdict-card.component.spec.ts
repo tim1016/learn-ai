@@ -12,6 +12,7 @@ import type {
 import type { RenderedAction } from '../lib/suggested-action-renderer';
 import { makeStatus } from '../bot-control-page.fixtures';
 import { makeDailyLifecycleFixture } from '../../../../testing/live-instance-status-fixtures';
+import { addRetiredTerminalBlocker } from '../../../../testing/operator-surface-fixtures';
 import { ActivityTabComponent } from '../tabs/activity-tab.component';
 import { VerdictCardComponent } from './verdict-card.component';
 
@@ -155,16 +156,53 @@ describe('VerdictCardComponent', () => {
     expect(el.querySelector('[data-testid="why-drawer"]')).not.toBeNull();
   });
 
-  it('renders a Retired bot read-only with no verb', () => {
-    // Default status has a reconcile remediation; retired must still show no verb.
+  it('renders a retired terminal blocker with Replace and Remove moves', () => {
+    // Default status has a reconcile remediation; terminal blockers own the card.
     const fixture = renderCard(
-      statusWith({ display_status: 'Retired', phase: 'RETIRED', primary_action: null }),
+      statusWith(
+        { display_status: 'Retired', phase: 'RETIRED', primary_action: null },
+        addRetiredTerminalBlocker,
+      ),
       { label: 'Reconcile now', variant: 'primary', invoke: vi.fn() },
     );
     const el = fixture.nativeElement as HTMLElement;
+    const lifecycleAction = vi.fn();
+    const terminalRetireReplaceRequested = vi.fn();
+    const removeRequested = vi.fn();
+    fixture.componentInstance.lifecycleAction.subscribe(lifecycleAction);
+    fixture.componentInstance.terminalRetireReplaceRequested.subscribe(terminalRetireReplaceRequested);
+    fixture.componentInstance.removeRequested.subscribe(removeRequested);
 
     expect(el.querySelector('.verdict-card')?.getAttribute('data-state')).toBe('Retired');
+    expect(el.querySelector('#verdict-state')?.textContent).toContain("Can't recover");
     expect(el.querySelector('[data-testid="verdict-verb"]')).toBeNull();
+    expect(el.querySelector('.vc-overflow__trigger')).toBeNull();
+    const buttons = Array.from(el.querySelectorAll<HTMLButtonElement>('.vc-terminal-action'));
+    expect(buttons.map((button) => button.textContent?.trim())).toEqual(['Remove', 'Replace']);
+
+    buttons[0]?.click();
+    buttons[1]?.click();
+
+    expect(removeRequested).toHaveBeenCalledTimes(1);
+    expect(terminalRetireReplaceRequested).toHaveBeenCalledTimes(1);
+    expect(lifecycleAction).not.toHaveBeenCalledWith('retire_replace');
+  });
+
+  it('hides Sick bay condition cures when a terminal blocker owns the card', () => {
+    const fixture = renderCard(
+      statusWith(
+        {
+          display_status: 'Sick bay',
+          primary_action: null,
+          conditions: [accountStaleCondition()],
+        },
+        addRetiredTerminalBlocker,
+      ),
+    );
+    const el = fixture.nativeElement as HTMLElement;
+
+    expect(el.querySelector('.vc-condition')).toBeNull();
+    expect(el.querySelector('#verdict-state')?.textContent).toContain("Can't recover");
   });
 
   it('emits the ambient action id from the overflow menu', () => {

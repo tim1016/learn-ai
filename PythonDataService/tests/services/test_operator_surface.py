@@ -20,6 +20,7 @@ import pytest
 
 from app.broker.ibkr.models import IbkrConnectionHealth
 from app.engine.live.account_artifacts import AccountFreezeEvidence
+from app.engine.live.bot_lifecycle_state import BotLifecyclePhase
 from app.schemas.account_truth import (
     AccountTruthMessage,
     AccountTruthResponse,
@@ -408,6 +409,33 @@ def test_host_process_start_capability_poisoned_overrides_stopped_latch() -> Non
     cap = surface.host_process.start_capability
     assert cap.enabled is False
     assert cap.disabled_reason_code == "STOPPED_REQUIRES_REDEPLOY"
+
+
+def test_operator_surface_authors_poisoned_terminal_blocker() -> None:
+    surface = _surface(
+        process=InstanceProcessView(state="idle"),
+        poisoned=True,
+    )
+
+    blocker = surface.blockers[0]
+    assert blocker.id == "run_poisoned"
+    assert blocker.severity == "blocking"
+    assert blocker.disposition == "terminal"
+    assert blocker.primary_move is not None
+    assert blocker.primary_move.action.kind == "retire_replace"
+    assert [move.action.kind for move in blocker.secondary_moves] == ["remove"]
+
+
+def test_operator_surface_authors_retired_terminal_blocker() -> None:
+    surface = _surface(bot_lifecycle_phase=BotLifecyclePhase.RETIRED)
+
+    blocker = surface.blockers[0]
+    assert blocker.id == "retired"
+    assert blocker.severity == "blocking"
+    assert blocker.disposition == "terminal"
+    assert blocker.primary_move is not None
+    assert blocker.primary_move.action.kind == "remove"
+    assert [move.action.kind for move in blocker.secondary_moves] == ["retire_replace"]
 
 
 def test_host_process_start_capability_crash_recovery_required_blocks_start() -> None:

@@ -21,6 +21,7 @@ import type {
   RiskPosture,
   TradingSessionPhase,
 } from '../../../../api/live-instances.types';
+import type { OperatorBlocker, OperatorMove } from '../../../../api/operator-blocker.types';
 import { fmtSignedCurrency } from '../../format';
 import { runbookOpensInstancePage } from './operator-runbook-routes';
 
@@ -68,13 +69,20 @@ export interface VerdictVital {
 
 export interface VerdictCardModel {
   readonly state: BotLifecycleDisplayStatus;
+  readonly stateLabel: string;
   readonly tone: VerdictTone;
   readonly layout: VerdictLayout;
   readonly identity: VerdictIdentity;
   /** Backend-authored one-line reason; rendered as prose, never piped. */
   readonly reason: string | null;
   readonly verb: VerdictVerbSource;
+  readonly terminalBlocker: OperatorBlocker | null;
+  readonly terminalMoves: readonly OperatorMove[];
   readonly ambientActions: readonly BotLifecycleAction[];
+  /** Terminal cards expose only terminal moves; no lifecycle/settings overflow. */
+  readonly showOverflow: boolean;
+  /** Terminal cards suppress lifecycle-condition cures; terminal moves are the only exits. */
+  readonly showConditionCure: boolean;
   readonly vitals: readonly VerdictVital[];
   /** Clocking out: show the live clean-exit checklist, never a verb. */
   readonly showChecklist: boolean;
@@ -155,6 +163,17 @@ function sessionVital(status: LiveInstanceStatus): VerdictVital {
   return { label: 'Session', value: SESSION_PHASE_LABEL[phase], tone: 'neutral' };
 }
 
+function primaryBlocker(status: LiveInstanceStatus): OperatorBlocker | null {
+  return status.operator_surface.blockers[0] ?? null;
+}
+
+function terminalMoves(blocker: OperatorBlocker | null): OperatorMove[] {
+  if (!blocker || blocker.disposition !== 'terminal') return [];
+  return blocker.primary_move
+    ? [blocker.primary_move, ...blocker.secondary_moves]
+    : [...blocker.secondary_moves];
+}
+
 function resolveVitals(state: BotLifecycleDisplayStatus, status: LiveInstanceStatus): VerdictVital[] {
   const risk = status.operator_surface.current_risk;
   switch (state) {
@@ -168,6 +187,8 @@ function resolveVitals(state: BotLifecycleDisplayStatus, status: LiveInstanceSta
 }
 
 function resolveVerb(state: BotLifecycleDisplayStatus, status: LiveInstanceStatus): VerdictVerbSource {
+  const blocker = primaryBlocker(status);
+  if (blocker?.disposition === 'terminal') return { kind: 'none' };
   // Clocking out is the one state that never shows a verb — it is already doing
   // what the operator asked.
   if (state === 'Clocking out') return { kind: 'none' };
@@ -202,18 +223,25 @@ function resolveVerb(state: BotLifecycleDisplayStatus, status: LiveInstanceStatu
 export function resolveVerdictCardModel(status: LiveInstanceStatus): VerdictCardModel {
   const lifecycle = status.daily_lifecycle;
   const state = lifecycle.display_status;
+  const blocker = primaryBlocker(status);
+  const terminalBlocker = blocker?.disposition === 'terminal' ? blocker : null;
   return {
     state,
-    tone: TONE_BY_STATE[state],
+    stateLabel: terminalBlocker?.headline ?? state,
+    tone: terminalBlocker ? 'danger' : TONE_BY_STATE[state],
     layout: state === 'On duty' ? 'strip' : 'full',
     identity: {
       instanceId: status.strategy_instance_id,
       symbol: status.symbol,
       mode: resolveMode(status.operator_surface.broker.safety_verdict),
     },
-    reason: lifecycle.reason,
+    reason: terminalBlocker?.detail ?? lifecycle.reason,
     verb: resolveVerb(state, status),
-    ambientActions: lifecycle.ambient_actions,
+    terminalBlocker,
+    terminalMoves: terminalMoves(terminalBlocker),
+    ambientActions: terminalBlocker ? [] : lifecycle.ambient_actions,
+    showOverflow: terminalBlocker === null,
+    showConditionCure: terminalBlocker === null,
     vitals: resolveVitals(state, status),
     showChecklist: state === 'Clocking out',
     readOnly: state === 'Retired',
