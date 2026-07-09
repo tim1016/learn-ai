@@ -8,35 +8,37 @@
   [attr.data-state]="m.state"
   aria-labelledby="verdict-state"
 >
-  <div class="vc-overflow">
-    <button
-      type="button"
-      class="vc-overflow__trigger"
-      aria-haspopup="menu"
-      [attr.aria-expanded]="overflowOpen()"
-      aria-label="More actions"
-      (click)="toggleOverflow()"
-    >
-      <i class="pi pi-ellipsis-h" aria-hidden="true"></i>
-    </button>
-    @if (overflowOpen()) {
-      <div class="vc-overflow__menu" role="menu">
-        @for (action of m.ambientActions; track action.id) {
-          <button
-            type="button"
-            role="menuitem"
-            [disabled]="!action.enabled || busy()"
-            [attr.title]="action.reason"
-            (click)="invokeAmbient(action)"
-          >
-            {{ action.label }}
-          </button>
-        }
-        <button type="button" role="menuitem" (click)="requestSettings()">Change settings…</button>
-        <button type="button" role="menuitem" (click)="openHistory()">Full history</button>
-      </div>
-    }
-  </div>
+  @if (m.showOverflow) {
+    <div class="vc-overflow">
+      <button
+        type="button"
+        class="vc-overflow__trigger"
+        aria-haspopup="menu"
+        [attr.aria-expanded]="overflowOpen()"
+        aria-label="More actions"
+        (click)="toggleOverflow()"
+      >
+        <i class="pi pi-ellipsis-h" aria-hidden="true"></i>
+      </button>
+      @if (overflowOpen()) {
+        <div class="vc-overflow__menu" role="menu">
+          @for (action of m.ambientActions; track action.id) {
+            <button
+              type="button"
+              role="menuitem"
+              [disabled]="!action.enabled || busy()"
+              [attr.title]="action.reason"
+              (click)="invokeAmbient(action)"
+            >
+              {{ action.label }}
+            </button>
+          }
+          <button type="button" role="menuitem" (click)="requestSettings()">Change settings…</button>
+          <button type="button" role="menuitem" (click)="openHistory()">Full history</button>
+        </div>
+      }
+    </div>
+  }
 
   <div class="vc-main">
     <p class="vc-identity">

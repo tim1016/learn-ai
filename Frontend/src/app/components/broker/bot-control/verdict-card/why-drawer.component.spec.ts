@@ -42,13 +42,13 @@ const terminalBlocker: OperatorBlocker = {
   primary_move: {
     label: 'Remove',
     action: { kind: 'remove' },
-    target: 'delete',
+    target: null,
   },
   secondary_moves: [
     {
       label: 'Replace',
       action: { kind: 'retire_replace' },
-      target: 'retire_replace',
+      target: null,
     },
   ],
   applies_to: 'run',

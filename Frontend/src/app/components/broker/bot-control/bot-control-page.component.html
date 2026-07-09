@@ -15,7 +15,7 @@
       (crashRecoveryRequested)="dispatchCrashRecoveryOverride()"
       (settingsRequested)="onSettingsRequested()"
       (accountMonitorRequested)="openAccountMonitor()"
-      (removeRequested)="dispatchRemoveBot()"
+      (removeRequested)="openRemoveBotConfirm()"
     />
   } @else if (!errorMessage()) {
     <p class="loading">Loading bot control...</p>
@@ -47,5 +47,15 @@
     confirmLabel="Retire &amp; Replace"
     (confirmed)="confirmRetireReplace()"
     (cancelled)="cancelRetireReplaceConfirm()"
+  />
+
+  <app-typed-halt-confirm
+    [open]="removeBotConfirmOpen()"
+    heading="Remove bot"
+    [message]="removeBotConfirmMessage"
+    requiredToken=""
+    confirmLabel="Remove bot"
+    (confirmed)="confirmRemoveBot()"
+    (cancelled)="cancelRemoveBotConfirm()"
   />
 </section>

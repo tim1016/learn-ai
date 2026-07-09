@@ -14,6 +14,7 @@ import { vi } from 'vitest';
 
 import type {
   BotLifecycleMutationResponse,
+  BotDeleteResponse,
   CrashRecoveryOverrideResponse,
   FleetAccountSummary,
   LifecycleTimelineResponse,
@@ -82,6 +83,7 @@ export class FakeLiveRunsService {
   issueInstanceCommand = vi.fn<LiveRunsService['issueInstanceCommand']>();
   reconcileInstance = vi.fn<LiveRunsService['reconcileInstance']>();
   recordCrashRecoveryOverride = vi.fn<LiveRunsService['recordCrashRecoveryOverride']>();
+  deleteBot = vi.fn<LiveRunsService['deleteBot']>();
 }
 
 export function allowRenewControlPlaneLeaseCall(
@@ -152,6 +154,13 @@ export function allowCrashRecoveryOverrideCall(
   liveRuns.recordCrashRecoveryOverride.mockResolvedValue(response);
 }
 
+export function allowDeleteBotCall(
+  liveRuns: FakeLiveRunsService,
+  response: BotDeleteResponse,
+): void {
+  liveRuns.deleteBot.mockResolvedValue(response);
+}
+
 export function rejectReconcileInstanceCall(liveRuns: FakeLiveRunsService, error: unknown): void {
   liveRuns.reconcileInstance.mockRejectedValue(error);
 }
@@ -216,6 +225,7 @@ interface BotControlMutationResponses {
   issueInstanceCommand?: CommandWriteResponse;
   reconcileInstance?: ReconcileAckResponse;
   recordCrashRecoveryOverride?: CrashRecoveryOverrideResponse;
+  deleteBot?: BotDeleteResponse;
 }
 
 interface BotControlMutationFailures {
@@ -312,6 +322,9 @@ function applyMutationResponses(
   if (responses.recordCrashRecoveryOverride) {
     allowCrashRecoveryOverrideCall(liveRuns, responses.recordCrashRecoveryOverride);
   }
+  if (responses.deleteBot) {
+    allowDeleteBotCall(liveRuns, responses.deleteBot);
+  }
 }
 
 function hasOwn(object: object, property: PropertyKey): boolean {
@@ -370,6 +383,7 @@ export function makeFailClosedLiveRuns(options: BotControlLiveRunsOptions = {}):
   liveRuns.issueInstanceCommand.mockRejectedValue(unexpectedMutation('issueInstanceCommand'));
   liveRuns.reconcileInstance.mockRejectedValue(unexpectedMutation('reconcileInstance'));
   liveRuns.recordCrashRecoveryOverride.mockRejectedValue(unexpectedMutation('recordCrashRecoveryOverride'));
+  liveRuns.deleteBot.mockRejectedValue(unexpectedMutation('deleteBot'));
   applyMutationResponses(liveRuns, options.mutationResponses);
   applyMutationFailures(liveRuns, options.mutationFailures);
   options.configureLiveRuns?.(liveRuns);

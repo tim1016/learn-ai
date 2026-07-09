@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
+  BotDeleteResponse,
   CrashRecoveryOverrideResponse,
   LiveInstanceStatus,
 } from '../../../api/live-instances.types';
@@ -44,6 +45,40 @@ function crashRecoveryResponse(): CrashRecoveryOverrideResponse {
     rung_receipt: null,
     rung_receipt_warnings: [],
   };
+}
+
+function removeBotResponse(): BotDeleteResponse {
+  return {
+    strategy_instance_id: 'sid-x',
+    mode: 'soft',
+    deleted_at_ms: 0,
+    deleted_by: 'operator',
+    reason: null,
+    deleted_run_ids: [],
+    marker_path: '/tmp/sid-x.deleted',
+    hidden_from_catalog: true,
+  };
+}
+
+function terminalRemoveStatus(): LiveInstanceStatus {
+  const status = makeStatus();
+  status.operator_surface.blockers = [
+    {
+      id: 'retired',
+      severity: 'blocking',
+      disposition: 'terminal',
+      headline: "Can't recover",
+      detail: 'This bot has been retired. Remove it from the catalog or replace it.',
+      primary_move: {
+        label: 'Remove',
+        action: { kind: 'remove' },
+        target: null,
+      },
+      secondary_moves: [],
+      applies_to: 'run',
+    },
+  ];
+  return status;
 }
 
 describe('BotControlPageComponent', () => {
@@ -110,6 +145,29 @@ describe('BotControlPageComponent', () => {
     expect(liveRuns.recordCrashRecoveryOverride).toHaveBeenCalledWith('sid-x', {
       confirm_account_flat: true,
       approved_by: 'operator',
+    });
+  });
+
+  it('confirms before removing a terminal bot', async () => {
+    const { fixture, component, element, liveRuns } = await setupBotControlPage({
+      status: terminalRemoveStatus(),
+      mutationResponses: { deleteBot: removeBotResponse() },
+    });
+
+    const remove = element.querySelector<HTMLButtonElement>('.vc-terminal-action');
+    expect(remove?.textContent?.trim()).toBe('Remove');
+
+    remove?.click();
+    await flush(fixture);
+
+    expect(component.removeBotConfirmOpen()).toBe(true);
+    expect(liveRuns.deleteBot).not.toHaveBeenCalled();
+
+    await component.confirmRemoveBot();
+
+    expect(liveRuns.deleteBot).toHaveBeenCalledWith('sid-x', {
+      mode: 'soft',
+      deleted_by: 'operator',
     });
   });
 

@@ -30,13 +30,13 @@ function addRetiredTerminalBlocker(status: LiveInstanceStatus): void {
       primary_move: {
         label: 'Remove',
         action: { kind: 'remove' },
-        target: 'delete',
+        target: null,
       },
       secondary_moves: [
         {
           label: 'Replace',
           action: { kind: 'retire_replace' },
-          target: 'retire_replace',
+          target: null,
         },
       ],
       applies_to: 'run',
@@ -182,6 +182,44 @@ describe('resolveVerdictCardModel', () => {
     expect(model.terminalMoves.map((move) => move.action.kind)).toEqual([
       'remove',
       'retire_replace',
+    ]);
+  });
+
+  it('suppresses lifecycle overflow for a poisoned non-retired terminal blocker', () => {
+    const model = resolveVerdictCardModel(
+      statusWith({ display_status: 'Off duty', phase: 'OFF_DUTY' }, (status) => {
+        status.operator_surface.blockers = [
+          {
+            id: 'run_poisoned',
+            severity: 'blocking',
+            disposition: 'terminal',
+            headline: "Can't recover",
+            detail: 'This run is poisoned and cannot be restarted safely.',
+            primary_move: {
+              label: 'Replace',
+              action: { kind: 'retire_replace' },
+              target: null,
+            },
+            secondary_moves: [
+              {
+                label: 'Remove',
+                action: { kind: 'remove' },
+                target: null,
+              },
+            ],
+            applies_to: 'run',
+          },
+        ];
+      }),
+    );
+
+    expect(model.stateLabel).toBe("Can't recover");
+    expect(model.verb).toEqual({ kind: 'none' });
+    expect(model.ambientActions).toEqual([]);
+    expect(model.showOverflow).toBe(false);
+    expect(model.terminalMoves.map((move) => move.action.kind)).toEqual([
+      'retire_replace',
+      'remove',
     ]);
   });
 });

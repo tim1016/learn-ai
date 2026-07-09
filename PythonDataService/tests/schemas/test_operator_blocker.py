@@ -87,13 +87,11 @@ def test_terminal_blocker_accepts_replace_and_remove_moves() -> None:
         primary_move=OperatorMove(
             label="Replace",
             action=RetireReplaceAction(kind="retire_replace"),
-            target="retire_replace",
         ),
         secondary_moves=[
             OperatorMove(
                 label="Remove",
                 action=RemoveAction(kind="remove"),
-                target="delete",
             )
         ],
         applies_to="run",

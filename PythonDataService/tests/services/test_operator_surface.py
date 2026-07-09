@@ -20,6 +20,7 @@ import pytest
 
 from app.broker.ibkr.models import IbkrConnectionHealth
 from app.engine.live.account_artifacts import AccountFreezeEvidence
+from app.engine.live.bot_lifecycle_state import BotLifecyclePhase
 from app.schemas.account_truth import (
     AccountTruthMessage,
     AccountTruthResponse,
@@ -426,7 +427,7 @@ def test_operator_surface_authors_poisoned_terminal_blocker() -> None:
 
 
 def test_operator_surface_authors_retired_terminal_blocker() -> None:
-    surface = _surface(bot_lifecycle_phase="RETIRED")
+    surface = _surface(bot_lifecycle_phase=BotLifecyclePhase.RETIRED)
 
     blocker = surface.blockers[0]
     assert blocker.id == "retired"

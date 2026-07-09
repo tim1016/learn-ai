@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo
 from pydantic import ValidationError
 
 from app.engine.live.account_artifacts import AccountFreezeEvidence
+from app.engine.live.bot_lifecycle_state import BotLifecyclePhase
 from app.engine.live.daemon_connectivity_monitor import DaemonConnectivityState
 from app.engine.live.daemon_transport import DaemonResultKind
 from app.engine.live.exit_taxonomy import RunExitEvidence, classify_run_exit
@@ -148,29 +149,26 @@ _HOST_PROCESS_NOTICE_BY_STATE: dict[str, str] = {
 _START_CAPABLE_STATES = frozenset({"IDLE", "WAITING_FOR_HOST", "EXITED"})
 
 
-def _terminal_moves(*, primary: str) -> tuple[OperatorMove, list[OperatorMove]]:
-    replace = OperatorMove(
+def _replace_move() -> OperatorMove:
+    return OperatorMove(
         label="Replace",
         action=RetireReplaceAction(kind="retire_replace"),
-        target="retire_replace",
     )
-    remove = OperatorMove(
+
+
+def _remove_move() -> OperatorMove:
+    return OperatorMove(
         label="Remove",
         action=RemoveAction(kind="remove"),
-        target="delete",
     )
-    if primary == "remove":
-        return remove, [replace]
-    return replace, [remove]
 
 
 def _author_operator_blockers(
     *,
     poisoned: bool,
-    bot_lifecycle_phase: str | None,
+    bot_lifecycle_phase: BotLifecyclePhase | None,
 ) -> list[OperatorBlocker]:
-    if bot_lifecycle_phase == "RETIRED":
-        primary_move, secondary_moves = _terminal_moves(primary="remove")
+    if bot_lifecycle_phase == BotLifecyclePhase.RETIRED:
         return [
             OperatorBlocker(
                 id="retired",
@@ -178,13 +176,12 @@ def _author_operator_blockers(
                 disposition="terminal",
                 headline="Can't recover",
                 detail="This bot has been retired. Remove it from the catalog or replace it with a fresh deploy.",
-                primary_move=primary_move,
-                secondary_moves=secondary_moves,
+                primary_move=_remove_move(),
+                secondary_moves=[_replace_move()],
                 applies_to="run",
             )
         ]
     if poisoned:
-        primary_move, secondary_moves = _terminal_moves(primary="replace")
         return [
             OperatorBlocker(
                 id="run_poisoned",
@@ -192,8 +189,8 @@ def _author_operator_blockers(
                 disposition="terminal",
                 headline="Can't recover",
                 detail="This run is poisoned and cannot be restarted safely. Replace it or remove the bot.",
-                primary_move=primary_move,
-                secondary_moves=secondary_moves,
+                primary_move=_replace_move(),
+                secondary_moves=[_remove_move()],
                 applies_to="run",
             )
         ]
@@ -1135,7 +1132,7 @@ def compute_operator_surface(
     instance_broker_self_consistent: bool | None = None,
     live_binding: LiveBinding | None = None,
     poisoned: bool = False,
-    bot_lifecycle_phase: str | None = None,
+    bot_lifecycle_phase: BotLifecyclePhase | None = None,
     desired_state: DesiredStateView | None = None,
     guard_state: ResumeGuardState | None = None,
     runtime_freshness: RuntimeFreshness | None = None,

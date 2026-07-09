@@ -1644,7 +1644,7 @@ async def _resolve_instance_status_from_process(
         instance_broker_self_consistent=None,
         live_binding=live_binding,
         poisoned=poisoned,
-        bot_lifecycle_phase=(lifecycle_state.phase.value if lifecycle_state is not None else None),
+        bot_lifecycle_phase=(lifecycle_state.phase if lifecycle_state is not None else None),
         desired_state=desired,
         guard_state=guard_state,
         runtime_freshness=runtime_freshness,

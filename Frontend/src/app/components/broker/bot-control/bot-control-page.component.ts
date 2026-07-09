@@ -39,6 +39,8 @@ const CRASH_RECOVERY_CONFIRM_MESSAGE =
   'Recording recovery evidence clears the crash-retired start gate and lets this bot run again. Only confirm if you have verified in IBKR that the broker account is FLAT with no open orders. This writes audited safety evidence.';
 const RETIRE_REPLACE_CONFIRM_MESSAGE =
   'Retire & Replace permanently retires this bot instance, then opens replacement deploy with the current lineage. Confirm only after you have verified the broker account is flat with no open orders.';
+const REMOVE_BOT_CONFIRM_MESSAGE =
+  'Remove hides this bot from the catalog with a soft-delete marker. The underlying audit files stay on disk, but this bot will no longer appear in the active bot list.';
 
 @Component({
   selector: 'app-bot-control-page',
@@ -67,9 +69,11 @@ export class BotControlPageComponent {
   private readonly typedHaltInstanceId = signal<string | null>(null);
   readonly crashRecoveryConfirmOpen = signal<boolean>(false);
   readonly retireReplaceConfirmOpen = signal<boolean>(false);
+  readonly removeBotConfirmOpen = signal<boolean>(false);
   readonly poisonedConfirmMessage = POISONED_CONFIRM_MESSAGE;
   readonly crashRecoveryConfirmMessage = CRASH_RECOVERY_CONFIRM_MESSAGE;
   readonly retireReplaceConfirmMessage = RETIRE_REPLACE_CONFIRM_MESSAGE;
+  readonly removeBotConfirmMessage = REMOVE_BOT_CONFIRM_MESSAGE;
 
   readonly errorMessage = computed<string | null>(
     () => this.mutationError() ?? this.statusError(),
@@ -403,7 +407,18 @@ export class BotControlPageComponent {
     }
   }
 
-  async dispatchRemoveBot(): Promise<void> {
+  openRemoveBotConfirm(): void {
+    if (!this.instanceId() || this.busyAction()) return;
+    this.removeBotConfirmOpen.set(true);
+  }
+
+  cancelRemoveBotConfirm(): void {
+    this.removeBotConfirmOpen.set(false);
+  }
+
+  async confirmRemoveBot(): Promise<void> {
+    if (!this.removeBotConfirmOpen()) return;
+    this.removeBotConfirmOpen.set(false);
     const id = this.instanceId();
     if (!id || this.busyAction()) return;
     this.busyAction.set('remove');

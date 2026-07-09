@@ -57,13 +57,13 @@ function addRetiredTerminalBlocker(status: LiveInstanceStatus): void {
       primary_move: {
         label: 'Remove',
         action: { kind: 'remove' },
-        target: 'delete',
+        target: null,
       },
       secondary_moves: [
         {
           label: 'Replace',
           action: { kind: 'retire_replace' },
-          target: 'retire_replace',
+          target: null,
         },
       ],
       applies_to: 'run',
@@ -198,6 +198,7 @@ describe('VerdictCardComponent', () => {
     expect(el.querySelector('.verdict-card')?.getAttribute('data-state')).toBe('Retired');
     expect(el.querySelector('#verdict-state')?.textContent).toContain("Can't recover");
     expect(el.querySelector('[data-testid="verdict-verb"]')).toBeNull();
+    expect(el.querySelector('.vc-overflow__trigger')).toBeNull();
     const buttons = Array.from(el.querySelectorAll<HTMLButtonElement>('.vc-terminal-action'));
     expect(buttons.map((button) => button.textContent?.trim())).toEqual(['Remove', 'Replace']);
 

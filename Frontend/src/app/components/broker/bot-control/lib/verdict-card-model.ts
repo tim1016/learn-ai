@@ -79,6 +79,8 @@ export interface VerdictCardModel {
   readonly terminalBlocker: OperatorBlocker | null;
   readonly terminalMoves: readonly OperatorMove[];
   readonly ambientActions: readonly BotLifecycleAction[];
+  /** Terminal cards expose only terminal moves; no lifecycle/settings overflow. */
+  readonly showOverflow: boolean;
   readonly vitals: readonly VerdictVital[];
   /** Clocking out: show the live clean-exit checklist, never a verb. */
   readonly showChecklist: boolean;
@@ -235,7 +237,8 @@ export function resolveVerdictCardModel(status: LiveInstanceStatus): VerdictCard
     verb: resolveVerb(state, status),
     terminalBlocker,
     terminalMoves: terminalMoves(terminalBlocker),
-    ambientActions: lifecycle.ambient_actions,
+    ambientActions: terminalBlocker ? [] : lifecycle.ambient_actions,
+    showOverflow: terminalBlocker === null,
     vitals: resolveVitals(state, status),
     showChecklist: state === 'Clocking out',
     readOnly: state === 'Retired',
