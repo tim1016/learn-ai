@@ -145,19 +145,22 @@ full snapshot; state channels do not replay obsolete intermediate documents.
 #### Event channels
 
 Broker activity and Bot events remain sequenced, append-only histories with
-backfill. One WAL tailer per bot feeds a sequence-indexed ring buffer and fans
-out through bounded client queues. Connected clients never trigger their own
-periodic full-WAL scan.
+backfill. One WAL tailer per bot **per event channel** feeds that channel's
+sequence-indexed ring buffer and fans out through bounded client queues. The
+channels do not share a WAL, ring, or sequence namespace. Connected clients
+never trigger their own periodic full-WAL scan.
 
-Every event-channel SSE row carries `id: <seq>`. Rotation preserves sequence
-continuity. If continuity cannot be preserved, the server emits a named reset
-control event with the new durable stream identity before any new row. The
-server honors `Last-Event-ID` when the cursor belongs to the current durable
-stream. The shared Angular `sseSignal` primitive must implement every recovery
-branch explicitly:
+Every event-channel SSE row carries the typed composite cursor
+`id: <durable_stream_id>:<seq>`. The same cursor shape is used by
+`Last-Event-ID`, REST backfill, gap markers, and explicit query cursors, so a
+sequence from a replaced WAL can never be mistaken for a sequence from the
+current stream. Rotation preserves the durable stream identity and sequence
+continuity when possible. If either cannot be preserved, the server emits a
+named reset control event with the new durable stream identity before any new
+row. The typed event-feed adapter implements every recovery branch explicitly:
 
-1. **Ordinary reconnect** — resume after the last acknowledged sequence or
-   state version, using `Last-Event-ID` or an explicit cursor.
+1. **Ordinary reconnect** — resume after the last acknowledged composite
+   cursor, using `Last-Event-ID` or an explicit cursor.
 2. **Cursor older than the ring** — close the stream, page through REST
    backfill from the cursor, merge by stable sequence, and subscribe from the
    new high-water mark.
@@ -176,11 +179,15 @@ size and processing remain linear in the number of bots; the improvement is
 removing the `bots × clients × poll rate` call amplification.
 
 Commands retain durable intent plus acknowledgement through
-`mutation_attempts/` and reconciliation. A mutation correlation ID is present
-in the state document until its pending or terminal receipt is observable, so
-the UI can render `pending → receipt` without a post-mutation synchronization
-fetch. Long operations return accepted-with-attempt-ID and publish their
-outcome on the state channel.
+`mutation_attempts/` and reconciliation. The authenticated command response
+establishes `pending` and returns the mutation attempt ID. Because the state
+channel is deliberately latest-wins, it guarantees only the latest known
+attempt state; it does not promise delivery of every intermediate transition.
+The state snapshot carries the matching latest or terminal receipt without a
+post-mutation synchronization fetch. A terminal receipt remains in the
+snapshot until a later attempt supersedes it, while the durable attempt lookup
+remains the source for older receipts. Long operations return
+accepted-with-attempt-ID and publish their latest outcome on the state channel.
 
 ### 5. Freshness belongs to each source
 
@@ -300,11 +307,14 @@ and lifecycle chart, but never derive a verdict, action eligibility,
 remediation, or arbitration result.
 
 Global stores are limited to genuinely fleet/account-scoped state: fleet
-roster, connectivity, and Account Monitor. A shared `sseSignal` owns
-reconnect, cursor, backfill, gap, and teardown behavior for every channel.
-Angular `resource`/`httpResource` owns request-response backfill; stable
-sequence deduplication replaces ActivityTab's manual cache. `linkedSignal`
-owns selections that reset when their upstream identity changes.
+roster, connectivity, and Account Monitor. A small shared authenticated SSE
+connection primitive owns connection lifecycle, reconnect scheduling, and
+teardown only. A typed snapshot adapter owns epoch/version adoption for state
+channels. A separate typed event-feed adapter owns composite cursors, REST
+backfill, gap recovery, and stable-sequence deduplication for event channels.
+Angular `resource`/`httpResource` owns request-response backfill and replaces
+ActivityTab's manual cache. `linkedSignal` owns selections that reset when
+their upstream identity changes.
 
 A functional `botSurfaceResolver` bootstraps the snapshot and soft-fails on
 control-plane outage. A `botExistsGuard` blocks only when nonexistence or
@@ -325,8 +335,9 @@ are deleted.
    queues/tasks, isolates mutations, breaks daemon failure amplification, and
    fences AccountOwner takeover.
 4. **Signal reactivity** — one route-scoped store consumes a versioned state
-   channel, while shared resources and `sseSignal` own request and stream
-   mechanics.
+   channel, while shared resources and typed state/event adapters own their
+   distinct recovery mechanics over one small authenticated SSE connection
+   primitive.
 5. **Functional decoupling** — the router transports a producer-owned
    snapshot, Angular selectors do no domain reasoning, and one host-scoped
    blocker renderer replaces parallel remediation derivations.
@@ -401,6 +412,7 @@ are deleted.
   blocker contract.
 - `Frontend/src/app/services/live-runs.service.ts` — Bot Cockpit REST boundary.
 - `Frontend/src/app/services/broker-sse.ts` — current native `EventSource`
-  wrapper generalized by the target `sseSignal`.
+  wrapper replaced by the authenticated connection primitive and typed
+  snapshot/event-feed adapters.
 - `docs/architecture/bot-control-stream-primary-prd.md` — PRD #951 interim
   stream affordance map and surface-disposal contract.

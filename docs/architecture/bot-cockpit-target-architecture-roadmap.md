@@ -47,10 +47,12 @@ defer each known safety defect:
 
 ## Stage 2 — Extract the snapshot producer `[PREREQUISITE]`
 
-Extract assembly from `live_instances.py` into the producer boundary. Add
+Introduce the per-bot `SurfaceHub` with REST/snapshot responsibilities only.
+Extract assembly from `live_instances.py` into that producer boundary. Add
 `{stream_epoch, surface_version}`, version-on-semantic-change, and one stored
 latest snapshot. Move `_resolve_activity_publisher_for_status` bootstrap from
-status-time read behavior into producer lifecycle.
+status-time read behavior into producer lifecycle. This is the final producer
+ownership boundary; later stages add delivery mechanisms without replacing it.
 
 **Exit criteria:**
 
@@ -62,32 +64,56 @@ status-time read behavior into producer lifecycle.
 - default status GET is proven free of canonical writes and publisher
   bootstrap side effects.
 
-## Stage 3 — Ship hubs, stream protocol, and consolidated daemon polling `[SCALE]`
+## Stage 3 — Add delivery protocols and shared daemon observation `[SCALE]`
 
-Make `SurfaceHub` the single per-bot producer. Add the full-snapshot state SSE
-channel, `id:`/`Last-Event-ID`, one WAL tailer and ring per bot under the
-existing event streams, fleet-batched daemon polling with stale-while-
-revalidate, and daemon circuit breaker/backoff. Keep a feature flag until the
-Cockpit consumer is ready.
+Keep one feature flag until the Cockpit consumer is ready, but deliver Stage 3
+as three independently shippable slices with separate rollback boundaries.
+
+### Stage 3A — Full-snapshot state SSE
+
+Expose the `SurfaceHub` snapshot through the latest-wins state channel with
+epoch/version IDs and bounded queue-one fan-out.
 
 **Exit criteria:**
 
 - Bot Cockpit can run with its four-second status poll disabled behind the
   flag;
-- instrumentation shows one daemon `/instances` network call per interval,
-  independent of connected clients;
+- ordinary reconnect and producer-epoch replacement are tested; and
+- shutdown closes state watchers and client queues within the graceful-
+  shutdown budget.
+
+### Stage 3B — Per-channel event tailers and rings
+
+Give each bot event channel its own WAL tailer, sequence-indexed ring, and
+bounded client fan-out. Use `<durable_stream_id>:<seq>` for SSE IDs,
+`Last-Event-ID`, REST backfill, gap markers, and explicit query cursors.
+
+**Exit criteria:**
+
 - five stream clients cause no repeated WAL scans;
+- ordinary reconnect, cursor-before-ring deep replay, WAL replacement, and
+  queue-gap recovery are tested; and
+- shutdown closes tailers and event client queues within the graceful-
+  shutdown budget.
+
+### Stage 3C — Fleet daemon cache and circuit breaker
+
+Add fleet-batched daemon polling with stale-while-revalidate plus bounded
+circuit-breaker backoff. Every bot hub consumes the shared stamped observation.
+
+**Exit criteria:**
+
+- instrumentation shows one daemon `/instances` network call per interval,
+  independent of bots and connected clients;
 - breaker-open serves the last stamped observation with current
-  `UNREACHABLE` meaning;
-- ordinary reconnect, cursor-before-ring deep replay, stream epoch/WAL
-  rotation, and queue-gap recovery are tested; and
-- shutdown closes watchers, tailers, and client queues within the service's
-  graceful-shutdown budget.
+  `UNREACHABLE` meaning; and
+- cache and breaker tasks stop within the graceful-shutdown budget.
 
 ## Stage 4 — Move Bot Cockpit to the reactive store `[UX+SCALE]`
 
-Add the route-provided `BotSurfaceStore`, shared `sseSignal`, soft-fail
-resolver/guard, route providers, request resources, and linked selections.
+Add the route-provided `BotSurfaceStore`, the small authenticated SSE connection
+primitive, typed snapshot and event-feed adapters, soft-fail resolver/guard,
+route providers, request resources, and linked selections.
 Delete the page polling engine, ActivityTab manual cache, post-mutation sync
 refetches, duplicated remediation derivations, and dispatch-object threading.
 
@@ -104,7 +130,8 @@ re-derived in Angular.
   than persisted stale state;
 - a proven missing/deleted bot is rejected, while an unreachable control plane
   does not block route activation;
-- mutation pending and terminal receipt states arrive through the surface
+- the authenticated mutation response establishes pending with an attempt ID,
+  and the matching latest or terminal receipt arrives through the surface
   stream without a synchronization fetch; and
 - one tested selector/presenter site replaces the duplicated frontend
   remediation rendering.
