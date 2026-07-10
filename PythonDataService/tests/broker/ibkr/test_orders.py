@@ -8,6 +8,8 @@ flips one layer to a bad value and asserts ``OrderRefusedError`` before
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -26,6 +28,10 @@ from app.broker.ibkr.orders import (
     list_open_orders,
     place_paper_order,
     stream_order_events,
+)
+from app.engine.live.account_owner_fence import (
+    AccountOwnerWriteFenceError,
+    account_owner_write_grant,
 )
 
 
@@ -82,6 +88,20 @@ def _client(
     )
 
 
+@contextmanager
+def _owner_grant(
+    boundary: str = "broker.place_order",
+    *,
+    account_id: str = "DU1234567",
+) -> Iterator[None]:
+    with account_owner_write_grant(
+        account_id=account_id,
+        owner_generation=1,
+        boundary=boundary,
+    ):
+        yield
+
+
 # ── safety layers ──────────────────────────────────────────────────────
 
 
@@ -120,7 +140,8 @@ def test_enforce_paper_safety_refuses_when_readonly_is_true() -> None:
 @pytest.mark.asyncio
 async def test_place_paper_order_market_buy_returns_ack() -> None:
     client = _client()
-    ack = await place_paper_order(client, _spec(action="BUY", quantity=10))
+    with _owner_grant():
+        ack = await place_paper_order(client, _spec(action="BUY", quantity=10))
 
     assert ack.account_id == "DU1234567"
     assert ack.is_paper is True
@@ -149,12 +170,64 @@ async def test_place_paper_order_market_buy_returns_ack() -> None:
 
 
 @pytest.mark.asyncio
+async def test_place_paper_order_refuses_without_account_owner_grant() -> None:
+    client = _client()
+
+    with pytest.raises(AccountOwnerWriteFenceError) as exc:
+        await place_paper_order(client, _spec())
+
+    assert exc.value.reason == "ACCOUNT_OWNER_WRITE_GRANT_MISSING"
+    client.ib.placeOrder.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_place_paper_order_refuses_account_owner_account_mismatch() -> None:
+    client = _client()
+
+    with (
+        pytest.raises(AccountOwnerWriteFenceError) as exc,
+        _owner_grant(account_id="DU7654321"),
+    ):
+        await place_paper_order(client, _spec())
+
+    assert exc.value.reason == "ACCOUNT_OWNER_WRITE_ACCOUNT_MISMATCH"
+    client.ib.placeOrder.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_place_paper_order_rechecks_generation_before_ibkr_place_order() -> None:
+    client = _client()
+    generation = {"value": 1}
+
+    async def _advance_during_qualify(_contract):
+        generation["value"] = 2
+        return [SimpleNamespace(conId=12345)]
+
+    client.ib.qualifyContractsAsync = AsyncMock(side_effect=_advance_during_qualify)
+
+    with (
+        pytest.raises(AccountOwnerWriteFenceError) as exc,
+        account_owner_write_grant(
+            account_id="DU1234567",
+            owner_generation=1,
+            boundary="broker.place_order",
+            owner_generation_provider=lambda: generation["value"],
+        ),
+    ):
+        await place_paper_order(client, _spec())
+
+    assert exc.value.reason == "OWNER_GENERATION_STALE_AT_BROKER_WRITE"
+    client.ib.placeOrder.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_place_paper_order_limit_sell_passes_price_through() -> None:
     client = _client()
-    ack = await place_paper_order(
-        client,
-        _spec(action="SELL", quantity=2, order_type="LMT", limit_price=421.50),
-    )
+    with _owner_grant():
+        ack = await place_paper_order(
+            client,
+            _spec(action="SELL", quantity=2, order_type="LMT", limit_price=421.50),
+        )
     assert ack.action == "SELL"
     assert ack.order_type == "LMT"
     assert ack.limit_price == 421.50
@@ -171,7 +244,7 @@ async def test_place_paper_order_limit_sell_passes_price_through() -> None:
 async def test_place_paper_order_option_requires_expiry_strike_right() -> None:
     client = _client()
     bad = _spec(sec_type="OPT")  # missing expiry_ms / strike / right
-    with pytest.raises(OrderRefusedError, match="OPT order requires"):
+    with pytest.raises(OrderRefusedError, match="OPT order requires"), _owner_grant():
         await place_paper_order(client, bad)
 
 
@@ -182,7 +255,7 @@ async def test_place_paper_order_lmt_requires_limit_price() -> None:
     # Pydantic itself rejects limit_price=None when order_type=LMT? Actually no,
     # we validate that in code. The model lets it through (gt=0 only when
     # provided), so the OrderRefusedError fires from _build_order.
-    with pytest.raises(OrderRefusedError, match="LMT order requires limit_price"):
+    with pytest.raises(OrderRefusedError, match="LMT order requires limit_price"), _owner_grant():
         await place_paper_order(client, bad)
 
 
@@ -219,7 +292,7 @@ async def test_place_paper_order_qualify_timeout_raises_and_does_not_place(monke
 
     client.ib.qualifyContractsAsync = _hanging_qualify
 
-    with pytest.raises(BrokerError, match="timed out"):
+    with pytest.raises(BrokerError, match="timed out"), _owner_grant():
         await place_paper_order(client, _spec())
     client.ib.placeOrder.assert_not_called()
 
@@ -280,8 +353,9 @@ async def test_place_paper_order_idempotency_replay_returns_cached_ack() -> None
     client = _client()
     spec = _spec(client_order_id="abc-123")
 
-    first = await place_paper_order(client, spec)
-    second = await place_paper_order(client, spec)
+    with _owner_grant():
+        first = await place_paper_order(client, spec)
+        second = await place_paper_order(client, spec)
 
     assert client.ib.placeOrder.call_count == 1
     assert first.order_id == second.order_id
@@ -291,8 +365,9 @@ async def test_place_paper_order_idempotency_replay_returns_cached_ack() -> None
 @pytest.mark.asyncio
 async def test_place_paper_order_no_client_order_id_does_not_dedupe() -> None:
     client = _client()
-    await place_paper_order(client, _spec())
-    await place_paper_order(client, _spec())
+    with _owner_grant():
+        await place_paper_order(client, _spec())
+        await place_paper_order(client, _spec())
     assert client.ib.placeOrder.call_count == 2
 
 
@@ -318,10 +393,11 @@ async def test_place_paper_order_concurrent_same_id_places_once() -> None:
     client.ib.qualifyContractsAsync = _slow_qualify
     spec = _spec(client_order_id="dup-1")
 
-    acks = await asyncio.gather(
-        place_paper_order(client, spec),
-        place_paper_order(client, spec),
-    )
+    with _owner_grant():
+        acks = await asyncio.gather(
+            place_paper_order(client, spec),
+            place_paper_order(client, spec),
+        )
 
     assert client.ib.placeOrder.call_count == 1
     assert acks[0].order_id == acks[1].order_id == 42
@@ -429,9 +505,69 @@ async def test_cancel_paper_order_calls_cancel_order_with_matching_trade() -> No
     client.ib.trades = MagicMock(return_value=[trade])
     client.ib.cancelOrder = MagicMock()
 
-    out = await cancel_paper_order(client, order_id=42)
+    with _owner_grant("broker.cancel_order"):
+        out = await cancel_paper_order(client, order_id=42)
     assert out.order_id == 42
     client.ib.cancelOrder.assert_called_once_with(trade.order)
+
+
+@pytest.mark.asyncio
+async def test_cancel_paper_order_refuses_without_account_owner_grant() -> None:
+    trade = _trade_namespace(order_id=42)
+    client = _client()
+    client.ib.trades = MagicMock(return_value=[trade])
+    client.ib.cancelOrder = MagicMock()
+
+    with pytest.raises(AccountOwnerWriteFenceError) as exc:
+        await cancel_paper_order(client, order_id=42)
+
+    assert exc.value.reason == "ACCOUNT_OWNER_WRITE_GRANT_MISSING"
+    client.ib.cancelOrder.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cancel_paper_order_refuses_account_owner_account_mismatch() -> None:
+    trade = _trade_namespace(order_id=42)
+    client = _client()
+    client.ib.trades = MagicMock(return_value=[trade])
+    client.ib.cancelOrder = MagicMock()
+
+    with (
+        pytest.raises(AccountOwnerWriteFenceError) as exc,
+        _owner_grant("broker.cancel_order", account_id="DU7654321"),
+    ):
+        await cancel_paper_order(client, order_id=42)
+
+    assert exc.value.reason == "ACCOUNT_OWNER_WRITE_ACCOUNT_MISMATCH"
+    client.ib.cancelOrder.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cancel_paper_order_rechecks_generation_before_ibkr_cancel_order() -> None:
+    trade = _trade_namespace(order_id=42)
+    client = _client()
+    generation = {"value": 1}
+
+    def _advance_during_trade_lookup():
+        generation["value"] = 2
+        return [trade]
+
+    client.ib.trades = MagicMock(side_effect=_advance_during_trade_lookup)
+    client.ib.cancelOrder = MagicMock()
+
+    with (
+        pytest.raises(AccountOwnerWriteFenceError) as exc,
+        account_owner_write_grant(
+            account_id="DU1234567",
+            owner_generation=1,
+            boundary="broker.cancel_order",
+            owner_generation_provider=lambda: generation["value"],
+        ),
+    ):
+        await cancel_paper_order(client, order_id=42)
+
+    assert exc.value.reason == "OWNER_GENERATION_STALE_AT_BROKER_WRITE"
+    client.ib.cancelOrder.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -445,7 +581,7 @@ async def test_cancel_paper_order_refuses_foreign_order_on_same_account() -> Non
     client.ib.trades = MagicMock(return_value=[foreign])
     client.ib.cancelOrder = MagicMock()
 
-    with pytest.raises(OrderNotFoundError):
+    with pytest.raises(OrderNotFoundError), _owner_grant("broker.cancel_order"):
         await cancel_paper_order(client, order_id=42)
     client.ib.cancelOrder.assert_not_called()
 
@@ -456,7 +592,7 @@ async def test_cancel_paper_order_raises_when_order_not_found() -> None:
     client.ib.trades = MagicMock(return_value=[])
     client.ib.cancelOrder = MagicMock()
 
-    with pytest.raises(OrderNotFoundError):
+    with pytest.raises(OrderNotFoundError), _owner_grant("broker.cancel_order"):
         await cancel_paper_order(client, order_id=42)
     client.ib.cancelOrder.assert_not_called()
 
@@ -936,7 +1072,8 @@ async def test_place_paper_order_proceeds_when_no_sweep_active(
     # Explicit stub to ensure no test ordering pollutes the gate.
     monkeypatch.setattr(registry, "any_recovery_active", lambda: False)
 
-    ack = await place_paper_order(client, _spec())
+    with _owner_grant():
+        ack = await place_paper_order(client, _spec())
     assert ack.order_id == 42
     client.ib.placeOrder.assert_called_once()
 

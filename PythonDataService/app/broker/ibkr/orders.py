@@ -54,6 +54,7 @@ from app.broker.ibkr.order_projection import (
     resolve_event_type,
     trade_order_event_fields,
 )
+from app.engine.live.account_owner_fence import require_account_owner_write_grant
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -439,6 +440,10 @@ async def place_paper_order(
             "app.engine.live.order_identity.build_order_ref and stamp it on "
             "the IbkrOrderSpec before calling this function."
         )
+    require_account_owner_write_grant(
+        account_id=account_id,
+        boundary="broker.place_order",
+    )
 
     # Without an idempotency key each call is independent — place directly.
     if spec.client_order_id is None:
@@ -511,6 +516,10 @@ async def _place_and_build_ack(
         f" {spec.strike}{spec.right}" if spec.right else "",
     )
 
+    require_account_owner_write_grant(
+        account_id=account_id,
+        boundary="broker.place_order",
+    )
     trade = client.ib.placeOrder(qualified_contract, order)
     ibkr_evidence = build_place_order_evidence(qualified_contract, order, trade)
     get_ibkr_api_evidence_recorder().record(
@@ -710,6 +719,10 @@ async def cancel_paper_order(
         raise OrderRefusedError(
             f"Refusing to cancel: account {account_id!r} is not a paper (DU) account."
         )
+    require_account_owner_write_grant(
+        account_id=account_id,
+        boundary="broker.cancel_order",
+    )
 
     # Find the open trade with this orderId. ib_async caches them on `trades()`.
     matching = [t for t in client.ib.trades() if int(t.order.orderId) == int(order_id)]
@@ -727,6 +740,10 @@ async def cancel_paper_order(
         raise OrderNotFoundError(
             f"No open order with order_id={order_id} owned by this client."
         )
+    require_account_owner_write_grant(
+        account_id=account_id,
+        boundary="broker.cancel_order",
+    )
     client.ib.cancelOrder(trade.order)
     request_snapshot = cancel_order_request_evidence(trade.order)
     get_ibkr_api_evidence_recorder().record(

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -54,6 +55,16 @@ def _trade_namespace(*, account="DU1234567", order_id, status_str="Submitted"):
         contract=contract, order=order,
         orderStatus=order_status, fills=[],
     )
+
+
+@contextmanager
+def _owner_grant(boundary: str = "broker.place_order") -> Iterator[None]:
+    with account_owner_write_grant(
+        account_id="DU1234567",
+        owner_generation=7,
+        boundary=boundary,
+    ):
+        yield
 
 
 def _client(*, owned_open_id: int = 100, foreign_open_id: int = 999):
@@ -110,11 +121,13 @@ async def test_cancel_open_orders_only_cancels_owned() -> None:
     adapter = IbkrBrokerAdapter(client)
 
     # Place one order so adapter records 100 as owned.
-    await adapter.place_order(_spec())
+    with _owner_grant():
+        await adapter.place_order(_spec())
     assert 100 in adapter.owned_order_ids
     assert 999 not in adapter.owned_order_ids
 
-    cancelled = await adapter.cancel_open_orders()
+    with _owner_grant("broker.cancel_order"):
+        cancelled = await adapter.cancel_open_orders()
 
     assert cancelled == [100]
     assert cancel_calls == [100]
@@ -203,7 +216,8 @@ async def test_cancel_open_orders_empty_when_runner_owns_nothing() -> None:
 async def test_cancel_open_orders_waits_until_owned_order_is_terminal() -> None:
     client, cancel_calls = _client(owned_open_id=100, foreign_open_id=999)
     adapter = IbkrBrokerAdapter(client)
-    await adapter.place_order(_spec())
+    with _owner_grant():
+        await adapter.place_order(_spec())
 
     terminal = asyncio.Event()
     open_trades = list(await client.ib.reqAllOpenOrdersAsync())
@@ -214,7 +228,8 @@ async def test_cancel_open_orders_waits_until_owned_order_is_terminal() -> None:
         return [trade for trade in open_trades if int(trade.order.orderId) != 100]
 
     client.ib.reqAllOpenOrdersAsync = AsyncMock(side_effect=_open_orders)
-    cancel_task = asyncio.create_task(adapter.cancel_open_orders())
+    with _owner_grant("broker.cancel_order"):
+        cancel_task = asyncio.create_task(adapter.cancel_open_orders())
 
     await asyncio.sleep(0.01)
     assert cancel_calls == [100]
@@ -228,14 +243,16 @@ async def test_cancel_open_orders_waits_until_owned_order_is_terminal() -> None:
 async def test_cancel_open_orders_waits_until_terminal_fill_reaches_buffer() -> None:
     client, _ = _client(owned_open_id=100, foreign_open_id=999)
     adapter = IbkrBrokerAdapter(client)
-    await adapter.place_order(_spec())
+    with _owner_grant():
+        await adapter.place_order(_spec())
     owned_trade = next(
         trade for trade in client.ib.trades() if int(trade.order.orderId) == 100
     )
     owned_trade.fills = [SimpleNamespace()]
     adapter._event_task = asyncio.current_task()
 
-    cancel_task = asyncio.create_task(adapter.cancel_open_orders())
+    with _owner_grant("broker.cancel_order"):
+        cancel_task = asyncio.create_task(adapter.cancel_open_orders())
     await asyncio.sleep(0.01)
     assert not cancel_task.done()
 
@@ -261,7 +278,8 @@ async def test_event_stream_buffers_all_fills_including_foreign() -> None:
     """
     client, _ = _client(owned_open_id=100)
     adapter = IbkrBrokerAdapter(client)
-    await adapter.place_order(_spec())
+    with _owner_grant():
+        await adapter.place_order(_spec())
 
     # Replace stream_order_events with a controllable async generator.
     queued: asyncio.Queue[IbkrOrderEvent | None] = asyncio.Queue()

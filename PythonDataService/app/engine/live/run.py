@@ -1811,7 +1811,11 @@ def cmd_start(args: argparse.Namespace) -> int:
         from app.broker.ibkr.orders import (
             list_open_orders as _owner_list_open_orders,
         )
-        from app.engine.live.account_artifacts import read_account_events, read_account_owner_generation
+        from app.engine.live.account_artifacts import (
+            advance_account_owner_generation,
+            read_account_events,
+            read_account_owner_generation,
+        )
         from app.engine.live.account_classifier import (
             AccountBrokerEvidence,
             classify_account,
@@ -1827,14 +1831,30 @@ def cmd_start(args: argparse.Namespace) -> int:
         def _account_owner_generation_provider() -> int:
             return account_owner_generation
 
-        def _advance_account_owner_generation() -> int:
-            nonlocal account_owner_generation
-            account_owner_generation += 1
+        def _current_account_owner_generation_provider() -> int:
+            persisted = read_account_owner_generation(_artifacts_root, ledger.account_id)
+            if persisted is not None:
+                return persisted.generation
             return account_owner_generation
+
+        def _advance_account_owner_generation(
+            phase: str,
+            recorded_at_ms: int,
+        ) -> AccountOwnerGeneration:
+            nonlocal account_owner_generation
+            generation = advance_account_owner_generation(
+                _artifacts_root,
+                ledger.account_id,
+                phase=phase,
+                recorded_at_ms=recorded_at_ms,
+                source="account_owner",
+            )
+            account_owner_generation = generation.generation
+            return generation
 
         require_owner_write_fence = getattr(broker, "require_account_owner_write_fence", None)
         if callable(require_owner_write_fence):
-            require_owner_write_fence(_account_owner_generation_provider)
+            require_owner_write_fence(_current_account_owner_generation_provider)
 
         async def _classify_account_for_submit(_intent):
             open_orders = await _owner_list_open_orders(client)
@@ -1865,6 +1885,7 @@ def cmd_start(args: argparse.Namespace) -> int:
             account_id=ledger.account_id,
             broker=broker,
             owner_generation_provider=_account_owner_generation_provider,
+            current_owner_generation_provider=_current_account_owner_generation_provider,
             owner_generation_advancer=_advance_account_owner_generation,
             classifier=_classify_account_for_submit,
             initial_phase=account_owner_initial_phase,
@@ -1913,6 +1934,9 @@ def cmd_start(args: argparse.Namespace) -> int:
         account_registry_gate_enabled=bool(ledger.strategy_instance_id),
         account_owner_submitter=account_owner.submit if account_owner is not None else None,
         owner_generation_provider=_account_owner_generation_provider if account_owner is not None else None,
+        current_owner_generation_provider=(
+            _current_account_owner_generation_provider if account_owner is not None else None
+        ),
     )
     broker_recovery_engine_ref["engine"] = engine
 
@@ -2613,6 +2637,8 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
     from datetime import datetime as _datetime
 
     from app.broker.ibkr.models import IbkrOrderSpec
+    from app.engine.live.account_artifacts import read_account_owner_generation
+    from app.engine.live.account_owner_fence import account_owner_write_grant
     from app.engine.live.intent_events import IntentEventType, IntentKind
     from app.engine.live.intent_wal import IntentWal
     from app.engine.live.order_identity import (
@@ -2641,6 +2667,11 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
     log_path = args.run_dir / "emergency_flatten.log"
     audit_wal = IntentWal(args.run_dir / "emergency_flatten_audit.jsonl")
     args.run_dir.mkdir(parents=True, exist_ok=True)
+    artifacts_root = getattr(args, "artifacts_root", Path("PythonDataService/artifacts"))
+
+    def _emergency_owner_generation_provider() -> int:
+        generation = read_account_owner_generation(artifacts_root, args.account)
+        return generation.generation if generation is not None else 0
 
     def _log(message: str) -> None:
         line = f"{_datetime.now(UTC).isoformat()} {message}"
@@ -2701,10 +2732,16 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
 
             unconfirmed_cancels_reason: str | None = None
             try:
-                cancelled = await _asyncio.wait_for(
-                    broker.cancel_open_orders(),
-                    timeout=CANCEL_CONFIRM_TIMEOUT_S,
-                )
+                with account_owner_write_grant(
+                    account_id=args.account,
+                    owner_generation=_emergency_owner_generation_provider(),
+                    boundary="broker.cancel_order",
+                    owner_generation_provider=_emergency_owner_generation_provider,
+                ):
+                    cancelled = await _asyncio.wait_for(
+                        broker.cancel_open_orders(),
+                        timeout=CANCEL_CONFIRM_TIMEOUT_S,
+                    )
                 _log(f"cancelled_open_orders: count={len(cancelled)} ids={cancelled}")
             except TimeoutError:
                 unconfirmed_cancels_reason = f"cancel_confirm_timeout_s={CANCEL_CONFIRM_TIMEOUT_S}"
@@ -2767,7 +2804,13 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
                     reason="emergency_flatten_liquidation",
                     order_spec=spec.model_dump(mode="json"),
                 )
-                ack = await broker.place_order(spec)
+                with account_owner_write_grant(
+                    account_id=args.account,
+                    owner_generation=_emergency_owner_generation_provider(),
+                    boundary="broker.place_order",
+                    owner_generation_provider=_emergency_owner_generation_provider,
+                ):
+                    ack = await broker.place_order(spec)
                 audit_wal.append(
                     event_type=IntentEventType.SUBMITTED,
                     intent_id=intent_id,
@@ -3083,6 +3126,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--confirm",
         action="store_true",
         help="Required. Without this flag the subcommand refuses (typo-proofing).",
+    )
+    flatten.add_argument(
+        "--artifacts-root",
+        type=Path,
+        default=Path("PythonDataService/artifacts"),
+        help=(
+            "Root for account-owner generation artifacts; should match "
+            "'start --artifacts-root'."
+        ),
     )
     flatten.set_defaults(func=cmd_emergency_flatten)
 
