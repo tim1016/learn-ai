@@ -9,10 +9,10 @@ The publisher is the stateful, data-plane-owned orchestrator. It:
 4. Calls the pure reconciler (``author_row_from_event``) to produce a
    ``BrokerActivityRow``.
 5. Appends the row to the ``broker_activity.jsonl`` WAL.
-6. Fans the row out to all SSE subscribers for that instance.
+6. Publishes the row through the instance's bounded durable event channel.
 
 Authoring itself is pure (lives in ``broker_activity_reconciler``); this
-module holds the state — subscriber queues, dedupe cache, WAL handle, the
+module holds the state — event channel, dedupe cache, WAL handle, the
 background task. The ``BrokerActivityPublisherRegistry`` provides the
 data-plane-singleton lifecycle (one publisher per ``strategy_instance_id``).
 
@@ -94,6 +94,7 @@ from app.services.broker_activity_wal import (
     instance_broker_activity_wal_path,
     legacy_per_run_broker_activity_wal_path,
 )
+from app.services.durable_event_channel import DurableEventChannel
 
 logger = logging.getLogger(__name__)
 
@@ -112,11 +113,6 @@ EventSourceFactory = Callable[[], AsyncIterator[IbkrOrderEvent]]
 # successful reconnect and its result is processed to completion before
 # the submission halt lifts.
 RecoverySourceFactory = Callable[[], Awaitable[list[IbkrOrderEvent]]]
-
-# Subscriber queue size. Each SSE client gets one; if a client falls
-# behind by this many rows we drop the connection rather than buffer
-# unboundedly. 256 covers a slow client + a fast bursty publisher.
-_SUBSCRIBER_QUEUE_SIZE = 256
 
 # PR 6 — periodic sweep cadence and lookback window.
 # ``DEFAULT_SWEEP_INTERVAL_MS``: how often the periodic sweep runs (60 s).
@@ -255,7 +251,7 @@ class _ConsumerEnded(Exception):
 
 
 class BrokerActivityPublisher:
-    """Per-strategy-instance background task + subscriber pub-sub.
+    """Per-strategy-instance background task and event-channel owner.
 
     Lifecycle:
 
@@ -307,6 +303,12 @@ class BrokerActivityPublisher:
         self._wal = BrokerActivityWal(
             instance_wal_path, trusted_root=artifacts_root / "live_instances"
         )
+        self._event_channel = DurableEventChannel(
+            channel_key=f"broker-activity:{strategy_instance_id}",
+            wal_path=instance_wal_path,
+            load_rows=self._wal.read_all,
+            seq_of=lambda row: row.seq,
+        )
         self._bot_event_wal = BotEventRawWal(
             run_bot_event_wal_path(run_dir), trusted_root=run_dir
         )
@@ -323,7 +325,6 @@ class BrokerActivityPublisher:
         self._intent_wal = IntentWal(run_dir / "intent_events.jsonl")
         self._fold_cache: tuple[float, dict[str, dict]] | None = None
 
-        self._subscribers: set[asyncio.Queue[BrokerActivityRow | None]] = set()
         self._seen_exec_ids: set[str] = set()
         # Per-intent dedup for the pending-intent tick: once a pending row
         # has been authored for a given intent_id, the tick suppresses
@@ -372,7 +373,7 @@ class BrokerActivityPublisher:
         # Cold-start: latest_row_ms is None until this process observes a row.
         # The WAL is read below only for dedup (_seen_exec_ids) and
         # pending-intent bookkeeping (_authored_pending_intent_ids); the
-        # health cursor advances exclusively inside _persist_and_broadcast
+        # health cursor advances exclusively inside _persist_and_publish
         # when a row is authored in-process.
         self._latest_row_ms: int | None = None
         latest_verdict_by_intent: dict[str, str] = {}
@@ -396,18 +397,16 @@ class BrokerActivityPublisher:
             return
         self._stopped.clear()
         self._child_tasks = []
+        self._event_channel.start()
         self._supervisor_task = asyncio.create_task(
             self._run_supervisor(),
             name=f"broker-activity-supervisor:{self._strategy_instance_id}",
         )
 
     async def stop(self) -> None:
-        """Cancel the supervisor (which cancels all children) and signal
-        all subscribers to drain.
-
-        Each subscriber's queue receives a ``None`` sentinel; subscribers
-        loop on ``get()`` and treat ``None`` as end-of-stream."""
+        """Cancel the supervisor and close the bounded event channel."""
         self._stopped.set()
+        await self._event_channel.stop()
         if self._supervisor_task is not None:
             self._supervisor_task.cancel()
             try:
@@ -418,16 +417,6 @@ class BrokerActivityPublisher:
                     extra={"strategy_instance_id": self._strategy_instance_id},
                 )
             self._supervisor_task = None
-        for q in self._subscribers:
-            try:
-                q.put_nowait(None)
-            except asyncio.QueueFull:
-                # The subscriber is already behind — they'll see the
-                # cancellation when they next try to read.
-                logger.debug(
-                    "subscriber queue full during stop; end sentinel not enqueued",
-                    extra={"strategy_instance_id": self._strategy_instance_id},
-                )
 
     @property
     def is_running(self) -> bool:
@@ -440,30 +429,14 @@ class BrokerActivityPublisher:
         """Wall-clock ms of the most recent row authored by this publisher.
 
         ``None`` when no rows have been authored yet (cold-start with an
-        empty WAL).  Updated by ``_persist_and_broadcast`` on every new
+        empty WAL).  Updated by ``_persist_and_publish`` on every new
         row so the health surface can expose row recency facts.
         """
         return self._latest_row_ms
 
-    # ── subscriber pub-sub ────────────────────────────────────────
-
-    def subscribe(self) -> asyncio.Queue[BrokerActivityRow | None]:
-        """Register a new subscriber and return their queue.
-
-        Caller is responsible for ``unsubscribe()``-ing — typically via a
-        ``try / finally`` in the SSE endpoint. The queue receives every
-        row authored after the subscription begins, plus a single
-        ``None`` sentinel when the publisher stops.
-        """
-        q: asyncio.Queue[BrokerActivityRow | None] = asyncio.Queue(
-            maxsize=_SUBSCRIBER_QUEUE_SIZE
-        )
-        self._subscribers.add(q)
-        return q
-
-    def unsubscribe(self, q: asyncio.Queue[BrokerActivityRow | None]) -> None:
-        """Drop the subscriber. Idempotent."""
-        self._subscribers.discard(q)
+    @property
+    def event_channel(self) -> DurableEventChannel[BrokerActivityRow]:
+        return self._event_channel
 
     def backfill(
         self, *, after_seq: int = 0, limit: int | None = None
@@ -620,7 +593,7 @@ class BrokerActivityPublisher:
         is in ``_UNRESOLVED_STATUSES`` (the canonical "still pending"
         predicate from ``intent_ledger``) AND has a usable ``order_spec``
         AND hasn't already been authored, calls ``author_pending_row`` and
-        broadcasts.
+        publishes.
 
         ``INTENT_NOT_ACCEPTED`` is treated as resolved-terminal (not
         pending) because ``intent_ledger._UNRESOLVED_STATUSES`` excludes
@@ -688,8 +661,8 @@ class BrokerActivityPublisher:
         """Author one ``engine_only_pending`` row from a folded view.
 
         Splits out so the dedup bookkeeping above stays readable. The
-        broadcast path reuses ``_author_and_broadcast``'s tail (WAL
-        append + subscriber fan-out + cursor advance) by constructing
+        publication path reuses ``_author_and_publish``'s tail (WAL
+        append + bounded channel fan-out + cursor advance) by constructing
         the row manually, allocating its seq, and going through the
         same persistence helpers.
         """
@@ -742,11 +715,11 @@ class BrokerActivityPublisher:
             )
             return
 
-        self._persist_and_broadcast(row)
+        self._persist_and_publish(row)
         self._authored_pending_intent_ids.add(intent_id)
 
     async def _handle_event(self, event: IbkrOrderEvent) -> None:
-        """Author at most one row from one event; fan out to subscribers."""
+        """Author at most one row from one event and publish it."""
         # Filter: only events bearing OUR namespace OR truly foreign
         # events (no parseable order_ref) get authored. An event with a
         # parseable ``order_ref`` whose namespace belongs to a DIFFERENT
@@ -786,15 +759,15 @@ class BrokerActivityPublisher:
                 return
 
         intent = self._build_engine_intent(intent_id, submitted_order) if intent_id else None
-        self._author_and_broadcast(event=event, intent=intent)
+        self._author_and_publish(event=event, intent=intent)
 
-    def _author_and_broadcast(
+    def _author_and_publish(
         self,
         *,
         event: IbkrOrderEvent,
         intent: EngineIntent | None,
     ) -> BrokerActivityRow | None:
-        """Allocate a seq, author the row, append to WAL, broadcast.
+        """Allocate a seq, author the row, append to WAL, and publish.
 
         Returns the authored row, or ``None`` when the event is
         unauthorable (logged + skipped per the truthfulness contract).
@@ -843,10 +816,10 @@ class BrokerActivityPublisher:
             )
             return None
 
-        self._persist_and_broadcast(row)
+        self._persist_and_publish(row)
         return row
 
-    def _persist_and_broadcast(self, row: BrokerActivityRow) -> None:
+    def _persist_and_publish(self, row: BrokerActivityRow) -> None:
         """Shared persistence + fan-out tail.
 
         Called by both the live event loop and the pending-intent tick;
@@ -863,9 +836,9 @@ class BrokerActivityPublisher:
         if self._latest_row_ms is None or row.ts_ms > self._latest_row_ms:
             self._latest_row_ms = row.ts_ms
         self._update_envelope_cursor(row.seq)
-        self._broadcast(row)
+        self._event_channel.publish(row)
 
-    # ── helpers (engine state + broadcast + envelope) ─────────────
+    # ── helpers (engine state + envelope) ─────────────────────────
 
     def _read_submitted_orders(self) -> dict[str, dict]:
         """Return the union of (a) the sidecar's persisted ``submitted_orders``
@@ -1101,12 +1074,12 @@ class BrokerActivityPublisher:
                     # Foreign execution — not initiated by this bot.
                     # Author the row for forensic visibility, then
                     # emit a critical incident (PR 6 §11).
-                    self._author_and_broadcast(event=event, intent=None)
+                    self._author_and_publish(event=event, intent=None)
                     authored += 1
                     self._emit_cross_client_incident(event, now_ms=now_ms)
                 else:
                     intent = self._build_engine_intent(intent_id)
-                    row = self._author_and_broadcast(event=event, intent=intent)
+                    row = self._author_and_publish(event=event, intent=intent)
                     if row is not None:
                         authored += 1
 
@@ -1250,7 +1223,7 @@ class BrokerActivityPublisher:
         3. For each event whose ``exec_id`` is not in
            ``_seen_exec_ids`` AND whose ``order_ref`` namespace matches
            this instance, author a row via the shared
-           ``_author_and_broadcast`` path. The flag set in step 1 means
+           ``_author_and_publish`` path. The flag set in step 1 means
            ``classify_verdict`` promotes the verdict to
            ``expected_with_caveat`` and the ``reconnect_recovery``
            template fires.
@@ -1303,7 +1276,7 @@ class BrokerActivityPublisher:
                         # rows that arrive after reconnect.
                         continue
                     intent = self._build_engine_intent(intent_id)
-                    row = self._author_and_broadcast(event=event, intent=intent)
+                    row = self._author_and_publish(event=event, intent=intent)
                     if row is not None:
                         authored += 1
                 logger.info(
@@ -1317,48 +1290,6 @@ class BrokerActivityPublisher:
                 return authored
             finally:
                 self._reconnect_recovery_active = False
-
-    def _broadcast(self, row: BrokerActivityRow) -> None:
-        """Push the row to every subscriber. A full queue means the
-        subscriber is too slow — drop one stale row to make room for the
-        ``None`` sentinel so the SSE handler unblocks and closes the
-        connection (without the sentinel the handler stays blocked in
-        ``queue.get()`` forever and silently misses all future rows).
-        Other subscribers are unaffected."""
-        dead: list[asyncio.Queue[BrokerActivityRow | None]] = []
-        for q in self._subscribers:
-            try:
-                q.put_nowait(row)
-            except asyncio.QueueFull:
-                logger.warning(
-                    "dropping slow broker-activity subscriber",
-                    extra={"strategy_instance_id": self._strategy_instance_id},
-                )
-                # Make room for the sentinel by draining one stale row.
-                # The subscriber was already going to lose rows — better
-                # to lose one and tell them so than to lose all future
-                # rows silently.
-                try:
-                    q.get_nowait()
-                except asyncio.QueueEmpty:
-                    logger.debug(
-                        "slow subscriber queue already empty during drain",
-                        extra={"strategy_instance_id": self._strategy_instance_id},
-                    )
-                try:
-                    q.put_nowait(None)
-                except asyncio.QueueFull:
-                    # Truly stuck (e.g. a second producer concurrently
-                    # re-filled the queue). The consumer will time out
-                    # at the transport layer.
-                    logger.debug(
-                        "slow subscriber queue still full; closing subscriber",
-                        extra={"strategy_instance_id": self._strategy_instance_id},
-                    )
-                dead.append(q)
-        for q in dead:
-            self._subscribers.discard(q)
-
 
 def _safe_int(value: object) -> int | None:
     if value is None:

@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path as FsPath
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, status
 from fastapi.responses import StreamingResponse
 
 from app.broker.ibkr.config import get_settings
@@ -19,6 +19,15 @@ from app.services.bot_event_stream_service import (
     BotEventStreamService,
     BotEventStreamUnavailableError,
     get_bot_event_stream_service,
+)
+from app.services.durable_event_channel import (
+    DurableEventChannel,
+    EventCursor,
+    EventEnd,
+    EventGap,
+    EventRecord,
+    EventReset,
+    event_message_sse,
 )
 
 logger = logging.getLogger(__name__)
@@ -94,13 +103,26 @@ async def bot_event_backfill(
             description="Max authored rows per page.",
         ),
     ] = 100,
+    cursor: Annotated[str | None, Query()] = None,
     service: BotEventStreamService = Depends(get_bot_event_stream_service),
 ) -> BotEventPage:
     run_dir = _run_dir_for_http(run_id)
     try:
+        channel = service.channel_for_run(run_dir)
+        channel.refresh()
+        parsed_cursor = _parse_event_cursor(cursor)
+        if parsed_cursor is not None and parsed_cursor.stream_id != channel.stream_id:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "EVENT_STREAM_REPLACED",
+                    "durable_stream_id": channel.stream_id,
+                },
+            )
+        effective_after_seq = parsed_cursor.seq if parsed_cursor is not None else after_seq
         page = service.backfill_run(
             run_dir=run_dir,
-            after_seq=after_seq,
+            after_seq=effective_after_seq,
             limit=limit,
         )
     except BotEventStreamUnavailableError as exc:
@@ -113,11 +135,18 @@ async def bot_event_backfill(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=_BOT_EVENT_PROJECTION_ERROR,
         ) from exc
-    return BotEventPage(rows=page.rows, next_seq=page.next_seq)
-
-
-def _row_sse(row: BotEventRow) -> str:
-    return f"event: row\ndata: {row.model_dump_json()}\n\n"
+    high_water_seq = page.rows[-1].seq if page.rows else effective_after_seq
+    return BotEventPage(
+        rows=page.rows,
+        next_seq=page.next_seq,
+        durable_stream_id=channel.stream_id,
+        high_water_cursor=EventCursor(channel.stream_id, high_water_seq).encode(),
+        next_cursor=(
+            EventCursor(channel.stream_id, page.next_seq).encode()
+            if page.next_seq is not None
+            else None
+        ),
+    )
 
 
 def _error_sse(detail: str) -> str:
@@ -146,21 +175,52 @@ async def bot_event_stream(
         Query(
             ge=250,
             le=60_000,
-            description="WAL polling interval once the stream has caught up.",
+            deprecated=True,
+            description=(
+                "Legacy no-op retained for compatibility; the shared channel "
+                "owns its WAL observation cadence."
+            ),
         ),
     ] = 1000,
+    cursor: Annotated[str | None, Query()] = None,
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
     service: BotEventStreamService = Depends(get_bot_event_stream_service),
 ) -> StreamingResponse:
     run_dir = _run_dir_for_http(run_id)
 
+    try:
+        channel = service.channel_for_run(run_dir)
+        channel.refresh()
+    except BotEventStreamUnavailableError:
+        async def projection_error_source() -> AsyncIterator[str]:
+            yield _error_sse(_BOT_EVENT_PROJECTION_ERROR)
+
+        return _streaming_response(projection_error_source())
+
+    requested_cursor = _resolve_stream_cursor(
+        channel=channel,
+        query_cursor=cursor,
+        last_event_id=last_event_id,
+        legacy_since_seq=since_seq,
+    )
+    del poll_ms
+
     async def event_source() -> AsyncIterator[str]:
+        subscription = channel.subscribe(requested_cursor)
         try:
-            async for row in service.stream_run(
-                run_dir=run_dir,
-                since_seq=since_seq,
-                poll_interval_s=poll_ms / 1000,
-            ):
-                yield _row_sse(row)
+            while True:
+                message = await subscription.queue.get()
+                yield event_message_sse(
+                    message,
+                    encode_row=lambda row: row.model_dump_json(),
+                )
+                if isinstance(message, EventRecord):
+                    subscription.acknowledge(message.cursor)
+                    continue
+                if isinstance(message, EventReset) and subscription.active:
+                    continue
+                if isinstance(message, (EventGap, EventEnd, EventReset)):
+                    return
         except asyncio.CancelledError:
             raise
         except BotEventStreamUnavailableError:
@@ -176,9 +236,40 @@ async def bot_event_stream(
                 extra={"run_id": run_id, "run_dir": str(run_dir)},
             )
             yield _error_sse(_BOT_EVENT_STREAM_ERROR)
+        finally:
+            channel.unsubscribe(subscription)
 
+    return _streaming_response(event_source())
+
+
+def _parse_event_cursor(value: str | None) -> EventCursor | None:
+    try:
+        return EventCursor.parse(value)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+def _resolve_stream_cursor(
+    *,
+    channel: DurableEventChannel[BotEventRow],
+    query_cursor: str | None,
+    last_event_id: str | None,
+    legacy_since_seq: int,
+) -> EventCursor:
+    if query_cursor and last_event_id and query_cursor != last_event_id:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="cursor and Last-Event-ID must match when both are supplied",
+        )
+    parsed = _parse_event_cursor(query_cursor or last_event_id)
+    if parsed is not None:
+        return parsed
+    return EventCursor(channel.stream_id, legacy_since_seq)
+
+
+def _streaming_response(source: AsyncIterator[str]) -> StreamingResponse:
     return StreamingResponse(
-        event_source(),
+        source,
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

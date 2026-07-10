@@ -3,13 +3,12 @@ per-instance task that wires the pure reconciler to the WAL + SSE.
 
 Coverage:
 
-- Fill events get authored, written to WAL, broadcast to subscribers.
+- Fill events get authored, written to WAL, and published to the event channel.
 - Intermediate status events (Submitted) for OUR orders are skipped.
 - Foreign fills (no namespace match) are authored as UNMATCHED rows.
 - Duplicate exec_id from a re-delivered event is skipped (deduped via
   cold-start fold of the WAL).
-- Slow subscribers are dropped without affecting others.
-- ``stop()`` drains subscribers cleanly with a ``None`` sentinel.
+- ``stop()`` closes event-channel subscribers cleanly.
 - The registry singleton lifecycle: register starts, unregister stops.
 - ``UnauthorableEventError`` events are skipped (logged), not authored.
 - Cursor on ``LiveStateEnvelope`` advances per row.
@@ -52,6 +51,7 @@ from app.services.broker_activity_wal import (
     instance_broker_activity_wal_path,
     legacy_per_run_broker_activity_wal_path,
 )
+from app.services.durable_event_channel import EventEnd, EventRecord
 
 pytestmark = pytest.mark.asyncio
 
@@ -255,12 +255,12 @@ async def _wait_for_incidents(
 # ── Tests ───────────────────────────────────────────────────────────
 
 
-async def test_fill_event_is_authored_persisted_and_broadcast(
+async def test_fill_event_is_authored_persisted_and_published(
     tmp_path: Path,
 ) -> None:
     publisher, _run_dir, artifacts = _build_publisher(tmp_path, [_fill_event()])
-    queue = publisher.subscribe()
     publisher.start()
+    subscription = publisher.event_channel.subscribe(None)
     try:
         rows = await _wait_for_rows(
             instance_broker_activity_wal_path(artifacts, SID), want=1
@@ -270,12 +270,11 @@ async def test_fill_event_is_authored_persisted_and_broadcast(
         assert rows[0].exec_id == "exec-pub-1"
         assert rows[0].order_ref == ORDER_REF
 
-        # The subscriber receives the same row via the queue.
-        broadcast = await asyncio.wait_for(queue.get(), timeout=0.5)
-        assert broadcast is not None
-        assert broadcast.exec_id == "exec-pub-1"
+        message = await asyncio.wait_for(subscription.queue.get(), timeout=0.5)
+        assert isinstance(message, EventRecord)
+        assert message.row.exec_id == "exec-pub-1"
     finally:
-        publisher.unsubscribe(queue)
+        publisher.event_channel.unsubscribe(subscription)
         await publisher.stop()
 
 
@@ -538,14 +537,13 @@ async def test_backfill_returns_rows_after_cursor(tmp_path: Path) -> None:
         await publisher.stop()
 
 
-async def test_stop_drains_subscribers_with_none_sentinel(tmp_path: Path) -> None:
+async def test_stop_closes_event_channel_subscribers(tmp_path: Path) -> None:
     publisher, _, _ = _build_publisher(tmp_path, [])
-    queue = publisher.subscribe()
     publisher.start()
-    # Stop immediately; subscriber should see the sentinel.
+    subscription = publisher.event_channel.subscribe(None)
     await publisher.stop()
-    sentinel = await asyncio.wait_for(queue.get(), timeout=0.5)
-    assert sentinel is None
+    message = await asyncio.wait_for(subscription.queue.get(), timeout=0.5)
+    assert isinstance(message, EventEnd)
 
 
 async def test_registry_register_starts_unregister_stops(tmp_path: Path) -> None:
@@ -731,62 +729,6 @@ async def test_event_for_foreign_namespace_is_silently_skipped(
         await publisher.stop()
 
 
-async def test_slow_subscriber_receives_sentinel_when_dropped(
-    tmp_path: Path,
-) -> None:
-    """A full subscriber queue must receive a ``None`` sentinel before
-    being discarded — otherwise the SSE handler is left blocked in
-    ``queue.get()`` forever and silently misses all future rows. The
-    sentinel lets the handler emit ``event: end`` and close the
-    connection so the client knows to reconnect.
-    """
-    publisher, _, _ = _build_publisher(tmp_path, [])
-    queue = publisher.subscribe()
-    # Fill the queue to capacity with dummy rows.
-    capacity = queue.maxsize
-    for i in range(capacity):
-        queue.put_nowait(
-            BrokerActivityRow(
-                seq=i + 1,
-                ts_ms=1_700_000_000_000 + i,
-                exec_id=f"prefill-{i}",
-                symbol="SPY",
-                side="BUY",
-                quantity=1.0,
-                order_type="MKT",
-                verdict=Verdict.EXPECTED,
-                template_key="normal_fill",
-                template_version=1,
-                headline="prefill",
-                narrative="prefill",
-            )
-        )
-    assert queue.full()
-    # Author one more row — _broadcast must dedupe to make room for the
-    # sentinel rather than silently dropping.
-    overflow_row = BrokerActivityRow(
-        seq=capacity + 1,
-        ts_ms=1_700_000_000_999,
-        exec_id="overflow",
-        symbol="SPY",
-        side="BUY",
-        quantity=1.0,
-        order_type="MKT",
-        verdict=Verdict.EXPECTED,
-        template_key="normal_fill",
-        template_version=1,
-        headline="overflow",
-        narrative="overflow",
-    )
-    publisher._broadcast(overflow_row)
-    # The queue should now hold the remaining stale rows AND a None
-    # sentinel at the tail.
-    drained: list[BrokerActivityRow | None] = []
-    while not queue.empty():
-        drained.append(queue.get_nowait())
-    assert drained[-1] is None, f"expected None sentinel at tail, got {drained[-1]!r}"
-    # The subscriber should have been discarded from the registry.
-    assert queue not in publisher._subscribers
 # ── Slice 3 — reconnect-recovery sweep ──────────────────────────────
 
 
@@ -1661,7 +1603,7 @@ async def test_pending_intent_tick_skips_non_strategy_intent_kind(
     assert rows == []
 
 
-async def test_pending_intent_tick_broadcasts_to_subscribers(
+async def test_pending_intent_tick_publishes_to_event_channel(
     tmp_path: Path,
 ) -> None:
     """The pending row reaches SSE subscribers like any other row —
@@ -1679,15 +1621,16 @@ async def test_pending_intent_tick_broadcasts_to_subscribers(
             "order_type": "MKT",
         },
     )
-    queue = publisher.subscribe()
     publisher.start()
+    subscription = publisher.event_channel.subscribe(None)
     try:
-        row = await asyncio.wait_for(queue.get(), timeout=1.0)
+        message = await asyncio.wait_for(subscription.queue.get(), timeout=1.0)
     finally:
-        publisher.unsubscribe(queue)
+        publisher.event_channel.unsubscribe(subscription)
         await publisher.stop()
 
-    assert row is not None
+    assert isinstance(message, EventRecord)
+    row = message.row
     assert row.verdict == Verdict.ENGINE_ONLY_PENDING
     assert row.order_ref == f"{NS}:pending-broadcast"
 

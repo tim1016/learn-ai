@@ -240,6 +240,9 @@ class BrokerActivityPage(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     rows: list[BrokerActivityRow]
+    durable_stream_id: str | None = None
+    high_water_cursor: str | None = None
+    next_cursor: str | None = None
     next_seq: int | None = Field(
         default=None,
         description=(

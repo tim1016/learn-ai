@@ -1,19 +1,15 @@
 """HTTP surface for the broker-activity reconciliation stream (ADR 0014).
 
-Two endpoints per strategy instance:
+Two endpoints per strategy instance share the publisher-owned durable channel:
 
 - ``GET /api/live-instances/{strategy_instance_id}/broker-activity/stream``
-  — SSE channel. Subscribes the cockpit FIRST (so live rows are buffered
-  while we drain WAL), then emits every WAL row with ``seq > since_seq``
-  as a backfill, then transitions seamlessly into live rows — deduping
-  any row that arrived in the WAL during the drain. This is the standard
-  cockpit flow; the client passes the highest ``seq`` it already has and
-  never misses a row across the REST/SSE handoff.
+  — SSE channel. Replays the sequence-indexed in-memory ring, then follows
+  live rows without request-owned WAL scans. Rows carry composite
+  ``<durable_stream_id>:<seq>`` IDs. Ring misses and slow-client overflow
+  produce explicit recovery control events.
 - ``GET /api/live-instances/{strategy_instance_id}/broker-activity``
-  — REST paginated query against the WAL. Kept as a forensic utility
-  for ad-hoc lookups (operator tools, log inspection); the cockpit
-  does NOT use this path — it subscribes directly to the SSE stream
-  with ``since_seq`` and gets backfill + live in one channel.
+  — REST paginated query against the WAL. It accepts and returns the same
+  composite cursor and is the deep-replay path after a gap marker.
 
 The router is render-only: the publisher (``broker_activity_publisher``)
 authors every row server-side per the truthfulness contract.
@@ -28,7 +24,7 @@ from functools import partial
 from pathlib import Path as FsPath
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Path, Query, status
+from fastapi import APIRouter, Header, HTTPException, Path, Query, status
 from fastapi.responses import StreamingResponse
 
 from app.broker.ibkr.client import get_client
@@ -46,10 +42,20 @@ from app.engine.live.live_state_sidecar import (
 from app.operator.incidents.store import IncidentStore
 from app.schemas.broker_activity import (
     BrokerActivityPage,
+    BrokerActivityRow,
     ReconciliationTimingPolicy,
 )
 from app.services.broker_activity_publisher import BrokerActivityPublisher
 from app.services.broker_activity_publisher_registry import get_publisher_registry
+from app.services.durable_event_channel import (
+    DurableEventChannel,
+    EventCursor,
+    EventEnd,
+    EventGap,
+    EventRecord,
+    EventReset,
+    event_message_sse,
+)
 
 
 class PublisherBootstrapError(Exception):
@@ -242,17 +248,23 @@ async def broker_activity_backfill(
             description="Max rows per page; pass the returned ``next_seq`` as ``after_seq`` on the next call.",
         ),
     ] = 100,
+    cursor: Annotated[str | None, Query()] = None,
 ) -> BrokerActivityPage:
-    """Forensic / ad-hoc paginated query against the WAL.
-
-    NOT the standard cockpit flow — cockpit clients subscribe directly
-    to ``/broker-activity/stream?since_seq=<N>`` which does its own WAL
-    backfill and seamlessly transitions to live without a handoff gap.
-    Use this endpoint for operator tools, log inspection, or any
-    out-of-band lookup.
-    """
+    """Deep-replay and forensic paginated query against the WAL."""
     publisher = await _ensure_publisher(strategy_instance_id)
-    rows = publisher.backfill(after_seq=after_seq, limit=limit)
+    channel = publisher.event_channel
+    channel.refresh()
+    parsed_cursor = _parse_event_cursor(cursor)
+    if parsed_cursor is not None and parsed_cursor.stream_id != channel.stream_id:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "code": "EVENT_STREAM_REPLACED",
+                "durable_stream_id": channel.stream_id,
+            },
+        )
+    effective_after_seq = parsed_cursor.seq if parsed_cursor is not None else after_seq
+    rows = publisher.backfill(after_seq=effective_after_seq, limit=limit)
     # ``next_seq`` is the cursor the caller passes verbatim as the next
     # ``after_seq``: the highest seq returned in this page. ``None``
     # iff this page drained the WAL.
@@ -262,7 +274,18 @@ async def broker_activity_backfill(
         if rows and rows[-1].seq < last_persisted
         else None
     )
-    return BrokerActivityPage(rows=rows, next_seq=next_seq)
+    high_water_seq = rows[-1].seq if rows else effective_after_seq
+    return BrokerActivityPage(
+        rows=rows,
+        next_seq=next_seq,
+        durable_stream_id=channel.stream_id,
+        high_water_cursor=EventCursor(channel.stream_id, high_water_seq).encode(),
+        next_cursor=(
+            EventCursor(channel.stream_id, next_seq).encode()
+            if next_seq is not None
+            else None
+        ),
+    )
 
 
 @router.get(
@@ -276,41 +299,40 @@ async def broker_activity_stream(
         Query(
             ge=0,
             description=(
-                "Replay every WAL row with ``seq > since_seq`` as the "
-                "backfill, then transition to live without a gap. "
-                "Cold-start clients pass 0; reconnecting clients pass "
-                "the highest seq they have."
+                "Legacy sequence-only cursor. New clients use the composite "
+                "cursor or Last-Event-ID so WAL replacement is detectable."
             ),
         ),
     ] = 0,
+    cursor: Annotated[str | None, Query()] = None,
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
 ) -> StreamingResponse:
     publisher = await _ensure_publisher(strategy_instance_id)
+    channel = publisher.event_channel
+    channel.refresh()
+    requested_cursor = _resolve_stream_cursor(
+        channel=channel,
+        query_cursor=cursor,
+        last_event_id=last_event_id,
+        legacy_since_seq=since_seq,
+    )
 
     async def event_source():
-        # Subscribe FIRST so any row authored during the WAL drain is
-        # buffered to this client's queue; the live-mode loop below
-        # then dedupes against ``last_emitted_seq`` so we never deliver
-        # the same seq twice across the backfill/live boundary.
-        queue = publisher.subscribe()
+        subscription = channel.subscribe(requested_cursor)
         try:
-            # 1. WAL backfill — every row the client hasn't seen.
-            backlog = publisher.backfill(after_seq=since_seq)
-            last_emitted_seq = since_seq
-            for row in backlog:
-                yield f"event: row\ndata: {row.model_dump_json()}\n\n"
-                last_emitted_seq = row.seq
-            # 2. Live mode — drain the queue, skipping anything already
-            # covered by the backfill above (a row may have landed in
-            # both the WAL and the queue while we were draining).
             while True:
-                row = await queue.get()
-                if row is None:
-                    yield "event: end\ndata: {}\n\n"
+                message = await subscription.queue.get()
+                yield event_message_sse(
+                    message,
+                    encode_row=lambda row: row.model_dump_json(),
+                )
+                if isinstance(message, EventRecord):
+                    subscription.acknowledge(message.cursor)
+                    continue
+                if isinstance(message, EventReset) and subscription.active:
+                    continue
+                if isinstance(message, (EventGap, EventEnd, EventReset)):
                     return
-                if row.seq <= last_emitted_seq:
-                    continue  # already delivered in the backfill
-                yield f"event: row\ndata: {row.model_dump_json()}\n\n"
-                last_emitted_seq = row.seq
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -321,13 +343,38 @@ async def broker_activity_stream(
             err = json.dumps({"error": str(exc)})
             yield f"event: error\ndata: {err}\n\n"
         finally:
-            publisher.unsubscribe(queue)
+            channel.unsubscribe(subscription)
 
     return StreamingResponse(
         event_source(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def _parse_event_cursor(value: str | None) -> EventCursor | None:
+    try:
+        return EventCursor.parse(value)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+def _resolve_stream_cursor(
+    *,
+    channel: DurableEventChannel[BrokerActivityRow],
+    query_cursor: str | None,
+    last_event_id: str | None,
+    legacy_since_seq: int,
+) -> EventCursor:
+    if query_cursor and last_event_id and query_cursor != last_event_id:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="cursor and Last-Event-ID must match when both are supplied",
+        )
+    parsed = _parse_event_cursor(query_cursor or last_event_id)
+    if parsed is not None:
+        return parsed
+    return EventCursor(channel.stream_id, legacy_since_seq)
 
 
 __all__ = [

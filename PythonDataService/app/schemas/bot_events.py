@@ -245,6 +245,9 @@ class BotEventPage(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     rows: list[BotEventRow]
+    durable_stream_id: str | None = None
+    high_water_cursor: str | None = None
+    next_cursor: str | None = None
     next_seq: int | None = Field(
         default=None,
         description=(
