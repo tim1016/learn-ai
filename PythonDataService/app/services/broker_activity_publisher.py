@@ -306,6 +306,7 @@ class BrokerActivityPublisher:
         self._event_channel = DurableEventChannel(
             channel_key=f"broker-activity:{strategy_instance_id}",
             wal_path=instance_wal_path,
+            trusted_root=artifacts_root / "live_instances",
             load_rows=self._wal.read_all,
             seq_of=lambda row: row.seq,
         )

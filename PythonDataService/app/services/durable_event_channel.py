@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Generic, TypeVar
 
+from app.engine.live.identity import confine_path_to_root
+
 logger = logging.getLogger(__name__)
 
 RowT = TypeVar("RowT")
@@ -104,6 +106,7 @@ class DurableEventChannel(Generic[RowT]):  # noqa: UP046 - Python 3.11 runtime.
         *,
         channel_key: str,
         wal_path: Path,
+        trusted_root: Path,
         load_rows: Callable[[], list[RowT]],
         seq_of: Callable[[RowT], int],
         poll_interval_seconds: float = 0.25,
@@ -114,6 +117,8 @@ class DurableEventChannel(Generic[RowT]):  # noqa: UP046 - Python 3.11 runtime.
             raise ValueError("event channel bounds must be positive")
         self.channel_key = channel_key
         self._wal_path = wal_path
+        self._trusted_root = trusted_root
+        self._safe_wal_path()
         self._load_rows = load_rows
         self._seq_of = seq_of
         self._poll_interval_seconds = poll_interval_seconds
@@ -314,8 +319,9 @@ class DurableEventChannel(Generic[RowT]):  # noqa: UP046 - Python 3.11 runtime.
                     )
 
     def _wal_signature(self) -> tuple[int, int, int, int] | None:
+        wal_path = self._safe_wal_path()
         try:
-            stat = self._wal_path.stat()
+            stat = wal_path.stat()
         except FileNotFoundError:
             return None
         return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
@@ -323,8 +329,15 @@ class DurableEventChannel(Generic[RowT]):  # noqa: UP046 - Python 3.11 runtime.
     def _identity_stream_id(self, *, nonce: object | None = None) -> str:
         signature = self._wal_signature()
         identity = signature[:2] if signature is not None else (0, 0)
-        raw = f"{self.channel_key}|{self._wal_path.resolve()}|{identity}|{nonce or ''}"
+        raw = f"{self.channel_key}|{self._safe_wal_path()}|{identity}|{nonce or ''}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+    def _safe_wal_path(self) -> Path:
+        return confine_path_to_root(
+            self._wal_path,
+            self._trusted_root,
+            label="durable event channel WAL",
+        )
 
 
 __all__ = [

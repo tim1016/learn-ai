@@ -30,6 +30,7 @@ def _channel(
     return DurableEventChannel(
         channel_key="bot:events",
         wal_path=path,
+        trusted_root=path.parent,
         load_rows=lambda: list(rows),
         seq_of=lambda row: row.seq,
         poll_interval_seconds=3_600,
@@ -188,3 +189,35 @@ def test_composite_cursor_round_trip_and_validation() -> None:
     assert EventCursor.parse(cursor.encode()) == cursor
     with pytest.raises(ValueError):
         EventCursor.parse("42")
+
+
+def test_channel_rejects_wal_outside_trusted_root(tmp_path: Path) -> None:
+    trusted_root = tmp_path / "trusted"
+    trusted_root.mkdir()
+
+    with pytest.raises(ValueError, match="escapes root"):
+        DurableEventChannel(
+            channel_key="bot:events",
+            wal_path=tmp_path / "outside.jsonl",
+            trusted_root=trusted_root,
+            load_rows=list,
+            seq_of=lambda row: row.seq,
+        )
+
+
+def test_channel_rechecks_symlink_escape_before_filesystem_access(
+    tmp_path: Path,
+) -> None:
+    trusted_root = tmp_path / "trusted"
+    trusted_root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    wal_path = trusted_root / "events.jsonl"
+    wal_path.write_text("")
+    channel = _channel(wal_path, [])
+
+    wal_path.unlink()
+    wal_path.symlink_to(outside / "events.jsonl")
+
+    with pytest.raises(ValueError, match="escapes root"):
+        channel.refresh()

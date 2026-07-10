@@ -59,6 +59,7 @@ class BotEventStreamService:
             channel = DurableEventChannel(
                 channel_key=f"bot-events:{key.name}",
                 wal_path=run_bot_event_wal_path(key),
+                trusted_root=key,
                 load_rows=lambda: self._load_rows(key),
                 seq_of=lambda row: row.seq,
             )
