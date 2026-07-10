@@ -113,6 +113,20 @@ for (const prefix of PROTECTED_READ_PREFIXES) {
 
 {
   const req = request({
+    method: 'GET',
+    url: '/api/live-instances/bot-a/operator-surface/stream',
+    intent: null,
+    queryIntent: DATA_PLANE_CONTROL_INTENT_VALUE,
+  });
+  const proxyReq = proxyReqRecorder();
+  attachDataPlaneSecret(proxyReq, req);
+  assert.equal(isProtectedControlRead(req), true);
+  assert.equal(requiresDataPlaneControlSecret(req), true);
+  assert.equal(proxyReq.headers.get(DATA_PLANE_CONTROL_SECRET_HEADER), 'local-dev-control-secret');
+}
+
+{
+  const req = request({
     method: 'POST',
     url: '/api/broker/connect',
     intent: null,

@@ -877,6 +877,17 @@ async def test_operator_surface_stream_emits_current_snapshot_and_closes_on_stop
     assert await anext(iterator) == "event: end\ndata: {}\n\n"
     await iterator.aclose()
 
+    await hub.start()
+    deferred_response = await live_instances.stream_instance_operator_surface(sid)
+    await hub.stop(timeout_seconds=0.1)
+
+    deferred_iterator = deferred_response.body_iterator
+    assert await asyncio.wait_for(anext(deferred_iterator), timeout=0.1) == (
+        "event: end\ndata: {}\n\n"
+    )
+    await deferred_iterator.aclose()
+    assert hub._watchers == set()
+
 
 async def test_surface_hub_does_not_bootstrap_publisher_for_stopped_bot(
     app_with_root,

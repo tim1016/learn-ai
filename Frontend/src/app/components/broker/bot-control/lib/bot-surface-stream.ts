@@ -24,7 +24,7 @@ export function openBotSurfaceStream(
 ): BotSurfaceStream {
   const encodedId = encodeURIComponent(strategyInstanceId);
   const url = withDataPlaneControlIntent(
-    `${environment.pythonServiceUrl}/api/live-instances/${encodedId}/operator-surface/stream`,
+    `/api/live-instances/${encodedId}/operator-surface/stream`,
   );
   const source = new EventSource(url);
   source.addEventListener('snapshot', (event: Event) => {

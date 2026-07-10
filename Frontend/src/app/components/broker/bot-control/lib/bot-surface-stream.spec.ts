@@ -53,8 +53,9 @@ describe('bot surface state stream', () => {
     source?.emit('snapshot', JSON.stringify(snapshot));
     stream.close();
 
-    expect(source?.url).toContain('/api/live-instances/spy%20bot/operator-surface/stream');
-    expect(source?.url).toContain('control_intent=learn-ai-browser-control');
+    expect(source?.url).toBe(
+      '/api/live-instances/spy%20bot/operator-surface/stream?control_intent=learn-ai-browser-control',
+    );
     expect(received).toEqual(['fixture-epoch']);
     expect(source?.closed).toBe(true);
   });

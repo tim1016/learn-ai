@@ -322,6 +322,25 @@ async def test_stop_closes_snapshot_watchers() -> None:
 
 
 @pytest.mark.asyncio
+async def test_subscribe_after_stop_is_terminal_and_not_retained() -> None:
+    hub = SurfaceHub(
+        strategy_instance_id="bot-a",
+        assemble=lambda: asyncio.sleep(
+            0,
+            result=_snapshot(generated_at_ms=1_700_000_000_100),
+        ),
+        refresh_interval_seconds=3_600,
+    )
+    await hub.start()
+    await hub.stop(timeout_seconds=0.1)
+
+    queue = hub.subscribe()
+
+    assert await queue.get() is None
+    assert queue not in hub._watchers
+
+
+@pytest.mark.asyncio
 async def test_visible_runs_cache_coalesces_fleet_scan_and_invalidates(
     tmp_path: Path,
 ) -> None:

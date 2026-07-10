@@ -154,6 +154,10 @@ semantic-version changes. Events use
 obsolete `Last-Event-ID` and sends current truth rather than replaying state.
 Every watcher has a latest-wins queue of one, is removed when its response
 ends, and receives an explicit terminal event when the hub stops.
+The browser opens the channel only through the same-origin `/api` proxy. The
+shared protected-read manifest marks the live-instance namespace, the proxy
+attaches the private control secret only for proven local browser intent, and
+Python applies its always-authenticated read guard to that namespace.
 
 The Bot Cockpit bootstrap still uses REST, then switches to the state stream
 when `environment.flags.botCockpitStateStream` is enabled. The existing

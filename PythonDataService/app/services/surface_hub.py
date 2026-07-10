@@ -185,6 +185,9 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
         """Subscribe to latest-wins snapshots with a bounded queue of one."""
 
         queue: asyncio.Queue[SnapshotT | None] = asyncio.Queue(maxsize=1)
+        if self._stop_event.is_set():
+            queue.put_nowait(None)
+            return queue
         if self._latest is not None:
             queue.put_nowait(self._latest)
         self._watchers.add(queue)
