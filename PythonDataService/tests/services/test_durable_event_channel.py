@@ -337,11 +337,16 @@ async def test_thousand_event_spike_preserves_sibling_p95_latency_budget(
             hot.publish(_Row(hot_seq))
         if hot_seq == 1_000:
             assert isinstance(await hot_slow.queue.get(), EventGap)
+            assert hot_slow.queue.qsize() <= hot.resource_limits.subscriber_queue_size
+            assert hot.resource_limits.subscriber_count == 0
         spike_samples.append(
             await _publish_and_measure(quiet, quiet_fast, seq=quiet_seq)
         )
 
     spike_p95_ns = _p95_ns(spike_samples)
+    assert quiet_fast.queue.empty()
+    assert quiet.resource_limits.subscriber_count == 1
+    assert quiet.resource_limits.subscriber_queue_size == 4
     assert spike_p95_ns <= p95_budget_ns, (
         "quiet sibling p95 exceeded derived budget under hot-bot spike: "
         f"baseline_p95_ns={baseline_p95_ns}, "

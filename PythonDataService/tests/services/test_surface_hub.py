@@ -16,6 +16,7 @@ class _Snapshot(BaseModel):
     stream_epoch: str = ""
     surface_version: int = 0
     fetched_at_ms: int = 0
+    daemon_fetched_at_ms: int | None = None
     generated_at_ms: int
     source_state: str
     evidence_at_ms: int
@@ -67,6 +68,33 @@ async def test_identical_semantics_do_not_advance_surface_version() -> None:
     assert first.surface_version == 1
     assert second.surface_version == 1
     assert second.fetched_at_ms > first.fetched_at_ms
+    assert queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_daemon_fetch_timestamp_does_not_advance_surface_version() -> None:
+    daemon_fetched_at_ms = 1_700_000_000_100
+
+    async def assemble() -> _Snapshot:
+        nonlocal daemon_fetched_at_ms
+        value = _snapshot(generated_at_ms=1_700_000_000_100).model_copy(
+            update={"daemon_fetched_at_ms": daemon_fetched_at_ms}
+        )
+        daemon_fetched_at_ms += 1_000
+        return value
+
+    hub = SurfaceHub(strategy_instance_id="__fleet_roster__", assemble=assemble)
+
+    first = await hub.refresh()
+    queue = hub.subscribe()
+    assert await queue.get() == first
+    second = await hub.refresh()
+
+    assert first.surface_version == 1
+    assert second.surface_version == 1
+    assert second.daemon_fetched_at_ms is not None
+    assert first.daemon_fetched_at_ms is not None
+    assert second.daemon_fetched_at_ms > first.daemon_fetched_at_ms
     assert queue.empty()
 
 
