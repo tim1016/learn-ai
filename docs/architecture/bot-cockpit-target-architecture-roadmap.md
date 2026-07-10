@@ -182,6 +182,24 @@ bounded client fan-out. Use `<durable_stream_id>:<seq>` for SSE IDs,
 - shutdown closes tailers and event client queues within the graceful-
   shutdown budget.
 
+**Implemented 2026-07-10.** Broker activity and Bot events now use separate
+`DurableEventChannel` owners with one WAL observer, a bounded sequence-indexed
+ring, and bounded per-client queues. SSE rows, `Last-Event-ID`, explicit query
+cursors, REST backfill, reset events, and gap markers share the
+`<durable_stream_id>:<seq>` cursor. A cursor from a replaced WAL is rejected by
+REST and produces a named SSE reset; a cursor older than the ring or a slow
+client queue produces a gap carrying the last acknowledged safe cursor. Broker
+activity publishes through this channel directly after its durable append; the
+legacy publisher subscriber fan-out was removed. Bot-event channels are owned
+and stopped by `BotEventStreamService`, and application shutdown drains those
+tailers after the per-bot producers stop. Focused regressions prove five
+clients share one initial scan, composite-cursor reconnect, deep-replay gap,
+WAL replacement through both polling and owner-publish paths, isolated queue
+overflow, and bounded shutdown. Sequence-only rollback clients receive a
+server-side deep backfill before their bounded live subscription; only live
+Bot-event subscriptions are cached, and the last disconnect stops and evicts
+their channel.
+
 ### Stage 3C — Fleet daemon cache and circuit breaker
 
 Add fleet-batched daemon polling with stale-while-revalidate plus bounded
