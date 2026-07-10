@@ -293,7 +293,7 @@ app.add_middleware(
 
 # Include routers
 DATA_PLANE_CONTROL_DEPENDENCIES = [Depends(require_data_plane_control_secret)]
-BROKER_SESSION_MIRROR_DEPENDENCIES = [Depends(require_data_plane_control_secret_always)]
+PROTECTED_DATA_PLANE_READ_DEPENDENCIES = [Depends(require_data_plane_control_secret_always)]
 
 app.include_router(aggregates.router, prefix="/api/aggregates", tags=["aggregates"])
 app.include_router(sanitize.router, prefix="/api", tags=["sanitize"])
@@ -388,7 +388,7 @@ app.include_router(broker_account_truth.router, dependencies=DATA_PLANE_CONTROL_
 # Account-scoped reconciliation and recovery triage endpoints.
 app.include_router(account_reconciliation.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 # Broker session mirror — read-only roster/SSE observatory with sensitive runtime data.
-app.include_router(broker_session.router, dependencies=BROKER_SESSION_MIRROR_DEPENDENCIES)
+app.include_router(broker_session.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
 # Golden fixture catalog — reads manifest.json + artifacts/fixture-validation/latest.json.
 # No live computation at request time (see docs/process/autonomous-decisions.md D-010).
 app.include_router(golden_fixtures.router, prefix="/api", tags=["golden-fixtures"])
@@ -419,14 +419,17 @@ app.include_router(
     live_instances_router.router,
     prefix="/api/live-instances",
     tags=["live-instances"],
-    dependencies=DATA_PLANE_CONTROL_DEPENDENCIES,
+    dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
 )
 app.include_router(lifecycle_projection.router)
 # ADR 0014 — broker-activity reconciliation surface (SSE + REST backfill).
 # The router carries its own ``/api/live-instances`` prefix internally
 # (so the path is sibling to the live-instances router), keeping the
 # operator-facing URL space consistent.
-app.include_router(broker_activity_router.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
+app.include_router(
+    broker_activity_router.router,
+    dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES,
+)
 
 # Data lake (Slice 1a) — gated by DATA_LAKE_ENABLED.
 # When disabled, the prefix has no registered routes; clients get 404.

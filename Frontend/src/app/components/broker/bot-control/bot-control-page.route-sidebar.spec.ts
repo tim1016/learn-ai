@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { LiveInstanceStatus } from '../../../api/live-instances.types';
 import type { HostRunnerStartRequest } from '../../../api/live-runs.types';
+import { environment } from '../../../../environments/environment';
 import {
   makeHostRunnerProcess,
   makeStatus,
@@ -23,6 +24,8 @@ describe('BotControlPageComponent route and sidebar behavior', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllGlobals();
+    environment.flags.botCockpitStateStream = false;
     window.localStorage.clear();
   });
 
@@ -109,6 +112,31 @@ describe('BotControlPageComponent route and sidebar behavior', () => {
     fixture.detectChanges();
 
     expect(liveRuns.getInstanceStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('disables the four-second poll when the state-stream flag is enabled', async () => {
+    class StubEventSource {
+      static instances: StubEventSource[] = [];
+
+      constructor(readonly url: string) {
+        StubEventSource.instances.push(this);
+      }
+
+      addEventListener(): void {}
+      close(): void {}
+    }
+
+    vi.useFakeTimers();
+    vi.stubGlobal('EventSource', StubEventSource);
+    environment.flags.botCockpitStateStream = true;
+    const { fixture, liveRuns } = await setupBotControlPage();
+    await flush(fixture);
+
+    await vi.advanceTimersByTimeAsync(8_000);
+    await flush(fixture);
+
+    expect(liveRuns.getInstanceStatus).toHaveBeenCalledTimes(1);
+    expect(StubEventSource.instances).toHaveLength(1);
   });
 
   it('ignores stale status responses after the route changes to another bot', async () => {

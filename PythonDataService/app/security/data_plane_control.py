@@ -36,7 +36,7 @@ async def require_data_plane_control_secret_always(
 
     _require_configured_control_secret(
         supplied=supplied,
-        missing_detail=f"{CONTROL_SECRET_ENV_VAR} is required for broker session mirror routes",
+        missing_detail=f"{CONTROL_SECRET_ENV_VAR} is required for protected data-plane reads",
     )
 
 

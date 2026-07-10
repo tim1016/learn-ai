@@ -86,7 +86,10 @@ export function brokerActivityStream(
     `/api/live-instances/${encodeURIComponent(strategyInstanceId)}` +
     `/broker-activity/stream?since_seq=0`;
   const stream = runInInjectionContext(injector, () =>
-    brokerSse<BrokerActivityRow>(url, 'row', { maxBuffer: SSE_MAX_BUFFER }),
+    brokerSse<BrokerActivityRow>(url, 'row', {
+      maxBuffer: SSE_MAX_BUFFER,
+      dataPlaneControlIntent: true,
+    }),
   );
   sseStream.set(stream);
 
