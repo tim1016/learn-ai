@@ -312,6 +312,7 @@ async def test_running_instance_status_carries_every_operator_surface_block(
         "control_plane",
         "action_plan",
         "actions",
+        "confirmations",
         "trading_session",
         # PRD #616 — additive operator-facing projections.
         "readiness_gates",

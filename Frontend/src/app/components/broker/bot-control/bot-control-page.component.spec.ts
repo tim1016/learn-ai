@@ -79,6 +79,13 @@ function terminalRemoveStatus(): LiveInstanceStatus {
         label: 'Remove',
         action: { kind: 'remove' },
         target: null,
+        confirmation: {
+          title: 'Move-authored remove title',
+          body: 'Move-authored remove body.',
+          consequence: 'Move-authored remove consequence.',
+          confirm_label: 'Remove bot from move',
+          required_token: '',
+        },
       },
       secondaryMoves: [],
       appliesTo: 'run',
@@ -101,6 +108,13 @@ function terminalReplaceStatus(): LiveInstanceStatus {
         label: 'Replace',
         action: { kind: 'retire_replace' },
         target: null,
+        confirmation: {
+          title: 'Move-authored replace title',
+          body: 'Move-authored replace body.',
+          consequence: 'Move-authored replace consequence.',
+          confirm_label: 'Replace from move',
+          required_token: '',
+        },
       },
       secondaryMoves: [],
       appliesTo: 'run',
@@ -198,6 +212,9 @@ describe('BotControlPageComponent', () => {
     await flush(fixture);
 
     expect(component.removeBotConfirmOpen()).toBe(true);
+    expect(element.textContent).toContain('Move-authored remove title');
+    expect(element.textContent).toContain('Move-authored remove consequence.');
+    expect(element.textContent).toContain('Remove bot from move');
     expect(liveRuns.deleteBot).not.toHaveBeenCalled();
 
     await component.confirmRemoveBot();
@@ -221,6 +238,9 @@ describe('BotControlPageComponent', () => {
     await flush(fixture);
 
     expect(component.retireReplaceConfirmOpen()).toBe(true);
+    expect(element.textContent).toContain('Move-authored replace title');
+    expect(element.textContent).toContain('Move-authored replace consequence.');
+    expect(element.textContent).toContain('Replace from move');
 
     await component.confirmRetireReplace();
 

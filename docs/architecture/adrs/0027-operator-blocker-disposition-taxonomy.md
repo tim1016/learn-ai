@@ -83,3 +83,10 @@ moves to the affected bot cockpit. Account Truth responses carry
 moves. The frontend shared `app-operator-blocker-list` renderer displays those
 host projections verbatim; it does not infer roster chip tone, account
 remediation, or blocker identity from readiness or Account Truth message codes.
+
+As of the Stage 8 confirmation-copy slice, dangerous Bot Cockpit confirmation
+copy is also backend-authored. Terminal `OperatorMove` values can carry
+title/body/consequence/confirm-label/token copy, and the operator surface
+provides the non-move safety confirmations used by mark-poisoned and
+crash-recovery override flows. The typed confirmation dialog renders those
+fields verbatim and has no domain-language fallback defaults.

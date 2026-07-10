@@ -4,7 +4,6 @@ import {
   computed,
   effect,
   ElementRef,
-  HostListener,
   inject,
   input,
   output,
@@ -32,6 +31,9 @@ import {
 @Component({
   selector: 'app-typed-halt-confirm',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  host: {
+    '(document:keydown.escape)': 'onEscape()',
+  },
   templateUrl: './typed-halt-confirm.component.html',
   styleUrl: './typed-halt-confirm.component.scss',
 })
@@ -39,11 +41,11 @@ export class TypedHaltConfirmComponent {
   /** When ``true`` the dialog is open; toggle to ``false`` on confirm or cancel. */
   readonly open = input.required<boolean>();
   /** Heading shown above the message. */
-  readonly heading = input<string>('Mark this run POISONED');
+  readonly heading = input.required<string>();
   /** Body copy explaining what the action does.  Operator-language. */
-  readonly message = input<string>(
-    'Flagging this instance as POISONED is IRREVERSIBLE: the current run can never resume on its run_id. Recovery requires a fresh deployment (new run_id) after you reconcile the account.',
-  );
+  readonly message = input.required<string>();
+  /** Explicit consequence copy authored by the backend. */
+  readonly consequence = input.required<string>();
   /** Token the operator must type to enable the confirm button. An empty
    *  string disables the typing gate entirely, turning this into a plain
    *  confirm dialog (the token field is hidden and confirm is always
@@ -51,7 +53,7 @@ export class TypedHaltConfirmComponent {
   readonly requiredToken = input<string>('HALT');
   /** Confirm button label. Defaults to the poison verb for the
    *  friction-gated MARK_POISONED flow; plain confirms override it. */
-  readonly confirmLabel = input<string>('Mark POISONED');
+  readonly confirmLabel = input.required<string>();
 
   readonly confirmed = output();
   readonly cancelled = output();
@@ -85,6 +87,13 @@ export class TypedHaltConfirmComponent {
     this._typed.set(value);
   }
 
+  onTokenInput(event: Event): void {
+    const target = event.target;
+    if (target instanceof HTMLInputElement) {
+      this.onTyped(target.value);
+    }
+  }
+
   onConfirm(): void {
     if (!this.canConfirm()) return;
     this.confirmed.emit(undefined);
@@ -94,7 +103,6 @@ export class TypedHaltConfirmComponent {
     this.cancelled.emit(undefined);
   }
 
-  @HostListener('document:keydown.escape')
   onEscape(): void {
     if (this.open()) {
       this.onCancel();

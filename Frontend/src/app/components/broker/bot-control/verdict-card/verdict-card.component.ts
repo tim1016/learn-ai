@@ -51,8 +51,6 @@ export class VerdictCardComponent {
   readonly crashRecoveryRequested = output();
   readonly settingsRequested = output();
   readonly accountMonitorRequested = output();
-  readonly removeRequested = output();
-  readonly terminalRetireReplaceRequested = output();
   readonly blockerMoveRequested = output<OperatorMove>();
 
   readonly whyOpen = signal(false);
@@ -118,19 +116,11 @@ export class VerdictCardComponent {
 
   invokeTerminalMove(move: OperatorMove): void {
     if (this.busy()) return;
-    if (move.action.kind === 'retire_replace') {
-      this.terminalRetireReplaceRequested.emit();
-    } else if (move.action.kind === 'remove') {
-      this.removeRequested.emit();
-    }
+    this.blockerMoveRequested.emit(move);
   }
 
   invokeDrawerBlockerMove(event: OperatorBlockerMoveEvent): void {
     const { move } = event;
-    if (move.action.kind === 'retire_replace' || move.action.kind === 'remove') {
-      this.invokeTerminalMove(move);
-      return;
-    }
     this.blockerMoveRequested.emit(move);
   }
 

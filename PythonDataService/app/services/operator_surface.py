@@ -60,6 +60,7 @@ from app.schemas.live_runs import (
     OperatorSurfaceBlockageLadder,
     OperatorSurfaceBroker,
     OperatorSurfaceConfiguration,
+    OperatorSurfaceConfirmations,
     OperatorSurfaceControlPlane,
     OperatorSurfaceCurrentRisk,
     OperatorSurfaceDailyOrderCap,
@@ -81,6 +82,7 @@ from app.schemas.live_runs import (
 from app.schemas.operator_blocker import (
     NavigateAction,
     OperatorBlocker,
+    OperatorConfirmationCopy,
     OperatorMove,
     RemoveAction,
     RetireReplaceAction,
@@ -158,11 +160,59 @@ _HOST_PROCESS_NOTICE_BY_STATE: dict[str, str] = {
 
 _START_CAPABLE_STATES = frozenset({"IDLE", "WAITING_FOR_HOST", "EXITED"})
 
+_MARK_POISONED_CONFIRMATION = OperatorConfirmationCopy(
+    title="Mark this run POISONED",
+    body=(
+        "Flagging this instance as POISONED is irreversible: the current run "
+        "can never resume on its run_id."
+    ),
+    consequence=(
+        "Recovery requires a fresh deployment with a new run_id after the "
+        "account is reconciled."
+    ),
+    confirm_label="Mark POISONED",
+    required_token="HALT",
+)
+_CRASH_RECOVERY_CONFIRMATION = OperatorConfirmationCopy(
+    title="Confirm the broker account is flat",
+    body=(
+        "Recording recovery evidence clears the crash-retired start gate and "
+        "lets this bot run again."
+    ),
+    consequence=(
+        "Only confirm after verifying in IBKR that the broker account is flat "
+        "with no open orders. This writes audited safety evidence."
+    ),
+    confirm_label="Record recovery override",
+)
+_RETIRE_REPLACE_CONFIRMATION = OperatorConfirmationCopy(
+    title="Retire & Replace",
+    body=(
+        "Retire & Replace permanently retires this bot instance, then opens "
+        "replacement deploy with the current lineage."
+    ),
+    consequence=(
+        "Confirm only after verifying the broker account is flat with no open "
+        "orders."
+    ),
+    confirm_label="Retire & Replace",
+)
+_REMOVE_BOT_CONFIRMATION = OperatorConfirmationCopy(
+    title="Remove bot",
+    body="Remove hides this bot from the catalog with a soft-delete marker.",
+    consequence=(
+        "The underlying audit files stay on disk, but this bot will no longer "
+        "appear in the active bot list."
+    ),
+    confirm_label="Remove bot",
+)
+
 
 def _replace_move() -> OperatorMove:
     return OperatorMove(
         label="Replace",
         action=RetireReplaceAction(kind="retire_replace"),
+        confirmation=_RETIRE_REPLACE_CONFIRMATION,
     )
 
 
@@ -170,6 +220,7 @@ def _remove_move() -> OperatorMove:
     return OperatorMove(
         label="Remove",
         action=RemoveAction(kind="remove"),
+        confirmation=_REMOVE_BOT_CONFIRMATION,
     )
 
 
@@ -185,6 +236,15 @@ def _runbook_move(label: str, slug: str) -> OperatorMove:
         label=label,
         action=BlockerOpenRunbookAction(kind="open_runbook", slug=slug),
         target=slug,
+    )
+
+
+def _operator_surface_confirmations() -> OperatorSurfaceConfirmations:
+    return OperatorSurfaceConfirmations(
+        mark_poisoned=_MARK_POISONED_CONFIRMATION,
+        crash_recovery_override=_CRASH_RECOVERY_CONFIRMATION,
+        retire_replace=_RETIRE_REPLACE_CONFIRMATION,
+        remove_bot=_REMOVE_BOT_CONFIRMATION,
     )
 
 
@@ -1472,6 +1532,7 @@ def compute_operator_surface(
         blockage_ladder=blockage_ladder,
         run_signal=_project_run_signal(host_process, blockage_ladder),
         actions=actions,
+        confirmations=_operator_surface_confirmations(),
         trading_session=trading_session,
         readiness_gates=readiness_gates,
         blockers=blockers,

@@ -19,6 +19,7 @@
       <h2 id="typed-halt-confirm-heading">{{ heading() }}</h2>
     </header>
     <p class="message">{{ message() }}</p>
+    <p class="consequence">{{ consequence() }}</p>
     @if (requiredToken()) {
       <label class="field">
         <span class="label">Type <code>{{ requiredToken() }}</code> to confirm</span>
@@ -28,7 +29,7 @@
           autocomplete="off"
           spellcheck="false"
           data-testid="typed-halt-confirm-input"
-          (input)="onTyped(($any($event.target)).value)"
+          (input)="onTokenInput($event)"
         />
       </label>
     }

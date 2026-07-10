@@ -457,9 +457,17 @@ roster, and Account Monitor.
   moves, and both hosts render through the shared Angular
   `app-operator-blocker-list` component instead of frontend roster-chip or
   account-message remediation policy.
-- Open gates remain: frontend confirmation-copy constants must be retired, and
-  Stage 7's one-week soak remains a separate prerequisite before Stage 7 can be
-  marked complete.
+- Added backend-authored Bot Cockpit confirmation copy. `OperatorMove` can now
+  carry title/body/consequence/confirm-label/token copy for dangerous terminal
+  moves, `operator_surface.confirmations` carries the non-move safety
+  confirmations, and the typed confirmation dialog has no domain-prose
+  defaults. Terminal buttons emit the exact backend move, preserving the
+  move-authored copy through the page boundary. Focused regressions cover the
+  Python schema/projection contract and Angular rendering from backend fixture
+  text.
+- Stage 8 implementation gates are complete as of this slice. Stage 7's
+  recorded one-week daemon soak remains a separate prerequisite before Stage 7
+  can be marked complete.
 
 ## Ordering rationale
 

@@ -23,7 +23,7 @@ from app.operator.notices.schema import (
     validate_actionability_action_pairing,
 )
 from app.schemas.account_condition_actions import AccountCureAction
-from app.schemas.operator_blocker import OperatorBlocker
+from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCopy
 
 
 class RunState(StrEnum):
@@ -1460,6 +1460,17 @@ class OperatorSurfaceActions(BaseModel):
     mark_poisoned: ActionCapability
 
 
+class OperatorSurfaceConfirmations(BaseModel):
+    """Backend-authored confirmation copy for Bot Cockpit safety actions."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mark_poisoned: OperatorConfirmationCopy
+    crash_recovery_override: OperatorConfirmationCopy
+    retire_replace: OperatorConfirmationCopy
+    remove_bot: OperatorConfirmationCopy
+
+
 class OperatorSurfaceBroker(BaseModel):
     """Server-authored broker block — two independent enums for the
     banner SAFETY pill and the tagline's "Broker: CONNECTED" half
@@ -2170,6 +2181,7 @@ class OperatorSurface(BaseModel):
     # lifecycle controls. Additive field; schema_version remains 1.
     run_signal: OperatorSurfaceRunSignal
     actions: OperatorSurfaceActions
+    confirmations: OperatorSurfaceConfirmations
     trading_session: OperatorSurfaceTradingSession
     # PRD #616 — operator-facing projection of the engine readiness
     # gates with server-authored remediation metadata.  Empty list when

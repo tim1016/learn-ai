@@ -6,7 +6,7 @@
       "evidence_run_id": "run-unreachable",
       "live_run_id": null,
       "process_state": "unreachable",
-      "sha256": "89a23e53371703061c363c725ed472b8b871ba795304bf9282f3fa53c7016f1f",
+      "sha256": "ca09c655626629b2ef2c7dce544b87c2f2e8155e9b92019d5468ba2c670884ea",
       "strategy_instance_id": "unreachable-bot"
     },
     "idle_stopped": {
@@ -14,7 +14,7 @@
       "evidence_run_id": "run-idle",
       "live_run_id": null,
       "process_state": "idle",
-      "sha256": "59ceae3b6295081a56537951db641de589c99215579478a93055b77dafb12f74",
+      "sha256": "a24f88c0d675a391b1691e2ba42e1cbdff3d2a10fc9851fc170b4b4d122954ad",
       "strategy_instance_id": "idle-bot"
     },
     "nothing_deployed": {
@@ -22,7 +22,7 @@
       "evidence_run_id": null,
       "live_run_id": null,
       "process_state": "unreachable",
-      "sha256": "114521ee19af9b4cfb4e1409d94c4992dee9aa7ce6802b95ba85d1107e54f05d",
+      "sha256": "4b0b900856424a2077d8a97d5fe24d2342b17370684daf9d54579db2c1e7bc01",
       "strategy_instance_id": "ghost-instance"
     },
     "running_live": {
@@ -30,7 +30,7 @@
       "evidence_run_id": "run-running",
       "live_run_id": "run-running",
       "process_state": "running",
-      "sha256": "2c5fae113efebfdcecda8b4548c0a29b519e1604ec251e2096c642a0324ae78a",
+      "sha256": "832150f1d40f6a1b353678d948bb145a17aa0e77edf902996523680f138e70cd",
       "strategy_instance_id": "running-bot"
     }
   },

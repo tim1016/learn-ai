@@ -19,6 +19,7 @@ import type {
   OperatorNotice,
   OperatorSurfaceProofLine,
   OperatorSurface,
+  OperatorSurfaceConfirmations,
   OperatorSurfaceRuntimeFreshness,
 } from '../app/api/live-instances.types';
 
@@ -94,6 +95,37 @@ const DEFAULT_PROOF_LINES: OperatorSurfaceProofLine[] = [
     tone: 'attention',
   },
 ];
+
+const OPERATOR_CONFIRMATIONS: OperatorSurfaceConfirmations = {
+  mark_poisoned: {
+    title: 'Mark this run POISONED',
+    body: 'Backend-authored poisoned body.',
+    consequence: 'Backend-authored poisoned consequence.',
+    confirm_label: 'Mark POISONED',
+    required_token: 'HALT',
+  },
+  crash_recovery_override: {
+    title: 'Confirm the broker account is flat',
+    body: 'Backend-authored crash recovery body.',
+    consequence: 'Backend-authored crash recovery consequence.',
+    confirm_label: 'Record recovery override',
+    required_token: '',
+  },
+  retire_replace: {
+    title: 'Retire & Replace',
+    body: 'Backend-authored retire body.',
+    consequence: 'Backend-authored retire consequence.',
+    confirm_label: 'Retire & Replace',
+    required_token: '',
+  },
+  remove_bot: {
+    title: 'Remove bot',
+    body: 'Backend-authored remove body.',
+    consequence: 'Backend-authored remove consequence.',
+    confirm_label: 'Remove bot',
+    required_token: '',
+  },
+};
 
 /**
  * A benign all-defaults projection useful for fixtures that don't care
@@ -228,6 +260,7 @@ export const DEFAULT_OPERATOR_SURFACE: OperatorSurface = {
       'NO_LIVE_BINDING',
     ]),
   },
+  confirmations: OPERATOR_CONFIRMATIONS,
   trading_session: {
     phase: 'UNKNOWN',
     permits_strategy_activity: null,

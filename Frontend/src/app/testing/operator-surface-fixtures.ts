@@ -1,5 +1,40 @@
-import type { LiveInstanceStatus, OperatorSurface } from '../api/live-instances.types';
+import type {
+  LiveInstanceStatus,
+  OperatorSurface,
+  OperatorSurfaceConfirmations,
+} from '../api/live-instances.types';
 import { operatorBlockerFixture } from './operator-blocker-fixtures';
+
+const OPERATOR_CONFIRMATIONS: OperatorSurfaceConfirmations = {
+  mark_poisoned: {
+    title: 'Mark this run POISONED',
+    body: 'Backend-authored poisoned body.',
+    consequence: 'Backend-authored poisoned consequence.',
+    confirm_label: 'Mark POISONED',
+    required_token: 'HALT',
+  },
+  crash_recovery_override: {
+    title: 'Confirm the broker account is flat',
+    body: 'Backend-authored crash recovery body.',
+    consequence: 'Backend-authored crash recovery consequence.',
+    confirm_label: 'Record recovery override',
+    required_token: '',
+  },
+  retire_replace: {
+    title: 'Retire & Replace',
+    body: 'Backend-authored retire body.',
+    consequence: 'Backend-authored retire consequence.',
+    confirm_label: 'Retire & Replace',
+    required_token: '',
+  },
+  remove_bot: {
+    title: 'Remove bot',
+    body: 'Backend-authored remove body.',
+    consequence: 'Backend-authored remove consequence.',
+    confirm_label: 'Remove bot',
+    required_token: '',
+  },
+};
 
 export function makeOperatorSurfaceFixture(
   overrides: Partial<OperatorSurface> = {},
@@ -190,6 +225,7 @@ export function makeOperatorSurfaceFixture(
         gate_results: [],
       },
     },
+    confirmations: OPERATOR_CONFIRMATIONS,
     trading_session: {
       phase: 'RTH',
       permits_strategy_activity: true,

@@ -445,7 +445,12 @@ def test_operator_surface_authors_poisoned_terminal_blocker() -> None:
     assert blocker.disposition == "terminal"
     assert blocker.primary_move is not None
     assert blocker.primary_move.action.kind == "retire_replace"
+    assert blocker.primary_move.confirmation is not None
+    assert blocker.primary_move.confirmation.title == "Retire & Replace"
+    assert blocker.primary_move.confirmation.consequence
     assert [move.action.kind for move in blocker.secondary_moves] == ["remove"]
+    assert blocker.secondary_moves[0].confirmation is not None
+    assert blocker.secondary_moves[0].confirmation.title == "Remove bot"
 
 
 def test_operator_surface_authors_retired_terminal_blocker() -> None:
@@ -457,7 +462,23 @@ def test_operator_surface_authors_retired_terminal_blocker() -> None:
     assert blocker.disposition == "terminal"
     assert blocker.primary_move is not None
     assert blocker.primary_move.action.kind == "remove"
+    assert blocker.primary_move.confirmation is not None
+    assert blocker.primary_move.confirmation.title == "Remove bot"
     assert [move.action.kind for move in blocker.secondary_moves] == ["retire_replace"]
+    assert blocker.secondary_moves[0].confirmation is not None
+    assert blocker.secondary_moves[0].confirmation.title == "Retire & Replace"
+
+
+def test_operator_surface_authors_bot_control_confirmation_copy() -> None:
+    surface = _surface()
+
+    assert surface.confirmations.mark_poisoned.required_token == "HALT"
+    assert surface.confirmations.mark_poisoned.confirm_label == "Mark POISONED"
+    assert surface.confirmations.crash_recovery_override.title == (
+        "Confirm the broker account is flat"
+    )
+    assert surface.confirmations.retire_replace.consequence
+    assert surface.confirmations.remove_bot.body
 
 
 def test_operator_surface_authors_broker_disconnected_blocker() -> None:

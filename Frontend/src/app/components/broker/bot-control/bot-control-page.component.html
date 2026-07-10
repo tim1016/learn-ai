@@ -37,8 +37,6 @@
           (crashRecoveryRequested)="dispatchCrashRecoveryOverride()"
           (settingsRequested)="onSettingsRequested()"
           (accountMonitorRequested)="openAccountMonitor()"
-          (removeRequested)="openRemoveBotConfirm()"
-          (terminalRetireReplaceRequested)="openTerminalRetireReplaceConfirm()"
           (blockerMoveRequested)="invokeBlockerMove($event)"
         />
         <app-overview-tab
@@ -59,41 +57,55 @@
     <p class="loading">Loading bot control...</p>
   }
 
-  <app-typed-halt-confirm
-    [open]="typedHaltOpen()"
-    heading="Mark this run POISONED"
-    [message]="poisonedConfirmMessage"
-    (confirmed)="confirmTypedHalt()"
-    (cancelled)="closeTypedHalt()"
-  />
+  @if (poisonedConfirmation(); as copy) {
+    <app-typed-halt-confirm
+      [open]="typedHaltOpen()"
+      [heading]="copy.title"
+      [message]="copy.body"
+      [consequence]="copy.consequence"
+      [requiredToken]="copy.required_token"
+      [confirmLabel]="copy.confirm_label"
+      (confirmed)="confirmTypedHalt()"
+      (cancelled)="closeTypedHalt()"
+    />
+  }
 
-  <app-typed-halt-confirm
-    [open]="crashRecoveryConfirmOpen()"
-    heading="Confirm the broker account is flat"
-    [message]="crashRecoveryConfirmMessage"
-    requiredToken=""
-    confirmLabel="Record recovery override"
-    (confirmed)="confirmCrashRecoveryOverride()"
-    (cancelled)="cancelCrashRecoveryConfirm()"
-  />
+  @if (crashRecoveryConfirmation(); as copy) {
+    <app-typed-halt-confirm
+      [open]="crashRecoveryConfirmOpen()"
+      [heading]="copy.title"
+      [message]="copy.body"
+      [consequence]="copy.consequence"
+      [requiredToken]="copy.required_token"
+      [confirmLabel]="copy.confirm_label"
+      (confirmed)="confirmCrashRecoveryOverride()"
+      (cancelled)="cancelCrashRecoveryConfirm()"
+    />
+  }
 
-  <app-typed-halt-confirm
-    [open]="retireReplaceConfirmOpen()"
-    heading="Retire &amp; Replace"
-    [message]="retireReplaceConfirmMessage"
-    requiredToken=""
-    confirmLabel="Retire &amp; Replace"
-    (confirmed)="confirmRetireReplace()"
-    (cancelled)="cancelRetireReplaceConfirm()"
-  />
+  @if (retireReplaceConfirmation(); as copy) {
+    <app-typed-halt-confirm
+      [open]="retireReplaceConfirmOpen()"
+      [heading]="copy.title"
+      [message]="copy.body"
+      [consequence]="copy.consequence"
+      [requiredToken]="copy.required_token"
+      [confirmLabel]="copy.confirm_label"
+      (confirmed)="confirmRetireReplace()"
+      (cancelled)="cancelRetireReplaceConfirm()"
+    />
+  }
 
-  <app-typed-halt-confirm
-    [open]="removeBotConfirmOpen()"
-    heading="Remove bot"
-    [message]="removeBotConfirmMessage"
-    requiredToken=""
-    confirmLabel="Remove bot"
-    (confirmed)="confirmRemoveBot()"
-    (cancelled)="cancelRemoveBotConfirm()"
-  />
+  @if (removeBotConfirmation(); as copy) {
+    <app-typed-halt-confirm
+      [open]="removeBotConfirmOpen()"
+      [heading]="copy.title"
+      [message]="copy.body"
+      [consequence]="copy.consequence"
+      [requiredToken]="copy.required_token"
+      [confirmLabel]="copy.confirm_label"
+      (confirmed)="confirmRemoveBot()"
+      (cancelled)="cancelRemoveBotConfirm()"
+    />
+  }
 </section>

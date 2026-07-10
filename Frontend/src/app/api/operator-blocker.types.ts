@@ -39,6 +39,15 @@ export interface OperatorMove {
   label: string;
   action: OperatorAction;
   target: string | null;
+  confirmation?: OperatorConfirmationCopy | null;
+}
+
+export interface OperatorConfirmationCopy {
+  title: string;
+  body: string;
+  consequence: string;
+  confirm_label: string;
+  required_token: string;
 }
 
 export type BlockerSeverity = 'blocking' | 'warning';
