@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, Sequence, Set
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -22,6 +22,8 @@ from app.engine.live.account_artifacts import (
 )
 from app.engine.live.exit_taxonomy import (
     CRASH_RETIRED_BINDING_SOURCES,
+    LIVENESS_UNPROVEN_REGISTRY_SOURCE,
+    RECOVERY_REQUIRED_RETIRED_BINDING_SOURCES,
     false_crash_repair_source,
     read_run_exit_evidence,
 )
@@ -74,6 +76,16 @@ class AccountRegistryFalseCrashBackfillResult:
     rows_skipped_no_disproof: int
     invalid_account_dirs: int
     repaired_run_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class AccountRegistryBootReconcileResult:
+    """Durable retirements performed before a new daemon trusts siblings."""
+
+    accounts_scanned: int
+    active_bindings_found: int
+    bindings_retired: int
+    preserved_managed_run_ids: tuple[str, ...]
 
 
 def bot_order_namespace_for_instance(strategy_instance_id: str) -> str:
@@ -225,7 +237,7 @@ def crash_retired_restart_blocking_binding(
     account_id: str,
     strategy_instance_id: str,
 ) -> AccountInstanceBinding | None:
-    """Return the crash-retired binding that blocks restart, if any."""
+    """Return the unsafe terminal binding that blocks restart, if any."""
 
     bindings = read_account_instance_registry(artifacts_root, account_id)
     events = read_account_events(artifacts_root, account_id)
@@ -236,11 +248,79 @@ def crash_retired_restart_blocking_binding(
     )
     if latest is None:
         return None
-    if latest.lifecycle_state != "RETIRED" or latest.source not in CRASH_RETIRED_BINDING_SOURCES:
+    if (
+        latest.lifecycle_state != "RETIRED"
+        or latest.source not in RECOVERY_REQUIRED_RETIRED_BINDING_SOURCES
+    ):
         return None
     if has_account_recovery_evidence_after(events, latest.recorded_at_ms):
         return None
     return latest
+
+
+def retire_unmanaged_active_bindings_on_daemon_boot(
+    artifacts_root: Path,
+    *,
+    managed_run_ids: Set[str],
+    now_ms: int,
+) -> AccountRegistryBootReconcileResult:
+    """Retire prior ``ACTIVE`` rows not owned by a live managed process.
+
+    A newly booted daemon does not adopt children from an earlier boot. Its
+    in-memory process registry is the liveness authority; a runtime sidecar is
+    useful diagnostic evidence but cannot prove process identity. Retiring an
+    unmanaged binding before the daemon serves requests removes its namespace
+    from sibling trust and makes the bot's submit gate fail closed.
+    """
+
+    accounts_root = Path(artifacts_root) / "accounts"
+    if not accounts_root.exists():
+        return AccountRegistryBootReconcileResult(0, 0, 0, ())
+
+    accounts_scanned = 0
+    active_bindings_found = 0
+    bindings_retired = 0
+    preserved: list[str] = []
+    next_recorded_at_ms = now_ms
+
+    for account_dir in sorted(path for path in accounts_root.iterdir() if path.is_dir()):
+        account_id = account_dir.name
+        bindings = read_account_instance_registry(artifacts_root, account_id)
+        accounts_scanned += 1
+        latest_bindings = index_account_instance_bindings(
+            bindings,
+            account_id=account_id,
+        ).latest_by_instance.values()
+        for binding in latest_bindings:
+            if binding.lifecycle_state != "ACTIVE":
+                continue
+            active_bindings_found += 1
+            if binding.run_id in managed_run_ids:
+                preserved.append(binding.run_id)
+                continue
+            next_recorded_at_ms = max(
+                next_recorded_at_ms,
+                binding.recorded_at_ms + 1,
+            )
+            write_account_instance_binding(
+                artifacts_root,
+                binding.model_copy(
+                    update={
+                        "lifecycle_state": "RETIRED",
+                        "recorded_at_ms": next_recorded_at_ms,
+                        "source": LIVENESS_UNPROVEN_REGISTRY_SOURCE,
+                    }
+                ),
+            )
+            bindings_retired += 1
+            next_recorded_at_ms += 1
+
+    return AccountRegistryBootReconcileResult(
+        accounts_scanned=accounts_scanned,
+        active_bindings_found=active_bindings_found,
+        bindings_retired=bindings_retired,
+        preserved_managed_run_ids=tuple(sorted(preserved)),
+    )
 
 
 def backfill_false_crash_registry_rows(
@@ -431,6 +511,7 @@ __all__ = [
     "CRASH_RETIRED_BINDING_SOURCES",
     "AccountInstanceBinding",
     "AccountInstanceBindingIndex",
+    "AccountRegistryBootReconcileResult",
     "AccountRegistryFalseCrashBackfillResult",
     "backfill_false_crash_registry_rows",
     "bot_order_namespace_for_instance",
@@ -441,5 +522,6 @@ __all__ = [
     "index_account_instance_bindings",
     "latest_account_instance_binding",
     "read_account_instance_registry",
+    "retire_unmanaged_active_bindings_on_daemon_boot",
     "write_account_instance_binding",
 ]

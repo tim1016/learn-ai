@@ -439,6 +439,15 @@ class RunnerProcessManager:
                 )
         return HostRunnerInstancesStatus(instances=out, fetched_at_ms=_now_ms())
 
+    def running_managed_run_ids(self) -> frozenset[str]:
+        """Run ids backed by a child process owned by this daemon boot."""
+        with self._managed_lock:
+            return frozenset(
+                managed.run_id
+                for managed in self._managed.values()
+                if managed.process.poll() is None
+            )
+
     def instance_status(self, strategy_instance_id: str) -> HostRunnerProcessStatus:
         """Live process status for one strategy instance (idle if untracked)."""
         with self._managed_lock:
@@ -911,10 +920,19 @@ class RunnerProcessManager:
             ) from exc
         if blocking_binding is None:
             return
+        from app.engine.live.exit_taxonomy import (
+            LIVENESS_UNPROVEN_RETIRED_BINDING_SOURCES,
+        )
+
+        failure = (
+            "is not owned by the current host daemon and its liveness is unproven"
+            if blocking_binding.source in LIVENESS_UNPROVEN_RETIRED_BINDING_SOURCES
+            else "crashed"
+        )
         raise HostRunnerError(
             status.HTTP_409_CONFLICT,
             (
-                f"Previous host runner for {strategy_instance_id!r} crashed without later account recovery proof. "
+                f"Previous host runner for {strategy_instance_id!r} {failure} without later account recovery proof. "
                 "Reconcile or record an audited recovery override before restarting this binding."
             ),
         )
@@ -1408,14 +1426,19 @@ def create_app(
     token = auth_token if auth_token is not None else ensure_daemon_token(_artifacts_root_from_env())
 
     # PRD #619-B — daemon lease lifespan. On startup: classify orphan
-    # candidates left behind by a previous daemon boot, then spawn the
-    # ``DaemonLeaseWriter`` which writes ``daemon_lease.json`` at 1Hz.
+    # candidates left behind by a previous daemon boot, retire prior ACTIVE
+    # account bindings that are not backed by this daemon's process registry,
+    # then spawn the ``DaemonLeaseWriter`` which writes ``daemon_lease.json``
+    # at 1Hz.
     # On shutdown: switch to ``DRAINING`` (an immediate flush) and
     # bounded-stop the writer so the watchdog observes the planned
     # transition. Failures are logged and tolerated — the daemon must
     # still start even if the control_plane directory is unwritable.
     from contextlib import asynccontextmanager
 
+    from app.engine.live.account_registry import (
+        retire_unmanaged_active_bindings_on_daemon_boot,
+    )
     from app.engine.live.control_plane import DaemonLeaseWriter
     from app.engine.live.orphan_classifier import classify_runtime_candidates_on_boot
 
@@ -1429,6 +1452,20 @@ def create_app(
             )
         except Exception:
             logger.exception("orphan classification on boot failed")
+        boot_reconcile = retire_unmanaged_active_bindings_on_daemon_boot(
+            process_manager.artifacts_root,
+            managed_run_ids=process_manager.running_managed_run_ids(),
+            now_ms=_now_ms(),
+        )
+        if boot_reconcile.bindings_retired:
+            logger.warning(
+                "Retired account bindings with unproven daemon-boot liveness",
+                extra={
+                    "accounts_scanned": boot_reconcile.accounts_scanned,
+                    "active_bindings_found": boot_reconcile.active_bindings_found,
+                    "bindings_retired": boot_reconcile.bindings_retired,
+                },
+            )
         writer = DaemonLeaseWriter(
             artifacts_root=process_manager.artifacts_root,
             boot_id=process_manager.boot_id,

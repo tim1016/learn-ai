@@ -8,6 +8,7 @@ from pathlib import Path
 
 from app.engine.live.account_artifacts import AccountArtifactError, AccountAuditedOverride, append_account_event
 from app.engine.live.account_registry import AccountInstanceBinding, crash_retired_restart_blocking_binding
+from app.engine.live.exit_taxonomy import LIVENESS_UNPROVEN_RETIRED_BINDING_SOURCES
 from app.schemas.account_recovery import CrashRecoveryOverrideRequest, CrashRecoveryOverrideResponse
 from app.schemas.live_runs import GateResult
 
@@ -86,10 +87,15 @@ def crash_recovery_block_detail(
     strategy_instance_id: str,
     binding: AccountInstanceBinding,
 ) -> dict:
+    failure = (
+        "is not owned by the current host daemon and its liveness is unproven"
+        if binding.source in LIVENESS_UNPROVEN_RETIRED_BINDING_SOURCES
+        else "crashed"
+    )
     return {
         "reason_code": "CRASH_RECOVERY_REQUIRED",
         "message": (
-            f"Previous host runner for {strategy_instance_id!r} crashed without later account recovery proof."
+            f"Previous host runner for {strategy_instance_id!r} {failure} without later account recovery proof."
         ),
         "remediation": (
             "Verify the broker account is flat with no open orders, then record an audited recovery override "
@@ -124,7 +130,7 @@ def record_crash_recovery_override_evidence(
     reason = (
         request.reason.strip()
         if request.reason is not None and request.reason.strip()
-        else "Operator verified the broker account is flat and has no open orders after a crash-retired host runner."
+        else "Operator verified the broker account is flat and has no open orders after an unsafe terminal host-runner state."
     )
     override = AccountAuditedOverride(
         account_id=account_id,

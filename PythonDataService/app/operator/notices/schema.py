@@ -95,13 +95,11 @@ NOTICE_CODE_CONTRACTS: dict[str, NoticeCodeContract] = {
     "reconciliation.discovered_execution_not_in_engine_state": NoticeCodeContract(tier="critical", actionability="routed"),
     "reconciliation.divergence_while_submitting": NoticeCodeContract(
         tier="critical",
-        actionability="no_remedy",
-        remedy_status="unbuilt",
+        actionability="routed",
     ),
     "fleet.sibling_liveness_unproven": NoticeCodeContract(
         tier="critical",
-        actionability="no_remedy",
-        remedy_status="unbuilt",
+        actionability="routed",
     ),
     "broker_session.orphaned_socket": NoticeCodeContract(tier="critical", actionability="routed"),
     "order.rejected": NoticeCodeContract(tier="critical", actionability="routed"),

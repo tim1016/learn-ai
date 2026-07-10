@@ -416,6 +416,15 @@ def test_triage_marks_crashed_and_no_status_retired_bots_for_retire_replace(
             recorded_at_ms=1_780_000_002_600,
         ),
     )
+    write_account_instance_binding(
+        tmp_path,
+        _retired_binding(
+            sid="unproven-bot",
+            run_id="run-unproven",
+            source="host_daemon.boot_liveness_unproven",
+            recorded_at_ms=1_780_000_002_700,
+        ),
+    )
 
     triage = service.triage(account_id="DU1234567", now_ms=1_780_000_003_100)
 
@@ -431,6 +440,7 @@ def test_triage_marks_crashed_and_no_status_retired_bots_for_retire_replace(
     ] == [
         ("crashed", "bot", "crashed-bot", "RETIRED", "retire_replace"),
         ("ended_without_status", "bot", "nostatus-bot", "RETIRED", "retire_replace"),
+        ("liveness_unproven", "bot", "unproven-bot", "RETIRED", "retire_replace"),
     ]
     assert all(row.severity == "critical" for row in triage.conditions)
     assert triage.overall_gate_result.status == "block"
@@ -536,6 +546,7 @@ def test_condition_contract_uses_closed_type_and_single_cure_action(tmp_path: Pa
         "exit_lease_stuck",
         "crashed",
         "ended_without_status",
+        "liveness_unproven",
         "repeated_unclean_start",
     }
     assert cure_actions == {

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from app.operator.notices.schema import (
@@ -226,17 +224,15 @@ def test_notice_rejects_routed_without_target():
         )
 
 
-def test_notice_rejects_no_remedy_code_missing_pinned_remedy_status():
-    # fleet.sibling_liveness_unproven pins remedy_status="unbuilt"; omitting it
-    # trips the contract-pinning check (not the pairing branch) for OperatorNotice.
-    with pytest.raises(ValueError, match="remedy_status='unbuilt'"):
+def test_liveness_notice_requires_routed_recovery_target():
+    with pytest.raises(ValueError, match="routed notices require an external route action"):
         OperatorNotice(
             code="fleet.sibling_liveness_unproven",
             tier="critical",
             title="Sibling liveness is unproven",
             message="The cockpit cannot prove whether a sibling bot is still alive.",
-            actionability="no_remedy",
-            resolution="Resolution unknown — requires manual reconciliation.",
+            actionability="routed",
+            resolution="Retire and replace after broker-account reconciliation.",
             action=OperatorNoticeAction(kind="none"),
         )
 
@@ -251,18 +247,13 @@ def test_notice_code_contract_exhaustive_and_pinned():
             assert contract.remedy_status is None
 
 
-def test_unbuilt_remedies_are_cross_referenced_in_known_gaps():
-    known_gaps = (
-        Path(__file__).resolve().parents[3] / "docs" / "known-gaps.md"
-    ).read_text(encoding="utf-8")
+def test_no_notice_remedies_remain_unbuilt():
     unbuilt_codes = [
         code
         for code, contract in NOTICE_CODE_CONTRACTS.items()
         if contract.remedy_status == "unbuilt"
     ]
-    assert unbuilt_codes
-    for code in unbuilt_codes:
-        assert code in known_gaps
+    assert unbuilt_codes == []
 
 
 def test_incident_records_started_and_unresolved_by_default():

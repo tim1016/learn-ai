@@ -26,6 +26,7 @@ AccountConditionType = Literal[
     "exit_lease_stuck",
     "crashed",
     "ended_without_status",
+    "liveness_unproven",
     "repeated_unclean_start",
 ]
 
