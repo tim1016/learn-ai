@@ -64,6 +64,14 @@
     </section>
   }
 
+  @if (showOperatorBlockers() && accountTruth.operator_blockers.length > 0) {
+    <app-operator-blocker-list
+      [blockers]="accountTruth.operator_blockers"
+      ariaLabel="Account Monitor blockers"
+      (moveSelected)="operatorBlockerMoveSelected.emit($event)"
+    />
+  }
+
   @if (showCaveats() && accountTruth.caveats.length > 0) {
     <section class="truth-messages">
       <header>Caveats</header>

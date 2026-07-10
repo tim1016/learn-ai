@@ -450,10 +450,16 @@ roster, and Account Monitor.
 - Added the shared Angular `app-operator-blocker-list` renderer and wired it
   into deploy preflight and the Bot Cockpit why drawer so those hosts no longer
   hand-render blocker copy/moves.
-- Open gates remain: fleet-roster and Account Monitor must receive
-  backend-authored host-scoped `OperatorBlocker` projections, frontend
-  confirmation-copy constants must be retired, and Stage 7's one-week soak
-  remains a separate prerequisite before Stage 7 can be marked complete.
+- Added backend-authored host-scoped `OperatorBlocker` projections for fleet
+  roster rows and Account Monitor. Fleet roster rows now carry
+  `host=fleet_roster` blockers with exact bot-cockpit navigation moves, Account
+  Truth responses carry `host=account_monitor` blockers with inline reconcile
+  moves, and both hosts render through the shared Angular
+  `app-operator-blocker-list` component instead of frontend roster-chip or
+  account-message remediation policy.
+- Open gates remain: frontend confirmation-copy constants must be retired, and
+  Stage 7's one-week soak remains a separate prerequisite before Stage 7 can be
+  marked complete.
 
 ## Ordering rationale
 

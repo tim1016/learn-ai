@@ -1076,11 +1076,12 @@ export interface LiveInstanceSummary {
    *  ``UNKNOWN`` when readiness cannot be resolved. */
   readiness_verdict?: ReadinessVerdictEnum;
   readiness_as_of_ms?: number | null;
+  blockers: OperatorBlocker[];
 }
 
 export type FleetRosterRow = Pick<
   LiveInstanceSummary,
-  'strategy_instance_id' | 'process_state' | 'readiness_verdict' | 'readiness_as_of_ms'
+  'strategy_instance_id' | 'process_state' | 'readiness_verdict' | 'readiness_as_of_ms' | 'blockers'
 >;
 
 export interface FleetRosterSnapshot {

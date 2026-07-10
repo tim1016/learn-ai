@@ -4,10 +4,10 @@ import {
   openFleetRosterStream,
   type FleetRosterStream,
 } from './fleet-roster-stream';
-import { presentFleetRosterChips, type FleetRosterChip } from './fleet-roster-chip-presenter';
 import { adoptVersionedSnapshot } from './versioned-snapshot-stream';
 import { BrokerHealthService } from './broker-health.service';
 import { LiveRunsService } from './live-runs.service';
+import type { OperatorBlocker } from '../api/operator-blocker.types';
 
 export type LinkState = 'ok' | 'down' | 'warn' | 'unknown';
 
@@ -82,8 +82,8 @@ export class BrokerConnectivityService {
     return list !== undefined && list.length === 0;
   });
 
-  readonly rosterChips = computed<FleetRosterChip[]>(() =>
-    presentFleetRosterChips(this.rosterInstances()),
+  readonly rosterBlockers = computed<OperatorBlocker[]>(() =>
+    (this.rosterInstances() ?? []).flatMap((row) => row.blockers ?? []),
   );
 
   constructor() {

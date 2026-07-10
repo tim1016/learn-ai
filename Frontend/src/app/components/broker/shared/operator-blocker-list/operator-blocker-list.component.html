@@ -1,6 +1,6 @@
 @if (blockers().length > 0) {
   <ul class="operator-blocker-list" [attr.aria-label]="ariaLabel()">
-    @for (blocker of blockers(); track blocker.host + ':' + blocker.condition.id) {
+    @for (blocker of blockers(); track trackBlocker(blocker)) {
       <li
         class="operator-blocker-list__item"
         [class.severity-warning]="blocker.condition.severity === 'warning'"

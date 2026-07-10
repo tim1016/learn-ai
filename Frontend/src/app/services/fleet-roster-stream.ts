@@ -58,7 +58,8 @@ function isFleetRosterRow(value: unknown): value is FleetRosterRow {
       (typeof verdict === 'string' && READINESS_VERDICTS.has(verdict as ReadinessVerdictEnum))) &&
     (record['readiness_as_of_ms'] === undefined ||
       record['readiness_as_of_ms'] === null ||
-      isNonNegativeSafeInteger(record['readiness_as_of_ms']))
+      isNonNegativeSafeInteger(record['readiness_as_of_ms'])) &&
+    Array.isArray(record['blockers'])
   );
 }
 

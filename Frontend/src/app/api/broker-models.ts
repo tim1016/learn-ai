@@ -13,6 +13,7 @@
  */
 
 import type { components } from './broker.types';
+import type { OperatorBlocker } from './operator-blocker.types';
 
 // ── REST-shaped models (sourced from OpenAPI) ─────────────────────────
 
@@ -557,6 +558,7 @@ export interface AccountTruthResponse {
   manual_namespaces_observed: string[];
   invariants: AccountTruthInvariant[];
   blockers: AccountTruthMessage[];
+  operator_blockers: OperatorBlocker[];
   caveats: AccountTruthMessage[];
   owner_summaries: AccountTruthOwnerSummary[];
   symbol_exposures: AccountTruthSymbolExposure[];

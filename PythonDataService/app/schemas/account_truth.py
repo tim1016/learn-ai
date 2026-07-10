@@ -15,6 +15,7 @@ from app.broker.ibkr.models import (
     OrderType,
     SecType,
 )
+from app.schemas.operator_blocker import OperatorBlocker
 
 AccountTruthFinalVerdict = Literal["clean", "not_proven"]
 AccountTruthSeverity = Literal["ok", "info", "warning", "critical"]
@@ -266,6 +267,7 @@ class AccountTruthResponse(BaseModel):
     manual_namespaces_observed: list[str] = Field(default_factory=list)
     invariants: list[AccountTruthInvariant]
     blockers: list[AccountTruthMessage] = Field(default_factory=list)
+    operator_blockers: list[OperatorBlocker] = Field(default_factory=list)
     caveats: list[AccountTruthMessage] = Field(default_factory=list)
     owner_summaries: list[AccountTruthOwnerSummary] = Field(default_factory=list)
     symbol_exposures: list[AccountTruthSymbolExposure] = Field(default_factory=list)

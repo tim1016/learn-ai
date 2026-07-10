@@ -2,7 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DaemonDiagnosticReport } from '../../../api/daemon-diagnostics.types';
-import type { FleetRosterChip } from '../../../services/fleet-roster-chip-presenter';
+import type { OperatorBlocker } from '../../../api/operator-blocker.types';
 import { BrokerConnectivityStripComponent } from './broker-connectivity-strip.component';
 import {
   BrokerConnectivityService,
@@ -10,6 +10,7 @@ import {
   type DaemonFreshness,
 } from '../../../services/broker-connectivity.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
+import { operatorBlockerFixture } from '../../../testing/operator-blocker-fixtures';
 
 const UNKNOWN: DaemonFreshness = { state: 'unknown', sha: null, commitsBehind: null };
 
@@ -25,12 +26,12 @@ function setupStrip(
   links: ConnectivityLink[],
   blockers: string[] = [],
   freshness: DaemonFreshness = UNKNOWN,
-  rosterChips: FleetRosterChip[] = [],
+  rosterBlockers: OperatorBlocker[] = [],
 ) {
   const fake = {
     links: () => links,
     blockers: () => blockers,
-    rosterChips: () => rosterChips,
+    rosterBlockers: () => rosterBlockers,
     daemonDown: () => links.some((link) => link.key === 'daemon' && link.state === 'down'),
     daemonFreshness: () => freshness,
     reload: () => undefined,
@@ -162,7 +163,7 @@ describe('BrokerConnectivityStripComponent', () => {
     expect(alert?.textContent).toContain('Fleet policy is blocking');
   });
 
-  it('renders backend-authored fleet roster blocker chips', () => {
+  it('renders backend-authored fleet roster blockers', () => {
     const el = setupStrip(
       [
         { key: 'daemon', label: 'Host daemon', state: 'ok', detail: 'Reachable' },
@@ -172,19 +173,24 @@ describe('BrokerConnectivityStripComponent', () => {
       [],
       UNKNOWN,
       [
-        {
-          id: 'bot-a',
-          label: 'bot-a',
-          processState: 'idle',
-          readinessVerdict: 'BLOCKED',
-          state: 'warn',
-        },
+        operatorBlockerFixture({
+          id: 'fleet_member_blocked',
+          scope: 'fleet',
+          host: 'fleet_roster',
+          headline: 'bot-a is blocked',
+          detail: 'Open the bot cockpit.',
+          primaryMove: {
+            label: 'Open bot cockpit',
+            action: { kind: 'navigate', route: '/broker/bots/bot-a', fragment: null },
+            target: null,
+          },
+        }),
       ],
     ).el;
 
-    const chip = el.querySelector('.roster-chip.state-warn');
-    expect(chip?.textContent).toContain('bot-a');
-    expect(chip?.textContent).toContain('Idle · Blocked');
+    expect(el.querySelector('app-operator-blocker-list')).toBeTruthy();
+    expect(el.textContent).toContain('bot-a is blocked');
+    expect(el.textContent).toContain('Open bot cockpit');
   });
 
   it('renders the unknown (checking) state without a blocker alert', () => {

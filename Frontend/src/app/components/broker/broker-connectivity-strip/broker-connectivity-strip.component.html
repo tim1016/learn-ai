@@ -19,17 +19,12 @@
     }
   </ul>
 
-  @if (connectivity.rosterChips().length > 0) {
-    <ul class="roster-chips" aria-label="Fleet roster blockers">
-      @for (chip of connectivity.rosterChips(); track chip.id) {
-        <li [class]="'roster-chip state-' + chip.state">
-          <span class="label">{{ chip.label }}</span>
-          <span class="detail">
-            {{ chip.processState | receiptLabel }} · {{ chip.readinessVerdict | receiptLabel }}
-          </span>
-        </li>
-      }
-    </ul>
+  @if (connectivity.rosterBlockers().length > 0) {
+    <app-operator-blocker-list
+      [blockers]="connectivity.rosterBlockers()"
+      ariaLabel="Fleet roster blockers"
+      (moveSelected)="handleRosterBlockerMove($event)"
+    />
   }
 
   @let fresh = connectivity.daemonFreshness();

@@ -96,6 +96,8 @@
         [showOwnerSummary]="true"
         [showExecutionHistory]="true"
         [showSymbolExposures]="true"
+        [showOperatorBlockers]="true"
+        (operatorBlockerMoveSelected)="handleAccountMonitorBlockerMove($event)"
       />
       @if (accountFreezeBanner(); as banner) {
         <app-account-freeze-banner [banner]="banner" />

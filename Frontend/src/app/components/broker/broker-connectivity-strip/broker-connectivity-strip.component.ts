@@ -9,8 +9,11 @@ import {
 import { Router } from '@angular/router';
 import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
 import { DaemonDiagnosticsStore } from '../../../services/daemon-diagnostics-store.service';
-import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { DaemonDiagnosticsPanelComponent } from '../daemon-diagnostics/daemon-diagnostics-panel.component';
+import {
+  OperatorBlockerListComponent,
+  type OperatorBlockerMoveEvent,
+} from '../shared/operator-blocker-list/operator-blocker-list.component';
 
 /**
  * Shared connectivity strip (handoff: cross-cuts broker pages). Renders the
@@ -21,7 +24,7 @@ import { DaemonDiagnosticsPanelComponent } from '../daemon-diagnostics/daemon-di
  */
 @Component({
   selector: 'app-broker-connectivity-strip',
-  imports: [DaemonDiagnosticsPanelComponent, ReceiptLabelPipe],
+  imports: [DaemonDiagnosticsPanelComponent, OperatorBlockerListComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
     '(document:keydown.escape)': 'closeDiagnosticsIfOpen()',
@@ -95,6 +98,13 @@ export class BrokerConnectivityStripComponent {
   protected async navigateFromDiagnostics(path: string): Promise<void> {
     this.closeDiagnostics();
     await this.router.navigateByUrl(path);
+  }
+
+  protected async handleRosterBlockerMove(event: OperatorBlockerMoveEvent): Promise<void> {
+    const action = event.move.action;
+    if (action.kind === 'navigate') {
+      await this.router.navigateByUrl(action.fragment ? `${action.route}#${action.fragment}` : action.route);
+    }
   }
 
   protected async copyStartCommand(): Promise<void> {

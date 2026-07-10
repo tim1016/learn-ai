@@ -154,12 +154,34 @@ describe('BrokerConnectivityService fleet state', () => {
             process_state: 'idle',
             readiness_verdict: 'BLOCKED',
             readiness_as_of_ms: 1_700_000_000_000,
+            blockers: [
+              {
+                condition: {
+                  id: 'fleet_member_blocked',
+                  severity: 'blocking',
+                  scope: 'fleet',
+                  evidence: {},
+                },
+                host: 'fleet_roster',
+                disposition: 'fix_elsewhere',
+                headline: 'blocked-bot is blocked',
+                detail: 'Open the bot cockpit.',
+                primary_move: {
+                  label: 'Open bot cockpit',
+                  action: { kind: 'navigate', route: '/broker/bots/blocked-bot', fragment: null },
+                  target: null,
+                },
+                secondary_moves: [],
+                applies_to: 'both',
+              },
+            ],
           },
           {
             strategy_instance_id: 'ready-bot',
             process_state: 'running',
             readiness_verdict: 'READY',
             readiness_as_of_ms: 1_700_000_000_000,
+            blockers: [],
           },
         ],
       }),
@@ -169,14 +191,8 @@ describe('BrokerConnectivityService fleet state', () => {
       '/api/live-instances/fleet/stream?control_intent=learn-ai-browser-control',
     );
     expect(service.nothingDeployed()).toBe(false);
-    expect(service.rosterChips()).toEqual([
-      {
-        id: 'blocked-bot',
-        label: 'blocked-bot',
-        processState: 'idle',
-        readinessVerdict: 'BLOCKED',
-        state: 'warn',
-      },
+    expect(service.rosterBlockers().map((blocker) => blocker.condition.id)).toEqual([
+      'fleet_member_blocked',
     ]);
   });
 });
