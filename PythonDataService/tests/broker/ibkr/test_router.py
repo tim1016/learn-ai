@@ -332,7 +332,7 @@ async def test_delete_order_refuses_raw_cancel_without_account_owner_grant(
         def raise_if_blocked(self) -> None:
             return None
 
-    async def allow_cancel(*_args, **_kwargs):
+    async def allow_cancel(*_args: object, **_kwargs: object) -> AllowCancelDecision:
         return AllowCancelDecision()
 
     monkeypatch.setattr(broker_router, "account_truth_cancel_decision", allow_cancel)

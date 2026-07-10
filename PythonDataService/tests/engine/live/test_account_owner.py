@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
 import pytest
 
+import app.engine.live.account_owner as account_owner_module
 from app.broker.ibkr.client import IbkrClientIdInUseError
 from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
@@ -145,7 +147,11 @@ def _owner(
     )
 
 
-def _persisted_generation_provider(artifacts_root: Path, *, default: int = 0):
+def _persisted_generation_provider(
+    artifacts_root: Path,
+    *,
+    default: int = 0,
+) -> Callable[[], int]:
     def provider() -> int:
         loaded = read_account_owner_generation(artifacts_root, ACCOUNT)
         return loaded.generation if loaded is not None else default
@@ -153,7 +159,14 @@ def _persisted_generation_provider(artifacts_root: Path, *, default: int = 0):
     return provider
 
 
-def _persisted_generation_advancer(artifacts_root: Path, *, default: int = 0):
+def _persisted_generation_advancer(
+    artifacts_root: Path,
+    *,
+    default: int = 0,
+) -> Callable[
+    [Literal["accepting", "reconnecting", "draining", "frozen"], int],
+    AccountOwnerGeneration,
+]:
     def advancer(
         phase: Literal["accepting", "reconnecting", "draining", "frozen"],
         recorded_at_ms: int,
@@ -214,6 +227,24 @@ def test_account_owner_records_accepting_generation_for_startup(tmp_path: Path) 
     assert events[-1]["event_type"] == "account_owner_generation_recorded"
     assert events[-1]["generation"] == 0
     assert events[-1]["phase"] == "accepting"
+
+
+def test_account_owner_accepting_transition_stays_closed_when_generation_persist_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = _owner(tmp_path, _Broker(), initial_phase="reconnecting")
+
+    def fail_write(*_args: object, **_kwargs: object) -> None:
+        raise OSError("generation write failed")
+
+    monkeypatch.setattr(account_owner_module, "write_account_owner_generation", fail_write)
+
+    with pytest.raises(OSError, match="generation write failed"):
+        owner._set_phase("accepting")
+
+    assert owner.accepting is False
+    assert owner.reconnect_gate_result().status != "pass"
 
 
 @pytest.mark.asyncio

@@ -1834,7 +1834,10 @@ def cmd_start(args: argparse.Namespace) -> int:
                 return persisted.generation
             return account_owner_generation
 
-        def _advance_account_owner_generation(phase: str, recorded_at_ms: int):
+        def _advance_account_owner_generation(
+            phase: str,
+            recorded_at_ms: int,
+        ) -> AccountOwnerGeneration:
             nonlocal account_owner_generation
             generation = advance_account_owner_generation(
                 _artifacts_root,

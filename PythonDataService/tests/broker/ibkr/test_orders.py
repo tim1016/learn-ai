@@ -89,9 +89,13 @@ def _client(
 
 
 @contextmanager
-def _owner_grant(boundary: str = "broker.place_order") -> Iterator[None]:
+def _owner_grant(
+    boundary: str = "broker.place_order",
+    *,
+    account_id: str = "DU1234567",
+) -> Iterator[None]:
     with account_owner_write_grant(
-        account_id="DU1234567",
+        account_id=account_id,
         owner_generation=1,
         boundary=boundary,
     ):
@@ -173,6 +177,20 @@ async def test_place_paper_order_refuses_without_account_owner_grant() -> None:
         await place_paper_order(client, _spec())
 
     assert exc.value.reason == "ACCOUNT_OWNER_WRITE_GRANT_MISSING"
+    client.ib.placeOrder.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_place_paper_order_refuses_account_owner_account_mismatch() -> None:
+    client = _client()
+
+    with (
+        pytest.raises(AccountOwnerWriteFenceError) as exc,
+        _owner_grant(account_id="DU7654321"),
+    ):
+        await place_paper_order(client, _spec())
+
+    assert exc.value.reason == "ACCOUNT_OWNER_WRITE_ACCOUNT_MISMATCH"
     client.ib.placeOrder.assert_not_called()
 
 
@@ -478,6 +496,23 @@ async def test_cancel_paper_order_refuses_without_account_owner_grant() -> None:
         await cancel_paper_order(client, order_id=42)
 
     assert exc.value.reason == "ACCOUNT_OWNER_WRITE_GRANT_MISSING"
+    client.ib.cancelOrder.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cancel_paper_order_refuses_account_owner_account_mismatch() -> None:
+    trade = _trade_namespace(order_id=42)
+    client = _client()
+    client.ib.trades = MagicMock(return_value=[trade])
+    client.ib.cancelOrder = MagicMock()
+
+    with (
+        pytest.raises(AccountOwnerWriteFenceError) as exc,
+        _owner_grant("broker.cancel_order", account_id="DU7654321"),
+    ):
+        await cancel_paper_order(client, order_id=42)
+
+    assert exc.value.reason == "ACCOUNT_OWNER_WRITE_ACCOUNT_MISMATCH"
     client.ib.cancelOrder.assert_not_called()
 
 

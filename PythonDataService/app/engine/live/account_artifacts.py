@@ -442,18 +442,18 @@ def advance_account_owner_generation(
             source=source,
         )
         _atomic_write_json_locked(path, generation.model_dump())
-    _append_account_event(
-        artifacts_root,
-        account_id,
-        {
-            "event_type": "account_owner_generation_recorded",
-            "account_id": account_id,
-            "generation": generation.generation,
-            "phase": generation.phase,
-            "recorded_at_ms": generation.recorded_at_ms,
-            "source": generation.source,
-        },
-    )
+        _append_account_event(
+            artifacts_root,
+            account_id,
+            {
+                "event_type": "account_owner_generation_recorded",
+                "account_id": account_id,
+                "generation": generation.generation,
+                "phase": generation.phase,
+                "recorded_at_ms": generation.recorded_at_ms,
+                "source": generation.source,
+            },
+        )
     return generation
 
 

@@ -458,8 +458,14 @@ class AccountOwner:
         *,
         advance: bool = False,
     ) -> AccountOwnerGeneration:
+        if phase == "accepting":
+            generation = self._write_generation(phase, advance=advance)
+            self._phase = phase
+            self._accepting = True
+            return generation
+
         self._phase = phase
-        self._accepting = phase == "accepting"
+        self._accepting = False
         return self._write_generation(phase, advance=advance)
 
     def _write_generation(
