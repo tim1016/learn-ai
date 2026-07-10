@@ -200,6 +200,7 @@ function setup(
   const connectivity = {
     links: () => [],
     blockers: () => [],
+    rosterChips: () => [],
     daemonState: () => 'ok',
     brokerState: () => 'ok',
     brokerDetail: () => 'Connected',
@@ -1619,6 +1620,7 @@ describe('BrokerDeployFormComponent', () => {
     const connectivity = {
       links: () => [],
       blockers: () => [],
+      rosterChips: () => [],
       daemonState: () => 'ok',
       brokerState: () => 'ok',
       brokerDetail: () => 'Connected',
