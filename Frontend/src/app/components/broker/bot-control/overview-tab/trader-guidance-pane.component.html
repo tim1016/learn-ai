@@ -22,7 +22,7 @@
         class="primary-remediation"
         [class.link-remediation]="action.variant === 'link'"
         data-testid="trader-guidance-primary-remediation"
-        (click)="action.invoke()"
+        (click)="emitCurrentRemediation()"
       >
         <span>{{ action.label }}</span>
         <i class="pi pi-arrow-right" aria-hidden="true"></i>

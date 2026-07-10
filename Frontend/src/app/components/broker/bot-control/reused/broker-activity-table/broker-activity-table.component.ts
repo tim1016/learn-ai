@@ -32,7 +32,7 @@ export class BrokerActivityTableComponent {
   readonly backfillError = input<string | null>(null);
   readonly sseStatus = input<string>('connecting');
   readonly sseError = input<string | null>(null);
-  /** PR 5 — typed broker-activity health from the 4s status poll.
+  /** Typed broker-activity health from the state stream.
    *  When present, replaces the implicit ``backfillLoading`` spinner with
    *  the server-authored health verdict. Null before the first poll response. */
   readonly activityHealth = input<BrokerActivityHealth | null>(null);

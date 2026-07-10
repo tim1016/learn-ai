@@ -271,6 +271,49 @@ re-derived in Angular.
 - one tested selector/presenter site replaces the duplicated frontend
   remediation rendering.
 
+**Stage 4 delivery checklist (recorded before implementation):**
+
+- route-scoped store tests prove bootstrap plus state-stream adoption replaces
+  the page timer and that route teardown closes every connection;
+- stream-error tests retain only the in-memory snapshot, disable mutation
+  dispatch, and render backend source timestamps/freshness without relabelling
+  stale evidence as current;
+- resolver/guard tests distinguish proven `404`/`410` from transport outage:
+  missing/deleted bots are rejected, while outage activates an honest
+  control-plane-unreachable page with no browser-persisted snapshot;
+- mutation tests prove the authenticated response records a pending attempt ID
+  and a later matching latest/terminal receipt is adopted from SSE with no
+  status synchronization request;
+- typed snapshot and event adapters separately prove epoch/version adoption,
+  composite-cursor backfill/gap recovery, and stable-sequence deduplication;
+- Activity request state moves to an Angular request resource, linked
+  selections reset on upstream identity changes, and component-owned manual
+  cache/refetch synchronization is deleted; and
+- one tested selector/presenter becomes the sole frontend remediation render
+  site without deriving backend verdicts, eligibility, arbitration, or copy.
+
+**Stage 4 implementation evidence (2026-07-10):** the bot route now provides
+one `BotSurfaceStore`; guard and resolver coalesce one validated REST bootstrap
+and the resolver starts the authenticated state stream. The store retains only
+its same-session snapshot during reconnect, requires a verified stream snapshot
+before enabling writes, closes on route teardown, rejects cross-instance or
+incomplete documents, and joins pending mutation IDs to stream-delivered durable
+receipts without a status refetch. Start, stop, end-day, desired-state, composed
+flatten, one-shot flatten, and emergency-flatten paths persist attempts before
+dispatch; ambiguous/post-write failures become `OUTCOME_UNKNOWN`, and startup
+recovers attempts stranded by process exit. The shared event adapter pages REST
+backfill and handles composite-cursor reconnect, deep gap, reset, immutable-seq
+deduplication, and bounded retention. Activity uses `resource` plus
+identity-linked selections, and the pure remediation presenter is the sole
+label/variant mapping. Frontend build and all 1,515 tests pass. Python focused
+router/attempt coverage passes (249 tests); the full suite records 6,919 passes,
+54 skips, 5 expected passes, and the six pre-existing external-fixture/sidecar
+failures. Project-scope Ruff and changed-file ESLint pass; repository-wide
+Frontend lint retains the pre-existing 158-warning baseline. Strict
+maintainability review found no new file crossing the 1k-line threshold and
+accepted the central `MutationAttemptScope` as the structural replacement for
+duplicated mutation-dispatch helpers.
+
 ## Stage 5 — Deliver PRD #951 on the new store `[UX]`
 
 Deliver the stream-primary Bot Cockpit from PRD #951 on the Stage-4 store. Its

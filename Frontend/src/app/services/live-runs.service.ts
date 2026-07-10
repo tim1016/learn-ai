@@ -78,9 +78,13 @@ export class LiveRunsService {
     );
   }
 
-  getBotEvents(runId: string, params?: { after_seq?: number; limit?: number }): Promise<BotEventPage> {
+  getBotEvents(
+    runId: string,
+    params?: { after_seq?: number; cursor?: string; limit?: number },
+  ): Promise<BotEventPage> {
     let query = new HttpParams();
     if (params?.after_seq !== undefined) query = query.set('after_seq', String(params.after_seq));
+    if (params?.cursor !== undefined) query = query.set('cursor', params.cursor);
     if (params?.limit !== undefined) query = query.set('limit', String(params.limit));
     return firstValueFrom(
       this.http.get<BotEventPage>(

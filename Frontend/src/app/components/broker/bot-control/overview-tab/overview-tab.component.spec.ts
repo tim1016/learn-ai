@@ -18,6 +18,7 @@ function makeStatus(id = 'sid-x'): LiveInstanceStatus {
     process: { state: 'idle', pid: null, bound_run_id: null, started_at_ms: null },
     live_binding: null,
     evidence_binding: null,
+    latest_mutation: null,
     desired_state: null,
     readiness: null,
     latest_decision: null,

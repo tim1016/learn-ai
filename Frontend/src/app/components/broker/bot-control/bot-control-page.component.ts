@@ -7,8 +7,9 @@ import {
   inject,
   signal,
 } from '@angular/core';
-import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { ActivatedRoute, Router } from '@angular/router';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { Router } from '@angular/router';
+import { timer } from 'rxjs';
 
 import type {
   BotLifecycleAction,
@@ -30,19 +31,12 @@ import { redeployQueryParamsForStatus } from './lib/redeploy-query-params';
 import { resolveOperatorRunbookRoute } from './lib/operator-runbook-routes';
 import { canStartHostProcess } from './lib/start-host-process';
 import {
-  renderTraderRemediation,
-  type RenderedAction,
-  type RendererDispatch,
+  presentTraderRemediation,
+  type PresentedAction,
 } from './lib/suggested-action-renderer';
 import { toOperationError, type OperationKind } from '../operation-error';
-import {
-  botSurfaceStreamEnabled,
-  openBotSurfaceStream,
-  shouldAcceptSurfaceSnapshot,
-  type BotSurfaceStream,
-} from './lib/bot-surface-stream';
+import { BotSurfaceStore } from './bot-surface-store.service';
 
-const POLL_INTERVAL_MS = 4_000;
 const POISONED_CONFIRM_MESSAGE =
   'Flagging this instance as POISONED is IRREVERSIBLE: the current run can never resume on its run_id. Recovery requires a fresh deployment (new run_id) after you reconcile the account.';
 const CRASH_RECOVERY_CONFIRM_MESSAGE =
@@ -61,19 +55,17 @@ const REMOVE_BOT_CONFIRM_MESSAGE =
 })
 export class BotControlPageComponent {
   private readonly liveRuns = inject(LiveRunsService);
-  private readonly route = inject(ActivatedRoute);
+  private readonly surface = inject(BotSurfaceStore);
   private readonly router = inject(Router);
   private readonly destroyRef = inject(DestroyRef);
   private readonly activeBotSidebarNotice = inject(ActiveBotSidebarNoticeService);
-  private pollTimer: ReturnType<typeof setTimeout> | null = null;
-  private pollToken = 0;
   private statusRequestSeq = 0;
-  private destroyed = false;
-  private surfaceStream: BotSurfaceStream | null = null;
 
-  readonly instanceId = signal<string | null>(null);
-  readonly status = signal<LiveInstanceStatus | null>(null);
-  readonly statusError = signal<string | null>(null);
+  readonly instanceId = this.surface.instanceId;
+  readonly status = this.surface.status;
+  readonly statusError = this.surface.errorMessage;
+  readonly readOnly = this.surface.readOnly;
+  readonly pendingAttemptId = this.surface.pendingAttemptId;
   readonly mutationError = signal<string | null>(null);
   readonly timelineRows = signal<LifecycleProjectionEventRow[]>([]);
   readonly timelineProjectionAvailable = signal<boolean>(false);
@@ -93,6 +85,59 @@ export class BotControlPageComponent {
   readonly errorMessage = computed<string | null>(
     () => this.mutationError() ?? this.statusError(),
   );
+  private readonly displayClock = toSignal(timer(0, 1_000), { initialValue: 0 });
+  readonly sourceFreshness = computed(() => {
+    this.displayClock();
+    const status = this.status();
+    if (!status) return [];
+    const receivedAtMs = this.surface.snapshotReceivedAtMs();
+    const elapsed = receivedAtMs === null ? 0 : Math.max(0, Date.now() - receivedAtMs);
+    const rows: { label: string; state: string; age_ms: number | null }[] = [
+      { label: 'Surface snapshot', state: 'SNAPSHOT', age_ms: elapsed },
+    ];
+    const freshness = status.operator_surface.runtime_freshness;
+    if (freshness) {
+      rows.push(
+        { label: 'Command loop', state: freshness.command_loop.state, age_ms: addAge(freshness.command_loop.age_ms, elapsed) },
+        { label: 'Broker runtime', state: freshness.broker.state, age_ms: addAge(freshness.broker.age_ms, elapsed) },
+        { label: 'Bar loop', state: freshness.bar_loop.state, age_ms: addAge(freshness.bar_loop.age_ms, elapsed) },
+        { label: 'Runtime control plane', state: freshness.control_plane.state, age_ms: addAge(freshness.control_plane.age_ms, elapsed) },
+      );
+    }
+    const controlPlane = status.operator_surface.control_plane;
+    if (controlPlane) {
+      rows.push({
+        label: 'Daemon observation',
+        state: controlPlane.state,
+        age_ms: sourceAgeAtDisplay(status.fetched_at_ms, controlPlane.last_success_ms, elapsed),
+      });
+    }
+    const brokerObservation = status.operator_surface.broker_observation_consistency;
+    if (brokerObservation) {
+      rows.push({
+        label: 'Broker comparison',
+        state: brokerObservation.verdict,
+        age_ms: sourceAgeAtDisplay(
+          status.fetched_at_ms,
+          brokerObservation.compared_at_ms,
+          elapsed,
+        ),
+      });
+    }
+    const reconciliation = status.operator_surface.reconciliation;
+    if (reconciliation) {
+      rows.push({
+        label: 'Reconciliation',
+        state: reconciliation.state,
+        age_ms: sourceAgeAtDisplay(
+          status.fetched_at_ms,
+          reconciliation.broker_observed_at_ms ?? reconciliation.last_reconcile_ms,
+          elapsed,
+        ),
+      });
+    }
+    return rows;
+  });
 
   readonly hostRunnerNotice = computed<ActiveBotSidebarNotice | null>(() => {
     const hostProcess = this.status()?.operator_surface.host_process ?? null;
@@ -129,59 +174,17 @@ export class BotControlPageComponent {
   readonly traderGuidance = computed(
     () => this.status()?.operator_surface.trader_guidance ?? null,
   );
-  readonly renderedPrimaryRemediation = computed<RenderedAction | null>(() =>
-    renderTraderRemediation(
-      this.traderGuidance()?.primary_remediation ?? null,
-      this.primaryRemediationDispatch,
-    ),
+  readonly renderedPrimaryRemediation = computed<PresentedAction | null>(() =>
+    presentTraderRemediation(this.traderGuidance()?.primary_remediation ?? null),
   );
 
-  private readonly primaryRemediationDispatch: RendererDispatch = {
-    invokeCapability: (capability) => {
-      if (capability === 'resume') void this.dispatchResumeIntent();
-      else void this.dispatchEndDayNow();
-    },
-    // Destructive focus actions have no lifecycle-chart node in the redesign; the
-    // confirm dialog is now their canonical render site. Flatten-and-pause is an
-    // account-scoped recovery, so it routes to the Account Monitor.
-    focus: (_tab, action) => {
-      if (action === 'mark_poisoned') this.openTypedHalt();
-      else if (action === 'stop') void this.dispatchStop();
-      else this.openAccountMonitor();
-    },
-    redeploy: () => this.onGateRedeploy(),
-    openRunbook: (slug) => this.onGateOpenRunbook(slug),
-    invokeEndpoint: (endpoint) => {
-      if (endpoint === 'reconcile_instance') void this.dispatchReconcileNow();
-    },
-  };
-
   constructor() {
-    this.route.paramMap.pipe(takeUntilDestroyed()).subscribe((params) => {
-      const id = params.get('id');
-      const token = ++this.pollToken;
-      this.clearPollTimer();
-      this.closeSurfaceStream();
-      this.instanceId.set(id);
-      this.status.set(null);
-      this.statusError.set(null);
-      this.mutationError.set(null);
-      this.timelineRows.set([]);
-      this.timelineProjectionAvailable.set(false);
-      this.timelineCanonicalFallbackRequired.set(true);
-      this.timelineNotice.set(null);
-      this.busyAction.set(null);
-      this.typedHaltOpen.set(false);
-      this.typedHaltInstanceId.set(null);
-      this.crashRecoveryConfirmOpen.set(false);
-      this.retireReplaceConfirmOpen.set(false);
-      this.removeBotConfirmOpen.set(false);
-      if (id) {
-        void this.refreshStatus(id).finally(() => {
-          if (botSurfaceStreamEnabled()) this.openSurfaceStream(id, token);
-          else this.scheduleNextPoll(id, token);
-        });
-      }
+    effect(() => {
+      const id = this.instanceId();
+      const status = this.status();
+      if (!id || !status) return;
+      const seq = ++this.statusRequestSeq;
+      void this.refreshLifecycleTimeline(id, status, seq);
     });
     effect(() => {
       const id = this.instanceId();
@@ -200,10 +203,6 @@ export class BotControlPageComponent {
       );
     });
     this.destroyRef.onDestroy(() => {
-      this.destroyed = true;
-      this.pollToken += 1;
-      this.clearPollTimer();
-      this.closeSurfaceStream();
       this.activeBotSidebarNotice.clearForInstance(this.instanceId());
     });
   }
@@ -233,11 +232,33 @@ export class BotControlPageComponent {
   }
 
   invokePrimaryRemediation(): void {
-    this.renderedPrimaryRemediation()?.invoke();
+    const remediation = this.traderGuidance()?.primary_remediation ?? null;
+    if (remediation !== null) this.invokeTraderRemediation(remediation);
   }
 
   invokeTraderRemediation(remediation: TraderPrimaryRemediation): void {
-    renderTraderRemediation(remediation, this.primaryRemediationDispatch)?.invoke();
+    switch (remediation.kind) {
+      case 'none':
+        break;
+      case 'invoke_capability':
+        if (remediation.capability === 'resume') void this.dispatchResumeIntent();
+        else void this.dispatchEndDayNow();
+        break;
+      case 'focus_action':
+        if (remediation.action === 'mark_poisoned') this.openTypedHalt();
+        else if (remediation.action === 'stop') void this.dispatchStop();
+        else this.openAccountMonitor();
+        break;
+      case 'redeploy':
+        this.onGateRedeploy();
+        break;
+      case 'open_runbook':
+        this.onGateOpenRunbook(remediation.slug);
+        break;
+      case 'invoke_endpoint':
+        if (remediation.endpoint === 'reconcile_instance') void this.dispatchReconcileNow();
+        break;
+    }
   }
 
   onSettingsRequested(): void {
@@ -247,7 +268,7 @@ export class BotControlPageComponent {
   async dispatchStartProcess(): Promise<void> {
     const id = this.instanceId();
     const cap = this.status()?.operator_surface.host_process.start_capability;
-    if (!id || this.busyAction() || !cap || !canStartHostProcess(cap)) return;
+    if (!id || this.mutationsDisabled() || !cap || !canStartHostProcess(cap)) return;
     const request = this.startRequestWithRollCallOffer(cap.request);
     if (!request) {
       this.mutationError.set('Run roll call before starting this bot.');
@@ -256,8 +277,8 @@ export class BotControlPageComponent {
     this.busyAction.set('start_process');
     this.mutationError.set(null);
     try {
-      await this.liveRuns.startHostRunner(cap.run_id, request);
-      await this.refreshStatus(id);
+      const response = await this.liveRuns.startHostRunner(cap.run_id, request);
+      this.surface.establishPending(response);
     } catch (err) {
       this.mutationError.set(this.operationErrorMessage('start', err));
     } finally {
@@ -270,7 +291,7 @@ export class BotControlPageComponent {
   // account is flat before we post confirm_account_flat — never on a bare click.
   dispatchCrashRecoveryOverride(): void {
     const id = this.instanceId();
-    if (!id || this.busyAction()) return;
+    if (!id || this.mutationsDisabled()) return;
     this.crashRecoveryConfirmOpen.set(true);
   }
 
@@ -282,7 +303,7 @@ export class BotControlPageComponent {
     if (!this.crashRecoveryConfirmOpen()) return;
     this.crashRecoveryConfirmOpen.set(false);
     const id = this.instanceId();
-    if (!id || this.busyAction()) return;
+    if (!id || this.mutationsDisabled()) return;
     this.busyAction.set('crash_recovery_override');
     this.mutationError.set(null);
     try {
@@ -290,7 +311,6 @@ export class BotControlPageComponent {
         confirm_account_flat: true,
         approved_by: 'operator',
       });
-      await this.refreshStatus(id);
     } catch (err) {
       this.mutationError.set(this.operationErrorMessage('recovery-override', err));
     } finally {
@@ -308,12 +328,12 @@ export class BotControlPageComponent {
 
   async dispatchEndDayNow(): Promise<void> {
     const id = this.instanceId();
-    if (!id || this.busyAction()) return;
+    if (!id || this.mutationsDisabled()) return;
     this.busyAction.set('end_day_now');
     this.mutationError.set(null);
     try {
-      await this.liveRuns.endDayNow(id, { force: false });
-      await this.refreshStatus(id);
+      const response = await this.liveRuns.endDayNow(id, { force: false });
+      this.surface.establishPending(response);
     } catch (err) {
       this.mutationError.set(this.operationErrorMessage('stop', err));
     } finally {
@@ -323,7 +343,7 @@ export class BotControlPageComponent {
 
   async dispatchRosterChange(onRoster: boolean): Promise<void> {
     const id = this.instanceId();
-    if (!id || this.busyAction()) return;
+    if (!id || this.mutationsDisabled()) return;
     const action: BotLifecycleActionId = onRoster ? 'add_to_roster' : 'take_off_roster';
     this.busyAction.set(action);
     this.mutationError.set(null);
@@ -333,7 +353,6 @@ export class BotControlPageComponent {
         updated_by: 'operator',
         reason: onRoster ? 'Add to roster' : 'Take off roster',
       });
-      await this.refreshStatus(id);
     } catch (err) {
       this.mutationError.set(this.humanError(err));
     } finally {
@@ -343,12 +362,11 @@ export class BotControlPageComponent {
 
   async dispatchReconcileNow(): Promise<void> {
     const id = this.instanceId();
-    if (!id || this.busyAction()) return;
+    if (!id || this.mutationsDisabled()) return;
     this.busyAction.set('reconcile_now');
     this.mutationError.set(null);
     try {
       await this.liveRuns.reconcileInstance(id);
-      await this.refreshStatus(id);
     } catch (err) {
       this.mutationError.set(this.operationErrorMessage('reconcile', err));
     } finally {
@@ -405,7 +423,7 @@ export class BotControlPageComponent {
 
   openTypedHalt(): void {
     const id = this.instanceId();
-    if (!id || this.busyAction()) return;
+    if (!id || this.mutationsDisabled()) return;
     this.typedHaltInstanceId.set(id);
     this.typedHaltOpen.set(true);
   }
@@ -417,14 +435,13 @@ export class BotControlPageComponent {
 
   async confirmTypedHalt(): Promise<void> {
     const id = this.instanceId();
-    if (!id || id !== this.typedHaltInstanceId() || this.busyAction()) return;
+    if (!id || id !== this.typedHaltInstanceId() || this.mutationsDisabled()) return;
     this.busyAction.set('mark_poisoned');
     this.mutationError.set(null);
     this.typedHaltOpen.set(false);
     this.typedHaltInstanceId.set(null);
     try {
       await this.liveRuns.issueInstanceCommand(id, { verb: 'MARK_POISONED' });
-      await this.refreshStatus(id);
     } catch (err) {
       this.mutationError.set(this.operationErrorMessage('mark-poisoned', err));
     } finally {
@@ -438,7 +455,7 @@ export class BotControlPageComponent {
   }
 
   openTerminalRetireReplaceConfirm(): void {
-    if (!this.instanceId() || this.busyAction()) return;
+    if (!this.instanceId() || this.mutationsDisabled()) return;
     this.retireReplaceConfirmOpen.set(true);
   }
 
@@ -450,7 +467,7 @@ export class BotControlPageComponent {
     if (!this.retireReplaceConfirmOpen()) return;
     this.retireReplaceConfirmOpen.set(false);
     const id = this.instanceId();
-    if (!id || this.busyAction()) return;
+    if (!id || this.mutationsDisabled()) return;
     this.busyAction.set('retire_replace');
     this.mutationError.set(null);
     try {
@@ -460,7 +477,6 @@ export class BotControlPageComponent {
         updated_by: 'operator',
         reason: 'Retire & Replace',
       });
-      await this.refreshStatus(id);
       this.onGateRedeploy();
     } catch (err) {
       this.mutationError.set(this.humanError(err));
@@ -470,7 +486,7 @@ export class BotControlPageComponent {
   }
 
   openRemoveBotConfirm(): void {
-    if (!this.instanceId() || this.busyAction()) return;
+    if (!this.instanceId() || this.mutationsDisabled()) return;
     this.removeBotConfirmOpen.set(true);
   }
 
@@ -482,7 +498,7 @@ export class BotControlPageComponent {
     if (!this.removeBotConfirmOpen()) return;
     this.removeBotConfirmOpen.set(false);
     const id = this.instanceId();
-    if (!id || this.busyAction()) return;
+    if (!id || this.mutationsDisabled()) return;
     this.busyAction.set('remove');
     this.mutationError.set(null);
     try {
@@ -502,7 +518,7 @@ export class BotControlPageComponent {
   }
 
   private isActionDisabled(action: BotLifecycleActionId): boolean {
-    if (this.status() === null || this.busyAction() !== null) return true;
+    if (this.status() === null || this.mutationsDisabled()) return true;
     return !this.lifecycleAction(action)?.enabled;
   }
 
@@ -519,23 +535,6 @@ export class BotControlPageComponent {
     const offerId = this.lifecycleAction('confirm_start')?.offer_id ?? null;
     if (!offerId) return null;
     return { ...request, roll_call_offer_id: offerId };
-  }
-
-  private async refreshStatus(id: string): Promise<void> {
-    const seq = ++this.statusRequestSeq;
-    try {
-      const status = await this.liveRuns.getInstanceStatus(id);
-      if (this.instanceId() !== id || seq !== this.statusRequestSeq) return;
-      this.status.set(status);
-      this.statusError.set(null);
-      void this.refreshLifecycleTimeline(id, status, seq);
-    } catch (err) {
-      if (this.instanceId() !== id || seq !== this.statusRequestSeq) return;
-      this.statusError.set(this.humanError(err));
-      this.timelineRows.set([]);
-      this.timelineProjectionAvailable.set(false);
-      this.timelineCanonicalFallbackRequired.set(true);
-    }
   }
 
   private async refreshLifecycleTimeline(
@@ -577,16 +576,16 @@ export class BotControlPageComponent {
 
   private async setIntent(action: 'resume' | 'stop', label: string): Promise<void> {
     const id = this.instanceId();
-    if (!id || this.busyAction()) return;
+    if (!id || this.mutationsDisabled()) return;
     this.busyAction.set(action);
     this.mutationError.set(null);
     try {
-      await this.liveRuns.setInstanceDesiredState(id, {
+      const response = await this.liveRuns.setInstanceDesiredState(id, {
         action,
         reason: label,
         updated_by: 'operator',
       });
-      await this.refreshStatus(id);
+      this.surface.establishPending(response);
     } catch (err) {
       this.mutationError.set(this.operationErrorMessage(action, err));
     } finally {
@@ -596,6 +595,7 @@ export class BotControlPageComponent {
 
   private operationErrorMessage(operation: OperationKind, err: unknown): string {
     const error = toOperationError(operation, err);
+    this.surface.establishPending(error);
     return `${error.detail} ${error.remediation}`;
   }
 
@@ -630,41 +630,21 @@ export class BotControlPageComponent {
     return 'Could not load bot control data.';
   }
 
-  private scheduleNextPoll(id: string, token: number): void {
-    if (this.destroyed || this.instanceId() !== id || token !== this.pollToken) return;
-    this.pollTimer = setTimeout(() => {
-      this.pollTimer = null;
-      void this.refreshStatus(id).finally(() => this.scheduleNextPoll(id, token));
-    }, POLL_INTERVAL_MS);
+  private mutationsDisabled(): boolean {
+    return this.busyAction() !== null || this.readOnly();
   }
+}
 
-  private openSurfaceStream(id: string, token: number): void {
-    if (this.destroyed || this.instanceId() !== id || token !== this.pollToken) return;
-    this.closeSurfaceStream();
-    this.surfaceStream = openBotSurfaceStream(id, {
-      onSnapshot: (snapshot) => {
-        if (this.destroyed || this.instanceId() !== id || token !== this.pollToken) return;
-        if (!shouldAcceptSurfaceSnapshot(this.status(), snapshot)) return;
-        const seq = ++this.statusRequestSeq;
-        this.status.set(snapshot);
-        this.statusError.set(null);
-        void this.refreshLifecycleTimeline(id, snapshot, seq);
-      },
-      onMalformedSnapshot: (message) => {
-        if (this.destroyed || this.instanceId() !== id || token !== this.pollToken) return;
-        this.statusError.set(message);
-      },
-    });
-  }
+function addAge(ageAtSnapshotMs: number | null, elapsedMs: number): number | null {
+  return ageAtSnapshotMs === null ? null : ageAtSnapshotMs + elapsedMs;
+}
 
-  private closeSurfaceStream(): void {
-    this.surfaceStream?.close();
-    this.surfaceStream = null;
-  }
-
-  private clearPollTimer(): void {
-    if (this.pollTimer === null) return;
-    clearTimeout(this.pollTimer);
-    this.pollTimer = null;
-  }
+function sourceAgeAtDisplay(
+  snapshotAtMs: number,
+  sourceAtMs: number | null,
+  localElapsedMs: number,
+): number | null {
+  return sourceAtMs === null
+    ? null
+    : Math.max(0, snapshotAtMs - sourceAtMs) + localElapsedMs;
 }

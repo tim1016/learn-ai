@@ -47,14 +47,20 @@ rigor.md``.
 
 from __future__ import annotations
 
+import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.artifact_io import atomic_write_pydantic_artifact, read_pydantic_artifact
 
 ActionName = Literal["start", "stop", "flatten", "resume", "pause"]
+
+_CREATION_ORDER_LOCK = threading.Lock()
+_CREATION_ORDER_NEXT: dict[tuple[Path, str], int] = {}
 
 DispatchState = Literal[
     "PREPARED",
@@ -74,12 +80,8 @@ DispatchState = Literal[
 _LEGAL_TRANSITIONS: dict[DispatchState, frozenset[DispatchState]] = {
     "PREPARED": frozenset({"DISPATCHING"}),
     "DISPATCHING": frozenset({"RESPONSE_CONFIRMED", "OUTCOME_UNKNOWN"}),
-    "RESPONSE_CONFIRMED": frozenset(
-        {"EFFECT_CONFIRMED", "EFFECT_NOT_OBSERVED", "NOT_PROVABLE", "EVIDENCE_CONFLICT"}
-    ),
-    "OUTCOME_UNKNOWN": frozenset(
-        {"EFFECT_CONFIRMED", "EFFECT_NOT_OBSERVED", "NOT_PROVABLE", "EVIDENCE_CONFLICT"}
-    ),
+    "RESPONSE_CONFIRMED": frozenset({"EFFECT_CONFIRMED", "EFFECT_NOT_OBSERVED", "NOT_PROVABLE", "EVIDENCE_CONFLICT"}),
+    "OUTCOME_UNKNOWN": frozenset({"EFFECT_CONFIRMED", "EFFECT_NOT_OBSERVED", "NOT_PROVABLE", "EVIDENCE_CONFLICT"}),
     "EFFECT_CONFIRMED": frozenset(),
     "EFFECT_NOT_OBSERVED": frozenset(),
     "NOT_PROVABLE": frozenset(),
@@ -102,9 +104,7 @@ class InvalidMutationTransitionError(ValueError):
     """
 
     def __init__(self, *, current_state: DispatchState, requested_state: DispatchState) -> None:
-        super().__init__(
-            f"illegal mutation_attempt transition: {current_state} -> {requested_state}"
-        )
+        super().__init__(f"illegal mutation_attempt transition: {current_state} -> {requested_state}")
         self.current_state = current_state
         self.requested_state = requested_state
 
@@ -135,6 +135,7 @@ class MutationAttempt(BaseModel):
     action: ActionName
 
     requested_at_ms: int = Field(ge=0)
+    creation_order: int = Field(default=0, ge=0)
     last_transition_at_ms: int = Field(ge=0)
 
     dispatch_state: DispatchState
@@ -173,9 +174,7 @@ def transition_attempt(
     """
     legal = _LEGAL_TRANSITIONS[attempt.dispatch_state]
     if new_state not in legal:
-        raise InvalidMutationTransitionError(
-            current_state=attempt.dispatch_state, requested_state=new_state
-        )
+        raise InvalidMutationTransitionError(current_state=attempt.dispatch_state, requested_state=new_state)
     return attempt.model_copy(
         update={
             "dispatch_state": new_state,
@@ -234,10 +233,9 @@ class MutationAttemptRepo:
     def latest_for(self, instance_id: str) -> MutationAttempt | None:
         """Return the most recent attempt for ``instance_id``.
 
-        Most-recent is defined by ``requested_at_ms`` (not file mtime —
-        the artifact's stamped time is authoritative; mtime drifts under
-        clock adjustments).  Returns ``None`` when no attempts exist
-        for the instance or the storage root is absent.
+        Most-recent is ordered by requested time then the durable per-instance
+        creation order (never completion time or file mtime). Returns ``None``
+        when no attempts exist for the instance or the storage root is absent.
         """
         if not self._root.exists():
             return None
@@ -248,9 +246,193 @@ class MutationAttemptRepo:
             attempt = read_pydantic_artifact(entry, MutationAttempt)
             if attempt is None or attempt.instance_id != instance_id:
                 continue
-            if best is None or attempt.requested_at_ms > best.requested_at_ms:
+            if best is None or (
+                attempt.requested_at_ms,
+                attempt.creation_order,
+            ) > (
+                best.requested_at_ms,
+                best.creation_order,
+            ):
                 best = attempt
         return best
+
+    def next_creation_order(self, instance_id: str) -> int:
+        """Allocate a process-serialized durable order for one instance."""
+
+        with _CREATION_ORDER_LOCK:
+            key = (self._root.resolve(strict=False), instance_id)
+            cached = _CREATION_ORDER_NEXT.get(key)
+            if cached is not None:
+                _CREATION_ORDER_NEXT[key] = cached + 1
+                return cached
+            highest = 0
+            if self._root.exists():
+                for entry in self._root.iterdir():
+                    if entry.suffix != ".json":
+                        continue
+                    attempt = read_pydantic_artifact(entry, MutationAttempt)
+                    if attempt is not None and attempt.instance_id == instance_id:
+                        highest = max(highest, attempt.creation_order)
+            allocated = highest + 1
+            _CREATION_ORDER_NEXT[key] = allocated + 1
+            return allocated
+
+    def recover_inflight(self, *, transitioned_at_ms: int) -> list[MutationAttempt]:
+        """Mark attempts stranded by a prior process exit as outcome unknown."""
+
+        recovered: list[MutationAttempt] = []
+        if not self._root.exists():
+            return recovered
+        for entry in sorted(self._root.iterdir()):
+            if entry.suffix != ".json":
+                continue
+            attempt = read_pydantic_artifact(entry, MutationAttempt)
+            if attempt is None or attempt.dispatch_state not in {"PREPARED", "DISPATCHING"}:
+                continue
+            if attempt.dispatch_state == "PREPARED":
+                attempt = transition_attempt(
+                    attempt,
+                    "DISPATCHING",
+                    transitioned_at_ms=max(transitioned_at_ms, attempt.last_transition_at_ms),
+                )
+            recovered_attempt = transition_attempt(
+                attempt,
+                "OUTCOME_UNKNOWN",
+                transitioned_at_ms=max(transitioned_at_ms, attempt.last_transition_at_ms),
+                outcome={"stage": "data_plane_restart_recovery"},
+            )
+            self.write(recovered_attempt)
+            recovered.append(recovered_attempt)
+        return recovered
+
+
+def begin_mutation_attempt(
+    repo: MutationAttemptRepo,
+    *,
+    instance_id: str,
+    action: ActionName,
+    requested_at_ms: int,
+    run_id: str | None = None,
+) -> MutationAttempt:
+    """Persist PREPARED then DISPATCHING before the mutation side effect."""
+
+    prepared = MutationAttempt(
+        mutation_attempt_id=f"mutation-{uuid4().hex}",
+        instance_id=instance_id,
+        run_id=run_id,
+        action=action,
+        requested_at_ms=requested_at_ms,
+        creation_order=repo.next_creation_order(instance_id),
+        last_transition_at_ms=requested_at_ms,
+        dispatch_state="PREPARED",
+    )
+    repo.write(prepared)
+    dispatching = transition_attempt(
+        prepared,
+        "DISPATCHING",
+        transitioned_at_ms=requested_at_ms,
+    )
+    repo.write(dispatching)
+    return dispatching
+
+
+def persist_attempt_transition(
+    repo: MutationAttemptRepo,
+    attempt: MutationAttempt,
+    new_state: DispatchState,
+    *,
+    transitioned_at_ms: int,
+    outcome: dict | None = None,
+    evidence: dict | None = None,
+) -> MutationAttempt:
+    """Advance and persist one legal mutation-attempt transition."""
+
+    advanced = transition_attempt(
+        attempt,
+        new_state,
+        transitioned_at_ms=transitioned_at_ms,
+        outcome=outcome,
+        evidence=evidence,
+    )
+    repo.write(advanced)
+    return advanced
+
+
+class MutationAttemptScope:
+    """Make every exceptional exit after begin durably outcome-unknown."""
+
+    def __init__(
+        self,
+        repo: MutationAttemptRepo,
+        attempt: MutationAttempt,
+        *,
+        now_ms: Callable[[], int],
+    ) -> None:
+        self.repo = repo
+        self.attempt = attempt
+        self.stage = "mutation_dispatch"
+        self._now_ms = now_ms
+
+    @classmethod
+    def begin(
+        cls,
+        repo: MutationAttemptRepo,
+        *,
+        instance_id: str,
+        action: ActionName,
+        requested_at_ms: int,
+        run_id: str | None,
+        now_ms: Callable[[], int],
+    ) -> MutationAttemptScope:
+        return cls(
+            repo,
+            begin_mutation_attempt(
+                repo,
+                instance_id=instance_id,
+                action=action,
+                requested_at_ms=requested_at_ms,
+                run_id=run_id,
+            ),
+            now_ms=now_ms,
+        )
+
+    def __enter__(self) -> MutationAttemptScope:
+        return self
+
+    def __exit__(self, _exc_type, exc, _traceback) -> bool:
+        if exc is not None and self.attempt.dispatch_state == "DISPATCHING":
+            self.unknown(error=exc)
+        return False
+
+    def confirm(self, *, outcome: dict) -> MutationAttempt:
+        self.attempt = persist_attempt_transition(
+            self.repo,
+            self.attempt,
+            "RESPONSE_CONFIRMED",
+            transitioned_at_ms=max(self.attempt.last_transition_at_ms, self._now_ms()),
+            outcome=outcome,
+        )
+        return self.attempt
+
+    def reject_not_observed(self, *, outcome: dict) -> MutationAttempt:
+        self.confirm(outcome=outcome)
+        self.attempt = persist_attempt_transition(
+            self.repo,
+            self.attempt,
+            "EFFECT_NOT_OBSERVED",
+            transitioned_at_ms=max(self.attempt.last_transition_at_ms, self._now_ms()),
+        )
+        return self.attempt
+
+    def unknown(self, *, error: BaseException) -> MutationAttempt:
+        self.attempt = persist_attempt_transition(
+            self.repo,
+            self.attempt,
+            "OUTCOME_UNKNOWN",
+            transitioned_at_ms=max(self.attempt.last_transition_at_ms, self._now_ms()),
+            outcome={"stage": self.stage, "error_type": type(error).__name__},
+        )
+        return self.attempt
 
 
 # ---------------------------------------------------------------------------
@@ -265,13 +447,9 @@ class MutationAttemptRepo:
 # ---------------------------------------------------------------------------
 
 
-ProcessStateLiteral = Literal[
-    "running", "stopping", "exited", "idle", "unreachable"
-]
+ProcessStateLiteral = Literal["running", "stopping", "exited", "idle", "unreachable"]
 DesiredStateLiteral = Literal["RUNNING", "PAUSED", "STOPPED"]
-EngineRuntimeStateLiteral = Literal[
-    "IDLE", "RUNNING", "PAUSED", "DRAINING", "FAILED"
-]
+EngineRuntimeStateLiteral = Literal["IDLE", "RUNNING", "PAUSED", "DRAINING", "FAILED"]
 
 
 class ReconciliationEvidence(BaseModel):
@@ -313,9 +491,7 @@ ReconciliationOutcome = Literal[
 ]
 
 
-def reconcile_mutation_effect(
-    attempt: MutationAttempt, evidence: ReconciliationEvidence
-) -> ReconciliationOutcome:
+def reconcile_mutation_effect(attempt: MutationAttempt, evidence: ReconciliationEvidence) -> ReconciliationOutcome:
     """Classify whether ``attempt``'s intended effect is observable.
 
     Pure: never touches disk.  The router writes the resulting

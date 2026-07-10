@@ -3,6 +3,7 @@ import { TestBed } from '@angular/core/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { BotEventRow } from '../../../../../api/live-runs.types';
+import { LiveRunsService } from '../../../../../services/live-runs.service';
 import { botEventRowStream } from './bot-event-row-stream';
 
 const eventSources: StubEventSource[] = [];
@@ -29,8 +30,8 @@ class StubEventSource {
     this.listeners.set(name, listeners.filter((listener) => listener !== fn));
   }
 
-  dispatch(name: string, data?: string): void {
-    const event = new MessageEvent(name, { data: data ?? '' }) as unknown as Event;
+  dispatch(name: string, data?: string, lastEventId = ''): void {
+    const event = new MessageEvent(name, { data: data ?? '', lastEventId }) as unknown as Event;
     for (const listener of this.listeners.get(name) ?? []) listener(event);
   }
 
@@ -58,39 +59,39 @@ afterAll(() => {
 });
 
 describe('botEventRowStream', () => {
-  it('opens the run-scoped bot-event SSE channel with since_seq=0', () => {
-    setup('run/with space');
+  it('opens the run-scoped bot-event SSE channel from the REST high-water cursor', async () => {
+    await setup('run/with space');
 
     expect(eventSources.length).toBe(1);
     expect(eventSources[0].url).toBe(
-      '/api/live-runs/run%2Fwith%20space/bot-events/stream?since_seq=0',
+      '/api/live-runs/run%2Fwith%20space/bot-events/stream?cursor=stream-a%3A0&control_intent=learn-ai-browser-control',
     );
   });
 
-  it('dedupes rows by seq with the latest row winning', () => {
-    const stream = setup('run-1');
+  it('dedupes rows by stable seq with the latest row winning', async () => {
+    const stream = await setup('run-1');
     const source = eventSources[0];
 
-    source.dispatch('row', JSON.stringify(row({ seq: 2, headline: 'old' })));
-    source.dispatch('row', JSON.stringify(row({ seq: 1, headline: 'first' })));
-    source.dispatch('row', JSON.stringify(row({ seq: 2, headline: 'new' })));
+    source.dispatch('row', JSON.stringify(row({ seq: 2, headline: 'old' })), 'stream-a:2');
+    source.dispatch('row', JSON.stringify(row({ seq: 1, headline: 'first' })), 'stream-a:1');
+    source.dispatch('row', JSON.stringify(row({ seq: 2, headline: 'new' })), 'stream-a:2');
 
     expect(stream.rows().map((item) => [item.seq, item.headline])).toEqual([
       [1, 'first'],
-      [2, 'new'],
+      [2, 'old'],
     ]);
   });
 
-  it('surfaces server-side SSE errors', () => {
-    const stream = setup('run-err');
+  it('surfaces server-side SSE errors', async () => {
+    const stream = await setup('run-err');
 
     eventSources[0].dispatch('error', JSON.stringify({ error: 'stream unavailable' }));
 
     expect(stream.errorMessage()).toBe('stream unavailable');
   });
 
-  it('closes the underlying EventSource', () => {
-    const stream = setup('run-close');
+  it('closes the underlying EventSource', async () => {
+    const stream = await setup('run-close');
     const source = eventSources[0];
 
     stream.close();
@@ -99,11 +100,27 @@ describe('botEventRowStream', () => {
   });
 });
 
-function setup(runId: string) {
+async function setup(runId: string) {
   TestBed.resetTestingModule();
-  TestBed.configureTestingModule({ providers: [] });
+  TestBed.configureTestingModule({
+    providers: [{
+      provide: LiveRunsService,
+      useValue: {
+        getBotEvents: () => Promise.resolve({
+          rows: [],
+          next_seq: null,
+          durable_stream_id: 'stream-a',
+          high_water_cursor: 'stream-a:0',
+          next_cursor: null,
+        }),
+      },
+    }],
+  });
   const injector = TestBed.inject(Injector);
-  return runInInjectionContext(injector, () => botEventRowStream(runId));
+  const stream = runInInjectionContext(injector, () => botEventRowStream(runId));
+  await Promise.resolve();
+  await Promise.resolve();
+  return stream;
 }
 
 function row(overrides: Partial<BotEventRow> = {}): BotEventRow {

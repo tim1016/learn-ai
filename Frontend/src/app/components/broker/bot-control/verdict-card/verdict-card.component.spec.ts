@@ -9,7 +9,7 @@ import type {
   BotLifecycleCondition,
   LiveInstanceStatus,
 } from '../../../../api/live-instances.types';
-import type { RenderedAction } from '../lib/suggested-action-renderer';
+import type { PresentedAction } from '../lib/suggested-action-renderer';
 import { makeStatus } from '../bot-control-page.fixtures';
 import { makeDailyLifecycleFixture } from '../../../../testing/live-instance-status-fixtures';
 import { addRetiredTerminalBlocker } from '../../../../testing/operator-surface-fixtures';
@@ -49,7 +49,7 @@ function accountStaleCondition(): BotLifecycleCondition {
 
 function renderCard(
   status: LiveInstanceStatus,
-  remediation: RenderedAction | null = null,
+  remediation: PresentedAction | null = null,
 ): ComponentFixture<VerdictCardComponent> {
   TestBed.configureTestingModule({
     providers: [
@@ -92,8 +92,7 @@ describe('VerdictCardComponent', () => {
   });
 
   it('renders the remediation verb for a Sick bay bot and emits on click', () => {
-    const invoke = vi.fn();
-    const remediation: RenderedAction = { label: 'Reconcile now', variant: 'primary', invoke };
+    const remediation: PresentedAction = { label: 'Reconcile now', variant: 'primary' };
     const fixture = renderCard(
       statusWith({ display_status: 'Sick bay', primary_action: null }),
       remediation,
@@ -197,7 +196,7 @@ describe('VerdictCardComponent', () => {
         { display_status: 'Retired', phase: 'RETIRED', primary_action: null },
         addRetiredTerminalBlocker,
       ),
-      { label: 'Reconcile now', variant: 'primary', invoke: vi.fn() },
+      { label: 'Reconcile now', variant: 'primary' },
     );
     const el = fixture.nativeElement as HTMLElement;
     const lifecycleAction = vi.fn();

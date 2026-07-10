@@ -5,11 +5,31 @@
     <p class="error-banner" role="alert">{{ message }}</p>
   }
 
+  @if (pendingAttemptId(); as attemptId) {
+    <p class="pending-banner" role="status">
+      Mutation pending · <span class="audit-token">{{ attemptId }}</span>
+    </p>
+  }
+
+  @if (readOnly() && status()) {
+    <section class="stale-banner" aria-label="Read-only source freshness">
+      <strong>Read-only while the control-plane stream reconnects.</strong>
+      <ul>
+        @for (source of sourceFreshness(); track source.label) {
+          <li>
+            {{ source.label }}: {{ source.state }} ·
+            @if (source.age_ms === null) { age unknown } @else { {{ source.age_ms }} ms old }
+          </li>
+        }
+      </ul>
+    </section>
+  }
+
   @if (status(); as s) {
     <div class="operator-truth-layout">
       <app-verdict-card
         [status]="s"
-        [busy]="busyAction() !== null"
+        [busy]="busyAction() !== null || readOnly()"
         [renderedRemediation]="renderedPrimaryRemediation()"
         (lifecycleAction)="dispatchOverviewAction($event)"
         (remediationInvoked)="invokePrimaryRemediation()"

@@ -362,6 +362,7 @@ class LiveInstanceSurfaceAssembler:
             process=process,
             live_binding=live_binding,
             evidence_binding=evidence,
+            latest_mutation=(latest_mutation.model_dump(mode="json") if latest_mutation is not None else None),
             desired_state=desired,
             readiness=readiness,
             latest_decision=latest_decision,

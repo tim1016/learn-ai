@@ -44,12 +44,15 @@ export interface OperationError {
   remediation: string;
   /** HTTP status when known; null for a transport/connection failure. */
   status: number | null;
+  mutation_attempt_id?: string;
+  mutation_dispatch_state?: 'OUTCOME_UNKNOWN';
 }
 
 const OUTCOME_UNKNOWN_ENDPOINTS = [
   'deploy',
   'start_run',
   'stop_run',
+  'end_day_now',
   'emergency_flatten',
   'renew_daemon_lease',
 ] as const;
@@ -67,6 +70,8 @@ export interface OutcomeUnknownBody {
   endpoint: OutcomeUnknownEndpoint;
   occurred_at_ms: number;
   runbook_hint: string;
+  mutation_attempt_id?: string;
+  mutation_dispatch_state?: 'OUTCOME_UNKNOWN';
 }
 
 /** Structured 409 body for deterministic domain/precondition blocks. */
@@ -167,7 +172,12 @@ export function describeOperationError(
   operation: OperationKind,
   status: number | null,
   detail: string,
-  options: { category?: ErrorCategory; remediationOverride?: string } = {},
+  options: {
+    category?: ErrorCategory;
+    remediationOverride?: string;
+    mutationAttemptId?: string;
+    mutationDispatchState?: 'OUTCOME_UNKNOWN';
+  } = {},
 ): OperationError {
   const category = options.category ?? categoryOf(status);
   const remediation =
@@ -180,6 +190,12 @@ export function describeOperationError(
     detail,
     remediation,
     status,
+    ...(options.mutationAttemptId
+      ? {
+          mutation_attempt_id: options.mutationAttemptId,
+          mutation_dispatch_state: options.mutationDispatchState,
+        }
+      : {}),
   };
 }
 
@@ -200,6 +216,8 @@ export function readOutcomeUnknownBody(body: unknown): OutcomeUnknownBody | null
   const occurredAtMs = d['occurred_at_ms'];
   const runbookHint = d['runbook_hint'];
   const bodyDetail = d['detail'];
+  const mutationAttemptId = d['mutation_attempt_id'];
+  const mutationDispatchState = d['mutation_dispatch_state'];
   if (
     d['outcome'] !== 'UNKNOWN' ||
     d['reason_code'] !== 'OUTCOME_UNKNOWN' ||
@@ -218,6 +236,12 @@ export function readOutcomeUnknownBody(body: unknown): OutcomeUnknownBody | null
     endpoint,
     occurred_at_ms: occurredAtMs,
     runbook_hint: runbookHint,
+    ...(typeof mutationAttemptId === 'string' && mutationDispatchState === 'OUTCOME_UNKNOWN'
+      ? {
+          mutation_attempt_id: mutationAttemptId,
+          mutation_dispatch_state: mutationDispatchState,
+        }
+      : {}),
   };
 }
 
@@ -297,6 +321,8 @@ export function toOperationError(operation: OperationKind, err: unknown): Operat
     return describeOperationError(operation, status, detail, {
       category: 'outcome-unknown',
       remediationOverride: outcomeUnknown.runbook_hint,
+      mutationAttemptId: outcomeUnknown.mutation_attempt_id,
+      mutationDispatchState: outcomeUnknown.mutation_dispatch_state,
     });
   }
   if (precondition !== null) {

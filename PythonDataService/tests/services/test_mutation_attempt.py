@@ -34,11 +34,46 @@ from app.services.mutation_attempt import (
     InvalidMutationTransitionError,
     MutationAttempt,
     MutationAttemptRepo,
+    MutationAttemptScope,
     ReconciliationEvidence,
     ReconciliationOutcome,
+    begin_mutation_attempt,
+    persist_attempt_transition,
     reconcile_mutation_effect,
     transition_attempt,
 )
+
+
+def test_begin_and_persist_transition_write_durable_attempt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = MutationAttemptRepo(tmp_path)
+    writes: list[DispatchState] = []
+    original_write = repo.write
+
+    def record_write(attempt: MutationAttempt) -> None:
+        writes.append(attempt.dispatch_state)
+        original_write(attempt)
+
+    monkeypatch.setattr(repo, "write", record_write)
+
+    dispatching = begin_mutation_attempt(
+        repo,
+        instance_id="inst-A",
+        action="pause",
+        requested_at_ms=1_700_000_000_000,
+        run_id="run-A",
+    )
+    confirmed = persist_attempt_transition(
+        repo,
+        dispatching,
+        "RESPONSE_CONFIRMED",
+        transitioned_at_ms=1_700_000_000_010,
+        outcome={"actuated": True},
+    )
+
+    assert dispatching.mutation_attempt_id.startswith("mutation-")
+    assert writes == ["PREPARED", "DISPATCHING", "RESPONSE_CONFIRMED"]
+    assert confirmed.dispatch_state == "RESPONSE_CONFIRMED"
+    assert repo.read(confirmed.mutation_attempt_id) == confirmed
 
 
 def _attempt(
@@ -47,6 +82,7 @@ def _attempt(
     instance_id: str = "inst-A",
     action: str = "start",
     requested_at_ms: int = 1_700_000_000_000,
+    creation_order: int = 0,
     state: DispatchState = "PREPARED",
     outcome: dict | None = None,
     evidence: dict | None = None,
@@ -57,6 +93,7 @@ def _attempt(
         run_id=None,
         action=action,  # type: ignore[arg-type]
         requested_at_ms=requested_at_ms,
+        creation_order=creation_order,
         last_transition_at_ms=requested_at_ms,
         dispatch_state=state,
         outcome=outcome,
@@ -166,6 +203,98 @@ def test_latest_for_returns_most_recent_by_requested_at_ms(tmp_path: Path) -> No
     assert latest.mutation_attempt_id == "att-3"
 
 
+def test_latest_for_uses_creation_order_to_break_requested_at_ties(tmp_path: Path) -> None:
+    repo = MutationAttemptRepo(tmp_path)
+    earlier = _attempt(attempt_id="att-a", requested_at_ms=100, creation_order=1)
+    later = earlier.model_copy(update={"mutation_attempt_id": "att-b", "creation_order": 2})
+    repo.write(later)
+    repo.write(earlier)
+
+    assert repo.latest_for("inst-A") == later
+
+
+def test_next_creation_order_resumes_after_highest_durable_order(tmp_path: Path) -> None:
+    repo = MutationAttemptRepo(tmp_path)
+    repo.write(_attempt(attempt_id="att-a", creation_order=7))
+
+    assert repo.next_creation_order("inst-A") == 8
+    assert repo.next_creation_order("inst-A") == 9
+
+
+def test_scope_exception_marks_dispatching_attempt_outcome_unknown(tmp_path: Path) -> None:
+    repo = MutationAttemptRepo(tmp_path)
+    scope = MutationAttemptScope.begin(
+        repo,
+        instance_id="inst-A",
+        action="stop",
+        requested_at_ms=100,
+        run_id="run-A",
+        now_ms=lambda: 101,
+    )
+
+    with pytest.raises(RuntimeError, match="daemon failed"), scope:
+        scope.stage = "daemon_stop"
+        raise RuntimeError("daemon failed")
+
+    assert scope.attempt.dispatch_state == "OUTCOME_UNKNOWN"
+    assert scope.attempt.outcome == {
+        "stage": "daemon_stop",
+        "error_type": "RuntimeError",
+    }
+    assert repo.read(scope.attempt.mutation_attempt_id) == scope.attempt
+
+
+def test_scope_rejection_is_terminal_and_exception_exit_does_not_rewrite_it(
+    tmp_path: Path,
+) -> None:
+    repo = MutationAttemptRepo(tmp_path)
+    scope = MutationAttemptScope.begin(
+        repo,
+        instance_id="inst-A",
+        action="stop",
+        requested_at_ms=100,
+        run_id="run-A",
+        now_ms=lambda: 101,
+    )
+
+    with pytest.raises(RuntimeError, match="surface rejection"), scope:
+        rejected = scope.reject_not_observed(outcome={"accepted": False})
+        raise RuntimeError("surface rejection")
+
+    assert rejected.dispatch_state == "EFFECT_NOT_OBSERVED"
+    assert scope.attempt == rejected
+    assert repo.read(rejected.mutation_attempt_id) == rejected
+
+
+def test_scope_surfaces_unknown_persistence_failure_instead_of_original_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = MutationAttemptRepo(tmp_path)
+    scope = MutationAttemptScope.begin(
+        repo,
+        instance_id="inst-A",
+        action="stop",
+        requested_at_ms=100,
+        run_id="run-A",
+        now_ms=lambda: 101,
+    )
+    original_write = repo.write
+
+    def fail_unknown_write(attempt: MutationAttempt) -> None:
+        if attempt.dispatch_state == "OUTCOME_UNKNOWN":
+            raise OSError("receipt disk unavailable")
+        original_write(attempt)
+
+    monkeypatch.setattr(repo, "write", fail_unknown_write)
+
+    with pytest.raises(OSError, match="receipt disk unavailable"), scope:
+        raise RuntimeError("daemon failed")
+
+    durable = repo.read(scope.attempt.mutation_attempt_id)
+    assert durable is not None
+    assert durable.dispatch_state == "DISPATCHING"
+
+
 def test_latest_for_filters_other_instances(tmp_path: Path) -> None:
     repo = MutationAttemptRepo(tmp_path)
     repo.write(_attempt(attempt_id="att-A1", instance_id="inst-A", requested_at_ms=1))
@@ -181,6 +310,22 @@ def test_latest_for_returns_none_when_no_attempts(tmp_path: Path) -> None:
     repo = MutationAttemptRepo(tmp_path)
     repo.root.mkdir(parents=True, exist_ok=True)
     assert repo.latest_for("inst-A") is None
+
+
+def test_recover_inflight_marks_prepared_and_dispatching_outcome_unknown(tmp_path: Path) -> None:
+    repo = MutationAttemptRepo(tmp_path)
+    repo.write(_attempt(attempt_id="prepared", state="PREPARED"))
+    repo.write(_attempt(attempt_id="dispatching", state="DISPATCHING"))
+    repo.write(_attempt(attempt_id="terminal", state="EFFECT_CONFIRMED"))
+
+    recovered = repo.recover_inflight(transitioned_at_ms=1_700_000_000_100)
+
+    assert {attempt.mutation_attempt_id for attempt in recovered} == {
+        "prepared",
+        "dispatching",
+    }
+    assert all(attempt.dispatch_state == "OUTCOME_UNKNOWN" for attempt in recovered)
+    assert repo.read("terminal").dispatch_state == "EFFECT_CONFIRMED"
 
 
 def test_latest_for_returns_none_when_root_absent(tmp_path: Path) -> None:
@@ -346,9 +491,7 @@ def test_daemon_unreachable_classifies_not_provable_for_every_action(
         (None, "NOT_PROVABLE"),
     ],
 )
-def test_reconcile_stop_classifies_by_process_state(
-    process_state: str | None, expected: ReconciliationOutcome
-) -> None:
+def test_reconcile_stop_classifies_by_process_state(process_state: str | None, expected: ReconciliationOutcome) -> None:
     attempt = _attempt(action="stop", state="OUTCOME_UNKNOWN")
     evidence = _evidence(process_state=process_state)
 
@@ -510,5 +653,3 @@ def test_reconcile_is_pure_and_does_not_mutate_attempt() -> None:
     # The attempt is unchanged; the router is responsible for
     # advancing the dispatch_state via ``transition_attempt``.
     assert attempt.dispatch_state == "OUTCOME_UNKNOWN"
-
-

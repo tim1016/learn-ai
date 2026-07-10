@@ -272,6 +272,7 @@ export interface LiveInstanceStatus {
   process: InstanceProcessView;
   live_binding: LiveBinding | null;
   evidence_binding: EvidenceBinding | null;
+  latest_mutation: MutationAttemptReceipt | null;
   desired_state: DesiredStateView | null;
   readiness: ReadinessVector | null;
   latest_decision: Record<string, unknown> | null;
@@ -1202,4 +1203,30 @@ export interface SetInstanceDesiredStateResponse {
   actuation: IntentActuation;
   rung_receipt: MutationRungReceipt;
   rung_receipt_warnings: MutationRungReceipt[];
+  mutation_attempt_id: string;
+  mutation_dispatch_state: MutationAttemptDispatchState;
+}
+
+export type MutationAttemptDispatchState =
+  | 'PREPARED'
+  | 'DISPATCHING'
+  | 'RESPONSE_CONFIRMED'
+  | 'OUTCOME_UNKNOWN'
+  | 'EFFECT_CONFIRMED'
+  | 'EFFECT_NOT_OBSERVED'
+  | 'NOT_PROVABLE'
+  | 'EVIDENCE_CONFLICT';
+
+export interface MutationAttemptReceipt {
+  schema_version: number;
+  mutation_attempt_id: string;
+  instance_id: string;
+  run_id: string | null;
+  action: 'start' | 'stop' | 'flatten' | 'resume' | 'pause';
+  requested_at_ms: number;
+  creation_order?: number;
+  last_transition_at_ms: number;
+  dispatch_state: MutationAttemptDispatchState;
+  outcome: Record<string, unknown> | null;
+  evidence: Record<string, unknown> | null;
 }

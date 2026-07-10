@@ -434,6 +434,7 @@ class MutationOutcomeUnknownResponse(BaseModel):
         "deploy",
         "start_run",
         "stop_run",
+        "end_day_now",
         "emergency_flatten",
         "renew_daemon_lease",
     ]
@@ -477,6 +478,36 @@ class ReconcileMutationResponse(BaseModel):
     ]
     evidence: dict
     reconciled_at_ms: int = Field(ge=0)
+
+
+MutationAttemptDispatchState = Literal[
+    "PREPARED",
+    "DISPATCHING",
+    "RESPONSE_CONFIRMED",
+    "OUTCOME_UNKNOWN",
+    "EFFECT_CONFIRMED",
+    "EFFECT_NOT_OBSERVED",
+    "NOT_PROVABLE",
+    "EVIDENCE_CONFLICT",
+]
+
+
+class MutationAttemptView(BaseModel):
+    """Latest durable mutation receipt carried by the state snapshot."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: int = Field(default=1, ge=1)
+    mutation_attempt_id: str = Field(min_length=1)
+    instance_id: str = Field(min_length=1)
+    run_id: str | None = None
+    action: Literal["start", "stop", "flatten", "resume", "pause"]
+    requested_at_ms: int = Field(ge=0)
+    creation_order: int = Field(default=0, ge=0)
+    last_transition_at_ms: int = Field(ge=0)
+    dispatch_state: MutationAttemptDispatchState
+    outcome: dict | None = None
+    evidence: dict | None = None
 
 
 OperatorSurfaceBlockageStageId = Literal[
@@ -556,6 +587,8 @@ class HostRunnerActionResponse(BaseModel):
     exit_reason: str | None = None
     rung_receipt: MutationRungReceipt | None = None
     rung_receipt_warnings: list[MutationRungReceipt] = Field(default_factory=list)
+    mutation_attempt_id: str | None = None
+    mutation_dispatch_state: MutationAttemptDispatchState | None = None
 
 
 class IdentityCoherenceConfirmation(BaseModel):
@@ -683,9 +716,7 @@ class HostRunnerDeployBaseRequest(BaseModel):
             from app.schemas.broker_activity import ReconciliationTimingPolicy
 
             policy_block = value["reconciliation_timing_policy"]
-            value["reconciliation_timing_policy"] = (
-                ReconciliationTimingPolicy.model_validate(policy_block).model_dump()
-            )
+            value["reconciliation_timing_policy"] = ReconciliationTimingPolicy.model_validate(policy_block).model_dump()
         return value
 
 
@@ -717,9 +748,7 @@ class LiveInstanceDeployRequest(HostRunnerDeployBaseRequest):
         if "account_id" in extras:
             value = extras["account_id"]
             if not isinstance(value, str) or not value.strip():
-                raise ValueError(
-                    "legacy account_id must be a non-empty string when provided"
-                )
+                raise ValueError("legacy account_id must be a non-empty string when provided")
         return self
 
     def client_supplied_account_id(self) -> str | None:
@@ -875,6 +904,8 @@ class CommandView(BaseModel):
     verb: str
     rung_receipt: MutationRungReceipt | None = None
     rung_receipt_warnings: list[MutationRungReceipt] = Field(default_factory=list)
+    mutation_attempt_id: str | None = None
+    mutation_dispatch_state: MutationAttemptDispatchState | None = None
 
 
 class CommandAckView(BaseModel):
@@ -1597,7 +1628,6 @@ class ReconciliationReceipt(BaseModel):
     failure_reason: str | None = None
 
 
-
 class OperatorSurfaceHostProcess(BaseModel):
     """Server-authored host-process surface (ADR-0003 / ADR-0006 / ADR-0007).
 
@@ -1817,6 +1847,7 @@ class OperatorSurfaceTraderGuidance(BaseModel):
         if proof_line_ids != expected_ids:
             raise ValueError(f"proof_lines must contain canonical ids in order: {expected_ids}")
         return proof_lines
+
 
 OperatorSurfaceBlockageState = Literal["clear", "info", "warning", "danger", "unknown"]
 OperatorSurfaceRunSignalTone = Literal["on", "off", "transition", "attention"]
@@ -2520,6 +2551,7 @@ class LiveInstanceStatus(BaseModel):
     process: InstanceProcessView
     live_binding: LiveBinding | None = None
     evidence_binding: EvidenceBinding | None = None
+    latest_mutation: MutationAttemptView | None = None
     desired_state: DesiredStateView | None = None
     readiness: ReadinessVector | None = None
     latest_decision: dict | None = None
@@ -3120,6 +3152,8 @@ class SetInstanceDesiredStateResponse(BaseModel):
     actuation: IntentActuation
     rung_receipt: MutationRungReceipt
     rung_receipt_warnings: list[MutationRungReceipt] = Field(default_factory=list)
+    mutation_attempt_id: str
+    mutation_dispatch_state: MutationAttemptDispatchState
 
 
 class ReconcileAckResponse(BaseModel):

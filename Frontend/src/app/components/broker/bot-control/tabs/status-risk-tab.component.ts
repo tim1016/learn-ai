@@ -18,7 +18,7 @@ import type {
   OperatorGate,
 } from '../../../../api/live-instances.types';
 import type { InnerTab } from '../lib/instance-tab-state';
-import { renderGateSuggestedAction } from '../lib/suggested-action-renderer';
+import { presentSuggestedAction } from '../lib/suggested-action-renderer';
 import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 
 @Component({
@@ -52,15 +52,27 @@ export class StatusRiskTabComponent {
   readonly sizing = computed(() => this.status().sizing);
   readonly broker = computed(() => this.status().broker);
 
-  renderAction(gate: OperatorGate): { label: string; variant: 'primary' | 'link'; invoke: () => void } | null {
-    return renderGateSuggestedAction(gate.suggested_action, {
-      invokeCapability: (cap) => {
-        if (cap === 'resume') this.invokeResume.emit();
-        else if (cap === 'pause') this.invokePause.emit();
-      },
-      focus: (tab) => this.focusTab.emit(tab),
-      redeploy: () => this.redeploy.emit(),
-      openRunbook: (slug) => this.openRunbook.emit(slug),
-    });
+  renderAction(gate: OperatorGate) {
+    return presentSuggestedAction(gate.suggested_action);
+  }
+
+  invokeAction(gate: OperatorGate): void {
+    const action = gate.suggested_action;
+    if (action === null) return;
+    switch (action.kind) {
+      case 'invoke_capability':
+        if (action.capability === 'resume') this.invokeResume.emit();
+        else this.invokePause.emit();
+        break;
+      case 'focus_action':
+        this.focusTab.emit(action.tab as InnerTab);
+        break;
+      case 'redeploy':
+        this.redeploy.emit();
+        break;
+      case 'open_runbook':
+        this.openRunbook.emit(action.slug);
+        break;
+    }
   }
 }

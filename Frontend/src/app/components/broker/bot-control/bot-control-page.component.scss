@@ -35,6 +35,30 @@
   font-size: var(--fs-sm);
 }
 
+.pending-banner,
+.stale-banner {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+}
+
+.stale-banner ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  margin: 0.5rem 0 0;
+  padding-left: 1rem;
+  color: var(--text-muted);
+}
+
+.audit-token {
+  font-family: var(--font-mono);
+}
+
 .operator-truth-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(22rem, 0.85fr);

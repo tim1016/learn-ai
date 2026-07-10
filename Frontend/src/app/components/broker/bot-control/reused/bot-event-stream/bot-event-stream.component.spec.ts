@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import type { BotEventRow } from '../../../../../api/live-runs.types';
+import { LiveRunsService } from '../../../../../services/live-runs.service';
 import { BotEventStreamComponent } from './bot-event-stream.component';
 
 const eventSources: StubEventSource[] = [];
@@ -29,8 +30,8 @@ class StubEventSource {
     this.listeners.set(name, listeners.filter((listener) => listener !== fn));
   }
 
-  dispatch(name: string, data?: string): void {
-    const event = new MessageEvent(name, { data: data ?? '' }) as unknown as Event;
+  dispatch(name: string, data?: string, lastEventId = ''): void {
+    const event = new MessageEvent(name, { data: data ?? '', lastEventId }) as unknown as Event;
     for (const listener of this.listeners.get(name) ?? []) listener(event);
   }
 
@@ -80,6 +81,19 @@ const ROW: BotEventRow = {
   facts: { raw_event_types: ['order_rejected'], order_ref: 'learn-ai/bot-a/v1:intent-1' },
 };
 
+const BOT_EVENT_PROVIDER = {
+  provide: LiveRunsService,
+  useValue: {
+    getBotEvents: () => Promise.resolve({
+      rows: [],
+      next_seq: null,
+      durable_stream_id: 'stream-a',
+      high_water_cursor: 'stream-a:0',
+      next_cursor: null,
+    }),
+  },
+};
+
 describe('BotEventStreamComponent', () => {
   beforeAll(() => {
     originalEventSource = globalThis.EventSource;
@@ -101,11 +115,11 @@ describe('BotEventStreamComponent', () => {
   it('subscribes to SSE and renders authored bot event rows', async () => {
     await render(BotEventStreamComponent, {
       inputs: { runId: 'run-1' },
-      providers: [provideZonelessChangeDetection()],
+      providers: [provideZonelessChangeDetection(), BOT_EVENT_PROVIDER],
     });
     await waitFor(() => expect(eventSources.length).toBe(1));
     expect(eventSources[0].url).toBe(
-      '/api/live-runs/run-1/bot-events/stream?since_seq=0',
+      '/api/live-runs/run-1/bot-events/stream?cursor=stream-a%3A0&control_intent=learn-ai-browser-control',
     );
 
     emitRow(ROW);
@@ -124,7 +138,7 @@ describe('BotEventStreamComponent', () => {
   it('expands gate and terminal evidence', async () => {
     await render(BotEventStreamComponent, {
       inputs: { runId: 'run-1' },
-      providers: [provideZonelessChangeDetection()],
+      providers: [provideZonelessChangeDetection(), BOT_EVENT_PROVIDER],
     });
     await waitFor(() => expect(eventSources.length).toBe(1));
     emitRow(ROW);
@@ -143,7 +157,7 @@ describe('BotEventStreamComponent', () => {
   it('renders empty state for a bound run with no event rows yet', async () => {
     await render(BotEventStreamComponent, {
       inputs: { runId: 'run-empty' },
-      providers: [provideZonelessChangeDetection()],
+      providers: [provideZonelessChangeDetection(), BOT_EVENT_PROVIDER],
     });
     await waitFor(() => expect(eventSources.length).toBe(1));
     eventSources[0].dispatch('open');
@@ -155,7 +169,7 @@ describe('BotEventStreamComponent', () => {
   it('renders server-side SSE errors', async () => {
     await render(BotEventStreamComponent, {
       inputs: { runId: 'run-1' },
-      providers: [provideZonelessChangeDetection()],
+      providers: [provideZonelessChangeDetection(), BOT_EVENT_PROVIDER],
     });
     await waitFor(() => expect(eventSources.length).toBe(1));
 
@@ -167,5 +181,5 @@ describe('BotEventStreamComponent', () => {
 });
 
 function emitRow(row: BotEventRow): void {
-  eventSources[0].dispatch('row', JSON.stringify(row));
+  eventSources[0].dispatch('row', JSON.stringify(row), `stream-a:${row.seq}`);
 }
