@@ -81,3 +81,14 @@ def test_unrelated_port_not_rejected() -> None:
     """
     s = IbkrSettings(mode="paper", port=14002, _env_file=None)
     assert s.port == 14002
+
+
+def test_daemon_breaker_backoff_bounds_must_be_ordered() -> None:
+    with pytest.raises(ValidationError, match="breaker max backoff"):
+        IbkrSettings(
+            mode="paper",
+            port=4002,
+            live_runner_daemon_breaker_initial_backoff_seconds=10.0,
+            live_runner_daemon_breaker_max_backoff_seconds=5.0,
+            _env_file=None,
+        )

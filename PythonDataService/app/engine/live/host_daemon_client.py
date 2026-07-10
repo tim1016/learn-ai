@@ -47,6 +47,55 @@ _DEPLOY_TIMEOUT = httpx.Timeout(15.0)
 _FLATTEN_TIMEOUT = httpx.Timeout(130.0)
 
 
+class HostDaemonCircuitBreaker:
+    """Transport-only bounded backoff for repeated unreachable results.
+
+    Operator meaning remains owned by the diagnostic projection. This class
+    only decides whether another daemon exchange is allowed yet (ADR-0028).
+    """
+
+    def __init__(
+        self,
+        *,
+        initial_backoff_seconds: float,
+        max_backoff_seconds: float,
+    ) -> None:
+        if initial_backoff_seconds <= 0:
+            raise ValueError("initial_backoff_seconds must be positive")
+        if max_backoff_seconds < initial_backoff_seconds:
+            raise ValueError(
+                "max_backoff_seconds must be at least initial_backoff_seconds"
+            )
+        self._initial_backoff_seconds = initial_backoff_seconds
+        self._max_backoff_seconds = max_backoff_seconds
+        self._consecutive_failures = 0
+        self._open_until = 0.0
+
+    @property
+    def open_until(self) -> float:
+        return self._open_until
+
+    @property
+    def consecutive_failures(self) -> int:
+        return self._consecutive_failures
+
+    def is_open(self, now: float) -> bool:
+        return now < self._open_until
+
+    def observe(self, result: DaemonResult, *, now: float) -> None:
+        if result.kind != "UNREACHABLE":
+            self._consecutive_failures = 0
+            self._open_until = 0.0
+            return
+        self._consecutive_failures += 1
+        exponent = min(self._consecutive_failures - 1, 30)
+        delay = min(
+            self._max_backoff_seconds,
+            self._initial_backoff_seconds * (2**exponent),
+        )
+        self._open_until = now + delay
+
+
 def _auth_headers() -> dict[str, str]:
     """Attach ``X-Live-Runner-Token`` to every daemon request (ADR 0007).
 

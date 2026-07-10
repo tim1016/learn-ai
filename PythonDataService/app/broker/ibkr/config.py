@@ -146,6 +146,25 @@ class IbkrSettings(BaseSettings):
     # LEAN_LAUNCHER_URL); the daemon defaults to port 8765.
     live_runner_daemon_url: str = "http://host.containers.internal:8765"
 
+    # ADR-0028 Stage 3C — one fleet owner polls the daemon's batched
+    # ``/instances`` snapshot. Per-bot hubs consume its stamped observation;
+    # they never create their own daemon cadence.
+    live_runner_fleet_poll_interval_seconds: float = Field(
+        default=1.0,
+        gt=0,
+        le=60.0,
+    )
+    live_runner_daemon_breaker_initial_backoff_seconds: float = Field(
+        default=1.0,
+        gt=0,
+        le=60.0,
+    )
+    live_runner_daemon_breaker_max_backoff_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        le=300.0,
+    )
+
     # Environment-specific operator command that starts the host service when
     # it is UNREACHABLE. Sourced from trusted server configuration and rendered
     # verbatim in the cockpit as a copyable remedy. Set per deployment topology:
@@ -190,6 +209,14 @@ class IbkrSettings(BaseSettings):
             raise ValueError(
                 f"IBKR_MODE=live but IBKR_PORT={self.port} is a PAPER port. "
                 f"Live ports are {sorted(LIVE_PORTS)}. Refusing to start."
+            )
+        if (
+            self.live_runner_daemon_breaker_max_backoff_seconds
+            < self.live_runner_daemon_breaker_initial_backoff_seconds
+        ):
+            raise ValueError(
+                "IBKR live-runner daemon breaker max backoff must be at least "
+                "its initial backoff."
             )
         return self
 

@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from app.broker.ibkr.auto_reconnect_monitor import get_monitor
 from app.broker.ibkr.client import NotConnectedError, get_client
@@ -42,6 +43,9 @@ from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from app.services.fleet_daemon_snapshot_provider import FleetDaemonObservation
+
 
 class BrokerSessionMirrorService:
     """Compose the read-only mirror snapshot from host and data-plane facts."""
@@ -55,7 +59,11 @@ class BrokerSessionMirrorService:
         self._event_service = event_service or get_broker_session_event_service()
         self._history_service = history_service or get_broker_session_history_service()
 
-    async def snapshot(self) -> BrokerSessionMirrorSnapshot:
+    async def snapshot(
+        self,
+        *,
+        fleet_observation: FleetDaemonObservation | None = None,
+    ) -> BrokerSessionMirrorSnapshot:
         settings = get_settings()
         as_of_ms = now_ms_utc()
         degradation_reasons: list[str] = []
@@ -64,13 +72,22 @@ class BrokerSessionMirrorService:
         registry_snapshot: HostRunnerInstancesStatus | None = None
         daemon_url = settings.live_runner_daemon_url.strip()
         if daemon_url:
-            (socket_result, socket_snapshot), (registry_result, registry_payload) = await asyncio.gather(
-                host_daemon_client.fetch_gateway_sockets(
-                    daemon_url,
-                    gateway_port=settings.port,
-                ),
-                host_daemon_client.fetch_instances(daemon_url),
+            socket_exchange = host_daemon_client.fetch_gateway_sockets(
+                daemon_url,
+                gateway_port=settings.port,
             )
+            if fleet_observation is None:
+                (socket_result, socket_snapshot), (
+                    registry_result,
+                    registry_payload,
+                ) = await asyncio.gather(
+                    socket_exchange,
+                    host_daemon_client.fetch_instances(daemon_url),
+                )
+            else:
+                socket_result, socket_snapshot = await socket_exchange
+                registry_result = fleet_observation.result
+                registry_payload = fleet_observation.payload
             if socket_snapshot is None:
                 degradation_reasons.append(socket_result.detail or "host daemon socket probe unavailable")
             if registry_payload is not None:
