@@ -2361,12 +2361,12 @@ def test_cmd_start_wires_account_owner_submitter_for_real_client(
     assert callable(kwargs["owner_generation_provider"])
     owner_generation = read_account_owner_generation(artifacts_root, "DU123")
     assert owner_generation is not None
-    assert owner_generation.generation == 0
+    assert owner_generation.generation == 1
     assert owner_generation.phase == "accepting"
     assert owner_generation.source == "account_owner"
     events = read_account_events(artifacts_root, "DU123")
     assert events[-1]["event_type"] == "account_owner_generation_recorded"
-    assert events[-1]["generation"] == 0
+    assert events[-1]["generation"] == 1
     assert events[-1]["phase"] == "accepting"
 
 

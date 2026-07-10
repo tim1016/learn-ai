@@ -13,6 +13,7 @@ from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
     AccountFreezeEvidence,
     AccountOwnerGeneration,
+    advance_account_owner_generation,
     read_account_events,
     read_account_owner_generation,
     write_account_freeze,
@@ -144,6 +145,42 @@ def _owner(
     )
 
 
+def _persisted_generation_provider(artifacts_root: Path, *, default: int = 0):
+    def provider() -> int:
+        loaded = read_account_owner_generation(artifacts_root, ACCOUNT)
+        return loaded.generation if loaded is not None else default
+
+    return provider
+
+
+def _persisted_generation_advancer(artifacts_root: Path, *, default: int = 0):
+    def advancer(
+        phase: Literal["accepting", "reconnecting", "draining", "frozen"],
+        recorded_at_ms: int,
+    ) -> AccountOwnerGeneration:
+        loaded = read_account_owner_generation(artifacts_root, ACCOUNT)
+        if loaded is None and default > 0:
+            write_account_owner_generation(
+                artifacts_root,
+                AccountOwnerGeneration(
+                    account_id=ACCOUNT,
+                    generation=default,
+                    phase=phase,
+                    recorded_at_ms=recorded_at_ms,
+                    source="test",
+                ),
+            )
+        return advance_account_owner_generation(
+            artifacts_root,
+            ACCOUNT,
+            phase=phase,
+            recorded_at_ms=recorded_at_ms,
+            source="account_owner",
+        )
+
+    return advancer
+
+
 def test_account_owner_generation_persists_and_rejects_stale_intent(tmp_path: Path) -> None:
     write_account_owner_generation(
         tmp_path,
@@ -213,6 +250,64 @@ async def test_account_owner_writes_pre_submit_and_terminal_evidence(tmp_path: P
     ]
     assert events[-1]["diagnostics"]["trace_id"] == "trace-1"
     assert events[-1]["diagnostics"]["broker_client_id"] == 42
+
+
+@pytest.mark.asyncio
+async def test_account_owner_refuses_old_owner_after_takeover_advances_persisted_generation(
+    tmp_path: Path,
+) -> None:
+    write_account_instance_binding(tmp_path, _binding())
+    write_account_owner_generation(
+        tmp_path,
+        AccountOwnerGeneration(
+            account_id=ACCOUNT,
+            generation=GENERATION,
+            phase="accepting",
+            recorded_at_ms=1_700_000_000_000,
+            source="test",
+        ),
+    )
+    provider = _persisted_generation_provider(tmp_path)
+    advancer = _persisted_generation_advancer(tmp_path)
+    old_owner_broker = _Broker()
+    old_owner = AccountOwner(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=old_owner_broker,
+        owner_generation_provider=provider,
+        owner_generation_advancer=advancer,
+        classifier=lambda _intent: _continue_decision(),
+    )
+    stale_intent = _intent(generation=provider())
+
+    new_owner_broker = _Broker()
+    new_owner = AccountOwner(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=new_owner_broker,
+        owner_generation_provider=provider,
+        owner_generation_advancer=advancer,
+        classifier=lambda _intent: _continue_decision(),
+    )
+    new_owner.record_accepting_generation(recorded_at_ms=1_700_000_020_000)
+
+    loaded = read_account_owner_generation(tmp_path, ACCOUNT)
+    assert loaded is not None
+    assert loaded.generation == GENERATION + 1
+
+    with pytest.raises(AccountOwnerSubmitRejected) as exc:
+        await old_owner.submit(stale_intent)
+    assert exc.value.reason == "OWNER_GENERATION_MISMATCH"
+    assert old_owner_broker.calls == []
+    events = read_account_events(tmp_path, ACCOUNT)
+    assert events[-1]["event_type"] == "account_owner_submit_rejected"
+    assert events[-1]["reason"] == "OWNER_GENERATION_MISMATCH"
+    assert events[-1]["diagnostics"]["current_owner_generation"] == GENERATION + 1
+
+    result = await new_owner.submit(_intent(generation=GENERATION + 1))
+
+    assert result.status == "accepted"
+    assert len(new_owner_broker.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -421,9 +516,18 @@ async def test_account_owner_reconnect_advances_generation_and_rejects_stale_int
     def provider() -> int:
         return generation["value"]
 
-    def advancer() -> int:
+    def advancer(
+        phase: Literal["accepting", "reconnecting", "draining", "frozen"],
+        recorded_at_ms: int,
+    ) -> AccountOwnerGeneration:
         generation["value"] += 1
-        return generation["value"]
+        return AccountOwnerGeneration(
+            account_id=ACCOUNT,
+            generation=generation["value"],
+            phase=phase,
+            recorded_at_ms=recorded_at_ms,
+            source="test",
+        )
 
     write_account_instance_binding(tmp_path, _binding())
     owner = AccountOwner(

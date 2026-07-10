@@ -1811,7 +1811,11 @@ def cmd_start(args: argparse.Namespace) -> int:
         from app.broker.ibkr.orders import (
             list_open_orders as _owner_list_open_orders,
         )
-        from app.engine.live.account_artifacts import read_account_events, read_account_owner_generation
+        from app.engine.live.account_artifacts import (
+            advance_account_owner_generation,
+            read_account_events,
+            read_account_owner_generation,
+        )
         from app.engine.live.account_classifier import (
             AccountBrokerEvidence,
             classify_account,
@@ -1825,12 +1829,22 @@ def cmd_start(args: argparse.Namespace) -> int:
         account_owner_initial_phase = persisted_generation.phase if persisted_generation is not None else "accepting"
 
         def _account_owner_generation_provider() -> int:
+            persisted = read_account_owner_generation(_artifacts_root, ledger.account_id)
+            if persisted is not None:
+                return persisted.generation
             return account_owner_generation
 
-        def _advance_account_owner_generation() -> int:
+        def _advance_account_owner_generation(phase: str, recorded_at_ms: int):
             nonlocal account_owner_generation
-            account_owner_generation += 1
-            return account_owner_generation
+            generation = advance_account_owner_generation(
+                _artifacts_root,
+                ledger.account_id,
+                phase=phase,
+                recorded_at_ms=recorded_at_ms,
+                source="account_owner",
+            )
+            account_owner_generation = generation.generation
+            return generation
 
         require_owner_write_fence = getattr(broker, "require_account_owner_write_fence", None)
         if callable(require_owner_write_fence):

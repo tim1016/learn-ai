@@ -89,6 +89,10 @@ from app.broker.ibkr.surface import (
     stream_option_surface,
 )
 from app.broker.ibkr.symbol_search import search_symbols
+from app.engine.live.account_owner_fence import (
+    AccountOwnerWriteFenceError,
+    require_account_owner_write_grant,
+)
 from app.engine.live.order_identity import (
     build_manual_order_namespace,
     build_order_ref,
@@ -872,6 +876,8 @@ async def place_order_endpoint(spec: IbkrOrderSpec) -> IbkrOrderAck:
         return await place_paper_order(client, spec)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    except AccountOwnerWriteFenceError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.reason) from exc
     except OrderRefusedError as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
     except BrokerError as exc:
@@ -900,6 +906,10 @@ async def cancel_order_endpoint(order_id: int) -> IbkrOpenOrder:
     """Cancel one paper order by ``order_id``."""
     client = require_connected_client()
     try:
+        require_account_owner_write_grant(
+            account_id=client.connected_account,
+            boundary="broker.cancel_order",
+        )
         decision = await account_truth_cancel_decision(
             client,
             health=build_broker_health(client, get_monitor()),
@@ -908,6 +918,8 @@ async def cancel_order_endpoint(order_id: int) -> IbkrOpenOrder:
         )
         decision.raise_if_blocked()
         return await cancel_paper_order(client, order_id)
+    except AccountOwnerWriteFenceError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, exc.reason) from exc
     except OrderRefusedError as exc:
         raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
     except OrderNotFoundError as exc:

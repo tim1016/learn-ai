@@ -62,9 +62,32 @@ def current_account_owner_write_grant() -> AccountOwnerWriteGrant | None:
     return _current_account_owner_write_grant.get()
 
 
+def require_account_owner_write_grant(
+    *,
+    account_id: str | None,
+    boundary: str,
+) -> AccountOwnerWriteGrant:
+    grant = current_account_owner_write_grant()
+    if grant is None:
+        raise AccountOwnerWriteFenceError(
+            reason="ACCOUNT_OWNER_WRITE_GRANT_MISSING",
+            boundary=boundary,
+            account_id=account_id,
+        )
+    if account_id is not None and grant.account_id != account_id:
+        raise AccountOwnerWriteFenceError(
+            reason="ACCOUNT_OWNER_WRITE_ACCOUNT_MISMATCH",
+            boundary=boundary,
+            account_id=account_id,
+            grant_owner_generation=grant.owner_generation,
+        )
+    return grant
+
+
 __all__ = [
     "AccountOwnerWriteFenceError",
     "AccountOwnerWriteGrant",
     "account_owner_write_grant",
     "current_account_owner_write_grant",
+    "require_account_owner_write_grant",
 ]

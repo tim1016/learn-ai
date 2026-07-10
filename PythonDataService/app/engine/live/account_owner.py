@@ -101,7 +101,7 @@ class AccountOwner:
         account_id: str,
         broker,
         owner_generation_provider: Callable[[], int],
-        owner_generation_advancer: Callable[[], int] | None = None,
+        owner_generation_advancer: Callable[[AccountOwnerRuntimePhase, int], AccountOwnerGeneration] | None = None,
         classifier: Callable[[AccountOwnerSubmitIntent], AccountClassifierDecision],
         initial_phase: AccountOwnerRuntimePhase = "accepting",
     ) -> None:
@@ -150,7 +150,11 @@ class AccountOwner:
     def record_accepting_generation(self, *, recorded_at_ms: int | None = None) -> AccountOwnerGeneration:
         if self._phase != "accepting":
             raise RuntimeError(f"cannot record accepting AccountOwner generation while phase is {self._phase!r}")
-        return self._write_generation("accepting", recorded_at_ms=recorded_at_ms)
+        return self._write_generation(
+            "accepting",
+            recorded_at_ms=recorded_at_ms,
+            advance=True,
+        )
 
     async def submit(self, intent: AccountOwnerSubmitIntent) -> AccountOwnerSubmitResult:
         if not self._accepting:
@@ -194,9 +198,7 @@ class AccountOwner:
         client_id_range: tuple[int, ...],
         backoff: Callable[[int], object] | None = None,
     ) -> None:
-        if self._owner_generation_advancer is not None:
-            self._owner_generation_advancer()
-        self._set_phase("reconnecting")
+        self._set_phase("reconnecting", advance=True)
         async with self._lock:
             await self._handle_reconnect_locked(
                 reconnect=reconnect,
@@ -450,22 +452,36 @@ class AccountOwner:
             "exec_id": None,
         }
 
-    def _set_phase(self, phase: AccountOwnerRuntimePhase) -> AccountOwnerGeneration:
+    def _set_phase(
+        self,
+        phase: AccountOwnerRuntimePhase,
+        *,
+        advance: bool = False,
+    ) -> AccountOwnerGeneration:
         self._phase = phase
         self._accepting = phase == "accepting"
-        return self._write_generation(phase)
+        return self._write_generation(phase, advance=advance)
 
     def _write_generation(
         self,
         phase: AccountOwnerRuntimePhase,
         *,
         recorded_at_ms: int | None = None,
+        advance: bool = False,
     ) -> AccountOwnerGeneration:
+        effective_recorded_at_ms = recorded_at_ms if recorded_at_ms is not None else time.time_ns() // 1_000_000
+        if advance and self._owner_generation_advancer is not None:
+            generation = self._owner_generation_advancer(phase, effective_recorded_at_ms)
+            if generation.account_id != self._account_id or generation.phase != phase:
+                raise RuntimeError("AccountOwner generation advancer returned mismatched generation")
+            return generation
+        else:
+            generation_value = self._owner_generation_provider()
         generation = AccountOwnerGeneration(
             account_id=self._account_id,
-            generation=self._owner_generation_provider(),
+            generation=generation_value,
             phase=phase,
-            recorded_at_ms=recorded_at_ms if recorded_at_ms is not None else time.time_ns() // 1_000_000,
+            recorded_at_ms=effective_recorded_at_ms,
             source="account_owner",
         )
         write_account_owner_generation(

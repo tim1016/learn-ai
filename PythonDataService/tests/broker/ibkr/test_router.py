@@ -8,12 +8,17 @@ with no Gateway present.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.broker.ibkr.client import set_client
+from app.broker.ibkr.config import IbkrSettings
 from app.broker.ibkr.models import IbkrOrderSpec
 from app.main import app
+from app.routers import broker as broker_router
 from app.routers.broker import _stamp_manual_order_ref_if_requested
 
 # ── Phase 1 endpoints ──────────────────────────────────────────────────
@@ -272,6 +277,72 @@ def test_non_manual_order_request_does_not_silently_repair_missing_order_ref() -
     )
 
     assert _stamp_manual_order_ref_if_requested(spec).order_ref is None
+
+
+def _connected_order_client() -> SimpleNamespace:
+    return SimpleNamespace(
+        settings=IbkrSettings(mode="paper", port=4002, readonly=False, _env_file=None),
+        connected_account="DU1234567",
+        is_connected=lambda: True,
+        require_connected=lambda: None,
+        require_live=lambda: None,
+        ib=SimpleNamespace(
+            qualifyContractsAsync=MagicMock(),
+            placeOrder=MagicMock(),
+            trades=MagicMock(return_value=[]),
+            cancelOrder=MagicMock(),
+        ),
+        _last_event_ms=1,
+        order_errors_after=lambda _seq: [],
+    )
+
+
+@pytest.mark.asyncio
+async def test_post_orders_refuses_raw_submit_without_account_owner_grant() -> None:
+    client = _connected_order_client()
+    set_client(client)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.post(
+            "/api/broker/orders",
+            json={
+                "symbol": "SPY",
+                "sec_type": "STK",
+                "action": "BUY",
+                "quantity": 1,
+                "order_type": "MKT",
+                "confirm_paper": True,
+                "manual_order": True,
+            },
+        )
+
+    assert resp.status_code == 403
+    assert "ACCOUNT_OWNER_WRITE_GRANT_MISSING" in resp.text
+    client.ib.placeOrder.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_order_refuses_raw_cancel_without_account_owner_grant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _connected_order_client()
+    set_client(client)
+
+    class AllowCancelDecision:
+        def raise_if_blocked(self) -> None:
+            return None
+
+    async def allow_cancel(*_args, **_kwargs):
+        return AllowCancelDecision()
+
+    monkeypatch.setattr(broker_router, "account_truth_cancel_decision", allow_cancel)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        resp = await ac.delete("/api/broker/orders/42")
+
+    assert resp.status_code == 403
+    assert "ACCOUNT_OWNER_WRITE_GRANT_MISSING" in resp.text
+    client.ib.cancelOrder.assert_not_called()
 
 
 # ── Phase 3b endpoints ─────────────────────────────────────────────────

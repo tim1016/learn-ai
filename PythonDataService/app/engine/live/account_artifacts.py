@@ -417,6 +417,46 @@ def write_account_owner_generation(
     return path
 
 
+def advance_account_owner_generation(
+    artifacts_root: Path,
+    account_id: str,
+    *,
+    phase: Literal["accepting", "reconnecting", "draining", "frozen"],
+    recorded_at_ms: int,
+    source: str,
+) -> AccountOwnerGeneration:
+    root = account_artifacts_root(artifacts_root, account_id)
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / ACCOUNT_OWNER_GENERATION_FILENAME
+    with _file_lock(path):
+        existing = (
+            AccountOwnerGeneration.model_validate_json(path.read_text(encoding="utf-8"))
+            if path.is_file()
+            else None
+        )
+        generation = AccountOwnerGeneration(
+            account_id=account_id,
+            generation=(existing.generation + 1 if existing is not None else 1),
+            phase=phase,
+            recorded_at_ms=recorded_at_ms,
+            source=source,
+        )
+        _atomic_write_json_locked(path, generation.model_dump())
+    _append_account_event(
+        artifacts_root,
+        account_id,
+        {
+            "event_type": "account_owner_generation_recorded",
+            "account_id": account_id,
+            "generation": generation.generation,
+            "phase": generation.phase,
+            "recorded_at_ms": generation.recorded_at_ms,
+            "source": generation.source,
+        },
+    )
+    return generation
+
+
 def read_account_owner_generation(
     artifacts_root: Path,
     account_id: str,
@@ -536,15 +576,19 @@ def _latest_restart_intensity_clear_ms(events: list[dict]) -> int | None:
 
 
 def _atomic_write_json(path: Path, payload: dict) -> None:
-    data = json.dumps(payload, separators=(",", ":"), sort_keys=True)
     with _file_lock(path):
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(data)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-        _fsync_parent_dir(path)
+        _atomic_write_json_locked(path, payload)
+
+
+def _atomic_write_json_locked(path: Path, payload: dict) -> None:
+    data = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(data)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+    _fsync_parent_dir(path)
 
 
 def _append_account_event(artifacts_root: Path, account_id: str, payload: dict) -> None:
@@ -681,6 +725,7 @@ _LOCAL_EXPORTS = [
     "AccountRecoveryProof",
     "RestartIntensityPolicy",
     "account_artifacts_root",
+    "advance_account_owner_generation",
     "append_account_event",
     "clear_account_freeze",
     "evaluate_restart_intensity",
