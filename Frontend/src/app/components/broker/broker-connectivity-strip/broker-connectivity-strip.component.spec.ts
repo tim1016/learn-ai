@@ -2,6 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DaemonDiagnosticReport } from '../../../api/daemon-diagnostics.types';
+import type { FleetRosterChip } from '../../../services/fleet-roster-chip-presenter';
 import { BrokerConnectivityStripComponent } from './broker-connectivity-strip.component';
 import {
   BrokerConnectivityService,
@@ -24,10 +25,12 @@ function setupStrip(
   links: ConnectivityLink[],
   blockers: string[] = [],
   freshness: DaemonFreshness = UNKNOWN,
+  rosterChips: FleetRosterChip[] = [],
 ) {
   const fake = {
     links: () => links,
     blockers: () => blockers,
+    rosterChips: () => rosterChips,
     daemonDown: () => links.some((link) => link.key === 'daemon' && link.state === 'down'),
     daemonFreshness: () => freshness,
     reload: () => undefined,
@@ -157,6 +160,31 @@ describe('BrokerConnectivityStripComponent', () => {
     expect(alert).toBeTruthy();
     expect(alert?.textContent).toContain('Broker disconnected');
     expect(alert?.textContent).toContain('Fleet policy is blocking');
+  });
+
+  it('renders backend-authored fleet roster blocker chips', () => {
+    const el = setupStrip(
+      [
+        { key: 'daemon', label: 'Host daemon', state: 'ok', detail: 'Reachable' },
+        { key: 'broker', label: 'Broker', state: 'ok', detail: 'Connected' },
+        { key: 'fleet', label: 'Fleet policy', state: 'warn', detail: 'Contaminated — new starts blocked' },
+      ],
+      [],
+      UNKNOWN,
+      [
+        {
+          id: 'bot-a',
+          label: 'bot-a',
+          processState: 'idle',
+          readinessVerdict: 'BLOCKED',
+          state: 'warn',
+        },
+      ],
+    ).el;
+
+    const chip = el.querySelector('.roster-chip.state-warn');
+    expect(chip?.textContent).toContain('bot-a');
+    expect(chip?.textContent).toContain('Idle · Blocked');
   });
 
   it('renders the unknown (checking) state without a blocker alert', () => {

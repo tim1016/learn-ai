@@ -1,14 +1,5 @@
 import type { LiveInstanceStatus } from '../../../../api/live-instances.types';
 
-/** Adopt a complete state snapshot only across epochs or increasing versions. */
-export function adoptBotSurfaceSnapshot(
-  current: LiveInstanceStatus | null,
-  candidate: LiveInstanceStatus,
-): LiveInstanceStatus {
-  if (current === null || current.stream_epoch !== candidate.stream_epoch) return candidate;
-  return candidate.surface_version > current.surface_version ? candidate : current;
-}
-
 export function isLiveInstanceStatus(
   value: unknown,
   expectedInstanceId?: string,

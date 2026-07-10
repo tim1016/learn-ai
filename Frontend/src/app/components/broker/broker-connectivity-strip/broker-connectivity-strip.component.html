@@ -19,6 +19,19 @@
     }
   </ul>
 
+  @if (connectivity.rosterChips().length > 0) {
+    <ul class="roster-chips" aria-label="Fleet roster blockers">
+      @for (chip of connectivity.rosterChips(); track chip.id) {
+        <li [class]="'roster-chip state-' + chip.state">
+          <span class="label">{{ chip.label }}</span>
+          <span class="detail">
+            {{ chip.processState | receiptLabel }} · {{ chip.readinessVerdict | receiptLabel }}
+          </span>
+        </li>
+      }
+    </ul>
+  }
+
   @let fresh = connectivity.daemonFreshness();
   @if (fresh.state === 'fresh') {
     <div class="code-identity">

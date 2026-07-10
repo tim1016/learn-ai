@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeStatus } from '../bot-control-page.fixtures';
 import { openBotSurfaceStream } from './bot-surface-stream';
-import { adoptBotSurfaceSnapshot } from './bot-surface-snapshot-adapter';
 
 class StubEventSource {
   static instances: StubEventSource[] = [];
@@ -54,25 +53,6 @@ describe('bot surface state stream', () => {
     );
     expect(received).toEqual(['fixture-epoch']);
     expect(source?.closed).toBe(true);
-  });
-
-  it('accepts higher versions and replacement epochs only', () => {
-    const current = makeStatus();
-
-    expect(
-      adoptBotSurfaceSnapshot(current, { ...current, surface_version: 2 }),
-    ).toEqual({ ...current, surface_version: 2 });
-    expect(
-      adoptBotSurfaceSnapshot(current, { ...current, surface_version: 1 }),
-    ).toBe(current);
-    const replacement = {
-      ...current,
-      stream_epoch: 'replacement-epoch',
-      surface_version: 1,
-    };
-    expect(
-      adoptBotSurfaceSnapshot(current, replacement),
-    ).toBe(replacement);
   });
 
   it('rejects a well-formed snapshot for a different route identity', () => {

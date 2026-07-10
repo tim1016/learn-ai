@@ -24,6 +24,7 @@ _TRANSPORT_ONLY_PATHS = frozenset(
         ("stream_epoch",),
         ("surface_version",),
         ("fetched_at_ms",),
+        ("daemon_fetched_at_ms",),
         ("readiness", "as_of_ms"),
         ("operator_surface", "trading_session", "as_of_ms"),
         (
@@ -43,6 +44,7 @@ _EVALUATION_RECEIPT_LABELS = frozenset(
         "trading_session.phase",
     }
 )
+_CLIENT_QUEUE_MAXSIZE = 1
 
 
 class SnapshotUnavailableError(RuntimeError):
@@ -126,6 +128,7 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
         self._producer_started_once = False
         self._generation = 0
         self._initial_cycle_done = asyncio.Event()
+        self._client_queue_maxsize = _CLIENT_QUEUE_MAXSIZE
         self._watchers: set[asyncio.Queue[SnapshotT | None]] = set()
 
     @property
@@ -142,7 +145,10 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
 
     @property
     def resource_limits(self) -> SurfaceHubResourceLimits:
-        return SurfaceHubResourceLimits(watcher_count=len(self._watchers))
+        return SurfaceHubResourceLimits(
+            client_queue_maxsize=self._client_queue_maxsize,
+            watcher_count=len(self._watchers),
+        )
 
     async def start(self) -> None:
         """Start one producer lifecycle, even when initial assembly fails.
@@ -197,7 +203,9 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
     def subscribe(self) -> asyncio.Queue[SnapshotT | None]:
         """Subscribe to latest-wins snapshots with a bounded queue of one."""
 
-        queue: asyncio.Queue[SnapshotT | None] = asyncio.Queue(maxsize=1)
+        queue: asyncio.Queue[SnapshotT | None] = asyncio.Queue(
+            maxsize=self._client_queue_maxsize
+        )
         if self._stop_event.is_set():
             queue.put_nowait(None)
             return queue

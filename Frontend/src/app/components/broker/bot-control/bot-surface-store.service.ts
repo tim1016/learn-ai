@@ -7,7 +7,7 @@ import type {
 } from '../../../api/live-instances.types';
 import type { AuthenticatedSseStatus } from '../../../services/authenticated-sse-connection';
 import { LiveRunsService } from '../../../services/live-runs.service';
-import { adoptBotSurfaceSnapshot } from './lib/bot-surface-snapshot-adapter';
+import { adoptVersionedSnapshot } from '../../../services/versioned-snapshot-stream';
 import { isLiveInstanceStatus } from './lib/bot-surface-snapshot-adapter';
 import { openBotSurfaceStream, type BotSurfaceStream } from './lib/bot-surface-stream';
 
@@ -92,7 +92,7 @@ export class BotSurfaceStore {
         const receivedAtMs = Date.now();
         this.eventAtMs.set(receivedAtMs);
         this.receivedAtMs.set(receivedAtMs);
-        const adopted = adoptBotSurfaceSnapshot(this.snapshot(), candidate);
+        const adopted = adoptVersionedSnapshot(this.snapshot(), candidate);
         if (adopted !== this.snapshot()) this.snapshot.set(adopted);
         this.bootstrapState.set({ kind: 'ready', snapshot: adopted });
         this.adoptMutationReceipt(adopted.latest_mutation);

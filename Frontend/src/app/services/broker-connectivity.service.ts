@@ -1,4 +1,11 @@
-import { Injectable, computed, inject, resource } from '@angular/core';
+import { DestroyRef, Injectable, computed, inject, resource, signal } from '@angular/core';
+import type { FleetRosterRow, FleetRosterSnapshot } from '../api/live-instances.types';
+import {
+  openFleetRosterStream,
+  type FleetRosterStream,
+} from './fleet-roster-stream';
+import { presentFleetRosterChips, type FleetRosterChip } from './fleet-roster-chip-presenter';
+import { adoptVersionedSnapshot } from './versioned-snapshot-stream';
 import { BrokerHealthService } from './broker-health.service';
 import { LiveRunsService } from './live-runs.service';
 
@@ -45,21 +52,44 @@ export interface DaemonFreshness {
 export class BrokerConnectivityService {
   private readonly svc = inject(LiveRunsService);
   private readonly brokerHealth = inject(BrokerHealthService);
+  private readonly destroyRef = inject(DestroyRef);
+  private readonly fleetRosterSnapshot = signal<FleetRosterSnapshot | null>(null);
+  private readonly rosterStreamState = signal<'closed' | 'connecting' | 'open' | 'error'>('closed');
+  private readonly supportsFleetRosterStream = typeof EventSource !== 'undefined';
+  private fleetRosterStream: FleetRosterStream | null = null;
 
   /** Host-daemon health — the only proof the subprocess bridge is reachable. */
   readonly daemon = resource({ loader: () => this.svc.getHostRunnerHealth() });
   /** Fleet contamination + policy (ADR 0005). */
   readonly fleet = resource({ loader: () => this.svc.getAccountFleet() });
-  /** The instance roster — its cardinality is what tells "nothing deployed"
-   * apart from "clean account" (account contamination alone can't, #411). */
-  readonly instances = resource({ loader: () => this.svc.getInstances() });
+  /** REST roster fallback for runtimes without EventSource. Browsers use the
+   * fleet roster stream as the single live roster source. */
+  readonly instances = resource<readonly FleetRosterRow[] | undefined, unknown>({
+    loader: () => {
+      if (this.supportsFleetRosterStream) return Promise.resolve(undefined);
+      return this.svc.getInstances();
+    },
+  });
+  readonly rosterInstances = computed<readonly FleetRosterRow[] | undefined>(
+    () => this.fleetRosterSnapshot()?.instances ?? this.instances.value(),
+  );
+  readonly fleetRosterStatus = this.rosterStreamState.asReadonly();
 
   /** No strategy instances exist at all — distinct from a clean/contaminated
    * account. Loaded (not undefined) and empty. */
   readonly nothingDeployed = computed<boolean>(() => {
-    const list = this.instances.value();
+    const list = this.rosterInstances();
     return list !== undefined && list.length === 0;
   });
+
+  readonly rosterChips = computed<FleetRosterChip[]>(() =>
+    presentFleetRosterChips(this.rosterInstances()),
+  );
+
+  constructor() {
+    this.openFleetRoster();
+    this.destroyRef.onDestroy(() => this.fleetRosterStream?.close());
+  }
 
   readonly daemonState = computed<LinkState>(() => {
     if (this.daemon.isLoading()) return 'unknown';
@@ -143,7 +173,12 @@ export class BrokerConnectivityService {
   }
 
   readonly fleetState = computed<LinkState>(() => {
-    if (this.fleet.isLoading() || this.instances.isLoading()) return 'unknown';
+    if (
+      this.fleet.isLoading() ||
+      (this.instances.isLoading() && this.fleetRosterSnapshot() === null)
+    ) {
+      return 'unknown';
+    }
     // Nothing deployed reads as neutral (grey), not a healthy "Clear" green —
     // the detail text "Nothing deployed" carries the distinction (WCAG: not
     // colour-alone).
@@ -258,6 +293,27 @@ export class BrokerConnectivityService {
     this.daemon.reload();
     this.fleet.reload();
     this.instances.reload();
+    this.fleetRosterSnapshot.set(null);
+    this.openFleetRoster();
     void this.brokerHealth.refresh();
+  }
+
+  private openFleetRoster(): void {
+    this.fleetRosterStream?.close();
+    this.fleetRosterStream = null;
+    if (!this.supportsFleetRosterStream) {
+      this.rosterStreamState.set('closed');
+      return;
+    }
+    this.fleetRosterStream = openFleetRosterStream({
+      onStatus: (status) => this.rosterStreamState.set(status),
+      onMalformedSnapshot: () => this.rosterStreamState.set('error'),
+      onSnapshot: (candidate) => {
+        this.rosterStreamState.set('open');
+        this.fleetRosterSnapshot.update((current) =>
+          adoptVersionedSnapshot(current, candidate),
+        );
+      },
+    });
   }
 }
