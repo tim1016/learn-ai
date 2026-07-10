@@ -328,6 +328,48 @@ documented interim mechanism until Stage 8.
 - stream actions join against the backend-authored current action block; and
 - mutation-to-receipt rendering requires no post-action status refetch.
 
+**Stage 5 delivery checklist (recorded before implementation):**
+
+- page-shell tests prove the verdict toolbar, lifecycle overview, persistent stream side panel, and lower documentation section render together on the Stage 4 route store;
+- deletion tests/search evidence prove the node-inspector component and trader-guidance timeline component are no longer imported, rendered, or fetched by the Cockpit route;
+- side-panel tests prove live-run preference, evidence-run fallback, honest no-run Fresh run navigation, vertical feed rendering, and bounded side-panel ownership;
+- a pure row-condition mapper pins the closed `BotEventType` and `TerminalErrorCode` domain to the interim action vocabulary, with explicit nulls for non-actionable historical rows;
+- rendered-DOM stream tests prove enabled and disabled row actions are joined against `operator_surface.actions` / `host_process.start_capability`, use semantic disabled buttons, and never dispatch while disabled;
+- mutation path inspection proves stream row actions call the same existing command handlers as verdict-now controls and rely on the Stage 4 pending-attempt/SSE receipt path rather than a post-action status refetch; and
+- docs are updated so the account-owner authority note names the stream-primary surface, in-node receipts, and the deleted redundant lifecycle timeline.
+
+**Stage 5 implementation evidence (2026-07-10):** Bot Control now renders the
+verdict toolbar, lifecycle overview, persistent Bot event stream side panel,
+and lower operator-documentation section from the Stage 4 route store. The
+old node-inspector component and trader-guidance timeline component are
+deleted; the route no longer fetches the lifecycle-projection timeline for
+run history. The side panel binds to the live run, falls back to the evidence
+run, and shows an honest no-run Fresh run state when neither exists. Stream
+rows render as a vertical feed with expandable backend-authored evidence.
+
+Inline stream actions are driven by a pure closed map over `BotEventType` and
+`TerminalErrorCode`, then joined at render time to
+`operator_surface.actions` or `host_process.start_capability`. Disabled row
+actions are semantic native disabled buttons with backend reason copy; enabled
+row actions reuse the existing Cockpit command handlers (`start_process`,
+`resume`, `pause`/End day, `flatten_and_pause`, `stop`, `mark_poisoned`, and
+Fresh run navigation), so mutation receipts still arrive through the Stage 4
+pending-attempt/SSE path with no post-action status refetch. The unused
+`ngx-vflow` dependency is removed.
+
+Focused Angular evidence covers the page shell, side panel run binding/no-run
+state, stream SSE rows, enabled/disabled row actions, the pure closed mapper,
+and the no-CTA documentation section (21 tests). Full Frontend evidence:
+`npm run build` passes; `npm test -- --watch=false` passes 1,517 tests across
+165 files; focused Playwright Bot Control routing/shell smoke passes 4 tests
+against the stream-primary shell; changed-file ESLint passes. Repository-wide
+`npm run lint` still fails only on the pre-existing 158-warning baseline with
+zero errors in Stage 5 files. Focused Python PRD seams for action-plan deploy
+readiness and safety-halt incident projection pass 22 selected tests. Strict
+maintainability review records a net deletion of roughly 720 lines, no changed
+runtime file over 1,000 lines, no whitespace errors, and no live
+imports/render paths for the deleted inspector or guidance timeline.
+
 ## Stage 6 — Enforce lifecycle and AccountOwner single writers `[SAFETY+SCALE]`
 
 Complete the ADR-0026/PRD #974 duty-roster path and make AccountOwner the sole

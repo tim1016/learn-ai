@@ -118,27 +118,25 @@ describe('BotControlPageComponent', () => {
     window.localStorage.clear();
   });
 
-  it('renders the Verdict Card and none of the deleted surfaces', async () => {
+  it('renders stream-primary cockpit surfaces without the deleted timeline fetch', async () => {
     const { fixture, element, liveRuns } = await setupBotControlPage({
       status: startableReadyStatus(),
     });
     await flush(fixture);
 
     expect(element.querySelector('app-verdict-card')).not.toBeNull();
+    expect(element.querySelector('app-overview-tab')).not.toBeNull();
     expect(element.querySelector('app-trader-guidance-pane')).not.toBeNull();
+    expect(element.querySelector('app-bot-control-side-panel')).not.toBeNull();
     expect(element.querySelector('#verdict-state')?.textContent).toContain('Ready');
-    expect(liveRuns.getLifecycleTimeline).toHaveBeenCalledWith({
-      account_id: null,
-      strategy_instance_id: 'sid-x',
-      run_id: 'run-x',
-      limit: 8,
-    });
-    expect(element.querySelector('app-trader-guidance-pane')?.textContent).toContain('Broker Ack #7');
+    expect(liveRuns.getLifecycleTimeline).not.toHaveBeenCalled();
+    expect(element.querySelector('app-trader-guidance-pane')?.textContent)
+      .toContain('Proof stack');
     // Deleted surfaces must not return.
-    expect(element.querySelector('app-overview-tab')).toBeNull();
     expect(element.querySelector('[data-testid="bot-control-workbench-tabs"]')).toBeNull();
     expect(element.querySelector('.posture-pills')).toBeNull();
-    expect(element.querySelector('app-bot-control-side-panel')).toBeNull();
+    expect(element.querySelector('app-node-inspector')).toBeNull();
+    expect(element.querySelector('app-trader-guidance-timeline')).toBeNull();
   });
 
   it('dispatches the start-host-runner mutation when the primary verb is clicked', async () => {

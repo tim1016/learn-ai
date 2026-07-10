@@ -6,10 +6,12 @@ import {
   inject,
   Injector,
   input,
+  output,
   runInInjectionContext,
   signal,
 } from '@angular/core';
 
+import type { LiveInstanceStatus } from '../../../../../api/live-instances.types';
 import type { BotEventSeverity } from '../../../../../api/live-runs.types';
 import {
   type DisplayRow,
@@ -17,6 +19,16 @@ import {
 } from './bot-event-display-row';
 import { BotEventDrawerComponent } from './bot-event-drawer.component';
 import { botEventRowStream, type BotEventRowStream } from './bot-event-row-stream';
+import {
+  actionForRow,
+  type BotEventStreamAction,
+  type BotEventStreamCommand,
+} from './bot-event-stream-action';
+
+interface ActionDisplayRow {
+  readonly display: DisplayRow;
+  readonly action: BotEventStreamAction | null;
+}
 
 @Component({
   selector: 'app-bot-event-stream',
@@ -27,6 +39,9 @@ import { botEventRowStream, type BotEventRowStream } from './bot-event-row-strea
 })
 export class BotEventStreamComponent {
   readonly runId = input.required<string>();
+  readonly status = input.required<LiveInstanceStatus>();
+  readonly commandsDisabled = input(false);
+  readonly actionInvoked = output<BotEventStreamCommand>();
 
   private readonly injector = inject(Injector);
   private readonly expanded = signal<Set<number>>(new Set());
@@ -43,6 +58,12 @@ export class BotEventStreamComponent {
 
   readonly rows = computed<DisplayRow[]>(() =>
     (this.stream()?.rows() ?? []).map((row) => toDisplayRow(row)),
+  );
+  readonly actionRows = computed<ActionDisplayRow[]>(() =>
+    this.rows().map((display) => ({
+      display,
+      action: actionForRow(display.row, this.status(), this.commandsDisabled()),
+    })),
   );
   readonly isLoading = computed<boolean>(() =>
     this.stream()?.isLoading() ?? true,
@@ -69,5 +90,10 @@ export class BotEventStreamComponent {
 
   trackRow(_index: number, display: DisplayRow): number {
     return display.row.seq;
+  }
+
+  invokeAction(action: BotEventStreamAction): void {
+    if (!action.enabled) return;
+    this.actionInvoked.emit(action.command);
   }
 }

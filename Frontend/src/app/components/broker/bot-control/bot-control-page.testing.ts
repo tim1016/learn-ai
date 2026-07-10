@@ -2,6 +2,7 @@ import {
   ChangeDetectionStrategy,
   Component,
   input,
+  output,
   provideZonelessChangeDetection,
   signal,
 } from '@angular/core';
@@ -31,9 +32,11 @@ import { BrokerHealthService } from '../../../services/broker-health.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { BrokerBannerComponent } from '../../../shell/broker-banner.component';
 import { ActivityTabComponent } from './tabs/activity-tab.component';
+import { BotControlSidePanelComponent } from './bot-control-side-panel.component';
 import { BotControlPageComponent } from './bot-control-page.component';
 import { BotSurfaceStore } from './bot-surface-store.service';
 import { VerdictCardComponent } from './verdict-card/verdict-card.component';
+import type { BotEventStreamCommand } from './reused/bot-event-stream/bot-event-stream-action';
 import {
   makeAccountSummary,
   makeCommandWriteResponse,
@@ -51,6 +54,18 @@ import {
 })
 class ActivityTabStubComponent {
   readonly status = input.required<LiveInstanceStatus>();
+}
+
+@Component({
+  selector: 'app-bot-control-side-panel',
+  template: '<div data-testid="bot-control-side-panel-stub"></div>',
+  changeDetection: ChangeDetectionStrategy.OnPush,
+})
+class BotControlSidePanelStubComponent {
+  readonly status = input.required<LiveInstanceStatus>();
+  readonly commandsDisabled = input(false);
+  readonly freshRunRequested = output();
+  readonly streamActionInvoked = output<BotEventStreamCommand>();
 }
 
 @Component({
@@ -230,6 +245,10 @@ export function installBotControlPageTestStubs(): void {
   TestBed.overrideComponent(VerdictCardComponent, {
     remove: { imports: [ActivityTabComponent] },
     add: { imports: [ActivityTabStubComponent] },
+  });
+  TestBed.overrideComponent(BotControlPageComponent, {
+    remove: { imports: [BotControlSidePanelComponent] },
+    add: { imports: [BotControlSidePanelStubComponent] },
   });
 }
 

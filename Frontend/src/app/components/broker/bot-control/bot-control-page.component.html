@@ -27,28 +27,34 @@
 
   @if (status(); as s) {
     <div class="operator-truth-layout">
-      <app-verdict-card
+      <div class="operator-main-column">
+        <app-verdict-card
+          [status]="s"
+          [busy]="busyAction() !== null || readOnly()"
+          [renderedRemediation]="renderedPrimaryRemediation()"
+          (lifecycleAction)="dispatchOverviewAction($event)"
+          (remediationInvoked)="invokePrimaryRemediation()"
+          (crashRecoveryRequested)="dispatchCrashRecoveryOverride()"
+          (settingsRequested)="onSettingsRequested()"
+          (accountMonitorRequested)="openAccountMonitor()"
+          (removeRequested)="openRemoveBotConfirm()"
+          (terminalRetireReplaceRequested)="openTerminalRetireReplaceConfirm()"
+          (blockerMoveRequested)="invokeBlockerMove($event)"
+        />
+        <app-overview-tab
+          [status]="s"
+          [recoveryOverrideBusy]="busyAction() === 'crash_recovery_override'"
+          (crashRecoveryOverrideRequested)="dispatchCrashRecoveryOverride()"
+        />
+      </div>
+      <app-bot-control-side-panel
         [status]="s"
-        [busy]="busyAction() !== null || readOnly()"
-        [renderedRemediation]="renderedPrimaryRemediation()"
-        (lifecycleAction)="dispatchOverviewAction($event)"
-        (remediationInvoked)="invokePrimaryRemediation()"
-        (crashRecoveryRequested)="dispatchCrashRecoveryOverride()"
-        (settingsRequested)="onSettingsRequested()"
-        (accountMonitorRequested)="openAccountMonitor()"
-        (removeRequested)="openRemoveBotConfirm()"
-        (terminalRetireReplaceRequested)="openTerminalRetireReplaceConfirm()"
-        (blockerMoveRequested)="invokeBlockerMove($event)"
-      />
-      <app-trader-guidance-pane
-        [surface]="s.operator_surface"
-        [timelineRows]="timelineRows()"
-        [timelineProjectionAvailable]="timelineProjectionAvailable()"
-        [timelineCanonicalFallbackRequired]="timelineCanonicalFallbackRequired()"
-        [timelineNotice]="timelineNotice()"
-        (primaryRemediationSelected)="invokeTraderRemediation($event)"
+        [commandsDisabled]="busyAction() !== null || readOnly()"
+        (freshRunRequested)="onGateRedeploy()"
+        (streamActionInvoked)="invokeStreamAction($event)"
       />
     </div>
+    <app-trader-guidance-pane [surface]="s.operator_surface" />
   } @else if (!errorMessage()) {
     <p class="loading">Loading bot control...</p>
   }

@@ -16,10 +16,11 @@
     </div>
   }
 
-  @if (rows().length > 0) {
+  @if (actionRows().length > 0) {
     <ol class="event-feed" aria-label="Bot event rows">
-      @for (display of rows(); track trackRow($index, display)) {
-        @let row = display.row;
+      @for (actionRow of actionRows(); track trackRow($index, actionRow.display)) {
+        @let display = actionRow.display;
+        @let row = actionRow.display.row;
         <li class="event-card" [class.expanded]="isExpanded(row.seq)" [attr.data-testid]="'bot-event-row-' + row.seq">
           <div class="event-head">
             <button
@@ -45,6 +46,23 @@
             </dl>
             <strong>{{ row.headline }}</strong>
             <p class="narrative">{{ row.narrative }}</p>
+            @if (actionRow.action; as action) {
+              <div class="stream-actions">
+                <button
+                  type="button"
+                  class="stream-action"
+                  [disabled]="!action.enabled"
+                  [attr.data-testid]="'bot-event-row-action-' + row.seq"
+                  [attr.title]="action.disabledReason ?? action.label"
+                  (click)="invokeAction(action)"
+                >
+                  {{ action.label }}
+                </button>
+                @if (!action.enabled && action.disabledReason) {
+                  <span class="stream-action-reason">{{ action.disabledReason }}</span>
+                }
+              </div>
+            }
           </div>
           @if (isExpanded(row.seq)) {
             <app-bot-event-drawer [display]="display" [drawerId]="'bot-event-drawer-' + row.seq" />

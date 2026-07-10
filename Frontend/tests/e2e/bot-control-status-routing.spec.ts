@@ -4,7 +4,6 @@ import {
   buildAccountSummary,
   buildActivityProjection,
   buildChartSnapshot,
-  buildLifecycleTimeline,
   buildScenarioStatus,
   buildSummary,
 } from './fixtures/bot-control-fixtures';
@@ -25,8 +24,23 @@ async function installBotControlRoutes(
   await page.route(/\/api\/live-instances\/[^/]+\/status(?:\?.*)?$/, (route) =>
     route.fulfill({ json: state.status }),
   );
-  await page.route(/\/api\/lifecycle-projection\/timeline(?:\?.*)?$/, (route) =>
-    route.fulfill({ json: buildLifecycleTimeline(state.status.strategy_instance_id) }),
+  await page.route(/\/api\/live-runs\/[^/]+\/bot-events(?:\?.*)?$/, (route) =>
+    route.fulfill({
+      json: {
+        rows: [],
+        next_seq: null,
+        durable_stream_id: 'e2e-bot-events',
+        high_water_cursor: 'e2e-bot-events:0',
+        next_cursor: null,
+      },
+    }),
+  );
+  await page.route(/\/api\/live-runs\/[^/]+\/bot-events\/stream(?:\?.*)?$/, (route) =>
+    route.fulfill({
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+      body: 'event: open\n\n',
+    }),
   );
   await page.route(/\/api\/live-instances\/[^/]+\/activity(?:\?.*)?$/, (route) =>
     route.fulfill({ json: buildActivityProjection(state.status.strategy_instance_id) }),
@@ -64,7 +78,7 @@ test.describe('Bot Control route and page shell', () => {
     await expect(page.getByTestId('verdict-verb')).toHaveText('End day now');
   });
 
-  test('canonical Bot Control page renders the on-duty verdict and activity surface', async ({ page }) => {
+  test('canonical Bot Control page renders the stream-primary cockpit shell', async ({ page }) => {
     const status = buildScenarioStatus({
       strategyInstanceId: SID,
       readinessVerdict: 'READY',
@@ -83,9 +97,12 @@ test.describe('Bot Control route and page shell', () => {
     await expect(page.getByTestId('verdict-verb')).toHaveText('End day now');
     await expect(page.getByLabel('Bot vitals')).toContainText('Position');
     await expect(page.getByLabel('Bot vitals')).toContainText('Orders today');
-    await expect(page.getByTestId('activity-tab')).toBeVisible();
-    await expect(page.getByTestId('activity-trade-chart')).toContainText('Trade chart');
-    await expect(page.getByTestId('activity-broker-activity')).toBeVisible();
+    await expect(page.getByLabel('Bot lifecycle overview')).toBeVisible();
+    await expect(page.getByTestId('bot-event-stream-side-panel')).toBeVisible();
+    await expect(page.getByTestId('bot-event-stream')).toBeVisible();
+    await expect(page.getByTestId('trader-guidance-pane')).toBeVisible();
+    await expect(page.locator('app-node-inspector')).toHaveCount(0);
+    await expect(page.locator('app-trader-guidance-timeline')).toHaveCount(0);
   });
 
   test('blocked bot surfaces scoped why evidence without restoring old shell tabs', async ({ page }) => {
