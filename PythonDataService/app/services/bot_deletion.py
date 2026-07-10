@@ -10,18 +10,19 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.engine.live.identity import (
-    STRATEGY_INSTANCE_ID_PATTERN,
-    strategy_instance_artifact_dir,
-    validate_strategy_instance_id,
-)
+from app.engine.live.identity import strategy_instance_artifact_dir, validate_strategy_instance_id
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
 
 BOT_DELETION_FILENAME = "bot_deletion.json"
+# Kept byte-identical to the canonical identity regex. This local capture is
+# deliberate: CodeQL does not treat a Match returned by another module as a
+# sanitizer before a filesystem sink.
+_BOT_DELETION_INSTANCE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 
 class BotDeletionCorruptError(RuntimeError):
@@ -47,7 +48,7 @@ class BotDeletionRecord(BaseModel):
 
 def stable_bot_deletion_path(artifacts_root: Path, strategy_instance_id: str) -> Path:
     validate_strategy_instance_id(strategy_instance_id)
-    match = STRATEGY_INSTANCE_ID_PATTERN.fullmatch(strategy_instance_id)
+    match = _BOT_DELETION_INSTANCE_ID_RE.fullmatch(strategy_instance_id)
     if match is None:
         raise ValueError(f"strategy_instance_id rejected on second check: {strategy_instance_id!r}")
     # Keep the regex capture in this path-builder frame. CodeQL recognizes
@@ -69,7 +70,7 @@ def read_bot_deletion(artifacts_root: Path, strategy_instance_id: str) -> BotDel
     # as the read sinks. CodeQL does not propagate sanitizer evidence through
     # a custom path-builder return value.
     validate_strategy_instance_id(strategy_instance_id)
-    match = STRATEGY_INSTANCE_ID_PATTERN.fullmatch(strategy_instance_id)
+    match = _BOT_DELETION_INSTANCE_ID_RE.fullmatch(strategy_instance_id)
     if match is None:
         raise ValueError(f"strategy_instance_id rejected on second check: {strategy_instance_id!r}")
     safe_strategy_instance_id = match.group(0)

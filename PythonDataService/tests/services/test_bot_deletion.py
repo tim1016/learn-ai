@@ -4,7 +4,15 @@ from pathlib import Path
 
 import pytest
 
-from app.services.bot_deletion import stable_bot_deletion_path
+from app.engine.live.identity import _INSTANCE_ID_RE as canonical_instance_id_re
+from app.services.bot_deletion import (
+    _BOT_DELETION_INSTANCE_ID_RE,
+    stable_bot_deletion_path,
+)
+
+
+def test_bot_deletion_path_regex_matches_canonical_identity_contract() -> None:
+    assert _BOT_DELETION_INSTANCE_ID_RE.pattern == canonical_instance_id_re.pattern
 
 
 def test_stable_bot_deletion_path_confines_symlinked_instance_directory(

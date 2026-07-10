@@ -24,7 +24,6 @@ from pathlib import Path
 # *creation* time — via the CLI and the deploy seam — instead of producing an
 # instance that exists but can never be operated on.
 _INSTANCE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
-STRATEGY_INSTANCE_ID_PATTERN = _INSTANCE_ID_RE
 
 
 def validate_strategy_instance_id(value: str) -> str:
