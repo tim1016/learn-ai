@@ -124,6 +124,8 @@ export function buildScenarioStatus(opts: BotControlScenarioOptions): LiveInstan
   });
   return {
     strategy_instance_id: id,
+    stream_epoch: 'e2e-stream-epoch',
+    surface_version: 1,
     process: {
       state: processState,
       pid: processState === 'running' ? 1 : null,
@@ -271,6 +273,7 @@ export function buildScenarioStatus(opts: BotControlScenarioOptions): LiveInstan
       readinessVerdict,
       poisoned: !!opts.poisoned,
     }),
+    latest_mutation: null,
     fetched_at_ms: NOW_MS,
   };
 }
