@@ -366,6 +366,10 @@ class HostRunnerInstancesStatus(BaseModel):
 
     instances: list[HostRunnerInstance] = Field(default_factory=list)
     fetched_at_ms: int
+    exited_record_retention_count: int | None = Field(default=None, ge=0)
+    exited_record_retention_ttl_ms: int | None = Field(default=None, ge=0)
+    exited_record_count: int = Field(default=0, ge=0)
+    exited_records_pruned_total: int = Field(default=0, ge=0)
 
 
 class HostRunnerStartRequest(BaseModel):
@@ -2985,6 +2989,21 @@ class LiveInstanceSummary(BaseModel):
     desired_state: str | None = None
     readiness_verdict: Literal["READY", "BLOCKED", "DEGRADED", "UNKNOWN"] = "UNKNOWN"
     readiness_as_of_ms: int | None = None
+
+
+class FleetRosterSnapshot(BaseModel):
+    """Versioned fleet roster snapshot for REST and SSE consumers.
+
+    The roster is authored by the same shared fleet-daemon observation used by
+    per-bot SurfaceHub producers, so adding a streaming client never creates an
+    extra host-daemon polling cadence.
+    """
+
+    stream_epoch: str = ""
+    surface_version: int = Field(default=0, ge=0)
+    fetched_at_ms: int
+    daemon_fetched_at_ms: int | None = None
+    instances: list[LiveInstanceSummary] = Field(default_factory=list)
 
 
 class BotCatalogPnl(BaseModel):

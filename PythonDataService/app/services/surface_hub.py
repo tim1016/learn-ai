@@ -49,6 +49,15 @@ class SnapshotUnavailableError(RuntimeError):
     """The producer has not completed a successful assembly yet."""
 
 
+class SurfaceHubResourceLimits(BaseModel):
+    """Bounded resources owned by one SurfaceHub producer."""
+
+    producer_task_limit: int = 1
+    refresh_task_limit: int = 1
+    client_queue_maxsize: int = 1
+    watcher_count: int = 0
+
+
 def _semantic_value(value: object, *, path: tuple[str, ...] = ()) -> object:
     if isinstance(value, dict):
         return {
@@ -130,6 +139,10 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
     @property
     def is_running(self) -> bool:
         return self._producer_task is not None and not self._producer_task.done()
+
+    @property
+    def resource_limits(self) -> SurfaceHubResourceLimits:
+        return SurfaceHubResourceLimits(watcher_count=len(self._watchers))
 
     async def start(self) -> None:
         """Start one producer lifecycle, even when initial assembly fails.
@@ -345,5 +358,6 @@ __all__ = [
     "SnapshotUnavailableError",
     "SurfaceHub",
     "SurfaceHubRegistry",
+    "SurfaceHubResourceLimits",
     "semantic_surface_fingerprint",
 ]

@@ -138,6 +138,14 @@ same producer-owned snapshot. Full documents are preferred to JSON Patch:
 the document is small, replacement is deterministic, and patch-order bugs add
 no value here.
 
+`GET /api/live-instances/fleet/stream` is the fleet roster state channel. It
+emits complete `FleetRosterSnapshot` documents from the same shared daemon
+observation used by per-bot producers. `GET /api/live-instances` serves that
+producer-owned roster snapshot when lifecycle has started; it may fall back to
+direct assembly only before the application lifecycle has installed the shared
+provider. A roster SSE client must never create another `/instances` polling
+cadence.
+
 Every SSE state event carries `id: <stream_epoch>:<surface_version>`. On a
 reconnect with an epoch the server no longer owns, the server sends its current
 full snapshot; state channels do not replay obsolete intermediate documents.
@@ -237,12 +245,28 @@ Each bot has separate watcher, WAL tailer, ring, client queues, and assembly
 task. State queues coalesce and event queues gap-mark. Daemon mutations use a
 per-bot semaphore independent of the fleet poll. This bounds per-client memory
 and prevents one bot's backlog from directly consuming sibling queues.
+The executable resource contracts are:
+
+- state `SurfaceHub`: one producer task, one coalesced refresh task, and
+  one-slot latest-wins client queues;
+- durable event channel: one WAL tailer, a fixed-size ring, and fixed-size
+  subscriber queues per bot per event channel; and
+- fleet roster `SurfaceHub`: one producer over the shared daemon observation,
+  also using one-slot latest-wins client queues.
+
 Because all hubs still share one Python event loop, the roadmap includes an
 explicit load/latency test rather than claiming task separation alone proves a
 CPU bulkhead.
 
 The host daemon runs under the host supervisor and prunes exited-process
-records by a bounded count plus TTL.
+records by a bounded count plus TTL. The default bounds are 10,000 exited
+records and seven days, configurable at daemon launch via
+`LIVE_RUNNER_EXITED_RECORD_RETENTION_COUNT`,
+`LIVE_RUNNER_EXITED_RECORD_RETENTION_TTL_SECONDS`,
+`--exited-record-retention-count`, and
+`--exited-record-retention-ttl-seconds`. `/instances` echoes the effective
+retention settings, current exited-record count, and cumulative prune count so
+soak evidence can cite the exact daemon contract under test.
 
 AccountOwner takeover is fenced, not merely leased. An authoritative owner
 generation is checked at intent acceptance and immediately before every

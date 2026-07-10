@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from app.services.durable_event_channel import (
     EventGap,
     EventRecord,
     EventReset,
+    EventSubscription,
 )
 
 
@@ -37,6 +39,28 @@ def _channel(
         ring_size=ring_size,
         subscriber_queue_size=queue_size,
     )
+
+
+def _p95_ns(samples: list[int]) -> int:
+    ordered = sorted(samples)
+    index = max(0, int(len(ordered) * 0.95) - 1)
+    return ordered[index]
+
+
+async def _publish_and_measure(
+    channel: DurableEventChannel[_Row],
+    subscription: EventSubscription[_Row],
+    *,
+    seq: int,
+) -> int:
+    started_ns = time.perf_counter_ns()
+    channel.publish(_Row(seq))
+    message = await subscription.queue.get()
+    elapsed_ns = time.perf_counter_ns() - started_ns
+    assert isinstance(message, EventRecord)
+    assert message.row.seq == seq
+    subscription.acknowledge(message.cursor)
+    return elapsed_ns
 
 
 @pytest.mark.asyncio
@@ -241,6 +265,92 @@ async def test_queue_overflow_emits_gap_and_isolates_other_clients(tmp_path: Pat
     assert isinstance(third, EventRecord)
     assert third.row.seq == 3
     await channel.stop()
+
+
+@pytest.mark.asyncio
+async def test_thousand_event_spike_on_one_channel_preserves_sibling_bounds(
+    tmp_path: Path,
+) -> None:
+    hot_path = tmp_path / "hot.jsonl"
+    quiet_path = tmp_path / "quiet.jsonl"
+    hot_path.write_text("")
+    quiet_path.write_text("")
+    hot_rows: list[_Row] = []
+    quiet_rows: list[_Row] = []
+    hot = _channel(hot_path, hot_rows, ring_size=8, queue_size=4)
+    quiet = _channel(quiet_path, quiet_rows, ring_size=8, queue_size=4)
+    hot.start()
+    quiet.start()
+    hot_slow = hot.subscribe(None)
+    quiet_fast = quiet.subscribe(None)
+
+    for seq in range(1, 1_001):
+        hot.publish(_Row(seq))
+
+    hot_gap = await hot_slow.queue.get()
+    assert isinstance(hot_gap, EventGap)
+    assert hot.resource_limits.ring_size == 8
+    assert hot.resource_limits.subscriber_queue_size == 4
+    assert hot_slow.queue.qsize() <= hot.resource_limits.subscriber_queue_size
+    assert quiet.resource_limits.ring_size == 8
+    assert quiet.resource_limits.subscriber_queue_size == 4
+    assert quiet_fast.queue.empty()
+
+    quiet.publish(_Row(1))
+    quiet_record = await quiet_fast.queue.get()
+    assert isinstance(quiet_record, EventRecord)
+    assert quiet_record.row.seq == 1
+
+    await hot.stop()
+    await quiet.stop()
+
+
+@pytest.mark.asyncio
+async def test_thousand_event_spike_preserves_sibling_p95_latency_budget(
+    tmp_path: Path,
+) -> None:
+    hot_path = tmp_path / "hot.jsonl"
+    quiet_path = tmp_path / "quiet.jsonl"
+    hot_path.write_text("")
+    quiet_path.write_text("")
+    hot = _channel(hot_path, [], ring_size=8, queue_size=4)
+    quiet = _channel(quiet_path, [], ring_size=8, queue_size=4)
+    hot.start()
+    quiet.start()
+    hot_slow = hot.subscribe(None)
+    quiet_fast = quiet.subscribe(None)
+
+    baseline_samples = [
+        await _publish_and_measure(quiet, quiet_fast, seq=seq)
+        for seq in range(1, 33)
+    ]
+    baseline_p95_ns = _p95_ns(baseline_samples)
+    # The derived budget keeps the proof tied to the local runner while leaving
+    # room for CI scheduler jitter unrelated to channel fan-out.
+    p95_budget_ns = max(baseline_p95_ns * 20, baseline_p95_ns + 50_000_000)
+
+    spike_samples: list[int] = []
+    hot_seq = 0
+    for quiet_seq in range(1_001, 1_033):
+        for _ in range(1_000):
+            hot_seq += 1
+            hot.publish(_Row(hot_seq))
+        if hot_seq == 1_000:
+            assert isinstance(await hot_slow.queue.get(), EventGap)
+        spike_samples.append(
+            await _publish_and_measure(quiet, quiet_fast, seq=quiet_seq)
+        )
+
+    spike_p95_ns = _p95_ns(spike_samples)
+    assert spike_p95_ns <= p95_budget_ns, (
+        "quiet sibling p95 exceeded derived budget under hot-bot spike: "
+        f"baseline_p95_ns={baseline_p95_ns}, "
+        f"budget_ns={p95_budget_ns}, "
+        f"spike_p95_ns={spike_p95_ns}"
+    )
+
+    await hot.stop()
+    await quiet.stop()
 
 
 @pytest.mark.asyncio

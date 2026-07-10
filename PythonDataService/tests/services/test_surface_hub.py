@@ -71,6 +71,22 @@ async def test_identical_semantics_do_not_advance_surface_version() -> None:
 
 
 @pytest.mark.asyncio
+async def test_surface_hub_declares_latest_wins_client_queue_bound() -> None:
+    hub = SurfaceHub(
+        strategy_instance_id="bot-a",
+        assemble=lambda: asyncio.sleep(0, result=_snapshot(generated_at_ms=1)),
+    )
+
+    queue = hub.subscribe()
+
+    assert queue.maxsize == 1
+    assert hub.resource_limits.producer_task_limit == 1
+    assert hub.resource_limits.refresh_task_limit == 1
+    assert hub.resource_limits.client_queue_maxsize == 1
+    assert hub.resource_limits.watcher_count == 1
+
+
+@pytest.mark.asyncio
 async def test_source_timestamp_advances_surface_version() -> None:
     generated_at_ms = 1_700_000_000_100
 
