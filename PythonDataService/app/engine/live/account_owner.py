@@ -22,6 +22,10 @@ from app.engine.live.account_artifacts import (
     write_account_owner_generation,
 )
 from app.engine.live.account_classifier import AccountClassifierDecision
+from app.engine.live.account_owner_fence import (
+    AccountOwnerWriteFenceError,
+    account_owner_write_grant,
+)
 from app.engine.live.account_registry import evaluate_account_instance_binding
 from app.schemas.live_runs import GateResult
 
@@ -156,6 +160,31 @@ class AccountOwner:
                 self._reject(intent, "ACCOUNT_OWNER_RECONNECTING", self._diagnostics(intent))
             return await self._submit_locked(intent)
 
+    async def run_broker_write(self, *, boundary: str, write: Callable[[], object]):
+        """Run a non-submit broker write under the current AccountOwner grant."""
+        if not self._accepting:
+            raise AccountOwnerWriteFenceError(
+                reason="ACCOUNT_OWNER_RECONNECTING",
+                boundary=boundary,
+                account_id=self._account_id,
+                current_owner_generation=self._owner_generation_provider(),
+            )
+        async with self._lock:
+            if not self._accepting:
+                raise AccountOwnerWriteFenceError(
+                    reason="ACCOUNT_OWNER_RECONNECTING",
+                    boundary=boundary,
+                    account_id=self._account_id,
+                    current_owner_generation=self._owner_generation_provider(),
+                )
+            owner_generation = self._owner_generation_provider()
+            with account_owner_write_grant(
+                account_id=self._account_id,
+                owner_generation=owner_generation,
+                boundary=boundary,
+            ):
+                return await _maybe_await(write())
+
     async def handle_reconnect(
         self,
         *,
@@ -288,13 +317,11 @@ class AccountOwner:
         if registry_gate.status != "pass":
             self._reject(intent, registry_gate.operator_reason, diagnostics)
 
-        current_generation = self._owner_generation_provider()
-        if intent.owner_generation != current_generation:
-            self._reject(
-                intent,
-                "OWNER_GENERATION_MISMATCH",
-                diagnostics | {"current_owner_generation": current_generation},
-            )
+        self._ensure_current_generation(
+            intent,
+            diagnostics,
+            reason="OWNER_GENERATION_MISMATCH",
+        )
 
         classifier_decision = await _maybe_await(self._classifier(intent))
         classifier_gate = classifier_decision.to_gate_result()
@@ -316,8 +343,30 @@ class AccountOwner:
             },
         )
 
+        self._ensure_current_generation(
+            intent,
+            diagnostics,
+            reason="OWNER_GENERATION_STALE_AT_BROKER_WRITE",
+        )
+
         try:
-            ack = await self._broker.place_order(spec)
+            with account_owner_write_grant(
+                account_id=intent.account_id,
+                owner_generation=intent.owner_generation,
+                boundary="broker.place_order",
+            ):
+                ack = await self._broker.place_order(spec)
+        except AccountOwnerWriteFenceError as exc:
+            self._reject(
+                intent,
+                exc.reason,
+                diagnostics
+                | {
+                    "broker_write_boundary": exc.boundary,
+                    "current_owner_generation": exc.current_owner_generation,
+                    "grant_owner_generation": exc.grant_owner_generation,
+                },
+            )
         except Exception as exc:
             reason = f"BROKER_SUBMIT_UNCERTAIN:{type(exc).__name__}"
             payload = {
@@ -369,6 +418,21 @@ class AccountOwner:
             },
         )
         raise AccountOwnerSubmitRejected(reason=reason, diagnostics=diagnostics)
+
+    def _ensure_current_generation(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        diagnostics: dict,
+        *,
+        reason: str,
+    ) -> None:
+        current_generation = self._owner_generation_provider()
+        if intent.owner_generation != current_generation:
+            self._reject(
+                intent,
+                reason,
+                diagnostics | {"current_owner_generation": current_generation},
+            )
 
     def _diagnostics(self, intent: AccountOwnerSubmitIntent) -> dict:
         return {

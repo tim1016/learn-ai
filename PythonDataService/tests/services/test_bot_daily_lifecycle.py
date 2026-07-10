@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+from typing import get_args
+
 from app.engine.live.bot_lifecycle_state import (
     BotLifecyclePhase,
     BotLifecycleStateRecord,
     BotRollCallOfferRecord,
 )
+from app.schemas.account_condition_actions import AccountCureAction
 from app.schemas.live_runs import (
     BotDailyLifecycleProjection,
+    BotLifecycleActionId,
     BotLifecycleCondition,
+    BotLifecycleDisplayStatus,
     HostProcessStartCapability,
     InstanceProcessView,
 )
@@ -208,3 +213,44 @@ def test_project_bot_daily_lifecycle_start_gate_without_offer_stays_off_duty() -
     assert projection.display_status == "Off duty"
     assert projection.reason == "Run roll call to issue a start offer."
     assert projection.primary_action is None
+
+
+def test_project_bot_daily_lifecycle_button_rule_contract_is_closed_and_single_primary() -> None:
+    scenarios = [
+        _project(start_enabled=True, persisted_state=_state(), roll_call_offer=_offer()),
+        _project(process_state="running", persisted_state=_state(BotLifecyclePhase.ON_DUTY, active_run_id="run-1")),
+        _project(process_state="stopping", persisted_state=_state(BotLifecyclePhase.ON_DUTY, active_run_id="run-1")),
+        _project(start_enabled=True, persisted_state=_state(on_roster=False), roll_call_offer=_offer()),
+        _project(start_enabled=True, persisted_state=_state(BotLifecyclePhase.RETIRED, on_roster=False)),
+        _project(
+            start_enabled=True,
+            persisted_state=_state(),
+            roll_call_offer=_offer(),
+            conditions=(_condition(),),
+        ),
+    ]
+    action_ids = set(get_args(BotLifecycleActionId))
+    display_statuses = set(get_args(BotLifecycleDisplayStatus))
+    cure_actions = set(get_args(AccountCureAction))
+
+    assert display_statuses == {
+        "Off duty",
+        "Ready",
+        "On duty",
+        "Clocking out",
+        "Sick bay",
+        "Off roster",
+        "Retired",
+    }
+    assert action_ids == {
+        "confirm_start",
+        "end_day_now",
+        "retire_replace",
+        "add_to_roster",
+        "take_off_roster",
+    }
+    for projection in scenarios:
+        primary = [] if projection.primary_action is None else [projection.primary_action]
+        assert len(primary) <= 1
+        assert all(action.id in action_ids for action in primary + projection.ambient_actions)
+        assert all(condition.cure_action in cure_actions for condition in projection.conditions)

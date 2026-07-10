@@ -17,6 +17,7 @@ import pytest
 
 from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderSpec
 from app.engine.execution.order_sizer import FixedShares, OrderSizer
+from app.engine.live.account_owner import AccountOwnerSubmitResult
 from app.engine.live.intent_events import IntentEventType
 from app.engine.live.intent_wal import IntentWal
 from app.engine.live.live_portfolio import LivePortfolio
@@ -211,13 +212,12 @@ def test_legacy_portfolio_without_wal_keeps_working(tmp_path: Path) -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Phase 5B / VCR-0002 — durable-submit invariant tests.
+# Phase 5B / Stage 6 — durable-submit invariant tests.
 #
 # The Phase 5A surface above was opt-in via ``intent_wal is not None``. Phase 5B
-# closes the structural hole: a broker adapter whose ``requires_durable_submit``
-# marker is ``True`` CANNOT be wrapped in a ``LivePortfolio`` without an
-# ``IntentWal`` + ``bot_order_namespace``. The WAL writes on the real-broker path
-# are unconditional and the namespace match is asserted before placement.
+# first required a WAL for real-broker adapters. Stage 6 closes that lane:
+# real-broker adapters must be wrapped in AccountOwner mode, while shadow/fake
+# adapters can still opt into the WAL voluntarily.
 # ──────────────────────────────────────────────────────────────────────
 
 
@@ -229,11 +229,24 @@ class _RealBrokerFake(FakeBroker):
     requires_durable_submit = True
 
 
-def test_real_broker_portfolio_without_intent_wal_raises() -> None:
-    """ADR 0008 / Phase 5B — a real-broker LivePortfolio cannot be constructed
-    without an IntentWal. Closes the bypass path VCR-0002 names: even after
-    every wiring PR ships, ``intent_wal is None`` was the residual escape."""
-    with pytest.raises(ValueError, match=r"ADR 0008.*IntentWal"):
+async def _accepted_account_owner_submitter(intent) -> AccountOwnerSubmitResult:
+    return AccountOwnerSubmitResult(
+        status="accepted",
+        trace_id=intent.trace_id,
+        account_id=intent.account_id,
+        strategy_instance_id=intent.strategy_instance_id,
+        run_id=intent.run_id,
+        intent_id=intent.intent_id,
+        order_ref=intent.order_ref,
+        owner_generation=intent.owner_generation,
+        order_id=44,
+        perm_id=90044,
+    )
+
+
+def test_real_broker_portfolio_without_account_owner_raises() -> None:
+    """Stage 6 — a real-broker LivePortfolio cannot use the old WAL-direct lane."""
+    with pytest.raises(ValueError, match=r"AccountOwner remains the sole writer"):
         LivePortfolio(
             _RealBrokerFake(),
             bot_order_namespace="learn-ai/test-instance/v1",
@@ -241,24 +254,35 @@ def test_real_broker_portfolio_without_intent_wal_raises() -> None:
 
 
 def test_real_broker_portfolio_without_namespace_raises(tmp_path: Path) -> None:
-    """ADR 0008 / Phase 5B — a real-broker LivePortfolio cannot be constructed
-    with an empty ``bot_order_namespace``: ownership identity is undefined
-    without a namespace."""
+    """Stage 6 — even a WAL no longer authorizes a real-broker writer lane."""
     wal = IntentWal(tmp_path / "intent_events.jsonl")
-    with pytest.raises(ValueError, match=r"ADR 0008.*bot_order_namespace"):
+    with pytest.raises(ValueError, match=r"AccountOwner remains the sole writer"):
         LivePortfolio(_RealBrokerFake(), intent_wal=wal)
 
 
-def test_real_broker_portfolio_with_intent_wal_constructs(tmp_path: Path) -> None:
-    """Happy path — the marker triggers the invariant, the invariant is
-    satisfied, construction proceeds."""
+def test_real_broker_portfolio_with_intent_wal_still_requires_account_owner(tmp_path: Path) -> None:
+    """Stage 6 — the prior Phase 5B WAL happy path is intentionally closed."""
     wal = IntentWal(tmp_path / "intent_events.jsonl")
+    with pytest.raises(ValueError, match=r"AccountOwner remains the sole writer"):
+        LivePortfolio(
+            _RealBrokerFake(),
+            intent_wal=wal,
+            bot_order_namespace="learn-ai/test-instance/v1",
+        )
+
+
+def test_real_broker_portfolio_with_account_owner_constructs() -> None:
+    """Happy path — real-broker construction proceeds only in AccountOwner mode."""
     portfolio = LivePortfolio(
         _RealBrokerFake(),
-        intent_wal=wal,
+        account_owner_submitter=_accepted_account_owner_submitter,
+        account_id="DU123",
+        strategy_instance_id="test-instance",
+        run_id="run-1",
         bot_order_namespace="learn-ai/test-instance/v1",
+        owner_generation_provider=lambda: 3,
     )
-    assert portfolio.intent_wal is wal
+    assert portfolio.intent_wal is None
     assert portfolio.bot_order_namespace == "learn-ai/test-instance/v1"
 
 
@@ -272,43 +296,36 @@ def test_shadow_portfolio_still_works_without_intent_wal() -> None:
     assert portfolio.bot_order_namespace == ""
 
 
-def test_real_broker_submit_writes_pending_intent_unconditionally(tmp_path: Path) -> None:
-    """ADR 0008 / Phase 5B — on the real-broker code path, the WAL writes are
-    unconditional. An order that did NOT go through ``set_holdings`` (e.g. a
-    direct ``submit_market_order`` from a strategy or engine flatten path)
-    still gets a minted intent_id, a stamped order_ref, and a fsynced
-    PENDING_INTENT BEFORE ``broker.place_order`` is awaited."""
+def test_real_broker_submit_routes_to_account_owner_without_wal(tmp_path: Path) -> None:
+    """Stage 6 — real-broker submits mint identity but hand off to AccountOwner."""
     import asyncio
 
     wal_path = tmp_path / "intent_events.jsonl"
-    wal = IntentWal(wal_path)
+    captured = []
+
+    async def submitter(intent) -> AccountOwnerSubmitResult:
+        captured.append(intent)
+        return await _accepted_account_owner_submitter(intent)
+
     portfolio = LivePortfolio(
         _RealBrokerFake(),
-        intent_wal=wal,
+        account_owner_submitter=submitter,
+        account_id="DU123",
+        strategy_instance_id="test-instance",
+        run_id="run-1",
         bot_order_namespace=build_bot_order_namespace("test-instance"),
+        owner_generation_provider=lambda: 3,
     )
     portfolio.update_reference_price("SPY", Decimal("500"))
-    # Direct submit_market_order — bypasses set_holdings, so no intent_id was
-    # minted upstream. The Phase 5B fallback mints one at submit time.
     portfolio.submit_market_order("SPY", 1, _bar_time(), tag="ManualEntry")
 
     asyncio.run(portfolio.submit_pending_orders())
 
-    raw = wal_path.read_text(encoding="utf-8").splitlines()
-    assert raw, "WAL must contain at least one event"
-    # First event is PENDING_INTENT, second is SUBMITTED — same intent_id.
-    import json
-
-    events = [json.loads(line) for line in raw if line.strip()]
-    assert [e["event_type"] for e in events] == [
-        IntentEventType.PENDING_INTENT.value,
-        IntentEventType.SUBMITTED.value,
-    ]
-    assert events[0]["intent_id"] == events[1]["intent_id"]
-    assert events[0]["order_ref"].startswith(build_bot_order_namespace("test-instance") + ":")
-    # The broker saw a non-empty order_ref on its spec.
-    assert portfolio.broker.orders[0].order_ref is not None
-    assert portfolio.broker.orders[0].order_ref == events[0]["order_ref"]
+    assert not wal_path.exists()
+    assert len(captured) == 1
+    assert captured[0].order_ref.startswith(build_bot_order_namespace("test-instance") + ":")
+    assert captured[0].owner_generation == 3
+    assert portfolio.broker.orders == []
 
 
 def test_real_broker_namespace_mismatch_assertion_fires(tmp_path: Path, monkeypatch) -> None:
@@ -319,11 +336,14 @@ def test_real_broker_namespace_mismatch_assertion_fires(tmp_path: Path, monkeypa
     awaited."""
     import asyncio
 
-    wal = IntentWal(tmp_path / "intent_events.jsonl")
     portfolio = LivePortfolio(
         _RealBrokerFake(),
-        intent_wal=wal,
+        account_owner_submitter=_accepted_account_owner_submitter,
+        account_id="DU123",
+        strategy_instance_id="test-instance",
+        run_id="run-1",
         bot_order_namespace=build_bot_order_namespace("test-instance"),
+        owner_generation_provider=lambda: 3,
     )
     portfolio.update_reference_price("SPY", Decimal("500"))
     portfolio.submit_market_order("SPY", 1, _bar_time())

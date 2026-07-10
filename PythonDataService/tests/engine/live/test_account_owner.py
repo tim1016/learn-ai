@@ -25,6 +25,7 @@ from app.engine.live.account_owner import (
     AccountOwnerSubmitRejected,
     ClientIdInUseError,
 )
+from app.engine.live.account_owner_fence import current_account_owner_write_grant
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
     bot_order_namespace_for_instance,
@@ -290,6 +291,57 @@ async def test_account_owner_rejects_generation_mismatch(tmp_path: Path) -> None
 
     assert exc.value.reason == "OWNER_GENERATION_MISMATCH"
     assert broker.calls == []
+
+
+@pytest.mark.asyncio
+async def test_account_owner_refuses_stale_generation_after_prepare_before_broker_write(tmp_path: Path) -> None:
+    broker = _Broker()
+    generation = {"value": GENERATION}
+
+    def provider() -> int:
+        return generation["value"]
+
+    async def classifier(_intent: AccountOwnerSubmitIntent) -> AccountClassifierDecision:
+        generation["value"] = GENERATION + 1
+        return _continue_decision()
+
+    write_account_instance_binding(tmp_path, _binding())
+    owner = AccountOwner(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=broker,
+        owner_generation_provider=provider,
+        classifier=classifier,
+    )
+
+    with pytest.raises(AccountOwnerSubmitRejected) as exc:
+        await owner.submit(_intent(generation=GENERATION))
+
+    assert exc.value.reason == "OWNER_GENERATION_STALE_AT_BROKER_WRITE"
+    assert broker.calls == []
+    events = read_account_events(tmp_path, ACCOUNT)
+    assert [event["event_type"] for event in events][-2:] == [
+        "account_owner_submit_prepared",
+        "account_owner_submit_rejected",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_account_owner_runs_non_submit_broker_write_with_generation_grant(tmp_path: Path) -> None:
+    broker = _Broker()
+    owner = _owner(tmp_path, broker)
+    observed = []
+
+    async def write() -> str:
+        grant = current_account_owner_write_grant()
+        assert grant is not None
+        observed.append((grant.account_id, grant.owner_generation, grant.boundary))
+        return "cancelled"
+
+    result = await owner.run_broker_write(boundary="broker.cancel_open_orders", write=write)
+
+    assert result == "cancelled"
+    assert observed == [(ACCOUNT, GENERATION, "broker.cancel_open_orders")]
 
 
 @pytest.mark.asyncio

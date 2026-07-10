@@ -705,6 +705,9 @@ class LiveEngine:
         self._account_registry_gate_enabled = account_registry_gate_enabled
         self._owner_generation_provider = owner_generation_provider
         self._trace_id_provider = trace_id_provider
+        require_owner_write_fence = getattr(self._broker, "require_account_owner_write_fence", None)
+        if self._owner_generation_provider is not None and callable(require_owner_write_fence):
+            require_owner_write_fence(self._owner_generation_provider)
         # PRD #619-B B5 follow-up — submissions-blocked flag set by the
         # watchdog's step 1 ``block_submissions`` callback. The bar loop
         # checks this alongside ``self._paused`` and clears any pending

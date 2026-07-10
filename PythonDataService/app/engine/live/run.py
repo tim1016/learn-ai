@@ -51,9 +51,10 @@ import logging
 import signal
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Protocol
 
 if TYPE_CHECKING:
     from app.broker.ibkr.client import IbkrClient
@@ -99,6 +100,10 @@ from app.engine.live.run_ledger import read_ledger
 from app.schemas.live_runs import DEFAULT_MAX_ORDERS_PER_DAY
 
 logger = logging.getLogger(__name__)
+
+
+class AccountOwnerBrokerWriter(Protocol):
+    async def __call__(self, *, boundary: str, write: Callable[[], object]) -> object: ...
 
 
 @dataclass(frozen=True)
@@ -503,6 +508,7 @@ async def _recovery_flatten(
     live_state_trusted_root: Path | None = None,
     live_state_seed: LiveStateEnvelope | None = None,
     bot_order_namespace: str | None = None,
+    account_owner_broker_writer: AccountOwnerBrokerWriter | None = None,
     failed_symbols: list[str] | None = None,
 ) -> int:
     """Best-effort cancel + flatten for the cmd_start unhandled-exception path.
@@ -582,8 +588,19 @@ async def _recovery_flatten(
         CancelConfirmTimeoutHaltError,
     )
 
+    async def _cancel_open_orders():
+        return await broker.cancel_open_orders()
+
     try:
-        cancelled = await asyncio.wait_for(broker.cancel_open_orders(), timeout=CANCEL_CONFIRM_TIMEOUT_S)
+        cancel_call = (
+            account_owner_broker_writer(
+                boundary="broker.cancel_open_orders",
+                write=_cancel_open_orders,
+            )
+            if account_owner_broker_writer is not None
+            else _cancel_open_orders()
+        )
+        cancelled = await asyncio.wait_for(cancel_call, timeout=CANCEL_CONFIRM_TIMEOUT_S)
     except TimeoutError as exc:
         logger.error(
             "cancel_open_orders timed out during recovery flatten; refusing to liquidate",
@@ -649,7 +666,17 @@ async def _recovery_flatten(
         try:
             # Wait for permId so the durable fingerprint below is recognizable
             # on relaunch — the engine's event stream is already stopped here.
-            ack = await broker.place_order(spec, perm_id_wait_s=_RECOVERY_PERM_ID_WAIT_S)
+            async def _place_order(order_spec=spec):
+                return await broker.place_order(order_spec, perm_id_wait_s=_RECOVERY_PERM_ID_WAIT_S)
+
+            ack = (
+                await account_owner_broker_writer(
+                    boundary="broker.place_order",
+                    write=_place_order,
+                )
+                if account_owner_broker_writer is not None
+                else await _place_order()
+            )
             logger.info(
                 "Recovery flatten liquidated %s qty=%s order_id=%s",
                 pos.symbol,
@@ -1805,6 +1832,10 @@ def cmd_start(args: argparse.Namespace) -> int:
             account_owner_generation += 1
             return account_owner_generation
 
+        require_owner_write_fence = getattr(broker, "require_account_owner_write_fence", None)
+        if callable(require_owner_write_fence):
+            require_owner_write_fence(_account_owner_generation_provider)
+
         async def _classify_account_for_submit(_intent):
             open_orders = await _owner_list_open_orders(client)
             executions = await _owner_executions_for_reconnect_recovery(client)
@@ -2472,6 +2503,9 @@ def cmd_start(args: argparse.Namespace) -> int:
                             live_state_trusted_root=_artifacts_root / "live_state",
                             live_state_seed=live_state_seed,
                             bot_order_namespace=f"learn-ai/{strategy_instance_id}/v1",
+                            account_owner_broker_writer=(
+                                account_owner.run_broker_write if account_owner is not None else None
+                            ),
                             failed_symbols=failed_symbols,
                         )
                         if failed_symbols and not is_readonly:

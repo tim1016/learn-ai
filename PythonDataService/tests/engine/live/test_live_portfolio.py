@@ -34,6 +34,10 @@ from tests.engine.live.fixtures.fake_broker import FakeBroker
 _NOW_MS = 1_700_000_000_000
 
 
+class RealBrokerStub(FakeBroker):
+    requires_durable_submit = True
+
+
 def _account_truth_snapshot(
     *,
     final_verdict: str = "clean",
@@ -376,6 +380,17 @@ def test_account_owner_mode_rejects_run_scoped_intent_wal() -> None:
             FakeBroker(),
             intent_wal=object(),  # type: ignore[arg-type]
             account_owner_submitter=object(),
+            bot_order_namespace="learn-ai/spy_ema_paper/v1",
+        )
+
+
+def test_real_broker_portfolio_requires_account_owner_submitter(tmp_path: Path) -> None:
+    from app.engine.live.intent_wal import IntentWal
+
+    with pytest.raises(ValueError, match="AccountOwner remains the sole writer"):
+        LivePortfolio(
+            RealBrokerStub(),
+            intent_wal=IntentWal(tmp_path / "intent_events.jsonl"),
             bot_order_namespace="learn-ai/spy_ema_paper/v1",
         )
 

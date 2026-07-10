@@ -12,6 +12,10 @@ import pytest
 from app.broker.ibkr import orders as orders_module
 from app.broker.ibkr.config import IbkrSettings
 from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
+from app.engine.live.account_owner_fence import (
+    AccountOwnerWriteFenceError,
+    account_owner_write_grant,
+)
 from app.engine.live.live_portfolio import IbkrBrokerAdapter
 
 
@@ -115,6 +119,72 @@ async def test_cancel_open_orders_only_cancels_owned() -> None:
     assert cancelled == [100]
     assert cancel_calls == [100]
     assert client.ib.reqAllOpenOrdersAsync.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_real_broker_adapter_refuses_direct_writes_without_account_owner_grant() -> None:
+    client, cancel_calls = _client(owned_open_id=100, foreign_open_id=999)
+    adapter = IbkrBrokerAdapter(
+        client,
+        require_account_owner_write_fence=True,
+        owner_generation_provider=lambda: 7,
+    )
+
+    with pytest.raises(AccountOwnerWriteFenceError) as submit_exc:
+        await adapter.place_order(_spec())
+    with pytest.raises(AccountOwnerWriteFenceError) as cancel_exc:
+        await adapter.cancel_open_orders()
+
+    assert submit_exc.value.reason == "ACCOUNT_OWNER_WRITE_GRANT_MISSING"
+    assert cancel_exc.value.reason == "ACCOUNT_OWNER_WRITE_GRANT_MISSING"
+    assert client.ib.placeOrder.call_count == 0
+    assert cancel_calls == []
+
+
+@pytest.mark.asyncio
+async def test_real_broker_adapter_accepts_matching_account_owner_grant() -> None:
+    client, cancel_calls = _client(owned_open_id=100, foreign_open_id=999)
+    adapter = IbkrBrokerAdapter(
+        client,
+        require_account_owner_write_fence=True,
+        owner_generation_provider=lambda: 7,
+    )
+
+    with account_owner_write_grant(
+        account_id="DU1234567",
+        owner_generation=7,
+        boundary="broker.place_order",
+    ):
+        await adapter.place_order(_spec())
+    with account_owner_write_grant(
+        account_id="DU1234567",
+        owner_generation=7,
+        boundary="broker.cancel_open_orders",
+    ):
+        cancelled = await adapter.cancel_open_orders()
+
+    assert cancelled == [100]
+    assert cancel_calls == [100]
+
+
+@pytest.mark.asyncio
+async def test_real_broker_adapter_refuses_stale_account_owner_grant() -> None:
+    client, _ = _client(owned_open_id=100, foreign_open_id=999)
+    adapter = IbkrBrokerAdapter(
+        client,
+        require_account_owner_write_fence=True,
+        owner_generation_provider=lambda: 8,
+    )
+
+    with pytest.raises(AccountOwnerWriteFenceError) as exc, account_owner_write_grant(
+        account_id="DU1234567",
+        owner_generation=7,
+        boundary="broker.place_order",
+    ):
+        await adapter.place_order(_spec())
+
+    assert exc.value.reason == "OWNER_GENERATION_STALE_AT_BROKER_WRITE"
+    assert client.ib.placeOrder.call_count == 0
 
 
 @pytest.mark.asyncio
