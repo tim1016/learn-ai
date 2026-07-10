@@ -39,6 +39,15 @@ defer each known safety defect:
 - `verdict-gates-nothing` and crashed-sibling-`ACTIVE` are fixed here or carry
   a written deferral with owner and safety rationale.
 
+The order-idempotency item was already satisfied before this roadmap landed.
+Commit `89248b0c6` added a per-`client_order_id` lock around the complete
+cache-check → contract-qualification → broker-submit → cache-store window, and
+`test_place_paper_order_concurrent_same_id_places_once` forces the former
+interleaving and proves one broker placement. The 2026-07-10 Stage 1 audit
+removed the stale B-01 entry from `docs/known-gaps.md`; durable cross-restart
+idempotency remains the separately documented Phase 3.5 boundary, not this
+in-process TOCTOU defect.
+
 **Exit criteria:**
 
 - every fixed defect has a regression test that fails before the fix;
