@@ -1075,9 +1075,10 @@ class BrokerActivityPublisher:
                     # Foreign execution — not initiated by this bot.
                     # Author the row for forensic visibility, then
                     # emit a critical incident (PR 6 §11).
-                    self._author_and_publish(event=event, intent=None)
-                    authored += 1
-                    self._emit_cross_client_incident(event, now_ms=now_ms)
+                    row = self._author_and_publish(event=event, intent=None)
+                    if row is not None:
+                        authored += 1
+                        self._emit_cross_client_incident(event, now_ms=now_ms)
                 else:
                     intent = self._build_engine_intent(intent_id)
                     row = self._author_and_publish(event=event, intent=intent)

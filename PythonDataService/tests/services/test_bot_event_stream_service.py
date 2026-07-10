@@ -51,6 +51,7 @@ async def test_stream_run_replays_backlog_then_newly_appended_rows(tmp_path: Pat
         await stream.aclose()
 
     assert [first.seq, second.seq, third.seq] == [1, 2, 3]
+    assert service._channels == {}
 
 
 async def test_stream_run_honors_since_seq_cursor(tmp_path: Path) -> None:
@@ -64,6 +65,7 @@ async def test_stream_run_honors_since_seq_cursor(tmp_path: Path) -> None:
         await stream.aclose()
 
     assert row.seq == 2
+    assert service._channels == {}
 
 
 async def test_stream_run_raises_unavailable_for_corrupt_history(tmp_path: Path) -> None:

@@ -126,8 +126,8 @@ class DurableEventChannel(Generic[RowT]):  # noqa: UP046 - Python 3.11 runtime.
         self._ring: deque[EventRecord[RowT]] = deque(maxlen=ring_size)
         self._subscriber_queue_size = subscriber_queue_size
         self._subscribers: set[EventSubscription[RowT]] = set()
+        self._signature = self._wal_signature()
         self._stream_id = self._identity_stream_id()
-        self._signature: tuple[int, int, int, int] | None = None
         self._last_seq = 0
         self._history_truncated = False
         self._stop_event = asyncio.Event()
@@ -141,6 +141,10 @@ class DurableEventChannel(Generic[RowT]):  # noqa: UP046 - Python 3.11 runtime.
     @property
     def last_cursor(self) -> EventCursor:
         return EventCursor(self._stream_id, self._last_seq)
+
+    @property
+    def subscriber_count(self) -> int:
+        return len(self._subscribers)
 
     def refresh(self) -> None:
         """Synchronize WAL identity and newly durable rows when changed."""
@@ -187,8 +191,10 @@ class DurableEventChannel(Generic[RowT]):  # noqa: UP046 - Python 3.11 runtime.
 
         rows = [record for record in self._ring if record.cursor.seq > baseline.seq]
         oldest_seq = self._ring[0].cursor.seq if self._ring else self._last_seq + 1
-        needs_backfill = self._history_truncated and baseline.seq < oldest_seq
-        if needs_backfill or len(rows) >= self._subscriber_queue_size - queue.qsize():
+        needs_backfill = (
+            self._history_truncated and baseline.seq + 1 < oldest_seq
+        )
+        if needs_backfill or len(rows) > self._subscriber_queue_size - queue.qsize():
             queue.put_nowait(
                 EventGap(
                     stream_id=self._stream_id,
@@ -203,6 +209,42 @@ class DurableEventChannel(Generic[RowT]):  # noqa: UP046 - Python 3.11 runtime.
         self._subscribers.add(subscription)
         return subscription
 
+    def subscribe_with_backfill(
+        self,
+        after_seq: int,
+    ) -> tuple[list[EventRecord[RowT]], EventSubscription[RowT]]:
+        """Deep-backfill a legacy sequence cursor, then subscribe live.
+
+        Composite-cursor clients use the bounded ring and explicit gap
+        recovery. Until Stage 4 replaces sequence-only browser clients, this
+        compatibility path preserves their former full-history behavior while
+        subscribing at the durable high-water mark before rows are emitted.
+        """
+
+        for _attempt in range(3):
+            self._refresh()
+            stream_id = self._stream_id
+            rows = sorted(self._load_rows(), key=self._seq_of)
+            self.scan_count += 1
+            records = [
+                EventRecord(
+                    cursor=EventCursor(stream_id, self._seq_of(row)),
+                    row=row,
+                )
+                for row in rows
+                if self._seq_of(row) > after_seq
+            ]
+            self._refresh()
+            if stream_id == self._stream_id:
+                break
+        else:
+            raise RuntimeError("durable event WAL identity did not stabilize")
+
+        high_water_seq = records[-1].cursor.seq if records else after_seq
+        subscription = self.subscribe(EventCursor(stream_id, high_water_seq))
+        subscription.last_safe_cursor = EventCursor(stream_id, after_seq)
+        return records, subscription
+
     def unsubscribe(self, subscription: EventSubscription[RowT]) -> None:
         subscription.active = False
         self._subscribers.discard(subscription)
@@ -212,6 +254,7 @@ class DurableEventChannel(Generic[RowT]):  # noqa: UP046 - Python 3.11 runtime.
 
         seq = self._seq_of(row)
         signature = self._wal_signature()
+        identity_appeared = self._signature is None and signature is not None
         replaced = (
             self._signature is not None
             and signature is not None
@@ -223,7 +266,7 @@ class DurableEventChannel(Generic[RowT]):  # noqa: UP046 - Python 3.11 runtime.
             and signature[:2] == self._signature[:2]
             and signature[2] < self._signature[2]
         )
-        if replaced or truncated:
+        if identity_appeared or replaced or truncated:
             self._refresh(force=True)
         if seq <= self._last_seq:
             return
@@ -241,6 +284,7 @@ class DurableEventChannel(Generic[RowT]):  # noqa: UP046 - Python 3.11 runtime.
             and signature is not None
             and signature[:2] != self._signature[:2]
         )
+        identity_appeared = self._signature is None and signature is not None
         truncated = (
             self._signature is not None
             and signature is not None
@@ -249,8 +293,9 @@ class DurableEventChannel(Generic[RowT]):  # noqa: UP046 - Python 3.11 runtime.
         )
         last_on_disk = self._seq_of(rows[-1]) if rows else 0
         sequence_replaced = self._last_seq > 0 and last_on_disk < self._last_seq
-        if identity_changed or truncated or sequence_replaced:
-            self._stream_id = self._identity_stream_id(nonce=signature)
+        if identity_appeared or identity_changed or truncated or sequence_replaced:
+            nonce = signature if truncated or sequence_replaced else None
+            self._stream_id = self._identity_stream_id(nonce=nonce)
             self._ring.clear()
             self._last_seq = 0
             self._history_truncated = False

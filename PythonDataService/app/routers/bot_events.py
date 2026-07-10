@@ -160,7 +160,7 @@ def _error_sse(detail: str) -> str:
 async def bot_event_stream(
     run_id: Annotated[str, Path(min_length=1)],
     since_seq: Annotated[
-        int,
+        int | None,
         Query(
             ge=0,
             description=(
@@ -169,7 +169,7 @@ async def bot_event_stream(
                 "clients pass the highest seq they have."
             ),
         ),
-    ] = 0,
+    ] = None,
     poll_ms: Annotated[
         int,
         Query(
@@ -187,27 +187,50 @@ async def bot_event_stream(
     service: BotEventStreamService = Depends(get_bot_event_stream_service),
 ) -> StreamingResponse:
     run_dir = _run_dir_for_http(run_id)
+    channel: DurableEventChannel[BotEventRow] | None = None
 
     try:
-        channel = service.channel_for_run(run_dir)
+        channel = service.live_channel_for_run(run_dir)
         channel.refresh()
     except BotEventStreamUnavailableError:
+        if channel is not None:
+            await service.release_live_channel(run_dir, channel)
+
         async def projection_error_source() -> AsyncIterator[str]:
             yield _error_sse(_BOT_EVENT_PROJECTION_ERROR)
 
         return _streaming_response(projection_error_source())
 
+    assert channel is not None
+
+    effective_since_seq = since_seq if since_seq is not None else 0
     requested_cursor = _resolve_stream_cursor(
         channel=channel,
         query_cursor=cursor,
         last_event_id=last_event_id,
-        legacy_since_seq=since_seq,
+        legacy_since_seq=effective_since_seq,
+    )
+    use_legacy_backfill = cursor is None and (
+        last_event_id is None or since_seq is not None
+    )
+    legacy_after_seq = (
+        requested_cursor.seq if last_event_id is not None else effective_since_seq
     )
     del poll_ms
 
     async def event_source() -> AsyncIterator[str]:
-        subscription = channel.subscribe(requested_cursor)
+        records: list[EventRecord[BotEventRow]] = []
+        if use_legacy_backfill:
+            records, subscription = channel.subscribe_with_backfill(legacy_after_seq)
+        else:
+            subscription = channel.subscribe(requested_cursor)
         try:
+            for record in records:
+                yield event_message_sse(
+                    record,
+                    encode_row=lambda row: row.model_dump_json(),
+                )
+                subscription.acknowledge(record.cursor)
             while True:
                 message = await subscription.queue.get()
                 yield event_message_sse(
@@ -238,6 +261,7 @@ async def bot_event_stream(
             yield _error_sse(_BOT_EVENT_STREAM_ERROR)
         finally:
             channel.unsubscribe(subscription)
+            await service.release_live_channel(run_dir, channel)
 
     return _streaming_response(event_source())
 
@@ -256,12 +280,7 @@ def _resolve_stream_cursor(
     last_event_id: str | None,
     legacy_since_seq: int,
 ) -> EventCursor:
-    if query_cursor and last_event_id and query_cursor != last_event_id:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            detail="cursor and Last-Event-ID must match when both are supplied",
-        )
-    parsed = _parse_event_cursor(query_cursor or last_event_id)
+    parsed = _parse_event_cursor(last_event_id or query_cursor)
     if parsed is not None:
         return parsed
     return EventCursor(channel.stream_id, legacy_since_seq)

@@ -16,7 +16,6 @@ from app.services.bot_event_wal import (
 )
 from app.services.durable_event_channel import (
     DurableEventChannel,
-    EventCursor,
     EventEnd,
     EventRecord,
 )
@@ -52,20 +51,47 @@ class BotEventStreamService:
                 "bot-event stream history cannot be projected"
             ) from exc
 
-    def channel_for_run(self, run_dir: Path) -> DurableEventChannel[BotEventRow]:
+    def _new_channel(self, key: Path) -> DurableEventChannel[BotEventRow]:
+        return DurableEventChannel(
+            channel_key=f"bot-events:{key.name}",
+            wal_path=run_bot_event_wal_path(key),
+            trusted_root=key,
+            load_rows=lambda: self._load_rows(key),
+            seq_of=lambda row: row.seq,
+        )
+
+    def channel_for_run(
+        self,
+        run_dir: Path,
+    ) -> DurableEventChannel[BotEventRow]:
+        return self._new_channel(run_dir.resolve())
+
+    def live_channel_for_run(
+        self,
+        run_dir: Path,
+    ) -> DurableEventChannel[BotEventRow]:
         key = run_dir.resolve()
         channel = self._channels.get(key)
         if channel is None:
-            channel = DurableEventChannel(
-                channel_key=f"bot-events:{key.name}",
-                wal_path=run_bot_event_wal_path(key),
-                trusted_root=key,
-                load_rows=lambda: self._load_rows(key),
-                seq_of=lambda row: row.seq,
-            )
+            channel = self._new_channel(key)
             self._channels[key] = channel
-        channel.start()
+        try:
+            channel.start()
+        except Exception:
+            self._channels.pop(key, None)
+            raise
         return channel
+
+    async def release_live_channel(
+        self,
+        run_dir: Path,
+        channel: DurableEventChannel[BotEventRow],
+    ) -> None:
+        key = run_dir.resolve()
+        if self._channels.get(key) is not channel or channel.subscriber_count:
+            return
+        self._channels.pop(key, None)
+        await channel.stop()
 
     async def stop_all(self) -> None:
         channels = list(self._channels.values())
@@ -97,9 +123,12 @@ class BotEventStreamService:
         """Yield ring history after ``since_seq``, then follow live rows."""
 
         del poll_interval_s, page_limit
-        channel = self.channel_for_run(run_dir)
-        subscription = channel.subscribe(EventCursor(channel.stream_id, since_seq))
+        channel = self.live_channel_for_run(run_dir)
+        records, subscription = channel.subscribe_with_backfill(since_seq)
         try:
+            for record in records:
+                yield record.row
+                subscription.acknowledge(record.cursor)
             while True:
                 message = await subscription.queue.get()
                 if isinstance(message, EventRecord):
@@ -111,6 +140,7 @@ class BotEventStreamService:
                     return
         finally:
             channel.unsubscribe(subscription)
+            await self.release_live_channel(run_dir, channel)
 
 
 _SERVICE = BotEventStreamService()

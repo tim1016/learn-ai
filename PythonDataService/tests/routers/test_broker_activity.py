@@ -339,6 +339,7 @@ async def test_sse_stream_delivers_owner_published_row_after_ring_replay(
         async with AsyncClient(transport=transport, base_url="http://test") as client, client.stream(
             "GET",
             f"/api/live-instances/{SID}/broker-activity/stream",
+            params={"cursor": f"{stream_id}:0"},
             headers={"Last-Event-ID": f"{stream_id}:0"},
         ) as resp:
             assert resp.status_code == 200
@@ -361,3 +362,61 @@ async def test_sse_stream_delivers_owner_published_row_after_ring_replay(
 
     seqs = [int(s) for s in re.findall(r'"seq":(\d+)', text)]
     assert seqs == [1, 2, 3]
+
+
+async def test_sse_reconnect_prefers_newer_last_event_id_over_query_cursor(
+    tmp_path: Path, fresh_registry
+) -> None:
+    publisher = _seed_publisher(tmp_path, [_row(1), _row(2)])
+    await fresh_registry.register(publisher, strategy_instance_id=SID)
+    stream_id = publisher.event_channel.stream_id
+    app = await _make_app()
+    transport = ASGITransport(app=app)
+
+    async def _collect_stream():
+        async with AsyncClient(transport=transport, base_url="http://test") as client, client.stream(
+            "GET",
+            f"/api/live-instances/{SID}/broker-activity/stream",
+            params={"cursor": f"{stream_id}:0"},
+            headers={"Last-Event-ID": f"{stream_id}:1"},
+        ) as resp:
+            assert resp.status_code == 200
+            return await resp.aread()
+
+    collector = asyncio.create_task(_collect_stream())
+    await asyncio.sleep(0.05)
+    await publisher.stop()
+    text = (await asyncio.wait_for(collector, timeout=2.0)).decode()
+
+    assert '"seq":1' not in text
+    assert '"seq":2' in text
+
+
+async def test_legacy_sse_deep_backfills_beyond_queue_capacity(
+    tmp_path: Path, fresh_registry
+) -> None:
+    publisher = _seed_publisher(tmp_path, [_row(seq) for seq in range(1, 71)])
+    await fresh_registry.register(publisher, strategy_instance_id=SID)
+    app = await _make_app()
+    transport = ASGITransport(app=app)
+
+    async def _collect_stream():
+        async with AsyncClient(transport=transport, base_url="http://test") as client, client.stream(
+            "GET",
+            f"/api/live-instances/{SID}/broker-activity/stream",
+            params={"since_seq": 0},
+        ) as resp:
+            assert resp.status_code == 200
+            return await resp.aread()
+
+    collector = asyncio.create_task(_collect_stream())
+    await asyncio.sleep(0.05)
+    await publisher.stop()
+    text = (await asyncio.wait_for(collector, timeout=2.0)).decode()
+
+    import re
+
+    assert "event: gap" not in text
+    assert [int(seq) for seq in re.findall(r'"seq":(\d+)', text)] == list(
+        range(1, 71)
+    )

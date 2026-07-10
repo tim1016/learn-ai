@@ -78,6 +78,49 @@ async def test_cursor_before_ring_gets_gap_with_last_safe_cursor(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+async def test_cursor_immediately_before_ring_replays_contiguous_rows(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "events.jsonl"
+    path.write_text("many\n")
+    rows = [_Row(seq) for seq in range(1, 7)]
+    channel = _channel(path, rows, ring_size=3)
+    channel.start()
+
+    subscription = channel.subscribe(EventCursor(channel.stream_id, 3))
+    messages = [await subscription.queue.get() for _ in range(3)]
+
+    assert [message.row.seq for message in messages if isinstance(message, EventRecord)] == [
+        4,
+        5,
+        6,
+    ]
+    assert all(isinstance(message, EventRecord) for message in messages)
+    await channel.stop()
+
+
+@pytest.mark.asyncio
+async def test_ring_replay_uses_exact_queue_capacity_without_gap(tmp_path: Path) -> None:
+    path = tmp_path / "events.jsonl"
+    path.write_text("four\n")
+    rows = [_Row(seq) for seq in range(1, 5)]
+    channel = _channel(path, rows, ring_size=4, queue_size=4)
+    channel.start()
+
+    subscription = channel.subscribe(EventCursor(channel.stream_id, 0))
+    messages = [await subscription.queue.get() for _ in range(4)]
+
+    assert [message.row.seq for message in messages if isinstance(message, EventRecord)] == [
+        1,
+        2,
+        3,
+        4,
+    ]
+    assert subscription.active is True
+    await channel.stop()
+
+
+@pytest.mark.asyncio
 async def test_replacement_emits_reset_and_changes_stream_id(tmp_path: Path) -> None:
     path = tmp_path / "events.jsonl"
     path.write_text("old\n")
@@ -120,6 +163,54 @@ async def test_owner_publish_detects_wal_replacement_before_fan_out(
     message = await subscription.queue.get()
     assert isinstance(message, EventReset)
     assert message.stream_id != old_stream_id
+    await channel.stop()
+
+
+@pytest.mark.asyncio
+async def test_first_wal_appearance_resets_placeholder_identity_and_survives_restart(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "events.jsonl"
+    rows: list[_Row] = []
+    channel = _channel(path, rows)
+    channel.start()
+    placeholder_stream_id = channel.stream_id
+    subscription = channel.subscribe(EventCursor(placeholder_stream_id, 0))
+
+    path.write_text("first\n")
+    rows.append(_Row(1))
+    channel.publish(rows[0])
+
+    reset = await subscription.queue.get()
+    assert isinstance(reset, EventReset)
+    assert reset.stream_id != placeholder_stream_id
+    current_stream_id = reset.stream_id
+    replay = channel.subscribe(EventCursor(current_stream_id, 0))
+    record = await replay.queue.get()
+    assert isinstance(record, EventRecord)
+    assert record.row.seq == 1
+    await channel.stop()
+
+    restarted = _channel(path, rows)
+    restarted.start()
+    assert restarted.stream_id == current_stream_id
+    await restarted.stop()
+
+
+@pytest.mark.asyncio
+async def test_legacy_backfill_can_exceed_live_queue_capacity(tmp_path: Path) -> None:
+    path = tmp_path / "events.jsonl"
+    path.write_text("many\n")
+    rows = [_Row(seq) for seq in range(1, 8)]
+    channel = _channel(path, rows, ring_size=4, queue_size=4)
+    channel.start()
+
+    records, subscription = channel.subscribe_with_backfill(0)
+
+    assert [record.row.seq for record in records] == list(range(1, 8))
+    assert subscription.active is True
+    assert subscription.last_safe_cursor == EventCursor(channel.stream_id, 0)
+    assert subscription.queue.empty()
     await channel.stop()
 
 

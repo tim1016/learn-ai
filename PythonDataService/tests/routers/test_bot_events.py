@@ -294,13 +294,15 @@ async def test_bot_events_stream_reports_projection_error_without_exception_deta
     run_dir = _run_dir(live_runs_root)
     (run_dir / "bot_events.jsonl").write_text("{not-json}\n", encoding="utf-8")
 
-    response = await bot_event_stream(RUN_ID, service=BotEventStreamService())
+    service = BotEventStreamService()
+    response = await bot_event_stream(RUN_ID, service=service)
     chunk = await anext(response.body_iterator)
     text = chunk.decode() if isinstance(chunk, bytes) else chunk
 
     assert "event: error" in text
     assert "bot-event stream history cannot be projected" in text
     assert "not-json" not in text
+    assert service._channels == {}
 
 
 async def test_bot_events_stream_resumes_from_last_event_id(
@@ -327,6 +329,7 @@ async def test_bot_events_stream_resumes_from_last_event_id(
 
     response = await bot_event_stream(
         RUN_ID,
+        cursor=f"{channel.stream_id}:0",
         last_event_id=f"{channel.stream_id}:1",
         service=service,
     )
@@ -339,3 +342,78 @@ async def test_bot_events_stream_resumes_from_last_event_id(
 
     assert f"id: {channel.stream_id}:2" in text
     assert '"seq":2' in text
+    assert '"seq":1' not in text
+    assert service._channels == {}
+
+
+async def test_bot_events_legacy_stream_deep_backfills_beyond_queue_capacity(
+    live_runs_root: Path,
+) -> None:
+    run_dir = _run_dir(live_runs_root)
+    _append(
+        run_dir,
+        [
+            _raw(
+                seq=seq,
+                event_type=BotEventRawType.SIGNAL_FIRED,
+                identity=BotEventIdentity(evaluation_id=f"eval-{seq}"),
+            )
+            for seq in range(1, 71)
+        ],
+    )
+    service = BotEventStreamService()
+    response = await bot_event_stream(RUN_ID, since_seq=0, service=service)
+    chunks: list[str] = []
+    try:
+        for _ in range(70):
+            chunk = await anext(response.body_iterator)
+            chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+    finally:
+        await response.body_iterator.aclose()
+
+    text = "".join(chunks)
+    assert "event: gap" not in text
+    assert [
+        int(part.split('"seq":', 1)[1].split(",", 1)[0])
+        for part in chunks
+    ] == list(range(1, 71))
+    assert service._channels == {}
+
+
+async def test_bot_events_legacy_reconnect_deep_backfills_from_last_event_id(
+    live_runs_root: Path,
+) -> None:
+    run_dir = _run_dir(live_runs_root)
+    _append(
+        run_dir,
+        [
+            _raw(
+                seq=seq,
+                event_type=BotEventRawType.SIGNAL_FIRED,
+                identity=BotEventIdentity(evaluation_id=f"eval-{seq}"),
+            )
+            for seq in range(1, 71)
+        ],
+    )
+    service = BotEventStreamService()
+    channel = service.channel_for_run(run_dir)
+    response = await bot_event_stream(
+        RUN_ID,
+        since_seq=0,
+        last_event_id=f"{channel.stream_id}:65",
+        service=service,
+    )
+    chunks: list[str] = []
+    try:
+        for _ in range(5):
+            chunk = await anext(response.body_iterator)
+            chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+    finally:
+        await response.body_iterator.aclose()
+
+    assert "event: gap" not in "".join(chunks)
+    assert [
+        int(part.split('"seq":', 1)[1].split(",", 1)[0])
+        for part in chunks
+    ] == list(range(66, 71))
+    assert service._channels == {}

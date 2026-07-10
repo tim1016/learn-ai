@@ -295,7 +295,7 @@ async def broker_activity_backfill(
 async def broker_activity_stream(
     strategy_instance_id: Annotated[str, Path(min_length=1)],
     since_seq: Annotated[
-        int,
+        int | None,
         Query(
             ge=0,
             description=(
@@ -303,23 +303,40 @@ async def broker_activity_stream(
                 "cursor or Last-Event-ID so WAL replacement is detectable."
             ),
         ),
-    ] = 0,
+    ] = None,
     cursor: Annotated[str | None, Query()] = None,
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
 ) -> StreamingResponse:
     publisher = await _ensure_publisher(strategy_instance_id)
     channel = publisher.event_channel
     channel.refresh()
+    effective_since_seq = since_seq if since_seq is not None else 0
     requested_cursor = _resolve_stream_cursor(
         channel=channel,
         query_cursor=cursor,
         last_event_id=last_event_id,
-        legacy_since_seq=since_seq,
+        legacy_since_seq=effective_since_seq,
+    )
+    use_legacy_backfill = cursor is None and (
+        last_event_id is None or since_seq is not None
+    )
+    legacy_after_seq = (
+        requested_cursor.seq if last_event_id is not None else effective_since_seq
     )
 
     async def event_source():
-        subscription = channel.subscribe(requested_cursor)
+        records: list[EventRecord[BrokerActivityRow]] = []
+        if use_legacy_backfill:
+            records, subscription = channel.subscribe_with_backfill(legacy_after_seq)
+        else:
+            subscription = channel.subscribe(requested_cursor)
         try:
+            for record in records:
+                yield event_message_sse(
+                    record,
+                    encode_row=lambda row: row.model_dump_json(),
+                )
+                subscription.acknowledge(record.cursor)
             while True:
                 message = await subscription.queue.get()
                 yield event_message_sse(
@@ -366,12 +383,7 @@ def _resolve_stream_cursor(
     last_event_id: str | None,
     legacy_since_seq: int,
 ) -> EventCursor:
-    if query_cursor and last_event_id and query_cursor != last_event_id:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            detail="cursor and Last-Event-ID must match when both are supplied",
-        )
-    parsed = _parse_event_cursor(query_cursor or last_event_id)
+    parsed = _parse_event_cursor(last_event_id or query_cursor)
     if parsed is not None:
         return parsed
     return EventCursor(channel.stream_id, legacy_since_seq)

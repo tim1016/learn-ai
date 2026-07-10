@@ -51,7 +51,12 @@ from app.services.broker_activity_wal import (
     instance_broker_activity_wal_path,
     legacy_per_run_broker_activity_wal_path,
 )
-from app.services.durable_event_channel import EventEnd, EventRecord
+from app.services.durable_event_channel import (
+    EventCursor,
+    EventEnd,
+    EventRecord,
+    EventReset,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -271,6 +276,12 @@ async def test_fill_event_is_authored_persisted_and_published(
         assert rows[0].order_ref == ORDER_REF
 
         message = await asyncio.wait_for(subscription.queue.get(), timeout=0.5)
+        if isinstance(message, EventReset):
+            publisher.event_channel.unsubscribe(subscription)
+            subscription = publisher.event_channel.subscribe(
+                EventCursor(message.stream_id, 0)
+            )
+            message = await asyncio.wait_for(subscription.queue.get(), timeout=0.5)
         assert isinstance(message, EventRecord)
         assert message.row.exec_id == "exec-pub-1"
     finally:
@@ -498,6 +509,52 @@ async def test_unauthorable_event_is_skipped_not_persisted(
         assert rows[0].exec_id == "exec-pub-1"
     finally:
         await publisher.stop()
+
+
+async def test_periodic_sweep_does_not_emit_cross_client_incident_without_row(
+    tmp_path: Path,
+) -> None:
+    artifacts = tmp_path / "artifacts"
+    run_dir = tmp_path / "run-dir"
+    incident_store = IncidentStore(run_dir)
+    _seed_envelope(artifacts)
+    bad_foreign_event = IbkrOrderEvent(
+        account_id="DU1234567",
+        order_id=777,
+        perm_id=777,
+        event_type="fill",
+        status="Filled",
+        order_ref=None,
+        symbol=None,
+        side="BUY",
+        order_type="MKT",
+        exec_id="foreign-unauthorable",
+        fill_quantity=100.0,
+        last_fill_price=450.0,
+        ts_ms=1_700_000_000_000,
+    )
+
+    async def recovery_source() -> list[IbkrOrderEvent]:
+        return [bad_foreign_event]
+
+    publisher = BrokerActivityPublisher(
+        strategy_instance_id=SID,
+        bot_order_namespace=NS,
+        run_dir=run_dir,
+        artifacts_root=artifacts,
+        timing_policy=ReconciliationTimingPolicy(),
+        event_source_factory=_make_event_source([]),
+        recovery_source_factory=recovery_source,
+        incident_store=incident_store,
+    )
+
+    authored = await publisher._run_periodic_sweep()
+
+    assert authored == 0
+    assert BrokerActivityWal(
+        instance_broker_activity_wal_path(artifacts, SID)
+    ).read_all() == []
+    assert incident_store.list_unresolved() == []
 
 
 async def test_envelope_cursor_advances_per_row(tmp_path: Path) -> None:
@@ -1625,6 +1682,12 @@ async def test_pending_intent_tick_publishes_to_event_channel(
     subscription = publisher.event_channel.subscribe(None)
     try:
         message = await asyncio.wait_for(subscription.queue.get(), timeout=1.0)
+        if isinstance(message, EventReset):
+            publisher.event_channel.unsubscribe(subscription)
+            subscription = publisher.event_channel.subscribe(
+                EventCursor(message.stream_id, 0)
+            )
+            message = await asyncio.wait_for(subscription.queue.get(), timeout=1.0)
     finally:
         publisher.event_channel.unsubscribe(subscription)
         await publisher.stop()

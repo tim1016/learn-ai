@@ -195,7 +195,10 @@ and stopped by `BotEventStreamService`, and application shutdown drains those
 tailers after the per-bot producers stop. Focused regressions prove five
 clients share one initial scan, composite-cursor reconnect, deep-replay gap,
 WAL replacement through both polling and owner-publish paths, isolated queue
-overflow, and bounded shutdown.
+overflow, and bounded shutdown. Sequence-only rollback clients receive a
+server-side deep backfill before their bounded live subscription; only live
+Bot-event subscriptions are cached, and the last disconnect stops and evicts
+their channel.
 
 ### Stage 3C — Fleet daemon cache and circuit breaker
 
