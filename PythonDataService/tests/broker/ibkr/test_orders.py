@@ -195,6 +195,32 @@ async def test_place_paper_order_refuses_account_owner_account_mismatch() -> Non
 
 
 @pytest.mark.asyncio
+async def test_place_paper_order_rechecks_generation_before_ibkr_place_order() -> None:
+    client = _client()
+    generation = {"value": 1}
+
+    async def _advance_during_qualify(_contract):
+        generation["value"] = 2
+        return [SimpleNamespace(conId=12345)]
+
+    client.ib.qualifyContractsAsync = AsyncMock(side_effect=_advance_during_qualify)
+
+    with (
+        pytest.raises(AccountOwnerWriteFenceError) as exc,
+        account_owner_write_grant(
+            account_id="DU1234567",
+            owner_generation=1,
+            boundary="broker.place_order",
+            owner_generation_provider=lambda: generation["value"],
+        ),
+    ):
+        await place_paper_order(client, _spec())
+
+    assert exc.value.reason == "OWNER_GENERATION_STALE_AT_BROKER_WRITE"
+    client.ib.placeOrder.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_place_paper_order_limit_sell_passes_price_through() -> None:
     client = _client()
     with _owner_grant():
@@ -513,6 +539,34 @@ async def test_cancel_paper_order_refuses_account_owner_account_mismatch() -> No
         await cancel_paper_order(client, order_id=42)
 
     assert exc.value.reason == "ACCOUNT_OWNER_WRITE_ACCOUNT_MISMATCH"
+    client.ib.cancelOrder.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cancel_paper_order_rechecks_generation_before_ibkr_cancel_order() -> None:
+    trade = _trade_namespace(order_id=42)
+    client = _client()
+    generation = {"value": 1}
+
+    def _advance_during_trade_lookup():
+        generation["value"] = 2
+        return [trade]
+
+    client.ib.trades = MagicMock(side_effect=_advance_during_trade_lookup)
+    client.ib.cancelOrder = MagicMock()
+
+    with (
+        pytest.raises(AccountOwnerWriteFenceError) as exc,
+        account_owner_write_grant(
+            account_id="DU1234567",
+            owner_generation=1,
+            boundary="broker.cancel_order",
+            owner_generation_provider=lambda: generation["value"],
+        ),
+    ):
+        await cancel_paper_order(client, order_id=42)
+
+    assert exc.value.reason == "OWNER_GENERATION_STALE_AT_BROKER_WRITE"
     client.ib.cancelOrder.assert_not_called()
 
 

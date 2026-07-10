@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -13,6 +13,7 @@ class AccountOwnerWriteGrant:
     account_id: str
     owner_generation: int
     boundary: str
+    owner_generation_provider: Callable[[], int] | None = None
 
 
 class AccountOwnerWriteFenceError(RuntimeError):
@@ -45,11 +46,13 @@ def account_owner_write_grant(
     account_id: str,
     owner_generation: int,
     boundary: str,
+    owner_generation_provider: Callable[[], int] | None = None,
 ) -> Iterator[AccountOwnerWriteGrant]:
     grant = AccountOwnerWriteGrant(
         account_id=account_id,
         owner_generation=owner_generation,
         boundary=boundary,
+        owner_generation_provider=owner_generation_provider,
     )
     token = _current_account_owner_write_grant.set(grant)
     try:
@@ -66,6 +69,7 @@ def require_account_owner_write_grant(
     *,
     account_id: str | None,
     boundary: str,
+    owner_generation_provider: Callable[[], int] | None = None,
 ) -> AccountOwnerWriteGrant:
     grant = current_account_owner_write_grant()
     if grant is None:
@@ -79,6 +83,24 @@ def require_account_owner_write_grant(
             reason="ACCOUNT_OWNER_WRITE_ACCOUNT_MISMATCH",
             boundary=boundary,
             account_id=account_id,
+            grant_owner_generation=grant.owner_generation,
+        )
+    effective_generation_provider = (
+        owner_generation_provider
+        if owner_generation_provider is not None
+        else grant.owner_generation_provider
+    )
+    current_owner_generation = (
+        effective_generation_provider()
+        if effective_generation_provider is not None
+        else None
+    )
+    if current_owner_generation is not None and grant.owner_generation != current_owner_generation:
+        raise AccountOwnerWriteFenceError(
+            reason="OWNER_GENERATION_STALE_AT_BROKER_WRITE",
+            boundary=boundary,
+            account_id=account_id,
+            current_owner_generation=current_owner_generation,
             grant_owner_generation=grant.owner_generation,
         )
     return grant

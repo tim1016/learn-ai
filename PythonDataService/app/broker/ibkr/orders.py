@@ -516,6 +516,10 @@ async def _place_and_build_ack(
         f" {spec.strike}{spec.right}" if spec.right else "",
     )
 
+    require_account_owner_write_grant(
+        account_id=account_id,
+        boundary="broker.place_order",
+    )
     trade = client.ib.placeOrder(qualified_contract, order)
     ibkr_evidence = build_place_order_evidence(qualified_contract, order, trade)
     get_ibkr_api_evidence_recorder().record(
@@ -736,6 +740,10 @@ async def cancel_paper_order(
         raise OrderNotFoundError(
             f"No open order with order_id={order_id} owned by this client."
         )
+    require_account_owner_write_grant(
+        account_id=account_id,
+        boundary="broker.cancel_order",
+    )
     client.ib.cancelOrder(trade.order)
     request_snapshot = cancel_order_request_evidence(trade.order)
     get_ibkr_api_evidence_recorder().record(

@@ -305,7 +305,8 @@ async def test_account_owner_refuses_old_owner_after_takeover_advances_persisted
         artifacts_root=tmp_path,
         account_id=ACCOUNT,
         broker=old_owner_broker,
-        owner_generation_provider=provider,
+        owner_generation_provider=lambda: GENERATION,
+        current_owner_generation_provider=provider,
         owner_generation_advancer=advancer,
         classifier=lambda _intent: _continue_decision(),
     )
@@ -317,6 +318,7 @@ async def test_account_owner_refuses_old_owner_after_takeover_advances_persisted
         account_id=ACCOUNT,
         broker=new_owner_broker,
         owner_generation_provider=provider,
+        current_owner_generation_provider=provider,
         owner_generation_advancer=advancer,
         classifier=lambda _intent: _continue_decision(),
     )

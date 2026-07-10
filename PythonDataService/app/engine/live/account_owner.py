@@ -101,6 +101,7 @@ class AccountOwner:
         account_id: str,
         broker,
         owner_generation_provider: Callable[[], int],
+        current_owner_generation_provider: Callable[[], int] | None = None,
         owner_generation_advancer: Callable[[AccountOwnerRuntimePhase, int], AccountOwnerGeneration] | None = None,
         classifier: Callable[[AccountOwnerSubmitIntent], AccountClassifierDecision],
         initial_phase: AccountOwnerRuntimePhase = "accepting",
@@ -109,6 +110,11 @@ class AccountOwner:
         self._account_id = account_id
         self._broker = broker
         self._owner_generation_provider = owner_generation_provider
+        self._current_owner_generation_provider = (
+            current_owner_generation_provider
+            if current_owner_generation_provider is not None
+            else owner_generation_provider
+        )
         self._owner_generation_advancer = owner_generation_advancer
         self._classifier = classifier
         self._lock = asyncio.Lock()
@@ -186,6 +192,7 @@ class AccountOwner:
                 account_id=self._account_id,
                 owner_generation=owner_generation,
                 boundary=boundary,
+                owner_generation_provider=self._current_owner_generation_provider,
             ):
                 return await _maybe_await(write())
 
@@ -356,6 +363,7 @@ class AccountOwner:
                 account_id=intent.account_id,
                 owner_generation=intent.owner_generation,
                 boundary="broker.place_order",
+                owner_generation_provider=self._current_owner_generation_provider,
             ):
                 ack = await self._broker.place_order(spec)
         except AccountOwnerWriteFenceError as exc:
@@ -428,7 +436,7 @@ class AccountOwner:
         *,
         reason: str,
     ) -> None:
-        current_generation = self._owner_generation_provider()
+        current_generation = self._current_owner_generation_provider()
         if intent.owner_generation != current_generation:
             self._reject(
                 intent,

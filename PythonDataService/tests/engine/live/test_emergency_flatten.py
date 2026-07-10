@@ -21,6 +21,7 @@ from app.broker.ibkr.models import (
     IbkrPosition,
     IbkrPositionsSnapshot,
 )
+from app.engine.live.account_owner_fence import current_account_owner_write_grant
 from app.engine.live.intent_events import IntentEventType, IntentKind
 from app.engine.live.intent_wal import IntentWal
 from app.engine.live.run import cmd_emergency_flatten
@@ -113,6 +114,7 @@ def _args(
     confirm: bool = True,
     broker=None,
     client=None,
+    artifacts_root: Path | None = None,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         run_dir=run_dir,
@@ -120,6 +122,7 @@ def _args(
         confirm=confirm,
         broker=broker,
         client=client,
+        artifacts_root=artifacts_root or Path("PythonDataService/artifacts"),
     )
 
 
@@ -251,6 +254,34 @@ def test_emergency_flatten_cancels_open_orders_before_liquidating_vcr_0009(
     assert all(step.startswith("place_order:") for step in broker.timeline[1:])
     log = (tmp_path / "emergency_flatten.log").read_text()
     assert "cancelled_open_orders: count=2" in log
+
+
+def test_emergency_flatten_runs_broker_writes_under_account_owner_grant(
+    tmp_path: Path,
+) -> None:
+    class _GrantAssertingBroker(_FakeFlattenBroker):
+        async def cancel_open_orders(self) -> list[int]:
+            grant = current_account_owner_write_grant()
+            assert grant is not None
+            assert grant.account_id == "DU123"
+            assert grant.boundary == "broker.cancel_order"
+            return await super().cancel_open_orders()
+
+        async def place_order(self, spec: IbkrOrderSpec) -> IbkrOrderAck:
+            grant = current_account_owner_write_grant()
+            assert grant is not None
+            assert grant.account_id == "DU123"
+            assert grant.boundary == "broker.place_order"
+            return await super().place_order(spec)
+
+    broker = _GrantAssertingBroker(positions=[_pos("SPY", 100)])
+
+    rc = cmd_emergency_flatten(
+        _args(run_dir=tmp_path, broker=broker, artifacts_root=tmp_path / "artifacts")
+    )
+
+    assert rc == 0
+    assert broker.timeline == ["cancel_open_orders", "place_order:SPY"]
 
 
 def test_emergency_flatten_proceeds_when_cancel_raises_vcr_0009(
