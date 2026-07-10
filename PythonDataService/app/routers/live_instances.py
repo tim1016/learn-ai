@@ -2250,7 +2250,7 @@ async def deploy_preflight(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
     blockers = deploy_preflight_service.author_deploy_blockers(signals)
     return DeployPreflightResponse(
-        ready=not any(blocker.severity == "blocking" for blocker in blockers),
+        ready=not any(blocker.condition.severity == "blocking" for blocker in blockers),
         blockers=blockers,
     )
 
@@ -2273,7 +2273,7 @@ async def _raise_if_deploy_preflight_blocks_start(
     blockers = [
         blocker
         for blocker in deploy_preflight_service.author_deploy_blockers(signals)
-        if blocker.severity == "blocking"
+        if blocker.condition.severity == "blocking"
     ]
     if not blockers:
         return

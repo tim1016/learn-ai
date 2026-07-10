@@ -12,7 +12,11 @@ from app.broker.ibkr.config import get_settings
 from app.broker.runtime_snapshot import BrokerRuntimeSnapshot, snapshot_data_plane_broker
 from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import read_account_freeze
-from app.schemas.operator_blocker import NavigateAction, OperatorBlocker, OperatorMove
+from app.schemas.operator_blocker import (
+    NavigateAction,
+    OperatorBlocker,
+    OperatorMove,
+)
 from app.services.account_truth_snapshot import assess_account_truth, get_account_truth_snapshot_provider
 from app.services.fleet_contamination import compute_account_fleet_contamination
 from app.services.strategy_validation_manifest import (
@@ -133,9 +137,10 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
 
     if not signals.daemon_reachable:
         blockers.append(
-            OperatorBlocker(
-                id="daemon_down",
-                severity="blocking",
+            OperatorBlocker.for_host(
+                condition_id="daemon_down",
+                scope="host",
+                host="deploy_preflight",
                 disposition="fix_elsewhere",
                 headline="Live engine unavailable",
                 detail="Start the engine on this machine, then recheck.",
@@ -147,9 +152,10 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
     broker_state = signals.broker_connection_state
     if broker_state is None or broker_state == "disconnected":
         blockers.append(
-            OperatorBlocker(
-                id="broker_disconnected",
-                severity="blocking",
+            OperatorBlocker.for_host(
+                condition_id="broker_disconnected",
+                scope="broker",
+                host="deploy_preflight",
                 disposition="fix_elsewhere",
                 headline="Broker disconnected",
                 detail="Connect the IBKR session before deploying or starting this bot.",
@@ -159,9 +165,10 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
         )
     elif broker_state == "soft_lost":
         blockers.append(
-            OperatorBlocker(
-                id="broker_soft_lost",
-                severity="blocking",
+            OperatorBlocker.for_host(
+                condition_id="broker_soft_lost",
+                scope="broker",
+                host="deploy_preflight",
                 disposition="wait",
                 headline="Broker connection temporarily lost",
                 detail="Waiting for the broker session to recover.",
@@ -170,9 +177,10 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
         )
     elif broker_state == "degraded_data_farm":
         blockers.append(
-            OperatorBlocker(
-                id="broker_data_farm_degraded",
-                severity="blocking",
+            OperatorBlocker.for_host(
+                condition_id="broker_data_farm_degraded",
+                scope="broker",
+                host="deploy_preflight",
                 disposition="wait",
                 headline="IBKR data farm degraded",
                 detail="Waiting for IBKR market-data evidence to recover.",
@@ -181,9 +189,10 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
         )
     elif broker_state == "subscriptions_stale":
         blockers.append(
-            OperatorBlocker(
-                id="broker_subscriptions_stale",
-                severity="blocking",
+            OperatorBlocker.for_host(
+                condition_id="broker_subscriptions_stale",
+                scope="broker",
+                host="deploy_preflight",
                 disposition="wait",
                 headline="Broker subscriptions stale",
                 detail="Waiting for market-data subscriptions to refresh.",
@@ -193,9 +202,10 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
 
     if signals.account_frozen:
         blockers.append(
-            OperatorBlocker(
-                id="account_frozen",
-                severity="blocking",
+            OperatorBlocker.for_host(
+                condition_id="account_frozen",
+                scope="account",
+                host="deploy_preflight",
                 disposition="fix_elsewhere",
                 headline="Account frozen",
                 detail="Resolve the account sick-bay condition before deploying.",
@@ -209,9 +219,10 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
         )
     elif not signals.account_proven:
         blockers.append(
-            OperatorBlocker(
-                id="account_not_proven",
-                severity="blocking",
+            OperatorBlocker.for_host(
+                condition_id="account_not_proven",
+                scope="account",
+                host="deploy_preflight",
                 disposition="fix_elsewhere",
                 headline="Account not proven",
                 detail="Run account reconcile to prove the account is clean before deploying.",
@@ -226,9 +237,10 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
 
     if signals.fleet_blocks_starts:
         blockers.append(
-            OperatorBlocker(
-                id="fleet_contaminated",
-                severity="blocking",
+            OperatorBlocker.for_host(
+                condition_id="fleet_contaminated",
+                scope="fleet",
+                host="deploy_preflight",
                 disposition="fix_elsewhere",
                 headline="Fleet state blocks new deploys",
                 detail="Clear the account fleet state before deploying.",
@@ -239,9 +251,10 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
 
     if not signals.strategy_deployable:
         blockers.append(
-            OperatorBlocker(
-                id="strategy_not_validated",
-                severity="blocking",
+            OperatorBlocker.for_host(
+                condition_id="strategy_not_validated",
+                scope="strategy",
+                host="deploy_preflight",
                 disposition="fix_elsewhere",
                 headline="Strategy not validated",
                 detail="Promote the strategy in Strategy Validation before deploying.",
@@ -252,9 +265,10 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
 
     if signals.instance_already_running:
         blockers.append(
-            OperatorBlocker(
-                id="instance_already_running",
-                severity="blocking",
+            OperatorBlocker.for_host(
+                condition_id="instance_already_running",
+                scope="bot",
+                host="deploy_preflight",
                 disposition="fix_elsewhere",
                 headline="Deployment name already running",
                 detail="A bot with this name is already live. Go to it, or choose a different name.",

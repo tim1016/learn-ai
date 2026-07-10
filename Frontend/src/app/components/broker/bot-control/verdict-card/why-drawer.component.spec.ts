@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { OperatorGate } from '../../../../api/live-instances.types';
 import type { OperatorBlocker } from '../../../../api/operator-blocker.types';
+import { operatorBlockerFixture } from '../../../../testing/operator-blocker-fixtures';
 import { makeStatus } from '../bot-control-page.fixtures';
 import { WhyDrawerComponent } from './why-drawer.component';
 
@@ -33,26 +34,26 @@ const failingGate: OperatorGate = {
   suggested_action_unavailable_reason: 'none',
 };
 
-const terminalBlocker: OperatorBlocker = {
+const terminalBlocker: OperatorBlocker = operatorBlockerFixture({
   id: 'retired',
-  severity: 'blocking',
+  scope: 'bot',
   disposition: 'terminal',
   headline: "Can't recover",
   detail: 'This bot has been retired. Remove it from the catalog or replace it.',
-  primary_move: {
+  primaryMove: {
     label: 'Remove',
     action: { kind: 'remove' },
     target: null,
   },
-  secondary_moves: [
+  secondaryMoves: [
     {
       label: 'Replace',
       action: { kind: 'retire_replace' },
       target: null,
     },
   ],
-  applies_to: 'run',
-};
+  appliesTo: 'run',
+});
 
 describe('WhyDrawerComponent', () => {
   it('renders nothing while closed', () => {
@@ -91,10 +92,12 @@ describe('WhyDrawerComponent', () => {
     expect(text).not.toContain('Unknown');
   });
 
-  it('groups operator blockers by disposition without adding drawer actions', () => {
+  it('renders operator blockers through the shared renderer and emits moves', () => {
     const fixture = renderDrawer();
     fixture.componentRef.setInput('guidance', null);
     fixture.componentRef.setInput('blockers', [terminalBlocker]);
+    const selected = vi.fn();
+    fixture.componentInstance.blockerMoveSelected.subscribe(selected);
     fixture.detectChanges();
 
     const el = fixture.nativeElement as HTMLElement;
@@ -103,7 +106,11 @@ describe('WhyDrawerComponent', () => {
     expect(text).toContain('This bot has been retired.');
     expect(text).toContain('Remove');
     expect(text).toContain('Replace');
-    expect(el.querySelector('.why-drawer__blocker button')).toBeNull();
+    el.querySelector<HTMLButtonElement>('.operator-blocker-list__move')?.click();
+    expect(selected).toHaveBeenCalledWith({
+      blocker: terminalBlocker,
+      move: terminalBlocker.primary_move,
+    });
   });
 
   it('emits closed when the close button is clicked', () => {

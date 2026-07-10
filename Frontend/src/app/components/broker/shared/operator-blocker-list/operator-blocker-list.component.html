@@ -1,0 +1,36 @@
+@if (blockers().length > 0) {
+  <ul class="operator-blocker-list" [attr.aria-label]="ariaLabel()">
+    @for (blocker of blockers(); track blocker.host + ':' + blocker.condition.id) {
+      <li
+        class="operator-blocker-list__item"
+        [class.severity-warning]="blocker.condition.severity === 'warning'"
+        [class.disposition-terminal]="blocker.disposition === 'terminal'"
+      >
+        <div class="operator-blocker-list__copy">
+          <p class="operator-blocker-list__meta">
+            {{ blocker.condition.scope | receiptLabel }} · {{ blocker.disposition | receiptLabel }}
+          </p>
+          <p class="operator-blocker-list__headline">{{ blocker.headline }}</p>
+          @if (blocker.detail; as detail) {
+            <p class="operator-blocker-list__detail">{{ detail }}</p>
+          }
+        </div>
+        @if (showMoves() && moves(blocker).length > 0) {
+          <div class="operator-blocker-list__moves">
+            @for (move of moves(blocker); track move.label + move.action.kind) {
+              <button
+                type="button"
+                class="operator-blocker-list__move"
+                [class.operator-blocker-list__move--primary]="isPrimaryMove(move)"
+                [class.operator-blocker-list__move--link]="!isPrimaryMove(move)"
+                (click)="selectMove(blocker, move)"
+              >
+                {{ move.label }}
+              </button>
+            }
+          </div>
+        }
+      </li>
+    }
+  </ul>
+}

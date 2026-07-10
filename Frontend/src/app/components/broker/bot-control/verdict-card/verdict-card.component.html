@@ -152,5 +152,6 @@
   [guidance]="guidance()"
   [gates]="gates()"
   [blockers]="status().operator_surface.blockers"
+  (blockerMoveSelected)="invokeDrawerBlockerMove($event)"
   (closed)="closeWhy()"
 />

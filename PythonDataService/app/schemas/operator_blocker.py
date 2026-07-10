@@ -12,6 +12,8 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Disposition = Literal["fix_here", "fix_elsewhere", "wait", "terminal"]
+OperatorHost = Literal["bot_cockpit", "deploy_preflight", "fleet_roster", "account_monitor"]
+ConditionScope = Literal["bot", "account", "broker", "fleet", "host", "strategy"]
 
 
 class NavigateAction(BaseModel):
@@ -72,17 +74,60 @@ class OperatorMove(BaseModel):
     target: str | None = None
 
 
-class OperatorBlocker(BaseModel):
+class OperatorCondition(BaseModel):
+    """Surface-neutral identity authored once from evidence."""
+
     model_config = ConfigDict(extra="forbid")
 
     id: str
     severity: Literal["blocking", "warning"]
+    scope: ConditionScope
+    evidence: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+
+
+class OperatorBlocker(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    condition: OperatorCondition
+    host: OperatorHost
     disposition: Disposition
     headline: str
     detail: str | None = None
     primary_move: OperatorMove | None = None
     secondary_moves: list[OperatorMove] = Field(default_factory=list)
     applies_to: Literal["deploy", "run", "both"]
+
+    @classmethod
+    def for_host(
+        cls,
+        *,
+        condition_id: str,
+        scope: ConditionScope,
+        host: OperatorHost,
+        disposition: Disposition,
+        headline: str,
+        detail: str | None,
+        applies_to: Literal["deploy", "run", "both"],
+        primary_move: OperatorMove | None = None,
+        secondary_moves: list[OperatorMove] | None = None,
+        severity: Literal["blocking", "warning"] = "blocking",
+        evidence: dict[str, str | int | float | bool | None] | None = None,
+    ) -> OperatorBlocker:
+        return cls(
+            condition=OperatorCondition(
+                id=condition_id,
+                severity=severity,
+                scope=scope,
+                evidence=evidence or {},
+            ),
+            host=host,
+            disposition=disposition,
+            headline=headline,
+            detail=detail,
+            primary_move=primary_move,
+            secondary_moves=secondary_moves or [],
+            applies_to=applies_to,
+        )
 
     @model_validator(mode="after")
     def _disposition_move_pairing(self) -> OperatorBlocker:

@@ -12,6 +12,7 @@ import { StrategyValidationService } from '../../../services/strategy-validation
 import type { StrategyValidationCatalog } from '../../../services/strategy-validation.types';
 import type { ActionPlan } from '../../../api/action-plan.types';
 import { BrokerDeployFormComponent } from './broker-deploy-form.component';
+import { operatorBlockerFixture } from '../../../testing/operator-blocker-fixtures';
 
 let activeFixture: { destroy(): void; detectChanges(): void } | null = null;
 
@@ -1130,22 +1131,7 @@ describe('BrokerDeployFormComponent', () => {
     const { fixture, svc, component } = setup({
       deployPreflight: {
         ready: false,
-        blockers: [
-          {
-            id: 'broker_disconnected',
-            severity: 'blocking',
-            disposition: 'fix_elsewhere',
-            headline: 'Broker disconnected',
-            detail: 'Connect the IBKR session before deploying.',
-            primary_move: {
-              label: 'Connect the broker',
-              action: { kind: 'navigate', route: '/broker', fragment: null },
-              target: null,
-            },
-            secondary_moves: [],
-            applies_to: 'both',
-          },
-        ],
+        blockers: [operatorBlockerFixture({ host: 'deploy_preflight' })],
       },
     });
     await flush();

@@ -11,6 +11,7 @@ import {
   makeRuntimeFreshnessWithLeaseAction,
   makeStatus,
 } from './bot-control-page.fixtures';
+import { operatorBlockerFixture } from '../../../testing/operator-blocker-fixtures';
 import {
   flush,
   installBotControlPageTestStubs,
@@ -68,20 +69,20 @@ function removeBotResponse(): BotDeleteResponse {
 function terminalRemoveStatus(): LiveInstanceStatus {
   const status = makeStatus();
   status.operator_surface.blockers = [
-    {
+    operatorBlockerFixture({
       id: 'retired',
-      severity: 'blocking',
+      scope: 'bot',
       disposition: 'terminal',
       headline: "Can't recover",
       detail: 'This bot has been retired. Remove it from the catalog or replace it.',
-      primary_move: {
+      primaryMove: {
         label: 'Remove',
         action: { kind: 'remove' },
         target: null,
       },
-      secondary_moves: [],
-      applies_to: 'run',
-    },
+      secondaryMoves: [],
+      appliesTo: 'run',
+    }),
   ];
   return status;
 }
@@ -90,20 +91,20 @@ function terminalReplaceStatus(): LiveInstanceStatus {
   const status = makeStatus();
   status.daily_lifecycle.primary_action = null;
   status.operator_surface.blockers = [
-    {
+    operatorBlockerFixture({
       id: 'run_poisoned',
-      severity: 'blocking',
+      scope: 'bot',
       disposition: 'terminal',
       headline: "Can't recover",
       detail: 'This run is poisoned and cannot be restarted safely.',
-      primary_move: {
+      primaryMove: {
         label: 'Replace',
         action: { kind: 'retire_replace' },
         target: null,
       },
-      secondary_moves: [],
-      applies_to: 'run',
-    },
+      secondaryMoves: [],
+      appliesTo: 'run',
+    }),
   ];
   return status;
 }

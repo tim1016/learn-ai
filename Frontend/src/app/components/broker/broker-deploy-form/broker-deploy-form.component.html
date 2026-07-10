@@ -76,27 +76,11 @@
           {{ selectedValidation()?.display_name ?? 'Select a validated strategy before deploying.' }}
         </p>
         @if (blockers().length > 0) {
-          <ul class="deploy-blockers" aria-label="Deploy blockers">
-            @for (blocker of blockers(); track blocker.id) {
-              <li class="deploy-blocker" [class.deploy-blocker--blocking]="blocker.severity === 'blocking'">
-                <p class="deploy-blocker__headline">{{ blocker.headline }}</p>
-                @if (blocker.detail) {
-                  <p class="deploy-blocker__detail">{{ blocker.detail }}</p>
-                }
-                @let move = renderMove(blocker);
-                @if (move !== null) {
-                  <button
-                    type="button"
-                    class="deploy-blocker__move"
-                    [class.deploy-blocker__move--primary]="move.variant === 'primary'"
-                    (click)="move.invoke()"
-                  >
-                    {{ move.label }}
-                  </button>
-                }
-              </li>
-            }
-          </ul>
+          <app-operator-blocker-list
+            [blockers]="blockers()"
+            ariaLabel="Deploy blockers"
+            (moveSelected)="handleBlockerMove($event)"
+          />
         }
         <button type="button" class="primary" [disabled]="!canSubmit()" (click)="submit()">
           <i class="pi pi-send" aria-hidden="true"></i>

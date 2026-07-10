@@ -21,10 +21,10 @@ def test_healthy_signals_produce_no_blockers() -> None:
 
 def test_daemon_down_is_blocking_fix_elsewhere() -> None:
     blockers = author_deploy_blockers(_healthy().model_copy(update={"daemon_reachable": False}))
-    ids = {blocker.id: blocker for blocker in blockers}
+    ids = {blocker.condition.id: blocker for blocker in blockers}
 
     assert "daemon_down" in ids
-    assert ids["daemon_down"].severity == "blocking"
+    assert ids["daemon_down"].condition.severity == "blocking"
     assert ids["daemon_down"].disposition == "fix_elsewhere"
     assert ids["daemon_down"].primary_move is not None
 
@@ -34,7 +34,7 @@ def test_broker_disconnected_blocks_deploy() -> None:
         _healthy().model_copy(update={"broker_connection_state": "disconnected"})
     )
 
-    assert "broker_disconnected" in {blocker.id for blocker in blockers}
+    assert "broker_disconnected" in {blocker.condition.id for blocker in blockers}
 
 
 def test_broker_disconnected_blocker_contract() -> None:
@@ -43,7 +43,7 @@ def test_broker_disconnected_blocker_contract() -> None:
         for blocker in author_deploy_blockers(
             _healthy().model_copy(update={"broker_connection_state": "disconnected"})
         )
-        if blocker.id == "broker_disconnected"
+        if blocker.condition.id == "broker_disconnected"
     )
 
     assert blocker.headline == "Broker disconnected"
@@ -57,9 +57,9 @@ def test_broker_soft_lost_is_wait_with_no_move() -> None:
     blockers = author_deploy_blockers(
         _healthy().model_copy(update={"broker_connection_state": "soft_lost"})
     )
-    match = next(blocker for blocker in blockers if blocker.id == "broker_soft_lost")
+    match = next(blocker for blocker in blockers if blocker.condition.id == "broker_soft_lost")
 
-    assert match.severity == "blocking"
+    assert match.condition.severity == "blocking"
     assert match.disposition == "wait"
     assert match.primary_move is None
 
@@ -68,40 +68,40 @@ def test_degraded_data_farm_is_blocking_wait() -> None:
     blockers = author_deploy_blockers(
         _healthy().model_copy(update={"broker_connection_state": "degraded_data_farm"})
     )
-    match = next(blocker for blocker in blockers if blocker.id == "broker_data_farm_degraded")
+    match = next(blocker for blocker in blockers if blocker.condition.id == "broker_data_farm_degraded")
 
-    assert match.severity == "blocking"
+    assert match.condition.severity == "blocking"
     assert match.disposition == "wait"
 
 
 def test_account_frozen_blocks_deploy() -> None:
     blockers = author_deploy_blockers(_healthy().model_copy(update={"account_frozen": True}))
 
-    assert "account_frozen" in {blocker.id for blocker in blockers}
+    assert "account_frozen" in {blocker.condition.id for blocker in blockers}
 
 
 def test_account_not_proven_blocks_deploy() -> None:
     blockers = author_deploy_blockers(_healthy().model_copy(update={"account_proven": False}))
 
-    assert "account_not_proven" in {blocker.id for blocker in blockers}
+    assert "account_not_proven" in {blocker.condition.id for blocker in blockers}
 
 
 def test_fleet_contamination_blocks_deploy() -> None:
     blockers = author_deploy_blockers(_healthy().model_copy(update={"fleet_blocks_starts": True}))
 
-    assert "fleet_contaminated" in {blocker.id for blocker in blockers}
+    assert "fleet_contaminated" in {blocker.condition.id for blocker in blockers}
 
 
 def test_strategy_not_validated_blocks_deploy() -> None:
     blockers = author_deploy_blockers(_healthy().model_copy(update={"strategy_deployable": False}))
 
-    assert "strategy_not_validated" in {blocker.id for blocker in blockers}
+    assert "strategy_not_validated" in {blocker.condition.id for blocker in blockers}
 
 
 def test_instance_already_running_blocks_deploy() -> None:
     blockers = author_deploy_blockers(_healthy().model_copy(update={"instance_already_running": True}))
 
-    assert "instance_already_running" in {blocker.id for blocker in blockers}
+    assert "instance_already_running" in {blocker.condition.id for blocker in blockers}
 
 
 def test_every_blocker_satisfies_pairing_invariant() -> None:

@@ -229,7 +229,11 @@ export function resolveVerdictCardModel(status: LiveInstanceStatus): VerdictCard
   const blocker = primaryBlocker(status);
   const terminalBlocker = blocker?.disposition === 'terminal' ? blocker : null;
   const blockerTone: VerdictTone | null =
-    blocker && !terminalBlocker ? (blocker.severity === 'blocking' ? 'danger' : 'warning') : null;
+    blocker && !terminalBlocker
+      ? blocker.condition.severity === 'blocking'
+        ? 'danger'
+        : 'warning'
+      : null;
   return {
     state,
     stateLabel: blocker?.headline ?? state,

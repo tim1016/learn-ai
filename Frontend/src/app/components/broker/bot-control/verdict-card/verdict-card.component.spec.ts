@@ -13,6 +13,7 @@ import type { PresentedAction } from '../lib/suggested-action-renderer';
 import { makeStatus } from '../bot-control-page.fixtures';
 import { makeDailyLifecycleFixture } from '../../../../testing/live-instance-status-fixtures';
 import { addRetiredTerminalBlocker } from '../../../../testing/operator-surface-fixtures';
+import { operatorBlockerFixture } from '../../../../testing/operator-blocker-fixtures';
 import { ActivityTabComponent } from '../tabs/activity-tab.component';
 import { VerdictCardComponent } from './verdict-card.component';
 
@@ -112,22 +113,7 @@ describe('VerdictCardComponent', () => {
   it('renders a blocker move as the primary verb and emits it on click', () => {
     const fixture = renderCard(
       statusWith({ display_status: 'Sick bay', primary_action: null }, (status) => {
-        status.operator_surface.blockers = [
-          {
-            id: 'broker_disconnected',
-            severity: 'blocking',
-            disposition: 'fix_elsewhere',
-            headline: 'Broker disconnected',
-            detail: 'Connect the IBKR session before deploying or starting this bot.',
-            primary_move: {
-              label: 'Connect the broker',
-              action: { kind: 'navigate', route: '/broker', fragment: null },
-              target: null,
-            },
-            secondary_moves: [],
-            applies_to: 'both',
-          },
-        ];
+        status.operator_surface.blockers = [operatorBlockerFixture()];
       }),
     );
     const el = fixture.nativeElement as HTMLElement;

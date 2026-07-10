@@ -22,9 +22,21 @@ the missing atom both surfaces consume.
 
 ## Decision
 
-Introduce `OperatorBlocker` as the shared backend-authored blocker atom
-for deploy preflight and bot control. Every blocker carries exactly one
-closed disposition:
+Introduce a two-layer blocker contract:
+
+1. `OperatorCondition` is the surface-neutral identity authored once from
+   evidence. It carries stable `id`, `scope`, `severity`, and evidence facts.
+2. `OperatorBlocker` is the host-scoped projection of that condition for a
+   specific surface (`bot_cockpit`, `deploy_preflight`, `fleet_roster`, or
+   `account_monitor`). It carries the host-relative disposition, copy, and
+   moves.
+
+`OperatorCondition` is the only home for condition identity and condition
+severity. `OperatorBlocker` does not duplicate `id` or `severity`; consumers
+read `blocker.condition.id` and `blocker.condition.severity` when they need
+identity or blocking/warning tone.
+
+Every blocker carries exactly one closed disposition:
 
 | Disposition | Meaning | Move rule |
 |---|---|---|
@@ -33,9 +45,11 @@ closed disposition:
 | `wait` | The block is transient or self-healing. | Must not carry `primary_move`. |
 | `terminal` | This bot cannot be recovered in place. | Must carry at least one terminal move. |
 
-The schema enforces the move rule. Frontend code renders blocker
-headline, detail, labels, and move targets verbatim; it does not derive
-copy or a cure from reason codes.
+The schema enforces the move rule. Frontend code renders blocker headline,
+detail, labels, confirmation copy, and move targets verbatim; it does not derive
+copy or a cure from reason codes. The same `OperatorCondition.id` may project
+as `fix_elsewhere` on one host and `fix_here` on another host; the condition
+identity and severity do not change when the viewing surface changes.
 
 `blockers[0]` owns the single visible verb on the bot control verdict
 card unless it is terminal. A terminal blocker owns the card completely:
@@ -55,6 +69,6 @@ blocking blocker is present.
 - Retired and poisoned bots are not presented as recoverable. The UI
   can offer Replace and Remove, but not Resume, Start, or Reconcile.
 
-Adding a new blocker requires adding the backend authoring case, a test
-for the disposition/move pairing, and any surface routing needed for
-the declared `OperatorAction`.
+Adding a new blocker requires adding the backend condition authoring case, its
+host projection, a test for the disposition/move pairing, and any surface
+routing needed for the declared `OperatorAction`.

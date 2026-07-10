@@ -1,6 +1,8 @@
 // TS mirror of PythonDataService/app/schemas/operator_blocker.py. Backend
 // authors operator prose; the frontend renders headline/detail/labels verbatim.
 export type Disposition = 'fix_here' | 'fix_elsewhere' | 'wait' | 'terminal';
+export type OperatorHost = 'bot_cockpit' | 'deploy_preflight' | 'fleet_roster' | 'account_monitor';
+export type OperatorConditionScope = 'bot' | 'account' | 'broker' | 'fleet' | 'host' | 'strategy';
 
 export interface NavigateAction {
   kind: 'navigate';
@@ -41,9 +43,16 @@ export interface OperatorMove {
 
 export type BlockerSeverity = 'blocking' | 'warning';
 
-export interface OperatorBlocker {
+export interface OperatorCondition {
   id: string;
   severity: BlockerSeverity;
+  scope: OperatorConditionScope;
+  evidence: Record<string, string | number | boolean | null>;
+}
+
+export interface OperatorBlocker {
+  condition: OperatorCondition;
+  host: OperatorHost;
   disposition: Disposition;
   headline: string;
   detail: string | null;

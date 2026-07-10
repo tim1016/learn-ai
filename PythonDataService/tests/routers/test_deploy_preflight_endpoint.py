@@ -67,4 +67,6 @@ async def test_preflight_blocks_when_broker_down(patch_signals: Callable[..., No
     assert resp.status_code == 200
     body = resp.json()
     assert body["ready"] is False
-    assert any(blocker["id"] == "broker_disconnected" for blocker in body["blockers"])
+    assert any(
+        blocker["condition"]["id"] == "broker_disconnected" for blocker in body["blockers"]
+    )

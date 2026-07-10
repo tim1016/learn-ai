@@ -115,9 +115,9 @@ def test_operator_surface_authors_durable_control_write_blocker() -> None:
     blocker = next(
         blocker
         for blocker in surface.blockers
-        if blocker.id == "durable_control_write_failed"
+        if blocker.condition.id == "durable_control_write_failed"
     )
-    assert blocker.severity == "blocking"
+    assert blocker.condition.severity == "blocking"
     assert blocker.disposition == "fix_elsewhere"
     assert blocker.applies_to == "both"
     assert blocker.primary_move is not None
@@ -440,8 +440,8 @@ def test_operator_surface_authors_poisoned_terminal_blocker() -> None:
     )
 
     blocker = surface.blockers[0]
-    assert blocker.id == "run_poisoned"
-    assert blocker.severity == "blocking"
+    assert blocker.condition.id == "run_poisoned"
+    assert blocker.condition.severity == "blocking"
     assert blocker.disposition == "terminal"
     assert blocker.primary_move is not None
     assert blocker.primary_move.action.kind == "retire_replace"
@@ -452,8 +452,8 @@ def test_operator_surface_authors_retired_terminal_blocker() -> None:
     surface = _surface(bot_lifecycle_phase=BotLifecyclePhase.RETIRED)
 
     blocker = surface.blockers[0]
-    assert blocker.id == "retired"
-    assert blocker.severity == "blocking"
+    assert blocker.condition.id == "retired"
+    assert blocker.condition.severity == "blocking"
     assert blocker.disposition == "terminal"
     assert blocker.primary_move is not None
     assert blocker.primary_move.action.kind == "remove"
@@ -466,9 +466,9 @@ def test_operator_surface_authors_broker_disconnected_blocker() -> None:
         broker_connection_state="disconnected",
     )
 
-    blocker = next(blocker for blocker in surface.blockers if blocker.id == "broker_disconnected")
+    blocker = next(blocker for blocker in surface.blockers if blocker.condition.id == "broker_disconnected")
 
-    assert blocker.severity == "blocking"
+    assert blocker.condition.severity == "blocking"
     assert blocker.disposition == "fix_elsewhere"
     assert blocker.primary_move is not None
     assert blocker.primary_move.label == "Connect the broker"
@@ -489,12 +489,12 @@ def test_broker_disconnected_blocker_matches_deploy_and_run_surfaces() -> None:
                 instance_already_running=False,
             )
         )
-        if blocker.id == "broker_disconnected"
+        if blocker.condition.id == "broker_disconnected"
     )
     run_blocker = next(
         blocker
         for blocker in _surface(process=_IDLE_PROC, broker_connection_state="disconnected").blockers
-        if blocker.id == "broker_disconnected"
+        if blocker.condition.id == "broker_disconnected"
     )
 
     assert run_blocker.headline == deploy_blocker.headline
@@ -508,7 +508,7 @@ def test_broker_disconnected_blocker_matches_deploy_and_run_surfaces() -> None:
 def test_operator_surface_authors_fleet_contamination_blocker() -> None:
     surface = _surface(fleet_blocks_starts=True)
 
-    blocker = next(blocker for blocker in surface.blockers if blocker.id == "fleet_contaminated")
+    blocker = next(blocker for blocker in surface.blockers if blocker.condition.id == "fleet_contaminated")
 
     assert blocker.disposition == "fix_elsewhere"
     assert blocker.primary_move is not None
@@ -529,7 +529,7 @@ def test_operator_surface_authors_daemon_diagnostic_blockers(
 ) -> None:
     surface = _surface(daemon_diagnostic_condition=condition)
 
-    blocker = next(blocker for blocker in surface.blockers if blocker.id == expected_id)
+    blocker = next(blocker for blocker in surface.blockers if blocker.condition.id == expected_id)
 
     assert blocker.disposition == "fix_elsewhere"
     assert blocker.primary_move is not None

@@ -4,6 +4,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LiveRunsService } from './live-runs.service';
+import { operatorBlockerFixture } from '../testing/operator-blocker-fixtures';
 import type { DaemonDiagnosticReport } from '../api/daemon-diagnostics.types';
 import type { HostRunnerActionResponse, HostRunnerHealth } from '../api/live-runs.types';
 import type {
@@ -130,22 +131,7 @@ describe('LiveRunsService start/stop proxy', () => {
   it('reads deploy preflight through the data-plane proxy', async () => {
     const response = {
       ready: false,
-      blockers: [
-        {
-          id: 'broker_disconnected',
-          severity: 'blocking' as const,
-          disposition: 'fix_elsewhere' as const,
-          headline: 'Broker disconnected',
-          detail: 'Connect the IBKR session before deploying.',
-          primary_move: {
-            label: 'Connect the broker',
-            action: { kind: 'navigate' as const, route: '/broker', fragment: null },
-            target: null,
-          },
-          secondary_moves: [],
-          applies_to: 'both' as const,
-        },
-      ],
+      blockers: [operatorBlockerFixture({ host: 'deploy_preflight' })],
     };
     const promise = service.deployPreflight({
       strategyKey: 'deployment_validation',
