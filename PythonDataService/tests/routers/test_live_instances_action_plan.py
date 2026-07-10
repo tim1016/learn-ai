@@ -72,9 +72,7 @@ def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Fast
     return app, root
 
 
-def _set_daemon(
-    monkeypatch: pytest.MonkeyPatch, *, instances: dict | None = None, process: dict | None = None
-) -> None:
+def _set_daemon(monkeypatch: pytest.MonkeyPatch, *, instances: dict | None = None, process: dict | None = None) -> None:
     async def fake_instances(_base_url: str):
         return as_typed_get(instances)
 
@@ -85,9 +83,7 @@ def _set_daemon(
     monkeypatch.setattr(host_daemon_client, "fetch_instance_process", fake_process)
 
 
-async def test_status_surfaces_empty_action_plan_from_ledger(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_status_surfaces_empty_action_plan_from_ledger(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger_with_action(
         root,
@@ -102,7 +98,7 @@ async def test_status_surfaces_empty_action_plan_from_ledger(
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     body = response.json()
@@ -126,7 +122,7 @@ async def test_status_surfaces_registered_explicit_instrument_surface(
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     body = response.json()
@@ -139,7 +135,7 @@ async def test_status_action_plan_is_null_when_ledger_omits_action(
     """Legacy / pre-Slice-1A ledgers carry no ``action`` key. The status
     payload must surface ``None`` rather than fabricating an empty plan,
     so the cockpit can distinguish "operator declared an empty plan" from
-    "the ledger pre-dates the field". """
+    "the ledger pre-dates the field"."""
 
     app, root = app_with_root
     _write_ledger_with_action(
@@ -155,7 +151,7 @@ async def test_status_action_plan_is_null_when_ledger_omits_action(
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     body = response.json()
@@ -178,9 +174,7 @@ _STOCK_PLAN: dict = {
 }
 
 
-async def test_status_surfaces_lineage_block_from_ledger(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_status_surfaces_lineage_block_from_ledger(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """Slice 1E (#598) — ``/status`` exposes the redeploy lineage
     (parent_run_id, redeploy_reason, redeployed_at_ms) from the
     ledger's ``lineage`` block. Persistence lives outside ``live_config``
@@ -215,7 +209,7 @@ async def test_status_surfaces_lineage_block_from_ledger(
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     body = response.json()
@@ -226,9 +220,7 @@ async def test_status_surfaces_lineage_block_from_ledger(
     }
 
 
-async def test_status_lineage_is_null_when_ledger_omits_it(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_status_lineage_is_null_when_ledger_omits_it(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """Legacy / pre-Slice-1E ledgers carry no lineage block — surface
     ``None``, not a fabricated empty record."""
 
@@ -246,15 +238,13 @@ async def test_status_lineage_is_null_when_ledger_omits_it(
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     assert response.json()["lineage"] is None
 
 
-async def test_status_surfaces_stock_plan_from_ledger(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_status_surfaces_stock_plan_from_ledger(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     """End-to-end demo from PRD #593 §"The operator workflow": an
     operator builds 'buy 100 SPY on ENTER / sell 100 SPY on EXIT' from
     the UI, submits, sees it persisted in the ledger, and sees it
@@ -275,7 +265,7 @@ async def test_status_surfaces_stock_plan_from_ledger(
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     body = response.json()

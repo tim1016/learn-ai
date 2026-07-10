@@ -158,7 +158,7 @@ async def test_status_response_includes_operator_surface_schema_version_one(
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     body = response.json()
@@ -183,7 +183,7 @@ async def test_host_process_block_stopped_when_daemon_idle(app_with_root, monkey
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     body = response.json()
     host = body["operator_surface"]["host_process"]
@@ -212,7 +212,7 @@ async def test_host_process_block_running_when_daemon_bound_to_run(
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     body = response.json()
     host = body["operator_surface"]["host_process"]
@@ -289,7 +289,7 @@ async def test_running_instance_status_carries_every_operator_surface_block(
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     surface = response.json()["operator_surface"]
@@ -436,7 +436,7 @@ async def test_running_instance_status_carries_account_owner_generation(
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     surface = response.json()["operator_surface"]
@@ -506,7 +506,7 @@ async def test_running_instance_fresh_runtime_keeps_actions_current(
     monkeypatch.setattr(live_instances, "_now_ms", lambda: now_ms)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     surface = response.json()["operator_surface"]
@@ -517,6 +517,45 @@ async def test_running_instance_fresh_runtime_keeps_actions_current(
     assert surface["runtime_freshness"]["posture_demoted"] is False
     assert surface["runtime_freshness"]["stale_reason_codes"] == []
     assert surface["runtime_freshness"]["bar_loop"]["state"] == "FRESH"
+
+
+async def test_real_surface_freshness_threshold_advances_semantic_version(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _app, root = app_with_root
+    sid = "spy_surface_freshness"
+    run_id = "run-surface-freshness"
+    now_ms = [1_772_463_600_000]
+    _write_ledger(root, run_id, sid, 100)
+    _write_runtime_snapshot(root, run_id, sid, now_ms[0])
+    _set_daemon(
+        monkeypatch,
+        process={
+            "state": "running",
+            "run_id": run_id,
+            "pid": 123,
+            "started_at_ms": now_ms[0],
+        },
+    )
+    monkeypatch.setattr(live_instances, "_now_ms", lambda: now_ms[0])
+    from app.services.surface_hub import SurfaceHub
+
+    hub = SurfaceHub(
+        strategy_instance_id=sid,
+        assemble=lambda: live_instances._assemble_instance_surface(sid),
+    )
+
+    fresh = await hub.refresh()
+    now_ms[0] += 121_000
+    stale = await hub.refresh()
+
+    assert fresh.operator_surface.runtime_freshness is not None
+    assert stale.operator_surface.runtime_freshness is not None
+    assert fresh.operator_surface.runtime_freshness.broker.state == "FRESH"
+    assert stale.operator_surface.runtime_freshness.broker.state != "FRESH"
+    assert fresh.surface_version == 1
+    assert stale.surface_version == 2
 
 
 async def test_status_preserves_recovering_runtime_broker_connection(
@@ -544,7 +583,7 @@ async def test_status_preserves_recovering_runtime_broker_connection(
     monkeypatch.setattr(live_instances, "_now_ms", lambda: now_ms)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     surface = response.json()["operator_surface"]
@@ -585,7 +624,7 @@ async def test_status_projects_hard_down_runtime_broker_connection_as_disconnect
     monkeypatch.setattr(live_instances, "_now_ms", lambda: now_ms)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     surface = response.json()["operator_surface"]
@@ -611,7 +650,7 @@ async def test_status_uses_account_freeze_artifact_to_block_start_and_resume(
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     surface = response.json()["operator_surface"]
@@ -634,7 +673,7 @@ async def test_status_projects_unresolved_watchdog_incident_into_recovery_chart(
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(f"/api/live-instances/{sid}/status")
+        response = await client.get(f"/api/live-instances/{sid}/status?refresh=true")
 
     assert response.status_code == 200
     body = response.json()
@@ -747,7 +786,7 @@ async def test_status_control_plane_is_null_when_no_monitor_installed(
     _set_daemon(monkeypatch, process={"state": "idle", "run_id": None})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(f"/api/live-instances/{sid}/status")
+        response = await client.get(f"/api/live-instances/{sid}/status?refresh=true")
 
     assert response.status_code == 200
     surface = response.json()["operator_surface"]
@@ -788,7 +827,7 @@ async def test_status_control_plane_reflects_monitor_state(app_with_root, monkey
     set_monitor(_StubMonitor())
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get(f"/api/live-instances/{sid}/status")
+            response = await client.get(f"/api/live-instances/{sid}/status?refresh=true")
     finally:
         set_monitor(None)
 
@@ -834,7 +873,7 @@ async def test_status_control_plane_connected_omits_notice(app_with_root, monkey
     set_monitor(_StubMonitor())
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get(f"/api/live-instances/{sid}/status")
+            response = await client.get(f"/api/live-instances/{sid}/status?refresh=true")
     finally:
         set_monitor(None)
 
@@ -864,7 +903,7 @@ async def test_status_broker_observation_consistency_is_null_without_binding(
     _set_daemon(monkeypatch, process={"state": "idle", "run_id": None})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(f"/api/live-instances/{sid}/status")
+        response = await client.get(f"/api/live-instances/{sid}/status?refresh=true")
 
     assert response.status_code == 200
     surface = response.json()["operator_surface"]
@@ -887,7 +926,7 @@ async def test_status_broker_observation_consistency_unknown_without_engine_runt
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(f"/api/live-instances/{sid}/status")
+        response = await client.get(f"/api/live-instances/{sid}/status?refresh=true")
 
     assert response.status_code == 200
     consistency = response.json()["operator_surface"]["broker_observation_consistency"]

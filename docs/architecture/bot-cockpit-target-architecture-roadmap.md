@@ -102,15 +102,28 @@ ownership boundary; later stages add delivery mechanisms without replacing it.
 **Implemented 2026-07-10.** `app/services/surface_hub.py` owns each bot's
 producer lifecycle, latest complete document, opaque stream epoch, semantic
 fingerprint, monotonic version, coalesced refresh, periodic assembly, and
-bounded shutdown. The data-plane lifespan starts/stops all visible hubs;
-deploy/start brings newly visible bots under the same owner. The status route
-reads the stored document (or performs a read-only fallback assembly for a
-just-deployed bot/lifespan-free test client), and `?refresh=true` requests one
-coalesced cycle. Broker-activity bootstrap now occurs only in producer or
-mutation lifecycle, never in normal status reads. Parity, version, epoch,
-freshness-transition, coalescing, lifecycle, and no-write regressions live in
-`tests/services/test_surface_hub.py` and
-`tests/routers/test_live_instances.py`.
+bounded shutdown. `app/services/live_instance_surface_assembler.py` owns
+source gathering and semantic composition behind an explicit dependency
+boundary; `live_instances.py` retains transport and wiring only. The
+data-plane lifespan starts/stops all visible hubs, and deploy/start brings
+newly visible bots under the same owner. A failed first assembly leaves a
+retrying producer running. Normal status reads return only the stored document
+or typed `SURFACE_SNAPSHOT_UNAVAILABLE`; `?refresh=true` is the explicit
+diagnostic/test refresh path. Stop/restart fences and drains in-flight
+assembly, and soft deletion stops/removes the hub before unregistering its
+publisher.
+
+Broker-activity publisher ownership follows producer-observed `live_binding`
+transitions: stopped bots do not bootstrap a publisher, live bots retry a
+transient bootstrap failure on later producer cycles, and transition-out or
+deletion unregisters it. Full-document SHA-256 characterization fixtures in
+`tests/fixtures/surface_hub/status_payload_parity.json` were generated from
+pre-extraction commit `340fbb266` and pin nothing-deployed, idle/stopped,
+running/live, and daemon-unreachable payloads after documented transport/path
+normalization. Dedicated regressions cover freshness thresholds, blockers and
+receipts, deletion, version, epoch, coalescing, retry, shutdown fencing, and
+default-read side effects in `tests/services/test_surface_hub.py` and the
+`tests/routers/test_live_instances*.py` suites.
 
 ## Stage 3 — Add delivery protocols and shared daemon observation `[SCALE]`
 

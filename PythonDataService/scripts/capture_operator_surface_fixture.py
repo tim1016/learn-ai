@@ -33,9 +33,7 @@ from app.engine.live.daemon_transport import DaemonResult
 from app.routers import live_instances
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_FIXTURE_DIR = (
-    _REPO_ROOT / "Frontend" / "src" / "testing" / "operator_surface_fixtures"
-)
+_FIXTURE_DIR = _REPO_ROOT / "Frontend" / "src" / "testing" / "operator_surface_fixtures"
 _FIXTURE_NOW_MS = 1_782_000_000_000
 _FIXTURE_ROOT_TOKEN = "__OPERATOR_SURFACE_FIXTURE_ROOT__"
 _STRATEGY_INSTANCE_ID = "spy_ema_paper"
@@ -149,12 +147,8 @@ async def _capture(scenario: OperatorSurfaceFixtureScenario) -> dict[str, Any]:
         with _patched_status_route(tmp, scenario):
             from app.main import app
 
-            async with AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                response = await client.get(
-                    f"/api/live-instances/{scenario.strategy_instance_id}/status"
-                )
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+                response = await client.get(f"/api/live-instances/{scenario.strategy_instance_id}/status?refresh=true")
             response.raise_for_status()
             return _sanitize_fixture_payload(response.json()["operator_surface"], tmp)
 
