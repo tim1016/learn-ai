@@ -1,8 +1,8 @@
 """Phase 5C cancel-confirm timeout / VCR-0002.
 
 PRD §5C step 4-5: every managed cancel/flatten path follows cancel →
-wait for confirms → fetch positions → liquidate. When the broker can't
-confirm cancels within ``CANCEL_CONFIRM_TIMEOUT_S``, the engine writes
+wait for terminal confirms → reconcile owned fills → liquidate. When the
+broker can't confirm cancels within ``CANCEL_CONFIRM_TIMEOUT_S``, the engine writes
 ``halt.flag`` (CANCEL_CONFIRM_TIMEOUT_HALT) and refuses to liquidate —
 submitting market liquidations against a broker we can't confirm
 cancel state with would race the just-issued cancels.
@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from app.engine.execution.order import Direction, OrderEvent
 from app.engine.live.config import LiveConfig
 from app.engine.live.live_engine import (
     CancelConfirmTimeoutHaltError,
@@ -25,12 +26,35 @@ from app.engine.live.live_engine import (
 from tests.engine.live.fixtures.fake_broker import FakeBroker
 
 
+async def _no_reconcile() -> None:
+    return None
+
+
 class _HangingCancelBroker(FakeBroker):
     """Cancel_open_orders awaits forever — exercises the timeout path."""
 
     async def cancel_open_orders(self) -> list[int]:
         await asyncio.sleep(10.0)
         return []
+
+
+class _LateFillDuringCancelBroker(FakeBroker):
+    """An owned exit fill becomes terminal while cancellation is in flight."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.cancel_confirmed = False
+
+    async def cancel_open_orders(self) -> list[int]:
+        self.cancel_confirmed = True
+        return [7]
+
+
+class _AccountNetMustNotSizeInstanceFlattenBroker(FakeBroker):
+    """Fails if instance shutdown tries to consume account-net positions."""
+
+    async def fetch_positions(self):
+        raise AssertionError("account-net positions are not an instance ownership ledger")
 
 
 @pytest.mark.asyncio
@@ -57,7 +81,12 @@ async def test_flatten_halts_on_cancel_confirm_timeout_vcr_0002(
     ctx = type("ctx", (), {"log": lambda self_, msg: None})()
 
     with pytest.raises(CancelConfirmTimeoutHaltError) as exc:
-        await engine._flatten(portfolio, ctx, bar_time=datetime(2026, 5, 4, 14, 30, tzinfo=UTC))  # type: ignore[arg-type]
+        await engine._flatten(
+            portfolio,
+            ctx,
+            bar_time=datetime(2026, 5, 4, 14, 30, tzinfo=UTC),
+            reconcile_owned_state=_no_reconcile,
+        )  # type: ignore[arg-type]
 
     assert exc.value.timeout_s == 0.05
     # halt.flag carries the timeout marker so the failure list can label it.
@@ -93,7 +122,12 @@ async def test_flatten_proceeds_when_cancel_completes_in_time(
     portfolio.get_position("SPY").quantity = 100  # something to liquidate
     ctx = type("ctx", (), {"log": lambda self_, msg: None})()
 
-    acks = await engine._flatten(portfolio, ctx, bar_time=datetime(2026, 5, 4, 14, 30, tzinfo=UTC))  # type: ignore[arg-type]
+    acks = await engine._flatten(
+        portfolio,
+        ctx,
+        bar_time=datetime(2026, 5, 4, 14, 30, tzinfo=UTC),
+        reconcile_owned_state=_no_reconcile,
+    )  # type: ignore[arg-type]
 
     # One liquidation order submitted; halt.flag NOT written.
     assert len(acks) == 1
@@ -101,13 +135,126 @@ async def test_flatten_proceeds_when_cancel_completes_in_time(
 
 
 @pytest.mark.asyncio
-async def test_flatten_tolerates_cancel_exception_without_halting(
+async def test_flatten_reconciles_terminal_owned_fill_before_sizing(
     tmp_path: Path,
 ) -> None:
-    """A non-timeout exception in cancel_open_orders (network blip,
-    transient) preserves the prior tolerant behavior: log + continue to
-    liquidate. PRD §5C is silent on this branch; only the timeout path
-    is load-bearing safety."""
+    """A late exit fill must not turn graceful flatten into a duplicate sell."""
+    broker = _LateFillDuringCancelBroker()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        output_dir=tmp_path,
+        account_id="DU123",
+        cancel_confirm_timeout_s=0.5,
+    )
+    from app.engine.live.live_portfolio import LivePortfolio
+
+    portfolio = LivePortfolio(broker)
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.get_position("SPY").quantity = 100
+    ctx = type("ctx", (), {"log": lambda self_, msg: None})()
+
+    async def reconcile_owned_state() -> None:
+        assert broker.cancel_confirmed
+        portfolio.record_broker_fill(
+            OrderEvent(
+                order_id=7,
+                symbol="SPY",
+                time=datetime(2026, 5, 4, 14, 30, tzinfo=UTC),
+                fill_price=Decimal("500"),
+                fill_quantity=-100,
+                direction=Direction.SHORT,
+                fee=Decimal("0"),
+                tag="owned-exit",
+            )
+        )
+
+    acks = await engine._flatten(
+        portfolio,
+        ctx,
+        bar_time=datetime(2026, 5, 4, 14, 30, tzinfo=UTC),
+        reconcile_owned_state=reconcile_owned_state,
+    )  # type: ignore[arg-type]
+
+    assert acks == []
+    assert broker.orders == []
+    assert portfolio.positions["SPY"].quantity == 0
+
+
+@pytest.mark.asyncio
+async def test_flatten_uses_namespace_owned_sign_for_short_position(
+    tmp_path: Path,
+) -> None:
+    """A namespace-owned short position must be closed with a buy."""
+    broker = FakeBroker()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        output_dir=tmp_path,
+        account_id="DU123",
+        cancel_confirm_timeout_s=0.5,
+    )
+    from app.engine.live.live_portfolio import LivePortfolio
+
+    portfolio = LivePortfolio(broker)
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.get_position("SPY").quantity = -50
+    ctx = type("ctx", (), {"log": lambda self_, msg: None})()
+
+    acks = await engine._flatten(
+        portfolio,
+        ctx,
+        bar_time=datetime(2026, 5, 4, 14, 30, tzinfo=UTC),
+        reconcile_owned_state=_no_reconcile,
+    )  # type: ignore[arg-type]
+
+    assert len(acks) == 1
+    [order] = broker.orders
+    assert order.action == "BUY"
+    assert order.quantity == 50
+
+
+@pytest.mark.asyncio
+async def test_flatten_never_liquidates_same_account_sibling_exposure(
+    tmp_path: Path,
+) -> None:
+    """One bot owns SPY +100 while the account-net position is SPY +150."""
+    broker = _AccountNetMustNotSizeInstanceFlattenBroker()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        output_dir=tmp_path,
+        account_id="DU123",
+        cancel_confirm_timeout_s=0.5,
+    )
+    from app.engine.live.live_portfolio import LivePortfolio
+
+    portfolio = LivePortfolio(broker)
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.get_position("SPY").quantity = 100
+    ctx = type("ctx", (), {"log": lambda self_, msg: None})()
+
+    acks = await engine._flatten(
+        portfolio,
+        ctx,
+        bar_time=datetime(2026, 5, 4, 14, 30, tzinfo=UTC),
+        reconcile_owned_state=_no_reconcile,
+    )  # type: ignore[arg-type]
+
+    assert len(acks) == 1
+    [order] = broker.orders
+    assert order.action == "SELL"
+    assert order.quantity == 100
+
+
+@pytest.mark.asyncio
+async def test_flatten_fails_closed_when_cancel_confirmation_errors(
+    tmp_path: Path,
+) -> None:
+    """An unconfirmed cancellation must never be followed by liquidation."""
 
     class _RaisingCancelBroker(FakeBroker):
         async def cancel_open_orders(self) -> list[int]:
@@ -129,7 +276,13 @@ async def test_flatten_tolerates_cancel_exception_without_halting(
     portfolio.get_position("SPY").quantity = 100
     ctx = type("ctx", (), {"log": lambda self_, msg: None})()
 
-    acks = await engine._flatten(portfolio, ctx, bar_time=datetime(2026, 5, 4, 14, 30, tzinfo=UTC))  # type: ignore[arg-type]
+    with pytest.raises(RuntimeError, match="transient broker error"):
+        await engine._flatten(
+            portfolio,
+            ctx,
+            bar_time=datetime(2026, 5, 4, 14, 30, tzinfo=UTC),
+            reconcile_owned_state=_no_reconcile,
+        )  # type: ignore[arg-type]
 
-    assert len(acks) == 1  # liquidation still ran
+    assert broker.orders == []
     assert not (tmp_path / "halt.flag").exists()

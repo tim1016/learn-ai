@@ -23,13 +23,6 @@ committing effort.
 
 ## 1. Safety-critical (verified open against current code)
 
-- **`_flatten` can go net-short on a late fill** — `graceful/shutdown` flatten
-  liquidates from in-memory `portfolio.positions` with no fresh
-  `broker.fetch_positions()` first, so a fill that lands during shutdown drives a
-  duplicate liquidation. The sibling `_recovery_flatten` path already has the
-  double-refresh guard; `_flatten` does not, and has no regression test.
-  Pointer: `PythonDataService/app/engine/live/live_engine.py` `_flatten` (~:2301),
-  shutdown call site (~:1028). *(was VCR-0019)*
 - **Durable-state write failures are swallowed** — `_persist_desired_state`
   (~:2200–2205) and `write_poisoned_flag` (~:2504–2505) catch-and-proceed on a
   genuine disk/permission failure. The command channel acks success while the

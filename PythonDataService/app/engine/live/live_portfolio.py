@@ -22,10 +22,9 @@ if TYPE_CHECKING:
     from app.engine.live.intent_wal import IntentWal
 
 from app.broker.ibkr.account import fetch_account_summary, fetch_positions
-from app.broker.ibkr.client import IbkrClient
+from app.broker.ibkr.client import BrokerError, IbkrClient
 from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderEvent, IbkrOrderSpec
 from app.broker.ibkr.orders import (
-    OrderNotFoundError,
     cancel_paper_order,
     list_open_orders,
     place_paper_order,
@@ -227,8 +226,10 @@ class BrokerAdapter(Protocol):
 
         Real adapters scope to the runner's own orders so that running
         the live engine never touches an unrelated open order on the
-        same paper account. Returns the list of cancelled ``order_id``
-        values.
+        same paper account. The method returns only after every targeted
+        order is terminal and, when event streaming is active, any terminal
+        fills have reached the adapter's event buffer. Returns the list of
+        cancelled ``order_id`` values.
         """
         ...
 
@@ -265,6 +266,8 @@ class IbkrBrokerAdapter(BrokerAdapter):
         self._event_task: asyncio.Task[None] | None = None
         self._stream_failure: BaseException | None = None
         self._broker_callback_sink: Callable[[IbkrOrderEvent], None] | None = None
+        self._observed_fill_count_by_order_id: dict[int, int] = {}
+        self._event_buffer_changed = asyncio.Event()
 
     @property
     def owned_order_ids(self) -> set[int]:
@@ -298,21 +301,76 @@ class IbkrBrokerAdapter(BrokerAdapter):
 
     async def cancel_open_orders(self) -> list[int]:
         open_orders = await list_open_orders(self._client)
-        cancelled: list[int] = []
+        targeted = [
+            int(order.order_id)
+            for order in open_orders
+            if int(order.order_id) in self._owned_order_ids
+        ]
+        if not targeted:
+            return []
+
         for order in open_orders:
             if int(order.order_id) not in self._owned_order_ids:
                 # Foreign order on this paper account — never the
                 # runner's to cancel. Leaving it alone is the whole
                 # point of the ownership filter.
                 continue
-            try:
-                await cancel_paper_order(self._client, order.order_id)
-                cancelled.append(order.order_id)
-            except OrderNotFoundError:
-                # Filled or cancelled between the list call and ours; either
-                # way it's no longer open, so the force-flat goal is satisfied.
-                continue
-        return cancelled
+            await cancel_paper_order(self._client, order.order_id)
+
+        targeted_set = set(targeted)
+        while True:
+            remaining = {
+                int(order.order_id)
+                for order in await list_open_orders(self._client)
+                if int(order.order_id) in targeted_set
+            }
+            if not remaining:
+                break
+            await asyncio.sleep(0.05)
+
+        if self._event_task is not None:
+            await self._wait_for_terminal_fills(targeted_set)
+        return targeted
+
+    async def _wait_for_terminal_fills(self, targeted_order_ids: set[int]) -> None:
+        """Wait until the event buffer contains every fill on terminal orders.
+
+        The engine sizes an instance-scoped liquidation from its owned fill
+        ledger, never from account-net positions. Terminal cancellation is
+        therefore not complete for that caller until the polling event stream
+        has observed every fill now present on the cached terminal trades.
+        The caller wraps ``cancel_open_orders`` in its managed timeout, so an
+        unprovable cache or failed stream fails closed instead of hanging.
+        """
+
+        while True:
+            self._event_buffer_changed.clear()
+            if self._stream_failure is not None:
+                raise BrokerError(
+                    "IBKR order-event stream failed before cancel confirmation"
+                ) from self._stream_failure
+
+            trades_by_order_id = {
+                int(trade.order.orderId): trade
+                for trade in self._client.ib.trades()
+                if int(trade.order.orderId) in targeted_order_ids
+            }
+            missing_trades = targeted_order_ids - trades_by_order_id.keys()
+            if missing_trades:
+                raise BrokerError(
+                    "IBKR terminal order cache missing owned order(s): "
+                    f"{sorted(missing_trades)}"
+                )
+
+            fills_complete = all(
+                self._observed_fill_count_by_order_id.get(order_id, 0)
+                >= len(getattr(trade, "fills", []) or [])
+                for order_id, trade in trades_by_order_id.items()
+            )
+            if fills_complete:
+                return
+
+            await self._event_buffer_changed.wait()
 
     async def start_event_stream(self) -> None:
         """Begin draining IBKR order events into the local buffer."""
@@ -355,7 +413,13 @@ class IbkrBrokerAdapter(BrokerAdapter):
                 # ``LiveEngine._convert_ibkr_fill``.
                 if self._broker_callback_sink is not None:
                     self._broker_callback_sink(event)
+                if event.event_type == "fill":
+                    order_id = int(event.order_id)
+                    self._observed_fill_count_by_order_id[order_id] = (
+                        self._observed_fill_count_by_order_id.get(order_id, 0) + 1
+                    )
                 self._event_buffer.append(event)
+                self._event_buffer_changed.set()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -366,6 +430,7 @@ class IbkrBrokerAdapter(BrokerAdapter):
             # original traceback in the operator log.
             logger.exception("IBKR order-event stream terminated unexpectedly")
             self._stream_failure = exc
+            self._event_buffer_changed.set()
 
     def drain_broker_events(self) -> list[IbkrOrderEvent]:
         events = list(self._event_buffer)
