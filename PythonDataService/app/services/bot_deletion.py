@@ -14,7 +14,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.engine.live.identity import validate_strategy_instance_id
+from app.engine.live.identity import strategy_instance_artifact_dir
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
 
 BOT_DELETION_FILENAME = "bot_deletion.json"
@@ -42,8 +42,14 @@ class BotDeletionRecord(BaseModel):
 
 
 def stable_bot_deletion_path(artifacts_root: Path, strategy_instance_id: str) -> Path:
-    validate_strategy_instance_id(strategy_instance_id)
-    return artifacts_root / "live_state" / strategy_instance_id / BOT_DELETION_FILENAME
+    return (
+        strategy_instance_artifact_dir(
+            artifacts_root,
+            "live_state",
+            strategy_instance_id,
+        )
+        / BOT_DELETION_FILENAME
+    )
 
 
 def read_bot_deletion(artifacts_root: Path, strategy_instance_id: str) -> BotDeletionRecord | None:
