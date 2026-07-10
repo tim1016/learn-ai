@@ -3,11 +3,11 @@
 > **Canonical reference** for what the live-paper bot lifecycle and broker-account ownership model ships today.
 > This is an implementation snapshot, not a future-design document. When this page disagrees with code, code wins and this page must be updated in the same PR.
 >
-> **Current status:** R2 multi-runner runtime with AccountOwner submit-lane foundation. The long-lived AccountOwner R3 daemon process and IPC intake are designed in `docs/architecture/bot-lifecycle-account-owner-prd.md` but are not implemented yet.
+> **Current status:** R2 multi-runner runtime with AccountOwner submit-lane enforcement. Real-broker runner submits now route through AccountOwner, generation is checked at intake and immediately before broker submit, and production startup configures the IBKR adapter to require an AccountOwner write grant before submit/cancel. The long-lived AccountOwner R3 daemon process and IPC intake are designed in `docs/architecture/bot-lifecycle-account-owner-prd.md` but are not implemented yet.
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-07-07 (Safety-halt incidents now bridge cold-start poison into Recent Incidents and Bot Control headlines; the deploy form pre-detects durable STOPPED before start-now submissions and switches to deploy-only; deploy now fails closed before ledger creation when a strategy with a deploy-time action-plan contract, currently `deployment_validation`, is missing required legs or submits a plan shape the runtime path cannot consume; not-proven Account Truth start blockers name missing/stale evidence and link directly to Account Monitor's account reconciliation action, while deploy-only staging remains available; Bot Control carries inherited identity and exposure evidence into the deploy form and blocks Deploy & start until any symbol mismatch or non-flat/unknown exposure facts are explicitly confirmed; operation-error alert announcements preserve authored operation title, backend detail, and remediation as separated prose so blocked deploy messages do not concatenate the category with bot-scoped detail; the run-scoped Bot event stream is the persistent side-panel surface, binds to the live run or evidence run, and renders an honest no-run state with a Fresh run route when neither binding exists; lifecycle chart nodes are non-interactive containers with a dedicated receipts button and one expanded node-scoped receipt region at a time.)
+> **Last reviewed:** 2026-07-10 (Real-broker runner submits require AccountOwner, owner generation is fenced at both intake and the broker-write boundary, production IBKR adapter writes require AccountOwner grants, and recovery flatten routes managed cancel/flatten writes through the AccountOwner broker-write runner. R3 daemon/IPC AccountOwner remains unshipped.)
 
 ---
 
@@ -17,7 +17,7 @@ This document answers: **what actually owns bot lifecycle, broker order submissi
 
 It does not answer:
 
-- The final AccountOwner implementation details. Those live in the PRD until shipped.
+- The final AccountOwner daemon/IPC implementation details. Those live in the PRD until shipped.
 - Alpha strategy behavior.
 - Live-money enablement. The lifecycle described here is paper trading only.
 - UI polish for the gate board. This document covers backend authority and artifacts.
@@ -35,7 +35,7 @@ Timestamp rule: every lifecycle/account timestamp persisted to files, stored in 
 
 ## 2. Current Architecture
 
-Today the host daemon spawns one OS process per `strategy_instance_id`. Each runner process may construct its own `IbkrClient`, run cold-start reconciliation, process bars, and submit broker orders through `LivePortfolio` and `place_paper_order`.
+Today the host daemon spawns one OS process per `strategy_instance_id`. Each runner process may construct its own `IbkrClient`, run cold-start reconciliation, and process bars. For real-broker runner submits, `LivePortfolio` must hand the order intent to AccountOwner; the legacy WAL-direct-submit lane remains available only to shadow/fake broker paths.
 
 ```mermaid
 flowchart TD
@@ -43,6 +43,8 @@ flowchart TD
     daemon["Host daemon<br/>RunnerProcessManager"]
     r1["Runner A process<br/>LiveEngine + LivePortfolio"]
     r2["Runner B process<br/>LiveEngine + LivePortfolio"]
+    ao1["Runner A AccountOwner<br/>generation-fenced grant"]
+    ao2["Runner B AccountOwner<br/>generation-fenced grant"]
     wal1["Run A artifacts<br/>intent_events.jsonl<br/>reconciliation_receipt.json"]
     wal2["Run B artifacts<br/>intent_events.jsonl<br/>reconciliation_receipt.json"]
     broker["IBKR Gateway / paper account"]
@@ -53,14 +55,16 @@ flowchart TD
     daemon --> r2
     r1 --> wal1
     r2 --> wal2
-    r1 --> broker
-    r2 --> broker
+    r1 --> ao1
+    r2 --> ao2
+    ao1 --> broker
+    ao2 --> broker
     wal1 --> surface
     wal2 --> surface
     broker --> surface
 ```
 
-This is **not** R3. The current process-local `_submit_lock` in `LiveEngine` serializes work inside one runner only. It does not prevent a sibling runner or stale runner process from calling IBKR.
+This is **not** R3. There is still no long-lived AccountOwner daemon/IPC process. The shipped enforcement is inside the runner process: AccountOwner serializes submit intents, fences owner generation at intake and broker-write boundary, and production startup configures the IBKR adapter to reject direct broker writes unless an AccountOwner write grant is active.
 
 ## 3. Current Lifecycle
 
@@ -72,8 +76,8 @@ This is **not** R3. The current process-local `_submit_lock` in `LiveEngine` ser
 | Run pre-flight | Runner validates run state, sizing, dirty tree policy, halt flags, unexpected positions, coexistence, and prior artifacts. | `engine/live/pre_flight.py`, `engine/live/run.py` |
 | Cold-start reconcile | Runner writes `reconciliation_receipt.json` as `in_progress`, probes broker, classifies broker state, then writes pass/fail. Poison outcomes write `poisoned.flag` and mint a deduplicated safety-halt OperatorIncident. | `reconciliation_orchestrator.py`, `reconciliation_classifier.py`, `operator/incidents/safety_halt_notices.py` |
 | Activate | Live engine constructs portfolio/context, starts broker event stream, publishes runtime/readiness blocks, and enters bar loop. | `live_engine.py`, `readiness.py` |
-| Submit | Strategy queues orders; `LivePortfolio.submit_pending_orders` writes intent WAL events and calls broker adapter. | `live_portfolio.py`, `intent_wal.py`, `submit_state_machine.py` |
-| Low-level broker write | Paper safety checks run, `order_ref` is required, contract is qualified, then `client.ib.placeOrder(...)` is called. | `broker/ibkr/orders.py::place_paper_order` |
+| Submit | Strategy queues orders; real-broker `LivePortfolio.submit_pending_orders` emits `AccountOwnerSubmitIntent` and waits for AccountOwner acceptance. Shadow/fake broker lanes may still write run-scoped WAL events. | `live_portfolio.py`, `account_owner.py`, `account_owner_fence.py`, `intent_wal.py`, `submit_state_machine.py` |
+| Low-level broker write | AccountOwner grants the broker write context, the IBKR adapter rechecks the current generation for configured production brokers, paper safety checks run, `order_ref` is required, contract is qualified, then `client.ib.placeOrder(...)` is called. | `engine/live/account_owner.py`, `engine/live/live_portfolio.py`, `broker/ibkr/orders.py::place_paper_order` |
 | Operator actions | Resume/Pause/Stop/Flatten-and-pause/Mark-poisoned use shared capability evaluator. Start has separate recheck. | `services/operator_capability.py`, `routers/live_instances.py` |
 | Watchdog lease loss | Child watchdog detects daemon lease loss and delegates typed halt sequence. | `child_watchdog.py`, `watchdog_controller.py` |
 
@@ -200,7 +204,7 @@ state to guess around.
 |---|---|---|
 | `run_ledger.json` | run | Deploy identity, account id, strategy/spec provenance, live config. |
 | `desired_state.json` | instance | Durable operator intent: `RUNNING`, `PAUSED`, `STOPPED`. |
-| `intent_events.jsonl` | run | Legacy/direct-submit append-only submit WAL. Source of truth for run-scoped intent lifecycle events when a runner submits directly; AccountOwner submit mode does not write this file. |
+| `intent_events.jsonl` | run | Legacy/shadow append-only submit WAL. Source of truth for run-scoped intent lifecycle events when a fake/shadow broker path opts into WAL; AccountOwner submit mode does not write this file and real-broker runner submits may not use this as the writer lane. |
 | `live_state.json` | instance | Stable projection used by reconciliation/readiness. |
 | `reconciliation_receipt.json` | run | Cold-start/runtime reconcile outcome. |
 | `poisoned.flag` | run | Run-level permanent unsafe state. New cold-start poison writes also mint a `safety-halt` OperatorIncident keyed by instance, run, halt trigger, evidence time, and artifact ref. |
@@ -307,16 +311,18 @@ from canonical files and Python facts.
 
 ## 5. Current Submit Authority
 
-Submit safety currently has three layers:
+Submit safety currently has these layers:
 
-1. Legacy direct-submit mode refuses a real broker adapter without `IntentWal` and non-empty `bot_order_namespace`.
-2. AccountOwner submit mode refuses a configured run-scoped `IntentWal`; it requires an AccountOwner submitter plus account id, strategy instance id, run id, bot order namespace, owner generation provider, and trace id provider.
+1. Real-broker `LivePortfolio` refuses the legacy `IntentWal` direct-submit lane and requires an AccountOwner submitter plus non-empty `bot_order_namespace`.
+2. AccountOwner submit mode refuses a configured run-scoped `IntentWal`; it requires account id, strategy instance id, run id, bot order namespace, owner generation provider, and trace id provider.
 3. `LivePortfolio.submit_pending_orders` refuses active account freezes, non-passing account registry bindings, and non-passing cached Account Truth gate results before any broker call or AccountOwner handoff.
-4. AccountOwner submit mode emits `AccountOwnerSubmitIntent` to the configured submitter, writes account-scoped submit evidence to `account_events.jsonl`, and does not call its broker adapter directly.
-5. Legacy direct-submit mode writes `PENDING_INTENT` before `broker.place_order`, then writes `SUBMITTED`, `ACK_FAILED_UNCERTAIN`, `SUBMITTED_RECOVERED`, `INTENT_NOT_ACCEPTED`, or `SUBMIT_UNCERTAIN_HALTED`.
-6. `place_paper_order` requires `spec.order_ref` and enforces paper safety before `IB.placeOrder`.
+4. AccountOwner validates owner generation at intent acceptance and again immediately after `account_owner_submit_prepared` before issuing the broker write grant.
+5. The production IBKR adapter can be configured to reject `place_order` and `cancel_open_orders` unless an AccountOwner write grant is present and its generation still matches the provider.
+6. Managed recovery flatten receives AccountOwner's broker-write runner from `cmd_start`, so its cancel and liquidation writes run under the same grant requirement when a production AccountOwner exists.
+7. Shadow/fake direct-submit mode may write `PENDING_INTENT` before `broker.place_order`, then write `SUBMITTED`, `ACK_FAILED_UNCERTAIN`, `SUBMITTED_RECOVERED`, `INTENT_NOT_ACCEPTED`, or `SUBMIT_UNCERTAIN_HALTED`.
+8. `place_paper_order` requires `spec.order_ref` and enforces paper safety before `IB.placeOrder`.
 
-Current limitation: this is still enforced inside each runner process, not by a single-writer AccountOwner. Multiple runner processes cannot pass submit with an unregistered/stale account binding, but a sibling process still owns its own broker connection until AccountOwner ships.
+Current limitation: this is still enforced inside each runner process, not by a long-lived AccountOwner daemon with IPC intake. A production runner configures its real IBKR adapter to require AccountOwner grants, so direct in-process broker writes fail closed. The final R3 daemon remains the target for a separately-owned broker session and out-of-process takeover orchestration.
 
 ## 5.1 AccountOwner Submit Lane V1
 
@@ -327,7 +333,7 @@ Runner-side owner mode is available through:
 - `LivePortfolio(account_owner_submitter=..., account_id=..., strategy_instance_id=..., run_id=..., bot_order_namespace=..., owner_generation_provider=..., trace_id_provider=...)`;
 - `LiveEngine(..., account_owner_submitter=..., owner_generation_provider=..., trace_id_provider=...)`, which passes those values to `LivePortfolio`.
 
-`AccountOwnerSubmitIntent` carries trace id, account id, strategy instance id, run id, bot order namespace, intent id, order ref, intent kind, order spec, owner generation, and created-at timestamp as `int64 ms UTC`. Intake validates account id, account freeze, account registry binding, owner generation, and account classifier decision before writing `account_owner_submit_prepared` to account events and calling the broker. Terminal account events are `account_owner_submit_accepted`, `account_owner_submit_rejected`, or `account_owner_submit_uncertain`.
+`AccountOwnerSubmitIntent` carries trace id, account id, strategy instance id, run id, bot order namespace, intent id, order ref, intent kind, order spec, owner generation, and created-at timestamp as `int64 ms UTC`. Intake validates account id, account freeze, account registry binding, owner generation, and account classifier decision before writing `account_owner_submit_prepared` to account events. AccountOwner then rechecks owner generation immediately before broker write, enters an AccountOwner write-grant context, and calls the broker. Terminal account events are `account_owner_submit_accepted`, `account_owner_submit_rejected`, or `account_owner_submit_uncertain`.
 
 Structured diagnostics include trace id, bot/instance id, account id, run id, intent id, order ref, owner generation, broker client id, order id, perm id, and exec id when available.
 
@@ -337,7 +343,7 @@ On runner startup, `run.py` initializes the V1 `AccountOwner` from the persisted
 
 On successful reconnect, `account_owner_reconnect_resumed` carries the accepting phase, current owner generation, and `recorded_at_ms` from the same `AccountOwnerGeneration` record written by the phase transition. Missing generation evidence still projects as `unknown`; the fix is to persist the evidence at the emitter, not to mark all resume events as passing.
 
-Current limitation: production still needs a long-lived AccountOwner process with a real broker session and IPC intake. V1 proves the serialized submit lane and runner no-direct-submit mode. Reconnect drain events are reconnect evidence, not submit terminal events; until a terminal `account_owner_submit_*` event exists, a later reconnect may still classify the prepared event again.
+Current limitation: production still needs a long-lived AccountOwner process with a real broker session and IPC intake. The current lane proves serialized submit, real-broker no-direct-submit construction, managed recovery broker-write grants, and stale-generation refusal at both intake and broker-write boundary. Reconnect drain events are reconnect evidence, not submit terminal events; until a terminal `account_owner_submit_*` event exists, a later reconnect may still classify the prepared event again.
 
 ## 6. Current Reconciliation Authority
 
@@ -438,7 +444,7 @@ their legacy `status` values (`pass`, `fail`, `unknown`) for compatibility;
 | Readiness | `build_live_readiness` and `build_start_readiness` emit raw readiness gates with canonical `GateResult`; operator surface projects those into `OperatorGate`. | Live readiness is engine-authored; backend-derived start readiness is separate and labelled. |
 | Resume guards | `resume_guard_state.py` folds broker safety, submission capability, reconciliation, and uncertain intent. | Instance/run scoped; does not know account freeze yet. |
 | Account instance registry | Host daemon deploy writes `DEPLOYED`; host daemon start and direct `run.py start` write `ACTIVE` for ledgers with a persisted `strategy_instance_id`; daemon boot retires prior `ACTIVE` rows not backed by a process it owns; a daemon-owned reaper retires post-boot exits without read traffic; both start paths require recovery proof before superseding an unsafe retirement; `LiveEngine` injects the registry gate into submit and readiness for those modern ledger identities. | Append-only registry is shipped, but it is not yet owned by AccountOwner. Legacy fallback identities are not entered into the account registry. |
-| Broker submit safety | `orders.py::_enforce_paper_safety`, reconnect recovery halt, required `order_ref`, `LivePortfolio.account_freeze_provider`, and `LivePortfolio.account_registry_gate_provider`. | Still process-local because there is no AccountOwner. |
+| Broker submit safety | `orders.py::_enforce_paper_safety`, reconnect recovery halt, required `order_ref`, `LivePortfolio.account_freeze_provider`, `LivePortfolio.account_registry_gate_provider`, AccountOwner intake/pre-write generation fences, and IBKR adapter AccountOwner write-grant enforcement configured by production runner startup. | Still process-local because there is no long-lived AccountOwner daemon/IPC process. |
 
 ### Restart Intensity Gate
 
@@ -457,8 +463,9 @@ When a slice ships, update this section from "target" to "shipped" with exact mo
 | `unresolved_exposure.flag` blocking deploy/start/router resume/submit | Shipped in `engine/live/account_artifacts.py`, `routers/live_instances.py`, `services/operator_surface.py`, `engine/live/live_engine.py`, and `engine/live/live_portfolio.py`. Direct runner CLI resume remains a documented gap. |
 | Account-scoped classifier over registry-known owners | Shipped in `engine/live/account_classifier.py` as pure V1 classifier with GateResult projection. |
 | AccountOwner daemon child process | Not shipped. V1 submit lane exists in `engine/live/account_owner.py`, but no long-lived child process/IPC intake owns it yet. |
-| Runner no-broker-write mode | Shipped when `LivePortfolio.account_owner_submitter` / `LiveEngine.account_owner_submitter` is configured. |
-| AccountOwner generation/fencing token | Shipped in `engine/live/account_artifacts.py`, `engine/live/account_owner.py`, and runner startup wiring in `engine/live/run.py`. |
+| Runner no-broker-write mode | Shipped for real-broker `LivePortfolio`: it refuses the legacy direct-submit lane and requires `LivePortfolio.account_owner_submitter` / `LiveEngine.account_owner_submitter`. |
+| AccountOwner generation/fencing token | Shipped in `engine/live/account_artifacts.py`, `engine/live/account_owner.py`, `engine/live/account_owner_fence.py`, `engine/live/live_portfolio.py`, and runner startup wiring in `engine/live/run.py`. Generation is checked at intent intake and immediately before the broker-write boundary. |
+| Managed recovery broker-write grants | Shipped in `engine/live/account_owner.py` and `engine/live/run.py`; recovery flatten cancel/liquidation writes use AccountOwner's broker-write runner when production AccountOwner is wired. |
 | Existing readiness, Start, and action capability rows generated from enforcement `GateResult` values | Shipped in `schemas/live_runs.py`, `engine/live/readiness.py`, and `services/operator_surface.py`. Account-level gate board rows are not shipped. |
 | Restart intensity fold over account events | Shipped in `engine/live/account_artifacts.py`, `engine/live/host_daemon.py`, and `engine/live/run.py`. |
 | Audited operator override for unreachable broker proof | Shipped in `engine/live/account_artifacts.py` and `engine/live/account_classifier.py`. |
@@ -591,8 +598,9 @@ This is a reproducibility receipt, not a new text-authoring engine or frontend t
 |---|---|
 | Host runner process lifecycle | `PythonDataService/app/engine/live/host_daemon.py` |
 | Runner CLI and start orchestration | `PythonDataService/app/engine/live/run.py` |
-| Live bar loop and process-local submit lock | `PythonDataService/app/engine/live/live_engine.py` |
-| Portfolio submit WAL and order intent handling | `PythonDataService/app/engine/live/live_portfolio.py` |
+| Live bar loop and engine runtime | `PythonDataService/app/engine/live/live_engine.py` |
+| Portfolio order intent handling and real-broker AccountOwner handoff | `PythonDataService/app/engine/live/live_portfolio.py` |
+| AccountOwner submit lane and broker-write grants | `PythonDataService/app/engine/live/account_owner.py`, `PythonDataService/app/engine/live/account_owner_fence.py` |
 | Intent event schema and WAL | `PythonDataService/app/engine/live/intent_events.py`, `intent_wal.py`, `intent_ledger.py` |
 | Submit state machine | `PythonDataService/app/engine/live/submit_state_machine.py` |
 | IBKR connection | `PythonDataService/app/broker/ibkr/client.py` |

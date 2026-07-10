@@ -40,6 +40,10 @@ from app.engine.execution.order_sizer import (
 )
 from app.engine.execution.portfolio import Position
 from app.engine.execution.sizing import SimpleFloorSizing, SizingModel
+from app.engine.live.account_owner_fence import (
+    AccountOwnerWriteFenceError,
+    current_account_owner_write_grant,
+)
 from app.engine.live.intent_events import DropReason
 from app.schemas.live_runs import GateResult
 
@@ -259,7 +263,13 @@ class IbkrBrokerAdapter(BrokerAdapter):
     # and a non-empty bot_order_namespace. Enforced in ``LivePortfolio.__post_init__``.
     requires_durable_submit: ClassVar[bool] = True
 
-    def __init__(self, client: IbkrClient) -> None:
+    def __init__(
+        self,
+        client: IbkrClient,
+        *,
+        require_account_owner_write_fence: bool = False,
+        owner_generation_provider: Callable[[], int] | None = None,
+    ) -> None:
         self._client = client
         self._owned_order_ids: set[int] = set()
         self._event_buffer: list[IbkrOrderEvent] = []
@@ -268,6 +278,8 @@ class IbkrBrokerAdapter(BrokerAdapter):
         self._broker_callback_sink: Callable[[IbkrOrderEvent], None] | None = None
         self._observed_fill_count_by_order_id: dict[int, int] = {}
         self._event_buffer_changed = asyncio.Event()
+        self._require_account_owner_write_fence = require_account_owner_write_fence
+        self._owner_generation_provider = owner_generation_provider
 
     @property
     def owned_order_ids(self) -> set[int]:
@@ -288,6 +300,14 @@ class IbkrBrokerAdapter(BrokerAdapter):
         """Install a synchronous receipt-time hook for durable raw callbacks."""
         self._broker_callback_sink = sink
 
+    def require_account_owner_write_fence(
+        self,
+        owner_generation_provider: Callable[[], int],
+    ) -> None:
+        """Require AccountOwner context before any broker-write method."""
+        self._require_account_owner_write_fence = True
+        self._owner_generation_provider = owner_generation_provider
+
     async def fetch_account_summary(self):
         return await fetch_account_summary(self._client)
 
@@ -295,11 +315,13 @@ class IbkrBrokerAdapter(BrokerAdapter):
         return await fetch_positions(self._client)
 
     async def place_order(self, spec: IbkrOrderSpec, *, perm_id_wait_s: float = 0.0) -> IbkrOrderAck:
+        self._enforce_account_owner_write_fence("broker.place_order")
         ack = await place_paper_order(self._client, spec, perm_id_wait_s=perm_id_wait_s)
         self._owned_order_ids.add(int(ack.order_id))
         return ack
 
     async def cancel_open_orders(self) -> list[int]:
+        self._enforce_account_owner_write_fence("broker.cancel_open_orders")
         open_orders = await list_open_orders(self._client)
         targeted = [
             int(order.order_id)
@@ -331,6 +353,40 @@ class IbkrBrokerAdapter(BrokerAdapter):
         if self._event_task is not None:
             await self._wait_for_terminal_fills(targeted_set)
         return targeted
+
+    def _enforce_account_owner_write_fence(self, boundary: str) -> None:
+        if not self._require_account_owner_write_fence:
+            return
+        grant = current_account_owner_write_grant()
+        account_id = getattr(self._client, "connected_account", None)
+        current_generation = (
+            self._owner_generation_provider()
+            if self._owner_generation_provider is not None
+            else None
+        )
+        if grant is None:
+            raise AccountOwnerWriteFenceError(
+                reason="ACCOUNT_OWNER_WRITE_GRANT_MISSING",
+                boundary=boundary,
+                account_id=account_id,
+                current_owner_generation=current_generation,
+            )
+        if account_id is not None and grant.account_id != account_id:
+            raise AccountOwnerWriteFenceError(
+                reason="ACCOUNT_OWNER_WRITE_ACCOUNT_MISMATCH",
+                boundary=boundary,
+                account_id=account_id,
+                current_owner_generation=current_generation,
+                grant_owner_generation=grant.owner_generation,
+            )
+        if current_generation is None or grant.owner_generation != current_generation:
+            raise AccountOwnerWriteFenceError(
+                reason="OWNER_GENERATION_STALE_AT_BROKER_WRITE",
+                boundary=boundary,
+                account_id=account_id,
+                current_owner_generation=current_generation,
+                grant_owner_generation=grant.owner_generation,
+            )
 
     async def _wait_for_terminal_fills(self, targeted_order_ids: set[int]) -> None:
         """Wait until the event buffer contains every fill on terminal orders.
@@ -531,13 +587,13 @@ class LivePortfolio:
     _last_minted_intent_id: str | None = None
 
     def __post_init__(self) -> None:
-        """ADR 0008 / Phase 5B — enforce the durable-submit invariant.
+        """ADR 0008 / Stage 6 — enforce the durable AccountOwner invariant.
 
         A ``LivePortfolio`` whose broker adapter declares
         ``requires_durable_submit = True`` cannot be constructed without an
-        ``IntentWal`` and a non-empty ``bot_order_namespace``. This closes the
-        "implemented but never wired" hole VCR-0002 names: the protocol exists,
-        the engine cannot bypass it.
+        AccountOwner submitter and a non-empty ``bot_order_namespace``. This
+        closes the legacy WAL-direct-submit lane: the protocol exists, the
+        engine cannot bypass AccountOwner.
 
         Shadow / fake adapters (``requires_durable_submit = False`` or unset)
         retain the pre-Phase-5B opt-in behaviour for backwards compatibility
@@ -551,20 +607,12 @@ class LivePortfolio:
             return
         if not getattr(self.broker, "requires_durable_submit", False):
             return
-        if self.intent_wal is None:
-            raise ValueError(
-                "ADR 0008 / Phase 5B: LivePortfolio with a real-broker adapter "
-                f"({type(self.broker).__name__}) cannot be constructed without "
-                "an IntentWal. Pass intent_wal=IntentWal(<run_dir>/intent_events.jsonl). "
-                "Shadow runs (NoSubmitBrokerAdapter) may omit it."
-            )
-        if not self.bot_order_namespace:
-            raise ValueError(
-                "ADR 0008 / Phase 5B: LivePortfolio with a real-broker adapter "
-                f"({type(self.broker).__name__}) cannot be constructed without "
-                "a non-empty bot_order_namespace. Pass "
-                "bot_order_namespace=build_bot_order_namespace(strategy_instance_id)."
-            )
+        raise ValueError(
+            "ADR 0028 / Stage 6: LivePortfolio with a real-broker adapter "
+            f"({type(self.broker).__name__}) cannot submit through the legacy "
+            "IntentWal lane. Pass account_owner_submitter plus a non-empty "
+            "bot_order_namespace so AccountOwner remains the sole writer."
+        )
 
     def drop_pending_before_submit(self, *, drop_reason: DropReason, ts_ms: int) -> None:
         """Append drop events for WAL-identified pending orders, then clear memory."""

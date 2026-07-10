@@ -68,6 +68,25 @@ async def test_recovery_flatten_submits_one_sell_per_long_position() -> None:
 
 
 @pytest.mark.asyncio
+async def test_recovery_flatten_routes_broker_writes_through_account_owner_writer() -> None:
+    broker = FakeBroker()
+    _seed_position(broker, "SPY", 100.0)
+    boundaries: list[str] = []
+
+    async def writer(*, boundary: str, write):
+        boundaries.append(boundary)
+        return await write()
+
+    liquidated = await _recovery_flatten(
+        broker,
+        account_owner_broker_writer=writer,
+    )
+
+    assert liquidated == 1
+    assert boundaries == ["broker.cancel_open_orders", "broker.place_order"]
+
+
+@pytest.mark.asyncio
 async def test_record_recovery_flatten_residual_incident_persists_open_positions(
     tmp_path,
 ) -> None:
