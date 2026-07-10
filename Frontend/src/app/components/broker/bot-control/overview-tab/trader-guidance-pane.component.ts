@@ -8,7 +8,7 @@ import type {
 import {
   buildDiagnosticEvidenceLines,
   type DiagnosticEvidenceLine,
-} from '../node-inspector-presenter';
+} from '../diagnostic-evidence-lines';
 import { ReceiptLabelPipe } from '../../../../shared/pipes/receipt-label.pipe';
 
 @Component({
