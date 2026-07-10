@@ -13,6 +13,7 @@ export type AccountConditionType =
   | 'exit_lease_stuck'
   | 'crashed'
   | 'ended_without_status'
+  | 'liveness_unproven'
   | 'repeated_unclean_start';
 export type AccountCureAction =
   | 'resolve_exposure'

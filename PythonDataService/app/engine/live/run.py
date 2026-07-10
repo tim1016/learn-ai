@@ -1571,11 +1571,25 @@ def cmd_start(args: argparse.Namespace) -> int:
             from app.engine.live.account_registry import (
                 AccountInstanceBinding,
                 bot_order_namespace_for_instance,
+                crash_retired_restart_blocking_binding,
                 write_account_instance_binding,
             )
 
             recorded_at_ms = now_ms()
             if not launched_by_host_daemon:
+                blocking_binding = crash_retired_restart_blocking_binding(
+                    _artifacts_root,
+                    account_id=ledger.account_id,
+                    strategy_instance_id=ledger.strategy_instance_id,
+                )
+                if blocking_binding is not None:
+                    print(
+                        f"[START] recovery proof required for {ledger.strategy_instance_id}: "
+                        f"prior run {blocking_binding.run_id} ended with "
+                        f"{blocking_binding.source}",
+                        file=sys.stderr,
+                    )
+                    return 1
                 write_account_instance_binding(
                     _artifacts_root,
                     AccountInstanceBinding(

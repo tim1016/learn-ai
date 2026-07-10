@@ -205,11 +205,11 @@ pre-classified so the exhaustiveness gate, placement function
 implementation exists:
 
 - `fleet.sibling_liveness_unproven` — crashed sibling shows ACTIVE
-  indefinitely (`critical`, `no_remedy`, `remedy_status="unbuilt"`,
+  indefinitely (`critical`, `routed` to retire/replace recovery,
   cross-referenced in `docs/known-gaps.md`).
 - `reconciliation.divergence_while_submitting` — account-truth verdict
-  diverges while the bot continues submitting (`critical`, `no_remedy`,
-  `remedy_status="unbuilt"`, cross-referenced in
+  diverges while the bot continues submitting (`critical`, `routed` to
+  Account Monitor reconciliation, cross-referenced in
   `docs/known-gaps.md`). The rung receipt (Amendment 2026-07-08 (b))
   covers this at mutation time only; this code covers the running bot
   between clicks.
@@ -218,6 +218,13 @@ Newly discovered silent states follow the same route: reserve the code
 with an honest pre-classification first, implement second. A
 known-gaps entry describing an operator-invisible trust impact without
 a corresponding reserved notice code is itself a gap.
+
+**2026-07-10 closeout.** The two underlying safety hazards are now fail-closed,
+so they no longer appear in `docs/known-gaps.md`: cached Account Truth gates
+every durable submit, and daemon boot retires prior `ACTIVE` bindings whose
+process liveness it cannot own. The codes remain reserved for a future
+notification layer; reservation status is not authority to bypass either
+enforcement path.
 
 **Scope:** governs every new notice immediately; existing notice
 families (`runtime.*`, `watchdog.*`, `activity.*`, `reconciliation.*`,

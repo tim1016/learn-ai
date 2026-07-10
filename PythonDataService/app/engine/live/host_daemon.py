@@ -92,6 +92,7 @@ _QC_SHADOW_SUBDIR = Path("references") / "qc-shadow"
 _DEFAULT_ALLOWED_ORIGINS = "http://localhost:4200,http://127.0.0.1:4200"
 _STOP_WAIT_SECONDS = 2.0
 _DEFAULT_IBKR_CLIENT_ID_POOL = "50-99"
+_PROCESS_REAPER_INTERVAL_SECONDS = 1.0
 _IBKR_CLIENT_ID_MIN = 1
 _IBKR_CLIENT_ID_MAX = 2**31 - 1
 _IBKR_CLIENT_ID_POOL_MAX_SPAN = 1_000
@@ -438,6 +439,21 @@ class RunnerProcessManager:
                     )
                 )
         return HostRunnerInstancesStatus(instances=out, fetched_at_ms=_now_ms())
+
+    def running_managed_run_ids(self) -> frozenset[str]:
+        """Run ids backed by a child process owned by this daemon boot."""
+        with self._managed_lock:
+            return frozenset(
+                managed.run_id
+                for managed in self._managed.values()
+                if managed.process.poll() is None
+            )
+
+    def reap_exited_processes(self) -> None:
+        """Settle every exited child independently of status read traffic."""
+        with self._managed_lock:
+            for managed in self._managed.values():
+                self._refresh(managed)
 
     def instance_status(self, strategy_instance_id: str) -> HostRunnerProcessStatus:
         """Live process status for one strategy instance (idle if untracked)."""
@@ -911,10 +927,19 @@ class RunnerProcessManager:
             ) from exc
         if blocking_binding is None:
             return
+        from app.engine.live.exit_taxonomy import (
+            LIVENESS_UNPROVEN_RETIRED_BINDING_SOURCES,
+        )
+
+        failure = (
+            "is not owned by the current host daemon and its liveness is unproven"
+            if blocking_binding.source in LIVENESS_UNPROVEN_RETIRED_BINDING_SOURCES
+            else "crashed"
+        )
         raise HostRunnerError(
             status.HTTP_409_CONFLICT,
             (
-                f"Previous host runner for {strategy_instance_id!r} crashed without later account recovery proof. "
+                f"Previous host runner for {strategy_instance_id!r} {failure} without later account recovery proof. "
                 "Reconcile or record an audited recovery override before restarting this binding."
             ),
         )
@@ -1408,16 +1433,35 @@ def create_app(
     token = auth_token if auth_token is not None else ensure_daemon_token(_artifacts_root_from_env())
 
     # PRD #619-B — daemon lease lifespan. On startup: classify orphan
-    # candidates left behind by a previous daemon boot, then spawn the
-    # ``DaemonLeaseWriter`` which writes ``daemon_lease.json`` at 1Hz.
+    # candidates left behind by a previous daemon boot, retire prior ACTIVE
+    # account bindings that are not backed by this daemon's process registry,
+    # then spawn the ``DaemonLeaseWriter`` which writes ``daemon_lease.json``
+    # at 1Hz.
     # On shutdown: switch to ``DRAINING`` (an immediate flush) and
     # bounded-stop the writer so the watchdog observes the planned
     # transition. Failures are logged and tolerated — the daemon must
     # still start even if the control_plane directory is unwritable.
     from contextlib import asynccontextmanager
 
+    from app.engine.live.account_registry import (
+        retire_unmanaged_active_bindings_on_daemon_boot,
+    )
     from app.engine.live.control_plane import DaemonLeaseWriter
     from app.engine.live.orphan_classifier import classify_runtime_candidates_on_boot
+
+    async def _process_reaper(stop_event: asyncio.Event) -> None:
+        while not stop_event.is_set():
+            try:
+                await asyncio.to_thread(process_manager.reap_exited_processes)
+            except Exception:
+                logger.exception("host runner process reaper iteration failed")
+            try:
+                await asyncio.wait_for(
+                    stop_event.wait(),
+                    timeout=_PROCESS_REAPER_INTERVAL_SECONDS,
+                )
+            except TimeoutError:
+                continue
 
     @asynccontextmanager
     async def _lifespan(_app: FastAPI):
@@ -1429,6 +1473,25 @@ def create_app(
             )
         except Exception:
             logger.exception("orphan classification on boot failed")
+        boot_reconcile = retire_unmanaged_active_bindings_on_daemon_boot(
+            process_manager.artifacts_root,
+            managed_run_ids=process_manager.running_managed_run_ids(),
+            now_ms=_now_ms(),
+        )
+        if boot_reconcile.bindings_retired:
+            logger.warning(
+                "Retired account bindings with unproven daemon-boot liveness",
+                extra={
+                    "accounts_scanned": boot_reconcile.accounts_scanned,
+                    "active_bindings_found": boot_reconcile.active_bindings_found,
+                    "bindings_retired": boot_reconcile.bindings_retired,
+                },
+            )
+        reaper_stop = asyncio.Event()
+        reaper_task = asyncio.create_task(
+            _process_reaper(reaper_stop),
+            name="host-runner-process-reaper",
+        )
         writer = DaemonLeaseWriter(
             artifacts_root=process_manager.artifacts_root,
             boot_id=process_manager.boot_id,
@@ -1442,6 +1505,13 @@ def create_app(
         try:
             yield
         finally:
+            reaper_stop.set()
+            try:
+                await asyncio.wait_for(reaper_task, timeout=2.0)
+            except TimeoutError:
+                reaper_task.cancel()
+                await asyncio.gather(reaper_task, return_exceptions=True)
+                logger.error("host runner process reaper did not stop within 2 seconds")
             writer.set_draining()
             # Give the writer task one event-loop tick to observe the
             # ``DRAINING`` wake and write a final lease before we

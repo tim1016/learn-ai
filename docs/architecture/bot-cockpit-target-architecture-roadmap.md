@@ -55,6 +55,25 @@ parent-directory fsync; append/read-modify-write paths are serialized. Offline
 reconciliation and research report bundles remain tracked separately because
 their failure cannot change bot intent, runtime ownership, or restart safety.
 
+The 2026-07-10 Stage 1 audit also closed the two stale fleet-trust entries.
+Account Truth is enforced immediately before durable broker submit through
+`LiveEngine`'s cached `account_truth_gate_provider`; non-pass evidence drops the
+pending batch and raises `AccountTruthBlockError` before any broker call. The
+portfolio and engine-wiring regressions live in
+`tests/engine/live/test_live_portfolio.py` and
+`tests/engine/live/test_live_engine_intent_wal_wiring_vcr_0002.py`. On
+host-daemon boot, prior
+`ACTIVE` account bindings not backed by a process owned by the new daemon are
+now durably retired as `host_daemon.boot_liveness_unproven` before requests are
+served. A daemon-owned process reaper applies the normal crash retirement path
+when an owned child exits after boot, without depending on status reads. Both
+daemon starts and direct `run.py start` require recovery proof before a new
+`ACTIVE` row can supersede either retirement. That removes dead namespaces from
+sibling trust and blocks their own submit gate. The boot, reaper, and recovery
+regressions live in
+`tests/engine/live/test_host_daemon_boot_reconcile.py` and
+`tests/engine/live/test_run_cli.py`.
+
 **Exit criteria:**
 
 - every fixed defect has a regression test that fails before the fix;

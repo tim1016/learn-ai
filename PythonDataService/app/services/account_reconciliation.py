@@ -30,6 +30,7 @@ from app.engine.live.account_registry import (
 from app.engine.live.exit_taxonomy import (
     CRASH_RETIRED_BINDING_SOURCES,
     ENDED_WITHOUT_STATUS_RETIRED_BINDING_SOURCES,
+    LIVENESS_UNPROVEN_RETIRED_BINDING_SOURCES,
 )
 from app.schemas.account_reconciliation import (
     AccountAcceptExposureOverrideResponse,
@@ -661,7 +662,9 @@ def _terminal_binding_conditions(
         if binding.lifecycle_state != "RETIRED":
             continue
         if binding.source not in (
-            CRASH_RETIRED_BINDING_SOURCES | ENDED_WITHOUT_STATUS_RETIRED_BINDING_SOURCES
+            CRASH_RETIRED_BINDING_SOURCES
+            | ENDED_WITHOUT_STATUS_RETIRED_BINDING_SOURCES
+            | LIVENESS_UNPROVEN_RETIRED_BINDING_SOURCES
         ):
             continue
         if has_account_recovery_evidence_after(account_events, binding.recorded_at_ms):
@@ -677,6 +680,26 @@ def _terminal_binding_conditions(
                     detail=(
                         f"{binding.strategy_instance_id} ended from a crash in run {binding.run_id}. "
                         "Retire & Replace preserves the history and creates a clean replacement."
+                    ),
+                    operator_next_step="RETIRE_REPLACE",
+                    source=binding.source,
+                    evidence_at_ms=binding.recorded_at_ms,
+                    evidence_refs=_binding_evidence_refs(binding),
+                    cure_action="retire_replace",
+                )
+            )
+        elif binding.source in LIVENESS_UNPROVEN_RETIRED_BINDING_SOURCES:
+            conditions.append(
+                AccountConditionRow(
+                    condition_type="liveness_unproven",
+                    scope="bot",
+                    owner=_bot_owner(binding),
+                    severity="critical",
+                    title="Bot liveness unproven after daemon boot",
+                    detail=(
+                        f"{binding.strategy_instance_id} was ACTIVE in run {binding.run_id}, "
+                        "but the current host daemon does not own its process. The binding was "
+                        "retired before it could be trusted as a live sibling."
                     ),
                     operator_next_step="RETIRE_REPLACE",
                     source=binding.source,
