@@ -17,7 +17,6 @@ authors every row server-side per the truthfulness contract.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from functools import partial
@@ -42,19 +41,15 @@ from app.engine.live.live_state_sidecar import (
 from app.operator.incidents.store import IncidentStore
 from app.schemas.broker_activity import (
     BrokerActivityPage,
-    BrokerActivityRow,
     ReconciliationTimingPolicy,
 )
 from app.services.broker_activity_publisher import BrokerActivityPublisher
 from app.services.broker_activity_publisher_registry import get_publisher_registry
-from app.services.durable_event_channel import (
-    DurableEventChannel,
-    EventCursor,
-    EventEnd,
-    EventGap,
-    EventRecord,
-    EventReset,
-    event_message_sse,
+from app.services.durable_event_channel import EventCursor
+from app.services.durable_event_stream import (
+    parse_event_cursor,
+    resolve_stream_cursor,
+    stream_durable_event_channel,
 )
 
 
@@ -254,7 +249,7 @@ async def broker_activity_backfill(
     publisher = await _ensure_publisher(strategy_instance_id)
     channel = publisher.event_channel
     channel.refresh()
-    parsed_cursor = _parse_event_cursor(cursor)
+    parsed_cursor = parse_event_cursor(cursor)
     if parsed_cursor is not None and parsed_cursor.stream_id != channel.stream_id:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -311,82 +306,32 @@ async def broker_activity_stream(
     channel = publisher.event_channel
     channel.refresh()
     effective_since_seq = since_seq if since_seq is not None else 0
-    requested_cursor = _resolve_stream_cursor(
+    stream_cursor = resolve_stream_cursor(
         channel=channel,
         query_cursor=cursor,
         last_event_id=last_event_id,
         legacy_since_seq=effective_since_seq,
-    )
-    use_legacy_backfill = cursor is None and (
-        last_event_id is None or since_seq is not None
-    )
-    legacy_after_seq = (
-        requested_cursor.seq if last_event_id is not None else effective_since_seq
+        legacy_since_seq_provided=since_seq is not None,
     )
 
-    async def event_source():
-        records: list[EventRecord[BrokerActivityRow]] = []
-        if use_legacy_backfill:
-            records, subscription = channel.subscribe_with_backfill(legacy_after_seq)
-        else:
-            subscription = channel.subscribe(requested_cursor)
-        try:
-            for record in records:
-                yield event_message_sse(
-                    record,
-                    encode_row=lambda row: row.model_dump_json(),
-                )
-                subscription.acknowledge(record.cursor)
-            while True:
-                message = await subscription.queue.get()
-                yield event_message_sse(
-                    message,
-                    encode_row=lambda row: row.model_dump_json(),
-                )
-                if isinstance(message, EventRecord):
-                    subscription.acknowledge(message.cursor)
-                    continue
-                if isinstance(message, EventReset) and subscription.active:
-                    continue
-                if isinstance(message, (EventGap, EventEnd, EventReset)):
-                    return
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logger.exception(
-                "broker-activity SSE stream error",
-                extra={"strategy_instance_id": strategy_instance_id},
-            )
-            err = json.dumps({"error": str(exc)})
-            yield f"event: error\ndata: {err}\n\n"
-        finally:
-            channel.unsubscribe(subscription)
+    def handle_stream_error(exc: BaseException) -> str:
+        logger.exception(
+            "broker-activity SSE stream error",
+            extra={"strategy_instance_id": strategy_instance_id},
+        )
+        err = json.dumps({"error": str(exc)})
+        return f"event: error\ndata: {err}\n\n"
 
     return StreamingResponse(
-        event_source(),
+        stream_durable_event_channel(
+            channel=channel,
+            cursor=stream_cursor,
+            encode_row=lambda row: row.model_dump_json(),
+            handle_error=handle_stream_error,
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-
-
-def _parse_event_cursor(value: str | None) -> EventCursor | None:
-    try:
-        return EventCursor.parse(value)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-
-
-def _resolve_stream_cursor(
-    *,
-    channel: DurableEventChannel[BrokerActivityRow],
-    query_cursor: str | None,
-    last_event_id: str | None,
-    legacy_since_seq: int,
-) -> EventCursor:
-    parsed = _parse_event_cursor(last_event_id or query_cursor)
-    if parsed is not None:
-        return parsed
-    return EventCursor(channel.stream_id, legacy_since_seq)
 
 
 __all__ = [

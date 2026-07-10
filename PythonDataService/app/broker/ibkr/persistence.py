@@ -29,10 +29,8 @@ are ``int64`` ms UTC. No ISO strings, no naive datetimes.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import os
-import tempfile
 import threading
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
@@ -44,6 +42,7 @@ from app.broker.ibkr.models import (
     IbkrPnLTick,
 )
 from app.utils.advisory_lock import advisory_file_lock
+from app.utils.atomic_parquet import atomic_parquet_write
 
 logger = logging.getLogger(__name__)
 
@@ -210,28 +209,12 @@ def _write_parquet_partition(out_path: Path, part) -> None:
         else:
             combined = part
 
-        fd, tmp_name = tempfile.mkstemp(
-            prefix=f".{out_path.name}.",
-            suffix=".tmp",
-            dir=str(out_path.parent),
+        atomic_parquet_write(
+            out_path,
+            lambda tmp_path: combined.to_parquet(tmp_path, index=False),
+            replace=os.replace,
+            cleanup_errors=(FileNotFoundError,),
         )
-        os.close(fd)
-        tmp_path = Path(tmp_name)
-        try:
-            combined.to_parquet(tmp_path, index=False)
-            with tmp_path.open("rb") as fh:
-                os.fsync(fh.fileno())
-            os.replace(tmp_path, out_path)
-            # fsync the directory so the rename itself survives a crash.
-            dir_fd = os.open(str(out_path.parent), os.O_RDONLY)
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
-        except Exception:
-            with contextlib.suppress(FileNotFoundError):
-                tmp_path.unlink()
-            raise
 
 
 def make_writer(persist: bool, persist_dir: str) -> TickWriter:
