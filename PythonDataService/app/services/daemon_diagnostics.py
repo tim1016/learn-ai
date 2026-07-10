@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import ValidationError
 
@@ -41,6 +42,9 @@ from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from app.services.fleet_daemon_snapshot_provider import FleetDaemonObservation
+
 __all__ = [
     "DaemonDiagnosticsService",
     "build_daemon_diagnostic_report",
@@ -64,6 +68,7 @@ class DaemonDiagnosticsService:
         self,
         *,
         strategy_instance_id: str | None = None,
+        fleet_observation: FleetDaemonObservation | None = None,
     ) -> DaemonDiagnosticReport:
         settings = get_settings()
         daemon_url = (settings.live_runner_daemon_url or "").strip()
@@ -73,8 +78,14 @@ class DaemonDiagnosticsService:
         if daemon_url:
             (daemon_result, health), (_registry_result, instances), mirror = await asyncio.gather(
                 host_daemon_client.fetch_health(daemon_url),
-                _fetch_instances(daemon_url),
-                self._safe_mirror_snapshot(fetched_at_ms=fetched_at_ms),
+                _fetch_instances(
+                    daemon_url,
+                    fleet_observation=fleet_observation,
+                ),
+                self._safe_mirror_snapshot(
+                    fetched_at_ms=fetched_at_ms,
+                    fleet_observation=fleet_observation,
+                ),
             )
         else:
             daemon_result = DaemonResult(
@@ -84,7 +95,10 @@ class DaemonDiagnosticsService:
             )
             health = None
             instances = None
-            mirror = await self._safe_mirror_snapshot(fetched_at_ms=fetched_at_ms)
+            mirror = await self._safe_mirror_snapshot(
+                fetched_at_ms=fetched_at_ms,
+                fleet_observation=fleet_observation,
+            )
 
         run_dir_visibility = (
             build_run_dir_visibility(Path(settings.live_runs_root), instances)
@@ -102,9 +116,16 @@ class DaemonDiagnosticsService:
             run_dir_visibility=run_dir_visibility,
         )
 
-    async def _safe_mirror_snapshot(self, *, fetched_at_ms: int) -> BrokerSessionMirrorSnapshot:
+    async def _safe_mirror_snapshot(
+        self,
+        *,
+        fetched_at_ms: int,
+        fleet_observation: FleetDaemonObservation | None,
+    ) -> BrokerSessionMirrorSnapshot:
         try:
-            return await self._mirror_service.snapshot()
+            return await self._mirror_service.snapshot(
+                fleet_observation=fleet_observation,
+            )
         except Exception as exc:
             logger.warning("daemon diagnostics could not read broker session mirror: %s", exc)
             settings = get_settings()
@@ -120,9 +141,14 @@ class DaemonDiagnosticsService:
 
 async def _fetch_instances(
     daemon_url: str,
+    *,
+    fleet_observation: FleetDaemonObservation | None = None,
 ) -> tuple[DaemonResult, HostRunnerInstancesStatus | None]:
-    result, payload = await host_daemon_client.fetch_instances(daemon_url)
-    if payload is None:
+    if fleet_observation is None:
+        result, payload = await host_daemon_client.fetch_instances(daemon_url)
+    else:
+        result, payload = fleet_observation.result, fleet_observation.payload
+    if result.kind != "CONNECTED" or payload is None:
         return result, None
     try:
         return result, HostRunnerInstancesStatus.model_validate(payload)

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+from app.engine.live.daemon_transport import DaemonResult
 from app.engine.live.engine_runtime import (
     BarLoopBlock,
     BrokerBlock,
@@ -22,6 +23,7 @@ from app.services.broker_session_mirror import (
     BrokerSessionMirrorService,
     _build_runtime_index,
 )
+from app.services.fleet_daemon_snapshot_provider import FleetDaemonObservation
 
 
 class _FakeEventService:
@@ -201,7 +203,7 @@ async def test_mirror_snapshot_includes_past_closed_history_when_observer_online
 
     async def _fetch_instances(_daemon_url):
         return (
-            SimpleNamespace(detail=None),
+            DaemonResult.connected(),
             {"instances": [], "fetched_at_ms": 1_783_120_000_100},
         )
 
@@ -230,3 +232,63 @@ async def test_mirror_snapshot_includes_past_closed_history_when_observer_online
     assert snapshot.summary.unknown == 0
     assert snapshot.summary.attention == 0
     assert history.current_rows == []
+
+
+async def test_mirror_does_not_reconcile_against_stale_fleet_payload(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        broker_session_mirror,
+        "get_settings",
+        lambda: SimpleNamespace(
+            live_runner_daemon_url="http://daemon.test",
+            live_runs_root=str(tmp_path),
+            port=4002,
+        ),
+    )
+    monkeypatch.setattr(broker_session_mirror, "_data_plane_health", lambda: None)
+
+    async def _fetch_gateway_sockets(_daemon_url, *, gateway_port):
+        return (
+            DaemonResult.connected(),
+            GatewaySocketsSnapshot(
+                fetched_at_ms=1_783_120_000_100,
+                gateway_port=gateway_port,
+                sockets=[],
+            ),
+        )
+
+    async def _fail_fetch_instances(_daemon_url):
+        raise AssertionError("shared observations must not trigger another registry call")
+
+    monkeypatch.setattr(
+        broker_session_mirror.host_daemon_client,
+        "fetch_gateway_sockets",
+        _fetch_gateway_sockets,
+    )
+    monkeypatch.setattr(
+        broker_session_mirror.host_daemon_client,
+        "fetch_instances",
+        _fail_fetch_instances,
+    )
+    observation = FleetDaemonObservation(
+        result=DaemonResult(
+            kind="UNREACHABLE",
+            detail="connection refused",
+            error_category="connect_error",
+        ),
+        payload={"instances": [], "fetched_at_ms": 1_783_120_000_000},
+        processes_by_id={},
+        source_fetched_at_ms=1_783_120_000_000,
+        observed_at_ms=1_783_120_000_100,
+    )
+    service = BrokerSessionMirrorService(
+        event_service=_FakeEventService(),
+        history_service=_FakeHistoryService(),
+    )
+
+    snapshot = await service.snapshot(fleet_observation=observation)
+
+    assert "connection refused" in snapshot.degradation_reasons
+    assert snapshot.rows == []

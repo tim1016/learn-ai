@@ -51,6 +51,7 @@ from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.daemon_connectivity_monitor import (
     get_monitor as get_daemon_connectivity_monitor,
 )
+from app.engine.live.daemon_transport import DaemonResult
 from app.engine.live.desired_state import (
     DesiredState,
     DesiredStateCorruptError,
@@ -252,6 +253,9 @@ from app.services.fleet_contamination import (
 from app.services.fleet_contamination import (
     scan_runs_by_instance as _scan_runs_by_instance,
 )
+from app.services.fleet_daemon_snapshot_provider import (
+    FleetDaemonSnapshotProvider,
+)
 from app.services.instance_context import InstanceContext, load_instance_context
 from app.services.live_chart_window import (
     ChartWindowError,
@@ -318,6 +322,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["live-instances"])
 _SURFACE_HUBS = SurfaceHubRegistry[LiveInstanceStatus]()
 _SURFACE_RUNS_CACHE = VisibleRunsSnapshotCache()
+_FLEET_DAEMON_PROVIDER: FleetDaemonSnapshotProvider | None = None
 
 # strategy_instance_id flows into a daemon URL and a filesystem path; confine it
 # to a single safe segment at the boundary.
@@ -1574,8 +1579,15 @@ async def _resolve_daemon_diagnostic_condition_for_status(
     sid: str,
 ) -> DaemonDominantCondition | None:
     try:
+        provider = _FLEET_DAEMON_PROVIDER
+        fleet_observation = (
+            await provider.observation() if provider is not None else None
+        )
         report = await asyncio.wait_for(
-            get_daemon_diagnostics_service().report(strategy_instance_id=sid),
+            get_daemon_diagnostics_service().report(
+                strategy_instance_id=sid,
+                fleet_observation=fleet_observation,
+            ),
             timeout=_STATUS_DAEMON_DIAGNOSTICS_TIMEOUT_S,
         )
     except Exception as exc:
@@ -1612,6 +1624,27 @@ async def _surface_visible_runs_by_instance(root: Path) -> dict[str, list[dict]]
     return await _SURFACE_RUNS_CACHE.get(root, _visible_runs_by_instance)
 
 
+async def _fetch_surface_instance_process(
+    daemon_url: str,
+    strategy_instance_id: str,
+) -> tuple[DaemonResult, dict | None]:
+    """Read the fleet owner in producer lifecycles.
+
+    The direct call is retained only for pure assembler tests and compatibility
+    callers that deliberately invoke the composition function without starting
+    application lifecycle. ``start_surface_hubs`` installs the shared provider
+    before it creates any producer.
+    """
+
+    provider = _FLEET_DAEMON_PROVIDER
+    if provider is None:
+        return await host_daemon_client.fetch_instance_process(
+            daemon_url,
+            strategy_instance_id,
+        )
+    return await provider.process_for(strategy_instance_id)
+
+
 def _get_surface_assembler() -> LiveInstanceSurfaceAssembler:
     return LiveInstanceSurfaceAssembler(
         LiveInstanceSurfaceDependencies(
@@ -1619,7 +1652,7 @@ def _get_surface_assembler() -> LiveInstanceSurfaceAssembler:
             visible_runs_by_instance=_surface_visible_runs_by_instance,
             sid_has_soft_deletion=_sid_has_soft_deletion_from_directory,
             bot_soft_deleted_detail=_bot_soft_deleted_detail,
-            fetch_instance_process=host_daemon_client.fetch_instance_process,
+            fetch_instance_process=_fetch_surface_instance_process,
             interpret_daemon_process=_interpret_daemon_process,
             scan_runs_by_instance=_scan_runs_by_instance,
             resolve_account_freeze=_resolve_account_freeze,
@@ -1750,10 +1783,34 @@ def _surface_hub_for(strategy_instance_id: str) -> SurfaceHub[LiveInstanceStatus
 async def start_surface_hubs() -> None:
     """Start producer lifecycles for every bot visible at data-plane boot."""
 
+    global _FLEET_DAEMON_PROVIDER
+
     settings = get_settings()
     root = Path(settings.live_runs_root)
     strategy_instance_ids = set(await _surface_visible_runs_by_instance(root))
-    _result, daemon = await host_daemon_client.fetch_instances(settings.live_runner_daemon_url)
+    provider = _FLEET_DAEMON_PROVIDER
+    if provider is None:
+        provider = FleetDaemonSnapshotProvider(
+            daemon_url=settings.live_runner_daemon_url,
+            fetch_instances=host_daemon_client.fetch_instances,
+            poll_interval_seconds=(
+                settings.live_runner_fleet_poll_interval_seconds
+            ),
+            breaker_initial_backoff_seconds=(
+                settings.live_runner_daemon_breaker_initial_backoff_seconds
+            ),
+            breaker_max_backoff_seconds=(
+                settings.live_runner_daemon_breaker_max_backoff_seconds
+            ),
+            now_ms=_now_ms,
+        )
+        _FLEET_DAEMON_PROVIDER = provider
+    observation = (
+        await provider.observation()
+        if provider.is_running
+        else await provider.start()
+    )
+    daemon = observation.payload
     for instance in (daemon or {}).get("instances", []):
         sid = instance.get("strategy_instance_id")
         if isinstance(sid, str) and sid:
@@ -1765,7 +1822,13 @@ async def start_surface_hubs() -> None:
 async def stop_surface_hubs() -> None:
     """Stop every producer task during data-plane shutdown."""
 
+    global _FLEET_DAEMON_PROVIDER
+
     await _SURFACE_HUBS.stop_all()
+    provider = _FLEET_DAEMON_PROVIDER
+    _FLEET_DAEMON_PROVIDER = None
+    if provider is not None:
+        await provider.stop()
     await _SURFACE_RUNS_CACHE.invalidate()
 
 
@@ -1776,6 +1839,12 @@ async def _ensure_surface_hub_started(
     await _SURFACE_RUNS_CACHE.invalidate(root)
     hub = _surface_hub_for(strategy_instance_id)
     try:
+        provider = _FLEET_DAEMON_PROVIDER
+        if provider is not None:
+            # Accepted daemon mutations are the authoritative out-of-band
+            # invalidation signal. Refresh the shared fleet observation once;
+            # normal client refreshes still obey the fleet cadence.
+            await provider.refresh(force=True)
         if hub.is_running:
             await hub.refresh()
         else:

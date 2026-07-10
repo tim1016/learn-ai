@@ -213,6 +213,37 @@ circuit-breaker backoff. Every bot hub consumes the shared stamped observation.
   `UNREACHABLE` meaning; and
 - cache and breaker tasks stop within the graceful-shutdown budget.
 
+**Stage 3C delivery checklist (recorded before implementation):**
+
+- a counted fake daemon proves concurrent reads from multiple bot hubs share
+  one `/instances` request per interval and never fall back to per-bot process
+  requests;
+- stale reads return immediately, coalesce revalidation, and replace the
+  observation only after the shared refresh completes;
+- deterministic breaker tests prove bounded exponential backoff, no network
+  traffic while open, and successful probe recovery;
+- an open breaker retains the last successful payload and its daemon-authored
+  `fetched_at_ms` stamp while the current transport result and host-process
+  projection remain `UNREACHABLE`;
+- application-lifecycle tests prove hubs start after the fleet provider and
+  stop before it, with provider polling and in-flight revalidation drained
+  inside the graceful-shutdown budget; and
+- all observation timestamps remain `int64` Unix epoch milliseconds UTC.
+
+**Implemented 2026-07-10.** `FleetDaemonSnapshotProvider` now owns one
+process-wide `/instances` cadence, an indexed stamped observation, coalesced
+stale-while-revalidate reads, and bounded task shutdown. Every application-
+owned `SurfaceHub` reads its per-bot process from that provider; the nested
+daemon diagnostics and broker-session mirror reuse the same fleet observation
+instead of issuing hidden registry calls. `HostDaemonCircuitBreaker` remains a
+transport-only mechanism in `host_daemon_client.py`: repeated unreachable
+results open a bounded exponential backoff, retain the last validated payload
+and daemon-authored `fetched_at_ms`, and make the current per-bot process
+projection `UNREACHABLE`. Focused evidence covers concurrent five-bot reads,
+three real hub lifecycles with the per-bot route forbidden, stale refresh
+coalescing, breaker recovery and cap, strict timestamp rejection, cancellation
+of an in-flight refresh, and hubs-before-provider application shutdown.
+
 ## Stage 4 — Move Bot Cockpit to the reactive store `[UX+SCALE]`
 
 Add the route-provided `BotSurfaceStore`, the small authenticated SSE connection

@@ -15,11 +15,36 @@ from app.schemas.live_runs import (
     HostRunnerProcessStatus,
 )
 from app.services.daemon_diagnostics import (
+    _fetch_instances,
     build_daemon_diagnostic_report,
     redact_host_runner_health,
 )
+from app.services.fleet_daemon_snapshot_provider import FleetDaemonObservation
 
 NOW_MS = 1_700_000_000_000
+
+
+async def test_stale_fleet_payload_is_not_reused_as_current_registry() -> None:
+    result = DaemonResult(
+        kind="UNREACHABLE",
+        detail="connection refused",
+        error_category="connect_error",
+    )
+    observation = FleetDaemonObservation(
+        result=result,
+        payload={"instances": [], "fetched_at_ms": NOW_MS - 1_000},
+        processes_by_id={},
+        source_fetched_at_ms=NOW_MS - 1_000,
+        observed_at_ms=NOW_MS,
+    )
+
+    returned_result, instances = await _fetch_instances(
+        "http://daemon",
+        fleet_observation=observation,
+    )
+
+    assert returned_result == result
+    assert instances is None
 
 
 def _process(**overrides: object) -> HostRunnerProcessStatus:

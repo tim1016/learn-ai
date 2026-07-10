@@ -520,6 +520,9 @@ def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         live_runs_root=str(root),
         live_runner_daemon_url="http://daemon",
         live_runner_host_start_command="",
+        live_runner_fleet_poll_interval_seconds=1.0,
+        live_runner_daemon_breaker_initial_backoff_seconds=1.0,
+        live_runner_daemon_breaker_max_backoff_seconds=30.0,
         fleet_dirty_blocks_starts=False,
         # Mirror the real default env (IBKR_MODE=paper, IBKR_READONLY=false) so
         # start_defaults resolves to place-orders; dedicated tests override.
@@ -936,6 +939,90 @@ async def test_surface_hub_does_not_bootstrap_publisher_for_stopped_bot(
         await live_instances.stop_surface_hubs()
 
 
+async def test_surface_hubs_share_one_fleet_daemon_snapshot(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _app, root = app_with_root
+    strategy_instance_ids = ["fleet-bot-a", "fleet-bot-b", "fleet-bot-c"]
+    for index, sid in enumerate(strategy_instance_ids):
+        _write_ledger(root, f"run-{sid}", sid, 100 + index)
+
+    calls = 0
+
+    async def fake_instances(_base_url: str):
+        nonlocal calls
+        calls += 1
+        return as_typed_get(
+            {
+                "fetched_at_ms": 1_700_000_000_000,
+                "instances": [
+                    {
+                        "strategy_instance_id": sid,
+                        "run_id": f"run-{sid}",
+                        "run_dir": str(root / f"run-{sid}"),
+                        "process": {"state": "idle", "run_id": f"run-{sid}"},
+                    }
+                    for sid in strategy_instance_ids
+                ],
+            }
+        )
+
+    async def fail_per_bot_fetch(_base_url: str, _sid: str):
+        raise AssertionError("a surface hub must not call the per-bot daemon route")
+
+    from app.services.surface_hub import SurfaceHubRegistry
+
+    monkeypatch.setattr(live_instances, "_SURFACE_HUBS", SurfaceHubRegistry())
+    monkeypatch.setattr(live_instances, "_FLEET_DAEMON_PROVIDER", None)
+    monkeypatch.setattr(host_daemon_client, "fetch_instances", fake_instances)
+    monkeypatch.setattr(
+        host_daemon_client,
+        "fetch_instance_process",
+        fail_per_bot_fetch,
+    )
+
+    try:
+        await live_instances.start_surface_hubs()
+
+        assert calls == 1
+        for sid in strategy_instance_ids:
+            hub = live_instances._SURFACE_HUBS.get(sid)
+            assert hub is not None
+            assert hub.latest is not None
+            assert hub.latest.process.state == "idle"
+    finally:
+        await live_instances.stop_surface_hubs()
+
+
+async def test_surface_shutdown_stops_hubs_before_fleet_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    order: list[str] = []
+
+    class RecordingHubs:
+        async def stop_all(self) -> None:
+            order.append("hubs")
+
+    class RecordingProvider:
+        async def stop(self) -> None:
+            order.append("provider")
+
+    class RecordingRunsCache:
+        async def invalidate(self) -> None:
+            order.append("runs-cache")
+
+    provider = RecordingProvider()
+    monkeypatch.setattr(live_instances, "_SURFACE_HUBS", RecordingHubs())
+    monkeypatch.setattr(live_instances, "_FLEET_DAEMON_PROVIDER", provider)
+    monkeypatch.setattr(live_instances, "_SURFACE_RUNS_CACHE", RecordingRunsCache())
+
+    await live_instances.stop_surface_hubs()
+
+    assert order == ["hubs", "provider", "runs-cache"]
+    assert live_instances._FLEET_DAEMON_PROVIDER is None
+
+
 async def test_running_surface_retries_transient_activity_publisher_bootstrap(
     app_with_root,
     monkeypatch: pytest.MonkeyPatch,
@@ -991,6 +1078,7 @@ async def test_accepted_mutation_refreshes_an_already_running_surface_hub(
 ) -> None:
     _app, root = app_with_root
     refreshes = 0
+    fleet_refreshes: list[bool] = []
     invalidated: list[Path | None] = []
 
     class RunningHub:
@@ -1011,12 +1099,18 @@ async def test_accepted_mutation_refreshes_an_already_running_surface_hub(
         async def invalidate(self, invalidated_root: Path | None = None) -> None:
             invalidated.append(invalidated_root)
 
+    class FleetProvider:
+        async def refresh(self, *, force: bool = False) -> None:
+            fleet_refreshes.append(force)
+
     monkeypatch.setattr(live_instances, "_SURFACE_HUBS", Registry())
     monkeypatch.setattr(live_instances, "_SURFACE_RUNS_CACHE", RunsCache())
+    monkeypatch.setattr(live_instances, "_FLEET_DAEMON_PROVIDER", FleetProvider())
 
     await live_instances._ensure_surface_hub_started("spy_mutated_surface")
 
     assert refreshes == 1
+    assert fleet_refreshes == [True]
     assert invalidated == [root]
 
 
