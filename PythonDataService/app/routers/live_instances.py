@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
@@ -195,6 +196,7 @@ from app.services.activity_repair_projection import load_activity_repair_project
 from app.services.bot_catalog_projection import compose_bot_catalog_row, trading_mode_from_configured_mode
 from app.services.bot_daily_lifecycle import project_bot_daily_lifecycle
 from app.services.bot_deletion import (
+    BOT_DELETION_FILENAME,
     BotDeletionCorruptError,
     BotDeletionRecord,
     bot_has_soft_deletion,
@@ -371,6 +373,35 @@ def _sid_has_soft_deletion(artifacts_root: Path, sid: str) -> bool:
     except (ValueError, BotDeletionCorruptError) as exc:
         logger.warning(
             "failed to read bot deletion marker",
+            extra={"strategy_instance_id": sid, "exception": repr(exc)},
+        )
+        return False
+
+
+def _sid_has_soft_deletion_from_directory(artifacts_root: Path, sid: str) -> bool:
+    """Prove a deletion marker without using request input in a path.
+
+    Directory entries originate from the trusted artifacts root; ``sid`` is
+    used only for equality. This keeps cached-status deletion proof off the
+    user-input-to-filesystem dataflow while preserving the durable marker as
+    authority across process restarts.
+    """
+
+    live_state_root = artifacts_root / "live_state"
+    try:
+        with os.scandir(live_state_root) as entries:
+            matched = next((entry for entry in entries if entry.name == sid), None)
+        if matched is None or not matched.is_dir(follow_symlinks=False):
+            return False
+        with os.scandir(matched.path) as children:
+            return any(
+                child.name == BOT_DELETION_FILENAME and child.is_file(follow_symlinks=False) for child in children
+            )
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        logger.warning(
+            "failed to scan bot deletion markers",
             extra={"strategy_instance_id": sid, "exception": repr(exc)},
         )
         return False
@@ -1579,7 +1610,7 @@ def _get_surface_assembler() -> LiveInstanceSurfaceAssembler:
         LiveInstanceSurfaceDependencies(
             get_settings=get_settings,
             visible_runs_by_instance=_visible_runs_by_instance,
-            sid_has_soft_deletion=_sid_has_soft_deletion,
+            sid_has_soft_deletion=_sid_has_soft_deletion_from_directory,
             bot_soft_deleted_detail=_bot_soft_deleted_detail,
             fetch_instance_process=host_daemon_client.fetch_instance_process,
             interpret_daemon_process=_interpret_daemon_process,
@@ -3207,7 +3238,10 @@ async def get_instance_status(
     sid = _validate_instance_id(strategy_instance_id)
     settings = get_settings()
     root = Path(settings.live_runs_root)
-    if sid not in _visible_runs_by_instance(root) and _sid_has_soft_deletion(root.parent, sid):
+    if sid not in _visible_runs_by_instance(root) and _sid_has_soft_deletion_from_directory(
+        root.parent,
+        sid,
+    ):
         raise HTTPException(
             status.HTTP_410_GONE,
             detail=_bot_soft_deleted_detail(sid),

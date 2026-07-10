@@ -2786,6 +2786,26 @@ async def test_delete_instance_soft_deletes_bot_from_catalog_list_and_status(
     assert owned_hub.is_running is False
 
 
+def test_status_deletion_directory_scan_does_not_follow_instance_symlink(
+    tmp_path: Path,
+) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    live_state_root = artifacts_root / "live_state"
+    outside = tmp_path / "outside"
+    live_state_root.mkdir(parents=True)
+    outside.mkdir()
+    (outside / "bot_deletion.json").write_text("{}", encoding="utf-8")
+    (live_state_root / "linked-bot").symlink_to(outside, target_is_directory=True)
+
+    assert (
+        live_instances._sid_has_soft_deletion_from_directory(
+            artifacts_root,
+            "linked-bot",
+        )
+        is False
+    )
+
+
 async def test_delete_instance_refuses_active_process(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-active", "active-bot", 100)

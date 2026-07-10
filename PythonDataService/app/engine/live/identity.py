@@ -44,15 +44,21 @@ def validate_strategy_instance_id(value: str) -> str:
     segment), so we reject it here too.
     """
     if value != value.strip():
-        raise ValueError(f"strategy_instance_id must not have leading/trailing whitespace: {value!r}")
+        raise ValueError(
+            f"strategy_instance_id must not have leading/trailing whitespace: {value!r}"
+        )
     if value == "":
         raise ValueError("strategy_instance_id must not be empty")
     if "\x00" in value:
         raise ValueError(f"strategy_instance_id must not contain a NUL byte: {value!r}")
     if "/" in value or "\\" in value:
-        raise ValueError(f"strategy_instance_id must not contain a path separator: {value!r}")
+        raise ValueError(
+            f"strategy_instance_id must not contain a path separator: {value!r}"
+        )
     if value in ("..", "."):
-        raise ValueError(f"strategy_instance_id must not be a path-traversal segment: {value!r}")
+        raise ValueError(
+            f"strategy_instance_id must not be a path-traversal segment: {value!r}"
+        )
     if _INSTANCE_ID_RE.fullmatch(value) is None:
         raise ValueError(
             "strategy_instance_id must be 1-128 chars, start with a letter or "
@@ -72,7 +78,9 @@ def safe_strategy_instance_path_segment(value: str) -> str:
     validate_strategy_instance_id(value)
     match = _INSTANCE_ID_RE.fullmatch(value)
     if match is None:
-        raise ValueError(f"strategy_instance_id rejected on second check: {value!r}")
+        raise ValueError(
+            f"strategy_instance_id rejected on second check: {value!r}"
+        )
     safe = match.group(0)
     if Path(safe).name != safe:
         raise ValueError(f"strategy_instance_id must be a single path segment: {value!r}")
@@ -89,7 +97,9 @@ def confine_path_to_root(path: Path, root: Path, *, label: str) -> Path:
     return Path(candidate)
 
 
-def strategy_instance_artifact_dir(artifacts_root: Path, namespace: str, strategy_instance_id: str) -> Path:
+def strategy_instance_artifact_dir(
+    artifacts_root: Path, namespace: str, strategy_instance_id: str
+) -> Path:
     """Return a confined per-instance directory below ``artifacts_root``.
 
     ``namespace`` is a trusted literal such as ``live_state`` or
@@ -101,7 +111,9 @@ def strategy_instance_artifact_dir(artifacts_root: Path, namespace: str, strateg
     if not namespace or namespace != Path(namespace).name:
         raise ValueError(f"artifact namespace must be a single path segment: {namespace!r}")
     safe_sid = safe_strategy_instance_path_segment(strategy_instance_id)
-    namespace_root = os.path.realpath(os.path.join(os.fspath(artifacts_root), namespace))
+    namespace_root = os.path.realpath(
+        os.path.join(os.fspath(artifacts_root), namespace)
+    )
     candidate = os.path.realpath(os.path.join(namespace_root, safe_sid))
     return confine_path_to_root(
         Path(candidate),
