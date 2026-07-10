@@ -60,11 +60,14 @@ async def test_identical_semantics_do_not_advance_surface_version() -> None:
     hub = SurfaceHub(strategy_instance_id="bot-a", assemble=assemble)
 
     first = await hub.refresh()
+    queue = hub.subscribe()
+    assert await queue.get() == first
     second = await hub.refresh()
 
     assert first.surface_version == 1
     assert second.surface_version == 1
     assert second.fetched_at_ms > first.fetched_at_ms
+    assert queue.empty()
 
 
 @pytest.mark.asyncio
@@ -272,6 +275,50 @@ async def test_registry_remove_stops_and_forgets_hub() -> None:
 
     assert registry.get("bot-a") is None
     assert hub.is_running is False
+
+
+@pytest.mark.asyncio
+async def test_snapshot_watchers_are_latest_wins_queue_one() -> None:
+    source_state = "one"
+
+    async def assemble() -> _Snapshot:
+        return _snapshot(
+            generated_at_ms=1_700_000_000_100,
+            source_state=source_state,
+        )
+
+    hub = SurfaceHub(strategy_instance_id="bot-a", assemble=assemble)
+    first = await hub.refresh()
+    queue = hub.subscribe()
+    assert await queue.get() == first
+
+    source_state = "two"
+    await hub.refresh()
+    source_state = "three"
+    latest = await hub.refresh()
+
+    assert queue.qsize() == 1
+    assert await queue.get() == latest
+    assert latest.surface_version == 3
+
+
+@pytest.mark.asyncio
+async def test_stop_closes_snapshot_watchers() -> None:
+    hub = SurfaceHub(
+        strategy_instance_id="bot-a",
+        assemble=lambda: asyncio.sleep(
+            0,
+            result=_snapshot(generated_at_ms=1_700_000_000_100),
+        ),
+        refresh_interval_seconds=3_600,
+    )
+    await hub.start()
+    queue = hub.subscribe()
+    await queue.get()
+
+    await hub.stop(timeout_seconds=0.1)
+
+    assert await queue.get() is None
 
 
 @pytest.mark.asyncio

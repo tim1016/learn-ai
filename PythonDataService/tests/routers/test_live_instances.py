@@ -843,6 +843,41 @@ async def test_status_is_versioned_from_stored_surface_without_publisher_bootstr
     assert {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()} == before
 
 
+async def test_operator_surface_stream_emits_current_snapshot_and_closes_on_stop(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _app, root = app_with_root
+    sid = "spy_surface_stream"
+    _write_ledger(root, "run-surface-stream", sid, 100)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+    from app.services.live_instance_surface_assembler import VisibleRunsSnapshotCache
+    from app.services.surface_hub import SurfaceHubRegistry
+
+    monkeypatch.setattr(live_instances, "_SURFACE_HUBS", SurfaceHubRegistry())
+    monkeypatch.setattr(
+        live_instances,
+        "_SURFACE_RUNS_CACHE",
+        VisibleRunsSnapshotCache(),
+    )
+    await live_instances._ensure_surface_hub_started(sid)
+    hub = live_instances._SURFACE_HUBS.get(sid)
+    assert hub is not None and hub.latest is not None
+
+    response = await live_instances.stream_instance_operator_surface(
+        sid,
+        last_event_id="obsolete-epoch:99",
+    )
+    iterator = response.body_iterator
+    first_event = await anext(iterator)
+    assert f"id: {hub.latest.stream_epoch}:{hub.latest.surface_version}\n" in first_event
+    assert "event: snapshot\n" in first_event
+
+    await hub.stop(timeout_seconds=0.1)
+    assert await anext(iterator) == "event: end\ndata: {}\n\n"
+    await iterator.aclose()
+
+
 async def test_surface_hub_does_not_bootstrap_publisher_for_stopped_bot(
     app_with_root,
     monkeypatch: pytest.MonkeyPatch,

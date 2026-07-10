@@ -117,6 +117,7 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
         self._producer_started_once = False
         self._generation = 0
         self._initial_cycle_done = asyncio.Event()
+        self._watchers: set[asyncio.Queue[SnapshotT | None]] = set()
 
     @property
     def latest(self) -> SnapshotT | None:
@@ -180,6 +181,18 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
             task = self._refresh_task
         return await asyncio.shield(task)
 
+    def subscribe(self) -> asyncio.Queue[SnapshotT | None]:
+        """Subscribe to latest-wins snapshots with a bounded queue of one."""
+
+        queue: asyncio.Queue[SnapshotT | None] = asyncio.Queue(maxsize=1)
+        if self._latest is not None:
+            queue.put_nowait(self._latest)
+        self._watchers.add(queue)
+        return queue
+
+    def unsubscribe(self, queue: asyncio.Queue[SnapshotT | None]) -> None:
+        self._watchers.discard(queue)
+
     async def stop(self, *, timeout_seconds: float = 2.0) -> None:
         """Stop the producer loop within the data-plane shutdown budget."""
 
@@ -205,6 +218,7 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
                     )
             self._producer_task = None
             self._refresh_task = None
+            self._close_watchers()
 
     def _new_stream_epoch(self) -> str:
         return f"{self._process_epoch}:{uuid4().hex}"
@@ -214,7 +228,8 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
         if generation != self._generation or epoch != self.stream_epoch:
             raise asyncio.CancelledError
         fingerprint = semantic_surface_fingerprint(candidate)
-        if fingerprint != self._fingerprint:
+        semantic_changed = fingerprint != self._fingerprint
+        if semantic_changed:
             self._surface_version += 1
             self._fingerprint = fingerprint
         versioned = candidate.model_copy(
@@ -224,7 +239,22 @@ class SurfaceHub(Generic[SnapshotT]):  # noqa: UP046 - Python 3.11 runtime; PEP 
             }
         )
         self._latest = versioned
+        if semantic_changed:
+            self._publish_to_watchers(versioned)
         return versioned
+
+    def _publish_to_watchers(self, snapshot: SnapshotT) -> None:
+        for queue in tuple(self._watchers):
+            if queue.full():
+                queue.get_nowait()
+            queue.put_nowait(snapshot)
+
+    def _close_watchers(self) -> None:
+        for queue in tuple(self._watchers):
+            if queue.full():
+                queue.get_nowait()
+            queue.put_nowait(None)
+        self._watchers.clear()
 
     async def _producer_loop(self, generation: int) -> None:
         while not self._stop_event.is_set():

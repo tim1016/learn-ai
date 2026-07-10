@@ -22,7 +22,8 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal, NoReturn, TypedDict
 
-from fastapi import APIRouter, Body, HTTPException, Query, Response, status
+from fastapi import APIRouter, Body, Header, HTTPException, Query, Response, status
+from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
 from app.broker.ibkr.api_evidence import get_ibkr_api_evidence_recorder
@@ -3238,6 +3239,52 @@ def _surface_snapshot_unavailable(strategy_instance_id: str) -> HTTPException:
             "message": "The bot surface producer has not completed a successful refresh yet.",
             "strategy_instance_id": strategy_instance_id,
         },
+    )
+
+
+@router.get(
+    "/{strategy_instance_id}/operator-surface/stream",
+    summary="Latest-wins SSE stream of complete Bot Cockpit snapshots",
+)
+async def stream_instance_operator_surface(
+    strategy_instance_id: str,
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+) -> StreamingResponse:
+    """Emit the current full snapshot and every later semantic version."""
+
+    del last_event_id  # State reconnect always sends current truth; no replay.
+    sid = _validate_instance_id(strategy_instance_id)
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    if sid not in _visible_runs_by_instance(root) and _sid_has_soft_deletion_from_directory(
+        root.parent,
+        sid,
+    ):
+        raise HTTPException(
+            status.HTTP_410_GONE,
+            detail=_bot_soft_deleted_detail(sid),
+        )
+    hub = _SURFACE_HUBS.get(sid)
+    if hub is None or hub.latest is None:
+        raise _surface_snapshot_unavailable(sid)
+
+    async def event_source():
+        queue = hub.subscribe()
+        try:
+            while True:
+                snapshot = await queue.get()
+                if snapshot is None:
+                    yield "event: end\ndata: {}\n\n"
+                    return
+                event_id = f"{snapshot.stream_epoch}:{snapshot.surface_version}"
+                yield (f"id: {event_id}\nevent: snapshot\ndata: {snapshot.model_dump_json()}\n\n")
+        finally:
+            hub.unsubscribe(queue)
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

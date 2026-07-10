@@ -35,6 +35,12 @@ import {
   type RendererDispatch,
 } from './lib/suggested-action-renderer';
 import { toOperationError, type OperationKind } from '../operation-error';
+import {
+  botSurfaceStreamEnabled,
+  openBotSurfaceStream,
+  shouldAcceptSurfaceSnapshot,
+  type BotSurfaceStream,
+} from './lib/bot-surface-stream';
 
 const POLL_INTERVAL_MS = 4_000;
 const POISONED_CONFIRM_MESSAGE =
@@ -63,6 +69,7 @@ export class BotControlPageComponent {
   private pollToken = 0;
   private statusRequestSeq = 0;
   private destroyed = false;
+  private surfaceStream: BotSurfaceStream | null = null;
 
   readonly instanceId = signal<string | null>(null);
   readonly status = signal<LiveInstanceStatus | null>(null);
@@ -154,6 +161,7 @@ export class BotControlPageComponent {
       const id = params.get('id');
       const token = ++this.pollToken;
       this.clearPollTimer();
+      this.closeSurfaceStream();
       this.instanceId.set(id);
       this.status.set(null);
       this.statusError.set(null);
@@ -169,7 +177,10 @@ export class BotControlPageComponent {
       this.retireReplaceConfirmOpen.set(false);
       this.removeBotConfirmOpen.set(false);
       if (id) {
-        void this.refreshStatus(id).finally(() => this.scheduleNextPoll(id, token));
+        void this.refreshStatus(id).finally(() => {
+          if (botSurfaceStreamEnabled()) this.openSurfaceStream(id, token);
+          else this.scheduleNextPoll(id, token);
+        });
       }
     });
     effect(() => {
@@ -192,6 +203,7 @@ export class BotControlPageComponent {
       this.destroyed = true;
       this.pollToken += 1;
       this.clearPollTimer();
+      this.closeSurfaceStream();
       this.activeBotSidebarNotice.clearForInstance(this.instanceId());
     });
   }
@@ -624,6 +636,30 @@ export class BotControlPageComponent {
       this.pollTimer = null;
       void this.refreshStatus(id).finally(() => this.scheduleNextPoll(id, token));
     }, POLL_INTERVAL_MS);
+  }
+
+  private openSurfaceStream(id: string, token: number): void {
+    if (this.destroyed || this.instanceId() !== id || token !== this.pollToken) return;
+    this.closeSurfaceStream();
+    this.surfaceStream = openBotSurfaceStream(id, {
+      onSnapshot: (snapshot) => {
+        if (this.destroyed || this.instanceId() !== id || token !== this.pollToken) return;
+        if (!shouldAcceptSurfaceSnapshot(this.status(), snapshot)) return;
+        const seq = ++this.statusRequestSeq;
+        this.status.set(snapshot);
+        this.statusError.set(null);
+        void this.refreshLifecycleTimeline(id, snapshot, seq);
+      },
+      onMalformedSnapshot: (message) => {
+        if (this.destroyed || this.instanceId() !== id || token !== this.pollToken) return;
+        this.statusError.set(message);
+      },
+    });
+  }
+
+  private closeSurfaceStream(): void {
+    this.surfaceStream?.close();
+    this.surfaceStream = null;
   }
 
   private clearPollTimer(): void {

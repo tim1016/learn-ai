@@ -145,6 +145,25 @@ epoch/version IDs and bounded queue-one fan-out.
 - shutdown closes state watchers and client queues within the graceful-
   shutdown budget.
 
+**Implemented 2026-07-10.**
+`GET /api/live-instances/{strategy_instance_id}/operator-surface/stream`
+subscribes to the existing `SurfaceHub`; it never creates a request-owned
+producer. Each client receives the current complete snapshot followed only by
+semantic-version changes. Events use
+`id: <stream_epoch>:<surface_version>`, and reconnect deliberately ignores an
+obsolete `Last-Event-ID` and sends current truth rather than replaying state.
+Every watcher has a latest-wins queue of one, is removed when its response
+ends, and receives an explicit terminal event when the hub stops.
+
+The Bot Cockpit bootstrap still uses REST, then switches to the state stream
+when `environment.flags.botCockpitStateStream` is enabled. The existing
+four-second poll remains the flag-off rollback path. The frontend rejects
+duplicate or older versions within an epoch and accepts any replacement
+epoch. Focused backend and Angular regressions cover current-snapshot
+reconnect, queue-one overwrite, suppression of transport-only refreshes,
+epoch replacement, flag-off polling, flag-on poll removal, route changes, and
+bounded shutdown.
+
 ### Stage 3B — Per-channel event tailers and rings
 
 Give each bot event channel its own WAL tailer, sequence-indexed ring, and
