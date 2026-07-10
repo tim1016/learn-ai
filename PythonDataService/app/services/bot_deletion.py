@@ -14,7 +14,11 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.engine.live.identity import strategy_instance_artifact_dir
+from app.engine.live.identity import (
+    STRATEGY_INSTANCE_ID_PATTERN,
+    strategy_instance_artifact_dir,
+    validate_strategy_instance_id,
+)
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
 
 BOT_DELETION_FILENAME = "bot_deletion.json"
@@ -42,11 +46,19 @@ class BotDeletionRecord(BaseModel):
 
 
 def stable_bot_deletion_path(artifacts_root: Path, strategy_instance_id: str) -> Path:
+    validate_strategy_instance_id(strategy_instance_id)
+    match = STRATEGY_INSTANCE_ID_PATTERN.fullmatch(strategy_instance_id)
+    if match is None:
+        raise ValueError(f"strategy_instance_id rejected on second check: {strategy_instance_id!r}")
+    # Keep the regex capture in this path-builder frame. CodeQL recognizes
+    # Match.group output as sanitized, while it does not follow a sanitizer
+    # returned through another helper before the filesystem sink.
+    safe_strategy_instance_id = match.group(0)
     return (
         strategy_instance_artifact_dir(
             artifacts_root,
             "live_state",
-            strategy_instance_id,
+            safe_strategy_instance_id,
         )
         / BOT_DELETION_FILENAME
     )
