@@ -9,6 +9,7 @@ import {
 import { Router } from '@angular/router';
 import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
 import { DaemonDiagnosticsStore } from '../../../services/daemon-diagnostics-store.service';
+import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { DaemonDiagnosticsPanelComponent } from '../daemon-diagnostics/daemon-diagnostics-panel.component';
 
 /**
@@ -20,7 +21,7 @@ import { DaemonDiagnosticsPanelComponent } from '../daemon-diagnostics/daemon-di
  */
 @Component({
   selector: 'app-broker-connectivity-strip',
-  imports: [DaemonDiagnosticsPanelComponent],
+  imports: [DaemonDiagnosticsPanelComponent, ReceiptLabelPipe],
   changeDetection: ChangeDetectionStrategy.OnPush,
   host: {
     '(document:keydown.escape)': 'closeDiagnosticsIfOpen()',

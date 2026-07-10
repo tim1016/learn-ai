@@ -24,7 +24,9 @@
       @for (chip of connectivity.rosterChips(); track chip.id) {
         <li [class]="'roster-chip state-' + chip.state">
           <span class="label">{{ chip.label }}</span>
-          <span class="detail">{{ chip.detail }}</span>
+          <span class="detail">
+            {{ chip.processState | receiptLabel }} · {{ chip.readinessVerdict | receiptLabel }}
+          </span>
         </li>
       }
     </ul>

@@ -1,20 +1,16 @@
 import type {
+  FleetRosterRow,
   FleetRosterSnapshot,
-  LiveInstanceSummary,
   ReadinessVerdictEnum,
 } from '../api/live-instances.types';
-import type { AuthenticatedSseStatus } from './authenticated-sse-connection';
-import { openAuthenticatedSseConnection } from './authenticated-sse-connection';
+import {
+  openVersionedSnapshotStream,
+  type SnapshotStream,
+  type SnapshotStreamCallbacks,
+} from './versioned-snapshot-stream';
 
-export interface FleetRosterStream {
-  readonly close: () => void;
-}
-
-export interface FleetRosterStreamCallbacks {
-  readonly onSnapshot: (snapshot: FleetRosterSnapshot) => void;
-  readonly onMalformedSnapshot: (message: string) => void;
-  readonly onStatus: (status: AuthenticatedSseStatus) => void;
-}
+export type FleetRosterStream = SnapshotStream;
+export type FleetRosterStreamCallbacks = SnapshotStreamCallbacks<FleetRosterSnapshot>;
 
 const READINESS_VERDICTS = new Set<ReadinessVerdictEnum>([
   'READY',
@@ -22,14 +18,6 @@ const READINESS_VERDICTS = new Set<ReadinessVerdictEnum>([
   'DEGRADED',
   'UNKNOWN',
 ]);
-
-export function adoptFleetRosterSnapshot(
-  current: FleetRosterSnapshot | null,
-  candidate: FleetRosterSnapshot,
-): FleetRosterSnapshot {
-  if (current === null || current.stream_epoch !== candidate.stream_epoch) return candidate;
-  return candidate.surface_version > current.surface_version ? candidate : current;
-}
 
 export function isFleetRosterSnapshot(value: unknown): value is FleetRosterSnapshot {
   if (typeof value !== 'object' || value === null) return false;
@@ -44,54 +32,28 @@ export function isFleetRosterSnapshot(value: unknown): value is FleetRosterSnaps
       isNonNegativeSafeInteger(record['daemon_fetched_at_ms'])
     ) &&
     Array.isArray(record['instances']) &&
-    record['instances'].every(isLiveInstanceSummary)
+    record['instances'].every(isFleetRosterRow)
   );
 }
 
 export function openFleetRosterStream(
   callbacks: FleetRosterStreamCallbacks,
 ): FleetRosterStream {
-  return openAuthenticatedSseConnection(
+  return openVersionedSnapshotStream(
     '/api/live-instances/fleet/stream',
-    'snapshot',
-    {
-      onStatus: callbacks.onStatus,
-      onEvent: (message) => {
-        try {
-          const parsed: unknown = JSON.parse(message.data);
-          if (!isFleetRosterSnapshot(parsed)) {
-            callbacks.onMalformedSnapshot('Fleet roster stream returned an invalid snapshot.');
-            return;
-          }
-          callbacks.onSnapshot(parsed);
-        } catch (error) {
-          callbacks.onMalformedSnapshot(
-            `Fleet roster stream returned malformed JSON: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-        }
-      },
-    },
+    isFleetRosterSnapshot,
+    'Fleet roster stream',
+    callbacks,
   );
 }
 
-function isLiveInstanceSummary(value: unknown): value is LiveInstanceSummary {
+function isFleetRosterRow(value: unknown): value is FleetRosterRow {
   if (typeof value !== 'object' || value === null) return false;
   const record = value as Record<string, unknown>;
   const verdict = record['readiness_verdict'];
   return (
     typeof record['strategy_instance_id'] === 'string' &&
     typeof record['process_state'] === 'string' &&
-    (record['bound_run_id'] === undefined ||
-      record['bound_run_id'] === null ||
-      typeof record['bound_run_id'] === 'string') &&
-    (record['latest_run_id'] === undefined ||
-      record['latest_run_id'] === null ||
-      typeof record['latest_run_id'] === 'string') &&
-    (record['desired_state'] === undefined ||
-      record['desired_state'] === null ||
-      typeof record['desired_state'] === 'string') &&
     (verdict === undefined ||
       (typeof verdict === 'string' && READINESS_VERDICTS.has(verdict as ReadinessVerdictEnum))) &&
     (record['readiness_as_of_ms'] === undefined ||

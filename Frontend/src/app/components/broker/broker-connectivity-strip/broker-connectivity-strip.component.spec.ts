@@ -2,12 +2,12 @@ import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DaemonDiagnosticReport } from '../../../api/daemon-diagnostics.types';
+import type { FleetRosterChip } from '../../../services/fleet-roster-chip-presenter';
 import { BrokerConnectivityStripComponent } from './broker-connectivity-strip.component';
 import {
   BrokerConnectivityService,
   type ConnectivityLink,
   type DaemonFreshness,
-  type FleetRosterChip,
 } from '../../../services/broker-connectivity.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
 
@@ -175,7 +175,8 @@ describe('BrokerConnectivityStripComponent', () => {
         {
           id: 'bot-a',
           label: 'bot-a',
-          detail: 'IDLE · BLOCKED',
+          processState: 'idle',
+          readinessVerdict: 'BLOCKED',
           state: 'warn',
         },
       ],
@@ -183,7 +184,7 @@ describe('BrokerConnectivityStripComponent', () => {
 
     const chip = el.querySelector('.roster-chip.state-warn');
     expect(chip?.textContent).toContain('bot-a');
-    expect(chip?.textContent).toContain('IDLE · BLOCKED');
+    expect(chip?.textContent).toContain('Idle · Blocked');
   });
 
   it('renders the unknown (checking) state without a blocker alert', () => {

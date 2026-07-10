@@ -1078,12 +1078,17 @@ export interface LiveInstanceSummary {
   readiness_as_of_ms?: number | null;
 }
 
+export type FleetRosterRow = Pick<
+  LiveInstanceSummary,
+  'strategy_instance_id' | 'process_state' | 'readiness_verdict' | 'readiness_as_of_ms'
+>;
+
 export interface FleetRosterSnapshot {
   stream_epoch: string;
   surface_version: number;
   fetched_at_ms: number;
   daemon_fetched_at_ms?: number | null;
-  instances: LiveInstanceSummary[];
+  instances: FleetRosterRow[];
 }
 
 export type BotCatalogTone = 'positive' | 'warning' | 'danger' | 'neutral';

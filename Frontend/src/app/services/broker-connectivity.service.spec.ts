@@ -100,6 +100,7 @@ afterEach(() => {
 
 describe('BrokerConnectivityService fleet state', () => {
   it('reports "Nothing deployed" (neutral) when no instances exist', async () => {
+    vi.stubGlobal('EventSource', undefined);
     const service = setup({ instances: [] });
     await flush();
 
@@ -109,6 +110,7 @@ describe('BrokerConnectivityService fleet state', () => {
   });
 
   it('reports "Clear" (ok) for a clean account with instances deployed', async () => {
+    vi.stubGlobal('EventSource', undefined);
     const service = setup({ instances: [{ strategy_instance_id: 'spy_ema_paper' }] });
     await flush();
 
@@ -118,6 +120,7 @@ describe('BrokerConnectivityService fleet state', () => {
   });
 
   it('reports the policy block (warn) when contaminated and starts are blocked', async () => {
+    vi.stubGlobal('EventSource', undefined);
     const service = setup({
       instances: [{ strategy_instance_id: 'spy_ema_paper' }],
       fleetVerdict: 'contaminated',
@@ -130,13 +133,13 @@ describe('BrokerConnectivityService fleet state', () => {
     expect(fleetLink(service)?.detail).toBe('Contaminated — new starts blocked');
   });
 
-  it('adopts the fleet roster SSE snapshot over the REST bootstrap', async () => {
+  it('uses the fleet roster SSE snapshot as the browser roster source', async () => {
     StubEventSource.instances = [];
     vi.stubGlobal('EventSource', StubEventSource);
     const service = setup({ instances: [] });
     await flush();
 
-    expect(service.nothingDeployed()).toBe(true);
+    expect(service.nothingDeployed()).toBe(false);
 
     StubEventSource.instances[0].emit(
       'snapshot',
@@ -170,7 +173,8 @@ describe('BrokerConnectivityService fleet state', () => {
       {
         id: 'blocked-bot',
         label: 'blocked-bot',
-        detail: 'IDLE · BLOCKED',
+        processState: 'idle',
+        readinessVerdict: 'BLOCKED',
         state: 'warn',
       },
     ]);

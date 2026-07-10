@@ -1,14 +1,11 @@
 import { DestroyRef, Injectable, computed, inject, resource, signal } from '@angular/core';
-import type {
-  FleetRosterSnapshot,
-  LiveInstanceSummary,
-  ReadinessVerdictEnum,
-} from '../api/live-instances.types';
+import type { FleetRosterRow, FleetRosterSnapshot } from '../api/live-instances.types';
 import {
-  adoptFleetRosterSnapshot,
   openFleetRosterStream,
   type FleetRosterStream,
 } from './fleet-roster-stream';
+import { presentFleetRosterChips, type FleetRosterChip } from './fleet-roster-chip-presenter';
+import { adoptVersionedSnapshot } from './versioned-snapshot-stream';
 import { BrokerHealthService } from './broker-health.service';
 import { LiveRunsService } from './live-runs.service';
 
@@ -35,13 +32,6 @@ export interface ConnectivityLink {
   detail: string;
 }
 
-export interface FleetRosterChip {
-  id: string;
-  label: string;
-  detail: string;
-  state: LinkState;
-}
-
 /** Whether the host daemon is running the latest code. `unknown` while loading
  * or when git is unavailable; `stale` means the working tree is ahead of the
  * running process and it must be restarted to apply merged fixes. */
@@ -65,16 +55,22 @@ export class BrokerConnectivityService {
   private readonly destroyRef = inject(DestroyRef);
   private readonly fleetRosterSnapshot = signal<FleetRosterSnapshot | null>(null);
   private readonly rosterStreamState = signal<'closed' | 'connecting' | 'open' | 'error'>('closed');
+  private readonly supportsFleetRosterStream = typeof EventSource !== 'undefined';
   private fleetRosterStream: FleetRosterStream | null = null;
 
   /** Host-daemon health — the only proof the subprocess bridge is reachable. */
   readonly daemon = resource({ loader: () => this.svc.getHostRunnerHealth() });
   /** Fleet contamination + policy (ADR 0005). */
   readonly fleet = resource({ loader: () => this.svc.getAccountFleet() });
-  /** The instance roster — its cardinality is what tells "nothing deployed"
-   * apart from "clean account" (account contamination alone can't, #411). */
-  readonly instances = resource({ loader: () => this.svc.getInstances() });
-  readonly rosterInstances = computed<readonly LiveInstanceSummary[] | undefined>(
+  /** REST roster fallback for runtimes without EventSource. Browsers use the
+   * fleet roster stream as the single live roster source. */
+  readonly instances = resource<readonly FleetRosterRow[] | undefined, unknown>({
+    loader: () => {
+      if (this.supportsFleetRosterStream) return Promise.resolve(undefined);
+      return this.svc.getInstances();
+    },
+  });
+  readonly rosterInstances = computed<readonly FleetRosterRow[] | undefined>(
     () => this.fleetRosterSnapshot()?.instances ?? this.instances.value(),
   );
   readonly fleetRosterStatus = this.rosterStreamState.asReadonly();
@@ -87,14 +83,7 @@ export class BrokerConnectivityService {
   });
 
   readonly rosterChips = computed<FleetRosterChip[]>(() =>
-    (this.rosterInstances() ?? [])
-      .filter((row) => (row.readiness_verdict ?? 'UNKNOWN') !== 'READY')
-      .map((row) => ({
-        id: row.strategy_instance_id,
-        label: row.strategy_instance_id,
-        detail: `${row.process_state.toUpperCase()} · ${row.readiness_verdict ?? 'UNKNOWN'}`,
-        state: rosterChipState(row),
-      })),
+    presentFleetRosterChips(this.rosterInstances()),
   );
 
   constructor() {
@@ -312,7 +301,7 @@ export class BrokerConnectivityService {
   private openFleetRoster(): void {
     this.fleetRosterStream?.close();
     this.fleetRosterStream = null;
-    if (typeof EventSource === 'undefined') {
+    if (!this.supportsFleetRosterStream) {
       this.rosterStreamState.set('closed');
       return;
     }
@@ -322,17 +311,9 @@ export class BrokerConnectivityService {
       onSnapshot: (candidate) => {
         this.rosterStreamState.set('open');
         this.fleetRosterSnapshot.update((current) =>
-          adoptFleetRosterSnapshot(current, candidate),
+          adoptVersionedSnapshot(current, candidate),
         );
       },
     });
   }
-}
-
-function rosterChipState(row: LiveInstanceSummary): LinkState {
-  if (row.process_state === 'unreachable') return 'down';
-  const verdict: ReadinessVerdictEnum = row.readiness_verdict ?? 'UNKNOWN';
-  if (verdict === 'READY') return 'ok';
-  if (verdict === 'BLOCKED' || verdict === 'DEGRADED') return 'warn';
-  return 'unknown';
 }

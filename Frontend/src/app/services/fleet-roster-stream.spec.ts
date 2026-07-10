@@ -1,11 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { FleetRosterSnapshot } from '../api/live-instances.types';
-import {
-  adoptFleetRosterSnapshot,
-  isFleetRosterSnapshot,
-  openFleetRosterStream,
-} from './fleet-roster-stream';
+import { isFleetRosterSnapshot, openFleetRosterStream } from './fleet-roster-stream';
 
 class StubEventSource {
   static instances: StubEventSource[] = [];
@@ -41,9 +37,6 @@ function snapshot(
       {
         strategy_instance_id: 'bot-a',
         process_state: 'running',
-        bound_run_id: 'run-a',
-        latest_run_id: 'run-a',
-        desired_state: 'RUNNING',
         readiness_verdict: 'READY',
         readiness_as_of_ms: 1_700_000_000_000,
       },
@@ -79,23 +72,6 @@ describe('fleet roster stream', () => {
     );
     expect(received).toEqual(['fleet-epoch']);
     expect(source?.closed).toBe(true);
-  });
-
-  it('accepts higher versions and replacement epochs only', () => {
-    const current = snapshot();
-
-    expect(
-      adoptFleetRosterSnapshot(current, { ...current, surface_version: 2 }),
-    ).toEqual({ ...current, surface_version: 2 });
-    expect(
-      adoptFleetRosterSnapshot(current, { ...current, surface_version: 1 }),
-    ).toBe(current);
-    const replacement = {
-      ...current,
-      stream_epoch: 'replacement-epoch',
-      surface_version: 1,
-    };
-    expect(adoptFleetRosterSnapshot(current, replacement)).toBe(replacement);
   });
 
   it('rejects incomplete or malformed snapshots', () => {
