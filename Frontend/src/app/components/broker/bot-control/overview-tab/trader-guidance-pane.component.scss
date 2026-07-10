@@ -7,13 +7,12 @@
   display: flex;
   flex-direction: column;
   gap: 0.8rem;
-  height: 100%;
   min-height: 0;
   padding: 1rem;
-  border-left: 1px solid var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   background: var(--bg-surface);
   color: var(--text-primary);
-  overflow: auto;
 }
 
 section,
@@ -38,42 +37,17 @@ section,
 }
 
 .readiness-band {
-  border-color: var(--warn);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--warn) 10%, transparent), transparent 70%),
-    var(--bg-canvas);
+  border-color: var(--border-light);
+  background: var(--bg-canvas);
 
-  &.can-submit {
-    border-color: var(--bull);
-    background:
-      linear-gradient(180deg, color-mix(in srgb, var(--bull) 10%, transparent), transparent 70%),
-      var(--bg-canvas);
-
-    .readiness-dot {
-      background: var(--bull);
-    }
+  &.can-submit .readiness-dot {
+    background: var(--text-muted);
   }
 }
 
 .risk-band {
-  border-color: var(--info);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--info) 10%, transparent), transparent 70%),
-    var(--bg-canvas);
-}
-
-.next-step-band {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.85rem;
-  align-items: center;
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-color: var(--border-light);
   background: var(--bg-canvas);
-
-  p:not(.eyebrow) {
-    margin-top: 0.2rem;
-    font-weight: 700;
-  }
 }
 
 .eyebrow {
@@ -114,7 +88,7 @@ p {
   width: 0.65rem;
   height: 0.65rem;
   border-radius: 999px;
-  background: var(--warn);
+  background: var(--text-muted);
 }
 
 .attention-band ul {
@@ -158,12 +132,9 @@ p {
     line-height: 1.35;
   }
 
-  &.tone-ok .proof-marker {
-    background: var(--bull);
-  }
-
+  &.tone-ok .proof-marker,
   &.tone-attention .proof-marker {
-    background: var(--warn);
+    background: var(--text-muted);
   }
 }
 
@@ -220,47 +191,19 @@ dd {
 
 .attention-band li {
   padding: 0.65rem;
-  border-left: 3px solid var(--border);
+  border-left: 3px solid var(--border-light);
   background: var(--bg-surface);
 
   &.severity-info {
-    border-left-color: var(--info);
+    border-left-color: var(--border-light);
   }
 
   &.severity-warning {
-    border-left-color: var(--warn);
+    border-left-color: var(--border-light);
   }
 
   &.severity-critical {
-    border-left-color: var(--bear);
-  }
-}
-
-.primary-remediation {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.45rem;
-  min-height: 38px;
-  max-width: 100%;
-  padding: 0 0.9rem;
-  border: 1px solid var(--accent);
-  border-radius: 4px;
-  background: var(--accent);
-  color: var(--on-accent, #fff);
-  cursor: pointer;
-  font: inherit;
-  font-weight: 700;
-  white-space: nowrap;
-
-  &:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
-
-  &.link-remediation {
-    background: var(--bg-surface);
-    color: var(--accent);
+    border-left-color: var(--border-light);
   }
 }
 
@@ -283,17 +226,10 @@ dd {
 
 @media (max-width: 980px) {
   .trader-guidance-pane {
-    border-left: 0;
-    border-top: 1px solid var(--border);
+    border: 1px solid var(--border);
   }
 
-  .truth-grid,
-  .next-step-band {
+  .truth-grid {
     grid-template-columns: 1fr;
-  }
-
-  .primary-remediation {
-    width: 100%;
-    white-space: normal;
   }
 }

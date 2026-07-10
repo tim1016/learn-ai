@@ -2,11 +2,11 @@ import { ChangeDetectionStrategy, Component, input, output } from '@angular/core
 import { TestBed } from '@angular/core/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import type { LifecycleChartNode, LiveInstanceStatus } from '../../../api/live-instances.types';
+import type { LiveInstanceStatus } from '../../../api/live-instances.types';
 import { makeStatus } from './bot-control-page.fixtures';
 import { BotControlSidePanelComponent } from './bot-control-side-panel.component';
-import { NodeInspectorComponent } from './node-inspector.component';
 import { BotEventStreamComponent } from './reused/bot-event-stream/bot-event-stream.component';
+import type { BotEventStreamCommand } from './reused/bot-event-stream/bot-event-stream-action';
 
 @Component({
   selector: 'app-bot-event-stream',
@@ -15,35 +15,18 @@ import { BotEventStreamComponent } from './reused/bot-event-stream/bot-event-str
 })
 class BotEventStreamStubComponent {
   readonly runId = input.required<string>();
-}
-
-@Component({
-  selector: 'app-node-inspector',
-  template: '<div data-testid="node-inspector-stub">{{ node().label }}</div>',
-  changeDetection: ChangeDetectionStrategy.OnPush,
-})
-class NodeInspectorStubComponent {
-  readonly node = input.required<LifecycleChartNode>();
   readonly status = input.required<LiveInstanceStatus>();
-  readonly hasExplicitSelection = input<boolean>(false);
-  readonly redeployRequested = output();
-}
-
-function primaryNode(status: LiveInstanceStatus): LifecycleChartNode {
-  const graph = status.lifecycle_chart.global_graph;
-  const node = graph.nodes.find((candidate) => candidate.id === graph.primary_node_id);
-  if (!node) throw new Error('Expected primary lifecycle node in fixture.');
-  return node;
+  readonly commandsDisabled = input(false);
+  readonly actionInvoked = output<BotEventStreamCommand>();
 }
 
 function render(status: LiveInstanceStatus) {
   TestBed.overrideComponent(BotControlSidePanelComponent, {
-    remove: { imports: [BotEventStreamComponent, NodeInspectorComponent] },
-    add: { imports: [BotEventStreamStubComponent, NodeInspectorStubComponent] },
+    remove: { imports: [BotEventStreamComponent] },
+    add: { imports: [BotEventStreamStubComponent] },
   });
   const fixture = TestBed.createComponent(BotControlSidePanelComponent);
   fixture.componentRef.setInput('status', status);
-  fixture.componentRef.setInput('node', primaryNode(status));
   fixture.detectChanges();
   return fixture;
 }
@@ -62,6 +45,7 @@ describe('BotControlSidePanelComponent', () => {
     expect(el.querySelector('[data-testid="bot-event-stream-stub"]')?.textContent)
       .toContain('run-live');
     expect(el.querySelector('[data-testid="bot-event-stream-no-run"]')).toBeNull();
+    expect(el.querySelector('app-node-inspector')).toBeNull();
   });
 
   it('falls back to the evidence run when no live run is bound', () => {

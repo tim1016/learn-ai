@@ -66,8 +66,16 @@
   align-items: stretch;
 }
 
+.operator-main-column {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
 .operator-truth-layout app-verdict-card,
-.operator-truth-layout app-trader-guidance-pane {
+.operator-truth-layout app-overview-tab,
+.operator-truth-layout app-bot-control-side-panel,
+.bot-control-page > app-trader-guidance-pane {
   min-width: 0;
 }
 

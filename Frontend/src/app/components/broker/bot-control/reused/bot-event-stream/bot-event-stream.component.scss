@@ -88,6 +88,41 @@ h3 {
   overflow-wrap: anywhere;
 }
 
+.stream-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.55rem;
+}
+
+.stream-action {
+  min-height: 2rem;
+  border: 1px solid var(--accent, #7c3aed);
+  border-radius: 4px;
+  padding: 0 0.7rem;
+  color: var(--accent-contrast, #fff);
+  background: var(--accent, #7c3aed);
+  font: inherit;
+  font-size: var(--fs-sm, 0.85rem);
+  font-weight: 700;
+  cursor: pointer;
+
+  &:disabled {
+    border-color: var(--border-subtle, rgba(255, 255, 255, 0.12));
+    color: var(--text-muted, #8d99b7);
+    background: rgba(148, 163, 184, 0.12);
+    cursor: not-allowed;
+  }
+}
+
+.stream-action-reason {
+  min-width: 0;
+  color: var(--text-muted, #8d99b7);
+  font-size: var(--fs-xs, 0.75rem);
+  overflow-wrap: anywhere;
+}
+
 .event-meta {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr));

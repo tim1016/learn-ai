@@ -1,5 +1,8 @@
 # Bot control page — the Verdict Card (trader-first simplification)
 
+Status: SUPERSEDED by ADR-0028 / PRD #951 stream-primary. Retained as
+historical record; the shipped layout is the stream-primary shell.
+
 **Date:** 2026-07-08
 **Status:** Approved design, pre-implementation
 **Route:** `/broker/bots/:id` (full replacement of the current page layout)

@@ -14,8 +14,6 @@ import { timer } from 'rxjs';
 import type {
   BotLifecycleAction,
   BotLifecycleActionId,
-  LifecycleProjectionEventRow,
-  LiveInstanceStatus,
   TraderPrimaryRemediation,
 } from '../../../api/live-instances.types';
 import type { OperatorMove } from '../../../api/operator-blocker.types';
@@ -25,8 +23,11 @@ import { formatReceiptLabel } from '../../../shared/pipes/receipt-label.pipe';
 import { ActiveBotSidebarNoticeService } from '../../../shell/active-bot-sidebar-notice.service';
 import type { ActiveBotSidebarNotice } from '../../../shell/active-bot-sidebar-notice.service';
 import { VerdictCardComponent } from './verdict-card/verdict-card.component';
+import { BotControlSidePanelComponent } from './bot-control-side-panel.component';
+import { OverviewTabComponent } from './overview-tab/overview-tab.component';
 import { TraderGuidancePaneComponent } from './overview-tab/trader-guidance-pane.component';
 import { TypedHaltConfirmComponent } from './reused/typed-halt-confirm/typed-halt-confirm.component';
+import type { BotEventStreamCommand } from './reused/bot-event-stream/bot-event-stream-action';
 import { redeployQueryParamsForStatus } from './lib/redeploy-query-params';
 import { resolveOperatorRunbookRoute } from './lib/operator-runbook-routes';
 import { canStartHostProcess } from './lib/start-host-process';
@@ -48,7 +49,13 @@ const REMOVE_BOT_CONFIRM_MESSAGE =
 
 @Component({
   selector: 'app-bot-control-page',
-  imports: [VerdictCardComponent, TraderGuidancePaneComponent, TypedHaltConfirmComponent],
+  imports: [
+    VerdictCardComponent,
+    OverviewTabComponent,
+    BotControlSidePanelComponent,
+    TraderGuidancePaneComponent,
+    TypedHaltConfirmComponent,
+  ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './bot-control-page.component.html',
   styleUrl: './bot-control-page.component.scss',
@@ -59,7 +66,6 @@ export class BotControlPageComponent {
   private readonly router = inject(Router);
   private readonly destroyRef = inject(DestroyRef);
   private readonly activeBotSidebarNotice = inject(ActiveBotSidebarNoticeService);
-  private statusRequestSeq = 0;
 
   readonly instanceId = this.surface.instanceId;
   readonly status = this.surface.status;
@@ -67,10 +73,6 @@ export class BotControlPageComponent {
   readonly readOnly = this.surface.readOnly;
   readonly pendingAttemptId = this.surface.pendingAttemptId;
   readonly mutationError = signal<string | null>(null);
-  readonly timelineRows = signal<LifecycleProjectionEventRow[]>([]);
-  readonly timelineProjectionAvailable = signal<boolean>(false);
-  readonly timelineCanonicalFallbackRequired = signal<boolean>(true);
-  readonly timelineNotice = signal<string | null>(null);
   readonly busyAction = signal<string | null>(null);
   readonly typedHaltOpen = signal<boolean>(false);
   private readonly typedHaltInstanceId = signal<string | null>(null);
@@ -181,13 +183,6 @@ export class BotControlPageComponent {
   constructor() {
     effect(() => {
       const id = this.instanceId();
-      const status = this.status();
-      if (!id || !status) return;
-      const seq = ++this.statusRequestSeq;
-      void this.refreshLifecycleTimeline(id, status, seq);
-    });
-    effect(() => {
-      const id = this.instanceId();
       const notice = this.hostRunnerNotice();
       this.activeBotSidebarNotice.setNotice(
         id && notice
@@ -258,6 +253,36 @@ export class BotControlPageComponent {
       case 'invoke_endpoint':
         if (remediation.endpoint === 'reconcile_instance') void this.dispatchReconcileNow();
         break;
+    }
+  }
+
+  invokeStreamAction(action: BotEventStreamCommand): void {
+    switch (action) {
+      case 'start_process':
+        void this.dispatchStartProcess();
+        break;
+      case 'resume':
+        void this.dispatchResumeIntent();
+        break;
+      case 'pause':
+        void this.dispatchEndDayNow();
+        break;
+      case 'flatten_and_pause':
+        void this.dispatchFlattenAndPause();
+        break;
+      case 'stop':
+        void this.dispatchStop();
+        break;
+      case 'mark_poisoned':
+        this.openTypedHalt();
+        break;
+      case 'fresh_run':
+        this.onGateRedeploy();
+        break;
+      default: {
+        const unreachable: never = action;
+        this.mutationError.set(`Unsupported stream action: ${String(unreachable)}`);
+      }
     }
   }
 
@@ -336,6 +361,25 @@ export class BotControlPageComponent {
       this.surface.establishPending(response);
     } catch (err) {
       this.mutationError.set(this.operationErrorMessage('stop', err));
+    } finally {
+      this.busyAction.set(null);
+    }
+  }
+
+  async dispatchFlattenAndPause(): Promise<void> {
+    const id = this.instanceId();
+    if (!id || this.mutationsDisabled()) return;
+    this.busyAction.set('flatten_and_pause');
+    this.mutationError.set(null);
+    try {
+      const response = await this.liveRuns.flattenAndPause(id, {
+        action: 'pause',
+        reason: 'Flatten and pause',
+        updated_by: 'operator',
+      });
+      this.surface.establishPending(response);
+    } catch (err) {
+      this.mutationError.set(this.operationErrorMessage('flatten', err));
     } finally {
       this.busyAction.set(null);
     }
@@ -535,43 +579,6 @@ export class BotControlPageComponent {
     const offerId = this.lifecycleAction('confirm_start')?.offer_id ?? null;
     if (!offerId) return null;
     return { ...request, roll_call_offer_id: offerId };
-  }
-
-  private async refreshLifecycleTimeline(
-    id: string,
-    status: LiveInstanceStatus,
-    seq: number,
-  ): Promise<void> {
-    try {
-      const timeline = await this.liveRuns.getLifecycleTimeline({
-        account_id: this.timelineAccountId(status),
-        strategy_instance_id: status.strategy_instance_id,
-        run_id: this.timelineRunId(status),
-        limit: 8,
-      });
-      if (this.instanceId() !== id || seq !== this.statusRequestSeq) return;
-      this.timelineRows.set(timeline.rows);
-      this.timelineProjectionAvailable.set(timeline.projection_available);
-      this.timelineCanonicalFallbackRequired.set(timeline.canonical_fallback_required);
-      this.timelineNotice.set(null);
-    } catch (err) {
-      if (this.instanceId() !== id || seq !== this.statusRequestSeq) return;
-      this.timelineRows.set([]);
-      this.timelineProjectionAvailable.set(false);
-      this.timelineCanonicalFallbackRequired.set(true);
-      this.timelineNotice.set(`Lifecycle projection unavailable: ${this.humanError(err)}`);
-    }
-  }
-
-  private timelineAccountId(status: LiveInstanceStatus): string | null {
-    return status.operator_surface.account_owner?.account_id ?? status.start_defaults?.account_id ?? null;
-  }
-
-  private timelineRunId(status: LiveInstanceStatus): string | null {
-    return status.live_binding?.run_id
-      ?? status.evidence_binding?.run_id
-      ?? status.daily_lifecycle.active_run_id
-      ?? status.daily_lifecycle.latest_run_id;
   }
 
   private async setIntent(action: 'resume' | 'stop', label: string): Promise<void> {

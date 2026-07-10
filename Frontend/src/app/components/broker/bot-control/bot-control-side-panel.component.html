@@ -10,7 +10,12 @@
     </header>
     @if (runId(); as boundRunId) {
       <div class="stream-scroll">
-        <app-bot-event-stream [runId]="boundRunId" />
+        <app-bot-event-stream
+          [runId]="boundRunId"
+          [status]="status()"
+          [commandsDisabled]="commandsDisabled()"
+          (actionInvoked)="streamActionInvoked.emit($event)"
+        />
       </div>
     } @else {
       <div class="stream-empty-state" data-testid="bot-event-stream-no-run">
@@ -23,15 +28,4 @@
       </div>
     }
   </section>
-
-  @if (node(); as currentNode) {
-    <section class="stream-secondary" aria-label="Lifecycle evidence reference">
-      <app-node-inspector
-        [node]="currentNode"
-        [status]="status()"
-        [hasExplicitSelection]="hasExplicitSelection()"
-        (redeployRequested)="freshRunRequested.emit()"
-      />
-    </section>
-  }
 </section>

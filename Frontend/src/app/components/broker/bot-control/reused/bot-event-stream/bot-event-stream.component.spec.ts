@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 import type { BotEventRow } from '../../../../../api/live-runs.types';
 import { LiveRunsService } from '../../../../../services/live-runs.service';
+import { makeStatus } from '../../bot-control-page.fixtures';
 import { BotEventStreamComponent } from './bot-event-stream.component';
 
 const eventSources: StubEventSource[] = [];
@@ -114,7 +115,7 @@ describe('BotEventStreamComponent', () => {
 
   it('subscribes to SSE and renders authored bot event rows', async () => {
     await render(BotEventStreamComponent, {
-      inputs: { runId: 'run-1' },
+      inputs: { runId: 'run-1', status: makeStatus({ markPoisonedEnabled: true }) },
       providers: [provideZonelessChangeDetection(), BOT_EVENT_PROVIDER],
     });
     await waitFor(() => expect(eventSources.length).toBe(1));
@@ -137,7 +138,7 @@ describe('BotEventStreamComponent', () => {
 
   it('expands gate and terminal evidence', async () => {
     await render(BotEventStreamComponent, {
-      inputs: { runId: 'run-1' },
+      inputs: { runId: 'run-1', status: makeStatus({ markPoisonedEnabled: true }) },
       providers: [provideZonelessChangeDetection(), BOT_EVENT_PROVIDER],
     });
     await waitFor(() => expect(eventSources.length).toBe(1));
@@ -156,7 +157,7 @@ describe('BotEventStreamComponent', () => {
 
   it('renders empty state for a bound run with no event rows yet', async () => {
     await render(BotEventStreamComponent, {
-      inputs: { runId: 'run-empty' },
+      inputs: { runId: 'run-empty', status: makeStatus() },
       providers: [provideZonelessChangeDetection(), BOT_EVENT_PROVIDER],
     });
     await waitFor(() => expect(eventSources.length).toBe(1));
@@ -168,7 +169,7 @@ describe('BotEventStreamComponent', () => {
 
   it('renders server-side SSE errors', async () => {
     await render(BotEventStreamComponent, {
-      inputs: { runId: 'run-1' },
+      inputs: { runId: 'run-1', status: makeStatus() },
       providers: [provideZonelessChangeDetection(), BOT_EVENT_PROVIDER],
     });
     await waitFor(() => expect(eventSources.length).toBe(1));
@@ -177,6 +178,37 @@ describe('BotEventStreamComponent', () => {
 
     await screen.findByTestId('bot-event-stream-error');
     expect(screen.getByText('Bot event stream unavailable: stream unavailable')).toBeTruthy();
+  });
+
+  it('renders row actions from the current backend-authored action block', async () => {
+    const status = makeStatus({ markPoisonedEnabled: true });
+    let invoked: string | null = null;
+    await render(BotEventStreamComponent, {
+      inputs: { runId: 'run-1', status },
+      on: { actionInvoked: (action: string) => { invoked = action; } },
+      providers: [provideZonelessChangeDetection(), BOT_EVENT_PROVIDER],
+    });
+    await waitFor(() => expect(eventSources.length).toBe(1));
+    emitRow(ROW);
+
+    const action = await screen.findByTestId('bot-event-row-action-7');
+    expect(action.hasAttribute('disabled')).toBe(false);
+    expect(action.textContent).toContain('Mark poisoned');
+    fireEvent.click(action);
+    expect(invoked).toBe('mark_poisoned');
+  });
+
+  it('semantically disables row actions when the current action block disables them', async () => {
+    await render(BotEventStreamComponent, {
+      inputs: { runId: 'run-1', status: makeStatus({ markPoisonedEnabled: false }) },
+      providers: [provideZonelessChangeDetection(), BOT_EVENT_PROVIDER],
+    });
+    await waitFor(() => expect(eventSources.length).toBe(1));
+    emitRow(ROW);
+
+    const action = await screen.findByTestId('bot-event-row-action-7');
+    expect(action.hasAttribute('disabled')).toBe(true);
+    expect(screen.getByText(/No live binding/)).toBeTruthy();
   });
 });
 
