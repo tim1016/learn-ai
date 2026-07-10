@@ -18,6 +18,7 @@ import { DataSourceComponent } from '../../../shared/data-source/data-source.com
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { AccountTruthBoardComponent } from '../account-truth-board/account-truth-board.component';
+import type { OperatorBlockerMoveEvent } from '../shared/operator-blocker-list/operator-blocker-list.component';
 import { AccountFreezeBannerComponent } from '../account-freeze-banner/account-freeze-banner.component';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
@@ -475,6 +476,12 @@ export class BrokerAccountMonitorComponent {
     } finally {
       this.exposureResolutionLoading.set(null);
     }
+  }
+
+  handleAccountMonitorBlockerMove(event: OperatorBlockerMoveEvent): void {
+    const action = event.move.action;
+    if (action.kind !== 'confirm_in_form' || typeof document === 'undefined') return;
+    document.getElementById(action.anchor)?.focus();
   }
 
   async acceptExposureOverrideFromDialog(): Promise<void> {

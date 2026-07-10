@@ -71,6 +71,7 @@ from app.schemas.account_truth import (
     AccountTruthSourceFreshness,
     AccountTruthSymbolExposure,
 )
+from app.schemas.operator_blocker import ConfirmInFormAction, OperatorBlocker, OperatorMove
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,36 @@ logger = logging.getLogger(__name__)
 _TERMINAL_CANCEL_STATUSES = frozenset({"Cancelled", "ApiCancelled"})
 _REJECTED_STATUSES = frozenset({"Inactive", "Rejected"})
 _ACKNOWLEDGED_STATUSES = frozenset({"PreSubmitted", "Submitted"})
+
+
+def _account_monitor_blockers(messages: Sequence[AccountTruthMessage]) -> list[OperatorBlocker]:
+    """Project Account Truth messages into Account Monitor-scoped moves."""
+
+    return [
+        OperatorBlocker.for_host(
+            condition_id=message.code,
+            scope="account",
+            host="account_monitor",
+            disposition="fix_here",
+            headline=message.title,
+            detail=message.message,
+            primary_move=OperatorMove(
+                label="Run account reconcile",
+                action=ConfirmInFormAction(
+                    kind="confirm_in_form",
+                    anchor="account-reconciliation-action",
+                ),
+            ),
+            applies_to="both",
+            severity="blocking" if message.severity == "critical" else "warning",
+            evidence={
+                key: value
+                for key, value in message.forensic_facts.items()
+                if isinstance(value, (str, int, float, bool)) or value is None
+            },
+        )
+        for message in messages
+    ]
 _LIMBO_STATUSES = frozenset({"PendingSubmit", "ApiPending", "PendingCancel", "Unknown"})
 
 
@@ -437,6 +468,7 @@ def compose_account_truth(
         manual_namespaces_observed=manual_namespaces,
         invariants=invariants,
         blockers=blockers,
+        operator_blockers=_account_monitor_blockers(blockers),
         caveats=caveats,
         owner_summaries=owner_summaries,
         symbol_exposures=symbol_exposures,

@@ -61,4 +61,18 @@ describe('OperatorBlockerListComponent', () => {
     expect(el.textContent).toContain('Broker disconnected');
     expect(el.querySelector('.operator-blocker-list__item.severity-warning')).toBeTruthy();
   });
+
+  it('keeps repeated fleet condition ids distinct by authored headline', () => {
+    TestBed.configureTestingModule({ providers: [provideZonelessChangeDetection()] });
+    const fixture = TestBed.createComponent(OperatorBlockerListComponent);
+    fixture.componentRef.setInput('blockers', [
+      { ...blocker, host: 'fleet_roster', headline: 'bot-a is blocked' },
+      { ...blocker, host: 'fleet_roster', headline: 'bot-b is blocked' },
+    ]);
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.textContent).toContain('bot-a is blocked');
+    expect(el.textContent).toContain('bot-b is blocked');
+  });
 });

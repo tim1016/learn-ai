@@ -39,6 +39,7 @@ function snapshot(
         process_state: 'running',
         readiness_verdict: 'READY',
         readiness_as_of_ms: 1_700_000_000_000,
+        blockers: [],
       },
     ],
     ...overrides,

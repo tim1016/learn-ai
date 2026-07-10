@@ -164,7 +164,7 @@ from app.schemas.live_runs import (
     SignalTone,
     SizingAuditRow,
 )
-from app.schemas.operator_blocker import DeployPreflightResponse
+from app.schemas.operator_blocker import DeployPreflightResponse, NavigateAction, OperatorBlocker, OperatorMove
 from app.services import deploy_preflight as deploy_preflight_service
 from app.services import fleet_contamination as fleet_contamination_service
 from app.services.account_crash_recovery import (
@@ -1582,9 +1582,74 @@ async def _build_live_instance_summaries(
                 desired_state=desired.state,
                 readiness_verdict=readiness_verdict,
                 readiness_as_of_ms=readiness_as_of_ms,
+                blockers=_fleet_roster_blockers(
+                    strategy_instance_id=sid,
+                    process_state=proc_state,
+                    readiness_verdict=readiness_verdict,
+                    readiness_as_of_ms=readiness_as_of_ms,
+                ),
             )
         )
     return summaries
+
+
+def _fleet_roster_blockers(
+    *,
+    strategy_instance_id: str,
+    process_state: str,
+    readiness_verdict: Literal["READY", "BLOCKED", "DEGRADED", "UNKNOWN"],
+    readiness_as_of_ms: int | None,
+) -> list[OperatorBlocker]:
+    if readiness_verdict == "READY" and process_state != "unreachable":
+        return []
+
+    if process_state == "unreachable":
+        condition_id = "fleet_member_unreachable"
+        headline = f"{strategy_instance_id} host is unreachable"
+        detail = "Open the bot cockpit to inspect host-process recovery before starting more account work."
+        severity: Literal["blocking", "warning"] = "blocking"
+    elif readiness_verdict == "BLOCKED":
+        condition_id = "fleet_member_blocked"
+        headline = f"{strategy_instance_id} is blocked"
+        detail = "Open the bot cockpit for the backend-authored blocker and recovery move."
+        severity = "blocking"
+    elif readiness_verdict == "DEGRADED":
+        condition_id = "fleet_member_degraded"
+        headline = f"{strategy_instance_id} is degraded"
+        detail = "Open the bot cockpit to review degraded readiness before fleet operations."
+        severity = "warning"
+    else:
+        condition_id = "fleet_member_readiness_unknown"
+        headline = f"{strategy_instance_id} readiness is unknown"
+        detail = "Open the bot cockpit to refresh readiness evidence before fleet operations."
+        severity = "warning"
+
+    return [
+        OperatorBlocker.for_host(
+            condition_id=condition_id,
+            scope="fleet",
+            host="fleet_roster",
+            disposition="fix_elsewhere",
+            headline=headline,
+            detail=detail,
+            primary_move=OperatorMove(
+                label="Open bot cockpit",
+                action=NavigateAction(
+                    kind="navigate",
+                    route=f"/broker/bots/{strategy_instance_id}",
+                    fragment=None,
+                ),
+            ),
+            applies_to="both",
+            severity=severity,
+            evidence={
+                "strategy_instance_id": strategy_instance_id,
+                "process_state": process_state,
+                "readiness_verdict": readiness_verdict,
+                "readiness_as_of_ms": readiness_as_of_ms,
+            },
+        )
+    ]
 
 
 @router.get("", response_model=list[LiveInstanceSummary])

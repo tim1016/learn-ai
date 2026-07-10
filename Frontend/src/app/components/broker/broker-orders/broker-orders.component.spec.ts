@@ -364,6 +364,7 @@ function accountTruthResponse(
     manual_namespaces_observed: [],
     invariants: [],
     blockers: [],
+    operator_blockers: [],
     caveats: [],
     owner_summaries: [],
     symbol_exposures: [],

@@ -62,6 +62,27 @@ function truth(overrides: Partial<AccountTruthResponse> = {}): AccountTruthRespo
         forensic_facts: {},
       },
     ],
+    operator_blockers: [
+      {
+        condition: {
+          id: 'unknown_open_orders',
+          severity: 'blocking',
+          scope: 'account',
+          evidence: {},
+        },
+        host: 'account_monitor',
+        disposition: 'fix_here',
+        headline: 'Unknown open broker orders',
+        detail: 'At least one live IBKR order has no known namespace.',
+        primary_move: {
+          label: 'Run account reconcile',
+          action: { kind: 'confirm_in_form', anchor: 'account-reconciliation-action' },
+          target: null,
+        },
+        secondary_moves: [],
+        applies_to: 'both',
+      },
+    ],
     caveats: [],
     owner_summaries: [
       {
@@ -140,6 +161,18 @@ describe('AccountTruthBoardComponent', () => {
     expect(text).toContain('Not proven');
     expect(text).toContain('Unknown open broker orders');
     expect(text).toContain('One or more live open orders are foreign or unclaimed.');
+  });
+
+  it('renders account-monitor scoped blockers through the shared blocker component', () => {
+    TestBed.configureTestingModule({});
+    const fixture = TestBed.createComponent(AccountTruthBoardComponent);
+    fixture.componentRef.setInput('truth', truth());
+    fixture.componentRef.setInput('showOperatorBlockers', true);
+    fixture.detectChanges();
+
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelector('app-operator-blocker-list')).toBeTruthy();
+    expect(el.textContent).toContain('Run account reconcile');
   });
 
   it('renders optional account, owner, and exposure sections', () => {

@@ -2989,6 +2989,7 @@ class LiveInstanceSummary(BaseModel):
     desired_state: str | None = None
     readiness_verdict: Literal["READY", "BLOCKED", "DEGRADED", "UNKNOWN"] = "UNKNOWN"
     readiness_as_of_ms: int | None = None
+    blockers: list[OperatorBlocker] = Field(default_factory=list)
 
 
 class FleetRosterSnapshot(BaseModel):

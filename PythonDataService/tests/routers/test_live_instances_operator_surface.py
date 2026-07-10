@@ -721,6 +721,15 @@ async def test_live_instance_summary_carries_readiness_verdict(app_with_root, mo
     assert "readiness_verdict" in row
     assert row["readiness_verdict"] in {"READY", "BLOCKED", "DEGRADED", "UNKNOWN"}
     assert "readiness_as_of_ms" in row
+    assert row["blockers"], "non-ready fleet rows must carry host-scoped blockers"
+    assert row["blockers"][0]["host"] == "fleet_roster"
+    assert row["blockers"][0]["condition"]["id"] == "fleet_member_unreachable"
+    assert row["blockers"][0]["disposition"] == "fix_elsewhere"
+    assert row["blockers"][0]["primary_move"]["action"] == {
+        "kind": "navigate",
+        "route": "/broker/bots/spy_ema_paper",
+        "fragment": None,
+    }
 
 
 async def test_account_summary_endpoint_returns_composed_dto(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:

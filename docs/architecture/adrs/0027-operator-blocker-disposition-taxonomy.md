@@ -72,3 +72,14 @@ blocking blocker is present.
 Adding a new blocker requires adding the backend condition authoring case, its
 host projection, a test for the disposition/move pairing, and any surface
 routing needed for the declared `OperatorAction`.
+
+## Implementation notes
+
+As of the Stage 8 host-projection slice, the same blocker atom is rendered by
+Bot Cockpit, Deploy Preflight, Fleet Roster, and Account Monitor. Fleet roster
+rows carry `host=fleet_roster` projections with backend-authored navigation
+moves to the affected bot cockpit. Account Truth responses carry
+`host=account_monitor` projections with backend-authored inline reconcile
+moves. The frontend shared `app-operator-blocker-list` renderer displays those
+host projections verbatim; it does not infer roster chip tone, account
+remediation, or blocker identity from readiness or Account Truth message codes.

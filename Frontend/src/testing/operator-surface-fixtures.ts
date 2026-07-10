@@ -450,6 +450,7 @@ export const LIVE_INSTANCE_SUMMARY_READY: LiveInstanceSummary = {
   desired_state: 'RUNNING',
   readiness_verdict: 'READY',
   readiness_as_of_ms: 1_700_000_000_000,
+  blockers: [],
 };
 
 export const LIVE_INSTANCE_SUMMARY_BLOCKED: LiveInstanceSummary = {
@@ -460,6 +461,7 @@ export const LIVE_INSTANCE_SUMMARY_BLOCKED: LiveInstanceSummary = {
   desired_state: 'PAUSED',
   readiness_verdict: 'BLOCKED',
   readiness_as_of_ms: 1_700_000_000_000,
+  blockers: [],
 };
 
 // ---------------------------------------------------------------------------

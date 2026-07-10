@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, input } from '@angular/core';
+import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
 import type {
   AccountTruthInvariant,
   AccountTruthMessage,
@@ -10,6 +10,10 @@ import { DataSourceComponent } from '../../../shared/data-source/data-source.com
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { fmtCurrency, fmtSignedNumber, fmtTimestampNy } from '../format';
 import { AccountTruthExecutionHistoryComponent } from './account-truth-execution-history.component';
+import {
+  OperatorBlockerListComponent,
+  type OperatorBlockerMoveEvent,
+} from '../shared/operator-blocker-list/operator-blocker-list.component';
 
 @Component({
   selector: 'app-account-truth-board',
@@ -17,6 +21,7 @@ import { AccountTruthExecutionHistoryComponent } from './account-truth-execution
     DataSourceComponent,
     ReceiptLabelPipe,
     AccountTruthExecutionHistoryComponent,
+    OperatorBlockerListComponent,
   ],
   templateUrl: './account-truth-board.component.html',
   styleUrl: './account-truth-board.component.scss',
@@ -30,6 +35,9 @@ export class AccountTruthBoardComponent {
   readonly showExecutionHistory = input(false);
   readonly showInvariants = input(false);
   readonly showCaveats = input(true);
+  readonly showOperatorBlockers = input(false);
+
+  readonly operatorBlockerMoveSelected = output<OperatorBlockerMoveEvent>();
 
   readonly fmtCurrency = fmtCurrency;
   readonly fmtSignedNumber = fmtSignedNumber;

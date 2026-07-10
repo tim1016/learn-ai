@@ -28,6 +28,15 @@ export class OperatorBlockerListComponent {
       : blocker.secondary_moves;
   }
 
+  trackBlocker(blocker: OperatorBlocker): string {
+    return [
+      blocker.host,
+      blocker.condition.id,
+      blocker.headline,
+      blocker.primary_move?.label ?? 'no-primary-move',
+    ].join(':');
+  }
+
   isPrimaryMove(move: OperatorMove): boolean {
     return move.action.kind === 'confirm_in_form' ||
       move.action.kind === 'retire_replace' ||

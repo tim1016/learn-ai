@@ -336,6 +336,12 @@ def test_account_truth_defaults_unstamped_open_order_to_foreign_and_blocks() -> 
     assert truth.orders[0].cancel_action.enabled is False
     assert truth.orders[0].cancel_action.reason_code == "FOREIGN_OR_UNCLAIMED"
     assert truth.blockers[0].code == "unknown_open_orders"
+    assert truth.operator_blockers[0].host == "account_monitor"
+    assert truth.operator_blockers[0].condition.id == "unknown_open_orders"
+    assert truth.operator_blockers[0].condition.severity == "blocking"
+    assert truth.operator_blockers[0].disposition == "fix_here"
+    assert truth.operator_blockers[0].primary_move is not None
+    assert truth.operator_blockers[0].primary_move.action.kind == "confirm_in_form"
 
 
 @pytest.mark.parametrize("lifecycle_state", ["DEPLOYED", "ACTIVE"])
