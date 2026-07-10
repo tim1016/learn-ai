@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,7 +20,11 @@ from app.engine.live.account_registry import (
     write_account_instance_binding,
 )
 from app.engine.live.exit_taxonomy import LIVENESS_UNPROVEN_REGISTRY_SOURCE
-from app.engine.live.host_daemon import RunnerProcessManager, create_app
+from app.engine.live.host_daemon import (
+    ManagedProcess,
+    RunnerProcessManager,
+    create_app,
+)
 
 ACCOUNT_ID = "DU1234567"
 INSTANCE_ID = "spy-ema-paper"
@@ -117,3 +125,106 @@ def test_boot_reconcile_preserves_process_owned_active_binding(tmp_path: Path) -
     assert result.preserved_managed_run_ids == (RUN_ID,)
     assert latest is not None
     assert latest.lifecycle_state == "ACTIVE"
+
+
+@pytest.mark.asyncio
+async def test_process_reaper_retires_post_boot_crash_without_status_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The daemon settles child crashes without any health/status request."""
+    from app.engine.live import host_daemon
+
+    live_runs_root = tmp_path / "live_runs"
+    run_dir = live_runs_root / RUN_ID
+    run_dir.mkdir(parents=True)
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "account_id": ACCOUNT_ID,
+                "strategy_instance_id": INSTANCE_ID,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "run_status.json").write_text(
+        json.dumps(
+            {
+                "run_id": RUN_ID,
+                "exit_code": 1,
+                "exit_reason": "exception",
+            }
+        ),
+        encoding="utf-8",
+    )
+    write_account_instance_binding(tmp_path, _active_binding())
+    monkeypatch.setattr(host_daemon, "ensure_daemon_token", lambda _root: "test-token")
+    monkeypatch.setattr(host_daemon, "_PROCESS_REAPER_INTERVAL_SECONDS", 0.01)
+
+    log_path = run_dir / "host_daemon.log"
+    log_handle = log_path.open("a", encoding="utf-8")
+    process = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(0.2); raise SystemExit(1)"],
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+    )
+    manager = RunnerProcessManager(
+        repo_root=tmp_path,
+        live_runs_root=live_runs_root,
+        boot_id="current-daemon-boot",
+    )
+    manager._managed[INSTANCE_ID] = ManagedProcess(
+        strategy_instance_id=INSTANCE_ID,
+        run_id=RUN_ID,
+        run_dir=run_dir,
+        process=process,
+        command=[sys.executable, "-c", "post-boot-crash"],
+        started_at_ms=1_700_000_000_100,
+        log_path=log_path,
+        log_handle=log_handle,
+    )
+    app = create_app(manager=manager, allowed_origins=["http://localhost"])
+
+    try:
+        async with app.router.lifespan_context(app):
+            latest = latest_account_instance_binding(
+                read_account_instance_registry(tmp_path, ACCOUNT_ID),
+                account_id=ACCOUNT_ID,
+                strategy_instance_id=INSTANCE_ID,
+            )
+            assert latest is not None
+            assert latest.lifecycle_state == "ACTIVE"
+
+            for _ in range(100):
+                await asyncio.sleep(0.01)
+                latest = latest_account_instance_binding(
+                    read_account_instance_registry(tmp_path, ACCOUNT_ID),
+                    account_id=ACCOUNT_ID,
+                    strategy_instance_id=INSTANCE_ID,
+                )
+                if latest is not None and latest.lifecycle_state == "RETIRED":
+                    break
+
+            assert latest is not None
+            assert latest.lifecycle_state == "RETIRED"
+            assert latest.source == "host_daemon.process_crashed"
+            _owned, siblings = compute_reconcile_namespaces(
+                artifacts_root=tmp_path,
+                account_id=ACCOUNT_ID,
+                current_namespace="learn-ai/current-run/v1",
+            )
+            assert siblings == frozenset()
+            assert (
+                crash_retired_restart_blocking_binding(
+                    tmp_path,
+                    account_id=ACCOUNT_ID,
+                    strategy_instance_id=INSTANCE_ID,
+                )
+                == latest
+            )
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=5)
+        if not log_handle.closed:
+            log_handle.close()

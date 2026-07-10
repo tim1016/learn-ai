@@ -92,6 +92,7 @@ _QC_SHADOW_SUBDIR = Path("references") / "qc-shadow"
 _DEFAULT_ALLOWED_ORIGINS = "http://localhost:4200,http://127.0.0.1:4200"
 _STOP_WAIT_SECONDS = 2.0
 _DEFAULT_IBKR_CLIENT_ID_POOL = "50-99"
+_PROCESS_REAPER_INTERVAL_SECONDS = 1.0
 _IBKR_CLIENT_ID_MIN = 1
 _IBKR_CLIENT_ID_MAX = 2**31 - 1
 _IBKR_CLIENT_ID_POOL_MAX_SPAN = 1_000
@@ -447,6 +448,12 @@ class RunnerProcessManager:
                 for managed in self._managed.values()
                 if managed.process.poll() is None
             )
+
+    def reap_exited_processes(self) -> None:
+        """Settle every exited child independently of status read traffic."""
+        with self._managed_lock:
+            for managed in self._managed.values():
+                self._refresh(managed)
 
     def instance_status(self, strategy_instance_id: str) -> HostRunnerProcessStatus:
         """Live process status for one strategy instance (idle if untracked)."""
@@ -1442,6 +1449,20 @@ def create_app(
     from app.engine.live.control_plane import DaemonLeaseWriter
     from app.engine.live.orphan_classifier import classify_runtime_candidates_on_boot
 
+    async def _process_reaper(stop_event: asyncio.Event) -> None:
+        while not stop_event.is_set():
+            try:
+                await asyncio.to_thread(process_manager.reap_exited_processes)
+            except Exception:
+                logger.exception("host runner process reaper iteration failed")
+            try:
+                await asyncio.wait_for(
+                    stop_event.wait(),
+                    timeout=_PROCESS_REAPER_INTERVAL_SECONDS,
+                )
+            except TimeoutError:
+                continue
+
     @asynccontextmanager
     async def _lifespan(_app: FastAPI):
         try:
@@ -1466,6 +1487,11 @@ def create_app(
                     "bindings_retired": boot_reconcile.bindings_retired,
                 },
             )
+        reaper_stop = asyncio.Event()
+        reaper_task = asyncio.create_task(
+            _process_reaper(reaper_stop),
+            name="host-runner-process-reaper",
+        )
         writer = DaemonLeaseWriter(
             artifacts_root=process_manager.artifacts_root,
             boot_id=process_manager.boot_id,
@@ -1479,6 +1505,13 @@ def create_app(
         try:
             yield
         finally:
+            reaper_stop.set()
+            try:
+                await asyncio.wait_for(reaper_task, timeout=2.0)
+            except TimeoutError:
+                reaper_task.cancel()
+                await asyncio.gather(reaper_task, return_exceptions=True)
+                logger.error("host runner process reaper did not stop within 2 seconds")
             writer.set_draining()
             # Give the writer task one event-loop tick to observe the
             # ``DRAINING`` wake and write a final lease before we

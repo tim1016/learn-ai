@@ -65,10 +65,14 @@ portfolio and engine-wiring regressions live in
 host-daemon boot, prior
 `ACTIVE` account bindings not backed by a process owned by the new daemon are
 now durably retired as `host_daemon.boot_liveness_unproven` before requests are
-served. That removes their namespace from sibling trust, blocks their own
-submit gate, and requires recovery proof before restart. The boot and recovery
+served. A daemon-owned process reaper applies the normal crash retirement path
+when an owned child exits after boot, without depending on status reads. Both
+daemon starts and direct `run.py start` require recovery proof before a new
+`ACTIVE` row can supersede either retirement. That removes dead namespaces from
+sibling trust and blocks their own submit gate. The boot, reaper, and recovery
 regressions live in
-`tests/engine/live/test_host_daemon_boot_reconcile.py`.
+`tests/engine/live/test_host_daemon_boot_reconcile.py` and
+`tests/engine/live/test_run_cli.py`.
 
 **Exit criteria:**
 

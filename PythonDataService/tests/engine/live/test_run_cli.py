@@ -2108,6 +2108,97 @@ def test_deployment_validation_position_gate_uses_trade_symbol(tmp_path: Path) -
     assert status["exit_reason"] == "normal"
 
 
+def test_cmd_start_direct_requires_recovery_before_new_active_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Direct CLI start cannot supersede an unsafe retired binding."""
+    import argparse as _argparse
+
+    from app.engine.live.account_registry import (
+        AccountInstanceBinding,
+        bot_order_namespace_for_instance,
+        latest_account_instance_binding,
+        read_account_instance_registry,
+        write_account_instance_binding,
+    )
+    from app.engine.live.run import cmd_start
+    from app.engine.live.run_ledger import build_ledger, write_ledger
+
+    monkeypatch.delenv("LIVE_RUNNER_DAEMON_BOOT_ID", raising=False)
+    strategy_instance_id = "spy-ema-paper"
+    strategy_spec = (
+        Path(__file__).resolve().parents[3]
+        / "app"
+        / "engine"
+        / "strategy"
+        / "spec"
+        / "fixtures"
+        / "deployment_validation.spec.json"
+    )
+    qc_audit = tmp_path / "qc_audit.py"
+    qc_audit.write_text("# QC audit copy stub\n", encoding="utf-8")
+    ledger = build_ledger(
+        code_sha="deadbeef" * 5,
+        strategy_spec_path=strategy_spec,
+        qc_audit_copy_path=qc_audit,
+        qc_cloud_backtest_id="bt-direct-recovery-gate",
+        account_id="DU123",
+        start_date_ms=1_714_838_400_000,
+        live_config={"sizing": {"kind": "FixedShares", "value": 1}},
+        strategy_instance_id=strategy_instance_id,
+        strategy_key="deployment_validation",
+    )
+    run_dir = tmp_path / ledger.run_id
+    write_ledger(run_dir / "run_ledger.json", ledger)
+    artifacts_root = tmp_path / "artifacts"
+    artifacts_root.mkdir()
+    namespace = bot_order_namespace_for_instance(strategy_instance_id)
+    active = AccountInstanceBinding(
+        account_id="DU123",
+        strategy_instance_id=strategy_instance_id,
+        run_id=ledger.run_id,
+        bot_order_namespace=namespace,
+        lifecycle_state="ACTIVE",
+        recorded_at_ms=1_700_000_000_000,
+        source="run.start",
+    )
+    retired = active.model_copy(
+        update={
+            "lifecycle_state": "RETIRED",
+            "recorded_at_ms": 1_700_000_001_000,
+            "source": "host_daemon.boot_liveness_unproven",
+        }
+    )
+    write_account_instance_binding(artifacts_root, active)
+    write_account_instance_binding(artifacts_root, retired)
+
+    rc = cmd_start(
+        _argparse.Namespace(
+            command="start",
+            run_dir=run_dir,
+            strategy="deployment_validation",
+            readonly=False,
+            max_orders_per_day=4,
+            hydrate_policy="optional",
+            artifacts_root=artifacts_root,
+            broker=None,
+            bars=None,
+            client=None,
+        )
+    )
+
+    latest = latest_account_instance_binding(
+        read_account_instance_registry(artifacts_root, "DU123"),
+        account_id="DU123",
+        strategy_instance_id=strategy_instance_id,
+    )
+    assert rc == 1
+    assert "recovery proof required" in capsys.readouterr().err
+    assert latest == retired
+
+
 def test_account_durable_intents_project_account_owner_events() -> None:
     intents = _account_durable_intents_from_events(
         [
