@@ -911,6 +911,7 @@ class CommandTimelineEntry(BaseModel):
     queued_at_ms: int | None = None
     acked_at_ms: int | None = None
     outcome: str | None = None
+    reason_code: str | None = None
     outcome_detail: str | None = None
 
 

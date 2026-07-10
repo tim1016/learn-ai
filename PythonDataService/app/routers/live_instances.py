@@ -819,6 +819,23 @@ def _resolve_live_run_dir(root: Path, live_binding: LiveBinding | None) -> Path 
     return run_dir if run_dir.is_absolute() else root / run_dir
 
 
+def _resolve_durable_control_write_failure(run_dir: Path | None) -> str | None:
+    """Keep a typed failure until a newer durable-control command succeeds."""
+
+    if run_dir is None:
+        return None
+    timeline = build_command_timeline(_confine(run_dir, "commands"))
+    durable_verbs = {"PAUSE", "RESUME", "STOP", "MARK_POISONED"}
+    for entry in timeline.entries:
+        if entry.verb not in durable_verbs:
+            continue
+        if entry.reason_code == "DURABLE_CONTROL_WRITE_FAILED":
+            return entry.outcome_detail or "The bot could not persist its control state."
+        if entry.outcome in {"ok", "success"}:
+            return None
+    return None
+
+
 def _resolve_incident_headline(root: Path, live_binding: LiveBinding | None, runs: list[dict]) -> OperatorNotice | None:
     run_dir = _resolve_evidence_run_dir(root, live_binding, runs)
     if run_dir is None or not run_dir.is_dir():
@@ -1674,6 +1691,7 @@ async def _resolve_instance_status_from_process(
     )
     incident_headline = _resolve_incident_headline(root, live_binding, runs)
     lifecycle_state = _resolve_bot_lifecycle_state(root, sid)
+    live_run_dir = _resolve_live_run_dir(root, live_binding)
     operator_surface = compute_operator_surface(
         process=process,
         last_exit=last_exit,
@@ -1697,6 +1715,9 @@ async def _resolve_instance_status_from_process(
         account_truth_snapshot=account_truth_snapshot,
         fleet_blocks_starts=fleet_blocks_starts,
         daemon_diagnostic_condition=daemon_diagnostic_condition,
+        durable_control_write_failure=_resolve_durable_control_write_failure(
+            live_run_dir
+        ),
         host_start_command=settings.live_runner_host_start_command,
         start_run_id=_resolve_start_run_id(root, live_binding, runs),
         account_freeze=account_freeze,
@@ -1754,7 +1775,6 @@ async def _resolve_instance_status_from_process(
         sizing=sizing,
         last_exit=last_exit,
     )
-    live_run_dir = _resolve_live_run_dir(root, live_binding)
     live_state = _read_instance_live_state(root, sid)
     intent_projection_since_ms = _session_started_at_ms(process, live_binding)
     lifecycle_events = project_intent_events(

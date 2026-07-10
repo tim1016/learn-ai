@@ -197,6 +197,7 @@ def _author_operator_blockers(
     account_truth: AccountTruthAssessment,
     fleet_blocks_starts: bool,
     daemon_diagnostic_condition: DaemonDominantCondition | None,
+    durable_control_write_failure: str | None,
 ) -> list[OperatorBlocker]:
     if bot_lifecycle_phase == BotLifecyclePhase.RETIRED:
         return [
@@ -225,6 +226,19 @@ def _author_operator_blockers(
             )
         ]
     blockers: list[OperatorBlocker] = []
+
+    if durable_control_write_failure is not None:
+        blockers.append(
+            OperatorBlocker(
+                id="durable_control_write_failed",
+                severity="blocking",
+                disposition="fix_elsewhere",
+                headline="Bot control state was not saved",
+                detail=durable_control_write_failure,
+                primary_move=_navigate_move("Inspect engine storage", "/engine"),
+                applies_to="both",
+            )
+        )
 
     if daemon_diagnostic_condition == DaemonDominantCondition.REGISTRY_AMNESIA:
         blockers.append(
@@ -1275,6 +1289,7 @@ def compute_operator_surface(
     account_truth_snapshot: AccountTruthReadinessEvidence | None = None,
     fleet_blocks_starts: bool = False,
     daemon_diagnostic_condition: DaemonDominantCondition | None = None,
+    durable_control_write_failure: str | None = None,
     host_start_command: str | None = None,
     start_run_id: str | None = None,
     account_freeze: AccountFreezeEvidence | None = None,
@@ -1429,6 +1444,7 @@ def compute_operator_surface(
         account_truth=account_truth_assessment,
         fleet_blocks_starts=fleet_blocks_starts,
         daemon_diagnostic_condition=daemon_diagnostic_condition,
+        durable_control_write_failure=durable_control_write_failure,
     )
 
     return OperatorSurface(

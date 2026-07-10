@@ -1250,6 +1250,7 @@ def build_command_timeline(commands_dir: Path) -> CommandsTimeline:
                     queued_at_ms=prior.queued_at_ms if prior else None,
                     acked_at_ms=_file_mtime_ms(ack_path),
                     outcome=raw_status,
+                    reason_code=outcome.get("reason_code"),
                     outcome_detail=outcome.get("effect") or outcome.get("detail"),
                 )
             except (OSError, ValueError, KeyError, TypeError):

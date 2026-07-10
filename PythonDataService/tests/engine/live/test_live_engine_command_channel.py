@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from app.engine.data.trade_bar import TradeBar
-from app.engine.live.command_channel import CommandChannel, CommandVerb
+from app.engine.live.command_channel import Command, CommandChannel, CommandVerb
 from app.engine.live.config import LiveConfig
 from app.engine.live.engine_runtime import CommandLoopBlock
 from app.engine.live.halt import PoisonedHaltTrigger, read_poisoned_flag
@@ -141,6 +141,72 @@ async def test_command_poll_loop_acks_pending_pause(tmp_path: Path) -> None:
     ack_payload = _json.loads(ack_files[0].read_text(encoding="utf-8"))
     assert ack_payload["verb"] == "PAUSE"
     assert ack_payload["outcome"]["status"] == "success"
+
+
+@pytest.mark.parametrize(
+    ("verb", "initial_paused"),
+    [
+        (CommandVerb.PAUSE, False),
+        (CommandVerb.RESUME, True),
+        (CommandVerb.STOP, False),
+    ],
+)
+def test_durable_intent_failure_blocks_runtime_actuation(
+    verb: CommandVerb,
+    initial_paused: bool,
+) -> None:
+    def failing_writer(_state, _reason) -> None:
+        raise OSError("read-only filesystem")
+
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=FakeBroker(),
+        desired_state_writer=failing_writer,
+    )
+    engine._paused = initial_paused
+    shutdown_event = asyncio.Event()
+
+    outcome = engine._dispatch_command(
+        Command(seq=1, verb=verb),
+        shutdown_event,
+    )
+
+    assert outcome["status"] == "error"
+    assert outcome["reason_code"] == "DURABLE_CONTROL_WRITE_FAILED"
+    assert "read-only filesystem" in outcome["effect"]
+    assert engine._paused is initial_paused
+    assert not shutdown_event.is_set()
+
+
+def test_poisoned_flag_failure_is_acked_as_durable_control_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live import live_engine as live_engine_module
+
+    monkeypatch.setattr(
+        live_engine_module,
+        "poison_and_record_incident",
+        lambda **_kwargs: (_ for _ in ()).throw(OSError("permission denied")),
+    )
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=FakeBroker(),
+        output_dir=tmp_path,
+    )
+    shutdown_event = asyncio.Event()
+
+    outcome = engine._dispatch_command(
+        Command(seq=1, verb=CommandVerb.MARK_POISONED),
+        shutdown_event,
+    )
+
+    assert outcome["status"] == "error"
+    assert outcome["reason_code"] == "DURABLE_CONTROL_WRITE_FAILED"
+    assert "permission denied" in outcome["effect"]
+    assert not shutdown_event.is_set()
 
 
 @pytest.mark.asyncio
