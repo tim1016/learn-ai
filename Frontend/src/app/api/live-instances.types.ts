@@ -266,6 +266,8 @@ export interface InstanceStartDefaults {
 }
 
 export interface LiveInstanceStatus {
+  stream_epoch: string;
+  surface_version: number;
   strategy_instance_id: string;
   process: InstanceProcessView;
   live_binding: LiveBinding | null;

@@ -31,6 +31,8 @@ function status(
   controlPlaneState: OperatorSurfaceControlPlane['state'] | null,
 ): LiveInstanceStatus {
   return {
+    stream_epoch: 'fixture-epoch',
+    surface_version: 1,
     strategy_instance_id: 'sid-x',
     process: { state: 'running', pid: 1, bound_run_id: 'run-1', started_at_ms: 0 },
     live_binding: { run_id: 'run-1', run_dir: null, source: 'registry' },

@@ -2514,6 +2514,8 @@ class LiveInstanceStatus(BaseModel):
     thing commands may target.
     """
 
+    stream_epoch: str = ""
+    surface_version: int = Field(default=0, ge=0)
     strategy_instance_id: str
     process: InstanceProcessView
     live_binding: LiveBinding | None = None

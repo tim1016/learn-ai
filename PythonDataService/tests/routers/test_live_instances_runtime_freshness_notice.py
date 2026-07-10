@@ -90,10 +90,8 @@ async def test_runtime_freshness_notice_headline_present_when_engine_runtime_mis
         process={"state": "running", "run_id": "run-notice-1", "pid": 1, "started_at_ms": 100},
     )
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     rf = response.json()["operator_surface"]["runtime_freshness"]
@@ -181,10 +179,8 @@ async def test_runtime_freshness_notice_headline_none_when_runtime_fresh(
     )
     monkeypatch.setattr(live_instances, "_now_ms", lambda: now_ms)
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     rf = response.json()["operator_surface"]["runtime_freshness"]

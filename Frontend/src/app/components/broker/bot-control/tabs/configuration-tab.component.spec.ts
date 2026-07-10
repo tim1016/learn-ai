@@ -23,6 +23,8 @@ function gateResult(gateId: string, status: GateResult['status']): GateResult {
 
 function status(): LiveInstanceStatus {
   return {
+    stream_epoch: 'fixture-epoch',
+    surface_version: 1,
     strategy_instance_id: 'sid-x',
     process: { state: 'idle', bound_run_id: null, pid: null, started_at_ms: null },
     live_binding: null,

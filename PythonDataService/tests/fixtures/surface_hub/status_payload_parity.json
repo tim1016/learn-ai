@@ -1,0 +1,42 @@
+{
+  "baseline_commit": "340fbb266",
+  "cases": {
+    "daemon_unreachable": {
+      "display_status": "Sick bay",
+      "evidence_run_id": "run-unreachable",
+      "live_run_id": null,
+      "process_state": "unreachable",
+      "sha256": "542f6306e78dcf3de8cc6508b3ef1b2c8c44f28596439fd86fa70f09ea5605db",
+      "strategy_instance_id": "unreachable-bot"
+    },
+    "idle_stopped": {
+      "display_status": "Sick bay",
+      "evidence_run_id": "run-idle",
+      "live_run_id": null,
+      "process_state": "idle",
+      "sha256": "7030ea4bcdedf59d48ddc8b76ba1c1d65f274e204c5b8f7a81b604f5fda7df1b",
+      "strategy_instance_id": "idle-bot"
+    },
+    "nothing_deployed": {
+      "display_status": "Off duty",
+      "evidence_run_id": null,
+      "live_run_id": null,
+      "process_state": "unreachable",
+      "sha256": "a2096981d15243b92bccbca968738c3d043bf3b1ecc0403de07e3d3d7027e1c1",
+      "strategy_instance_id": "ghost-instance"
+    },
+    "running_live": {
+      "display_status": "On duty",
+      "evidence_run_id": "run-running",
+      "live_run_id": "run-running",
+      "process_state": "running",
+      "sha256": "322f63ea575134c117773fbbe6481157da2a347d281025467ef0228716864383",
+      "strategy_instance_id": "running-bot"
+    }
+  },
+  "normalization": [
+    "exclude stream_epoch",
+    "exclude surface_version",
+    "replace live_runs_root"
+  ]
+}

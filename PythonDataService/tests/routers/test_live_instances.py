@@ -8,6 +8,7 @@ server-side and the serialized response carries both `live_binding` and
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -572,6 +573,80 @@ def _set_daemon(monkeypatch: pytest.MonkeyPatch, *, instances: dict | None = Non
     monkeypatch.setattr(host_daemon_client, "fetch_instance_process", fake_process)
 
 
+@pytest.mark.parametrize(
+    ("case_name", "sid", "run_id", "process"),
+    [
+        ("nothing_deployed", "ghost-instance", None, None),
+        ("idle_stopped", "idle-bot", "run-idle", {"state": "idle"}),
+        (
+            "running_live",
+            "running-bot",
+            "run-running",
+            {"state": "running", "run_id": "run-running", "pid": 99, "started_at_ms": 100},
+        ),
+        ("daemon_unreachable", "unreachable-bot", "run-unreachable", None),
+    ],
+)
+async def test_surface_assembler_matches_pre_extraction_payload_golden(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+    case_name: str,
+    sid: str,
+    run_id: str | None,
+    process: dict | None,
+) -> None:
+    _app, root = app_with_root
+    if run_id is not None:
+        _write_ledger(root, run_id, sid, 100, account_id="DU123456")
+    _set_daemon(monkeypatch, process=process)
+    now_ms = [1_700_000_000_000]
+    monkeypatch.setattr(live_instances, "_now_ms", lambda: now_ms[0])
+
+    async def no_diagnostic(_sid: str):
+        return None
+
+    async def no_fleet_block(_settings, _root: Path) -> bool:
+        return False
+
+    monkeypatch.setattr(
+        live_instances,
+        "_resolve_daemon_diagnostic_condition_for_status",
+        no_diagnostic,
+    )
+    monkeypatch.setattr(
+        live_instances,
+        "_resolve_fleet_blocks_starts_for_status",
+        no_fleet_block,
+    )
+
+    payload = (await live_instances._assemble_instance_surface(sid)).model_dump(
+        mode="json", exclude={"stream_epoch", "surface_version"}
+    )
+
+    def normalize(value):
+        if isinstance(value, dict):
+            return {key: normalize(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [normalize(item) for item in value]
+        if isinstance(value, str):
+            return value.replace(str(root), "$LIVE_RUNS_ROOT")
+        return value
+
+    normalized = normalize(payload)
+    encoded = json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode()
+    fixture_path = Path(__file__).parents[1] / "fixtures" / "surface_hub" / "status_payload_parity.json"
+    expected = json.loads(fixture_path.read_text(encoding="utf-8"))["cases"][case_name]
+
+    assert hashlib.sha256(encoded).hexdigest() == expected["sha256"]
+    assert normalized["strategy_instance_id"] == expected["strategy_instance_id"]
+    assert normalized["process"]["state"] == expected["process_state"]
+    assert (normalized["live_binding"]["run_id"] if normalized["live_binding"] else None) == expected["live_run_id"]
+    assert (normalized["evidence_binding"]["run_id"] if normalized["evidence_binding"] else None) == expected[
+        "evidence_run_id"
+    ]
+    assert normalized["daily_lifecycle"]["display_status"] == expected["display_status"]
+
+
 async def test_instance_status_running_exposes_live_binding(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-live-aaa", "spy_ema_paper", 100)
@@ -581,7 +656,7 @@ async def test_instance_status_running_exposes_live_binding(app_with_root, monke
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     body = response.json()
@@ -630,7 +705,7 @@ async def test_instance_status_blocks_start_when_crash_recovery_required(
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(f"/api/live-instances/{sid}/status")
+        response = await client.get(f"/api/live-instances/{sid}/status?refresh=true")
 
     assert response.status_code == 200
     start_capability = response.json()["operator_surface"]["host_process"]["start_capability"]
@@ -639,28 +714,25 @@ async def test_instance_status_blocks_start_when_crash_recovery_required(
     assert start_capability["gate_results"][0]["gate_id"] == "account.crash_recovery"
 
 
-async def test_status_activity_publisher_resolution_bootstraps_missing_live_publisher(
+async def test_status_activity_publisher_resolution_never_bootstraps_missing_publisher(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sid = "spy_bootstrap_status"
-    publisher = _StatusPublisher()
+    bootstrap_called = False
 
     class Registry:
-        def __init__(self) -> None:
-            self.publisher = None
-
         def get(self, _sid: str):
-            return self.publisher
+            return None
 
         def registered_at_ms(self, _sid: str) -> int | None:
-            return 123 if self.publisher is not None else None
+            return None
 
     registry = Registry()
 
     async def fake_bootstrap(strategy_instance_id: str):
+        nonlocal bootstrap_called
         assert strategy_instance_id == sid
-        registry.publisher = publisher
-        return publisher
+        bootstrap_called = True
 
     from app.routers import broker_activity
 
@@ -672,38 +744,234 @@ async def test_status_activity_publisher_resolution_bootstraps_missing_live_publ
         LiveBinding(run_id="run-live-aaa"),
     )
 
-    assert resolved is publisher
-    assert registered_at_ms == 123
+    assert resolved is None
+    assert registered_at_ms is None
+    assert bootstrap_called is False
 
 
-async def test_status_activity_publisher_resolution_times_out_slow_bootstrap(
+async def test_status_activity_publisher_resolution_reads_registered_publisher(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    sid = "spy_bootstrap_timeout"
+    sid = "spy_registered_publisher"
+    publisher = _StatusPublisher()
 
     class Registry:
         def get(self, _sid: str):
-            return None
+            return publisher
 
         def registered_at_ms(self, _sid: str) -> int | None:
-            return None
-
-    async def slow_bootstrap(_strategy_instance_id: str):
-        await asyncio.sleep(1)
-
-    from app.routers import broker_activity
+            return 123
 
     monkeypatch.setattr(live_instances, "get_publisher_registry", lambda: Registry())
-    monkeypatch.setattr(broker_activity, "bootstrap_publisher_for_instance", slow_bootstrap)
-    monkeypatch.setattr(live_instances, "_STATUS_ACTIVITY_BOOTSTRAP_TIMEOUT_S", 0.001)
 
     resolved, registered_at_ms = await live_instances._resolve_activity_publisher_for_status(
         sid,
         LiveBinding(run_id="run-live-aaa"),
     )
 
-    assert resolved is None
-    assert registered_at_ms is None
+    assert resolved is publisher
+    assert registered_at_ms == 123
+
+
+async def test_status_without_started_producer_returns_typed_unavailable(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    sid = "spy_surface_not_started"
+    _write_ledger(root, "run-surface-not-started", sid, 100)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+    from app.services.surface_hub import SurfaceHubRegistry
+
+    monkeypatch.setattr(live_instances, "_SURFACE_HUBS", SurfaceHubRegistry())
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/status")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == {
+        "reason_code": "SURFACE_SNAPSHOT_UNAVAILABLE",
+        "message": "The bot surface producer has not completed a successful refresh yet.",
+        "strategy_instance_id": sid,
+    }
+    assert live_instances._SURFACE_HUBS.get(sid) is None
+
+
+async def test_status_is_versioned_from_stored_surface_without_publisher_bootstrap(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    sid = "spy_surface_hub_status"
+    run_id = "run-surface-hub-status"
+    _write_ledger(root, run_id, sid, 100)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+    bootstrap_called = False
+
+    async def fake_bootstrap(_strategy_instance_id: str):
+        nonlocal bootstrap_called
+        bootstrap_called = True
+
+    from app.routers import broker_activity
+
+    monkeypatch.setattr(broker_activity, "bootstrap_publisher_for_instance", fake_bootstrap)
+    now_ms = [1_700_000_000_000]
+    monkeypatch.setattr(live_instances, "_now_ms", lambda: now_ms[0])
+    before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    assembled = await live_instances._assemble_instance_surface(sid)
+    from app.services.surface_hub import SurfaceHubRegistry
+
+    monkeypatch.setattr(live_instances, "_SURFACE_HUBS", SurfaceHubRegistry())
+    await live_instances._ensure_surface_hub_started(sid)
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            first = (await client.get(f"/api/live-instances/{sid}/status")).json()
+            second = (await client.get(f"/api/live-instances/{sid}/status")).json()
+            now_ms[0] += 1_000
+            refreshed = (await client.get(f"/api/live-instances/{sid}/status?refresh=true")).json()
+    finally:
+        await live_instances.stop_surface_hubs()
+
+    assert {
+        key: value for key, value in first.items() if key not in {"stream_epoch", "surface_version"}
+    } == assembled.model_dump(mode="json", exclude={"stream_epoch", "surface_version"})
+    assert first["stream_epoch"] == second["stream_epoch"]
+    assert first["surface_version"] == second["surface_version"] == refreshed["surface_version"] == 1
+    assert first == second
+    assert refreshed["fetched_at_ms"] == second["fetched_at_ms"] + 1_000
+    assert bootstrap_called is False
+    assert {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()} == before
+
+
+async def test_surface_hub_does_not_bootstrap_publisher_for_stopped_bot(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    sid = "spy_surface_lifecycle"
+    _write_ledger(root, "run-surface-lifecycle", sid, 100)
+    _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1}, process={"state": "idle"})
+    started: list[str] = []
+
+    async def fake_start_publisher(strategy_instance_id: str) -> None:
+        started.append(strategy_instance_id)
+
+    from app.services.surface_hub import SurfaceHubRegistry
+
+    monkeypatch.setattr(live_instances, "_SURFACE_HUBS", SurfaceHubRegistry())
+    from app.routers import broker_activity
+
+    monkeypatch.setattr(broker_activity, "bootstrap_publisher_for_instance", fake_start_publisher)
+
+    try:
+        await live_instances.start_surface_hubs()
+        hub = live_instances._SURFACE_HUBS.get(sid)
+        assert hub is not None
+        assert hub.is_running is True
+        assert hub.latest is not None
+        assert started == []
+
+        async def fail_if_status_reassembles(_strategy_instance_id: str):
+            raise AssertionError("normal status GET must use the stored snapshot")
+
+        monkeypatch.setattr(
+            live_instances,
+            "_assemble_instance_surface",
+            fail_if_status_reassembles,
+        )
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            response = await client.get(f"/api/live-instances/{sid}/status")
+        assert response.status_code == 200
+        assert response.json()["stream_epoch"] == hub.latest.stream_epoch
+    finally:
+        await live_instances.stop_surface_hubs()
+
+
+async def test_running_surface_retries_transient_activity_publisher_bootstrap(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _app, root = app_with_root
+    sid = "spy_surface_live_publisher"
+    run_id = "run-surface-live-publisher"
+    _write_ledger(root, run_id, sid, 100)
+    _set_daemon(
+        monkeypatch,
+        process={"state": "running", "run_id": run_id, "pid": 99, "started_at_ms": 100},
+    )
+    attempts: list[str] = []
+
+    class EmptyRegistry:
+        def get(self, _sid: str):
+            return None
+
+        def registered_at_ms(self, _sid: str) -> int | None:
+            return None
+
+        async def unregister(self, _sid: str) -> None:
+            raise AssertionError("a live surface must not unregister its publisher")
+
+    async def flaky_bootstrap(strategy_instance_id: str) -> None:
+        attempts.append(strategy_instance_id)
+        if len(attempts) == 1:
+            raise RuntimeError("broker session is still connecting")
+
+    from app.routers import broker_activity
+    from app.services.surface_hub import SurfaceHubRegistry
+
+    monkeypatch.setattr(live_instances, "_SURFACE_HUBS", SurfaceHubRegistry())
+    monkeypatch.setattr(live_instances, "get_publisher_registry", lambda: EmptyRegistry())
+    monkeypatch.setattr(broker_activity, "bootstrap_publisher_for_instance", flaky_bootstrap)
+    hub = live_instances._surface_hub_for(sid)
+    hub._refresh_interval_seconds = 0.01
+
+    try:
+        await hub.start()
+        for _ in range(20):
+            if len(attempts) >= 2:
+                break
+            await asyncio.sleep(0.01)
+        assert attempts[:2] == [sid, sid]
+    finally:
+        await live_instances.stop_surface_hubs()
+
+
+async def test_accepted_mutation_refreshes_an_already_running_surface_hub(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _app, root = app_with_root
+    refreshes = 0
+    invalidated: list[Path | None] = []
+
+    class RunningHub:
+        is_running = True
+
+        async def refresh(self) -> None:
+            nonlocal refreshes
+            refreshes += 1
+
+        async def start(self) -> None:
+            raise AssertionError("an already-running hub must be refreshed, not restarted")
+
+    class Registry:
+        def get_or_create(self, *_args, **_kwargs):
+            return RunningHub()
+
+    class RunsCache:
+        async def invalidate(self, invalidated_root: Path | None = None) -> None:
+            invalidated.append(invalidated_root)
+
+    monkeypatch.setattr(live_instances, "_SURFACE_HUBS", Registry())
+    monkeypatch.setattr(live_instances, "_SURFACE_RUNS_CACHE", RunsCache())
+
+    await live_instances._ensure_surface_hub_started("spy_mutated_surface")
+
+    assert refreshes == 1
+    assert invalidated == [root]
 
 
 async def test_instance_status_uses_recovered_activity_publisher_for_health_and_chart(
@@ -731,7 +999,7 @@ async def test_instance_status_uses_recovered_activity_publisher_for_health_and_
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(f"/api/live-instances/{sid}/status")
+        response = await client.get(f"/api/live-instances/{sid}/status?refresh=true")
 
     assert response.status_code == 200
     body = response.json()
@@ -807,7 +1075,7 @@ async def test_instance_status_projects_account_owner_submit_events_into_lifecyc
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(f"/api/live-instances/{sid}/status")
+        response = await client.get(f"/api/live-instances/{sid}/status?refresh=true")
 
     assert response.status_code == 200
     submit_nodes = {
@@ -839,7 +1107,7 @@ async def test_instance_status_skips_malformed_account_events_without_500(
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(f"/api/live-instances/{sid}/status")
+        response = await client.get(f"/api/live-instances/{sid}/status?refresh=true")
 
     assert response.status_code == 200
     broker_nodes = {
@@ -904,7 +1172,7 @@ async def test_instance_status_does_not_project_pre_session_intent_wal_as_curren
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(f"/api/live-instances/{sid}/status")
+        response = await client.get(f"/api/live-instances/{sid}/status?refresh=true")
 
     assert response.status_code == 200
     submit_nodes = {
@@ -923,7 +1191,7 @@ async def test_instance_status_dead_is_evidence_only(app_with_root, monkeypatch:
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     body = response.json()
@@ -954,7 +1222,7 @@ async def test_status_start_defaults_seed_strategy_from_ledger_key(
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     defaults = response.json()["start_defaults"]
@@ -977,7 +1245,7 @@ async def test_status_start_defaults_empty_strategy_for_legacy_ledger(
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     assert response.json()["start_defaults"]["strategy"] == ""
@@ -1011,7 +1279,7 @@ async def test_status_start_defaults_carry_redeploy_identity_from_ledger(
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     defaults = response.json()["start_defaults"]
@@ -1931,7 +2199,7 @@ async def test_status_provenance_attests_the_run_identity(app_with_root, monkeyp
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     prov = response.json()["provenance"]
@@ -1967,7 +2235,7 @@ async def test_status_exposes_symbol_from_ledger_live_config(app_with_root, monk
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/qqq_strategy/status")
+        response = await client.get("/api/live-instances/qqq_strategy/status?refresh=true")
 
     assert response.status_code == 200
     body = response.json()
@@ -1982,7 +2250,7 @@ async def test_status_symbol_is_null_when_nothing_deployed(app_with_root, monkey
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/ghost_instance/status")
+        response = await client.get("/api/live-instances/ghost_instance/status?refresh=true")
 
     assert response.status_code == 200
     assert response.json()["symbol"] is None
@@ -2010,7 +2278,7 @@ async def test_status_symbol_is_null_when_live_config_missing_symbol(
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/legacy_strategy/status")
+        response = await client.get("/api/live-instances/legacy_strategy/status?refresh=true")
 
     assert response.status_code == 200
     assert response.json()["symbol"] is None
@@ -2021,7 +2289,7 @@ async def test_status_provenance_none_when_nothing_deployed(app_with_root, monke
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/ghost_instance/status")
+        response = await client.get("/api/live-instances/ghost_instance/status?refresh=true")
 
     assert response.status_code == 200
     assert response.json()["provenance"] is None
@@ -2068,7 +2336,7 @@ async def test_status_last_exit_surfaces_the_specific_halt_trigger(
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     last_exit = response.json()["last_exit"]
@@ -2144,7 +2412,7 @@ async def test_status_start_defaults_redeploy_fields_empty_for_legacy_ledger(
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     defaults = response.json()["start_defaults"]
     assert defaults["strategy_spec_path"] == ""
@@ -2160,7 +2428,7 @@ async def test_instance_status_unreachable_daemon_is_not_guessed(
     _set_daemon(monkeypatch, process=None)  # daemon unreachable -> None
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     body = response.json()
@@ -2354,7 +2622,7 @@ async def test_status_marks_bot_sick_bay_for_terminal_account_condition(
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(f"/api/live-instances/{sid}/status")
+        response = await client.get(f"/api/live-instances/{sid}/status?refresh=true")
 
     assert response.status_code == 200
     lifecycle = response.json()["daily_lifecycle"]
@@ -2364,10 +2632,7 @@ async def test_status_marks_bot_sick_bay_for_terminal_account_condition(
         "scope": "bot",
         "severity": "critical",
         "title": "Bot ended without status",
-        "detail": (
-            f"{sid} exited without a run-status receipt for run {run_id}. "
-            "Retire & Replace is required."
-        ),
+        "detail": (f"{sid} exited without a run-status receipt for run {run_id}. Retire & Replace is required."),
         "owner_label": f"Bot {sid}",
         "cure_action": "retire_replace",
         "cure_label": "Retire & Replace",
@@ -2459,7 +2724,7 @@ async def test_bot_catalog_does_not_surface_legacy_fresh_run_only_flag(
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/api/live-instances/catalog")
-        status_response = await client.get("/api/live-instances/stopped_bot/status")
+        status_response = await client.get("/api/live-instances/stopped_bot/status?refresh=true")
 
     assert response.status_code == 200
     row = response.json()["bots"][0]
@@ -2523,6 +2788,13 @@ async def test_delete_instance_soft_deletes_bot_from_catalog_list_and_status(
     app, root = app_with_root
     _write_ledger(root, "run-delete", "delete-me", 100)
     _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1}, process={"state": "idle"})
+    from app.services.surface_hub import SurfaceHubRegistry
+
+    registry = SurfaceHubRegistry()
+    monkeypatch.setattr(live_instances, "_SURFACE_HUBS", registry)
+    await live_instances._ensure_surface_hub_started("delete-me")
+    owned_hub = registry.get("delete-me")
+    assert owned_hub is not None and owned_hub.is_running
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         delete_response = await client.request(
@@ -2545,6 +2817,28 @@ async def test_delete_instance_soft_deletes_bot_from_catalog_list_and_status(
     assert list_response.json() == []
     assert status_response.status_code == 410
     assert status_response.json()["detail"]["reason_code"] == "BOT_SOFT_DELETED"
+    assert registry.get("delete-me") is None
+    assert owned_hub.is_running is False
+
+
+def test_status_deletion_directory_scan_does_not_follow_instance_symlink(
+    tmp_path: Path,
+) -> None:
+    artifacts_root = tmp_path / "artifacts"
+    live_state_root = artifacts_root / "live_state"
+    outside = tmp_path / "outside"
+    live_state_root.mkdir(parents=True)
+    outside.mkdir()
+    (outside / "bot_deletion.json").write_text("{}", encoding="utf-8")
+    (live_state_root / "linked-bot").symlink_to(outside, target_is_directory=True)
+
+    assert (
+        live_instances._sid_has_soft_deletion_from_directory(
+            artifacts_root,
+            "linked-bot",
+        )
+        is False
+    )
 
 
 async def test_delete_instance_refuses_active_process(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2581,9 +2875,7 @@ async def test_delete_instance_allows_retired_bot_when_daemon_unreachable(
     assert (root.parent / "live_state" / "retired-bot" / "bot_deletion.json").is_file()
 
 
-async def test_soft_deleted_instance_reappears_after_new_run_id(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_soft_deleted_instance_reappears_after_new_run_id(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-old", "redeployable-bot", 100)
     _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1}, process={"state": "idle"})
@@ -2596,7 +2888,7 @@ async def test_soft_deleted_instance_reappears_after_new_run_id(
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         catalog_response = await client.get("/api/live-instances/catalog")
-        status_response = await client.get("/api/live-instances/redeployable-bot/status")
+        status_response = await client.get("/api/live-instances/redeployable-bot/status?refresh=true")
 
     assert catalog_response.status_code == 200
     assert [row["strategy_instance_id"] for row in catalog_response.json()["bots"]] == ["redeployable-bot"]
@@ -2604,9 +2896,7 @@ async def test_soft_deleted_instance_reappears_after_new_run_id(
     assert status_response.json()["evidence_binding"]["run_id"] == "run-new"
 
 
-async def test_start_run_rejects_soft_deleted_run_before_daemon(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_start_run_rejects_soft_deleted_run_before_daemon(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-soft-deleted", "soft-deleted-bot", 100)
     _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1}, process={"state": "idle"})
@@ -2661,7 +2951,7 @@ async def test_instance_status_rejects_invalid_id(app_with_root, monkeypatch: py
     _set_daemon(monkeypatch, process=None)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/evil$/status")
+        response = await client.get("/api/live-instances/evil$/status?refresh=true")
 
     assert response.status_code == 400
 
@@ -2691,7 +2981,7 @@ async def test_status_includes_namespace_attributed_broker_slice(
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     broker = response.json()["broker"]
     assert broker["bot_order_namespace"] == "spy_ema_ns"
@@ -2705,7 +2995,7 @@ async def test_status_broker_absent_without_sidecar(app_with_root, monkeypatch: 
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.json()["broker"] is None
 
@@ -2832,7 +3122,7 @@ async def test_status_transports_engine_readiness_when_live(app_with_root, monke
     _set_daemon(monkeypatch, process={"state": "running", "run_id": "run-live-rdy", "pid": 1})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     readiness = response.json()["readiness"]
     assert readiness["kind"] == "live_readiness"
@@ -2846,7 +3136,7 @@ async def test_status_derives_start_readiness_when_dead(app_with_root, monkeypat
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     readiness = response.json()["readiness"]
     assert readiness["kind"] == "start_readiness"
@@ -2865,7 +3155,7 @@ async def test_status_includes_spec_derived_decision_column_descriptors(
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     body = response.json()
     cols = {c["name"]: c for c in body["decision_columns"]}
@@ -2906,7 +3196,7 @@ async def test_status_includes_backend_authored_latest_signal_tone(
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     body = response.json()
     assert body["latest_decision"]["signal"] == "EXIT"
@@ -3021,8 +3311,7 @@ async def test_resume_receipt_names_crash_recovery_next_rung(
     assert receipt["rung_id"] == "host_process"
     assert receipt["source_codes"] == ["CRASH_RECOVERY_REQUIRED"]
     assert receipt["title"] == (
-        "Stop latch cleared. The bot still won't run: previous host runner crashed "
-        "— record crash-recovery evidence"
+        "Stop latch cleared. The bot still won't run: previous host runner crashed — record crash-recovery evidence"
     )
     assert receipt["actionability"] == "actuatable"
     assert receipt["action"] == {
@@ -3193,9 +3482,7 @@ async def test_deploy_and_start_stages_after_legacy_stopped_latch_check(
     app, root = app_with_root
     _set_startable_now(monkeypatch)
     _set_connected_broker_account(monkeypatch, "DU111")
-    DesiredStateRepo(
-        stable_desired_state_path(root.parent, "spy_ema_paper")
-    ).set(
+    DesiredStateRepo(stable_desired_state_path(root.parent, "spy_ema_paper")).set(
         DesiredState.STOPPED,
         updated_by="test",
         reason="regression",
@@ -3517,9 +3804,7 @@ async def test_deploy_and_start_rejects_unknown_existing_exposure(
     assert called is False
 
 
-async def test_deploy_and_start_allows_flat_existing_exposure(
-    app_with_root, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_deploy_and_start_allows_flat_existing_exposure(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
     _set_startable_now(monkeypatch)
     _set_connected_broker_account(monkeypatch, "DU111")
@@ -3977,9 +4262,7 @@ async def test_start_run_forwards_and_returns_action(app_with_root, monkeypatch:
     assert seen["run_id"] == "run-abc"
     assert seen["payload"]["readonly"] is False
     assert seen["payload"]["hydrate_policy"] == "optional"
-    lifecycle = BotLifecycleStateRepo(
-        stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper")
-    ).read()
+    lifecycle = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper")).read()
     assert lifecycle is not None
     assert lifecycle.phase == "ON_DUTY"
     assert lifecycle.active_run_id == "run-abc"
@@ -4430,9 +4713,7 @@ async def test_stop_run_forwards_and_returns_action(app_with_root, monkeypatch: 
 
     assert response.status_code == 200
     assert response.json()["process"]["state"] == "stopping"
-    lifecycle = BotLifecycleStateRepo(
-        stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper")
-    ).read()
+    lifecycle = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper")).read()
     assert lifecycle is not None
     assert lifecycle.phase == "OFF_DUTY"
     assert lifecycle.active_run_id is None
@@ -4464,9 +4745,7 @@ async def test_end_day_now_resolves_live_binding_and_stops_current_run(
 
     assert response.status_code == 200
     assert seen == {"run_id": "run-live", "payload": {"force": False}}
-    lifecycle = BotLifecycleStateRepo(
-        stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper")
-    ).read()
+    lifecycle = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper")).read()
     assert lifecycle is not None
     assert lifecycle.phase == "OFF_DUTY"
 
@@ -4532,12 +4811,7 @@ async def test_retire_and_replace_rejects_unreachable_daemon(
 
     assert response.status_code == 409
     assert response.json()["detail"]["reason_code"] == "HOST_SERVICE_OFFLINE"
-    assert (
-        BotLifecycleStateRepo(
-            stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper")
-        ).read()
-        is None
-    )
+    assert BotLifecycleStateRepo(stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper")).read() is None
 
 
 async def test_retire_and_replace_marks_bot_retired(
@@ -4558,9 +4832,7 @@ async def test_retire_and_replace_marks_bot_retired(
     body = response.json()
     assert body["lifecycle"]["phase"] == "RETIRED"
     assert body["lifecycle"]["display_status"] == "Retired"
-    lifecycle = BotLifecycleStateRepo(
-        stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper")
-    ).read()
+    lifecycle = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper")).read()
     assert lifecycle is not None
     assert lifecycle.phase == "RETIRED"
     assert lifecycle.retired_reason == "machinery replaced"
@@ -4805,7 +5077,7 @@ async def test_status_last_exit_surfaces_cold_start_hydration_failure(
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     last_exit = response.json()["last_exit"]
@@ -4828,7 +5100,7 @@ async def test_status_last_exit_absent_while_run_is_live(app_with_root, monkeypa
     )
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     assert response.json()["last_exit"] is None
@@ -4849,7 +5121,7 @@ async def test_status_last_exit_tolerates_malformed_hydration_receipt(
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     last_exit = response.json()["last_exit"]
@@ -4876,7 +5148,7 @@ async def test_start_defaults_readonly_false_in_paper_mode(app_with_root, monkey
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     assert response.json()["start_defaults"]["readonly"] is False
@@ -4899,7 +5171,7 @@ async def test_start_defaults_readonly_true_in_live_mode(app_with_root, monkeypa
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     assert response.json()["start_defaults"]["readonly"] is True
@@ -4925,7 +5197,7 @@ async def test_start_defaults_honors_ibkr_readonly_in_paper_mode(
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     assert response.json()["start_defaults"]["readonly"] is True
@@ -4948,7 +5220,7 @@ async def test_start_defaults_fail_closed_when_mode_missing(app_with_root, monke
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get("/api/live-instances/spy_ema_paper/status")
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
     assert response.json()["start_defaults"]["readonly"] is True
