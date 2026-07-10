@@ -29,8 +29,10 @@ are ``int64`` ms UTC. No ISO strings, no naive datetimes.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
+import tempfile
 import threading
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
@@ -41,6 +43,7 @@ from app.broker.ibkr.models import (
     IbkrChainSnapshot,
     IbkrPnLTick,
 )
+from app.utils.advisory_lock import advisory_file_lock
 
 logger = logging.getLogger(__name__)
 
@@ -160,13 +163,12 @@ class ParquetTickWriter(TickWriter):
         await self.flush()
 
 
-# Per-output-path locks. ``_write_parquet_partition`` runs inside
-# ``asyncio.to_thread`` (a thread pool), and two SSE consumers of the same
-# account each build their own writer, so two threads can target one partition
-# concurrently. Without serialization both read the same baseline and the later
-# write clobbers the earlier append — silent data loss with no exception. These
-# are threading.Locks (not asyncio.Lock) because the contended code runs off the
-# event loop.
+# Per-output-path in-process locks complement the sibling advisory file lock.
+# ``_write_parquet_partition`` runs inside ``asyncio.to_thread`` (a thread pool),
+# and two SSE consumers of the same account each build their own writer, so two
+# threads can target one partition concurrently. The advisory lock extends the
+# same serialization across daemon processes. Without both scopes, writers can
+# read the same baseline and silently clobber one another's appends.
 _PARTITION_LOCKS: dict[str, threading.Lock] = {}
 _PARTITION_LOCKS_GUARD = threading.Lock()
 
@@ -189,35 +191,47 @@ def _write_parquet_partition(out_path: Path, part) -> None:
 
     Two correctness properties, both previously missing (bug-hunt B-07):
 
-    * **Serialized per path.** The read-modify-write is held under a per-path
-      lock so concurrent writers to the same partition can't clobber each
-      other's appends (last-writer-wins → silent row loss).
-    * **Crash-atomic.** The combined frame is written to a sibling ``.tmp``,
-      fsynced, then ``os.replace``'d over the destination (and the directory is
-      fsynced). A crash mid-write leaves the old complete file, never a
-      truncated one that would poison every subsequent read. Mirrors the
-      tmp+fsync+replace contract used by live_state_sidecar / desired_state.
+    * **Serialized per path.** The read-modify-write is held under both a local
+      thread lock and a sibling advisory file lock so independent processes
+      cannot clobber each other's appends (last-writer-wins → silent row loss).
+    * **Crash-atomic.** The combined frame is written to a unique sibling temp
+      file, fsynced, then ``os.replace``'d over the destination (and the
+      directory is fsynced). A crash mid-write leaves the old complete file,
+      never a truncated one that would poison every subsequent read. Mirrors
+      the tmp+fsync+replace contract used by live_state_sidecar / desired_state.
     """
     import pandas as pd
 
-    with _partition_lock(out_path):
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with _partition_lock(out_path), advisory_file_lock(out_path):
         if out_path.exists():
             existing = pd.read_parquet(out_path)
             combined = pd.concat([existing, part], ignore_index=True)
         else:
             combined = part
 
-        tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
-        combined.to_parquet(tmp_path, index=False)
-        with open(tmp_path, "rb") as fh:
-            os.fsync(fh.fileno())
-        os.replace(tmp_path, out_path)
-        # fsync the directory so the rename itself survives a crash.
-        dir_fd = os.open(str(out_path.parent), os.O_RDONLY)
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{out_path.name}.",
+            suffix=".tmp",
+            dir=str(out_path.parent),
+        )
+        os.close(fd)
+        tmp_path = Path(tmp_name)
         try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
+            combined.to_parquet(tmp_path, index=False)
+            with tmp_path.open("rb") as fh:
+                os.fsync(fh.fileno())
+            os.replace(tmp_path, out_path)
+            # fsync the directory so the rename itself survives a crash.
+            dir_fd = os.open(str(out_path.parent), os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except Exception:
+            with contextlib.suppress(FileNotFoundError):
+                tmp_path.unlink()
+            raise
 
 
 def make_writer(persist: bool, persist_dir: str) -> TickWriter:

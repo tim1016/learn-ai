@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import multiprocessing
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,17 @@ from app.broker.ibkr.persistence import (
     ParquetTickWriter,
     make_writer,
 )
+
+
+def _append_partition_in_process(out_path: str, value: int, start_event) -> None:
+    """Spawn-safe target used to prove the partition lock crosses processes."""
+    import pandas as pd
+
+    from app.broker.ibkr.persistence import _write_parquet_partition
+
+    if not start_event.wait(timeout=10):
+        raise TimeoutError("test start event was not released")
+    _write_parquet_partition(Path(out_path), pd.DataFrame({"a": [value]}))
 
 
 def _snapshot(symbol: str, as_of_ms: int) -> IbkrChainSnapshot:
@@ -107,7 +119,7 @@ def test_write_parquet_partition_leaves_no_tmp_debris(tmp_path: Path) -> None:
     _write_parquet_partition(out, pd.DataFrame({"a": [2]}))
 
     assert sorted(pd.read_parquet(out)["a"].tolist()) == [1, 2]
-    assert list(tmp_path.glob("*.tmp")) == []
+    assert list(tmp_path.glob(".*.tmp")) == []
 
 
 def test_write_parquet_partition_failed_rename_keeps_original_intact(
@@ -172,3 +184,35 @@ def test_write_parquet_partition_concurrent_appends_lose_no_rows(
 
     monkeypatch.undo()
     assert sorted(real_read(out)["a"].tolist()) == [0, 1, 2, 3, 4, 5]
+
+
+def test_write_parquet_partition_process_appends_lose_no_rows(tmp_path: Path) -> None:
+    """Independent processes serialize the complete read-modify-write cycle."""
+    pd = pytest.importorskip("pandas")
+    pytest.importorskip("pyarrow")
+    from app.broker.ibkr.persistence import _write_parquet_partition
+
+    out = tmp_path / "p.parquet"
+    _write_parquet_partition(out, pd.DataFrame({"a": [0]}))
+
+    context = multiprocessing.get_context("spawn")
+    start_event = context.Event()
+    processes = [
+        context.Process(
+            target=_append_partition_in_process,
+            args=(str(out), value, start_event),
+        )
+        for value in range(1, 5)
+    ]
+    for process in processes:
+        process.start()
+    start_event.set()
+    for process in processes:
+        process.join(timeout=30)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=5)
+
+    assert [process.exitcode for process in processes] == [0, 0, 0, 0]
+    assert sorted(pd.read_parquet(out)["a"].tolist()) == [0, 1, 2, 3, 4]
+    assert list(tmp_path.glob(".*.tmp")) == []
