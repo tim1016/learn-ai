@@ -53,8 +53,6 @@ converted into findings. The disconnect-blindness cluster (B-02/03/04/08) now
 appears addressed in `broker/ibkr/client.py` (~:335–655, codes 1100/1101/1102/504
 handled) — confirm closed, then drop. Remaining:
 
-- **B-01** Idempotency-cache TOCTOU → duplicate paper orders on double-submit
-  within the qualify window (`broker/ibkr/orders.py` ~:233–296).
 - **B-05** `cancel_paper_order` / `_order_belongs_to_account` match by `orderId`
   only → can cancel a *foreign* order on the same DU account; ownership check
   should be `account_id AND client_id` (`orders.py` ~:385–423). *(also VCR-P3-H)*
