@@ -974,6 +974,7 @@ async def test_surface_hubs_share_one_fleet_daemon_snapshot(
 
     monkeypatch.setattr(live_instances, "_SURFACE_HUBS", SurfaceHubRegistry())
     monkeypatch.setattr(live_instances, "_FLEET_DAEMON_PROVIDER", None)
+    monkeypatch.setattr(live_instances, "_FLEET_ROSTER_HUB", None)
     monkeypatch.setattr(host_daemon_client, "fetch_instances", fake_instances)
     monkeypatch.setattr(
         host_daemon_client,
@@ -990,6 +991,63 @@ async def test_surface_hubs_share_one_fleet_daemon_snapshot(
             assert hub is not None
             assert hub.latest is not None
             assert hub.latest.process.state == "idle"
+        roster = await live_instances.list_live_instances()
+        assert [row.strategy_instance_id for row in roster] == strategy_instance_ids
+        assert calls == 1
+    finally:
+        await live_instances.stop_surface_hubs()
+
+
+async def test_fleet_roster_stream_emits_current_snapshot_from_shared_provider(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _app, root = app_with_root
+    sid = "fleet-stream-bot"
+    run_id = "run-fleet-stream-bot"
+    _write_ledger(root, run_id, sid, 100)
+    calls = 0
+
+    async def fake_instances(_base_url: str):
+        nonlocal calls
+        calls += 1
+        return as_typed_get(
+            {
+                "fetched_at_ms": 1_700_000_000_000,
+                "instances": [
+                    {
+                        "strategy_instance_id": sid,
+                        "run_id": run_id,
+                        "run_dir": str(root / run_id),
+                        "process": {"state": "running", "run_id": run_id},
+                    }
+                ],
+            }
+        )
+
+    from app.services.surface_hub import SurfaceHubRegistry
+
+    monkeypatch.setattr(live_instances, "_SURFACE_HUBS", SurfaceHubRegistry())
+    monkeypatch.setattr(live_instances, "_FLEET_DAEMON_PROVIDER", None)
+    monkeypatch.setattr(live_instances, "_FLEET_ROSTER_HUB", None)
+    monkeypatch.setattr(host_daemon_client, "fetch_instances", fake_instances)
+
+    try:
+        await live_instances.start_surface_hubs()
+        hub = live_instances._FLEET_ROSTER_HUB
+        assert hub is not None and hub.latest is not None
+        assert calls == 1
+
+        response = await live_instances.stream_fleet_roster(last_event_id="obsolete")
+        iterator = response.body_iterator
+        first_event = await anext(iterator)
+        assert f"id: {hub.latest.stream_epoch}:{hub.latest.surface_version}\n" in first_event
+        assert "event: snapshot\n" in first_event
+        assert '"strategy_instance_id":"fleet-stream-bot"' in first_event
+
+        await hub.stop(timeout_seconds=0.1)
+        assert await anext(iterator) == "event: end\ndata: {}\n\n"
+        await iterator.aclose()
     finally:
         await live_instances.stop_surface_hubs()
 
@@ -1007,19 +1065,25 @@ async def test_surface_shutdown_stops_hubs_before_fleet_provider(
         async def stop(self) -> None:
             order.append("provider")
 
+    class RecordingFleetHub:
+        async def stop(self) -> None:
+            order.append("fleet-roster")
+
     class RecordingRunsCache:
         async def invalidate(self) -> None:
             order.append("runs-cache")
 
     provider = RecordingProvider()
     monkeypatch.setattr(live_instances, "_SURFACE_HUBS", RecordingHubs())
+    monkeypatch.setattr(live_instances, "_FLEET_ROSTER_HUB", RecordingFleetHub())
     monkeypatch.setattr(live_instances, "_FLEET_DAEMON_PROVIDER", provider)
     monkeypatch.setattr(live_instances, "_SURFACE_RUNS_CACHE", RecordingRunsCache())
 
     await live_instances.stop_surface_hubs()
 
-    assert order == ["hubs", "provider", "runs-cache"]
+    assert order == ["hubs", "fleet-roster", "provider", "runs-cache"]
     assert live_instances._FLEET_DAEMON_PROVIDER is None
+    assert live_instances._FLEET_ROSTER_HUB is None
 
 
 async def test_running_surface_retries_transient_activity_publisher_bootstrap(

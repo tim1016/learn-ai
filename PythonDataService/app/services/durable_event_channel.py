@@ -99,6 +99,15 @@ class EventSubscription(Generic[RowT]):  # noqa: UP046 - Python 3.11 runtime.
         self.last_safe_cursor = cursor
 
 
+@dataclass(frozen=True)
+class DurableEventChannelResourceLimits:
+    """Bounded memory/resource shape for one durable event channel."""
+
+    ring_size: int
+    subscriber_queue_size: int
+    subscriber_count: int
+
+
 class DurableEventChannel(Generic[RowT]):  # noqa: UP046 - Python 3.11 runtime.
     """Observe one WAL once and serve all clients from one bounded ring."""
 
@@ -145,6 +154,14 @@ class DurableEventChannel(Generic[RowT]):  # noqa: UP046 - Python 3.11 runtime.
     @property
     def subscriber_count(self) -> int:
         return len(self._subscribers)
+
+    @property
+    def resource_limits(self) -> DurableEventChannelResourceLimits:
+        return DurableEventChannelResourceLimits(
+            ring_size=self._ring.maxlen or 0,
+            subscriber_queue_size=self._subscriber_queue_size,
+            subscriber_count=len(self._subscribers),
+        )
 
     def refresh(self) -> None:
         """Synchronize WAL identity and newly durable rows when changed."""
@@ -399,6 +416,7 @@ class DurableEventChannel(Generic[RowT]):  # noqa: UP046 - Python 3.11 runtime.
 
 __all__ = [
     "DurableEventChannel",
+    "DurableEventChannelResourceLimits",
     "EventCursor",
     "EventEnd",
     "EventGap",

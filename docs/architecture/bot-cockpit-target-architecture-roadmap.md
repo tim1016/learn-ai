@@ -400,6 +400,27 @@ retention by count plus TTL, and formalize per-bot queue/task resource limits.
   retention stabilizes, with no continuing upward trend; and
 - the soak result and retention settings are recorded with the stage evidence.
 
+**Evidence ledger (2026-07-10, in progress):**
+
+- Implemented daemon exited-record retention by count plus TTL, with
+  `/instances` echoing effective retention settings and prune counters.
+- Implemented fleet roster `FleetRosterSnapshot` plus
+  `/api/live-instances/fleet/stream`, backed by the shared fleet daemon
+  provider rather than a second `/instances` cadence.
+- Formalized state and durable-event resource bounds in executable service
+  contracts and focused tests.
+- Focused tests passed:
+  `test_instances_prunes_exited_records_by_ttl_and_count`,
+  `test_surface_hub_declares_latest_wins_client_queue_bound`,
+  `test_thousand_event_spike_on_one_channel_preserves_sibling_bounds`,
+  `test_thousand_event_spike_preserves_sibling_p95_latency_budget`,
+  `test_surface_hubs_share_one_fleet_daemon_snapshot`,
+  `test_fleet_roster_stream_emits_current_snapshot_from_shared_provider`,
+  and `test_surface_shutdown_stops_hubs_before_fleet_provider`.
+- Open gate: the recorded one-week daemon soak remains required before Stage 7
+  can be marked complete. Do not substitute the deterministic queue-bound and
+  p95 sibling-latency tests for the full soak evidence.
+
 ## Stage 8 — Land the host-scoped blocker end state `[UX]`
 
 Amend ADR-0027 and introduce the surface-neutral condition plus host-scoped

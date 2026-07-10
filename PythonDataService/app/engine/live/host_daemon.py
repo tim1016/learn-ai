@@ -25,6 +25,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
@@ -93,6 +94,8 @@ _DEFAULT_ALLOWED_ORIGINS = "http://localhost:4200,http://127.0.0.1:4200"
 _STOP_WAIT_SECONDS = 2.0
 _DEFAULT_IBKR_CLIENT_ID_POOL = "50-99"
 _PROCESS_REAPER_INTERVAL_SECONDS = 1.0
+_DEFAULT_EXITED_RECORD_RETENTION_COUNT = 10_000
+_DEFAULT_EXITED_RECORD_RETENTION_TTL_MS = 7 * 24 * 60 * 60 * 1000
 _IBKR_CLIENT_ID_MIN = 1
 _IBKR_CLIENT_ID_MAX = 2**31 - 1
 _IBKR_CLIENT_ID_POOL_MAX_SPAN = 1_000
@@ -261,9 +264,20 @@ class RunnerProcessManager:
         repo_root: Path,
         live_runs_root: Path,
         boot_id: str | None = None,
+        exited_record_retention_count: int = _DEFAULT_EXITED_RECORD_RETENTION_COUNT,
+        exited_record_retention_ttl_ms: int = _DEFAULT_EXITED_RECORD_RETENTION_TTL_MS,
+        now_ms: Callable[[], int] | None = None,
     ) -> None:
+        if exited_record_retention_count < 0:
+            raise ValueError("exited_record_retention_count must be >= 0")
+        if exited_record_retention_ttl_ms < 0:
+            raise ValueError("exited_record_retention_ttl_ms must be >= 0")
         self.repo_root = repo_root.resolve()
         self.live_runs_root = live_runs_root.resolve()
+        self._now_ms_override = now_ms
+        self._exited_record_retention_count = exited_record_retention_count
+        self._exited_record_retention_ttl_ms = exited_record_retention_ttl_ms
+        self._exited_records_pruned_total = 0
         # PRD #619-B — daemon boot identity. Immutable per process
         # start. Spawned children read it via LIVE_RUNNER_DAEMON_BOOT_ID
         # and the child watchdog treats a mismatch as BOOT_ID_CHANGED.
@@ -348,7 +362,7 @@ class RunnerProcessManager:
             ok=True,
             repo_root=str(self.repo_root),
             live_runs_root=str(self.live_runs_root),
-            fetched_at_ms=_now_ms(),
+            fetched_at_ms=self._clock_ms(),
             process=self._first_process_status(),
             git_sha=running,
             repo_head_sha=on_disk,
@@ -430,6 +444,11 @@ class RunnerProcessManager:
         with self._managed_lock:
             for managed in self._managed.values():
                 self._refresh(managed)
+            self._prune_exited_records_locked()
+            exited_record_count = 0
+            for managed in self._managed.values():
+                if managed.process.poll() is not None:
+                    exited_record_count += 1
                 out.append(
                     HostRunnerInstance(
                         strategy_instance_id=managed.strategy_instance_id,
@@ -438,7 +457,14 @@ class RunnerProcessManager:
                         process=self._status_of(managed),
                     )
                 )
-        return HostRunnerInstancesStatus(instances=out, fetched_at_ms=_now_ms())
+        return HostRunnerInstancesStatus(
+            instances=out,
+            fetched_at_ms=self._clock_ms(),
+            exited_record_retention_count=self._exited_record_retention_count,
+            exited_record_retention_ttl_ms=self._exited_record_retention_ttl_ms,
+            exited_record_count=exited_record_count,
+            exited_records_pruned_total=self._exited_records_pruned_total,
+        )
 
     def running_managed_run_ids(self) -> frozenset[str]:
         """Run ids backed by a child process owned by this daemon boot."""
@@ -449,11 +475,17 @@ class RunnerProcessManager:
                 if managed.process.poll() is None
             )
 
+    def _clock_ms(self) -> int:
+        if self._now_ms_override is not None:
+            return self._now_ms_override()
+        return _now_ms()
+
     def reap_exited_processes(self) -> None:
         """Settle every exited child independently of status read traffic."""
         with self._managed_lock:
             for managed in self._managed.values():
                 self._refresh(managed)
+            self._prune_exited_records_locked()
 
     def instance_status(self, strategy_instance_id: str) -> HostRunnerProcessStatus:
         """Live process status for one strategy instance (idle if untracked)."""
@@ -862,7 +894,7 @@ class RunnerProcessManager:
         )
 
         try:
-            recorded_at_ms = _now_ms()
+            recorded_at_ms = self._clock_ms()
             write_account_instance_binding(
                 self.artifacts_root,
                 AccountInstanceBinding(
@@ -1344,7 +1376,7 @@ class RunnerProcessManager:
                     lifecycle_state="RETIRED",
                     source=self._account_registry_retirement_source(managed),
                 )
-                managed.registry_retired_at_ms = _now_ms()
+                managed.registry_retired_at_ms = self._clock_ms()
             except HostRunnerError:
                 logger.exception(
                     "Failed to retire account registry binding for exited host runner",
@@ -1354,8 +1386,46 @@ class RunnerProcessManager:
                     },
                 )
         if managed.ended_at_ms is None:
-            managed.ended_at_ms = _now_ms()
+            managed.ended_at_ms = self._clock_ms()
             managed.log_handle.close()
+
+    def _prune_exited_records_locked(self) -> None:
+        """Bound exited process records by TTL and count while preserving live ones."""
+
+        if not self._managed:
+            return
+        now_ms = self._clock_ms()
+        cutoff_ms = now_ms - self._exited_record_retention_ttl_ms
+        pruned_keys: set[str] = set()
+        retained_exited: list[tuple[str, ManagedProcess]] = []
+        for key, managed in self._managed.items():
+            if managed.process.poll() is None:
+                continue
+            ended_at_ms = managed.ended_at_ms
+            if ended_at_ms is None:
+                ended_at_ms = now_ms
+                managed.ended_at_ms = ended_at_ms
+            if self._exited_record_retention_ttl_ms == 0 or ended_at_ms < cutoff_ms:
+                pruned_keys.add(key)
+                continue
+            retained_exited.append((key, managed))
+        if self._exited_record_retention_count == 0:
+            pruned_keys.update(key for key, _managed in retained_exited)
+        elif len(retained_exited) > self._exited_record_retention_count:
+            retained_exited.sort(
+                key=lambda item: (
+                    item[1].ended_at_ms if item[1].ended_at_ms is not None else -1,
+                    item[1].started_at_ms,
+                    item[0],
+                ),
+                reverse=True,
+            )
+            pruned_keys.update(
+                key for key, _managed in retained_exited[self._exited_record_retention_count :]
+            )
+        for key in pruned_keys:
+            self._managed.pop(key, None)
+        self._exited_records_pruned_total += len(pruned_keys)
 
     def _quarantine_rejected_ibkr_client_id(self, managed: ManagedProcess) -> None:
         if managed.ibkr_client_id is None or managed.ibkr_client_id in self._rejected_ibkr_client_ids:
@@ -1676,7 +1746,36 @@ def create_app(
 
 def _manager_from_env() -> RunnerProcessManager:
     repo_root = Path(os.environ.get("LEARN_AI_REPO_ROOT", Path.cwd())).resolve()
-    return RunnerProcessManager(repo_root=repo_root, live_runs_root=_live_runs_root_from_env(repo_root))
+    return RunnerProcessManager(
+        repo_root=repo_root,
+        live_runs_root=_live_runs_root_from_env(repo_root),
+        exited_record_retention_count=_env_int(
+            "LIVE_RUNNER_EXITED_RECORD_RETENTION_COUNT",
+            _DEFAULT_EXITED_RECORD_RETENTION_COUNT,
+            minimum=0,
+        ),
+        exited_record_retention_ttl_ms=(
+            _env_int(
+                "LIVE_RUNNER_EXITED_RECORD_RETENTION_TTL_SECONDS",
+                _DEFAULT_EXITED_RECORD_RETENTION_TTL_MS // 1000,
+                minimum=0,
+            )
+            * 1000
+        ),
+    )
+
+
+def _env_int(name: str, default: int, *, minimum: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be an integer") from exc
+    if value < minimum:
+        raise RuntimeError(f"{name} must be >= {minimum}")
+    return value
 
 
 def _live_runs_root_from_env(repo_root: Path) -> Path:
@@ -1742,6 +1841,18 @@ def build_parser() -> argparse.ArgumentParser:
             "Defaults to <repo-root>/.env."
         ),
     )
+    parser.add_argument(
+        "--exited-record-retention-count",
+        type=int,
+        default=_DEFAULT_EXITED_RECORD_RETENTION_COUNT,
+        help="Maximum exited child-process records retained by /instances.",
+    )
+    parser.add_argument(
+        "--exited-record-retention-ttl-seconds",
+        type=int,
+        default=_DEFAULT_EXITED_RECORD_RETENTION_TTL_MS // 1000,
+        help="Maximum age for exited child-process records retained by /instances.",
+    )
     return parser
 
 
@@ -1773,7 +1884,12 @@ def main(argv: list[str] | None = None) -> int:
         if args.live_runs_root is not None
         else (repo_root / "PythonDataService" / "artifacts" / "live_runs").resolve()
     )
-    manager = RunnerProcessManager(repo_root=repo_root, live_runs_root=live_runs_root)
+    manager = RunnerProcessManager(
+        repo_root=repo_root,
+        live_runs_root=live_runs_root,
+        exited_record_retention_count=args.exited_record_retention_count,
+        exited_record_retention_ttl_ms=args.exited_record_retention_ttl_seconds * 1000,
+    )
     # Resolve/generate the shared secret next to live_runs/ so the data-plane
     # container reads the same token through the artifacts bind mount.
     token = ensure_daemon_token(live_runs_root.parent)

@@ -134,6 +134,7 @@ from app.schemas.live_runs import (
     EnqueueCommandRequest,
     FleetAccountSummary,
     FleetContamination,
+    FleetRosterSnapshot,
     HostRunnerActionResponse,
     HostRunnerDeployRequest,
     HostRunnerDeployResponse,
@@ -254,6 +255,7 @@ from app.services.fleet_contamination import (
     scan_runs_by_instance as _scan_runs_by_instance,
 )
 from app.services.fleet_daemon_snapshot_provider import (
+    FleetDaemonObservation,
     FleetDaemonSnapshotProvider,
 )
 from app.services.instance_context import InstanceContext, load_instance_context
@@ -324,6 +326,7 @@ router = APIRouter(tags=["live-instances"])
 _SURFACE_HUBS = SurfaceHubRegistry[LiveInstanceStatus]()
 _SURFACE_RUNS_CACHE = VisibleRunsSnapshotCache()
 _FLEET_DAEMON_PROVIDER: FleetDaemonSnapshotProvider | None = None
+_FLEET_ROSTER_HUB: SurfaceHub[FleetRosterSnapshot] | None = None
 
 # strategy_instance_id flows into a daemon URL and a filesystem path; confine it
 # to a single safe segment at the boundary.
@@ -1525,20 +1528,29 @@ def _provenance(root: Path, live_binding: LiveBinding | None, runs: list[dict]) 
 async def _build_live_instance_summaries(
     settings: IbkrSettings,
     root: Path,
+    *,
+    fleet_observation: FleetDaemonObservation | None = None,
 ) -> list[LiveInstanceSummary]:
     by_instance = _visible_runs_by_instance(root)
 
-    _result, daemon = await host_daemon_client.fetch_instances(settings.live_runner_daemon_url)
-    daemon_reachable = daemon is not None
+    if fleet_observation is None:
+        result, daemon = await host_daemon_client.fetch_instances(settings.live_runner_daemon_url)
+        daemon_reachable = result.kind == "CONNECTED" and daemon is not None
+    else:
+        daemon = fleet_observation.payload
+        daemon_reachable = fleet_observation.is_current
     daemon_by_sid: dict[str, dict] = {}
+    daemon_sids: set[str] = set()
     if daemon:
         for inst in daemon.get("instances", []):
             sid = inst.get("strategy_instance_id")
             if sid:
-                daemon_by_sid[sid] = inst
+                daemon_sids.add(sid)
+                if daemon_reachable:
+                    daemon_by_sid[sid] = inst
 
     summaries: list[LiveInstanceSummary] = []
-    for sid in sorted(set(by_instance) | set(daemon_by_sid)):
+    for sid in sorted(set(by_instance) | daemon_sids):
         if sid not in by_instance and _sid_has_soft_deletion(root.parent, sid):
             continue
         managed = daemon_by_sid.get(sid)
@@ -1578,6 +1590,9 @@ async def _build_live_instance_summaries(
 @router.get("", response_model=list[LiveInstanceSummary])
 async def list_live_instances() -> list[LiveInstanceSummary]:
     """Account fleet overview: every known strategy instance, live or not."""
+    hub = _FLEET_ROSTER_HUB
+    if hub is not None and hub.latest is not None:
+        return hub.latest.instances
     settings = get_settings()
     root = Path(settings.live_runs_root)
     return await _build_live_instance_summaries(settings, root)
@@ -1806,6 +1821,35 @@ def _surface_hub_for(strategy_instance_id: str) -> SurfaceHub[LiveInstanceStatus
     )
 
 
+async def _assemble_fleet_roster_snapshot() -> FleetRosterSnapshot:
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    provider = _FLEET_DAEMON_PROVIDER
+    observation = await provider.observation() if provider is not None else None
+    return FleetRosterSnapshot(
+        fetched_at_ms=_now_ms(),
+        daemon_fetched_at_ms=(
+            observation.source_fetched_at_ms if observation is not None else None
+        ),
+        instances=await _build_live_instance_summaries(
+            settings,
+            root,
+            fleet_observation=observation,
+        ),
+    )
+
+
+def _fleet_roster_hub_for() -> SurfaceHub[FleetRosterSnapshot]:
+    global _FLEET_ROSTER_HUB
+
+    if _FLEET_ROSTER_HUB is None:
+        _FLEET_ROSTER_HUB = SurfaceHub(
+            strategy_instance_id="__fleet_roster__",
+            assemble=_assemble_fleet_roster_snapshot,
+        )
+    return _FLEET_ROSTER_HUB
+
+
 async def start_surface_hubs() -> None:
     """Start producer lifecycles for every bot visible at data-plane boot."""
 
@@ -1832,6 +1876,7 @@ async def start_surface_hubs() -> None:
         sid = instance.get("strategy_instance_id")
         if isinstance(sid, str) and sid:
             strategy_instance_ids.add(sid)
+    await _fleet_roster_hub_for().start()
     hubs = [_surface_hub_for(sid) for sid in sorted(strategy_instance_ids)]
     await _SURFACE_HUBS.start_all(hubs)
 
@@ -1839,9 +1884,13 @@ async def start_surface_hubs() -> None:
 async def stop_surface_hubs() -> None:
     """Stop every producer task during data-plane shutdown."""
 
-    global _FLEET_DAEMON_PROVIDER
+    global _FLEET_DAEMON_PROVIDER, _FLEET_ROSTER_HUB
 
     await _SURFACE_HUBS.stop_all()
+    fleet_hub = _FLEET_ROSTER_HUB
+    _FLEET_ROSTER_HUB = None
+    if fleet_hub is not None:
+        await fleet_hub.stop()
     provider = _FLEET_DAEMON_PROVIDER
     _FLEET_DAEMON_PROVIDER = None
     if provider is not None:
@@ -1862,6 +1911,8 @@ async def _ensure_surface_hub_started(
             # invalidation signal. Refresh the shared fleet observation once;
             # normal client refreshes still obey the fleet cadence.
             await provider.refresh(force=True)
+        if _FLEET_ROSTER_HUB is not None:
+            await _FLEET_ROSTER_HUB.refresh()
         if hub.is_running:
             await hub.refresh()
         else:
@@ -3396,6 +3447,46 @@ def _surface_snapshot_unavailable(strategy_instance_id: str) -> HTTPException:
             "message": "The bot surface producer has not completed a successful refresh yet.",
             "strategy_instance_id": strategy_instance_id,
         },
+    )
+
+
+@router.get(
+    "/fleet/stream",
+    summary="Latest-wins SSE stream of complete fleet roster snapshots",
+)
+async def stream_fleet_roster(
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+) -> StreamingResponse:
+    """Emit the current full fleet roster and every later semantic version."""
+
+    del last_event_id  # State reconnect always sends current truth; no replay.
+    hub = _FLEET_ROSTER_HUB
+    if hub is None or hub.latest is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "reason_code": "FLEET_ROSTER_SNAPSHOT_UNAVAILABLE",
+                "message": "The fleet roster producer has not completed a successful refresh yet.",
+            },
+        )
+
+    async def event_source():
+        queue = hub.subscribe()
+        try:
+            while True:
+                snapshot = await queue.get()
+                if snapshot is None:
+                    yield "event: end\ndata: {}\n\n"
+                    return
+                event_id = f"{snapshot.stream_epoch}:{snapshot.surface_version}"
+                yield (f"id: {event_id}\nevent: snapshot\ndata: {snapshot.model_dump_json()}\n\n")
+        finally:
+            hub.unsubscribe(queue)
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

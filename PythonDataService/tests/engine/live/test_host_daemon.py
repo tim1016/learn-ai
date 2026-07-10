@@ -94,6 +94,38 @@ class FakeProcess:
         self.returncode = -9
 
 
+def _add_managed_process(
+    manager: RunnerProcessManager,
+    *,
+    key: str,
+    ended_at_ms: int | None,
+    returncode: int | None,
+) -> None:
+    from app.engine.live.host_daemon import ManagedProcess
+
+    run_id = f"run-{key}"
+    run_dir = manager.live_runs_root / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    log_path = run_dir / "host_daemon.log"
+    log_handle = log_path.open("a", encoding="utf-8")
+    if ended_at_ms is not None:
+        log_handle.close()
+    process = FakeProcess()
+    process.returncode = returncode
+    manager._managed[key] = ManagedProcess(
+        strategy_instance_id=key,
+        run_id=run_id,
+        run_dir=run_dir,
+        process=process,
+        command=[],
+        started_at_ms=ended_at_ms or 0,
+        log_path=log_path,
+        log_handle=log_handle,
+        ended_at_ms=ended_at_ms,
+        registry_retired_at_ms=ended_at_ms,
+    )
+
+
 @pytest.fixture
 def daemon_context(tmp_path: Path) -> tuple[RunnerProcessManager, Path]:
     repo_root = tmp_path / "repo"
@@ -119,6 +151,36 @@ async def test_health_reports_idle_process(daemon_context: tuple[RunnerProcessMa
     assert body["repo_head_sha"] is None
     assert body["code_stale"] is False
     assert body["commits_behind"] is None
+
+
+def test_instances_prunes_exited_records_by_ttl_and_count(tmp_path: Path) -> None:
+    now_ms = 10_000
+    repo_root = tmp_path / "repo"
+    live_runs_root = repo_root / "PythonDataService" / "artifacts" / "live_runs"
+    manager = RunnerProcessManager(
+        repo_root=repo_root,
+        live_runs_root=live_runs_root,
+        exited_record_retention_count=2,
+        exited_record_retention_ttl_ms=5_000,
+        now_ms=lambda: now_ms,
+    )
+    _add_managed_process(manager, key="active", ended_at_ms=None, returncode=None)
+    _add_managed_process(manager, key="old-exit", ended_at_ms=4_000, returncode=0)
+    _add_managed_process(manager, key="new-exit-a", ended_at_ms=9_000, returncode=0)
+    _add_managed_process(manager, key="new-exit-b", ended_at_ms=8_000, returncode=0)
+    _add_managed_process(manager, key="new-exit-c", ended_at_ms=7_000, returncode=0)
+
+    status = manager.instances()
+
+    assert {instance.strategy_instance_id for instance in status.instances} == {
+        "active",
+        "new-exit-a",
+        "new-exit-b",
+    }
+    assert status.exited_record_retention_count == 2
+    assert status.exited_record_retention_ttl_ms == 5_000
+    assert status.exited_record_count == 2
+    assert status.exited_records_pruned_total == 2
 
 
 async def test_broker_sockets_endpoint_returns_gateway_socket_rows(
