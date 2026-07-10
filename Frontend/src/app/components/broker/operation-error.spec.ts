@@ -90,6 +90,8 @@ describe('toOperationError', () => {
           endpoint: 'start_run',
           occurred_at_ms: 1_700_000_000_000,
           runbook_hint: 'Refresh the cockpit to read live state before retrying.',
+          mutation_attempt_id: 'mutation-1',
+          mutation_dispatch_state: 'OUTCOME_UNKNOWN',
         },
       },
     });
@@ -101,6 +103,8 @@ describe('toOperationError', () => {
     expect(e.title).toContain('outcome unknown');
     expect(e.detail).toBe('response lost');
     expect(e.remediation).toBe('Refresh the cockpit to read live state before retrying.');
+    expect(e.mutation_attempt_id).toBe('mutation-1');
+    expect(e.mutation_dispatch_state).toBe('OUTCOME_UNKNOWN');
   });
 
   it('falls back to a synthesised detail when the OUTCOME_UNKNOWN body omits detail', () => {

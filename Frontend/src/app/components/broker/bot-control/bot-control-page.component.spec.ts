@@ -1,6 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { convertToParamMap } from '@angular/router';
-import { Subject } from 'rxjs';
 
 import type {
   BotDeleteResponse,
@@ -10,6 +8,7 @@ import type {
 import {
   makeBotLifecycleMutationResponse,
   makeHostRunnerHealth,
+  makeRuntimeFreshnessWithLeaseAction,
   makeStatus,
 } from './bot-control-page.fixtures';
 import {
@@ -234,36 +233,32 @@ describe('BotControlPageComponent', () => {
     });
   });
 
-  it('closes the remove confirmation when the route instance changes', async () => {
-    const routeParamMap$ = new Subject<ReturnType<typeof convertToParamMap>>();
-    const { fixture, component } = await setupBotControlPage({
-      routeParamMap$,
-      status: terminalRemoveStatus(),
-      mutationResponses: { deleteBot: removeBotResponse() },
-    });
-
-    routeParamMap$.next(convertToParamMap({ id: 'sid-x' }));
-    await flush(fixture);
-    component.openRemoveBotConfirm();
-    expect(component.removeBotConfirmOpen()).toBe(true);
-
-    routeParamMap$.next(convertToParamMap({ id: 'sid-y' }));
-    await flush(fixture);
-
-    expect(component.removeBotConfirmOpen()).toBe(false);
-  });
-
   it('shows an error banner when the status request fails', async () => {
     const { element } = await setupBotControlPage({
-      // bot-control-allow-configure-live-runs: this spec intentionally bypasses
-      // the typed happy-path setup to exercise the page's request-error branch.
-      configureLiveRuns: (liveRuns) => {
-        liveRuns.getInstanceStatus.mockRejectedValue(new Error('status boom'));
-      },
+      surfaceError: 'status boom',
     });
 
     const banner = element.querySelector('.error-banner');
     expect(banner?.textContent).toContain('status boom');
     expect(element.querySelector('app-verdict-card')).toBeNull();
+  });
+
+  it('keeps the stream snapshot read-only and renders each backend freshness age', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+    const status = startableReadyStatus();
+    status.fetched_at_ms = Date.now();
+    status.operator_surface.runtime_freshness = makeRuntimeFreshnessWithLeaseAction();
+    const { fixture, element, surface } = await setupBotControlPage({ status });
+
+    surface.readOnly.set(true);
+    fixture.detectChanges();
+
+    const banner = element.querySelector('.stale-banner');
+    const copy = banner?.textContent?.replace(/\s+/g, ' ');
+    expect(copy).toContain('Command loop: FRESH · 100 ms old');
+    expect(copy).toContain('Runtime control plane: STALE · 30000 ms old');
+    expect(element.querySelector<HTMLButtonElement>('[data-testid="verdict-verb"]')?.disabled)
+      .toBe(true);
   });
 });

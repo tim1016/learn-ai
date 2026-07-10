@@ -32,6 +32,7 @@ import { LiveRunsService } from '../../../services/live-runs.service';
 import { BrokerBannerComponent } from '../../../shell/broker-banner.component';
 import { ActivityTabComponent } from './tabs/activity-tab.component';
 import { BotControlPageComponent } from './bot-control-page.component';
+import { BotSurfaceStore } from './bot-surface-store.service';
 import { VerdictCardComponent } from './verdict-card/verdict-card.component';
 import {
   makeAccountSummary,
@@ -84,6 +85,25 @@ export class FakeLiveRunsService {
   reconcileInstance = vi.fn<LiveRunsService['reconcileInstance']>();
   recordCrashRecoveryOverride = vi.fn<LiveRunsService['recordCrashRecoveryOverride']>();
   deleteBot = vi.fn<LiveRunsService['deleteBot']>();
+}
+
+export class FakeBotSurfaceStore {
+  readonly instanceId = signal<string | null>(null);
+  readonly status = signal<LiveInstanceStatus | null>(null);
+  readonly errorMessage = signal<string | null>(null);
+  readonly readOnly = signal(false);
+  readonly pendingAttemptId = signal<string | null>(null);
+  readonly snapshotReceivedAtMs = signal<number | null>(Date.now());
+  readonly establishPending = vi.fn((response: { mutation_attempt_id?: string | null }) => {
+    this.pendingAttemptId.set(response.mutation_attempt_id ?? null);
+  });
+
+  configure(instanceId: string, status: LiveInstanceStatus | null, error: string | null): void {
+    this.instanceId.set(instanceId);
+    this.status.set(status);
+    this.errorMessage.set(error);
+    this.snapshotReceivedAtMs.set(Date.now());
+  }
 }
 
 export function allowRenewControlPlaneLeaseCall(
@@ -253,6 +273,7 @@ export interface BotControlLiveRunsOptions {
   mutationResponses?: BotControlMutationResponses;
   mutationFailures?: BotControlMutationFailures;
   configureLiveRuns?: (liveRuns: FakeLiveRunsService) => void;
+  surfaceError?: string | null;
 }
 
 export interface BotControlPageSetupOptions extends BotControlLiveRunsOptions {
@@ -264,12 +285,14 @@ export interface BotControlPageHarness {
   component: BotControlPageComponent;
   element: HTMLElement;
   liveRuns: FakeLiveRunsService;
+  surface: FakeBotSurfaceStore;
 }
 
 export interface BotControlSidebarHostHarness {
   fixture: ComponentFixture<BotControlWithSidebarHostComponent>;
   element: HTMLElement;
   liveRuns: FakeLiveRunsService;
+  surface: FakeBotSurfaceStore;
 }
 
 function applyReadSequence<T>(
@@ -395,6 +418,12 @@ export async function setupBotControlPage(
 ): Promise<BotControlPageHarness> {
   const routeId = options.routeId ?? 'sid-x';
   const liveRuns = makeFailClosedLiveRuns(options);
+  const surface = new FakeBotSurfaceStore();
+  surface.configure(
+    routeId,
+    options.surfaceError ? null : options.status ?? makeStatus({ id: routeId }),
+    options.surfaceError ?? null,
+  );
 
   TestBed.configureTestingModule({
     providers: [
@@ -409,6 +438,7 @@ export async function setupBotControlPage(
         },
       },
       { provide: LiveRunsService, useValue: liveRuns },
+      { provide: BotSurfaceStore, useValue: surface },
     ],
   });
 
@@ -420,6 +450,7 @@ export async function setupBotControlPage(
     component: fixture.componentInstance,
     element: fixture.nativeElement as HTMLElement,
     liveRuns,
+    surface,
   };
 }
 
@@ -428,6 +459,12 @@ export async function setupBotControlSidebarHost(
 ): Promise<BotControlSidebarHostHarness> {
   const routeId = options.routeId ?? 'sid-x';
   const liveRuns = makeFailClosedLiveRuns(options);
+  const surface = new FakeBotSurfaceStore();
+  surface.configure(
+    routeId,
+    options.surfaceError ? null : options.status ?? makeStatus({ id: routeId }),
+    options.surfaceError ?? null,
+  );
 
   TestBed.configureTestingModule({
     imports: [BotControlWithSidebarHostComponent],
@@ -444,6 +481,7 @@ export async function setupBotControlSidebarHost(
         },
       },
       { provide: LiveRunsService, useValue: liveRuns },
+      { provide: BotSurfaceStore, useValue: surface },
     ],
   });
 
@@ -454,5 +492,6 @@ export async function setupBotControlSidebarHost(
     fixture,
     element: fixture.nativeElement as HTMLElement,
     liveRuns,
+    surface,
   };
 }

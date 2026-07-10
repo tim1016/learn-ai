@@ -155,6 +155,8 @@ export interface CommandWriteResponse {
   command: CommandEntry;
   rung_receipt?: MutationRungReceipt | null;
   rung_receipt_warnings?: MutationRungReceipt[];
+  mutation_attempt_id?: string | null;
+  mutation_dispatch_state?: import('./live-instances.types').MutationAttemptDispatchState | null;
 }
 
 export interface LiveRunStatus {
@@ -349,6 +351,9 @@ export interface BotEventRow {
 export interface BotEventPage {
   rows: BotEventRow[];
   next_seq: number | null;
+  durable_stream_id: string;
+  high_water_cursor: string;
+  next_cursor: string | null;
 }
 
 export type HydratePolicy = 'require' | 'optional' | 'disabled';
@@ -416,6 +421,8 @@ export interface HostRunnerActionResponse {
   process: HostRunnerProcessStatus;
   rung_receipt?: MutationRungReceipt | null;
   rung_receipt_warnings?: MutationRungReceipt[];
+  mutation_attempt_id?: string | null;
+  mutation_dispatch_state?: import('./live-instances.types').MutationAttemptDispatchState | null;
 }
 
 // ─────────────────────────── ADR 0009 sizing policy ───────────────────────────

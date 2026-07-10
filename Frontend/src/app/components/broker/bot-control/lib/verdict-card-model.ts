@@ -37,7 +37,7 @@ export interface VerdictIdentity {
 
 /** Which source the state's single verb comes from. The remediation branch
  *  carries no label/handler — those come from the container-computed
- *  `RenderedAction` so verb copy is never duplicated here. `crash_recovery` is
+ *  the shared remediation presenter so verb copy is never duplicated here. `crash_recovery` is
  *  the start-gate safety verb: when the start gate reports
  *  `CRASH_RECOVERY_REQUIRED` the operator must record recovery evidence before
  *  the bot can run again — a first-class verb so the capability is never

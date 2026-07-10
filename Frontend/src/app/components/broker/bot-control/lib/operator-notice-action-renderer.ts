@@ -2,48 +2,23 @@ import {
   executableOperatorNoticeAction,
   type RenderableNotice,
 } from '../../../../models/operator-notice-action-contract';
-import type { RenderedAction, RendererDispatch } from './suggested-action-renderer';
+import type { PresentedAction } from './suggested-action-renderer';
 
-export interface OperatorNoticeDispatch extends Pick<RendererDispatch, 'openRunbook' | 'redeploy'> {
-  focusTarget(target: string): void;
-  renewControlPlaneLease(): void;
+type ExecutableNoticeAction = NonNullable<ReturnType<typeof executableOperatorNoticeAction>>;
+
+export interface PresentedOperatorNoticeAction extends PresentedAction {
+  readonly action: ExecutableNoticeAction;
 }
 
-export function renderOperatorNoticeAction(
+/** Pure notice presenter; the consuming container owns typed action dispatch. */
+export function presentOperatorNoticeAction(
   notice: RenderableNotice,
-  dispatch: OperatorNoticeDispatch,
-): RenderedAction | null {
+): PresentedOperatorNoticeAction | null {
   const action = executableOperatorNoticeAction(notice);
   if (action === null) return null;
-
-  switch (action.kind) {
-    case 'open_runbook':
-      return {
-        label: action.label,
-        variant: 'link',
-        invoke: () => dispatch.openRunbook(action.slug),
-      };
-    case 'focus_cockpit_action':
-      return {
-        label: action.label,
-        variant: 'link',
-        invoke: () => dispatch.focusTarget(action.target),
-      };
-    case 'redeploy':
-      return {
-        label: action.label,
-        variant: 'link',
-        invoke: () => dispatch.redeploy(),
-      };
-    case 'renew_control_plane_lease':
-      return {
-        label: action.label,
-        variant: 'primary',
-        invoke: () => dispatch.renewControlPlaneLease(),
-      };
-    default: {
-      const unreachable: never = action;
-      return unreachable;
-    }
-  }
+  return {
+    action,
+    label: action.label,
+    variant: action.kind === 'renew_control_plane_lease' ? 'primary' : 'link',
+  };
 }

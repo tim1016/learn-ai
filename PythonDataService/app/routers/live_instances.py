@@ -271,6 +271,7 @@ from app.services.mutation_attempt import (
     TERMINAL_STATES,
     MutationAttempt,
     MutationAttemptRepo,
+    MutationAttemptScope,
     ReconciliationEvidence,
     reconcile_mutation_effect,
     transition_attempt,
@@ -799,6 +800,33 @@ def _mutation_attempt_root(live_runs_root: Path) -> Path:
     parent — same layout as the rest of 619's per-instance evidence.
     """
     return live_runs_root.parent / "mutation_attempts"
+
+
+def _operator_mutation_scope(
+    root: Path,
+    *,
+    instance_id: str,
+    action: Literal["start", "stop", "flatten", "resume", "pause"],
+    run_id: str | None,
+) -> MutationAttemptScope:
+    repo = MutationAttemptRepo(_mutation_attempt_root(root))
+    return MutationAttemptScope.begin(
+        repo,
+        instance_id=instance_id,
+        action=action,
+        requested_at_ms=_now_ms(),
+        run_id=run_id,
+        now_ms=_now_ms,
+    )
+
+
+def _mutation_error_detail(detail: object, attempt: MutationAttempt) -> dict[str, object]:
+    body = dict(detail) if isinstance(detail, dict) else {"message": str(detail)}
+    body.update(
+        mutation_attempt_id=attempt.mutation_attempt_id,
+        mutation_dispatch_state=attempt.dispatch_state,
+    )
+    return body
 
 
 def _resolve_reconciliation_inputs(root: Path, live_binding: LiveBinding | None):
@@ -1580,9 +1608,7 @@ async def _resolve_daemon_diagnostic_condition_for_status(
 ) -> DaemonDominantCondition | None:
     try:
         provider = _FLEET_DAEMON_PROVIDER
-        fleet_observation = (
-            await provider.observation() if provider is not None else None
-        )
+        fleet_observation = await provider.observation() if provider is not None else None
         report = await asyncio.wait_for(
             get_daemon_diagnostics_service().report(
                 strategy_instance_id=sid,
@@ -1787,29 +1813,20 @@ async def start_surface_hubs() -> None:
 
     settings = get_settings()
     root = Path(settings.live_runs_root)
+    MutationAttemptRepo(_mutation_attempt_root(root)).recover_inflight(transitioned_at_ms=_now_ms())
     strategy_instance_ids = set(await _surface_visible_runs_by_instance(root))
     provider = _FLEET_DAEMON_PROVIDER
     if provider is None:
         provider = FleetDaemonSnapshotProvider(
             daemon_url=settings.live_runner_daemon_url,
             fetch_instances=host_daemon_client.fetch_instances,
-            poll_interval_seconds=(
-                settings.live_runner_fleet_poll_interval_seconds
-            ),
-            breaker_initial_backoff_seconds=(
-                settings.live_runner_daemon_breaker_initial_backoff_seconds
-            ),
-            breaker_max_backoff_seconds=(
-                settings.live_runner_daemon_breaker_max_backoff_seconds
-            ),
+            poll_interval_seconds=(settings.live_runner_fleet_poll_interval_seconds),
+            breaker_initial_backoff_seconds=(settings.live_runner_daemon_breaker_initial_backoff_seconds),
+            breaker_max_backoff_seconds=(settings.live_runner_daemon_breaker_max_backoff_seconds),
             now_ms=_now_ms,
         )
         _FLEET_DAEMON_PROVIDER = provider
-    observation = (
-        await provider.observation()
-        if provider.is_running
-        else await provider.start()
-    )
+    observation = await provider.observation() if provider.is_running else await provider.start()
     daemon = observation.payload
     for instance in (daemon or {}).get("instances", []):
         sid = instance.get("strategy_instance_id")
@@ -2688,27 +2705,45 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
     root = Path(settings.live_runs_root)
     await _assert_start_allowed(run_id, body, settings)
     sid = _strategy_instance_id_for_run(root, run_id)
-    previous_start_intent: DesiredStateRecord | None = None
-    if sid is not None:
-        previous_start_intent = _persist_start_intent(root, sid)
-    try:
-        result = await host_daemon_client.start_run(
-            settings.live_runner_daemon_url,
-            run_id,
-            body.model_dump(exclude={"roll_call_offer_id"}),
+    if sid is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="run has no strategy_instance_id ledger binding",
         )
-    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
-        _raise_outcome_unknown("start_run", exc)
-    except host_daemon_client.HostDaemonError as exc:
-        if sid is not None:
+    scope = _operator_mutation_scope(root, instance_id=sid, action="start", run_id=run_id)
+    with scope:
+        scope.stage = "persist_start_intent"
+        previous_start_intent = _persist_start_intent(root, sid)
+        scope.stage = "daemon_start"
+        try:
+            result = await host_daemon_client.start_run(
+                settings.live_runner_daemon_url,
+                run_id,
+                body.model_dump(exclude={"roll_call_offer_id"}),
+            )
+        except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
+            unknown = scope.unknown(error=exc)
+            await _ensure_surface_hub_started(sid)
+            _raise_outcome_unknown(
+                "start_run",
+                exc,
+                mutation_attempt_id=unknown.mutation_attempt_id,
+            )
+        except host_daemon_client.HostDaemonError as exc:
+            rejected = scope.reject_not_observed(
+                outcome={"accepted": False, "status_code": exc.status_code},
+            )
             _restore_start_intent(root, sid, previous_start_intent)
-        raise HTTPException(exc.status_code, detail=exc.detail) from exc
-    response = _parse_action_response(result)
-    if sid is not None and not response.accepted:
-        _restore_start_intent(root, sid, previous_start_intent)
-    await _maybe_start_broker_activity_publisher(response)
-    sid = sid or response.process.strategy_instance_id
-    if sid is not None:
+            await _ensure_surface_hub_started(sid)
+            raise HTTPException(
+                exc.status_code,
+                detail=_mutation_error_detail(exc.detail, rejected),
+            ) from exc
+        scope.stage = "start_response_assembly"
+        response = _parse_action_response(result)
+        if not response.accepted:
+            _restore_start_intent(root, sid, previous_start_intent)
+        await _maybe_start_broker_activity_publisher(response)
         if response.accepted:
             if body.roll_call_offer_id is not None:
                 bot_roll_call_offer_repo(root, sid).consume(body.roll_call_offer_id)
@@ -2726,13 +2761,16 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
             response.process.model_dump(mode="json"),
             mutation_key="start",
         )
+        confirmed = scope.confirm(outcome={"accepted": response.accepted, "run_id": run_id})
         response = response.model_copy(
             update={
                 "rung_receipt": receipt,
                 "rung_receipt_warnings": warnings,
+                "mutation_attempt_id": confirmed.mutation_attempt_id,
+                "mutation_dispatch_state": confirmed.dispatch_state,
             }
         )
-        await _ensure_surface_hub_started(sid)
+    await _ensure_surface_hub_started(sid)
     return response
 
 
@@ -2793,16 +2831,37 @@ async def stop_run(run_id: str, body: HostRunnerStopRequest) -> HostRunnerAction
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     settings = get_settings()
-    try:
-        result = await host_daemon_client.stop_run(settings.live_runner_daemon_url, run_id, body.model_dump())
-    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
-        _raise_outcome_unknown("stop_run", exc)
-    except host_daemon_client.HostDaemonError as exc:
-        raise HTTPException(exc.status_code, detail=exc.detail) from exc
-    response = _parse_action_response(result)
     root = Path(settings.live_runs_root)
-    sid = _strategy_instance_id_for_run(root, run_id) or response.process.strategy_instance_id
-    if sid is not None:
+    sid = _strategy_instance_id_for_run(root, run_id)
+    if sid is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="run has no strategy_instance_id ledger binding",
+        )
+    scope = _operator_mutation_scope(root, instance_id=sid, action="stop", run_id=run_id)
+    with scope:
+        scope.stage = "daemon_stop"
+        try:
+            result = await host_daemon_client.stop_run(settings.live_runner_daemon_url, run_id, body.model_dump())
+        except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
+            unknown = scope.unknown(error=exc)
+            await _ensure_surface_hub_started(sid)
+            _raise_outcome_unknown(
+                "stop_run",
+                exc,
+                mutation_attempt_id=unknown.mutation_attempt_id,
+            )
+        except host_daemon_client.HostDaemonError as exc:
+            rejected = scope.reject_not_observed(
+                outcome={"accepted": False, "status_code": exc.status_code},
+            )
+            await _ensure_surface_hub_started(sid)
+            raise HTTPException(
+                exc.status_code,
+                detail=_mutation_error_detail(exc.detail, rejected),
+            ) from exc
+        scope.stage = "stop_response_assembly"
+        response = _parse_action_response(result)
         if response.accepted:
             _bot_lifecycle_state_repo(root, sid).set_phase(
                 BotLifecyclePhase.OFF_DUTY,
@@ -2818,12 +2877,16 @@ async def stop_run(run_id: str, body: HostRunnerStopRequest) -> HostRunnerAction
             response.process.model_dump(mode="json"),
             mutation_key="stop",
         )
+        confirmed = scope.confirm(outcome={"accepted": response.accepted, "run_id": run_id})
         response = response.model_copy(
             update={
                 "rung_receipt": receipt,
                 "rung_receipt_warnings": warnings,
+                "mutation_attempt_id": confirmed.mutation_attempt_id,
+                "mutation_dispatch_state": confirmed.dispatch_state,
             }
         )
+    await _ensure_surface_hub_started(sid)
     return response
 
 
@@ -2850,38 +2913,63 @@ async def end_day_now(
         )
 
     request = body or HostRunnerStopRequest()
-    try:
-        result = await host_daemon_client.stop_run(
-            settings.live_runner_daemon_url,
-            live_binding.run_id,
-            request.model_dump(),
-        )
-    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
-        _raise_outcome_unknown("end_day_now", exc)
-    except host_daemon_client.HostDaemonError as exc:
-        raise HTTPException(exc.status_code, detail=exc.detail) from exc
-    response = _parse_action_response(result)
-    if response.accepted:
-        _bot_lifecycle_state_repo(root, sid).set_phase(
-            BotLifecyclePhase.OFF_DUTY,
-            now_ms=_now_ms(),
-            updated_by="operator",
-            active_run_id=None,
-            reason="end_day_now",
-        )
-    receipt, warnings = await _mutation_rung_receipts_from_process(
-        sid,
+    scope = _operator_mutation_scope(
         root,
-        settings,
-        response.process.model_dump(mode="json"),
-        mutation_key="stop",
+        instance_id=sid,
+        action="stop",
+        run_id=live_binding.run_id,
     )
-    return response.model_copy(
-        update={
-            "rung_receipt": receipt,
-            "rung_receipt_warnings": warnings,
-        }
-    )
+    with scope:
+        scope.stage = "daemon_stop"
+        try:
+            result = await host_daemon_client.stop_run(
+                settings.live_runner_daemon_url,
+                live_binding.run_id,
+                request.model_dump(),
+            )
+        except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
+            unknown = scope.unknown(error=exc)
+            await _ensure_surface_hub_started(sid)
+            _raise_outcome_unknown("end_day_now", exc, mutation_attempt_id=unknown.mutation_attempt_id)
+        except host_daemon_client.HostDaemonError as exc:
+            rejected = scope.reject_not_observed(
+                outcome={"accepted": False, "status_code": exc.status_code},
+            )
+            await _ensure_surface_hub_started(sid)
+            raise HTTPException(
+                exc.status_code,
+                detail=_mutation_error_detail(exc.detail, rejected),
+            ) from exc
+        scope.stage = "end_day_response_assembly"
+        response = _parse_action_response(result)
+        if response.accepted:
+            _bot_lifecycle_state_repo(root, sid).set_phase(
+                BotLifecyclePhase.OFF_DUTY,
+                now_ms=_now_ms(),
+                updated_by="operator",
+                active_run_id=None,
+                reason="end_day_now",
+            )
+        receipt, warnings = await _mutation_rung_receipts_from_process(
+            sid,
+            root,
+            settings,
+            response.process.model_dump(mode="json"),
+            mutation_key="stop",
+        )
+        confirmed = scope.confirm(
+            outcome={"accepted": response.accepted, "run_id": live_binding.run_id},
+        )
+        response = response.model_copy(
+            update={
+                "rung_receipt": receipt,
+                "rung_receipt_warnings": warnings,
+                "mutation_attempt_id": confirmed.mutation_attempt_id,
+                "mutation_dispatch_state": confirmed.dispatch_state,
+            }
+        )
+    await _ensure_surface_hub_started(sid)
+    return response
 
 
 @router.post("/{strategy_instance_id}/lifecycle/roster", response_model=BotLifecycleMutationResponse)
@@ -3579,6 +3667,11 @@ _OUTCOME_UNKNOWN_RUNBOOK_HINTS: dict[str, str] = {
         "was lost. The run may or may not have stopped. Refresh the cockpit "
         "to read live state before deciding whether to retry."
     ),
+    "end_day_now": (
+        "An end-day stop request was sent to the host runner daemon but the response "
+        "was lost. The run may or may not have stopped. Read the latest Bot Cockpit "
+        "state before deciding whether to retry."
+    ),
     "emergency_flatten": (
         "An emergency-flatten request was sent to the host runner daemon "
         "but the response was lost. Broker positions may be in an "
@@ -3598,10 +3691,13 @@ def _raise_outcome_unknown(
         "deploy",
         "start_run",
         "stop_run",
+        "end_day_now",
         "emergency_flatten",
         "renew_daemon_lease",
     ],
     exc: host_daemon_client.HostDaemonOutcomeUnknownError,
+    *,
+    mutation_attempt_id: str | None = None,
 ) -> NoReturn:
     """Surface an ambiguous-outcome mutation failure as a typed 409 (PRD #619-C5).
 
@@ -3617,9 +3713,13 @@ def _raise_outcome_unknown(
         occurred_at_ms=_now_ms(),
         runbook_hint=_OUTCOME_UNKNOWN_RUNBOOK_HINTS[endpoint],
     )
+    detail = body.model_dump(mode="json")
+    if mutation_attempt_id is not None:
+        detail["mutation_attempt_id"] = mutation_attempt_id
+        detail["mutation_dispatch_state"] = "OUTCOME_UNKNOWN"
     raise HTTPException(
         status_code=status.HTTP_409_CONFLICT,
-        detail=body.model_dump(mode="json"),
+        detail=detail,
     ) from exc
 
 
@@ -4692,72 +4792,84 @@ async def set_instance_desired_state(
             },
         )
 
-    repo = DesiredStateRepo(sidecar_path, trusted_root=artifacts_root / "live_state")
-    record = repo.set(
-        _ACTION_TO_STATE[body.action],
-        updated_by=body.updated_by,
-        reason=body.reason,
-        now_ms=_now_ms(),
-    )
-    durable = DesiredStateRecordResponse(
-        state=record.desired_state.value,
-        updated_at_ms=record.updated_at_ms,
-        updated_by=record.updated_by,
-        reason=record.reason,
-        version=record.version,
-    )
-
-    # Re-fetch the daemon state for the actuation step (the durable
-    # write may have triggered a daemon-side response we should
-    # reflect).  Using a fresh fetch keeps the actuation reasoning
-    # against the latest binding.
-    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
-    _process, live_binding = _interpret_daemon_process(daemon, root)
-    live_run_dir = _visible_live_run_dir(root, live_binding) if live_binding is not None else None
-    if live_binding is None or live_run_dir is None:
-        # No live binding, or the bound run dir is not visible under this
-        # service's live_runs_root (root mismatch / missing artifacts). The
-        # engine polls its real run dir, so a command written here would never
-        # be seen or acked — stay durable-only rather than claim a phantom
-        # actuation. `_interpret_daemon_process` only sets run_dir when the dir
-        # actually exists locally.
-        detail = (
-            "durable only; will gate next start"
-            if live_binding is None
-            else f"durable only; bound run {live_binding.run_id} is not visible locally"
-        )
-        actuation = IntentActuation(actuated=False, detail=detail)
-    else:
-        verb = _ACTION_TO_VERB[body.action]
-        try:
-            command = CommandChannel(live_run_dir / "commands").write_from_operator(verb)
-        except Exception as exc:
-            actuation = IntentActuation(
-                actuated=False,
-                run_id=live_binding.run_id,
-                detail=f"failed to enqueue live command: {exc}",
-            )
-        else:
-            actuation = IntentActuation(
-                actuated=True,
-                run_id=live_binding.run_id,
-                command_seq=command.seq,
-                detail=f"{verb.value} queued on {live_binding.run_id}; awaiting ack",
-            )
-
-    receipt, warnings = await _mutation_rung_receipts_from_process(
-        sid,
+    scope = _operator_mutation_scope(
         root,
-        settings,
-        daemon,
-        mutation_key=action_name,
+        instance_id=sid,
+        action=body.action.value,
+        run_id=(ctx.live_binding.run_id if ctx.live_binding is not None else None),
     )
-    return SetInstanceDesiredStateResponse(
-        durable=durable,
-        actuation=actuation,
-        rung_receipt=receipt,
-        rung_receipt_warnings=warnings,
-    )
+    with scope:
+        scope.stage = "durable_intent_write"
+        repo = DesiredStateRepo(sidecar_path, trusted_root=artifacts_root / "live_state")
+        record = repo.set(
+            _ACTION_TO_STATE[body.action],
+            updated_by=body.updated_by,
+            reason=body.reason,
+            now_ms=_now_ms(),
+        )
+        durable = DesiredStateRecordResponse(
+            state=record.desired_state.value,
+            updated_at_ms=record.updated_at_ms,
+            updated_by=record.updated_by,
+            reason=record.reason,
+            version=record.version,
+        )
+        # Re-fetch after the durable write so actuation uses the latest binding.
+        scope.stage = "daemon_observation"
+        _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
+        _process, live_binding = _interpret_daemon_process(daemon, root)
+        live_run_dir = _visible_live_run_dir(root, live_binding) if live_binding is not None else None
+        if live_binding is None or live_run_dir is None:
+            detail = (
+                "durable only; will gate next start"
+                if live_binding is None
+                else f"durable only; bound run {live_binding.run_id} is not visible locally"
+            )
+            actuation = IntentActuation(actuated=False, detail=detail)
+        else:
+            verb = _ACTION_TO_VERB[body.action]
+            try:
+                command = CommandChannel(live_run_dir / "commands").write_from_operator(verb)
+            except Exception as exc:
+                actuation = IntentActuation(
+                    actuated=False,
+                    run_id=live_binding.run_id,
+                    detail=f"failed to enqueue live command: {exc}",
+                )
+            else:
+                actuation = IntentActuation(
+                    actuated=True,
+                    run_id=live_binding.run_id,
+                    command_seq=command.seq,
+                    detail=f"{verb.value} queued on {live_binding.run_id}; awaiting ack",
+                )
+
+        scope.stage = "receipt_assembly"
+        receipt, warnings = await _mutation_rung_receipts_from_process(
+            sid,
+            root,
+            settings,
+            daemon,
+            mutation_key=action_name,
+        )
+        confirmed = scope.confirm(
+            outcome={
+                "durable_state": durable.state,
+                "actuated": actuation.actuated,
+                "run_id": actuation.run_id,
+                "command_seq": actuation.command_seq,
+            },
+        )
+        response = SetInstanceDesiredStateResponse(
+            durable=durable,
+            actuation=actuation,
+            rung_receipt=receipt,
+            rung_receipt_warnings=warnings,
+            mutation_attempt_id=confirmed.mutation_attempt_id,
+            mutation_dispatch_state=confirmed.dispatch_state,
+        )
+    await _ensure_surface_hub_started(sid)
+    return response
 
 
 @router.post(
@@ -4821,76 +4933,97 @@ async def flatten_and_pause_instance(
         reason="flatten-and-pause",
         updated_by="operator",
     )
-    repo = DesiredStateRepo(sidecar_path, trusted_root=artifacts_root / "live_state")
-    try:
-        record = repo.set(
-            DesiredState.PAUSED,
-            updated_by=payload.updated_by,
-            reason=payload.reason or "flatten-and-pause",
-            now_ms=_now_ms(),
-        )
-    except OSError as exc:
-        # Step 1 failed — refuse the composition. The one-shot is NOT sent
-        # because a flatten without a persisted PAUSE would still let the
-        # next bar re-enter, re-opening VCR-0007.
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"flatten_and_pause aborted before FLATTEN_NOW: durable PAUSE write failed: {exc}",
-        ) from exc
-
-    durable = DesiredStateRecordResponse(
-        state=record.desired_state.value,
-        updated_at_ms=record.updated_at_ms,
-        updated_by=record.updated_by,
-        reason=record.reason,
-        version=record.version,
-    )
-
-    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
-    _process, live_binding = _interpret_daemon_process(daemon, root)
-    live_run_dir = _visible_live_run_dir(root, live_binding) if live_binding is not None else None
-    if live_binding is None or live_run_dir is None:
-        detail = (
-            "PAUSE persisted; no live binding so FLATTEN_NOW was not enqueued"
-            if live_binding is None
-            else (f"PAUSE persisted; bound run {live_binding.run_id} is not visible locally, FLATTEN_NOW not enqueued")
-        )
-        actuation = IntentActuation(actuated=False, detail=detail)
-    else:
-        try:
-            command = CommandChannel(live_run_dir / "commands").write_from_operator(CommandVerb.FLATTEN)
-        except Exception as exc:
-            # PAUSE is already persisted — surface the failure honestly.
-            # The durable PAUSE keeps the bar loop from re-entering even
-            # though the flatten one-shot did not enqueue.
-            actuation = IntentActuation(
-                actuated=False,
-                run_id=live_binding.run_id,
-                detail=(
-                    f"PAUSE persisted but FLATTEN_NOW failed to enqueue — retry the flatten one-shot manually: {exc}"
-                ),
-            )
-        else:
-            actuation = IntentActuation(
-                actuated=True,
-                run_id=live_binding.run_id,
-                command_seq=command.seq,
-                detail=(f"PAUSE persisted; FLATTEN_NOW queued on {live_binding.run_id}; awaiting flatten ack"),
-            )
-
-    receipt, warnings = await _mutation_rung_receipts_from_process(
-        sid,
+    scope = _operator_mutation_scope(
         root,
-        settings,
-        daemon,
-        mutation_key="flatten_and_pause",
+        instance_id=sid,
+        action="flatten",
+        run_id=(ctx.live_binding.run_id if ctx.live_binding is not None else None),
     )
-    return SetInstanceDesiredStateResponse(
-        durable=durable,
-        actuation=actuation,
-        rung_receipt=receipt,
-        rung_receipt_warnings=warnings,
-    )
+    with scope:
+        scope.stage = "durable_pause_write"
+        repo = DesiredStateRepo(sidecar_path, trusted_root=artifacts_root / "live_state")
+        try:
+            record = repo.set(
+                DesiredState.PAUSED,
+                updated_by=payload.updated_by,
+                reason=payload.reason or "flatten-and-pause",
+                now_ms=_now_ms(),
+            )
+        except OSError as exc:
+            unknown = scope.unknown(error=exc)
+            await _ensure_surface_hub_started(sid)
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=_mutation_error_detail(
+                    "flatten_and_pause aborted before FLATTEN_NOW: durable PAUSE write failed",
+                    unknown,
+                ),
+            ) from exc
+
+        durable = DesiredStateRecordResponse(
+            state=record.desired_state.value,
+            updated_at_ms=record.updated_at_ms,
+            updated_by=record.updated_by,
+            reason=record.reason,
+            version=record.version,
+        )
+        scope.stage = "daemon_observation"
+        _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
+        _process, live_binding = _interpret_daemon_process(daemon, root)
+        live_run_dir = _visible_live_run_dir(root, live_binding) if live_binding is not None else None
+        if live_binding is None or live_run_dir is None:
+            detail = (
+                "PAUSE persisted; no live binding so FLATTEN_NOW was not enqueued"
+                if live_binding is None
+                else f"PAUSE persisted; bound run {live_binding.run_id} is not visible locally, FLATTEN_NOW not enqueued"
+            )
+            actuation = IntentActuation(actuated=False, detail=detail)
+        else:
+            try:
+                command = CommandChannel(live_run_dir / "commands").write_from_operator(CommandVerb.FLATTEN)
+            except Exception as exc:
+                actuation = IntentActuation(
+                    actuated=False,
+                    run_id=live_binding.run_id,
+                    detail=(
+                        "PAUSE persisted but FLATTEN_NOW failed to enqueue — "
+                        f"retry the flatten one-shot manually: {exc}"
+                    ),
+                )
+            else:
+                actuation = IntentActuation(
+                    actuated=True,
+                    run_id=live_binding.run_id,
+                    command_seq=command.seq,
+                    detail=f"PAUSE persisted; FLATTEN_NOW queued on {live_binding.run_id}; awaiting flatten ack",
+                )
+
+        scope.stage = "receipt_assembly"
+        receipt, warnings = await _mutation_rung_receipts_from_process(
+            sid,
+            root,
+            settings,
+            daemon,
+            mutation_key="flatten_and_pause",
+        )
+        confirmed = scope.confirm(
+            outcome={
+                "durable_state": durable.state,
+                "actuated": actuation.actuated,
+                "run_id": actuation.run_id,
+                "command_seq": actuation.command_seq,
+            },
+        )
+        response = SetInstanceDesiredStateResponse(
+            durable=durable,
+            actuation=actuation,
+            rung_receipt=receipt,
+            rung_receipt_warnings=warnings,
+            mutation_attempt_id=confirmed.mutation_attempt_id,
+            mutation_dispatch_state=confirmed.dispatch_state,
+        )
+    await _ensure_surface_hub_started(sid)
+    return response
 
 
 @router.post(
@@ -5191,19 +5324,49 @@ async def issue_instance_command(strategy_instance_id: str, body: EnqueueCommand
 
     if run_dir is None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="no live run bound to this instance to command")
-    command = CommandChannel(run_dir / "commands").write_from_operator(verb)
-    receipt, warnings = await _mutation_rung_receipts_for_instance(
-        sid,
+    if verb is not CommandVerb.FLATTEN:
+        command = CommandChannel(run_dir / "commands").write_from_operator(verb)
+        receipt, warnings = await _mutation_rung_receipts_for_instance(
+            sid,
+            root,
+            settings,
+            mutation_key=verb.value.lower(),
+        )
+        return CommandView(
+            seq=command.seq,
+            verb=command.verb.value,
+            rung_receipt=receipt,
+            rung_receipt_warnings=warnings,
+        )
+
+    scope = _operator_mutation_scope(
         root,
-        settings,
-        mutation_key=verb.value.lower(),
+        instance_id=sid,
+        action="flatten",
+        run_id=(ctx.live_binding.run_id if ctx.live_binding is not None else None),
     )
-    return CommandView(
-        seq=command.seq,
-        verb=command.verb.value,
-        rung_receipt=receipt,
-        rung_receipt_warnings=warnings,
-    )
+    with scope:
+        scope.stage = "one_shot_flatten"
+        command = CommandChannel(run_dir / "commands").write_from_operator(verb)
+        receipt, warnings = await _mutation_rung_receipts_for_instance(
+            sid,
+            root,
+            settings,
+            mutation_key=verb.value.lower(),
+        )
+        confirmed = scope.confirm(
+            outcome={"accepted": True, "command_seq": command.seq},
+        )
+        response = CommandView(
+            seq=command.seq,
+            verb=command.verb.value,
+            rung_receipt=receipt,
+            rung_receipt_warnings=warnings,
+            mutation_attempt_id=confirmed.mutation_attempt_id,
+            mutation_dispatch_state=confirmed.dispatch_state,
+        )
+    await _ensure_surface_hub_started(sid)
+    return response
 
 
 @router.post("/{strategy_instance_id}/emergency-flatten", response_model=HostRunnerActionResponse)
@@ -5230,27 +5393,51 @@ async def emergency_flatten_instance(
     if not runs:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail=f"no run found for instance {sid!r} to flatten")
     run_id = str(runs[0]["run_id"])
-    try:
-        body_json = await host_daemon_client.emergency_flatten_run(
-            settings.live_runner_daemon_url,
-            run_id,
-            {"account": body.account, "confirm": True},
+    scope = _operator_mutation_scope(root, instance_id=sid, action="flatten", run_id=run_id)
+    with scope:
+        scope.stage = "daemon_emergency_flatten"
+        try:
+            body_json = await host_daemon_client.emergency_flatten_run(
+                settings.live_runner_daemon_url,
+                run_id,
+                {"account": body.account, "confirm": True},
+            )
+        except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
+            unknown = scope.unknown(error=exc)
+            await _ensure_surface_hub_started(sid)
+            _raise_outcome_unknown(
+                "emergency_flatten",
+                exc,
+                mutation_attempt_id=unknown.mutation_attempt_id,
+            )
+        except host_daemon_client.HostDaemonError as exc:
+            rejected = scope.reject_not_observed(
+                outcome={"accepted": False, "status_code": exc.status_code},
+            )
+            await _ensure_surface_hub_started(sid)
+            raise HTTPException(
+                exc.status_code,
+                detail=_mutation_error_detail(exc.detail, rejected),
+            ) from exc
+        scope.stage = "emergency_flatten_response_assembly"
+        response = HostRunnerActionResponse.model_validate(body_json)
+        receipt, warnings = await _mutation_rung_receipts_from_process(
+            sid,
+            root,
+            settings,
+            response.process.model_dump(mode="json"),
+            mutation_key="emergency_flatten",
         )
-    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
-        _raise_outcome_unknown("emergency_flatten", exc)
-    except host_daemon_client.HostDaemonError as exc:
-        raise HTTPException(exc.status_code, detail=exc.detail) from exc
-    response = HostRunnerActionResponse.model_validate(body_json)
-    receipt, warnings = await _mutation_rung_receipts_from_process(
-        sid,
-        root,
-        settings,
-        response.process.model_dump(mode="json"),
-        mutation_key="emergency_flatten",
-    )
-    return response.model_copy(
-        update={
-            "rung_receipt": receipt,
-            "rung_receipt_warnings": warnings,
-        }
-    )
+        confirmed = scope.confirm(
+            outcome={"accepted": response.accepted, "run_id": run_id},
+        )
+        response = response.model_copy(
+            update={
+                "rung_receipt": receipt,
+                "rung_receipt_warnings": warnings,
+                "mutation_attempt_id": confirmed.mutation_attempt_id,
+                "mutation_dispatch_state": confirmed.dispatch_state,
+            }
+        )
+    await _ensure_surface_hub_started(sid)
+    return response

@@ -1,4 +1,9 @@
 import { Routes } from "@angular/router";
+import { BotSurfaceStore } from "./components/broker/bot-control/bot-surface-store.service";
+import {
+  botExistsGuard,
+  botSurfaceResolver,
+} from "./components/broker/bot-control/bot-surface-routing";
 
 export const routes: Routes = [
   { path: "", redirectTo: "/data-lab", pathMatch: "full" },
@@ -258,6 +263,9 @@ export const routes: Routes = [
   },
   {
     path: "broker/bots/:id",
+    providers: [BotSurfaceStore],
+    canActivate: [botExistsGuard],
+    resolve: { botSurface: botSurfaceResolver },
     loadComponent: () =>
       import(
         "./components/broker/bot-control/bot-control-page.component"

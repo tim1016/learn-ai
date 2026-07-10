@@ -1,12 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { environment } from '../../../../../environments/environment';
 import { makeStatus } from '../bot-control-page.fixtures';
-import {
-  botSurfaceStreamEnabled,
-  openBotSurfaceStream,
-  shouldAcceptSurfaceSnapshot,
-} from './bot-surface-stream';
+import { openBotSurfaceStream } from './bot-surface-stream';
+import { adoptBotSurfaceSnapshot } from './bot-surface-snapshot-adapter';
 
 class StubEventSource {
   static instances: StubEventSource[] = [];
@@ -38,7 +34,6 @@ describe('bot surface state stream', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    environment.flags.botCockpitStateStream = false;
   });
 
   it('opens the protected latest-wins snapshot channel and closes it', () => {
@@ -46,9 +41,10 @@ describe('bot surface state stream', () => {
     const stream = openBotSurfaceStream('spy bot', {
       onSnapshot: (snapshot) => received.push(snapshot.stream_epoch),
       onMalformedSnapshot: vi.fn(),
+      onStatus: vi.fn(),
     });
     const source = StubEventSource.instances[0];
-    const snapshot = makeStatus();
+    const snapshot = makeStatus({ id: 'spy bot' });
 
     source?.emit('snapshot', JSON.stringify(snapshot));
     stream.close();
@@ -64,23 +60,55 @@ describe('bot surface state stream', () => {
     const current = makeStatus();
 
     expect(
-      shouldAcceptSurfaceSnapshot(current, { ...current, surface_version: 2 }),
-    ).toBe(true);
+      adoptBotSurfaceSnapshot(current, { ...current, surface_version: 2 }),
+    ).toEqual({ ...current, surface_version: 2 });
     expect(
-      shouldAcceptSurfaceSnapshot(current, { ...current, surface_version: 1 }),
-    ).toBe(false);
+      adoptBotSurfaceSnapshot(current, { ...current, surface_version: 1 }),
+    ).toBe(current);
+    const replacement = {
+      ...current,
+      stream_epoch: 'replacement-epoch',
+      surface_version: 1,
+    };
     expect(
-      shouldAcceptSurfaceSnapshot(current, {
-        ...current,
-        stream_epoch: 'replacement-epoch',
-        surface_version: 1,
-      }),
-    ).toBe(true);
+      adoptBotSurfaceSnapshot(current, replacement),
+    ).toBe(replacement);
   });
 
-  it('reads the rollout flag without requiring every local environment file to define it', () => {
-    expect(botSurfaceStreamEnabled()).toBe(false);
-    environment.flags.botCockpitStateStream = true;
-    expect(botSurfaceStreamEnabled()).toBe(true);
+  it('rejects a well-formed snapshot for a different route identity', () => {
+    const onSnapshot = vi.fn();
+    const onMalformedSnapshot = vi.fn();
+    openBotSurfaceStream('sid-a', {
+      onSnapshot,
+      onMalformedSnapshot,
+      onStatus: vi.fn(),
+    });
+
+    StubEventSource.instances[0].emit(
+      'snapshot',
+      JSON.stringify(makeStatus({ id: 'sid-b' })),
+    );
+
+    expect(onSnapshot).not.toHaveBeenCalled();
+    expect(onMalformedSnapshot).toHaveBeenCalledWith(
+      'State stream returned an invalid snapshot.',
+    );
+  });
+
+  it('rejects an incomplete snapshot before the store can dereference it', () => {
+    const onSnapshot = vi.fn();
+    const onMalformedSnapshot = vi.fn();
+    openBotSurfaceStream('sid-x', {
+      onSnapshot,
+      onMalformedSnapshot,
+      onStatus: vi.fn(),
+    });
+    const incomplete = { ...makeStatus() } as Record<string, unknown>;
+    delete incomplete['latest_mutation'];
+
+    StubEventSource.instances[0].emit('snapshot', JSON.stringify(incomplete));
+
+    expect(onSnapshot).not.toHaveBeenCalled();
+    expect(onMalformedSnapshot).toHaveBeenCalledOnce();
   });
 });

@@ -110,4 +110,7 @@ export interface BrokerActivityPage {
   rows: BrokerActivityRow[];
   /** ``null`` when the page drained the WAL — caller switches to SSE. */
   next_seq: number | null;
+  durable_stream_id: string;
+  high_water_cursor: string;
+  next_cursor: string | null;
 }

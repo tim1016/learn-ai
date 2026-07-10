@@ -13,7 +13,7 @@ import type {
   LiveInstanceStatus,
 } from '../../../../api/live-instances.types';
 import type { OperatorMove } from '../../../../api/operator-blocker.types';
-import type { RenderedAction } from '../lib/suggested-action-renderer';
+import type { PresentedAction } from '../lib/suggested-action-renderer';
 import { AssetIdentityComponent } from '../../../../shared/asset-identity';
 import { ActivityTabComponent } from '../tabs/activity-tab.component';
 import { WhyDrawerComponent } from './why-drawer.component';
@@ -43,7 +43,7 @@ export class VerdictCardComponent {
   readonly busy = input<boolean>(false);
   /** The container-computed remediation verb (label + variant); rendered as the
    *  primary verb only when the model has no lifecycle primary action. */
-  readonly renderedRemediation = input<RenderedAction | null>(null);
+  readonly renderedRemediation = input<PresentedAction | null>(null);
 
   readonly lifecycleAction = output<BotLifecycleActionId>();
   readonly remediationInvoked = output();

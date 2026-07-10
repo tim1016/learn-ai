@@ -55,6 +55,7 @@ from app.routers import live_instances
 from app.schemas.broker_activity import BrokerActivityRow
 from app.schemas.live_runs import LiveBinding
 from app.services.live_chart_window import ChartTimeframe, ChartWindowResult
+from app.services.mutation_attempt import MutationAttemptRepo
 from tests._fixtures.daemon_transport import as_typed_get
 
 
@@ -885,9 +886,7 @@ async def test_operator_surface_stream_emits_current_snapshot_and_closes_on_stop
     await hub.stop(timeout_seconds=0.1)
 
     deferred_iterator = deferred_response.body_iterator
-    assert await asyncio.wait_for(anext(deferred_iterator), timeout=0.1) == (
-        "event: end\ndata: {}\n\n"
-    )
+    assert await asyncio.wait_for(anext(deferred_iterator), timeout=0.1) == ("event: end\ndata: {}\n\n")
     await deferred_iterator.aclose()
     assert hub._watchers == set()
 
@@ -2510,7 +2509,10 @@ async def test_emergency_flatten_works_without_live_binding(app_with_root, monke
         )
 
     assert response.status_code == 200
-    assert response.json()["accepted"] is True
+    body = response.json()
+    assert body["accepted"] is True
+    assert body["mutation_attempt_id"].startswith("mutation-")
+    assert body["mutation_dispatch_state"] == "RESPONSE_CONFIRMED"
     assert captured["run_id"] == "run-flat"
     assert captured["payload"] == {"account": "DU123", "confirm": True}
 
@@ -3362,8 +3364,86 @@ async def test_set_desired_state_actuates_live_binding(app_with_root, monkeypatc
     assert body["actuation"]["actuated"] is True
     assert body["actuation"]["run_id"] == "run-live-ccc"
     assert body["actuation"]["command_seq"] is not None
+    assert body["mutation_attempt_id"].startswith("mutation-")
+    assert body["mutation_dispatch_state"] == "RESPONSE_CONFIRMED"
+    attempt = MutationAttemptRepo(root.parent / "mutation_attempts").read(body["mutation_attempt_id"])
+    assert attempt is not None
+    assert attempt.dispatch_state == "RESPONSE_CONFIRMED"
     queued = list((root / "run-live-ccc" / "commands").glob("command.*.PAUSE.pending.json"))
     assert len(queued) == 1
+
+
+async def test_flatten_and_pause_returns_durable_attempt_receipt(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-flatten-live", "spy_ema_paper", 100)
+    _set_daemon(
+        monkeypatch,
+        process={"state": "running", "run_id": "run-flatten-live", "pid": 7},
+    )
+    monkeypatch.setattr(
+        live_instances,
+        "evaluate_action",
+        lambda *_args, **_kwargs: type(
+            "EnabledGate",
+            (),
+            {"enabled": True, "disabled_reason_code": None},
+        )(),
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/spy_ema_paper/flatten-and-pause")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["durable"]["state"] == "PAUSED"
+    assert body["mutation_attempt_id"].startswith("mutation-")
+    assert body["mutation_dispatch_state"] == "RESPONSE_CONFIRMED"
+    attempt = MutationAttemptRepo(root.parent / "mutation_attempts").read(body["mutation_attempt_id"])
+    assert attempt is not None
+    assert attempt.action == "flatten"
+
+
+async def test_desired_state_post_write_failure_marks_attempt_outcome_unknown(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-failure", "spy_ema_paper", 100)
+    _set_daemon(
+        monkeypatch,
+        process={"state": "running", "run_id": "run-failure", "pid": 7},
+    )
+    original_fetch = host_daemon_client.fetch_instance_process
+    calls = 0
+
+    async def fail_post_write_fetch(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("post-write daemon failure")
+        return await original_fetch(*args, **kwargs)
+
+    monkeypatch.setattr(
+        host_daemon_client,
+        "fetch_instance_process",
+        fail_post_write_fetch,
+    )
+
+    with pytest.raises(RuntimeError, match="post-write daemon failure"):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            await client.post(
+                "/api/live-instances/spy_ema_paper/desired-state",
+                json={"action": "pause", "updated_by": "operator"},
+            )
+
+    attempt = MutationAttemptRepo(root.parent / "mutation_attempts").latest_for("spy_ema_paper")
+    assert attempt is not None
+    assert attempt.dispatch_state == "OUTCOME_UNKNOWN"
+    assert attempt.outcome == {
+        "stage": "daemon_observation",
+        "error_type": "RuntimeError",
+    }
 
 
 async def test_resume_rejects_when_account_is_frozen(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -4379,6 +4459,10 @@ def _running_process(run_id: str) -> dict:
 
 async def test_start_run_forwards_and_returns_action(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
+    _write_ledger(root, "run-abc", "spy_ema_paper", 100)
+    offer_id = _write_roll_call_offer(root.parent, run_id="run-abc")
+    _set_startable_now(monkeypatch)
+    _set_daemon(monkeypatch, process={"state": "idle"})
     seen: dict = {}
 
     async def fake_start(_base_url: str, run_id: str, payload: dict) -> dict:
@@ -4391,13 +4475,20 @@ async def test_start_run_forwards_and_returns_action(app_with_root, monkeypatch:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(
             "/api/live-instances/runs/run-abc/start",
-            json={"readonly": False, "hydrate_policy": "optional", "strategy": "spy_ema_crossover"},
+            json={
+                "readonly": False,
+                "hydrate_policy": "optional",
+                "strategy": "spy_ema_crossover",
+                "roll_call_offer_id": offer_id,
+            },
         )
 
     assert response.status_code == 200
     body = response.json()
     assert body["accepted"] is True
     assert body["process"]["state"] == "running"
+    assert body["mutation_attempt_id"].startswith("mutation-")
+    assert body["mutation_dispatch_state"] == "RESPONSE_CONFIRMED"
     # The proxy forwards the run_id and the start knobs verbatim to the daemon.
     assert seen["run_id"] == "run-abc"
     assert seen["payload"]["readonly"] is False
@@ -4840,6 +4931,7 @@ async def test_start_run_rolls_back_desired_state_when_daemon_rejects(
 
 async def test_stop_run_forwards_and_returns_action(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, root = app_with_root
+    _write_ledger(root, "run-abc", "spy_ema_paper", 100)
 
     async def fake_stop(_base_url: str, run_id: str, _payload: dict) -> dict:
         proc = _running_process(run_id)
@@ -4852,7 +4944,15 @@ async def test_stop_run_forwards_and_returns_action(app_with_root, monkeypatch: 
         response = await client.post("/api/live-instances/runs/run-abc/stop", json={"force": False})
 
     assert response.status_code == 200
-    assert response.json()["process"]["state"] == "stopping"
+    body = response.json()
+    assert body["process"]["state"] == "stopping"
+    assert body["mutation_attempt_id"].startswith("mutation-")
+    assert body["mutation_dispatch_state"] == "RESPONSE_CONFIRMED"
+    hub = live_instances._SURFACE_HUBS.get("spy_ema_paper")
+    assert hub is not None and hub.latest is not None
+    assert hub.latest.latest_mutation is not None
+    assert hub.latest.latest_mutation.mutation_attempt_id == body["mutation_attempt_id"]
+    assert hub.latest.latest_mutation.dispatch_state == "RESPONSE_CONFIRMED"
     lifecycle = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper")).read()
     assert lifecycle is not None
     assert lifecycle.phase == "OFF_DUTY"
@@ -4884,6 +4984,8 @@ async def test_end_day_now_resolves_live_binding_and_stops_current_run(
         response = await client.post("/api/live-instances/spy_ema_paper/end-day-now", json={"force": False})
 
     assert response.status_code == 200
+    assert response.json()["mutation_attempt_id"].startswith("mutation-")
+    assert response.json()["mutation_dispatch_state"] == "RESPONSE_CONFIRMED"
     assert seen == {"run_id": "run-live", "payload": {"force": False}}
     lifecycle = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper")).read()
     assert lifecycle is not None
@@ -4979,7 +5081,11 @@ async def test_retire_and_replace_marks_bot_retired(
 
 
 async def test_start_run_propagates_daemon_404(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
-    app, _ = app_with_root
+    app, root = app_with_root
+    _write_ledger(root, "run-missing", "spy_ema_paper", 100)
+    offer_id = _write_roll_call_offer(root.parent, run_id="run-missing")
+    _set_startable_now(monkeypatch)
+    _set_daemon(monkeypatch, process={"state": "idle"})
 
     async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
         raise host_daemon_client.HostDaemonError(404, "Run 'run-missing' not found")
@@ -4987,14 +5093,22 @@ async def test_start_run_propagates_daemon_404(app_with_root, monkeypatch: pytes
     monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post("/api/live-instances/runs/run-missing/start", json={})
+        response = await client.post(
+            "/api/live-instances/runs/run-missing/start",
+            json={"roll_call_offer_id": offer_id},
+        )
 
     assert response.status_code == 404
-    assert "not found" in response.json()["detail"].lower()
+    assert "not found" in response.json()["detail"]["message"].lower()
+    assert response.json()["detail"]["mutation_dispatch_state"] == "EFFECT_NOT_OBSERVED"
 
 
 async def test_start_run_propagates_daemon_unreachable_503(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
-    app, _ = app_with_root
+    app, root = app_with_root
+    _write_ledger(root, "run-abc", "spy_ema_paper", 100)
+    offer_id = _write_roll_call_offer(root.parent, run_id="run-abc")
+    _set_startable_now(monkeypatch)
+    _set_daemon(monkeypatch, process={"state": "idle"})
 
     async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
         raise host_daemon_client.HostDaemonError(503, "host daemon unreachable: connection refused")
@@ -5002,13 +5116,21 @@ async def test_start_run_propagates_daemon_unreachable_503(app_with_root, monkey
     monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post("/api/live-instances/runs/run-abc/start", json={})
+        response = await client.post(
+            "/api/live-instances/runs/run-abc/start",
+            json={"roll_call_offer_id": offer_id},
+        )
 
     assert response.status_code == 503
+    assert response.json()["detail"]["mutation_dispatch_state"] == "EFFECT_NOT_OBSERVED"
 
 
 async def test_start_run_invalid_daemon_payload_returns_502(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
-    app, _ = app_with_root
+    app, root = app_with_root
+    _write_ledger(root, "run-abc", "spy_ema_paper", 100)
+    offer_id = _write_roll_call_offer(root.parent, run_id="run-abc")
+    _set_startable_now(monkeypatch)
+    _set_daemon(monkeypatch, process={"state": "idle"})
 
     async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
         return {"unexpected": "shape"}  # missing accepted/process
@@ -5016,9 +5138,33 @@ async def test_start_run_invalid_daemon_payload_returns_502(app_with_root, monke
     monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post("/api/live-instances/runs/run-abc/start", json={})
+        response = await client.post(
+            "/api/live-instances/runs/run-abc/start",
+            json={"roll_call_offer_id": offer_id},
+        )
 
     assert response.status_code == 502
+
+
+async def test_start_run_without_instance_binding_rejects_before_daemon(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, _root = app_with_root
+    called = False
+
+    async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
+        nonlocal called
+        called = True
+        raise AssertionError("identityless mutation must not reach the daemon")
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/runs/legacy-without-ledger/start", json={})
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "run has no strategy_instance_id ledger binding"
+    assert called is False
 
 
 # ---------------------------------------------------------------------------
@@ -5064,7 +5210,11 @@ async def test_deploy_outcome_unknown_returns_typed_409(app_with_root, monkeypat
 
 
 async def test_start_run_outcome_unknown_returns_typed_409(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
-    app, _ = app_with_root
+    app, root = app_with_root
+    _write_ledger(root, "run-abc", "spy_ema_paper", 100)
+    offer_id = _write_roll_call_offer(root.parent, run_id="run-abc")
+    _set_startable_now(monkeypatch)
+    _set_daemon(monkeypatch, process={"state": "idle"})
 
     async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
         raise _outcome_unknown_exc(category="write_timeout")
@@ -5072,14 +5222,21 @@ async def test_start_run_outcome_unknown_returns_typed_409(app_with_root, monkey
     monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.post("/api/live-instances/runs/run-abc/start", json={})
+        response = await client.post(
+            "/api/live-instances/runs/run-abc/start",
+            json={"roll_call_offer_id": offer_id},
+        )
 
     assert response.status_code == 409
-    _assert_outcome_unknown_body(response.json()["detail"], endpoint="start_run", category="write_timeout")
+    detail = response.json()["detail"]
+    _assert_outcome_unknown_body(detail, endpoint="start_run", category="write_timeout")
+    assert detail["mutation_attempt_id"].startswith("mutation-")
+    assert detail["mutation_dispatch_state"] == "OUTCOME_UNKNOWN"
 
 
 async def test_stop_run_outcome_unknown_returns_typed_409(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
-    app, _ = app_with_root
+    app, root = app_with_root
+    _write_ledger(root, "run-abc", "spy_ema_paper", 100)
 
     async def fake_stop(_base_url: str, _run_id: str, _payload: dict) -> dict:
         raise _outcome_unknown_exc()
@@ -5090,7 +5247,10 @@ async def test_stop_run_outcome_unknown_returns_typed_409(app_with_root, monkeyp
         response = await client.post("/api/live-instances/runs/run-abc/stop", json={})
 
     assert response.status_code == 409
-    _assert_outcome_unknown_body(response.json()["detail"], endpoint="stop_run")
+    detail = response.json()["detail"]
+    _assert_outcome_unknown_body(detail, endpoint="stop_run")
+    assert detail["mutation_attempt_id"].startswith("mutation-")
+    assert detail["mutation_dispatch_state"] == "OUTCOME_UNKNOWN"
 
 
 async def test_emergency_flatten_outcome_unknown_returns_typed_409(
@@ -5120,6 +5280,56 @@ async def test_emergency_flatten_outcome_unknown_returns_typed_409(
         endpoint="emergency_flatten",
         category="remote_protocol_error",
     )
+    assert response.json()["detail"]["mutation_attempt_id"].startswith("mutation-")
+    assert response.json()["detail"]["mutation_dispatch_state"] == "OUTCOME_UNKNOWN"
+
+
+@pytest.mark.parametrize("endpoint", ["stop", "end_day", "emergency_flatten"])
+async def test_cancelled_mutation_marks_attempt_outcome_unknown(
+    endpoint: str,
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _app, root = app_with_root
+    sid = "spy_cancelled_mutation"
+    run_id = "run-cancelled"
+    _write_ledger(root, run_id, sid, 100)
+
+    async def cancelled(*_args, **_kwargs):
+        raise asyncio.CancelledError()
+
+    if endpoint == "stop":
+        monkeypatch.setattr(host_daemon_client, "stop_run", cancelled)
+        invocation = live_instances.stop_run(run_id, live_instances.HostRunnerStopRequest())
+    elif endpoint == "end_day":
+        _set_daemon(
+            monkeypatch,
+            process={
+                "state": "running",
+                "run_id": run_id,
+                "pid": 99,
+                "started_at_ms": 100,
+            },
+        )
+        monkeypatch.setattr(host_daemon_client, "stop_run", cancelled)
+        invocation = live_instances.end_day_now(sid)
+    else:
+        monkeypatch.setattr(host_daemon_client, "emergency_flatten_run", cancelled)
+        invocation = live_instances.emergency_flatten_instance(
+            sid,
+            live_instances.EmergencyFlattenRequest(account="DU123", confirm=True),
+        )
+
+    with pytest.raises(asyncio.CancelledError):
+        await invocation
+
+    attempt = MutationAttemptRepo(live_instances._mutation_attempt_root(root)).latest_for(sid)
+    assert attempt is not None
+    assert attempt.dispatch_state == "OUTCOME_UNKNOWN"
+    assert attempt.outcome == {
+        "stage": ("daemon_emergency_flatten" if endpoint == "emergency_flatten" else "daemon_stop"),
+        "error_type": "CancelledError",
+    }
 
 
 async def test_renew_daemon_lease_outcome_unknown_returns_typed_409(

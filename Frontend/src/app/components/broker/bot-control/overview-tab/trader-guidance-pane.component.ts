@@ -8,9 +8,8 @@ import type {
   TraderPrimaryRemediation,
 } from '../../../../api/live-instances.types';
 import {
-  renderTraderRemediation,
-  type RendererDispatch,
-  type RenderedAction,
+  presentTraderRemediation,
+  type PresentedAction,
 } from '../lib/suggested-action-renderer';
 import {
   buildDiagnosticEvidenceLines,
@@ -42,17 +41,9 @@ export class TraderGuidancePaneComponent {
   readonly diagnosticEvidence = computed<DiagnosticEvidenceLine[]>(() =>
     buildDiagnosticEvidenceLines(this.traderGuidance().advanced_evidence),
   );
-  readonly renderedPrimary = computed<RenderedAction | null>(() =>
-    renderTraderRemediation(this.traderGuidance().primary_remediation, this.dispatch),
+  readonly renderedPrimary = computed<PresentedAction | null>(() =>
+    presentTraderRemediation(this.traderGuidance().primary_remediation),
   );
-
-  private readonly dispatch: RendererDispatch = {
-    invokeCapability: () => this.emitCurrentRemediation(),
-    focus: () => this.emitCurrentRemediation(),
-    redeploy: () => this.emitCurrentRemediation(),
-    openRunbook: () => this.emitCurrentRemediation(),
-    invokeEndpoint: () => this.emitCurrentRemediation(),
-  };
 
   trackEvidence(index: number, line: DiagnosticEvidenceLine): string {
     return `${line.id}:${index}`;
@@ -66,7 +57,7 @@ export class TraderGuidancePaneComponent {
     return `${line.id}:${index}`;
   }
 
-  private emitCurrentRemediation(): void {
+  emitCurrentRemediation(): void {
     const remediation = this.traderGuidance().primary_remediation;
     if (remediation.kind === 'none') return;
     this.primaryRemediationSelected.emit(remediation);

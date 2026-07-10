@@ -1,12 +1,12 @@
 {
-  "baseline_commit": "340fbb266",
+  "baseline_commit": "abc8f6771+stage4-mutation-receipt",
   "cases": {
     "daemon_unreachable": {
       "display_status": "Sick bay",
       "evidence_run_id": "run-unreachable",
       "live_run_id": null,
       "process_state": "unreachable",
-      "sha256": "542f6306e78dcf3de8cc6508b3ef1b2c8c44f28596439fd86fa70f09ea5605db",
+      "sha256": "f1e36068d5aa687b8c5abc7944b9f9f7f221c8ef9529c3d06a29e09732ed7a2c",
       "strategy_instance_id": "unreachable-bot"
     },
     "idle_stopped": {
@@ -14,7 +14,7 @@
       "evidence_run_id": "run-idle",
       "live_run_id": null,
       "process_state": "idle",
-      "sha256": "7030ea4bcdedf59d48ddc8b76ba1c1d65f274e204c5b8f7a81b604f5fda7df1b",
+      "sha256": "3d87ea144071032bcfa6358f71ec76ed5ae341f51a0a51c1c38c31135b911c30",
       "strategy_instance_id": "idle-bot"
     },
     "nothing_deployed": {
@@ -22,7 +22,7 @@
       "evidence_run_id": null,
       "live_run_id": null,
       "process_state": "unreachable",
-      "sha256": "a2096981d15243b92bccbca968738c3d043bf3b1ecc0403de07e3d3d7027e1c1",
+      "sha256": "48c694e0b6eadf2bf03cb6a3ea37c0c7e4a63d7cfef633a5c3046ff70aa66ac7",
       "strategy_instance_id": "ghost-instance"
     },
     "running_live": {
@@ -30,7 +30,7 @@
       "evidence_run_id": "run-running",
       "live_run_id": "run-running",
       "process_state": "running",
-      "sha256": "322f63ea575134c117773fbbe6481157da2a347d281025467ef0228716864383",
+      "sha256": "ba49ba416ab180da9c42bc6839ea9344357bed9bc8d60d5e79768f0caa66bc89",
       "strategy_instance_id": "running-bot"
     }
   },

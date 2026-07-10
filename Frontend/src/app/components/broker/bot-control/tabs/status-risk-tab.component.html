@@ -36,7 +36,7 @@
                 [class.primary]="action.variant === 'primary'"
                 [class.link]="action.variant === 'link'"
                 [attr.data-testid]="'gate-action-' + gate.name"
-                (click)="action.invoke()"
+                (click)="invokeAction(gate)"
               >
                 {{ action.label }}
               </button>

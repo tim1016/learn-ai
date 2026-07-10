@@ -52,6 +52,7 @@ export function makeStatus(options: {
     process: { state: processState, pid: null, bound_run_id: null, started_at_ms: null },
     live_binding: null,
     evidence_binding: null,
+    latest_mutation: null,
     desired_state: {
       state: 'RUNNING',
       path_status: 'ok',
@@ -425,6 +426,8 @@ export function makeLifecycleTimeline(): LifecycleTimelineResponse {
 
 export function makeDesiredStateResponse(): SetInstanceDesiredStateResponse {
   return {
+    mutation_attempt_id: 'mutation-fixture-1',
+    mutation_dispatch_state: 'RESPONSE_CONFIRMED',
     durable: {
       state: 'PAUSED',
       updated_at_ms: 1_700_000_001_000,

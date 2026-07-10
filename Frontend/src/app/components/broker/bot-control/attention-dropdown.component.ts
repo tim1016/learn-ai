@@ -6,14 +6,13 @@ import type {
   TraderPrimaryRemediation,
 } from '../../../api/live-instances.types';
 import {
-  renderTraderRemediation,
-  type RenderedAction,
-  type RendererDispatch,
+  presentTraderRemediation,
+  type PresentedAction,
 } from './lib/suggested-action-renderer';
 
 interface AttentionActionRow {
   readonly group: OperatorSurfaceAttentionGroup;
-  readonly action: RenderedAction | null;
+  readonly action: PresentedAction | null;
 }
 
 @Component({
@@ -31,17 +30,9 @@ export class AttentionDropdownComponent {
   readonly actionRows = computed<AttentionActionRow[]>(() =>
     this.groups().map((group) => ({
       group,
-      action: renderTraderRemediation(group.remediation, this.dispatch),
+      action: presentTraderRemediation(group.remediation),
     })),
   );
-
-  private readonly dispatch: RendererDispatch = {
-    invokeCapability: () => this.emitCurrentRemediation(),
-    focus: () => this.emitCurrentRemediation(),
-    redeploy: () => this.emitCurrentRemediation(),
-    openRunbook: () => this.emitCurrentRemediation(),
-    invokeEndpoint: () => this.emitCurrentRemediation(),
-  };
 
   toggle(): void {
     this.open.update((open) => !open);
@@ -58,10 +49,5 @@ export class AttentionDropdownComponent {
   invoke(row: AttentionActionRow): void {
     if (row.group.remediation.kind === 'none') return;
     this.remediationSelected.emit(row.group.remediation);
-  }
-
-  private emitCurrentRemediation(): void {
-    // Row actions call invoke(row), which has the concrete group. This dispatch
-    // only satisfies the shared renderer contract and should not fire directly.
   }
 }
