@@ -32,9 +32,12 @@ retention leaves it in place.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import logging
+import os
+import tempfile
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -45,6 +48,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from app.broker.ibkr.models import IbkrMinuteBar
+from app.utils.advisory_lock import advisory_file_lock
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +153,32 @@ def _record_to_bar(record: dict) -> IbkrMinuteBar:
     return IbkrMinuteBar.model_validate(record)
 
 
+def _publish_parquet_atomic(table: pa.Table, path: Path) -> None:
+    """Publish a complete Parquet file with same-filesystem atomic replace."""
+
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+    )
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        pq.write_table(table, tmp_path)
+        with tmp_path.open("rb") as fh:
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, path)
+        dir_fd = os.open(str(path.parent), os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except Exception:
+        with contextlib.suppress(FileNotFoundError):
+            tmp_path.unlink()
+        raise
+
+
 class BarPersistence:
     """JSONL append-log + Parquet compaction for live OHLCV bars."""
 
@@ -172,75 +202,85 @@ class BarPersistence:
         regression after quarantining the day's JSONL.
         """
         with self._lock:
-            cursor = self._get_or_load_cursor(symbol, resolution)
             jsonl = self._jsonl_path(symbol, resolution, _ms_to_date(bar.start_ms))
+            with advisory_file_lock(jsonl):
+                return self._append_locked(symbol, resolution, bar, jsonl)
 
-            if cursor.last_start_ms is None:
-                self._write_line(jsonl, "append", bar)
-                cursor.last_start_ms = bar.start_ms
-                cursor.last_payload_key = _payload_key(bar)
-                return AppendOutcome.WRITTEN
+    def _append_locked(
+        self,
+        symbol: str,
+        resolution: str,
+        bar: IbkrMinuteBar,
+        jsonl: Path,
+    ) -> AppendOutcome:
+        cursor = self._get_or_load_cursor(symbol, resolution)
 
-            if bar.start_ms == cursor.last_start_ms:
-                payload = _payload_key(bar)
-                if payload == cursor.last_payload_key:
-                    cursor.counters.skipped_duplicate += 1
-                    logger.info(
-                        "bar_persistence: skipped_duplicate",
-                        extra={
-                            "symbol": symbol,
-                            "resolution": resolution,
-                            "start_ms": bar.start_ms,
-                            "action": "skipped_duplicate",
-                        },
-                    )
-                    return AppendOutcome.SKIPPED_DUPLICATE
-                # Mid-aggregate correction: same start_ms, different payload.
-                self._write_line(jsonl, "correction", bar)
-                cursor.last_payload_key = payload
-                cursor.counters.applied_correction += 1
-                logger.info(
-                    "bar_persistence: applied_correction",
-                    extra={
-                        "symbol": symbol,
-                        "resolution": resolution,
-                        "start_ms": bar.start_ms,
-                        "action": "applied_correction",
-                    },
-                )
-                return AppendOutcome.APPLIED_CORRECTION
-
-            if bar.start_ms < cursor.last_start_ms:
-                # Capture the prior cursor BEFORE reset (PR #483 review): the
-                # error message previously read ``last_accepted=None`` because
-                # the f-string ran after the field was cleared.
-                prior_start_ms = cursor.last_start_ms
-                self._quarantine(jsonl)
-                cursor.counters.regression_quarantined += 1
-                logger.error(
-                    "bar_persistence: non-monotonic regression — quarantining JSONL",
-                    extra={
-                        "symbol": symbol,
-                        "resolution": resolution,
-                        "incoming_start_ms": bar.start_ms,
-                        "last_accepted_start_ms": prior_start_ms,
-                        "action": "regression_quarantined",
-                    },
-                )
-                # Reset the cursor so a follow-up bar can start fresh, but
-                # the caller is expected to treat the raised error as fatal.
-                cursor.last_start_ms = None
-                cursor.last_payload_key = None
-                raise BarPersistenceRegressionError(
-                    f"non-monotonic bar for {symbol}/{resolution}: "
-                    f"incoming start_ms={bar.start_ms} < last_accepted={prior_start_ms}"
-                )
-
-            # Strict forward progress.
+        if cursor.last_start_ms is None:
             self._write_line(jsonl, "append", bar)
             cursor.last_start_ms = bar.start_ms
             cursor.last_payload_key = _payload_key(bar)
             return AppendOutcome.WRITTEN
+
+        if bar.start_ms == cursor.last_start_ms:
+            payload = _payload_key(bar)
+            if payload == cursor.last_payload_key:
+                cursor.counters.skipped_duplicate += 1
+                logger.info(
+                    "bar_persistence: skipped_duplicate",
+                    extra={
+                        "symbol": symbol,
+                        "resolution": resolution,
+                        "start_ms": bar.start_ms,
+                        "action": "skipped_duplicate",
+                    },
+                )
+                return AppendOutcome.SKIPPED_DUPLICATE
+            # Mid-aggregate correction: same start_ms, different payload.
+            self._write_line(jsonl, "correction", bar)
+            cursor.last_payload_key = payload
+            cursor.counters.applied_correction += 1
+            logger.info(
+                "bar_persistence: applied_correction",
+                extra={
+                    "symbol": symbol,
+                    "resolution": resolution,
+                    "start_ms": bar.start_ms,
+                    "action": "applied_correction",
+                },
+            )
+            return AppendOutcome.APPLIED_CORRECTION
+
+        if bar.start_ms < cursor.last_start_ms:
+            # Capture the prior cursor BEFORE reset (PR #483 review): the
+            # error message previously read ``last_accepted=None`` because
+            # the f-string ran after the field was cleared.
+            prior_start_ms = cursor.last_start_ms
+            self._quarantine(jsonl)
+            cursor.counters.regression_quarantined += 1
+            logger.error(
+                "bar_persistence: non-monotonic regression — quarantining JSONL",
+                extra={
+                    "symbol": symbol,
+                    "resolution": resolution,
+                    "incoming_start_ms": bar.start_ms,
+                    "last_accepted_start_ms": prior_start_ms,
+                    "action": "regression_quarantined",
+                },
+            )
+            # Reset the cursor so a follow-up bar can start fresh, but
+            # the caller is expected to treat the raised error as fatal.
+            cursor.last_start_ms = None
+            cursor.last_payload_key = None
+            raise BarPersistenceRegressionError(
+                f"non-monotonic bar for {symbol}/{resolution}: "
+                f"incoming start_ms={bar.start_ms} < last_accepted={prior_start_ms}"
+            )
+
+        # Strict forward progress.
+        self._write_line(jsonl, "append", bar)
+        cursor.last_start_ms = bar.start_ms
+        cursor.last_payload_key = _payload_key(bar)
+        return AppendOutcome.WRITTEN
 
     def replay(self, symbol: str, resolution: str, day: date) -> list[IbkrMinuteBar]:
         """Reconstruct the day's bars from JSONL.
@@ -300,18 +340,26 @@ class BarPersistence:
         ``<date>.jsonl.compacted-<now_ms>`` rather than deleted so an
         operator can audit the source after compaction.
         """
-        bars = self.replay(symbol, resolution, day)
-        parquet = self._parquet_path(symbol, resolution, day)
-        parquet.parent.mkdir(parents=True, exist_ok=True)
-        rows = [_bar_to_record(b) for b in bars]
-        table = pa.Table.from_pylist(rows) if rows else pa.table({})
-        pq.write_table(table, parquet)
+        with self._lock:
+            jsonl = self._jsonl_path(symbol, resolution, day)
+            with advisory_file_lock(jsonl):
+                parquet = self._parquet_path(symbol, resolution, day)
+                if not jsonl.is_file() and parquet.is_file():
+                    return parquet
+                bars = self.replay(symbol, resolution, day)
+                parquet.parent.mkdir(parents=True, exist_ok=True)
+                rows = [_bar_to_record(b) for b in bars]
+                table = pa.Table.from_pylist(rows) if rows else pa.table({})
+                _publish_parquet_atomic(table, parquet)
 
-        jsonl = self._jsonl_path(symbol, resolution, day)
-        if jsonl.is_file():
-            archive = jsonl.with_name(f"{jsonl.name}.{_COMPACTED_PREFIX}{_now_ms_utc()}")
-            jsonl.rename(archive)
-        return parquet
+                # Archive the source only after the complete Parquet file is
+                # durably published. A failed write leaves JSONL replayable.
+                if jsonl.is_file():
+                    archive = jsonl.with_name(
+                        f"{jsonl.name}.{_COMPACTED_PREFIX}{_now_ms_utc()}"
+                    )
+                    jsonl.rename(archive)
+                return parquet
 
     def active_dates(self, symbol: str, resolution: str) -> list[date]:
         """Sorted dates that have either a JSONL or a Parquet for
