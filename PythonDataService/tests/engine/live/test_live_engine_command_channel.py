@@ -115,6 +115,7 @@ async def test_command_poll_loop_acks_pending_pause(tmp_path: Path) -> None:
     channel.write_from_operator(CommandVerb.PAUSE)
 
     broker = FakeBroker()
+    durable_writes: list[tuple[object, str]] = []
     engine = LiveEngine(
         None,
         LiveConfig(),
@@ -122,6 +123,9 @@ async def test_command_poll_loop_acks_pending_pause(tmp_path: Path) -> None:
         output_dir=tmp_path,
         account_id="DU123",
         command_channel=channel,
+        desired_state_writer=lambda state, reason: durable_writes.append(
+            (state, reason)
+        ),
     )
 
     # Drive the bar loop enough wall-clock time for one 1s poll tick.
@@ -141,6 +145,7 @@ async def test_command_poll_loop_acks_pending_pause(tmp_path: Path) -> None:
     ack_payload = _json.loads(ack_files[0].read_text(encoding="utf-8"))
     assert ack_payload["verb"] == "PAUSE"
     assert ack_payload["outcome"]["status"] == "success"
+    assert len(durable_writes) == 1
 
 
 @pytest.mark.parametrize(
@@ -209,6 +214,35 @@ def test_poisoned_flag_failure_is_acked_as_durable_control_error(
     assert not shutdown_event.is_set()
 
 
+def test_missing_desired_state_writer_is_a_typed_command_failure() -> None:
+    engine = LiveEngine(None, LiveConfig(), broker=FakeBroker())
+
+    outcome = engine._dispatch_command(
+        Command(seq=1, verb=CommandVerb.PAUSE),
+        asyncio.Event(),
+    )
+
+    assert outcome["status"] == "error"
+    assert outcome["reason_code"] == "DURABLE_CONTROL_WRITE_FAILED"
+    assert "desired_state_writer is not configured" in outcome["effect"]
+    assert engine._paused is False
+
+
+def test_missing_run_directory_blocks_mark_poisoned() -> None:
+    engine = LiveEngine(None, LiveConfig(), broker=FakeBroker())
+    shutdown_event = asyncio.Event()
+
+    outcome = engine._dispatch_command(
+        Command(seq=1, verb=CommandVerb.MARK_POISONED),
+        shutdown_event,
+    )
+
+    assert outcome["status"] == "error"
+    assert outcome["reason_code"] == "DURABLE_CONTROL_WRITE_FAILED"
+    assert "run output directory is not configured" in outcome["effect"]
+    assert not shutdown_event.is_set()
+
+
 @pytest.mark.asyncio
 async def test_stop_command_signals_shutdown(tmp_path: Path) -> None:
     """STOP sets the shutdown_event so the bar loop exits via the
@@ -218,6 +252,7 @@ async def test_stop_command_signals_shutdown(tmp_path: Path) -> None:
     channel.write_from_operator(CommandVerb.STOP)
 
     broker = FakeBroker()
+    durable_writes: list[tuple[object, str]] = []
     engine = LiveEngine(
         None,
         LiveConfig(),
@@ -225,6 +260,9 @@ async def test_stop_command_signals_shutdown(tmp_path: Path) -> None:
         output_dir=tmp_path,
         account_id="DU123",
         command_channel=channel,
+        desired_state_writer=lambda state, reason: durable_writes.append(
+            (state, reason)
+        ),
     )
 
     bars = [_bar(minute) for minute in range(30, 200)]  # plenty
@@ -233,6 +271,7 @@ async def test_stop_command_signals_shutdown(tmp_path: Path) -> None:
     # The STOP was acked.
     ack_files = list(commands_dir.glob("*.ack.json"))
     assert len(ack_files) == 1
+    assert len(durable_writes) == 1
 
 
 @pytest.mark.asyncio

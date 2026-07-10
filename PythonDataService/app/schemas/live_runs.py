@@ -905,13 +905,15 @@ class CommandTimelineEntry(BaseModel):
 
     seq: int
     verb: str
-    status: str  # queued | acknowledged | failed
+    status: Literal["queued", "acknowledged", "failed"]
     reason: str | None = None
     issued_by: str | None = None
     queued_at_ms: int | None = None
     acked_at_ms: int | None = None
     outcome: str | None = None
     reason_code: str | None = None
+    durable_control: bool = False
+    failure_kind: Literal["durable_control_write_failed"] | None = None
     outcome_detail: str | None = None
 
 

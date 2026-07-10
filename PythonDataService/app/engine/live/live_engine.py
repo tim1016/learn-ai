@@ -2044,15 +2044,24 @@ class LiveEngine:
         """
         try:
             if cmd.verb is CommandVerb.PAUSE:
-                self._persist_desired_state(DesiredState.PAUSED, "command_channel:PAUSE")
+                self._persist_command_desired_state(
+                    DesiredState.PAUSED,
+                    "command_channel:PAUSE",
+                )
                 self._paused = True
                 return {"status": "success", "effect": "paused"}
             if cmd.verb is CommandVerb.RESUME:
-                self._persist_desired_state(DesiredState.RUNNING, "command_channel:RESUME")
+                self._persist_command_desired_state(
+                    DesiredState.RUNNING,
+                    "command_channel:RESUME",
+                )
                 self._paused = False
                 return {"status": "success", "effect": "resumed"}
             if cmd.verb is CommandVerb.STOP:
-                self._persist_desired_state(DesiredState.STOPPED, "command_channel:STOP")
+                self._persist_command_desired_state(
+                    DesiredState.STOPPED,
+                    "command_channel:STOP",
+                )
                 shutdown_event.set()
                 return {"status": "success", "effect": "shutdown_signalled"}
             if cmd.verb is CommandVerb.FLATTEN:
@@ -2068,11 +2077,14 @@ class LiveEngine:
                 self._flatten_now_requested = True
                 return {"status": "accepted", "effect": "flatten_now_queued"}
             if cmd.verb is CommandVerb.MARK_POISONED:
-                effect = "poisoned_flag_written"
-                if self._output_dir is not None:
-                    effect = self._write_operator_poisoned_flag(
-                        self._output_dir, cmd.payload.get("reason", "operator_declared")
+                if self._output_dir is None:
+                    raise DurableControlWriteError(
+                        operation="persist operator-declared poisoned.flag",
+                        cause=RuntimeError("run output directory is not configured"),
                     )
+                effect = self._write_operator_poisoned_flag(
+                    self._output_dir, cmd.payload.get("reason", "operator_declared")
+                )
                 shutdown_event.set()
                 return {"status": "success", "effect": effect}
             if cmd.verb is CommandVerb.RECONCILE:
@@ -2426,7 +2438,7 @@ class LiveEngine:
         ) from None
 
     def _persist_desired_state(self, state: DesiredState, reason: str) -> None:
-        """Persist operator intent before the command mutates runtime state."""
+        """Persist intent when this engine was wired to a durable state store."""
         if self._desired_state_writer is None:
             return
         try:
@@ -2436,6 +2448,20 @@ class LiveEngine:
                 operation=f"persist desired_state={state.value} reason={reason}",
                 cause=exc,
             ) from exc
+
+    def _persist_command_desired_state(
+        self,
+        state: DesiredState,
+        reason: str,
+    ) -> None:
+        """Require durability for commands that promise an intent change."""
+
+        if self._desired_state_writer is None:
+            raise DurableControlWriteError(
+                operation=f"persist desired_state={state.value} reason={reason}",
+                cause=RuntimeError("desired_state_writer is not configured"),
+            )
+        self._persist_desired_state(state, reason)
 
     def _write_operator_poisoned_flag(self, run_dir: Path, reason: str) -> str:
         """Write a structured operator-declared poisoned.flag.
