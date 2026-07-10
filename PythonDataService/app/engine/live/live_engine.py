@@ -14,7 +14,7 @@ import contextlib
 import json
 import logging
 import time
-from collections.abc import AsyncIterable, Callable
+from collections.abc import AsyncIterable, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -991,6 +991,48 @@ class LiveEngine:
             await self._broker.start_event_stream()
             started_event_stream = True
 
+        async def reconcile_real_broker_events(*, last_clean_bar_close_ms: int) -> None:
+            """Project one raw broker drain through every runtime consumer."""
+
+            nonlocal last_written_trade_count
+
+            raw_events = self._drain_raw_real_broker_events()
+            self._append_raw_broker_callbacks(raw_events)
+            if self._halt_enabled and raw_events:
+                self._extend_seen_executions(seen_executions, raw_events)
+                await self._check_halt_outside_mutation(
+                    seen_executions,
+                    last_clean_bar_close_ms=last_clean_bar_close_ms,
+                    portfolio=portfolio,
+                    writers=writers,
+                )
+            for raw_event in raw_events:
+                self._record_broker_order_cancelled(raw_event)
+                engine_event = self._convert_ibkr_fill(raw_event)
+                if engine_event is None:
+                    continue
+                self._record_broker_order_filled(raw_event)
+                portfolio.record_broker_fill(engine_event)
+                order_events.append(engine_event)
+                strategy.on_order_event(engine_event)
+                if writers is not None:
+                    self._write_execution(writers, engine_event)
+                    last_written_trade_count = self._flush_new_trades(
+                        writers,
+                        strategy,
+                        last_written_trade_count,
+                    )
+
+        async def reconcile_owned_state_after_cancel() -> None:
+            last_clean_ms = (
+                int(previous_bar.end_time.timestamp() * 1000)
+                if previous_bar is not None
+                else 0
+            )
+            await reconcile_real_broker_events(
+                last_clean_bar_close_ms=last_clean_ms,
+            )
+
         # PRD #619-B B3 — engine_runtime aggregator startup hooks. All
         # four blocks are seeded here so the publisher's first snapshot
         # writes immediately. The earlier shape (seed only command_loop
@@ -1080,7 +1122,12 @@ class LiveEngine:
                         # where no bar ever arrived.
                         fallback_time = last_bar.end_time if last_bar is not None else datetime.now(_ENGINE_TZ)
                         ctx.log(f"[SHUTDOWN] {fallback_time}: shutdown_event set; flattening and exiting")
-                        flat_acks = await self._flatten(portfolio, ctx, bar_time=fallback_time)
+                        flat_acks = await self._flatten(
+                            portfolio,
+                            ctx,
+                            bar_time=fallback_time,
+                            reconcile_owned_state=reconcile_owned_state_after_cancel,
+                        )
                         submitted_order_ids.extend(ack.order_id for ack in flat_acks)
                     # source exhausted (shutdown_won=False) OR shutdown finished —
                     # either way the bar loop is done.
@@ -1110,7 +1157,12 @@ class LiveEngine:
                 if self._flatten_now_requested:
                     self._flatten_now_requested = False
                     ctx.log(f"[FLATTEN_NOW] {minute_bar.time}: cancelling owned opens + liquidating")
-                    flat_acks = await self._flatten(portfolio, ctx, bar_time=minute_bar.time)
+                    flat_acks = await self._flatten(
+                        portfolio,
+                        ctx,
+                        bar_time=minute_bar.time,
+                        reconcile_owned_state=reconcile_owned_state_after_cancel,
+                    )
                     submitted_order_ids.extend(ack.order_id for ack in flat_acks)
                 # Reset per-day order counter on session-date boundary.
                 bar_date = minute_bar.time.date()
@@ -1140,33 +1192,14 @@ class LiveEngine:
                 # important: drain_broker_events clears the buffer, so
                 # a second drain in _drain_real_broker_order_events
                 # would see nothing.
-                raw_real_events = self._drain_raw_real_broker_events()
-                self._append_raw_broker_callbacks(raw_real_events)
-                if self._halt_enabled and raw_real_events:
-                    last_clean_ms = (
-                        int(previous_bar.end_time.timestamp() * 1000)
-                        if previous_bar is not None
-                        else int(minute_bar.time.timestamp() * 1000)
-                    )
-                    self._extend_seen_executions(seen_executions, raw_real_events)
-                    await self._check_halt_outside_mutation(
-                        seen_executions,
-                        last_clean_bar_close_ms=last_clean_ms,
-                        portfolio=portfolio,
-                        writers=writers,
-                    )
-                for raw_event in raw_real_events:
-                    self._record_broker_order_cancelled(raw_event)
-                    engine_event = self._convert_ibkr_fill(raw_event)
-                    if engine_event is None:
-                        continue
-                    self._record_broker_order_filled(raw_event)
-                    portfolio.record_broker_fill(engine_event)
-                    order_events.append(engine_event)
-                    strategy.on_order_event(engine_event)
-                    if writers is not None:
-                        self._write_execution(writers, engine_event)
-                        last_written_trade_count = self._flush_new_trades(writers, strategy, last_written_trade_count)
+                last_clean_ms = (
+                    int(previous_bar.end_time.timestamp() * 1000)
+                    if previous_bar is not None
+                    else int(minute_bar.time.timestamp() * 1000)
+                )
+                await reconcile_real_broker_events(
+                    last_clean_bar_close_ms=last_clean_ms,
+                )
 
                 # Force-flat barrier: at most once per session date, when the
                 # bar's wall-clock time crosses ``force_flat_at``, cancel the
@@ -1188,12 +1221,16 @@ class LiveEngine:
                     # that have not been submitted; they would otherwise compete
                     # with the liquidation about to be sent.
                     portfolio.pending_orders.clear()
-                    cancelled = await self._broker.cancel_open_orders()
+                    cancelled = await self._cancel_owned_orders_for_managed_flatten(
+                        bar_time=minute_bar.time,
+                        path="force_flat",
+                    )
                     if cancelled:
                         ctx.log(
                             f"[FORCE-FLAT] {minute_bar.time}: cancelled "
                             f"{len(cancelled)} open broker order(s) {cancelled!r}"
                         )
+                    await reconcile_owned_state_after_cancel()
                     liquidations = 0
                     for sym, pos in list(portfolio.positions.items()):
                         if pos.quantity == 0:
@@ -1417,29 +1454,14 @@ class LiveEngine:
                 await self._broker.stop_event_stream()
                 started_event_stream = False
                 self._raise_if_event_stream_failed()
-                final_raw_events = self._drain_raw_real_broker_events()
-                self._append_raw_broker_callbacks(final_raw_events)
-                if self._halt_enabled and final_raw_events:
-                    last_clean_ms = int(previous_bar.end_time.timestamp() * 1000) if previous_bar is not None else 0
-                    self._extend_seen_executions(seen_executions, final_raw_events)
-                    await self._check_halt_outside_mutation(
-                        seen_executions,
-                        last_clean_bar_close_ms=last_clean_ms,
-                        portfolio=portfolio,
-                        writers=writers,
-                    )
-                for raw_event in final_raw_events:
-                    self._record_broker_order_cancelled(raw_event)
-                    engine_event = self._convert_ibkr_fill(raw_event)
-                    if engine_event is None:
-                        continue
-                    self._record_broker_order_filled(raw_event)
-                    portfolio.record_broker_fill(engine_event)
-                    order_events.append(engine_event)
-                    strategy.on_order_event(engine_event)
-                    if writers is not None:
-                        self._write_execution(writers, engine_event)
-                        last_written_trade_count = self._flush_new_trades(writers, strategy, last_written_trade_count)
+                last_clean_ms = (
+                    int(previous_bar.end_time.timestamp() * 1000)
+                    if previous_bar is not None
+                    else 0
+                )
+                await reconcile_real_broker_events(
+                    last_clean_bar_close_ms=last_clean_ms,
+                )
         finally:
             # PRD #619-B B5 follow-up — stop the child watchdog FIRST so
             # its periodic lease-reading task is settled before we touch
@@ -2442,12 +2464,49 @@ class LiveEngine:
 
     # ──────────────────── Graceful shutdown helper ───────────────────
 
+    async def _cancel_owned_orders_for_managed_flatten(
+        self,
+        *,
+        bar_time: datetime,
+        path: str,
+    ) -> list[int]:
+        """Require a bounded terminal-cancel barrier before liquidation."""
+
+        try:
+            return await asyncio.wait_for(
+                self._broker.cancel_open_orders(),
+                timeout=self._cancel_confirm_timeout_s,
+            )
+        except TimeoutError as exc:
+            if self._output_dir is not None:
+                try:
+                    self._output_dir.mkdir(parents=True, exist_ok=True)
+                    (self._output_dir / "halt.flag").write_text(
+                        f"CANCEL_CONFIRM_TIMEOUT_HALT "
+                        f"timeout_s={self._cancel_confirm_timeout_s} "
+                        f"path={path} bar_time={bar_time}\n",
+                        encoding="utf-8",
+                    )
+                except OSError:
+                    logger.exception("halt.flag write failed for cancel-confirm timeout")
+            raise CancelConfirmTimeoutHaltError(
+                timeout_s=self._cancel_confirm_timeout_s
+            ) from exc
+        except Exception:
+            logger.exception(
+                "broker.cancel_open_orders failed during %s; "
+                "refusing unconfirmed liquidation",
+                path,
+            )
+            raise
+
     async def _flatten(
         self,
         portfolio: LivePortfolio,
         ctx: LiveContext,
         *,
         bar_time: datetime,
+        reconcile_owned_state: Callable[[], Awaitable[None]],
     ) -> list[IbkrOrderAck]:
         """Cancel + flatten + submit liquidations for a graceful shutdown.
 
@@ -2467,80 +2526,39 @@ class LiveEngine:
         cannot probe the broker mid-flatten. The lock is non-reentrant,
         so the internal submit uses ``_submit_pending_with_meta_locked``.
 
-        The broker position snapshot, not the in-memory portfolio, owns the
-        liquidation quantity. Positions are refreshed after cancellation and
-        again per symbol immediately before submit. This mirrors
-        ``run._recovery_flatten`` and prevents a late exit fill from turning a
-        stale liquidation into a duplicate order that crosses through flat.
+        ``cancel_open_orders`` is a terminal-confirmation barrier. Once it
+        returns, ``reconcile_owned_state`` projects every final namespace-owned
+        fill into the instance portfolio. Liquidation is then sized exactly
+        once from that owned ledger. Account-net broker positions are never
+        used as instance ownership because they can include sibling bots.
         """
         async with self._submit_lock:
             portfolio.pending_orders.clear()
-            # Phase 5C / VCR-0002 — managed cancel-confirm timeout. PRD §5C step
-            # 4-5: every managed cancel/flatten path follows cancel → wait for
-            # confirms → fetch positions → liquidate. A hung broker that can't
-            # confirm cancels must NOT proceed to liquidation; the engine
-            # writes halt.flag (CANCEL_CONFIRM_TIMEOUT_HALT) and raises so the
-            # operator can reconcile. The emergency-flatten force path has its
-            # own audit-event carve-out at the CLI layer.
-            try:
-                cancelled = await asyncio.wait_for(
-                    self._broker.cancel_open_orders(),
-                    timeout=self._cancel_confirm_timeout_s,
-                )
-            except TimeoutError as exc:
-                if self._output_dir is not None:
-                    try:
-                        self._output_dir.mkdir(parents=True, exist_ok=True)
-                        (self._output_dir / "halt.flag").write_text(
-                            f"CANCEL_CONFIRM_TIMEOUT_HALT "
-                            f"timeout_s={self._cancel_confirm_timeout_s} "
-                            f"path=_flatten bar_time={bar_time}\n",
-                            encoding="utf-8",
-                        )
-                    except OSError:
-                        logger.exception("halt.flag write failed for cancel-confirm timeout")
-                raise CancelConfirmTimeoutHaltError(timeout_s=self._cancel_confirm_timeout_s) from exc
-            except Exception:
-                # Other broker exceptions (network blip, transient) — preserve
-                # the prior tolerant behavior so the operator-issued flatten
-                # still acts. PRD §5C is silent on this branch; the timeout
-                # path is the load-bearing safety.
-                logger.exception("broker.cancel_open_orders failed during shutdown_flatten")
-                cancelled = []
+            # Phase 5C / VCR-0002: every managed flatten requires terminal
+            # cancellation confirmation. Emergency flatten has its own audited
+            # force-through carve-out at the CLI boundary.
+            cancelled = await self._cancel_owned_orders_for_managed_flatten(
+                bar_time=bar_time,
+                path="_flatten",
+            )
             if cancelled:
                 ctx.log(f"[SHUTDOWN] {bar_time}: cancelled {len(cancelled)} open broker order(s) {cancelled!r}")
 
-            # The broker is authoritative after cancel confirmation. A fill
-            # may have landed while the engine was shutting down, so the
-            # in-memory portfolio is no longer safe for liquidation sizing.
-            await portfolio.refresh_positions_from_broker()
-            candidate_symbols = tuple(
-                symbol
-                for symbol, position in portfolio.positions.items()
-                if position.quantity != 0
-            )
+            # The terminal barrier freezes the set of pre-existing owned
+            # orders. Reconcile their final fills before reading the owned
+            # portfolio; account-net positions are not an ownership ledger.
+            await reconcile_owned_state()
 
             liquidations = 0
-            flat_acks: list[IbkrOrderAck] = []
-            for sym in candidate_symbols:
-                # Close the residual race between the post-cancel snapshot and
-                # each placement. Submit this symbol immediately after the
-                # refresh instead of building a stale multi-symbol batch.
-                await portfolio.refresh_positions_from_broker()
-                fresh_position = portfolio.positions.get(sym)
-                if fresh_position is None or fresh_position.quantity == 0:
-                    ctx.log(
-                        f"[SHUTDOWN] {bar_time}: skipped {sym} liquidation; "
-                        "broker now reports flat"
-                    )
+            for sym, position in list(portfolio.positions.items()):
+                if position.quantity == 0:
                     continue
-
                 if portfolio.liquidate(sym, bar_time) is None:
                     continue
                 liquidations += 1
-                flat_acks.extend(await self._submit_pending_with_meta_locked(portfolio))
             if liquidations == 0:
                 return []
+            flat_acks = await self._submit_pending_with_meta_locked(portfolio)
             ctx.log(f"[SHUTDOWN] {bar_time}: submitted {liquidations} liquidation order(s)")
             return flat_acks
 

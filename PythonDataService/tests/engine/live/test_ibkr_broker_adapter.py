@@ -68,10 +68,17 @@ def _client(*, owned_open_id: int = 100, foreign_open_id: int = 999):
     def _cancel_order(order):
         cancel_calls.append(int(order.orderId))
 
+    async def _open_orders():
+        return [
+            trade
+            for trade in open_trades
+            if int(trade.order.orderId) not in cancel_calls
+        ]
+
     ib = SimpleNamespace(
         qualifyContractsAsync=AsyncMock(return_value=[qualified]),
         placeOrder=MagicMock(return_value=place_order_return),
-        reqAllOpenOrdersAsync=AsyncMock(return_value=open_trades),
+        reqAllOpenOrdersAsync=AsyncMock(side_effect=_open_orders),
         trades=MagicMock(return_value=open_trades),
         cancelOrder=MagicMock(side_effect=_cancel_order),
     )
@@ -107,6 +114,7 @@ async def test_cancel_open_orders_only_cancels_owned() -> None:
 
     assert cancelled == [100]
     assert cancel_calls == [100]
+    assert client.ib.reqAllOpenOrdersAsync.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -119,6 +127,52 @@ async def test_cancel_open_orders_empty_when_runner_owns_nothing() -> None:
 
     assert cancelled == []
     assert cancel_calls == []
+
+
+@pytest.mark.asyncio
+async def test_cancel_open_orders_waits_until_owned_order_is_terminal() -> None:
+    client, cancel_calls = _client(owned_open_id=100, foreign_open_id=999)
+    adapter = IbkrBrokerAdapter(client)
+    await adapter.place_order(_spec())
+
+    terminal = asyncio.Event()
+    open_trades = list(await client.ib.reqAllOpenOrdersAsync())
+
+    async def _open_orders():
+        if not terminal.is_set():
+            return open_trades
+        return [trade for trade in open_trades if int(trade.order.orderId) != 100]
+
+    client.ib.reqAllOpenOrdersAsync = AsyncMock(side_effect=_open_orders)
+    cancel_task = asyncio.create_task(adapter.cancel_open_orders())
+
+    await asyncio.sleep(0.01)
+    assert cancel_calls == [100]
+    assert not cancel_task.done()
+
+    terminal.set()
+    assert await asyncio.wait_for(cancel_task, timeout=0.2) == [100]
+
+
+@pytest.mark.asyncio
+async def test_cancel_open_orders_waits_until_terminal_fill_reaches_buffer() -> None:
+    client, _ = _client(owned_open_id=100, foreign_open_id=999)
+    adapter = IbkrBrokerAdapter(client)
+    await adapter.place_order(_spec())
+    owned_trade = next(
+        trade for trade in client.ib.trades() if int(trade.order.orderId) == 100
+    )
+    owned_trade.fills = [SimpleNamespace()]
+    adapter._event_task = asyncio.current_task()
+
+    cancel_task = asyncio.create_task(adapter.cancel_open_orders())
+    await asyncio.sleep(0.01)
+    assert not cancel_task.done()
+
+    adapter._observed_fill_count_by_order_id[100] = 1
+    adapter._event_buffer_changed.set()
+    assert await asyncio.wait_for(cancel_task, timeout=0.2) == [100]
+    adapter._event_task = None
 
 
 @pytest.mark.asyncio
