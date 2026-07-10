@@ -41,7 +41,11 @@ IntentWal truncates its tolerated tail before append). The following P1s were
 - Crashed-sibling-stays-`ACTIVE` liveness leak (fleet trust leak).
   Reserved operator-notice code: `fleet.sibling_liveness_unproven`
   (`critical`, `no_remedy(unbuilt)` — ADR-0015 § Amendment 2026-07-08).
-- Non-atomic ledger / parquet writes (crash mid-write can self-poison).
+- Offline reconciliation/report bundle writers still publish Parquet and their
+  companion JSON/hash files non-atomically. Live run artifacts, live bar
+  compaction, and broker tick partitions use atomic publication; the remaining
+  report-bundle work is research-output integrity rather than control-plane
+  safety.
 - No R3 recovery daemon.
 - Residual: committed dev-default control secret `local-dev-control-secret`
   (fine for local; must not reach a shared/live host).
@@ -58,8 +62,6 @@ handled) — confirm closed, then drop. Remaining:
   should be `account_id AND client_id` (`orders.py` ~:385–423). *(also VCR-P3-H)*
 - **B-06** `place_paper_order` awaits `qualifyContractsAsync` with no timeout on
   the live submit hot path (`orders.py` ~:243–263).
-- **B-07** Parquet partition writer non-atomic + races concurrent writers
-  (`broker/ibkr/persistence.py` ~:161–174) — behind `persist_*` flags (default off).
 - **B-09** Partial-fill events mis-stamp running totals.
 - **B-10** `Ticker.time` → ms without a naive-datetime guard (timestamp-rigor
   violation, `market_data.py` ~:137–141).

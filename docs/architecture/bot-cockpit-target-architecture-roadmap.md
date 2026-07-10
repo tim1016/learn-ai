@@ -48,6 +48,13 @@ removed the stale B-01 entry from `docs/known-gaps.md`; durable cross-restart
 idempotency remains the separately documented Phase 3.5 boundary, not this
 in-process TOCTOU defect.
 
+For this stage, “Parquet publication” covers operator-path datasets: live-run
+artifacts, live bar compaction, and optional broker tick partitions. All three
+publish through a same-filesystem temporary file, fsync, atomic replace, and
+parent-directory fsync; append/read-modify-write paths are serialized. Offline
+reconciliation and research report bundles remain tracked separately because
+their failure cannot change bot intent, runtime ownership, or restart safety.
+
 **Exit criteria:**
 
 - every fixed defect has a regression test that fails before the fix;

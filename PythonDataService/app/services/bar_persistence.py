@@ -32,9 +32,12 @@ retention leaves it in place.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import logging
+import os
+import tempfile
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -147,6 +150,32 @@ def _bar_to_record(bar: IbkrMinuteBar) -> dict:
 
 def _record_to_bar(record: dict) -> IbkrMinuteBar:
     return IbkrMinuteBar.model_validate(record)
+
+
+def _publish_parquet_atomic(table: pa.Table, path: Path) -> None:
+    """Publish a complete Parquet file with same-filesystem atomic replace."""
+
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+    )
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    try:
+        pq.write_table(table, tmp_path)
+        with tmp_path.open("rb") as fh:
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, path)
+        dir_fd = os.open(str(path.parent), os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    except Exception:
+        with contextlib.suppress(FileNotFoundError):
+            tmp_path.unlink()
+        raise
 
 
 class BarPersistence:
@@ -300,18 +329,23 @@ class BarPersistence:
         ``<date>.jsonl.compacted-<now_ms>`` rather than deleted so an
         operator can audit the source after compaction.
         """
-        bars = self.replay(symbol, resolution, day)
-        parquet = self._parquet_path(symbol, resolution, day)
-        parquet.parent.mkdir(parents=True, exist_ok=True)
-        rows = [_bar_to_record(b) for b in bars]
-        table = pa.Table.from_pylist(rows) if rows else pa.table({})
-        pq.write_table(table, parquet)
+        with self._lock:
+            bars = self.replay(symbol, resolution, day)
+            parquet = self._parquet_path(symbol, resolution, day)
+            parquet.parent.mkdir(parents=True, exist_ok=True)
+            rows = [_bar_to_record(b) for b in bars]
+            table = pa.Table.from_pylist(rows) if rows else pa.table({})
+            _publish_parquet_atomic(table, parquet)
 
-        jsonl = self._jsonl_path(symbol, resolution, day)
-        if jsonl.is_file():
-            archive = jsonl.with_name(f"{jsonl.name}.{_COMPACTED_PREFIX}{_now_ms_utc()}")
-            jsonl.rename(archive)
-        return parquet
+            # Archive the source only after the complete Parquet file is
+            # durably published. A failed write leaves JSONL replayable.
+            jsonl = self._jsonl_path(symbol, resolution, day)
+            if jsonl.is_file():
+                archive = jsonl.with_name(
+                    f"{jsonl.name}.{_COMPACTED_PREFIX}{_now_ms_utc()}"
+                )
+                jsonl.rename(archive)
+            return parquet
 
     def active_dates(self, symbol: str, resolution: str) -> list[date]:
         """Sorted dates that have either a JSONL or a Parquet for

@@ -187,6 +187,36 @@ def test_compact_emits_parquet_and_archives_jsonl(tmp_path: Path) -> None:
     archived = list((tmp_path / "SPY" / "1m").glob("2026-04-01.jsonl.compacted-*"))
     assert len(archived) == 1
     assert not (tmp_path / "SPY" / "1m" / "2026-04-01.jsonl").exists()
+    assert list((tmp_path / "SPY" / "1m").glob(".*.tmp")) == []
+
+
+def test_compact_failed_publish_preserves_parquet_and_jsonl(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed atomic replace leaves both prior truth sources intact."""
+    from app.services import bar_persistence
+
+    store = BarPersistence(root=tmp_path)
+    store.append("SPY", "1m", _bar(ANCHOR_MS))
+    parquet = tmp_path / "SPY" / "1m" / "2026-04-01.parquet"
+    bar_persistence.pq.write_table(
+        bar_persistence.pa.table({"sentinel": [1]}),
+        parquet,
+    )
+    original = parquet.read_bytes()
+    monkeypatch.setattr(
+        bar_persistence.os,
+        "replace",
+        lambda *_args: (_ for _ in ()).throw(OSError("replace failed")),
+    )
+
+    with pytest.raises(OSError, match="replace failed"):
+        store.compact("SPY", "1m", ANCHOR_DATE)
+
+    assert parquet.read_bytes() == original
+    assert (tmp_path / "SPY" / "1m" / "2026-04-01.jsonl").is_file()
+    assert list((tmp_path / "SPY" / "1m").glob(".*.tmp")) == []
 
 
 def test_read_parquet_round_trips_bars(tmp_path: Path) -> None:
