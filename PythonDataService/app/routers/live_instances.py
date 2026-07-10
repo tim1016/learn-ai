@@ -1839,6 +1839,12 @@ async def _ensure_surface_hub_started(
     await _SURFACE_RUNS_CACHE.invalidate(root)
     hub = _surface_hub_for(strategy_instance_id)
     try:
+        provider = _FLEET_DAEMON_PROVIDER
+        if provider is not None:
+            # Accepted daemon mutations are the authoritative out-of-band
+            # invalidation signal. Refresh the shared fleet observation once;
+            # normal client refreshes still obey the fleet cadence.
+            await provider.refresh(force=True)
         if hub.is_running:
             await hub.refresh()
         else:

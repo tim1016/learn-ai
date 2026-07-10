@@ -1078,6 +1078,7 @@ async def test_accepted_mutation_refreshes_an_already_running_surface_hub(
 ) -> None:
     _app, root = app_with_root
     refreshes = 0
+    fleet_refreshes: list[bool] = []
     invalidated: list[Path | None] = []
 
     class RunningHub:
@@ -1098,12 +1099,18 @@ async def test_accepted_mutation_refreshes_an_already_running_surface_hub(
         async def invalidate(self, invalidated_root: Path | None = None) -> None:
             invalidated.append(invalidated_root)
 
+    class FleetProvider:
+        async def refresh(self, *, force: bool = False) -> None:
+            fleet_refreshes.append(force)
+
     monkeypatch.setattr(live_instances, "_SURFACE_HUBS", Registry())
     monkeypatch.setattr(live_instances, "_SURFACE_RUNS_CACHE", RunsCache())
+    monkeypatch.setattr(live_instances, "_FLEET_DAEMON_PROVIDER", FleetProvider())
 
     await live_instances._ensure_surface_hub_started("spy_mutated_surface")
 
     assert refreshes == 1
+    assert fleet_refreshes == [True]
     assert invalidated == [root]
 
 

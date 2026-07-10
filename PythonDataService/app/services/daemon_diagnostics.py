@@ -148,7 +148,7 @@ async def _fetch_instances(
         result, payload = await host_daemon_client.fetch_instances(daemon_url)
     else:
         result, payload = fleet_observation.result, fleet_observation.payload
-    if payload is None:
+    if result.kind != "CONNECTED" or payload is None:
         return result, None
     try:
         return result, HostRunnerInstancesStatus.model_validate(payload)

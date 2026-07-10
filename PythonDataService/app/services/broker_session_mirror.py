@@ -90,7 +90,7 @@ class BrokerSessionMirrorService:
                 registry_payload = fleet_observation.payload
             if socket_snapshot is None:
                 degradation_reasons.append(socket_result.detail or "host daemon socket probe unavailable")
-            if registry_payload is not None:
+            if registry_result.kind == "CONNECTED" and registry_payload is not None:
                 try:
                     registry_snapshot = HostRunnerInstancesStatus.model_validate(registry_payload)
                 except ValueError as exc:
