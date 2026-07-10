@@ -9,6 +9,7 @@ the composition boundary again.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,50 @@ from fastapi import HTTPException, status
 from app.schemas.live_runs import EvidenceBinding, LiveInstanceStatus
 from app.services.bot_daily_lifecycle import BotDailyLifecycleEvidence
 from app.services.bot_lifecycle_receipts import LifecycleReceiptContext
+
+VisibleRuns = dict[str, list[dict]]
+
+
+class VisibleRunsSnapshotCache:
+    """Coalesce fleet-wide run scans shared by every per-bot assembler."""
+
+    def __init__(self, *, ttl_seconds: float = 0.9) -> None:
+        self._ttl_seconds = ttl_seconds
+        self._entries: dict[Path, tuple[float, VisibleRuns]] = {}
+        self._lock = asyncio.Lock()
+
+    async def get(
+        self,
+        root: Path,
+        loader: Callable[[Path], VisibleRuns],
+    ) -> VisibleRuns:
+        key = root.resolve(strict=False)
+        now = time.monotonic()
+        cached = self._entries.get(key)
+        if cached is not None and cached[0] > now:
+            return cached[1]
+        async with self._lock:
+            now = time.monotonic()
+            cached = self._entries.get(key)
+            if cached is not None and cached[0] > now:
+                return cached[1]
+            snapshot = await asyncio.to_thread(loader, root)
+            completed_at = time.monotonic()
+            self._entries = {
+                entry_root: entry for entry_root, entry in self._entries.items() if entry[0] > completed_at
+            }
+            self._entries[key] = (
+                completed_at + self._ttl_seconds,
+                snapshot,
+            )
+            return snapshot
+
+    async def invalidate(self, root: Path | None = None) -> None:
+        async with self._lock:
+            if root is None:
+                self._entries.clear()
+            else:
+                self._entries.pop(root.resolve(strict=False), None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,7 +136,7 @@ class LiveInstanceSurfaceAssembler:
         d = self._d
         settings = d.get_settings()
         root = Path(settings.live_runs_root)
-        runs_by_instance = d.visible_runs_by_instance(root)
+        runs_by_instance = await d.visible_runs_by_instance(root)
         if strategy_instance_id not in runs_by_instance and d.sid_has_soft_deletion(
             root.parent,
             strategy_instance_id,
@@ -345,4 +390,8 @@ class LiveInstanceSurfaceAssembler:
         )
 
 
-__all__ = ["LiveInstanceSurfaceAssembler", "LiveInstanceSurfaceDependencies"]
+__all__ = [
+    "LiveInstanceSurfaceAssembler",
+    "LiveInstanceSurfaceDependencies",
+    "VisibleRunsSnapshotCache",
+]

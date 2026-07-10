@@ -111,7 +111,9 @@ retrying producer running. Normal status reads return only the stored document
 or typed `SURFACE_SNAPSHOT_UNAVAILABLE`; `?refresh=true` is the explicit
 diagnostic/test refresh path. Stop/restart fences and drains in-flight
 assembly, and soft deletion stops/removes the hub before unregistering its
-publisher.
+publisher. A short-lived async fleet snapshot cache coalesces the shared
+run-ledger scan across all per-bot refreshes; accepted deploy/start mutations
+invalidate that cache and refresh an already-running hub before returning.
 
 Broker-activity publisher ownership follows producer-observed `live_binding`
 transitions: stopped bots do not bootstrap a publisher, live bots retry a

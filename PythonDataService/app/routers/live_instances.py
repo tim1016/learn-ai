@@ -260,6 +260,7 @@ from app.services.live_chart_window import (
 from app.services.live_instance_surface_assembler import (
     LiveInstanceSurfaceAssembler,
     LiveInstanceSurfaceDependencies,
+    VisibleRunsSnapshotCache,
 )
 from app.services.mutation_attempt import (
     TERMINAL_STATES,
@@ -315,6 +316,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["live-instances"])
 _SURFACE_HUBS = SurfaceHubRegistry[LiveInstanceStatus]()
+_SURFACE_RUNS_CACHE = VisibleRunsSnapshotCache()
 
 # strategy_instance_id flows into a daemon URL and a filesystem path; confine it
 # to a single safe segment at the boundary.
@@ -1605,11 +1607,15 @@ async def _resolve_fleet_blocks_starts_for_status(
     return fleet.policy_blocks_starts
 
 
+async def _surface_visible_runs_by_instance(root: Path) -> dict[str, list[dict]]:
+    return await _SURFACE_RUNS_CACHE.get(root, _visible_runs_by_instance)
+
+
 def _get_surface_assembler() -> LiveInstanceSurfaceAssembler:
     return LiveInstanceSurfaceAssembler(
         LiveInstanceSurfaceDependencies(
             get_settings=get_settings,
-            visible_runs_by_instance=_visible_runs_by_instance,
+            visible_runs_by_instance=_surface_visible_runs_by_instance,
             sid_has_soft_deletion=_sid_has_soft_deletion_from_directory,
             bot_soft_deleted_detail=_bot_soft_deleted_detail,
             fetch_instance_process=host_daemon_client.fetch_instance_process,
@@ -1745,7 +1751,7 @@ async def start_surface_hubs() -> None:
 
     settings = get_settings()
     root = Path(settings.live_runs_root)
-    strategy_instance_ids = set(_visible_runs_by_instance(root))
+    strategy_instance_ids = set(await _surface_visible_runs_by_instance(root))
     _result, daemon = await host_daemon_client.fetch_instances(settings.live_runner_daemon_url)
     for instance in (daemon or {}).get("instances", []):
         sid = instance.get("strategy_instance_id")
@@ -1759,20 +1765,25 @@ async def stop_surface_hubs() -> None:
     """Stop every producer task during data-plane shutdown."""
 
     await _SURFACE_HUBS.stop_all()
+    await _SURFACE_RUNS_CACHE.invalidate()
 
 
 async def _ensure_surface_hub_started(
     strategy_instance_id: str,
 ) -> None:
+    root = Path(get_settings().live_runs_root)
+    await _SURFACE_RUNS_CACHE.invalidate(root)
     hub = _surface_hub_for(strategy_instance_id)
-    if not hub.is_running:
-        try:
+    try:
+        if hub.is_running:
+            await hub.refresh()
+        else:
             await hub.start()
-        except Exception:
-            logger.exception(
-                "surface hub startup deferred after mutation",
-                extra={"strategy_instance_id": strategy_instance_id},
-            )
+    except Exception:
+        logger.exception(
+            "surface hub refresh deferred after mutation",
+            extra={"strategy_instance_id": strategy_instance_id},
+        )
 
 
 @router.get("/catalog", response_model=BotCatalogResponse)
@@ -1980,6 +1991,7 @@ async def delete_instance(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="bot deletion marker could not be written",
         ) from exc
+    await _SURFACE_RUNS_CACHE.invalidate(root)
     # Stop the producer before unregistering the publisher so an in-flight
     # snapshot observer cannot recreate publisher ownership after cleanup.
     for cleanup in (

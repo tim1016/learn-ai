@@ -939,6 +939,41 @@ async def test_running_surface_retries_transient_activity_publisher_bootstrap(
         await live_instances.stop_surface_hubs()
 
 
+async def test_accepted_mutation_refreshes_an_already_running_surface_hub(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _app, root = app_with_root
+    refreshes = 0
+    invalidated: list[Path | None] = []
+
+    class RunningHub:
+        is_running = True
+
+        async def refresh(self) -> None:
+            nonlocal refreshes
+            refreshes += 1
+
+        async def start(self) -> None:
+            raise AssertionError("an already-running hub must be refreshed, not restarted")
+
+    class Registry:
+        def get_or_create(self, *_args, **_kwargs):
+            return RunningHub()
+
+    class RunsCache:
+        async def invalidate(self, invalidated_root: Path | None = None) -> None:
+            invalidated.append(invalidated_root)
+
+    monkeypatch.setattr(live_instances, "_SURFACE_HUBS", Registry())
+    monkeypatch.setattr(live_instances, "_SURFACE_RUNS_CACHE", RunsCache())
+
+    await live_instances._ensure_surface_hub_started("spy_mutated_surface")
+
+    assert refreshes == 1
+    assert invalidated == [root]
+
+
 async def test_instance_status_uses_recovered_activity_publisher_for_health_and_chart(
     app_with_root,
     monkeypatch: pytest.MonkeyPatch,

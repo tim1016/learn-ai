@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 from pydantic import BaseModel
 
+from app.services.live_instance_surface_assembler import VisibleRunsSnapshotCache
 from app.services.surface_hub import SnapshotUnavailableError, SurfaceHub, SurfaceHubRegistry
 
 
@@ -270,6 +272,29 @@ async def test_registry_remove_stops_and_forgets_hub() -> None:
 
     assert registry.get("bot-a") is None
     assert hub.is_running is False
+
+
+@pytest.mark.asyncio
+async def test_visible_runs_cache_coalesces_fleet_scan_and_invalidates(
+    tmp_path: Path,
+) -> None:
+    cache = VisibleRunsSnapshotCache(ttl_seconds=60)
+    calls = 0
+
+    def load(_root: Path) -> dict[str, list[dict]]:
+        nonlocal calls
+        calls += 1
+        return {"bot-a": [{"run_id": "run-a"}]}
+
+    snapshots = await asyncio.gather(*(cache.get(tmp_path, load) for _ in range(5)))
+
+    assert calls == 1
+    assert all(snapshot == snapshots[0] for snapshot in snapshots)
+
+    await cache.invalidate(tmp_path)
+    await cache.get(tmp_path, load)
+
+    assert calls == 2
 
 
 @pytest.mark.asyncio
