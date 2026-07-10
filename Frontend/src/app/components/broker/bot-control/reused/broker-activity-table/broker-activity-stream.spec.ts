@@ -96,7 +96,7 @@ describe('brokerActivityStream', () => {
     // on the same channel, so no REST paging precedes it.
     expect(eventSources.length).toBe(1);
     expect(eventSources[0].url).toBe(
-      '/api/live-instances/sid-1/broker-activity/stream?since_seq=0',
+      '/api/live-instances/sid-1/broker-activity/stream?since_seq=0&control_intent=learn-ai-browser-control',
     );
   });
 
