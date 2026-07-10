@@ -5,6 +5,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from app.routers.live_instances import (
+    _resolve_durable_control_write_failure,
+    _resolve_durable_control_write_failure_for_status,
+)
 from app.routers.live_runs import COMMAND_POLL_INTERVAL_MS, build_command_timeline
 
 
@@ -27,7 +31,16 @@ def test_timeline_unifies_queued_acknowledged_failed(tmp_path: Path) -> None:
     _pending(d, 2, "FLATTEN")
     _ack(d, 2, "FLATTEN", {"status": "ok", "effect": "flat"})  # acknowledged
     _pending(d, 3, "MARK_POISONED")
-    _ack(d, 3, "MARK_POISONED", {"status": "error", "effect": "boom"})  # failed
+    _ack(
+        d,
+        3,
+        "MARK_POISONED",
+        {
+            "status": "error",
+            "reason_code": "DURABLE_CONTROL_WRITE_FAILED",
+            "effect": "boom",
+        },
+    )  # failed
 
     timeline = build_command_timeline(d)
 
@@ -42,12 +55,70 @@ def test_timeline_unifies_queued_acknowledged_failed(tmp_path: Path) -> None:
     assert by_seq[1].acked_at_ms is None
 
     assert by_seq[2].status == "acknowledged"
+    assert by_seq[2].durable_control is False
     assert by_seq[2].outcome == "ok"
     assert by_seq[2].outcome_detail == "flat"
     assert by_seq[2].acked_at_ms is not None
 
     assert by_seq[3].status == "failed"
     assert by_seq[3].outcome == "error"
+    assert by_seq[3].reason_code == "DURABLE_CONTROL_WRITE_FAILED"
+    assert by_seq[3].durable_control is True
+    assert by_seq[3].failure_kind == "durable_control_write_failed"
+
+
+def test_latest_durable_write_failure_surfaces_until_newer_command(tmp_path: Path) -> None:
+    d = tmp_path / "commands"
+    d.mkdir()
+    _ack(
+        d,
+        1,
+        "PAUSE",
+        {
+            "status": "error",
+            "reason_code": "DURABLE_CONTROL_WRITE_FAILED",
+            "effect": "persist desired_state=PAUSED failed",
+        },
+    )
+
+    assert (
+        _resolve_durable_control_write_failure(tmp_path)
+        == "persist desired_state=PAUSED failed"
+    )
+
+    _ack(d, 2, "FLATTEN", {"status": "success", "effect": "flattened"})
+    assert (
+        _resolve_durable_control_write_failure(tmp_path)
+        == "persist desired_state=PAUSED failed"
+    )
+
+    _ack(d, 3, "PAUSE", {"status": "success", "effect": "paused"})
+    assert _resolve_durable_control_write_failure(tmp_path) is None
+
+
+def test_durable_failure_survives_loss_of_live_binding(tmp_path: Path) -> None:
+    root = tmp_path / "live_runs"
+    run_dir = root / "run-latest"
+    commands_dir = run_dir / "commands"
+    commands_dir.mkdir(parents=True)
+    _ack(
+        commands_dir,
+        1,
+        "STOP",
+        {
+            "status": "error",
+            "reason_code": "DURABLE_CONTROL_WRITE_FAILED",
+            "effect": "persist desired_state=STOPPED failed",
+        },
+    )
+
+    failure = _resolve_durable_control_write_failure_for_status(
+        root,
+        live_binding=None,
+        runs=[{"run_dir": str(run_dir)}],
+    )
+
+    assert failure == "persist desired_state=STOPPED failed"
 
 
 def test_timeline_empty_for_absent_dir(tmp_path: Path) -> None:

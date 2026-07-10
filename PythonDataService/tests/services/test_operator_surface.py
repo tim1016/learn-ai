@@ -105,6 +105,26 @@ def _account_truth_snapshot(
     return AccountTruthSnapshot(truth=truth, cached_at_ms=generated_at_ms)
 
 
+def test_operator_surface_authors_durable_control_write_blocker() -> None:
+    surface = _surface(
+        durable_control_write_failure=(
+            "persist desired_state=PAUSED failed: read-only filesystem"
+        )
+    )
+
+    blocker = next(
+        blocker
+        for blocker in surface.blockers
+        if blocker.id == "durable_control_write_failed"
+    )
+    assert blocker.severity == "blocking"
+    assert blocker.disposition == "fix_elsewhere"
+    assert blocker.applies_to == "both"
+    assert blocker.primary_move is not None
+    assert blocker.primary_move.action.kind == "navigate"
+    assert blocker.primary_move.action.route == "/engine"
+
+
 def _guard(
     *,
     broker_state: str = "SAFE",

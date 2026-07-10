@@ -23,11 +23,7 @@ committing effort.
 
 ## 1. Safety-critical (verified open against current code)
 
-- **Durable-state write failures are swallowed** — `_persist_desired_state`
-  (~:2200–2205) and `write_poisoned_flag` (~:2504–2505) catch-and-proceed on a
-  genuine disk/permission failure. The command channel acks success while the
-  next start of the same `run_id` reads no `poisoned.flag` / durable intent.
-  Should re-raise or transition to a degraded state. *(was VCR-0018 sub-item G)*
+No verified-open items remain in this section.
 
 ## 2. Architecture-investigation P1 tier (survives; not re-verified 2026-07-04)
 

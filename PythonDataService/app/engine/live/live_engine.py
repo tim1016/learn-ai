@@ -213,6 +213,15 @@ class MaxOrdersPerDayExceeded(RuntimeError):
     """
 
 
+class DurableControlWriteError(RuntimeError):
+    """A command could not persist the durable state it claims to change."""
+
+    def __init__(self, *, operation: str, cause: BaseException) -> None:
+        super().__init__(f"{operation} failed: {cause}")
+        self.operation = operation
+        self.__cause__ = cause
+
+
 class CancelConfirmTimeoutHaltError(RuntimeError):
     """Phase 5C / VCR-0002 — managed cancel-then-liquidate path stalled.
 
@@ -2035,15 +2044,24 @@ class LiveEngine:
         """
         try:
             if cmd.verb is CommandVerb.PAUSE:
+                self._persist_command_desired_state(
+                    DesiredState.PAUSED,
+                    "command_channel:PAUSE",
+                )
                 self._paused = True
-                self._persist_desired_state(DesiredState.PAUSED, "command_channel:PAUSE")
                 return {"status": "success", "effect": "paused"}
             if cmd.verb is CommandVerb.RESUME:
+                self._persist_command_desired_state(
+                    DesiredState.RUNNING,
+                    "command_channel:RESUME",
+                )
                 self._paused = False
-                self._persist_desired_state(DesiredState.RUNNING, "command_channel:RESUME")
                 return {"status": "success", "effect": "resumed"}
             if cmd.verb is CommandVerb.STOP:
-                self._persist_desired_state(DesiredState.STOPPED, "command_channel:STOP")
+                self._persist_command_desired_state(
+                    DesiredState.STOPPED,
+                    "command_channel:STOP",
+                )
                 shutdown_event.set()
                 return {"status": "success", "effect": "shutdown_signalled"}
             if cmd.verb is CommandVerb.FLATTEN:
@@ -2059,11 +2077,14 @@ class LiveEngine:
                 self._flatten_now_requested = True
                 return {"status": "accepted", "effect": "flatten_now_queued"}
             if cmd.verb is CommandVerb.MARK_POISONED:
-                effect = "poisoned_flag_written"
-                if self._output_dir is not None:
-                    effect = self._write_operator_poisoned_flag(
-                        self._output_dir, cmd.payload.get("reason", "operator_declared")
+                if self._output_dir is None:
+                    raise DurableControlWriteError(
+                        operation="persist operator-declared poisoned.flag",
+                        cause=RuntimeError("run output directory is not configured"),
                     )
+                effect = self._write_operator_poisoned_flag(
+                    self._output_dir, cmd.payload.get("reason", "operator_declared")
+                )
                 shutdown_event.set()
                 return {"status": "success", "effect": effect}
             if cmd.verb is CommandVerb.RECONCILE:
@@ -2109,6 +2130,17 @@ class LiveEngine:
                     "accepted_at_ms": accepted_at_ms,
                 }
             return {"status": "error", "effect": f"unknown_verb_{cmd.verb.value}"}
+        except DurableControlWriteError as exc:
+            logger.exception(
+                "durable control write failed for verb=%s operation=%s",
+                cmd.verb.value,
+                exc.operation,
+            )
+            return {
+                "status": "error",
+                "reason_code": "DURABLE_CONTROL_WRITE_FAILED",
+                "effect": str(exc),
+            }
         except Exception as exc:
             logger.exception("command dispatch failed for verb=%s", cmd.verb.value)
             return {"status": "error", "effect": f"dispatch_exception: {exc!r}"}
@@ -2406,24 +2438,30 @@ class LiveEngine:
         ) from None
 
     def _persist_desired_state(self, state: DesiredState, reason: str) -> None:
-        """Best-effort durable write of operator intent (PRD-A §16.4
-        Resolution 7) so PAUSE / STOP survive a crash + reboot.
-
-        Mirrors ``_persist_live_state``'s swallow-with-log contract: a
-        desired-state sidecar I/O hiccup must not break command dispatch
-        or take down the 1s poll loop. A ``None`` writer disables it
-        (replay / test paths that don't pass one).
-        """
+        """Persist intent when this engine was wired to a durable state store."""
         if self._desired_state_writer is None:
             return
         try:
             self._desired_state_writer(state, reason)
-        except Exception:
-            logger.exception(
-                "desired-state persist failed for state=%s reason=%s",
-                state.value,
-                reason,
+        except Exception as exc:
+            raise DurableControlWriteError(
+                operation=f"persist desired_state={state.value} reason={reason}",
+                cause=exc,
+            ) from exc
+
+    def _persist_command_desired_state(
+        self,
+        state: DesiredState,
+        reason: str,
+    ) -> None:
+        """Require durability for commands that promise an intent change."""
+
+        if self._desired_state_writer is None:
+            raise DurableControlWriteError(
+                operation=f"persist desired_state={state.value} reason={reason}",
+                cause=RuntimeError("desired_state_writer is not configured"),
             )
+        self._persist_desired_state(state, reason)
 
     def _write_operator_poisoned_flag(self, run_dir: Path, reason: str) -> str:
         """Write a structured operator-declared poisoned.flag.
@@ -2458,9 +2496,11 @@ class LiveEngine:
                 return "poisoned_flag_written"
             logger.info("poisoned.flag already exists; operator MARK_POISONED preserved prior cause")
             return "poisoned_flag_already_present"
-        except OSError:
-            logger.exception("could not write operator-declared poisoned.flag")
-            return "poisoned_flag_write_failed"
+        except OSError as exc:
+            raise DurableControlWriteError(
+                operation="persist operator-declared poisoned.flag",
+                cause=exc,
+            ) from exc
 
     # ──────────────────── Graceful shutdown helper ───────────────────
 

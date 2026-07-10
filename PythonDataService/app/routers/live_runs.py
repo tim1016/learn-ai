@@ -1201,6 +1201,17 @@ async def enqueue_command(run_id: str, body: EnqueueCommandRequest) -> CommandVi
 # (plan §16.4 Resolution 7). Server-provided so the client's staleness
 # threshold derives from the dispatcher's cadence, not a magic constant.
 COMMAND_POLL_INTERVAL_MS = 1000
+_DURABLE_CONTROL_VERBS = frozenset(
+    {
+        CommandVerb.PAUSE.value,
+        CommandVerb.RESUME.value,
+        CommandVerb.STOP.value,
+        CommandVerb.MARK_POISONED.value,
+    }
+)
+_ACKNOWLEDGED_OUTCOMES = frozenset(
+    {"ok", "success", "accepted", "completed", "already_running"}
+)
 
 
 def _file_mtime_ms(path: Path) -> int | None:
@@ -1240,16 +1251,29 @@ def build_command_timeline(commands_dir: Path) -> CommandsTimeline:
                 seq = int(data["seq"])
                 outcome = dict(data.get("outcome", {}))
                 raw_status = str(outcome.get("status", "ok"))
+                reason_code = outcome.get("reason_code")
+                verb = str(data["verb"])
                 prior = entries.get(seq)
                 entries[seq] = CommandTimelineEntry(
                     seq=seq,
-                    verb=str(data["verb"]),
-                    status="acknowledged" if raw_status == "ok" else "failed",
+                    verb=verb,
+                    status=(
+                        "acknowledged"
+                        if raw_status in _ACKNOWLEDGED_OUTCOMES
+                        else "failed"
+                    ),
                     reason=prior.reason if prior else None,
                     issued_by=prior.issued_by if prior else "operator",
                     queued_at_ms=prior.queued_at_ms if prior else None,
                     acked_at_ms=_file_mtime_ms(ack_path),
                     outcome=raw_status,
+                    reason_code=reason_code,
+                    durable_control=verb in _DURABLE_CONTROL_VERBS,
+                    failure_kind=(
+                        "durable_control_write_failed"
+                        if reason_code == "DURABLE_CONTROL_WRITE_FAILED"
+                        else None
+                    ),
                     outcome_detail=outcome.get("effect") or outcome.get("detail"),
                 )
             except (OSError, ValueError, KeyError, TypeError):
