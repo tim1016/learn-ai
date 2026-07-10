@@ -51,6 +51,32 @@
   opacity: 0.8;
 }
 
+.roster-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.roster-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 100%;
+  padding: 0.12rem 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--link-color, #8a8a8a) 45%, transparent);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  background: color-mix(in srgb, var(--link-color, #8a8a8a) 12%, transparent);
+
+  .label,
+  .detail {
+    overflow-wrap: anywhere;
+  }
+}
+
 .code-identity {
   display: flex;
   align-items: center;

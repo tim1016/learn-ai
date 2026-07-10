@@ -1,4 +1,14 @@
-import { Injectable, computed, inject, resource } from '@angular/core';
+import { DestroyRef, Injectable, computed, inject, resource, signal } from '@angular/core';
+import type {
+  FleetRosterSnapshot,
+  LiveInstanceSummary,
+  ReadinessVerdictEnum,
+} from '../api/live-instances.types';
+import {
+  adoptFleetRosterSnapshot,
+  openFleetRosterStream,
+  type FleetRosterStream,
+} from './fleet-roster-stream';
 import { BrokerHealthService } from './broker-health.service';
 import { LiveRunsService } from './live-runs.service';
 
@@ -25,6 +35,13 @@ export interface ConnectivityLink {
   detail: string;
 }
 
+export interface FleetRosterChip {
+  id: string;
+  label: string;
+  detail: string;
+  state: LinkState;
+}
+
 /** Whether the host daemon is running the latest code. `unknown` while loading
  * or when git is unavailable; `stale` means the working tree is ahead of the
  * running process and it must be restarted to apply merged fixes. */
@@ -45,6 +62,10 @@ export interface DaemonFreshness {
 export class BrokerConnectivityService {
   private readonly svc = inject(LiveRunsService);
   private readonly brokerHealth = inject(BrokerHealthService);
+  private readonly destroyRef = inject(DestroyRef);
+  private readonly fleetRosterSnapshot = signal<FleetRosterSnapshot | null>(null);
+  private readonly rosterStreamState = signal<'closed' | 'connecting' | 'open' | 'error'>('closed');
+  private fleetRosterStream: FleetRosterStream | null = null;
 
   /** Host-daemon health — the only proof the subprocess bridge is reachable. */
   readonly daemon = resource({ loader: () => this.svc.getHostRunnerHealth() });
@@ -53,13 +74,33 @@ export class BrokerConnectivityService {
   /** The instance roster — its cardinality is what tells "nothing deployed"
    * apart from "clean account" (account contamination alone can't, #411). */
   readonly instances = resource({ loader: () => this.svc.getInstances() });
+  readonly rosterInstances = computed<readonly LiveInstanceSummary[] | undefined>(
+    () => this.fleetRosterSnapshot()?.instances ?? this.instances.value(),
+  );
+  readonly fleetRosterStatus = this.rosterStreamState.asReadonly();
 
   /** No strategy instances exist at all — distinct from a clean/contaminated
    * account. Loaded (not undefined) and empty. */
   readonly nothingDeployed = computed<boolean>(() => {
-    const list = this.instances.value();
+    const list = this.rosterInstances();
     return list !== undefined && list.length === 0;
   });
+
+  readonly rosterChips = computed<FleetRosterChip[]>(() =>
+    (this.rosterInstances() ?? [])
+      .filter((row) => (row.readiness_verdict ?? 'UNKNOWN') !== 'READY')
+      .map((row) => ({
+        id: row.strategy_instance_id,
+        label: row.strategy_instance_id,
+        detail: `${row.process_state.toUpperCase()} · ${row.readiness_verdict ?? 'UNKNOWN'}`,
+        state: rosterChipState(row),
+      })),
+  );
+
+  constructor() {
+    this.openFleetRoster();
+    this.destroyRef.onDestroy(() => this.fleetRosterStream?.close());
+  }
 
   readonly daemonState = computed<LinkState>(() => {
     if (this.daemon.isLoading()) return 'unknown';
@@ -143,7 +184,12 @@ export class BrokerConnectivityService {
   }
 
   readonly fleetState = computed<LinkState>(() => {
-    if (this.fleet.isLoading() || this.instances.isLoading()) return 'unknown';
+    if (
+      this.fleet.isLoading() ||
+      (this.instances.isLoading() && this.fleetRosterSnapshot() === null)
+    ) {
+      return 'unknown';
+    }
     // Nothing deployed reads as neutral (grey), not a healthy "Clear" green —
     // the detail text "Nothing deployed" carries the distinction (WCAG: not
     // colour-alone).
@@ -258,6 +304,35 @@ export class BrokerConnectivityService {
     this.daemon.reload();
     this.fleet.reload();
     this.instances.reload();
+    this.fleetRosterSnapshot.set(null);
+    this.openFleetRoster();
     void this.brokerHealth.refresh();
   }
+
+  private openFleetRoster(): void {
+    this.fleetRosterStream?.close();
+    this.fleetRosterStream = null;
+    if (typeof EventSource === 'undefined') {
+      this.rosterStreamState.set('closed');
+      return;
+    }
+    this.fleetRosterStream = openFleetRosterStream({
+      onStatus: (status) => this.rosterStreamState.set(status),
+      onMalformedSnapshot: () => this.rosterStreamState.set('error'),
+      onSnapshot: (candidate) => {
+        this.rosterStreamState.set('open');
+        this.fleetRosterSnapshot.update((current) =>
+          adoptFleetRosterSnapshot(current, candidate),
+        );
+      },
+    });
+  }
+}
+
+function rosterChipState(row: LiveInstanceSummary): LinkState {
+  if (row.process_state === 'unreachable') return 'down';
+  const verdict: ReadinessVerdictEnum = row.readiness_verdict ?? 'UNKNOWN';
+  if (verdict === 'READY') return 'ok';
+  if (verdict === 'BLOCKED' || verdict === 'DEGRADED') return 'warn';
+  return 'unknown';
 }

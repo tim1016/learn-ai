@@ -1078,6 +1078,14 @@ export interface LiveInstanceSummary {
   readiness_as_of_ms?: number | null;
 }
 
+export interface FleetRosterSnapshot {
+  stream_epoch: string;
+  surface_version: number;
+  fetched_at_ms: number;
+  daemon_fetched_at_ms?: number | null;
+  instances: LiveInstanceSummary[];
+}
+
 export type BotCatalogTone = 'positive' | 'warning' | 'danger' | 'neutral';
 export type BotCatalogTradingMode = 'paper' | 'live' | 'unknown';
 

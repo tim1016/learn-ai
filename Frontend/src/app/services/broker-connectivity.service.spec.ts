@@ -4,6 +4,28 @@ import { BrokerConnectivityService } from './broker-connectivity.service';
 import { BrokerHealthService } from './broker-health.service';
 import { LiveRunsService } from './live-runs.service';
 
+class StubEventSource {
+  static instances: StubEventSource[] = [];
+  readonly listeners = new Map<string, (event: Event) => void>();
+  closed = false;
+
+  constructor(readonly url: string) {
+    StubEventSource.instances.push(this);
+  }
+
+  addEventListener(name: string, listener: EventListenerOrEventListenerObject): void {
+    if (typeof listener === 'function') this.listeners.set(name, listener);
+  }
+
+  emit(name: string, data: string): void {
+    this.listeners.get(name)?.(new MessageEvent(name, { data }));
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+}
+
 interface SetupOpts {
   instances: unknown[];
   fleetVerdict?: 'clean' | 'contaminated';
@@ -73,6 +95,7 @@ function brokerLink(service: BrokerConnectivityService) {
 afterEach(() => {
   TestBed.resetTestingModule();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe('BrokerConnectivityService fleet state', () => {
@@ -105,6 +128,52 @@ describe('BrokerConnectivityService fleet state', () => {
     expect(service.fleetState()).toBe('warn');
     expect(service.fleetBlocksStarts()).toBe(true);
     expect(fleetLink(service)?.detail).toBe('Contaminated — new starts blocked');
+  });
+
+  it('adopts the fleet roster SSE snapshot over the REST bootstrap', async () => {
+    StubEventSource.instances = [];
+    vi.stubGlobal('EventSource', StubEventSource);
+    const service = setup({ instances: [] });
+    await flush();
+
+    expect(service.nothingDeployed()).toBe(true);
+
+    StubEventSource.instances[0].emit(
+      'snapshot',
+      JSON.stringify({
+        stream_epoch: 'fleet-epoch',
+        surface_version: 1,
+        fetched_at_ms: 1_700_000_000_000,
+        daemon_fetched_at_ms: 1_700_000_000_000,
+        instances: [
+          {
+            strategy_instance_id: 'blocked-bot',
+            process_state: 'idle',
+            readiness_verdict: 'BLOCKED',
+            readiness_as_of_ms: 1_700_000_000_000,
+          },
+          {
+            strategy_instance_id: 'ready-bot',
+            process_state: 'running',
+            readiness_verdict: 'READY',
+            readiness_as_of_ms: 1_700_000_000_000,
+          },
+        ],
+      }),
+    );
+
+    expect(StubEventSource.instances[0].url).toBe(
+      '/api/live-instances/fleet/stream?control_intent=learn-ai-browser-control',
+    );
+    expect(service.nothingDeployed()).toBe(false);
+    expect(service.rosterChips()).toEqual([
+      {
+        id: 'blocked-bot',
+        label: 'blocked-bot',
+        detail: 'IDLE · BLOCKED',
+        state: 'warn',
+      },
+    ]);
   });
 });
 
