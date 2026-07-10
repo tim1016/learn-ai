@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 from collections import deque
 from collections.abc import Callable
 from contextlib import suppress
@@ -319,9 +320,20 @@ class DurableEventChannel(Generic[RowT]):  # noqa: UP046 - Python 3.11 runtime.
                     )
 
     def _wal_signature(self) -> tuple[int, int, int, int] | None:
-        wal_path = self._safe_wal_path()
+        # Keep the realpath confinement adjacent to the filesystem sink. The
+        # shared helper enforces the same invariant at construction and for
+        # identity stamping, while this local proof lets CodeQL verify that a
+        # route-derived instance id cannot influence ``stat`` outside the
+        # service-owned root.
+        root_real = os.path.realpath(os.fspath(self._trusted_root))
+        candidate = os.path.realpath(os.fspath(self._wal_path))
+        root_prefix = root_real.rstrip(os.sep) + os.sep
+        if not candidate.startswith(root_prefix):
+            raise ValueError(
+                f"durable event channel WAL path {candidate} escapes root {root_real}"
+            )
         try:
-            stat = wal_path.stat()
+            stat = os.stat(candidate)
         except FileNotFoundError:
             return None
         return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
