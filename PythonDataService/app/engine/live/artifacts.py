@@ -42,7 +42,7 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
-from app.engine.live.live_state_sidecar import _fsync_parent_dir
+from app.utils.atomic_parquet import atomic_parquet_write, fsync_file, fsync_parent_dir
 
 if TYPE_CHECKING:
     from app.engine.strategy.spec.schema import StrategySpec
@@ -498,22 +498,11 @@ def _max_segment_index(dataset_dir: Path) -> int:
 def _write_parquet_file_atomic(path: Path, frame: pd.DataFrame) -> None:
     """Crash-safe fallback for appending to a legacy single-file parquet."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        dir=str(path.parent),
+    atomic_parquet_write(
+        path,
+        lambda tmp_path: frame.to_parquet(tmp_path, index=False),
+        replace=os.replace,
     )
-    os.close(fd)
-    tmp_path = Path(tmp_name)
-    try:
-        frame.to_parquet(tmp_path, index=False)
-        _fsync_file(tmp_path)
-        os.replace(tmp_path, path)
-        _fsync_parent_dir(path)
-    except Exception:
-        with contextlib.suppress(OSError):
-            tmp_path.unlink()
-        raise
 
 
 def _write_parquet_segment_atomic(
@@ -536,10 +525,10 @@ def _write_parquet_segment_atomic(
     try:
         segment_path = tmp_dir / segment_name
         frame.to_parquet(segment_path, index=False)
-        _fsync_file(segment_path)
-        _fsync_parent_dir(segment_path)
+        fsync_file(segment_path)
+        fsync_parent_dir(segment_path)
         os.replace(tmp_dir, dataset_dir)
-        _fsync_parent_dir(dataset_dir)
+        fsync_parent_dir(dataset_dir)
     except Exception:
         with contextlib.suppress(OSError):
             shutil.rmtree(tmp_dir)
@@ -551,22 +540,14 @@ def _write_segment_into_existing_dataset(
     segment_name: str,
     frame: pd.DataFrame,
 ) -> None:
-    tmp_path = dataset_dir.parent / f".{dataset_dir.name}.{segment_name}.tmp"
     final_path = dataset_dir / segment_name
-    try:
-        frame.to_parquet(tmp_path, index=False)
-        _fsync_file(tmp_path)
-        os.replace(tmp_path, final_path)
-        _fsync_parent_dir(final_path)
-    except Exception:
-        with contextlib.suppress(OSError):
-            tmp_path.unlink()
-        raise
-
-
-def _fsync_file(path: Path) -> None:
-    with path.open("rb") as fh:
-        os.fsync(fh.fileno())
+    atomic_parquet_write(
+        final_path,
+        lambda tmp_path: frame.to_parquet(tmp_path, index=False),
+        replace=os.replace,
+        temp_dir=dataset_dir.parent,
+        temp_prefix=f".{dataset_dir.name}.{segment_name}.",
+    )
 
 
 # ──────────────────────────── Bundle ─────────────────────────────────

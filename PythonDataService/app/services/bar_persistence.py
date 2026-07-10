@@ -32,12 +32,10 @@ retention leaves it in place.
 
 from __future__ import annotations
 
-import contextlib
 import io
 import json
 import logging
 import os
-import tempfile
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -49,6 +47,7 @@ import pyarrow.parquet as pq
 
 from app.broker.ibkr.models import IbkrMinuteBar
 from app.utils.advisory_lock import advisory_file_lock
+from app.utils.atomic_parquet import atomic_parquet_write
 
 logger = logging.getLogger(__name__)
 
@@ -156,27 +155,12 @@ def _record_to_bar(record: dict) -> IbkrMinuteBar:
 def _publish_parquet_atomic(table: pa.Table, path: Path) -> None:
     """Publish a complete Parquet file with same-filesystem atomic replace."""
 
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        dir=str(path.parent),
+    atomic_parquet_write(
+        path,
+        lambda tmp_path: pq.write_table(table, tmp_path),
+        replace=os.replace,
+        cleanup_errors=(FileNotFoundError,),
     )
-    os.close(fd)
-    tmp_path = Path(tmp_name)
-    try:
-        pq.write_table(table, tmp_path)
-        with tmp_path.open("rb") as fh:
-            os.fsync(fh.fileno())
-        os.replace(tmp_path, path)
-        dir_fd = os.open(str(path.parent), os.O_RDONLY)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
-    except Exception:
-        with contextlib.suppress(FileNotFoundError):
-            tmp_path.unlink()
-        raise
 
 
 class BarPersistence:

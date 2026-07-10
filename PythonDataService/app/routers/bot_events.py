@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import re
@@ -23,11 +22,11 @@ from app.services.bot_event_stream_service import (
 from app.services.durable_event_channel import (
     DurableEventChannel,
     EventCursor,
-    EventEnd,
-    EventGap,
-    EventRecord,
-    EventReset,
-    event_message_sse,
+)
+from app.services.durable_event_stream import (
+    parse_event_cursor,
+    resolve_stream_cursor,
+    stream_durable_event_channel,
 )
 
 logger = logging.getLogger(__name__)
@@ -110,7 +109,7 @@ async def bot_event_backfill(
     try:
         channel = service.channel_for_run(run_dir)
         channel.refresh()
-        parsed_cursor = _parse_event_cursor(cursor)
+        parsed_cursor = parse_event_cursor(cursor)
         if parsed_cursor is not None and parsed_cursor.stream_id != channel.stream_id:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
@@ -204,86 +203,44 @@ async def bot_event_stream(
     assert channel is not None
 
     effective_since_seq = since_seq if since_seq is not None else 0
-    requested_cursor = _resolve_stream_cursor(
+    stream_cursor = resolve_stream_cursor(
         channel=channel,
         query_cursor=cursor,
         last_event_id=last_event_id,
         legacy_since_seq=effective_since_seq,
-    )
-    use_legacy_backfill = cursor is None and (
-        last_event_id is None or since_seq is not None
-    )
-    legacy_after_seq = (
-        requested_cursor.seq if last_event_id is not None else effective_since_seq
+        legacy_since_seq_provided=since_seq is not None,
     )
     del poll_ms
 
-    async def event_source() -> AsyncIterator[str]:
-        records: list[EventRecord[BotEventRow]] = []
-        if use_legacy_backfill:
-            records, subscription = channel.subscribe_with_backfill(legacy_after_seq)
-        else:
-            subscription = channel.subscribe(requested_cursor)
-        try:
-            for record in records:
-                yield event_message_sse(
-                    record,
-                    encode_row=lambda row: row.model_dump_json(),
-                )
-                subscription.acknowledge(record.cursor)
-            while True:
-                message = await subscription.queue.get()
-                yield event_message_sse(
-                    message,
-                    encode_row=lambda row: row.model_dump_json(),
-                )
-                if isinstance(message, EventRecord):
-                    subscription.acknowledge(message.cursor)
-                    continue
-                if isinstance(message, EventReset) and subscription.active:
-                    continue
-                if isinstance(message, (EventGap, EventEnd, EventReset)):
-                    return
-        except asyncio.CancelledError:
-            raise
-        except BotEventStreamUnavailableError:
-            logger.warning(
-                "Could not stream bot-event rows",
-                extra={"run_id": run_id, "run_dir": str(run_dir)},
-                exc_info=True,
-            )
-            yield _error_sse(_BOT_EVENT_PROJECTION_ERROR)
-        except Exception:
-            logger.exception(
-                "bot-event SSE stream error",
-                extra={"run_id": run_id, "run_dir": str(run_dir)},
-            )
-            yield _error_sse(_BOT_EVENT_STREAM_ERROR)
-        finally:
-            channel.unsubscribe(subscription)
-            await service.release_live_channel(run_dir, channel)
+    def handle_projection_error(_: BaseException) -> str:
+        logger.warning(
+            "Could not stream bot-event rows",
+            extra={"run_id": run_id, "run_dir": str(run_dir)},
+            exc_info=True,
+        )
+        return _error_sse(_BOT_EVENT_PROJECTION_ERROR)
 
-    return _streaming_response(event_source())
+    def handle_stream_error(_: BaseException) -> str:
+        logger.exception(
+            "bot-event SSE stream error",
+            extra={"run_id": run_id, "run_dir": str(run_dir)},
+        )
+        return _error_sse(_BOT_EVENT_STREAM_ERROR)
 
+    async def release_channel() -> None:
+        await service.release_live_channel(run_dir, channel)
 
-def _parse_event_cursor(value: str | None) -> EventCursor | None:
-    try:
-        return EventCursor.parse(value)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-
-
-def _resolve_stream_cursor(
-    *,
-    channel: DurableEventChannel[BotEventRow],
-    query_cursor: str | None,
-    last_event_id: str | None,
-    legacy_since_seq: int,
-) -> EventCursor:
-    parsed = _parse_event_cursor(last_event_id or query_cursor)
-    if parsed is not None:
-        return parsed
-    return EventCursor(channel.stream_id, legacy_since_seq)
+    return _streaming_response(
+        stream_durable_event_channel(
+            channel=channel,
+            cursor=stream_cursor,
+            encode_row=lambda row: row.model_dump_json(),
+            projection_error_types=(BotEventStreamUnavailableError,),
+            handle_projection_error=handle_projection_error,
+            handle_error=handle_stream_error,
+            on_close=release_channel,
+        )
+    )
 
 
 def _streaming_response(source: AsyncIterator[str]) -> StreamingResponse:
