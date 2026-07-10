@@ -65,7 +65,22 @@ def stable_bot_deletion_path(artifacts_root: Path, strategy_instance_id: str) ->
 
 
 def read_bot_deletion(artifacts_root: Path, strategy_instance_id: str) -> BotDeletionRecord | None:
-    path = stable_bot_deletion_path(artifacts_root, strategy_instance_id)
+    # Keep validation, regex reconstruction, and containment in the same frame
+    # as the read sinks. CodeQL does not propagate sanitizer evidence through
+    # a custom path-builder return value.
+    validate_strategy_instance_id(strategy_instance_id)
+    match = STRATEGY_INSTANCE_ID_PATTERN.fullmatch(strategy_instance_id)
+    if match is None:
+        raise ValueError(f"strategy_instance_id rejected on second check: {strategy_instance_id!r}")
+    safe_strategy_instance_id = match.group(0)
+    live_state_root = (artifacts_root / "live_state").resolve()
+    path = (live_state_root / safe_strategy_instance_id / BOT_DELETION_FILENAME).resolve(strict=False)
+    try:
+        common = os.path.commonpath([str(path), str(live_state_root)])
+    except ValueError as exc:
+        raise ValueError(f"bot deletion path {path} cannot share root {live_state_root}") from exc
+    if common != str(live_state_root):
+        raise ValueError(f"bot deletion path {path} escapes root {live_state_root}")
     if not path.exists():
         return None
     try:
