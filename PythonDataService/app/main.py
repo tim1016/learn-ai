@@ -232,9 +232,16 @@ async def lifespan(app: FastAPI):
             "daemon connectivity monitor not started."
         )
 
+    # ADR-0028 Stage 2 — each visible bot gets one producer-owned status
+    # snapshot before the API begins serving normal reads. The producer owns
+    # broker-activity bootstrap and periodic assembly; status GET only reads
+    # its stored document.
+    await live_instances_router.start_surface_hubs()
+
     try:
         yield
     finally:
+        await live_instances_router.stop_surface_hubs()
         # Stop the daemon monitor first — its probe traffic stops cleanly
         # before any other shutdown step can race it.
         if daemon_monitor is not None:

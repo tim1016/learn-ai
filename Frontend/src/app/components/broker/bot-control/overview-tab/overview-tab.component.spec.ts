@@ -12,6 +12,8 @@ import { OverviewTabComponent } from './overview-tab.component';
 
 function makeStatus(id = 'sid-x'): LiveInstanceStatus {
   return {
+    stream_epoch: 'fixture-epoch',
+    surface_version: 1,
     strategy_instance_id: id,
     process: { state: 'idle', pid: null, bound_run_id: null, started_at_ms: null },
     live_binding: null,

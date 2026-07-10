@@ -99,6 +99,19 @@ ownership boundary; later stages add delivery mechanisms without replacing it.
 - default status GET is proven free of canonical writes and publisher
   bootstrap side effects.
 
+**Implemented 2026-07-10.** `app/services/surface_hub.py` owns each bot's
+producer lifecycle, latest complete document, opaque stream epoch, semantic
+fingerprint, monotonic version, coalesced refresh, periodic assembly, and
+bounded shutdown. The data-plane lifespan starts/stops all visible hubs;
+deploy/start brings newly visible bots under the same owner. The status route
+reads the stored document (or performs a read-only fallback assembly for a
+just-deployed bot/lifespan-free test client), and `?refresh=true` requests one
+coalesced cycle. Broker-activity bootstrap now occurs only in producer or
+mutation lifecycle, never in normal status reads. Parity, version, epoch,
+freshness-transition, coalescing, lifecycle, and no-write regressions live in
+`tests/services/test_surface_hub.py` and
+`tests/routers/test_live_instances.py`.
+
 ## Stage 3 — Add delivery protocols and shared daemon observation `[SCALE]`
 
 Keep one feature flag until the Cockpit consumer is ready, but deliver Stage 3

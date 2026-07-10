@@ -286,6 +286,7 @@ from app.services.runtime_freshness import (
 from app.services.strategy_validation_manifest import (
     StrategyValidationManifestError,
 )
+from app.services.surface_hub import SurfaceHub, SurfaceHubRegistry
 
 if TYPE_CHECKING:
     from app.services.broker_activity_publisher import BrokerActivityPublisher
@@ -303,12 +304,12 @@ _ACTION_TO_VERB = {
     DesiredStateAction.stop: CommandVerb.STOP,
 }
 
-_STATUS_ACTIVITY_BOOTSTRAP_TIMEOUT_S = 2.0
 _STATUS_DAEMON_DIAGNOSTICS_TIMEOUT_S = 1.5
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["live-instances"])
+_SURFACE_HUBS = SurfaceHubRegistry[LiveInstanceStatus]()
 
 # strategy_instance_id flows into a daemon URL and a filesystem path; confine it
 # to a single safe segment at the boundary.
@@ -1532,49 +1533,10 @@ async def _resolve_activity_publisher_for_status(
     sid: str,
     live_binding: LiveBinding | None,
 ) -> tuple[BrokerActivityPublisher | None, int | None]:
-    """Return the publisher facts the status projection should render.
-
-    ``broker_activity.py`` already has a lazy-bootstrap path for the Activity
-    REST/SSE endpoints.  Status/Overview also depends on the same in-memory
-    registry, so a data-plane restart can otherwise make a healthy running bot
-    look detached until the Activity endpoint is hit.  This best-effort retry
-    only rebuilds the runtime publisher; it does not append evidence or mutate
-    broker-activity WAL rows from a status read.
-    """
+    """Read publisher facts without starting or mutating producer lifecycle."""
+    del live_binding
     registry = get_publisher_registry()
     publisher = registry.get(sid)
-    if live_binding is None:
-        return publisher, registry.registered_at_ms(sid)
-    if publisher is not None and publisher.is_running:
-        return publisher, registry.registered_at_ms(sid)
-
-    from app.routers.broker_activity import (
-        PublisherBootstrapError,
-        bootstrap_publisher_for_instance,
-    )
-
-    try:
-        publisher = await asyncio.wait_for(
-            bootstrap_publisher_for_instance(sid),
-            timeout=_STATUS_ACTIVITY_BOOTSTRAP_TIMEOUT_S,
-        )
-    except TimeoutError:
-        logger.warning(
-            "status-time broker-activity publisher bootstrap timed out",
-            extra={"strategy_instance_id": sid},
-        )
-        publisher = registry.get(sid)
-    except PublisherBootstrapError as exc:
-        logger.warning(
-            "status-time broker-activity publisher bootstrap deferred (%s): %s",
-            exc.code,
-            exc.detail,
-            extra={
-                "strategy_instance_id": sid,
-                "bootstrap_error_code": exc.code,
-            },
-        )
-        publisher = registry.get(sid)
     return publisher, registry.registered_at_ms(sid)
 
 
@@ -1843,6 +1805,115 @@ async def _resolve_instance_status_from_process(
         daily_lifecycle=daily_lifecycle,
         fetched_at_ms=observed_at_ms,
     )
+
+
+async def _assemble_instance_surface(strategy_instance_id: str) -> LiveInstanceStatus:
+    """Gather one semantic status document for its owning ``SurfaceHub``."""
+
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    runs_by_instance = _visible_runs_by_instance(root)
+    if strategy_instance_id not in runs_by_instance and _sid_has_soft_deletion(
+        root.parent,
+        strategy_instance_id,
+    ):
+        raise HTTPException(
+            status.HTTP_410_GONE,
+            detail=_bot_soft_deleted_detail(strategy_instance_id),
+        )
+    _result, daemon = await host_daemon_client.fetch_instance_process(
+        settings.live_runner_daemon_url,
+        strategy_instance_id,
+    )
+    return await _resolve_instance_status_from_process(
+        strategy_instance_id,
+        root,
+        settings,
+        daemon,
+        runs_by_instance=runs_by_instance,
+    )
+
+
+async def _start_surface_activity_publisher(strategy_instance_id: str) -> None:
+    """Best-effort activity publisher bootstrap owned by producer lifecycle."""
+
+    from app.routers.broker_activity import (
+        PublisherBootstrapError,
+        bootstrap_publisher_for_instance,
+    )
+
+    try:
+        await asyncio.wait_for(
+            bootstrap_publisher_for_instance(strategy_instance_id),
+            timeout=2.0,
+        )
+    except TimeoutError:
+        logger.warning(
+            "surface producer activity bootstrap timed out",
+            extra={"strategy_instance_id": strategy_instance_id},
+        )
+    except PublisherBootstrapError as exc:
+        logger.info(
+            "surface producer activity bootstrap deferred (%s): %s",
+            exc.code,
+            exc.detail,
+            extra={
+                "strategy_instance_id": strategy_instance_id,
+                "bootstrap_error_code": exc.code,
+            },
+        )
+    except Exception:
+        logger.exception(
+            "surface producer activity bootstrap failed unexpectedly",
+            extra={"strategy_instance_id": strategy_instance_id},
+        )
+
+
+def _surface_hub_for(strategy_instance_id: str) -> SurfaceHub[LiveInstanceStatus]:
+    return _SURFACE_HUBS.get_or_create(
+        strategy_instance_id,
+        assemble=lambda: _assemble_instance_surface(strategy_instance_id),
+        on_start=lambda: _start_surface_activity_publisher(strategy_instance_id),
+    )
+
+
+async def start_surface_hubs() -> None:
+    """Start producer lifecycles for every bot visible at data-plane boot."""
+
+    settings = get_settings()
+    root = Path(settings.live_runs_root)
+    strategy_instance_ids = set(_visible_runs_by_instance(root))
+    _result, daemon = await host_daemon_client.fetch_instances(
+        settings.live_runner_daemon_url
+    )
+    for instance in (daemon or {}).get("instances", []):
+        sid = instance.get("strategy_instance_id")
+        if isinstance(sid, str) and sid:
+            strategy_instance_ids.add(sid)
+    hubs = [_surface_hub_for(sid) for sid in sorted(strategy_instance_ids)]
+    await _SURFACE_HUBS.start_all(hubs)
+
+
+async def stop_surface_hubs() -> None:
+    """Stop every producer task during data-plane shutdown."""
+
+    await _SURFACE_HUBS.stop_all()
+
+
+async def _ensure_surface_hub_started(
+    strategy_instance_id: str,
+    *,
+    invoke_start_hook: bool,
+) -> None:
+    hub = _surface_hub_for(strategy_instance_id)
+    if not hub.is_running:
+        try:
+            await hub.start(invoke_start_hook=invoke_start_hook)
+        except Exception:
+            logger.exception(
+                "surface hub startup deferred after mutation",
+                extra={"strategy_instance_id": strategy_instance_id},
+            )
 
 
 @router.get("/catalog", response_model=BotCatalogResponse)
@@ -2271,6 +2342,11 @@ async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -
         ) from exc
     if not parsed.created:
         response.status_code = status.HTTP_200_OK
+    if body.strategy_instance_id:
+        await _ensure_surface_hub_started(
+            body.strategy_instance_id,
+            invoke_start_hook=False,
+        )
     return parsed
 
 
@@ -2703,6 +2779,10 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
                 "rung_receipt": receipt,
                 "rung_receipt_warnings": warnings,
             }
+        )
+        await _ensure_surface_hub_started(
+            sid,
+            invoke_start_hook=False,
         )
     return response
 
@@ -3274,23 +3354,19 @@ async def get_account_summary() -> FleetAccountSummary:
 
 
 @router.get("/{strategy_instance_id}/status", response_model=LiveInstanceStatus)
-async def get_instance_status(strategy_instance_id: str) -> LiveInstanceStatus:
-    """Instance control-room status: live binding (registry) + evidence + intent."""
+async def get_instance_status(
+    strategy_instance_id: str,
+    refresh: bool = Query(default=False),
+) -> LiveInstanceStatus:
+    """Return the snapshot stored by this bot's producer-owned hub."""
     sid = _validate_instance_id(strategy_instance_id)
-    settings = get_settings()
-    root = Path(settings.live_runs_root)
-    runs_by_instance = _visible_runs_by_instance(root)
-    if sid not in runs_by_instance and _sid_has_soft_deletion(root.parent, sid):
-        raise HTTPException(status.HTTP_410_GONE, detail=_bot_soft_deleted_detail(sid))
-
-    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
-    return await _resolve_instance_status_from_process(
-        sid,
-        root,
-        settings,
-        daemon,
-        runs_by_instance=runs_by_instance,
-    )
+    hub = _surface_hub_for(sid)
+    if not hub.is_running:
+        # Production pre-starts visible hubs in the FastAPI lifespan. This
+        # read-only fallback supports lifespan-free ASGI test clients and a
+        # just-deployed bot without bootstrapping unrelated publishers.
+        return await hub.snapshot(refresh=True)
+    return await hub.snapshot(refresh=refresh)
 
 
 @router.post(

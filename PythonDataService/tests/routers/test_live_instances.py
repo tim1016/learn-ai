@@ -7,7 +7,6 @@ server-side and the serialized response carries both `live_binding` and
 
 from __future__ import annotations
 
-import asyncio
 import json
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -639,28 +638,25 @@ async def test_instance_status_blocks_start_when_crash_recovery_required(
     assert start_capability["gate_results"][0]["gate_id"] == "account.crash_recovery"
 
 
-async def test_status_activity_publisher_resolution_bootstraps_missing_live_publisher(
+async def test_status_activity_publisher_resolution_never_bootstraps_missing_publisher(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sid = "spy_bootstrap_status"
-    publisher = _StatusPublisher()
+    bootstrap_called = False
 
     class Registry:
-        def __init__(self) -> None:
-            self.publisher = None
-
         def get(self, _sid: str):
-            return self.publisher
+            return None
 
         def registered_at_ms(self, _sid: str) -> int | None:
-            return 123 if self.publisher is not None else None
+            return None
 
     registry = Registry()
 
     async def fake_bootstrap(strategy_instance_id: str):
+        nonlocal bootstrap_called
         assert strategy_instance_id == sid
-        registry.publisher = publisher
-        return publisher
+        bootstrap_called = True
 
     from app.routers import broker_activity
 
@@ -672,38 +668,132 @@ async def test_status_activity_publisher_resolution_bootstraps_missing_live_publ
         LiveBinding(run_id="run-live-aaa"),
     )
 
-    assert resolved is publisher
-    assert registered_at_ms == 123
+    assert resolved is None
+    assert registered_at_ms is None
+    assert bootstrap_called is False
 
 
-async def test_status_activity_publisher_resolution_times_out_slow_bootstrap(
+async def test_status_activity_publisher_resolution_reads_registered_publisher(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    sid = "spy_bootstrap_timeout"
+    sid = "spy_registered_publisher"
+    publisher = _StatusPublisher()
 
     class Registry:
         def get(self, _sid: str):
-            return None
+            return publisher
 
         def registered_at_ms(self, _sid: str) -> int | None:
-            return None
-
-    async def slow_bootstrap(_strategy_instance_id: str):
-        await asyncio.sleep(1)
-
-    from app.routers import broker_activity
+            return 123
 
     monkeypatch.setattr(live_instances, "get_publisher_registry", lambda: Registry())
-    monkeypatch.setattr(broker_activity, "bootstrap_publisher_for_instance", slow_bootstrap)
-    monkeypatch.setattr(live_instances, "_STATUS_ACTIVITY_BOOTSTRAP_TIMEOUT_S", 0.001)
 
     resolved, registered_at_ms = await live_instances._resolve_activity_publisher_for_status(
         sid,
         LiveBinding(run_id="run-live-aaa"),
     )
 
-    assert resolved is None
-    assert registered_at_ms is None
+    assert resolved is publisher
+    assert registered_at_ms == 123
+
+
+async def test_status_is_versioned_from_stored_surface_without_publisher_bootstrap(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    sid = "spy_surface_hub_status"
+    run_id = "run-surface-hub-status"
+    _write_ledger(root, run_id, sid, 100)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+    bootstrap_called = False
+
+    async def fake_bootstrap(_strategy_instance_id: str):
+        nonlocal bootstrap_called
+        bootstrap_called = True
+
+    from app.routers import broker_activity
+
+    monkeypatch.setattr(broker_activity, "bootstrap_publisher_for_instance", fake_bootstrap)
+    monkeypatch.setattr(live_instances, "_now_ms", lambda: 1_700_000_000_000)
+    before = {
+        path.relative_to(root): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+    assembled = await live_instances._assemble_instance_surface(sid)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        first = (await client.get(f"/api/live-instances/{sid}/status")).json()
+        second = (await client.get(f"/api/live-instances/{sid}/status")).json()
+        refreshed = (
+            await client.get(f"/api/live-instances/{sid}/status?refresh=true")
+        ).json()
+
+    assert {
+        key: value
+        for key, value in first.items()
+        if key not in {"stream_epoch", "surface_version"}
+    } == assembled.model_dump(mode="json", exclude={"stream_epoch", "surface_version"})
+    assert first["stream_epoch"] == second["stream_epoch"]
+    assert first["surface_version"] == second["surface_version"] == refreshed["surface_version"] == 1
+    assert first == second
+    assert refreshed == second
+    assert bootstrap_called is False
+    assert {
+        path.relative_to(root): path.read_bytes()
+        for path in root.rglob("*")
+        if path.is_file()
+    } == before
+
+
+async def test_surface_hub_lifecycle_owns_activity_publisher_bootstrap(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    sid = "spy_surface_lifecycle"
+    _write_ledger(root, "run-surface-lifecycle", sid, 100)
+    _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1}, process={"state": "idle"})
+    started: list[str] = []
+
+    async def fake_start_publisher(strategy_instance_id: str) -> None:
+        started.append(strategy_instance_id)
+
+    from app.services.surface_hub import SurfaceHubRegistry
+
+    monkeypatch.setattr(live_instances, "_SURFACE_HUBS", SurfaceHubRegistry())
+    monkeypatch.setattr(
+        live_instances,
+        "_start_surface_activity_publisher",
+        fake_start_publisher,
+    )
+
+    try:
+        await live_instances.start_surface_hubs()
+        hub = live_instances._SURFACE_HUBS.get(sid)
+        assert hub is not None
+        assert hub.is_running is True
+        assert hub.latest is not None
+        assert started == [sid]
+
+        async def fail_if_status_reassembles(_strategy_instance_id: str):
+            raise AssertionError("normal status GET must use the stored snapshot")
+
+        monkeypatch.setattr(
+            live_instances,
+            "_assemble_instance_surface",
+            fail_if_status_reassembles,
+        )
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            response = await client.get(f"/api/live-instances/{sid}/status")
+        assert response.status_code == 200
+        assert response.json()["stream_epoch"] == hub.latest.stream_epoch
+    finally:
+        await live_instances.stop_surface_hubs()
 
 
 async def test_instance_status_uses_recovered_activity_publisher_for_health_and_chart(

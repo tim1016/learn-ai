@@ -46,6 +46,8 @@ export function makeStatus(options: {
       ? 'running'
       : 'exited';
   return {
+    stream_epoch: 'fixture-epoch',
+    surface_version: 1,
     strategy_instance_id: options.id ?? 'sid-x',
     process: { state: processState, pid: null, bound_run_id: null, started_at_ms: null },
     live_binding: null,
