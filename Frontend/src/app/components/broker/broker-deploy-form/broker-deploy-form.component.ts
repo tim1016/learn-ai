@@ -57,8 +57,11 @@ import {
   buildFormBlockers,
   deployReady,
   resolveBlockerMove,
-  type RenderedMove,
 } from './deploy-blockers';
+import {
+  OperatorBlockerListComponent,
+  type OperatorBlockerMoveEvent,
+} from '../shared/operator-blocker-list/operator-blocker-list.component';
 import type {
   DeployPreflightResponse,
   OperatorBlocker,
@@ -124,6 +127,7 @@ interface SettledDeployPreflight {
     ReceiptLabelPipe,
     DeployCoherenceCardComponent,
     ExposureLaunchDecisionComponent,
+    OperatorBlockerListComponent,
   ],
   templateUrl: './broker-deploy-form.component.html',
   styleUrl: './broker-deploy-form.component.scss',
@@ -472,18 +476,16 @@ export class BrokerDeployFormComponent {
   readonly ready = computed<boolean>(() => deployReady(this.blockers()));
 
   readonly topBlocker = computed<OperatorBlocker | null>(() => {
-    const blocking = this.blockers().filter((b) => b.severity === 'blocking');
+    const blocking = this.blockers().filter((b) => b.condition.severity === 'blocking');
     return blocking[0] ?? null;
   });
 
-  renderMove(blocker: OperatorBlocker): RenderedMove | null {
-    const move = blocker.primary_move;
-    if (move === null) return null;
-    return resolveBlockerMove(move, {
+  handleBlockerMove(event: OperatorBlockerMoveEvent): void {
+    resolveBlockerMove(event.move, {
       navigate: (route, fragment) =>
         void this.router.navigate([route], fragment ? { fragment } : {}),
       focusAnchor: (anchor) => this.focusDeployAnchor(anchor),
-    });
+    })?.invoke();
   }
   constructor() {
     // Re-deploy URLs seed operator/runtime fields; validation receipts still win.

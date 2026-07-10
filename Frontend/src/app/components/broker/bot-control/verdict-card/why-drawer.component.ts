@@ -13,12 +13,16 @@ import type {
   OperatorGate,
   OperatorSurfaceTraderGuidance,
 } from '../../../../api/live-instances.types';
-import type { Disposition, OperatorBlocker } from '../../../../api/operator-blocker.types';
+import type { OperatorBlocker } from '../../../../api/operator-blocker.types';
 import { fmtTimestampLocal } from '../../format';
 import {
   formatReceiptLabel,
   formatReceiptValue,
 } from '../../../../shared/pipes/receipt-label.pipe';
+import {
+  OperatorBlockerListComponent,
+  type OperatorBlockerMoveEvent,
+} from '../../shared/operator-blocker-list/operator-blocker-list.component';
 
 interface DrawerEvidenceRow {
   readonly label: string;
@@ -26,33 +30,15 @@ interface DrawerEvidenceRow {
   readonly meta: string | null;
 }
 
-interface DrawerBlockerGroup {
-  readonly disposition: Disposition;
-  readonly label: string;
-  readonly blockers: readonly OperatorBlocker[];
-}
-
-const BLOCKER_GROUP_LABEL: Record<Disposition, string> = {
-  terminal: "Can't recover",
-  fix_here: 'Fix on this screen',
-  fix_elsewhere: 'Fix elsewhere',
-  wait: 'Waiting',
-};
-
-const BLOCKER_GROUP_ORDER: readonly Disposition[] = [
-  'terminal',
-  'fix_here',
-  'fix_elsewhere',
-  'wait',
-];
-
 /** Scoped "why?" drawer (spec §Why-drawer contract). Renders only the receipts
  *  behind the state's current verdict: the trader-guidance claim, its proof
  *  lines, the failing readiness gates, and advanced evidence facts — all through
- *  the shared `receiptLabel` pipe. It NEVER introduces a new action; the only
- *  control is Close. Empty is honest, never "Unknown". */
+ *  the shared `receiptLabel` pipe. Blocker moves are backend-authored
+ *  OperatorBlockers surfaced through the shared renderer. Empty is honest,
+ *  never "Unknown". */
 @Component({
   selector: 'app-why-drawer',
+  imports: [OperatorBlockerListComponent],
   templateUrl: './why-drawer.component.html',
   styleUrl: './why-drawer.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -65,6 +51,7 @@ export class WhyDrawerComponent {
   readonly blockers = input<readonly OperatorBlocker[]>([]);
 
   readonly closed = output();
+  readonly blockerMoveSelected = output<OperatorBlockerMoveEvent>();
 
   private readonly closeButton = viewChild<ElementRef<HTMLButtonElement>>('closeButton');
 
@@ -75,17 +62,6 @@ export class WhyDrawerComponent {
   readonly failingGates = computed(() =>
     this.gates().filter((gate) => gate.gate_result.status !== 'pass'),
   );
-  readonly blockerGroups = computed<DrawerBlockerGroup[]>(() => {
-    const blockers = this.blockers();
-    return BLOCKER_GROUP_ORDER
-      .map((disposition) => ({
-        disposition,
-        label: BLOCKER_GROUP_LABEL[disposition],
-        blockers: blockers.filter((blocker) => blocker.disposition === disposition),
-      }))
-      .filter((group) => group.blockers.length > 0);
-  });
-
   readonly evidence = computed<DrawerEvidenceRow[]>(() => {
     const facts = this.guidance()?.advanced_evidence ?? [];
     return facts.map((fact) => ({
@@ -98,7 +74,7 @@ export class WhyDrawerComponent {
   readonly hasContent = computed(
     () =>
       this.headline() !== null ||
-      this.blockerGroups().length > 0 ||
+      this.blockers().length > 0 ||
       this.proofLines().length > 0 ||
       this.failingGates().length > 0 ||
       this.evidence().length > 0,
@@ -122,5 +98,9 @@ export class WhyDrawerComponent {
 
   close(): void {
     this.closed.emit();
+  }
+
+  selectBlockerMove(event: OperatorBlockerMoveEvent): void {
+    this.blockerMoveSelected.emit(event);
   }
 }

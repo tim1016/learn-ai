@@ -8,6 +8,7 @@ import type {
 import { makeStatus } from '../bot-control-page.fixtures';
 import { makeDailyLifecycleFixture } from '../../../../testing/live-instance-status-fixtures';
 import { addRetiredTerminalBlocker } from '../../../../testing/operator-surface-fixtures';
+import { operatorBlockerFixture } from '../../../../testing/operator-blocker-fixtures';
 import { formatPosition, resolveVerdictCardModel } from './verdict-card-model';
 
 function statusWith(
@@ -145,20 +146,9 @@ describe('resolveVerdictCardModel', () => {
     const model = resolveVerdictCardModel(
       statusWith({ display_status: 'Sick bay', primary_action: null }, (status) => {
         status.operator_surface.blockers = [
-          {
-            id: 'broker_disconnected',
-            severity: 'blocking',
-            disposition: 'fix_elsewhere',
-            headline: 'Broker disconnected',
+          operatorBlockerFixture({
             detail: 'Connect the IBKR session before deploying or starting this bot.',
-            primary_move: {
-              label: 'Connect the broker',
-              action: { kind: 'navigate', route: '/broker', fragment: null },
-              target: null,
-            },
-            secondary_moves: [],
-            applies_to: 'both',
-          },
+          }),
         ];
       }),
     );
@@ -175,16 +165,13 @@ describe('resolveVerdictCardModel', () => {
     const model = resolveVerdictCardModel(
       statusWith({ display_status: 'Ready' }, (status) => {
         status.operator_surface.blockers = [
-          {
+          operatorBlockerFixture({
             id: 'broker_reconnecting',
-            severity: 'blocking',
             disposition: 'wait',
             headline: 'Broker connection is recovering',
             detail: 'Waiting for the broker session to recover before new submit activity.',
-            primary_move: null,
-            secondary_moves: [],
-            applies_to: 'both',
-          },
+            primaryMove: null,
+          }),
         ];
       }),
     );
@@ -217,26 +204,26 @@ describe('resolveVerdictCardModel', () => {
     const model = resolveVerdictCardModel(
       statusWith({ display_status: 'Off duty', phase: 'OFF_DUTY' }, (status) => {
         status.operator_surface.blockers = [
-          {
+          operatorBlockerFixture({
             id: 'run_poisoned',
-            severity: 'blocking',
+            scope: 'bot',
             disposition: 'terminal',
             headline: "Can't recover",
             detail: 'This run is poisoned and cannot be restarted safely.',
-            primary_move: {
+            primaryMove: {
               label: 'Replace',
               action: { kind: 'retire_replace' },
               target: null,
             },
-            secondary_moves: [
+            secondaryMoves: [
               {
                 label: 'Remove',
                 action: { kind: 'remove' },
                 target: null,
               },
             ],
-            applies_to: 'run',
-          },
+            appliesTo: 'run',
+          }),
         ];
       }),
     );

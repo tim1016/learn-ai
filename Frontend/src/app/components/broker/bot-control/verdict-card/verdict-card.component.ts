@@ -7,6 +7,7 @@ import {
   signal,
 } from '@angular/core';
 
+import type { OperatorBlockerMoveEvent } from '../../shared/operator-blocker-list/operator-blocker-list.component';
 import type {
   BotLifecycleAction,
   BotLifecycleActionId,
@@ -122,6 +123,15 @@ export class VerdictCardComponent {
     } else if (move.action.kind === 'remove') {
       this.removeRequested.emit();
     }
+  }
+
+  invokeDrawerBlockerMove(event: OperatorBlockerMoveEvent): void {
+    const { move } = event;
+    if (move.action.kind === 'retire_replace' || move.action.kind === 'remove') {
+      this.invokeTerminalMove(move);
+      return;
+    }
+    this.blockerMoveRequested.emit(move);
   }
 
   invokeAmbient(action: BotLifecycleAction): void {

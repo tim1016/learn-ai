@@ -3834,7 +3834,7 @@ async def test_deploy_and_start_rejects_backend_preflight_blocker(
     assert response.status_code == 409
     detail = response.json()["detail"]
     assert detail["reason_code"] == "DEPLOY_PREFLIGHT_BLOCKED"
-    assert detail["blockers"][0]["id"] == "broker_disconnected"
+    assert detail["blockers"][0]["condition"]["id"] == "broker_disconnected"
     assert called is False
 
 

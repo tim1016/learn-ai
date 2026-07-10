@@ -215,10 +215,16 @@
   "blockers": [
     {
       "applies_to": "both",
+      "condition": {
+        "evidence": {},
+        "id": "account_not_proven",
+        "scope": "account",
+        "severity": "blocking"
+      },
       "detail": "No cached Account Truth projection is available for this account.",
       "disposition": "fix_elsewhere",
       "headline": "Account not proven",
-      "id": "account_not_proven",
+      "host": "bot_cockpit",
       "primary_move": {
         "action": {
           "fragment": "account-reconciliation-action",
@@ -228,8 +234,7 @@
         "label": "Open account monitor",
         "target": null
       },
-      "secondary_moves": [],
-      "severity": "blocking"
+      "secondary_moves": []
     }
   ],
   "broker": {

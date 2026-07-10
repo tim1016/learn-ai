@@ -440,6 +440,21 @@ roster, and Account Monitor.
 - ADR-0027, its schema tests, and the operator-surface contract are amended in
   the same implementation change.
 
+**Evidence ledger (2026-07-10, in progress):**
+
+- Started the Stage 8 foundation on merged Stage 7 work: `OperatorCondition`
+  now owns surface-neutral identity/severity/scope/evidence, while
+  `OperatorBlocker` owns only the host-scoped projection, with schema coverage
+  proving the same condition can be `fix_elsewhere` in Bot Cockpit and
+  `fix_here` in Account Monitor.
+- Added the shared Angular `app-operator-blocker-list` renderer and wired it
+  into deploy preflight and the Bot Cockpit why drawer so those hosts no longer
+  hand-render blocker copy/moves.
+- Open gates remain: fleet-roster and Account Monitor must receive
+  backend-authored host-scoped `OperatorBlocker` projections, frontend
+  confirmation-copy constants must be retired, and Stage 7's one-week soak
+  remains a separate prerequisite before Stage 7 can be marked complete.
+
 ## Ordering rationale
 
 Stage 0 protects the in-flight contract. Stage 1 front-loads safety before the

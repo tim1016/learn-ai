@@ -201,9 +201,10 @@ def _author_operator_blockers(
 ) -> list[OperatorBlocker]:
     if bot_lifecycle_phase == BotLifecyclePhase.RETIRED:
         return [
-            OperatorBlocker(
-                id="retired",
-                severity="blocking",
+            OperatorBlocker.for_host(
+                condition_id="retired",
+                scope="bot",
+                host="bot_cockpit",
                 disposition="terminal",
                 headline="Can't recover",
                 detail="This bot has been retired. Remove it from the catalog or replace it with a fresh deploy.",
@@ -214,9 +215,10 @@ def _author_operator_blockers(
         ]
     if poisoned:
         return [
-            OperatorBlocker(
-                id="run_poisoned",
-                severity="blocking",
+            OperatorBlocker.for_host(
+                condition_id="run_poisoned",
+                scope="bot",
+                host="bot_cockpit",
                 disposition="terminal",
                 headline="Can't recover",
                 detail="This run is poisoned and cannot be restarted safely. Replace it or remove the bot.",
@@ -229,9 +231,10 @@ def _author_operator_blockers(
 
     if durable_control_write_failure is not None:
         blockers.append(
-            OperatorBlocker(
-                id="durable_control_write_failed",
-                severity="blocking",
+            OperatorBlocker.for_host(
+                condition_id="durable_control_write_failed",
+                scope="host",
+                host="bot_cockpit",
                 disposition="fix_elsewhere",
                 headline="Bot control state was not saved",
                 detail=durable_control_write_failure,
@@ -242,9 +245,10 @@ def _author_operator_blockers(
 
     if daemon_diagnostic_condition == DaemonDominantCondition.REGISTRY_AMNESIA:
         blockers.append(
-            OperatorBlocker(
-                id="registry_amnesia",
-                severity="blocking",
+            OperatorBlocker.for_host(
+                condition_id="registry_amnesia",
+                scope="host",
+                host="bot_cockpit",
                 disposition="fix_elsewhere",
                 headline="Launcher registry forgot this bot",
                 detail=(
@@ -257,9 +261,10 @@ def _author_operator_blockers(
         )
     elif daemon_diagnostic_condition == DaemonDominantCondition.ORPHANED_SOCKET:
         blockers.append(
-            OperatorBlocker(
-                id="orphaned_socket",
-                severity="blocking",
+            OperatorBlocker.for_host(
+                condition_id="orphaned_socket",
+                scope="broker",
+                host="bot_cockpit",
                 disposition="fix_elsewhere",
                 headline="Bot socket is orphaned",
                 detail=(
@@ -273,9 +278,10 @@ def _author_operator_blockers(
 
     if host_process.start_capability.disabled_reason_code == "HOST_SERVICE_OFFLINE":
         blockers.append(
-            OperatorBlocker(
-                id="daemon_down",
-                severity="blocking",
+            OperatorBlocker.for_host(
+                condition_id="daemon_down",
+                scope="host",
+                host="bot_cockpit",
                 disposition="fix_elsewhere",
                 headline="Live engine unavailable",
                 detail="Start the engine on this machine, then recheck.",
@@ -285,9 +291,10 @@ def _author_operator_blockers(
         )
     if broker.connection == "DISCONNECTED":
         blockers.append(
-            OperatorBlocker(
-                id="broker_disconnected",
-                severity="blocking",
+            OperatorBlocker.for_host(
+                condition_id="broker_disconnected",
+                scope="broker",
+                host="bot_cockpit",
                 disposition="fix_elsewhere",
                 headline="Broker disconnected",
                 detail="Connect the IBKR session before deploying or starting this bot.",
@@ -297,9 +304,10 @@ def _author_operator_blockers(
         )
     elif broker.connection == "DEGRADED":
         blockers.append(
-            OperatorBlocker(
-                id="broker_reconnecting",
-                severity="blocking",
+            OperatorBlocker.for_host(
+                condition_id="broker_reconnecting",
+                scope="broker",
+                host="bot_cockpit",
                 disposition="wait",
                 headline="Broker connection is recovering",
                 detail="Waiting for the broker session to recover before new submit activity.",
@@ -309,9 +317,10 @@ def _author_operator_blockers(
 
     if fleet_blocks_starts:
         blockers.append(
-            OperatorBlocker(
-                id="fleet_contaminated",
-                severity="blocking",
+            OperatorBlocker.for_host(
+                condition_id="fleet_contaminated",
+                scope="fleet",
+                host="bot_cockpit",
                 disposition="fix_elsewhere",
                 headline="Fleet state blocks starts",
                 detail="Clear the account fleet state before starting another bot.",
@@ -326,9 +335,10 @@ def _author_operator_blockers(
 
     if account_truth.status == "block":
         blockers.append(
-            OperatorBlocker(
-                id="account_not_proven",
-                severity="blocking",
+            OperatorBlocker.for_host(
+                condition_id="account_not_proven",
+                scope="account",
+                host="bot_cockpit",
                 disposition="fix_elsewhere",
                 headline="Account not proven",
                 detail=account_truth.explanation,

@@ -1,4 +1,10 @@
-import type { OperatorBlocker, OperatorMove } from '../../../api/operator-blocker.types';
+import type {
+  BlockerSeverity,
+  Disposition,
+  OperatorBlocker,
+  OperatorConditionScope,
+  OperatorMove,
+} from '../../../api/operator-blocker.types';
 
 export interface FormBlockerInput {
   missingRequiredFields: string[];
@@ -15,105 +21,119 @@ function confirmInForm(label: string, anchor: string): OperatorMove {
   return { label, action: { kind: 'confirm_in_form', anchor }, target: null };
 }
 
+function formBlocker(
+  id: string,
+  scope: OperatorConditionScope,
+  headline: string,
+  detail: string,
+  move: OperatorMove,
+  severity: BlockerSeverity = 'blocking',
+  disposition: Disposition = 'fix_here',
+): OperatorBlocker {
+  return {
+    condition: { id, severity, scope, evidence: {} },
+    host: 'deploy_preflight',
+    disposition,
+    headline,
+    detail,
+    primary_move: move,
+    secondary_moves: [],
+    applies_to: 'deploy',
+  };
+}
+
 export function buildFormBlockers(input: FormBlockerInput): OperatorBlocker[] {
   const blockers: OperatorBlocker[] = [];
 
   if (input.missingRequiredFields.length > 0) {
-    blockers.push({
-      id: 'missing_required_fields',
-      severity: 'blocking',
-      disposition: 'fix_here',
-      headline: 'Deployment details incomplete',
-      detail: `Missing: ${input.missingRequiredFields.join(', ')}.`,
-      primary_move: confirmInForm('Complete the form', 'strategy-section'),
-      secondary_moves: [],
-      applies_to: 'deploy',
-    });
+    blockers.push(
+      formBlocker(
+        'missing_required_fields',
+        'bot',
+        'Deployment details incomplete',
+        `Missing: ${input.missingRequiredFields.join(', ')}.`,
+        confirmInForm('Complete the form', 'strategy-section'),
+      ),
+    );
   }
 
   if (input.identityConflictSummary !== null) {
-    blockers.push({
-      id: 'identity_coherence_unconfirmed',
-      severity: 'blocking',
-      disposition: 'fix_here',
-      headline: 'Run identity needs confirmation',
-      detail: input.identityConflictSummary,
-      primary_move: confirmInForm('Confirm identity', 'identity-coherence-card'),
-      secondary_moves: [],
-      applies_to: 'deploy',
-    });
+    blockers.push(
+      formBlocker(
+        'identity_coherence_unconfirmed',
+        'bot',
+        'Run identity needs confirmation',
+        input.identityConflictSummary,
+        confirmInForm('Confirm identity', 'identity-coherence-card'),
+      ),
+    );
   }
 
   if (input.exposureConflictSummary !== null) {
-    blockers.push({
-      id: 'exposure_coherence_unconfirmed',
-      severity: 'blocking',
-      disposition: 'fix_here',
-      headline: 'Exposure needs confirmation',
-      detail: input.exposureConflictSummary,
-      primary_move: confirmInForm('Confirm exposure', 'exposure-launch-decision'),
-      secondary_moves: [],
-      applies_to: 'deploy',
-    });
+    blockers.push(
+      formBlocker(
+        'exposure_coherence_unconfirmed',
+        'account',
+        'Exposure needs confirmation',
+        input.exposureConflictSummary,
+        confirmInForm('Confirm exposure', 'exposure-launch-decision'),
+      ),
+    );
   }
 
   if (input.customSizingError !== null) {
-    blockers.push({
-      id: 'sizing_invalid',
-      severity: 'blocking',
-      disposition: 'fix_here',
-      headline: 'Sizing is invalid',
-      detail: input.customSizingError,
-      primary_move: confirmInForm('Fix sizing', 'sizing-section'),
-      secondary_moves: [],
-      applies_to: 'deploy',
-    });
+    blockers.push(
+      formBlocker(
+        'sizing_invalid',
+        'bot',
+        'Sizing is invalid',
+        input.customSizingError,
+        confirmInForm('Fix sizing', 'sizing-section'),
+      ),
+    );
   }
 
   if (input.allInCoexistenceBlock) {
-    blockers.push({
-      id: 'reference_parity_coexistence_blocked',
-      severity: 'blocking',
-      disposition: 'fix_here',
-      headline: 'Reference parity sizing is blocked',
-      detail: input.allInCoexistenceBlock,
-      primary_move: confirmInForm('Pick a different sizing preset', 'sizing-section'),
-      secondary_moves: [],
-      applies_to: 'deploy',
-    });
+    blockers.push(
+      formBlocker(
+        'reference_parity_coexistence_blocked',
+        'strategy',
+        'Reference parity sizing is blocked',
+        input.allInCoexistenceBlock,
+        confirmInForm('Pick a different sizing preset', 'sizing-section'),
+      ),
+    );
   }
 
   if (input.liveExecutionSelected) {
-    blockers.push({
-      id: 'live_execution_unavailable',
-      severity: 'blocking',
-      disposition: 'fix_here',
-      headline: 'Live execution is unavailable from Deploy',
-      detail: 'Pick read-only observation or paper orders.',
-      primary_move: confirmInForm('Pick paper or read-only', 'launch-section'),
-      secondary_moves: [],
-      applies_to: 'deploy',
-    });
+    blockers.push(
+      formBlocker(
+        'live_execution_unavailable',
+        'broker',
+        'Live execution is unavailable from Deploy',
+        'Pick read-only observation or paper orders.',
+        confirmInForm('Pick paper or read-only', 'launch-section'),
+      ),
+    );
   }
 
   if (!input.actionPlanReady) {
-    blockers.push({
-      id: 'action_plan_incomplete',
-      severity: 'blocking',
-      disposition: 'fix_here',
-      headline: 'Entry/exit legs incomplete',
-      detail: input.actionPlanMessage ?? 'Add a valid entry leg and a matching close leg before deploying.',
-      primary_move: confirmInForm('Fix the legs', 'action-plan-picker-heading'),
-      secondary_moves: [],
-      applies_to: 'deploy',
-    });
+    blockers.push(
+      formBlocker(
+        'action_plan_incomplete',
+        'strategy',
+        'Entry/exit legs incomplete',
+        input.actionPlanMessage ?? 'Add a valid entry leg and a matching close leg before deploying.',
+        confirmInForm('Fix the legs', 'action-plan-picker-heading'),
+      ),
+    );
   }
 
   return blockers;
 }
 
 export function deployReady(blockers: OperatorBlocker[]): boolean {
-  return blockers.every((b) => b.severity !== 'blocking');
+  return blockers.every((b) => b.condition.severity !== 'blocking');
 }
 
 export interface MoveDispatch {

@@ -1,4 +1,5 @@
 import type { LiveInstanceStatus, OperatorSurface } from '../api/live-instances.types';
+import { operatorBlockerFixture } from './operator-blocker-fixtures';
 
 export function makeOperatorSurfaceFixture(
   overrides: Partial<OperatorSurface> = {},
@@ -224,25 +225,26 @@ export function makeOperatorSurfaceFixture(
 
 export function addRetiredTerminalBlocker(status: LiveInstanceStatus): void {
   status.operator_surface.blockers = [
-    {
+    operatorBlockerFixture({
       id: 'retired',
-      severity: 'blocking',
+      scope: 'bot',
+      host: 'bot_cockpit',
       disposition: 'terminal',
       headline: "Can't recover",
       detail: 'This bot has been retired. Remove it from the catalog or replace it.',
-      primary_move: {
+      primaryMove: {
         label: 'Remove',
         action: { kind: 'remove' },
         target: null,
       },
-      secondary_moves: [
+      secondaryMoves: [
         {
           label: 'Replace',
           action: { kind: 'retire_replace' },
           target: null,
         },
       ],
-      applies_to: 'run',
-    },
+      appliesTo: 'run',
+    }),
   ];
 }

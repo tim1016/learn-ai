@@ -35,32 +35,14 @@
           <p class="why-drawer__explanation">{{ explanation }}</p>
         }
 
-        @if (blockerGroups().length > 0) {
+        @if (blockers().length > 0) {
           <section class="why-drawer__section" aria-label="Operator blockers">
             <p class="why-drawer__section-label">Operator blockers</p>
-            @for (group of blockerGroups(); track group.disposition) {
-              <div class="why-drawer__blocker-group">
-                <h3>{{ group.label }}</h3>
-                @for (blocker of group.blockers; track blocker.id) {
-                  <article class="why-drawer__blocker">
-                    <strong>{{ blocker.headline }}</strong>
-                    @if (blocker.detail; as detail) {
-                      <span>{{ detail }}</span>
-                    }
-                    @if (blocker.primary_move; as move) {
-                      <em>{{ move.label }}</em>
-                    }
-                    @if (blocker.secondary_moves.length > 0) {
-                      <small>
-                        @for (move of blocker.secondary_moves; track move.label + move.action.kind) {
-                          <span>{{ move.label }}</span>
-                        }
-                      </small>
-                    }
-                  </article>
-                }
-              </div>
-            }
+            <app-operator-blocker-list
+              [blockers]="blockers()"
+              ariaLabel="Bot Cockpit blockers"
+              (moveSelected)="selectBlockerMove($event)"
+            />
           </section>
         }
 

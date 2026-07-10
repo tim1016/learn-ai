@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { OperatorBlocker } from '../../../api/operator-blocker.types';
+import { operatorBlockerFixture } from '../../../testing/operator-blocker-fixtures';
 import { buildFormBlockers, deployReady, resolveBlockerMove } from './deploy-blockers';
 
 describe('buildFormBlockers', () => {
@@ -22,8 +23,8 @@ describe('buildFormBlockers', () => {
     });
 
     expect(blockers).toHaveLength(1);
-    expect(blockers[0].id).toBe('missing_required_fields');
-    expect(blockers[0].severity).toBe('blocking');
+    expect(blockers[0].condition.id).toBe('missing_required_fields');
+    expect(blockers[0].condition.severity).toBe('blocking');
     expect(blockers[0].disposition).toBe('fix_here');
     expect(blockers[0].detail).toContain('Strategy');
   });
@@ -33,7 +34,7 @@ describe('buildFormBlockers', () => {
       ...ready,
       identityConflictSummary: 'Symbol mismatch',
     });
-    const match = blockers.find((b) => b.id === 'identity_coherence_unconfirmed');
+    const match = blockers.find((b) => b.condition.id === 'identity_coherence_unconfirmed');
 
     expect(match?.disposition).toBe('fix_here');
     expect(match?.primary_move?.action.kind).toBe('confirm_in_form');
@@ -42,31 +43,25 @@ describe('buildFormBlockers', () => {
 
 describe('deployReady', () => {
   it('is false when any blocker is blocking', () => {
-    const b: OperatorBlocker = {
+    const b: OperatorBlocker = operatorBlockerFixture({
       id: 'x',
-      severity: 'blocking',
-      disposition: 'fix_elsewhere',
-      headline: 'h',
-      detail: null,
-      primary_move: null,
-      secondary_moves: [],
-      applies_to: 'deploy',
-    };
+      host: 'deploy_preflight',
+      primaryMove: null,
+      appliesTo: 'deploy',
+    });
 
     expect(deployReady([b])).toBe(false);
   });
 
   it('is true when all blockers are warnings', () => {
-    const b: OperatorBlocker = {
+    const b: OperatorBlocker = operatorBlockerFixture({
       id: 'x',
+      host: 'deploy_preflight',
       severity: 'warning',
       disposition: 'wait',
-      headline: 'h',
-      detail: null,
-      primary_move: null,
-      secondary_moves: [],
-      applies_to: 'deploy',
-    };
+      primaryMove: null,
+      appliesTo: 'deploy',
+    });
 
     expect(deployReady([b])).toBe(true);
   });
