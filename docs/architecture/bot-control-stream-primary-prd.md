@@ -12,6 +12,16 @@ Event stream in the side panel with inline actions · node-scoped receipts insid
 - **Implementation-snapshot DoD:** every PR that implements a slice of this PRD updates `docs/bot-lifecycle-account-owner-authority.md` in the same PR.
 - **Status:** ready-for-agent.
 
+**Amended by proposed ADR-0028 (2026-07-10):** This PRD's closed frontend
+condition-to-affordance map remains the intentional interim mechanism for the
+stream-primary delivery stage. ADR-0028 fixes the final remediation contract:
+a surface-neutral condition is projected into backend-authored, host-scoped
+`OperatorBlocker` moves, so a condition can truthfully be `fix_elsewhere` in
+Bot Cockpit and `fix_here` in Account Monitor. The roadmap lands that amendment
+after this PRD rather than churning the in-flight ADR-0027 contract; the Bot
+event stream remains historical evidence and never becomes a second current
+verdict.
+
 ---
 
 ## Problem Statement
