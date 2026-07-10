@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 from app.broker.ibkr.bars import stream_minute_bars
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.config import PAPER_PORTS
-from app.broker.ibkr.models import IbkrMinuteBar, IbkrOrderEvent
+from app.broker.ibkr.models import IbkrMinuteBar, IbkrOrderAck, IbkrOrderEvent
 from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import EquitySnapshot
 from app.engine.execution.order import Direction, OrderEvent
@@ -2447,8 +2447,8 @@ class LiveEngine:
         portfolio: LivePortfolio,
         ctx: LiveContext,
         *,
-        bar_time,
-    ) -> list:
+        bar_time: datetime,
+    ) -> list[IbkrOrderAck]:
         """Cancel + flatten + submit liquidations for a graceful shutdown.
 
         Same broker effects as the force-flat barrier (cancel open
@@ -2466,6 +2466,12 @@ class LiveEngine:
         section runs under ``self._submit_lock`` so a runtime RECONCILE
         cannot probe the broker mid-flatten. The lock is non-reentrant,
         so the internal submit uses ``_submit_pending_with_meta_locked``.
+
+        The broker position snapshot, not the in-memory portfolio, owns the
+        liquidation quantity. Positions are refreshed after cancellation and
+        again per symbol immediately before submit. This mirrors
+        ``run._recovery_flatten`` and prevents a late exit fill from turning a
+        stale liquidation into a duplicate order that crosses through flat.
         """
         async with self._submit_lock:
             portfolio.pending_orders.clear()
@@ -2503,15 +2509,38 @@ class LiveEngine:
                 cancelled = []
             if cancelled:
                 ctx.log(f"[SHUTDOWN] {bar_time}: cancelled {len(cancelled)} open broker order(s) {cancelled!r}")
+
+            # The broker is authoritative after cancel confirmation. A fill
+            # may have landed while the engine was shutting down, so the
+            # in-memory portfolio is no longer safe for liquidation sizing.
+            await portfolio.refresh_positions_from_broker()
+            candidate_symbols = tuple(
+                symbol
+                for symbol, position in portfolio.positions.items()
+                if position.quantity != 0
+            )
+
             liquidations = 0
-            for sym, pos in list(portfolio.positions.items()):
-                if pos.quantity == 0:
+            flat_acks: list[IbkrOrderAck] = []
+            for sym in candidate_symbols:
+                # Close the residual race between the post-cancel snapshot and
+                # each placement. Submit this symbol immediately after the
+                # refresh instead of building a stale multi-symbol batch.
+                await portfolio.refresh_positions_from_broker()
+                fresh_position = portfolio.positions.get(sym)
+                if fresh_position is None or fresh_position.quantity == 0:
+                    ctx.log(
+                        f"[SHUTDOWN] {bar_time}: skipped {sym} liquidation; "
+                        "broker now reports flat"
+                    )
                     continue
-                portfolio.liquidate(sym, bar_time)
+
+                if portfolio.liquidate(sym, bar_time) is None:
+                    continue
                 liquidations += 1
+                flat_acks.extend(await self._submit_pending_with_meta_locked(portfolio))
             if liquidations == 0:
                 return []
-            flat_acks = await self._submit_pending_with_meta_locked(portfolio)
             ctx.log(f"[SHUTDOWN] {bar_time}: submitted {liquidations} liquidation order(s)")
             return flat_acks
 

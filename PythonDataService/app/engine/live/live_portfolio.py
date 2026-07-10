@@ -529,6 +529,11 @@ class LivePortfolio:
         self.cash = Decimal(str(account.cash_balance or 0))
         self.net_liquidation = Decimal(str(account.net_liquidation or account.cash_balance or 0))
 
+        await self.refresh_positions_from_broker()
+
+    async def refresh_positions_from_broker(self) -> None:
+        """Replace cached positions from one authoritative broker snapshot."""
+
         snapshot = await self.broker.fetch_positions()
         refreshed: dict[str, Position] = {}
         for pos in snapshot.positions:

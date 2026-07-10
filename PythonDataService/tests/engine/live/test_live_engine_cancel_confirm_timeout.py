@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from app.broker.ibkr.models import IbkrPosition, IbkrPositionsSnapshot
 from app.engine.live.config import LiveConfig
 from app.engine.live.live_engine import (
     CancelConfirmTimeoutHaltError,
@@ -25,12 +26,49 @@ from app.engine.live.live_engine import (
 from tests.engine.live.fixtures.fake_broker import FakeBroker
 
 
+def _position_snapshot(quantity: float) -> IbkrPositionsSnapshot:
+    positions = (
+        [
+            IbkrPosition(
+                account_id="DU123",
+                con_id=756733,
+                symbol="SPY",
+                sec_type="STK",
+                quantity=quantity,
+                avg_cost=500.0,
+                fetched_at_ms=1,
+            )
+        ]
+        if quantity != 0
+        else []
+    )
+    return IbkrPositionsSnapshot(
+        account_id="DU123",
+        is_paper=True,
+        positions=positions,
+        fetched_at_ms=1,
+    )
+
+
 class _HangingCancelBroker(FakeBroker):
     """Cancel_open_orders awaits forever — exercises the timeout path."""
 
     async def cancel_open_orders(self) -> list[int]:
         await asyncio.sleep(10.0)
         return []
+
+
+class _LateFillSettlesDuringFlattenBroker(FakeBroker):
+    """The broker position becomes flat between cancel and liquidation."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.position_fetches = 0
+
+    async def fetch_positions(self) -> IbkrPositionsSnapshot:
+        self.position_fetches += 1
+        quantity = 100.0 if self.position_fetches == 1 else 0.0
+        return _position_snapshot(quantity)
 
 
 @pytest.mark.asyncio
@@ -91,6 +129,7 @@ async def test_flatten_proceeds_when_cancel_completes_in_time(
     portfolio = LivePortfolio(broker)
     portfolio.update_reference_price("SPY", Decimal("500"))
     portfolio.get_position("SPY").quantity = 100  # something to liquidate
+    broker.position_snapshot = _position_snapshot(100.0)
     ctx = type("ctx", (), {"log": lambda self_, msg: None})()
 
     acks = await engine._flatten(portfolio, ctx, bar_time=datetime(2026, 5, 4, 14, 30, tzinfo=UTC))  # type: ignore[arg-type]
@@ -98,6 +137,72 @@ async def test_flatten_proceeds_when_cancel_completes_in_time(
     # One liquidation order submitted; halt.flag NOT written.
     assert len(acks) == 1
     assert not (tmp_path / "halt.flag").exists()
+
+
+@pytest.mark.asyncio
+async def test_flatten_refetches_before_submit_when_late_fill_closes_position(
+    tmp_path: Path,
+) -> None:
+    """A late exit fill must not turn graceful flatten into a duplicate sell."""
+    broker = _LateFillSettlesDuringFlattenBroker()
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        output_dir=tmp_path,
+        account_id="DU123",
+        cancel_confirm_timeout_s=0.5,
+    )
+    from app.engine.live.live_portfolio import LivePortfolio
+
+    portfolio = LivePortfolio(broker)
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.get_position("SPY").quantity = 100
+    ctx = type("ctx", (), {"log": lambda self_, msg: None})()
+
+    acks = await engine._flatten(
+        portfolio,
+        ctx,
+        bar_time=datetime(2026, 5, 4, 14, 30, tzinfo=UTC),
+    )  # type: ignore[arg-type]
+
+    assert broker.position_fetches == 2
+    assert acks == []
+    assert broker.orders == []
+
+
+@pytest.mark.asyncio
+async def test_flatten_uses_fresh_broker_sign_for_short_position(
+    tmp_path: Path,
+) -> None:
+    """A broker-reported short position must be closed with a buy."""
+    broker = FakeBroker()
+    broker.position_snapshot = _position_snapshot(-50.0)
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        output_dir=tmp_path,
+        account_id="DU123",
+        cancel_confirm_timeout_s=0.5,
+    )
+    from app.engine.live.live_portfolio import LivePortfolio
+
+    portfolio = LivePortfolio(broker)
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.get_position("SPY").quantity = 100  # deliberately stale, wrong sign
+    ctx = type("ctx", (), {"log": lambda self_, msg: None})()
+
+    acks = await engine._flatten(
+        portfolio,
+        ctx,
+        bar_time=datetime(2026, 5, 4, 14, 30, tzinfo=UTC),
+    )  # type: ignore[arg-type]
+
+    assert len(acks) == 1
+    [order] = broker.orders
+    assert order.action == "BUY"
+    assert order.quantity == 50
 
 
 @pytest.mark.asyncio
@@ -127,6 +232,7 @@ async def test_flatten_tolerates_cancel_exception_without_halting(
     portfolio = LivePortfolio(broker)
     portfolio.update_reference_price("SPY", Decimal("500"))
     portfolio.get_position("SPY").quantity = 100
+    broker.position_snapshot = _position_snapshot(100.0)
     ctx = type("ctx", (), {"log": lambda self_, msg: None})()
 
     acks = await engine._flatten(portfolio, ctx, bar_time=datetime(2026, 5, 4, 14, 30, tzinfo=UTC))  # type: ignore[arg-type]
