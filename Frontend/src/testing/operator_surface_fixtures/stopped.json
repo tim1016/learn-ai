@@ -237,6 +237,7 @@
           "kind": "navigate",
           "route": "/broker/account-monitor"
         },
+        "confirmation": null,
         "label": "Open account monitor",
         "target": null
       },
@@ -262,6 +263,36 @@
       "SIZING_PRESET_MISSING"
     ],
     "verdict": "ATTENTION"
+  },
+  "confirmations": {
+    "crash_recovery_override": {
+      "body": "Recording recovery evidence clears the crash-retired start gate and lets this bot run again.",
+      "confirm_label": "Record recovery override",
+      "consequence": "Only confirm after verifying in IBKR that the broker account is flat with no open orders. This writes audited safety evidence.",
+      "required_token": "",
+      "title": "Confirm the broker account is flat"
+    },
+    "mark_poisoned": {
+      "body": "Flagging this instance as POISONED is irreversible: the current run can never resume on its run_id.",
+      "confirm_label": "Mark POISONED",
+      "consequence": "Recovery requires a fresh deployment with a new run_id after the account is reconciled.",
+      "required_token": "HALT",
+      "title": "Mark this run POISONED"
+    },
+    "remove_bot": {
+      "body": "Remove hides this bot from the catalog with a soft-delete marker.",
+      "confirm_label": "Remove bot",
+      "consequence": "The underlying audit files stay on disk, but this bot will no longer appear in the active bot list.",
+      "required_token": "",
+      "title": "Remove bot"
+    },
+    "retire_replace": {
+      "body": "Retire & Replace permanently retires this bot instance, then opens replacement deploy with the current lineage.",
+      "confirm_label": "Retire & Replace",
+      "consequence": "Confirm only after verifying the broker account is flat with no open orders.",
+      "required_token": "",
+      "title": "Retire & Replace"
+    }
   },
   "control_plane": null,
   "current_risk": {

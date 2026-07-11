@@ -103,6 +103,7 @@ describe('operator surface fixture wire contract', () => {
       'blockage_ladder',
       'run_signal',
       'actions',
+      'confirmations',
       'trading_session',
       'readiness_gates',
       'blockers',

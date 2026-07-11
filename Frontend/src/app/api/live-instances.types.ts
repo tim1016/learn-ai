@@ -20,7 +20,10 @@ import type {
   OperatorSurfaceBlockageLadder,
   OperatorSurfaceNamedCondition,
 } from './operator-observability.types';
-import type { OperatorBlocker } from './operator-blocker.types';
+import type {
+  OperatorBlocker,
+  OperatorConfirmationCopy,
+} from './operator-blocker.types';
 
 export type {
   MutationRungReceipt,
@@ -493,6 +496,13 @@ export interface OperatorSurfaceHostProcess {
   start_capability: HostProcessStartCapability;
 }
 
+export interface OperatorSurfaceConfirmations {
+  mark_poisoned: OperatorConfirmationCopy;
+  crash_recovery_override: OperatorConfirmationCopy;
+  retire_replace: OperatorConfirmationCopy;
+  remove_bot: OperatorConfirmationCopy;
+}
+
 export interface OperatorSurfacePriorRun {
   classification: PriorRunClassification;
 }
@@ -875,6 +885,8 @@ export interface OperatorSurface {
   /** Backend-authored compact process signal rendered beside one-click lifecycle controls. */
   run_signal: OperatorSurfaceRunSignal;
   actions: OperatorSurfaceActions;
+  /** Backend-authored copy for dangerous Bot Cockpit confirmations. */
+  confirmations: OperatorSurfaceConfirmations;
   trading_session: OperatorSurfaceTradingSession;
   /** PRD #616 — operator-facing projection of engine readiness gates with
    *  server-authored remediation metadata.  Empty list when no readiness

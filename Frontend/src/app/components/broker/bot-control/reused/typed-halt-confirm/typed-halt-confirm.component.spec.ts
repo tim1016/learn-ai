@@ -16,6 +16,9 @@ function render(opts: {
   open: boolean;
   requiredToken?: string;
   confirmLabel?: string;
+  heading?: string;
+  message?: string;
+  consequence?: string;
 }): Harness {
   TestBed.resetTestingModule();
   TestBed.configureTestingModule({
@@ -23,11 +26,12 @@ function render(opts: {
   });
   const fixture = TestBed.createComponent(TypedHaltConfirmComponent);
   fixture.componentRef.setInput('open', opts.open);
+  fixture.componentRef.setInput('heading', opts.heading ?? 'Backend title');
+  fixture.componentRef.setInput('message', opts.message ?? 'Backend body.');
+  fixture.componentRef.setInput('consequence', opts.consequence ?? 'Backend consequence.');
+  fixture.componentRef.setInput('confirmLabel', opts.confirmLabel ?? 'Backend confirm');
   if (opts.requiredToken !== undefined) {
     fixture.componentRef.setInput('requiredToken', opts.requiredToken);
-  }
-  if (opts.confirmLabel !== undefined) {
-    fixture.componentRef.setInput('confirmLabel', opts.confirmLabel);
   }
   let confirmed = 0;
   let cancelled = 0;
@@ -66,6 +70,8 @@ describe('TypedHaltConfirmComponent', () => {
     expect(
       h.el.querySelector('[data-testid="typed-halt-confirm-dialog"]'),
     ).not.toBeNull();
+    expect(h.el.textContent).toContain('Backend title');
+    expect(h.el.textContent).toContain('Backend consequence.');
   });
 
   it('disables the confirm button until the operator types HALT exactly', () => {
@@ -145,6 +151,10 @@ describe('TypedHaltConfirmComponent', () => {
       TestBed.configureTestingModule({ providers: [provideZonelessChangeDetection()] });
       const fixture = TestBed.createComponent(TypedHaltConfirmComponent);
       fixture.componentRef.setInput('open', false);
+      fixture.componentRef.setInput('heading', 'Backend title');
+      fixture.componentRef.setInput('message', 'Backend body.');
+      fixture.componentRef.setInput('consequence', 'Backend consequence.');
+      fixture.componentRef.setInput('confirmLabel', 'Backend confirm');
       fixture.componentRef.setInput('requiredToken', '');
       document.body.appendChild(fixture.nativeElement);
       fixture.detectChanges();

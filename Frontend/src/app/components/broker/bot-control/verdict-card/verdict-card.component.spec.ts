@@ -186,11 +186,9 @@ describe('VerdictCardComponent', () => {
     );
     const el = fixture.nativeElement as HTMLElement;
     const lifecycleAction = vi.fn();
-    const terminalRetireReplaceRequested = vi.fn();
-    const removeRequested = vi.fn();
+    const blockerMoveRequested = vi.fn();
     fixture.componentInstance.lifecycleAction.subscribe(lifecycleAction);
-    fixture.componentInstance.terminalRetireReplaceRequested.subscribe(terminalRetireReplaceRequested);
-    fixture.componentInstance.removeRequested.subscribe(removeRequested);
+    fixture.componentInstance.blockerMoveRequested.subscribe(blockerMoveRequested);
 
     expect(el.querySelector('.verdict-card')?.getAttribute('data-state')).toBe('Retired');
     expect(el.querySelector('#verdict-state')?.textContent).toContain("Can't recover");
@@ -202,8 +200,15 @@ describe('VerdictCardComponent', () => {
     buttons[0]?.click();
     buttons[1]?.click();
 
-    expect(removeRequested).toHaveBeenCalledTimes(1);
-    expect(terminalRetireReplaceRequested).toHaveBeenCalledTimes(1);
+    expect(blockerMoveRequested).toHaveBeenCalledTimes(2);
+    expect(blockerMoveRequested).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ action: { kind: 'remove' } }),
+    );
+    expect(blockerMoveRequested).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ action: { kind: 'retire_replace' } }),
+    );
     expect(lifecycleAction).not.toHaveBeenCalledWith('retire_replace');
   });
 

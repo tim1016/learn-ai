@@ -8,6 +8,7 @@ from app.schemas.operator_blocker import (
     OpenRunbookAction,
     OperatorBlocker,
     OperatorCondition,
+    OperatorConfirmationCopy,
     OperatorMove,
     RemoveAction,
     RetireReplaceAction,
@@ -107,6 +108,27 @@ def test_terminal_blocker_accepts_replace_and_remove_moves() -> None:
     assert blocker.primary_move is not None
     assert blocker.primary_move.action.kind == "retire_replace"
     assert blocker.secondary_moves[0].action.kind == "remove"
+
+
+def test_operator_move_serializes_backend_confirmation_copy() -> None:
+    move = OperatorMove(
+        label="Replace",
+        action=RetireReplaceAction(kind="retire_replace"),
+        confirmation=OperatorConfirmationCopy(
+            title="Retire & Replace",
+            body="Retire this bot before replacement deploy.",
+            consequence="Only confirm after broker exposure is flat.",
+            confirm_label="Retire & Replace",
+        ),
+    )
+
+    assert move.model_dump()["confirmation"] == {
+        "title": "Retire & Replace",
+        "body": "Retire this bot before replacement deploy.",
+        "consequence": "Only confirm after broker exposure is flat.",
+        "confirm_label": "Retire & Replace",
+        "required_token": "",
+    }
 
 
 def test_fix_elsewhere_accepts_open_runbook_move() -> None:

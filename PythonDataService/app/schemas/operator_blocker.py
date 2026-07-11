@@ -66,12 +66,25 @@ OperatorAction = Annotated[
 ]
 
 
+class OperatorConfirmationCopy(BaseModel):
+    """Backend-authored copy for dangerous operator confirmations."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    body: str
+    consequence: str
+    confirm_label: str
+    required_token: str = ""
+
+
 class OperatorMove(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     label: str
     action: OperatorAction
     target: str | None = None
+    confirmation: OperatorConfirmationCopy | None = None
 
 
 class OperatorCondition(BaseModel):
