@@ -2979,6 +2979,45 @@ async def test_bot_catalog_reuses_run_scan_for_status_rows(app_with_root, monkey
     assert calls == 1
 
 
+async def test_bot_catalog_composes_status_rows_concurrently(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-ema-1", "spy_ema_paper", 100)
+    _write_ledger(root, "run-vwap-1", "spy_vwap_shadow", 110)
+    _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1})
+    real_resolve = live_instances._resolve_instance_status_from_process
+    active = 0
+    max_active = 0
+
+    async def counted_resolve(*args, **kwargs):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        try:
+            await asyncio.sleep(0)
+            return await real_resolve(*args, **kwargs)
+        finally:
+            active -= 1
+
+    monkeypatch.setattr(
+        live_instances,
+        "_resolve_instance_status_from_process",
+        counted_resolve,
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/catalog")
+
+    assert response.status_code == 200
+    assert {row["strategy_instance_id"] for row in response.json()["bots"]} == {
+        "spy_ema_paper",
+        "spy_vwap_shadow",
+    }
+    assert max_active == 2
+
+
 async def test_roll_call_tick_persists_start_offer_and_catalog_reads_it(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
