@@ -392,6 +392,153 @@ async def test_sse_reconnect_prefers_newer_last_event_id_over_query_cursor(
     assert '"seq":2' in text
 
 
+async def test_sse_overflow_gap_then_rest_backfill_recovers_missed_rows(
+    tmp_path: Path, fresh_registry
+) -> None:
+    """Tracer for the full overflow-recovery loop through real HTTP.
+
+    A publish burst that outruns the subscriber queue must terminate the
+    stream with ``event: gap`` carrying ``last_safe_cursor``; REST backfill
+    from that cursor must return every missed row; a fresh subscription at
+    the backfill high-water mark must then serve live rows again.
+    """
+    publisher = _seed_publisher(tmp_path, [_row(1), _row(2)])
+    await fresh_registry.register(publisher, strategy_instance_id=SID)
+    stream_id = publisher.event_channel.stream_id
+    queue_size = publisher.event_channel.resource_limits.subscriber_queue_size
+
+    app = await _make_app()
+    transport = ASGITransport(app=app)
+
+    async def _collect_stream():
+        async with AsyncClient(transport=transport, base_url="http://test") as client, client.stream(
+            "GET",
+            f"/api/live-instances/{SID}/broker-activity/stream",
+            params={"cursor": f"{stream_id}:0"},
+        ) as resp:
+            assert resp.status_code == 200
+            text = ""
+            async for chunk in resp.aiter_text():
+                text += chunk
+                if "event: gap" in text:
+                    return text
+            return text
+
+    collector = asyncio.create_task(_collect_stream())
+    # Let the subscriber drain the two seeded ring rows.
+    await asyncio.sleep(0.05)
+    # Publish a burst larger than the subscriber queue without yielding to
+    # the event loop, so the SSE generator cannot drain between publishes.
+    wal = BrokerActivityWal(
+        instance_broker_activity_wal_path(tmp_path / "artifacts", SID)
+    )
+    burst = [_row(seq) for seq in range(3, 3 + queue_size + 8)]
+    for row in burst:
+        wal.allocate_seq()
+        wal.append_row(row)
+    for row in burst:
+        publisher.event_channel.publish(row)
+
+    text = await asyncio.wait_for(collector, timeout=2.0)
+    assert "event: gap" in text
+    import json as json_module
+    import re
+
+    gap_payload = json_module.loads(
+        re.search(r"event: gap\ndata: (.+)\n", text).group(1)
+    )
+    last_safe = gap_payload["last_safe_cursor"]
+    assert last_safe.startswith(f"{stream_id}:")
+    safe_seq = int(last_safe.rpartition(":")[2])
+    assert safe_seq >= 2
+
+    # REST backfill from the gap's safe cursor recovers every missed row.
+    recovered: list[int] = []
+    cursor = last_safe
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        while cursor is not None:
+            resp = await client.get(
+                f"/api/live-instances/{SID}/broker-activity",
+                params={"cursor": cursor, "limit": 50},
+            )
+            assert resp.status_code == 200
+            payload = resp.json()
+            recovered.extend(r["seq"] for r in payload["rows"])
+            cursor = payload["next_cursor"] if payload["rows"] else None
+    assert recovered == list(range(safe_seq + 1, burst[-1].seq + 1))
+
+    # A fresh subscription at the recovered high-water mark goes live again.
+    async def _collect_resubscribe():
+        async with AsyncClient(transport=transport, base_url="http://test") as client, client.stream(
+            "GET",
+            f"/api/live-instances/{SID}/broker-activity/stream",
+            params={"cursor": f"{stream_id}:{burst[-1].seq}"},
+        ) as resp:
+            assert resp.status_code == 200
+            return await resp.aread()
+
+    resubscriber = asyncio.create_task(_collect_resubscribe())
+    await asyncio.sleep(0.05)
+    live_seq = burst[-1].seq + 1
+    live_row = _row(live_seq, exec_id="post-gap-live")
+    wal.allocate_seq()
+    wal.append_row(live_row)
+    publisher.event_channel.publish(live_row)
+    await asyncio.sleep(0.05)
+    await publisher.stop()
+    tail_text = (await asyncio.wait_for(resubscriber, timeout=2.0)).decode()
+    assert "event: gap" not in tail_text
+    assert f'"seq":{live_seq}' in tail_text
+
+
+async def test_sse_mid_stream_wal_replacement_emits_reset_and_closes(
+    tmp_path: Path, fresh_registry
+) -> None:
+    """WAL identity change mid-stream must surface ``event: reset`` through
+    HTTP and close the stream so the client re-bootstraps."""
+    publisher = _seed_publisher(tmp_path, [_row(1), _row(2)])
+    await fresh_registry.register(publisher, strategy_instance_id=SID)
+    old_stream_id = publisher.event_channel.stream_id
+
+    app = await _make_app()
+    transport = ASGITransport(app=app)
+
+    async def _collect_stream():
+        async with AsyncClient(transport=transport, base_url="http://test") as client, client.stream(
+            "GET",
+            f"/api/live-instances/{SID}/broker-activity/stream",
+            params={"cursor": f"{old_stream_id}:0"},
+        ) as resp:
+            assert resp.status_code == 200
+            text = ""
+            async for chunk in resp.aiter_text():
+                text += chunk
+                if "event: reset" in text:
+                    return text
+            return text
+
+    collector = asyncio.create_task(_collect_stream())
+    await asyncio.sleep(0.05)
+
+    # Replace the WAL with a new file (new inode) as an external rotation.
+    wal_path = instance_broker_activity_wal_path(tmp_path / "artifacts", SID)
+    replacement_path = tmp_path / "replacement-wal.jsonl"
+    replacement = BrokerActivityWal(replacement_path)
+    replacement.allocate_seq()
+    replacement.append_row(_row(1, exec_id="post-replacement"))
+    import os as os_module
+
+    os_module.replace(replacement_path, wal_path)
+    publisher.event_channel.refresh()
+
+    text = await asyncio.wait_for(collector, timeout=2.0)
+    assert "event: reset" in text
+    new_stream_id = publisher.event_channel.stream_id
+    assert new_stream_id != old_stream_id
+    assert f'"durable_stream_id": "{new_stream_id}"' in text
+    await publisher.stop()
+
+
 async def test_legacy_sse_deep_backfills_beyond_queue_capacity(
     tmp_path: Path, fresh_registry
 ) -> None:

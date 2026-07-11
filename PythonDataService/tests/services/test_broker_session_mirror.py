@@ -114,7 +114,7 @@ def test_runtime_index_reads_child_client_id_from_engine_runtime(tmp_path: Path)
     assert entry.recovery_state == "RECONNECTING"
 
 
-async def test_mirror_snapshot_records_roster_history(
+async def test_mirror_snapshot_records_roster_history_when_requested(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -138,10 +138,42 @@ async def test_mirror_snapshot_records_roster_history(
         history_service=history,
     )
 
-    snapshot = await service.snapshot()
+    snapshot = await service.snapshot(record_history=True)
 
     assert history.snapshots == [snapshot]
     assert snapshot.observer_status == "degraded"
+
+
+async def test_mirror_snapshot_default_read_path_does_not_write_history(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Per-bot diagnostics compose the mirror at high frequency; a status
+    read must never append durable history (ADR-0026 reads-never-write)."""
+
+    history = _FakeHistoryService()
+    monkeypatch.setattr(
+        broker_session_mirror,
+        "get_settings",
+        lambda: type(
+            "Settings",
+            (),
+            {
+                "live_runner_daemon_url": "",
+                "live_runs_root": str(tmp_path),
+                "port": 4002,
+            },
+        )(),
+    )
+    monkeypatch.setattr(broker_session_mirror, "_data_plane_health", lambda: None)
+    service = BrokerSessionMirrorService(
+        event_service=_FakeEventService(),
+        history_service=history,
+    )
+
+    await service.snapshot()
+
+    assert history.snapshots == []
 
 
 async def test_mirror_snapshot_includes_past_closed_history_when_observer_online(

@@ -8,6 +8,7 @@ server-side and the serialized response carries both `live_binding` and
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 from datetime import UTC, date, datetime, timedelta
@@ -57,6 +58,60 @@ from app.schemas.live_runs import LiveBinding
 from app.services.live_chart_window import ChartTimeframe, ChartWindowResult
 from app.services.mutation_attempt import MutationAttemptRepo
 from tests._fixtures.daemon_transport import as_typed_get
+
+
+async def _capture_first_asgi_stream_body(
+    app,
+    path: str,
+    *,
+    headers: list[tuple[bytes, bytes]] | None = None,
+) -> tuple[dict, str]:
+    """Drive one ASGI streaming request and disconnect after the first body."""
+
+    response_start: list[dict] = []
+    body_chunks: list[bytes] = []
+    request_sent = False
+    first_body = asyncio.Event()
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "headers": [(b"host", b"test")] + (headers or []),
+        "client": ("testclient", 50000),
+        "server": ("test", 80),
+        "root_path": "",
+    }
+
+    async def receive():
+        nonlocal request_sent
+        if not request_sent:
+            request_sent = True
+            return {"type": "http.request", "body": b"", "more_body": False}
+        await first_body.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict) -> None:
+        if message["type"] == "http.response.start":
+            response_start.append(message)
+        if message["type"] == "http.response.body" and message.get("body"):
+            body_chunks.append(message["body"])
+            first_body.set()
+
+    task = asyncio.create_task(app(scope, receive, send))
+    try:
+        await asyncio.wait_for(first_body.wait(), timeout=1.0)
+        await asyncio.wait_for(task, timeout=1.0)
+    finally:
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+    return response_start[0], b"".join(body_chunks).decode()
 
 
 def _write_ledger(
@@ -994,6 +1049,163 @@ async def test_surface_hubs_share_one_fleet_daemon_snapshot(
         roster = await live_instances.list_live_instances()
         assert [row.strategy_instance_id for row in roster] == strategy_instance_ids
         assert calls == 1
+    finally:
+        await live_instances.stop_surface_hubs()
+
+
+async def test_operator_surface_stream_serves_snapshot_through_asgi_http(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tracer through the real HTTP layer, not the endpoint function."""
+
+    app, root = app_with_root
+    sid = "spy_surface_stream_http"
+    _write_ledger(root, "run-surface-stream-http", sid, 100)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+    from app.services.live_instance_surface_assembler import VisibleRunsSnapshotCache
+    from app.services.surface_hub import SurfaceHubRegistry
+
+    monkeypatch.setattr(live_instances, "_SURFACE_HUBS", SurfaceHubRegistry())
+    monkeypatch.setattr(live_instances, "_SURFACE_RUNS_CACHE", VisibleRunsSnapshotCache())
+    from app.config import settings as app_settings
+
+    monkeypatch.setattr(app_settings, "DATA_PLANE_CONTROL_SECRET", "tracer-secret")
+    await live_instances._ensure_surface_hub_started(sid)
+    hub = live_instances._SURFACE_HUBS.get(sid)
+    assert hub is not None and hub.latest is not None
+
+    try:
+        start, collected = await _capture_first_asgi_stream_body(
+            app,
+            f"/api/live-instances/{sid}/operator-surface/stream",
+            headers=[(b"x-data-plane-control-secret", b"tracer-secret")],
+        )
+        assert start["status"] == 200
+        response_headers = dict(start["headers"])
+        assert response_headers[b"content-type"].startswith(b"text/event-stream")
+        first_event = collected.split("\n\n")[0]
+        assert f"id: {hub.latest.stream_epoch}:{hub.latest.surface_version}" in first_event
+        assert "event: snapshot" in first_event
+        assert f'"strategy_instance_id":"{sid}"' in first_event.replace(" ", "")
+    finally:
+        await hub.stop(timeout_seconds=0.5)
+
+
+async def test_fleet_roster_marks_processes_unreachable_from_stale_observation(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stale-while-revalidate observation must never present its retained
+    payload as live process truth: rows render 'unreachable', while the old
+    daemon stamp stays visible as the per-source age."""
+
+    _app, root = app_with_root
+    sid = "stale-observation-bot"
+    _write_ledger(root, "run-stale-observation", sid, 100)
+    from app.engine.live.daemon_transport import DaemonResult
+    from app.services.fleet_daemon_snapshot_provider import FleetDaemonObservation
+
+    stale_observation = FleetDaemonObservation(
+        result=DaemonResult(
+            kind="UNREACHABLE",
+            detail="connection refused",
+            error_category="connect_error",
+        ),
+        payload={
+            "fetched_at_ms": 1_700_000_000_000,
+            "instances": [
+                {
+                    "strategy_instance_id": sid,
+                    "run_id": "run-stale-observation",
+                    "run_dir": str(root / "run-stale-observation"),
+                    "process": {"state": "running", "run_id": "run-stale-observation"},
+                }
+            ],
+        },
+        processes_by_id={},
+        source_fetched_at_ms=1_700_000_000_000,
+        observed_at_ms=1_700_000_060_000,
+    )
+
+    class _StaleProvider:
+        async def observation(self) -> FleetDaemonObservation:
+            return stale_observation
+
+    monkeypatch.setattr(live_instances, "_FLEET_DAEMON_PROVIDER", _StaleProvider())
+
+    snapshot = await live_instances._assemble_fleet_roster_snapshot()
+
+    assert snapshot.daemon_fetched_at_ms == 1_700_000_000_000
+    row = next(r for r in snapshot.instances if r.strategy_instance_id == sid)
+    assert row.process_state == "unreachable"
+
+
+async def test_start_surface_hubs_boots_degraded_when_daemon_unreachable(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Data-plane boot must complete (degraded) when the host daemon is down.
+
+    A daemon outage at startup must never leave the whole API unbootable —
+    the producer owns retries and the surface renders UNREACHABLE evidence.
+    """
+
+    _app, root = app_with_root
+    sid = "boot-daemon-down-bot"
+    _write_ledger(root, "run-boot-daemon-down", sid, 100)
+
+    async def refused_instances(_base_url: str):
+        raise ConnectionError("connection refused")
+
+    from app.services.live_instance_surface_assembler import VisibleRunsSnapshotCache
+    from app.services.surface_hub import SurfaceHubRegistry
+
+    monkeypatch.setattr(live_instances, "_SURFACE_HUBS", SurfaceHubRegistry())
+    monkeypatch.setattr(live_instances, "_FLEET_DAEMON_PROVIDER", None)
+    monkeypatch.setattr(live_instances, "_FLEET_ROSTER_HUB", None)
+    monkeypatch.setattr(live_instances, "_SURFACE_RUNS_CACHE", VisibleRunsSnapshotCache())
+    monkeypatch.setattr(host_daemon_client, "fetch_instances", refused_instances)
+
+    try:
+        await asyncio.wait_for(live_instances.start_surface_hubs(), timeout=10)
+
+        hub = live_instances._SURFACE_HUBS.get(sid)
+        assert hub is not None
+        assert hub.is_running is True
+        assert hub.latest is not None
+        roster_hub = live_instances._FLEET_ROSTER_HUB
+        assert roster_hub is not None and roster_hub.latest is not None
+    finally:
+        await live_instances.stop_surface_hubs()
+
+
+async def test_start_surface_hubs_survives_corrupt_mutation_attempt_artifact(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _app, root = app_with_root
+    sid = "boot-corrupt-attempt-bot"
+    _write_ledger(root, "run-boot-corrupt-attempt", sid, 100)
+    _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1}, process={"state": "idle"})
+    attempts_root = live_instances._mutation_attempt_root(root)
+    attempts_root.mkdir(parents=True, exist_ok=True)
+    (attempts_root / "mutation-corrupt.json").write_text("{not-json", encoding="utf-8")
+
+    from app.services.live_instance_surface_assembler import VisibleRunsSnapshotCache
+    from app.services.surface_hub import SurfaceHubRegistry
+
+    monkeypatch.setattr(live_instances, "_SURFACE_HUBS", SurfaceHubRegistry())
+    monkeypatch.setattr(live_instances, "_FLEET_DAEMON_PROVIDER", None)
+    monkeypatch.setattr(live_instances, "_FLEET_ROSTER_HUB", None)
+    monkeypatch.setattr(live_instances, "_SURFACE_RUNS_CACHE", VisibleRunsSnapshotCache())
+
+    try:
+        await asyncio.wait_for(live_instances.start_surface_hubs(), timeout=10)
+
+        hub = live_instances._SURFACE_HUBS.get(sid)
+        assert hub is not None
+        assert hub.latest is not None
     finally:
         await live_instances.stop_surface_hubs()
 

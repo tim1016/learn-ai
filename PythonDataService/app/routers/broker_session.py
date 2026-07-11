@@ -38,9 +38,9 @@ logger = logging.getLogger(__name__)
 async def broker_session_snapshot(
     service: BrokerSessionMirrorService = Depends(get_broker_session_mirror_service),
 ) -> BrokerSessionMirrorSnapshot:
-    """Return one read-only roster snapshot."""
+    """Return one roster snapshot; the mirror page owns history appends."""
 
-    return await service.snapshot()
+    return await service.snapshot(record_history=True)
 
 
 @router.get("/events", response_model=BrokerSessionEventPage)
@@ -96,7 +96,7 @@ async def broker_session_stream(
         try:
             while True:
                 try:
-                    snapshot = await service.snapshot()
+                    snapshot = await service.snapshot(record_history=True)
                 except Exception:
                     logger.exception("broker session snapshot stream failed")
                     yield "event: error\ndata: {}\n\n"

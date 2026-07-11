@@ -116,6 +116,47 @@ describe('durableEventFeed', () => {
     expect(feed.cursor()).toBe('stream-b:1');
   });
 
+  it('bounds replacement recovery: a second 409 dead-ends into error instead of looping', async () => {
+    const backfill = vi.fn()
+      .mockResolvedValueOnce(page('stream-a', 2, [row(1, 'first'), row(2, 'second')], null))
+      .mockRejectedValueOnce({ status: 409 })
+      .mockRejectedValueOnce({ status: 409 });
+    const feed = setup(backfill);
+    await flushAsync();
+
+    StubEventSource.instances[0].dispatch('gap', {
+      durable_stream_id: 'stream-a',
+      last_safe_cursor: 'stream-a:2',
+    });
+    await flushAsync();
+    await flushAsync();
+
+    expect(backfill.mock.calls.map(([cursor]) => cursor)).toEqual([null, 'stream-a:2', null]);
+    expect(feed.status()).toBe('error');
+    expect(feed.loading()).toBe(false);
+    expect(StubEventSource.instances).toHaveLength(1);
+
+    await flushAsync();
+    expect(backfill).toHaveBeenCalledTimes(3);
+  });
+
+  it('surfaces an honest error state when recovery backfill fails after a stream drop', async () => {
+    const backfill = vi.fn()
+      .mockResolvedValueOnce(page('stream-a', 1, [row(1, 'first')], null))
+      .mockRejectedValueOnce(new Error('control plane unreachable'));
+    const feed = setup(backfill);
+    await flushAsync();
+
+    StubEventSource.instances[0].dispatch('error', '');
+    await flushAsync();
+
+    expect(feed.status()).toBe('error');
+    expect(feed.error()).toBe('control plane unreachable');
+    expect(feed.loading()).toBe(false);
+    expect(feed.rows()).toEqual([row(1, 'first')]);
+    expect(StubEventSource.instances).toHaveLength(1);
+  });
+
   it('rejects a malformed channel row before admitting typed history', async () => {
     const feed = setup(vi.fn().mockResolvedValue(page('stream-a', 0, [], null)));
     await flushAsync();

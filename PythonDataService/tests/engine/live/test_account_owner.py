@@ -28,7 +28,11 @@ from app.engine.live.account_owner import (
     AccountOwnerSubmitRejected,
     ClientIdInUseError,
 )
-from app.engine.live.account_owner_fence import current_account_owner_write_grant
+from app.engine.live.account_owner_fence import (
+    AccountOwnerWriteFenceError,
+    current_account_owner_write_grant,
+    require_account_owner_write_grant,
+)
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
     bot_order_namespace_for_instance,
@@ -209,6 +213,74 @@ def test_account_owner_generation_persists_and_rejects_stale_intent(tmp_path: Pa
 
     assert loaded is not None
     assert loaded.generation == GENERATION
+
+
+@pytest.mark.asyncio
+async def test_resumed_stale_owner_is_fenced_after_takeover(tmp_path: Path) -> None:
+    """Stage 6 exit criterion: pause → lease takeover → resume → refusal.
+
+    Owner A holds generation N while a successor advances the durable
+    generation to N+1 (the SIGSTOP → expiry → takeover → SIGCONT shape,
+    simulated in-process). Resumed A must be refused at BOTH boundaries —
+    intent acceptance and the broker-write fence — before any broker call.
+    """
+
+    write_account_owner_generation(
+        tmp_path,
+        AccountOwnerGeneration(
+            account_id=ACCOUNT,
+            generation=GENERATION,
+            phase="accepting",
+            recorded_at_ms=1_700_000_000_000,
+            source="test",
+        ),
+    )
+    write_account_instance_binding(tmp_path, _binding())
+    broker = _Broker()
+    owner_a = AccountOwner(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=broker,
+        owner_generation_provider=lambda: GENERATION,
+        current_owner_generation_provider=_persisted_generation_provider(tmp_path),
+        classifier=lambda _intent: _continue_decision(),
+        initial_phase="accepting",
+    )
+
+    # Sanity: while A's held generation is current, its submits reach the broker.
+    await owner_a.submit(_intent())
+    assert len(broker.calls) == 1
+
+    # A pauses; the lease expires; a successor takes over the account.
+    advance_account_owner_generation(
+        tmp_path,
+        ACCOUNT,
+        phase="accepting",
+        recorded_at_ms=1_700_000_100_000,
+        source="takeover",
+    )
+
+    # A resumes and submits under its stale held generation.
+    with pytest.raises(AccountOwnerSubmitRejected) as rejected:
+        await owner_a.submit(_intent())
+    assert rejected.value.reason == "OWNER_GENERATION_MISMATCH"
+    assert rejected.value.diagnostics["current_owner_generation"] == GENERATION + 1
+    assert len(broker.calls) == 1
+
+    # A's non-submit broker writes are refused at the write fence, exactly
+    # as IbkrBrokerAdapter enforces it before touching the broker.
+    with pytest.raises(AccountOwnerWriteFenceError) as fenced:
+        await owner_a.run_broker_write(
+            boundary="broker.cancel_open_orders",
+            write=lambda: require_account_owner_write_grant(
+                account_id=ACCOUNT,
+                boundary="broker.cancel_open_orders",
+            ),
+        )
+    assert fenced.value.reason == "OWNER_GENERATION_STALE_AT_BROKER_WRITE"
+    assert fenced.value.current_owner_generation == GENERATION + 1
+    assert fenced.value.grant_owner_generation == GENERATION
+    assert len(broker.calls) == 1
 
 
 def test_account_owner_records_accepting_generation_for_startup(tmp_path: Path) -> None:

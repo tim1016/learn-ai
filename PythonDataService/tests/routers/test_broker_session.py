@@ -20,7 +20,8 @@ from app.services.broker_session_mirror import get_broker_session_mirror_service
 
 
 class _FakeBrokerSessionMirrorService:
-    async def snapshot(self) -> BrokerSessionMirrorSnapshot:
+    async def snapshot(self, *, record_history: bool = False) -> BrokerSessionMirrorSnapshot:
+        assert record_history is True
         return BrokerSessionMirrorSnapshot(
             as_of_ms=1_783_120_000_000,
             gateway_port=4002,

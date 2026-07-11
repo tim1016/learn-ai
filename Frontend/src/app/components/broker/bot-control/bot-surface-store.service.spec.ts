@@ -172,6 +172,47 @@ describe('BotSurfaceStore', () => {
     expect(store.latestMutationReceipt()?.mutation_attempt_id).toBe('mutation-race');
   });
 
+  it('keeps a pending attempt across a stream drop and clears it from the reconnect snapshot', async () => {
+    const initial = makeStatus();
+    liveRuns.getInstanceStatus.mockResolvedValue(initial);
+    const store = TestBed.inject(BotSurfaceStore);
+    await store.bootstrapInstance('sid-x');
+    store.connect('sid-x');
+    const source = StubEventSource.instances[0];
+    source.dispatch('open');
+    source.dispatch('snapshot', JSON.stringify(initial));
+    store.establishPending({ mutation_attempt_id: 'mutation-outage' });
+
+    source.dispatch('error');
+
+    // The outage must not silently discard the pending attempt, and the
+    // banner + read-only state must make the wait honest.
+    expect(store.pendingAttemptId()).toBe('mutation-outage');
+    expect(store.readOnly()).toBe(true);
+    expect(store.errorMessage()).toContain('same-session snapshot');
+
+    const reconnected = makeStatus();
+    reconnected.surface_version = initial.surface_version + 1;
+    reconnected.latest_mutation = {
+      schema_version: 1,
+      mutation_attempt_id: 'mutation-outage',
+      instance_id: 'sid-x',
+      run_id: 'run-x',
+      action: 'pause',
+      requested_at_ms: 1_700_000_000_000,
+      last_transition_at_ms: 1_700_000_000_010,
+      dispatch_state: 'RESPONSE_CONFIRMED',
+      outcome: { actuated: true },
+      evidence: null,
+    };
+    source.dispatch('snapshot', JSON.stringify(reconnected));
+
+    expect(store.pendingAttemptId()).toBeNull();
+    expect(store.latestMutationReceipt()?.mutation_attempt_id).toBe('mutation-outage');
+    expect(store.readOnly()).toBe(false);
+    expect(store.errorMessage()).toBeNull();
+  });
+
   it('recovers read/write state after a malformed event is followed by a valid snapshot', async () => {
     const initial = makeStatus();
     liveRuns.getInstanceStatus.mockResolvedValue(initial);
