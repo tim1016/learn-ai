@@ -221,7 +221,7 @@ export class BotsPageComponent {
       this.rollCall.set(catalog.roll_call);
       this.eveningReport.set(catalog.evening_report);
       this.retainKnownSelections(catalog.bots);
-      await this.refreshAccountTriage();
+      void this.refreshAccountTriage();
     } catch (err) {
       this.errorMessage.set(this.humanError(err));
     } finally {

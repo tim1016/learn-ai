@@ -116,6 +116,7 @@ from app.schemas.live_runs import (
     ActivityReconciliationWarning,
     AuditCopySizingLookup,
     BotCatalogResponse,
+    BotCatalogRow,
     BotDeleteRequest,
     BotDeleteResponse,
     BotLifecycleMutationResponse,
@@ -196,7 +197,7 @@ from app.services.activity_projection_contract import (
     fold_activity_event_rows,
 )
 from app.services.activity_repair_projection import load_activity_repair_projection
-from app.services.bot_catalog_projection import compose_bot_catalog_row, trading_mode_from_configured_mode
+from app.services.bot_catalog_projection import TradingMode, compose_bot_catalog_row, trading_mode_from_configured_mode
 from app.services.bot_daily_lifecycle import project_bot_daily_lifecycle
 from app.services.bot_deletion import (
     BOT_DELETION_FILENAME,
@@ -2004,35 +2005,59 @@ async def list_bot_catalog() -> BotCatalogResponse:
             if sid:
                 daemon_by_sid[sid] = inst
 
-    rows = []
     trading_mode = trading_mode_from_configured_mode(getattr(settings, "mode", None))
-    for sid in sorted(set(by_instance) | set(daemon_by_sid)):
-        if sid not in by_instance and _sid_has_soft_deletion(root.parent, sid):
-            continue
-        status_view = await _resolve_instance_status_from_process(
-            sid,
-            root,
-            settings,
-            _daemon_process_from_instance(daemon_by_sid.get(sid)),
-            runs_by_instance=by_instance,
-        )
-        row = compose_bot_catalog_row(status_view, trading_mode)
-        rows.append(
-            row.model_copy(
-                update={
-                    "attendance": attendance_for_instance(
-                        runs=by_instance.get(sid, []),
-                        lifecycle_state=_resolve_bot_lifecycle_state(root, sid),
-                        read_sidecar=_read_sidecar,
-                    )
-                }
+    sids = [
+        sid
+        for sid in sorted(set(by_instance) | set(daemon_by_sid))
+        if sid in by_instance or not _sid_has_soft_deletion(root.parent, sid)
+    ]
+    rows = list(
+        await asyncio.gather(
+            *(
+                _bot_catalog_row_for_sid(
+                    sid,
+                    root,
+                    settings,
+                    daemon_by_sid.get(sid),
+                    by_instance,
+                    trading_mode,
+                )
+                for sid in sids
             )
         )
+    )
     rows.sort(key=lambda row: (row.created_at_ms or row.last_run_at_ms or 0, row.name), reverse=True)
     return BotCatalogResponse(
         bots=rows,
         roll_call=roll_call_summary_from_rows(rows, now_ms=_now_ms()),
         evening_report=evening_report_from_rows(rows, now_ms=_now_ms()),
+    )
+
+
+async def _bot_catalog_row_for_sid(
+    sid: str,
+    root: Path,
+    settings: IbkrSettings,
+    daemon_instance: dict | None,
+    by_instance: dict[str, list[dict]],
+    trading_mode: TradingMode,
+) -> BotCatalogRow:
+    status_view = await _resolve_instance_status_from_process(
+        sid,
+        root,
+        settings,
+        _daemon_process_from_instance(daemon_instance),
+        runs_by_instance=by_instance,
+    )
+    row = compose_bot_catalog_row(status_view, trading_mode)
+    return row.model_copy(
+        update={
+            "attendance": attendance_for_instance(
+                runs=by_instance.get(sid, []),
+                lifecycle_state=_resolve_bot_lifecycle_state(root, sid),
+                read_sidecar=_read_sidecar,
+            )
+        }
     )
 
 
