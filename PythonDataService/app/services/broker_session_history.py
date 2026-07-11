@@ -24,6 +24,12 @@ from app.services.broker_session_events import (
 
 _HISTORY_LOG_RELATIVE = Path("_broker") / "session_roster_history.jsonl"
 _HISTORY_MAX_SNAPSHOTS = 500
+# Hard byte ceiling for both reads and the on-disk log. Reads never load more
+# than this many bytes (a log that grew past the budget before compaction
+# existed must not balloon memory — a 1.3GB history file OOM-killed the data
+# plane at boot on 2026-07-10), and appends compact the log back down to the
+# retention window once it crosses the budget.
+_HISTORY_MAX_BYTES = 64 * 1024 * 1024
 
 logger = logging.getLogger(__name__)
 
@@ -36,12 +42,14 @@ class BrokerSessionHistoryService:
         *,
         path: Path | None = None,
         max_snapshots: int = _HISTORY_MAX_SNAPSHOTS,
+        max_bytes: int = _HISTORY_MAX_BYTES,
     ) -> None:
         self._path = path
         self._max_snapshots = max(1, max_snapshots)
+        self._max_bytes = max(1, max_bytes)
 
     def append_snapshot(self, snapshot: BrokerSessionMirrorSnapshot) -> None:
-        """Append a snapshot; readers apply the bounded retention window."""
+        """Append a snapshot and keep the log within its retention budget."""
 
         line = _snapshot_to_line(snapshot)
         path = self.history_log_path()
@@ -51,6 +59,7 @@ class BrokerSessionHistoryService:
                 fh.write(f"{line}\n")
                 fh.flush()
                 os.fsync(fh.fileno())
+            self._compact_past_budget(path)
 
     def history(self, *, limit: int = 100) -> BrokerSessionHistoryPage:
         """Return retained snapshots newest first."""
@@ -92,9 +101,8 @@ class BrokerSessionHistoryService:
 
         path = self.history_log_path()
         with locked_jsonl_file(path):
-            try:
-                lines = path.read_text(encoding="utf-8").splitlines()
-            except FileNotFoundError:
+            lines = self._read_retained_lines()
+            if not lines:
                 return BrokerSessionHistoryPurgeResult(
                     purged_row_count=0,
                     purged_snapshot_count=0,
@@ -139,20 +147,45 @@ class BrokerSessionHistoryService:
         )
 
     def _read_all_snapshots(self) -> list[BrokerSessionMirrorSnapshot]:
+        snapshots: list[BrokerSessionMirrorSnapshot] = []
+        for line in self._read_retained_lines():
+            snapshot = _snapshot_from_line(line)
+            if snapshot is not None:
+                snapshots.append(snapshot)
+        return snapshots
+
+    def _read_retained_lines(self) -> list[str]:
+        """Read at most the retention window without loading the whole file.
+
+        The tail read is byte-bounded; a partial first line inside the budget
+        window is dropped rather than parsed as garbage.
+        """
+
+        path = self.history_log_path()
         try:
-            lines = self.history_log_path().read_text(encoding="utf-8").splitlines()
+            with open(path, "rb") as fh:
+                size = fh.seek(0, os.SEEK_END)
+                start = max(0, size - self._max_bytes)
+                fh.seek(start)
+                data = fh.read()
         except FileNotFoundError:
             return []
         except OSError as exc:
             logger.warning("failed to read broker session history: %s", exc)
             return []
-        retained_lines = lines[-self._max_snapshots :]
-        snapshots: list[BrokerSessionMirrorSnapshot] = []
-        for line in retained_lines:
-            snapshot = _snapshot_from_line(line)
-            if snapshot is not None:
-                snapshots.append(snapshot)
-        return snapshots
+        lines = data.decode("utf-8", errors="replace").splitlines()
+        if start > 0 and lines:
+            lines = lines[1:]
+        return lines[-self._max_snapshots :]
+
+    def _compact_past_budget(self, path: Path) -> None:
+        try:
+            if path.stat().st_size <= self._max_bytes:
+                return
+        except OSError as exc:
+            logger.warning("failed to stat broker session history: %s", exc)
+            return
+        write_jsonl_lines_atomically(path, self._read_retained_lines())
 
     def history_log_path(self) -> Path:
         if self._path is not None:

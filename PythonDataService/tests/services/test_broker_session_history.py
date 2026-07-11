@@ -27,6 +27,44 @@ def test_history_service_retains_bounded_snapshots_newest_first(tmp_path: Path) 
     assert len(path.read_text(encoding="utf-8").splitlines()) == 3
 
 
+def test_append_snapshot_compacts_oversized_log_to_retention_window(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "_broker" / "session_roster_history.jsonl"
+    line_budget = _line_bytes(_snapshot(10, "run-10"))
+    service = BrokerSessionHistoryService(
+        path=path,
+        max_snapshots=2,
+        max_bytes=line_budget * 3,
+    )
+
+    for as_of_ms in range(10, 100, 10):
+        service.append_snapshot(_snapshot(as_of_ms, f"run-{as_of_ms}"))
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) <= 3
+    page = service.history(limit=10)
+    assert [row.as_of_ms for row in page.rows][:2] == [90, 80]
+
+
+def test_reader_is_byte_bounded_against_an_oversized_log(tmp_path: Path) -> None:
+    path = tmp_path / "_broker" / "session_roster_history.jsonl"
+    path.parent.mkdir()
+    lines = [
+        json.dumps(_snapshot(as_of_ms, f"run-{as_of_ms}").model_dump(mode="json"))
+        for as_of_ms in range(10, 100, 10)
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # Budget covers the last line plus part of the previous one; the partial
+    # head line inside the window must be dropped, not parsed as garbage.
+    budget = len(lines[-1]) + 1 + len(lines[-2]) // 2
+    service = BrokerSessionHistoryService(path=path, max_snapshots=10, max_bytes=budget)
+
+    page = service.history(limit=10)
+
+    assert [row.as_of_ms for row in page.rows] == [90]
+
+
 def test_history_service_skips_malformed_diagnostic_rows(tmp_path: Path) -> None:
     path = tmp_path / "_broker" / "session_roster_history.jsonl"
     path.parent.mkdir()
@@ -176,6 +214,15 @@ def test_history_purge_request_requires_filter_and_confirm() -> None:
         assert "start_ms must be <= end_ms" in str(exc)
     else:
         raise AssertionError("expected purge request validation to fail")
+
+
+def _line_bytes(snapshot: BrokerSessionMirrorSnapshot) -> int:
+    line = json.dumps(
+        snapshot.model_dump(mode="json"),
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return len(line.encode("utf-8")) + 1
 
 
 def _snapshot(

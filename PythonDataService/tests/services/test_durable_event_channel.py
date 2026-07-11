@@ -83,6 +83,43 @@ async def test_five_clients_share_one_initial_wal_scan(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_publish_after_external_wal_replacement_resets_before_accepting_row(
+    tmp_path: Path,
+) -> None:
+    """``publish()`` must notice a rotated WAL (new inode) before its seq
+    dedup, so an owner append racing an external rotation cannot stamp a row
+    onto the dead stream identity."""
+
+    import os
+
+    path = tmp_path / "events.jsonl"
+    path.write_text("one\ntwo\n")
+    rows = [_Row(1), _Row(2)]
+    channel = _channel(path, rows)
+    channel.start()
+    subscription = channel.subscribe(None)
+    for _ in range(2):
+        message = await subscription.queue.get()
+        assert isinstance(message, EventRecord)
+        subscription.acknowledge(message.cursor)
+    old_stream_id = channel.stream_id
+
+    replacement = tmp_path / "replacement.jsonl"
+    replacement.write_text("replacement-one\nreplacement-two\nreplacement-three\n")
+    os.replace(replacement, path)
+    rows.clear()
+    rows.extend([_Row(1), _Row(2), _Row(3)])
+    channel.publish(_Row(3))
+
+    message = await subscription.queue.get()
+    assert message == EventReset(stream_id=channel.stream_id)
+    assert channel.stream_id != old_stream_id
+    assert subscription.active is False
+    assert channel.last_cursor.seq == 3
+    await channel.stop()
+
+
+@pytest.mark.asyncio
 async def test_cursor_before_ring_gets_gap_with_last_safe_cursor(tmp_path: Path) -> None:
     path = tmp_path / "events.jsonl"
     path.write_text("many\n")

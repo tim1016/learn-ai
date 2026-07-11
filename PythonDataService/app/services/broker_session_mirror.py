@@ -63,7 +63,17 @@ class BrokerSessionMirrorService:
         self,
         *,
         fleet_observation: FleetDaemonObservation | None = None,
+        record_history: bool = False,
     ) -> BrokerSessionMirrorSnapshot:
+        """Compose one mirror snapshot.
+
+        ``record_history`` is opt-in for the mirror's own surfaces (the
+        session-mirror page and its stream). Read paths that compose the
+        mirror as an input — per-bot daemon diagnostics run this once per
+        status assembly — must not write durable history (reads never
+        write); unbounded per-assembly appends grew the history log to
+        1.3GB and OOM-killed the data plane at boot on 2026-07-10.
+        """
         settings = get_settings()
         as_of_ms = now_ms_utc()
         degradation_reasons: list[str] = []
@@ -161,10 +171,13 @@ class BrokerSessionMirrorService:
             summary=summarize_broker_session_rows(rows),
             degradation_reasons=degradation_reasons,
         )
-        try:
-            await asyncio.to_thread(self._history_service.append_snapshot, snapshot)
-        except OSError as exc:
-            logger.warning("failed to append broker session history: %s", exc)
+        if record_history:
+            try:
+                await asyncio.to_thread(
+                    self._history_service.append_snapshot, snapshot
+                )
+            except OSError as exc:
+                logger.warning("failed to append broker session history: %s", exc)
         return snapshot
 
 
