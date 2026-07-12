@@ -21,10 +21,18 @@ suite and by the manual flow on the Engine Lab page.
 from __future__ import annotations
 
 import inspect
+import json
 import re
+import threading
+from pathlib import Path
+from typing import Any
+
+import pytest
 
 from app.jobs.phases import JOB_PHASES, LEAN_ENGINE_RUN_PHASES, friendly
-from app.services.lean_sidecar_service import run_trusted_sample
+from app.lean_sidecar.normalized_parser import NormalizedOrderEvent, NormalizedResult
+from app.routers.jobs import LeanEngineRunJobRequest, start_lean_engine_run_job
+from app.services.lean_sidecar_service import TrustedRunResult, run_trusted_sample
 
 EXPECTED_PHASE_IDS = (
     "staging_data",
@@ -97,12 +105,123 @@ class TestRunTrustedSamplePhaseSequence:
                 f"{name} must be keyword-only so existing positional callers don't break"
             )
 
-    def test_job_wrapper_serializes_dataclass_result_with_jsonable_encoder(self) -> None:
+    @pytest.mark.asyncio
+    async def test_job_wrapper_serializes_dataclass_result_with_jsonable_encoder(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """``run_trusted_sample`` returns a dataclass, not a Pydantic
         model. The job wrapper must use FastAPI's jsonable encoder so
         Path fields and nested Pydantic DTOs survive the Redis JSON hop."""
         import app.routers.jobs as jobs_router
+        import app.services.lean_sidecar_service as lean_sidecar_service
 
-        source = inspect.getsource(jobs_router.start_lean_engine_run_job)
-        assert "jsonable_encoder(result)" in source
-        assert "result.model_dump" not in source
+        completed_results: list[dict[str, Any]] = []
+
+        class _Cancel:
+            def raise_if_cancelled(self) -> None:
+                return None
+
+        class _Emitter:
+            def phase(self, _phase: str) -> None:
+                return None
+
+            def log(self, _message: str) -> None:
+                return None
+
+            def failed(self, *, code: str, message: str) -> None:
+                raise AssertionError(f"job unexpectedly failed: {code} {message}")
+
+        def run_sync(job_id: str, work: Any, **_kwargs: Any) -> None:
+            def target() -> None:
+                result = work(_Emitter(), _Cancel())
+                assert result is not None
+                completed_results.append(json.loads(json.dumps(result)))
+
+            thread = threading.Thread(target=target, name=f"test-{job_id}")
+            thread.start()
+            thread.join(timeout=5)
+            assert not thread.is_alive()
+
+        async def fake_run_trusted_sample(*_args: Any, **_kwargs: Any) -> TrustedRunResult:
+            normalized = NormalizedResult(
+                parser_version="test",
+                algorithm_id="MyAlgorithm",
+                statistics={"Total Orders": "1"},
+                runtime_statistics={},
+                equity_curve=[],
+                order_events=[
+                    NormalizedOrderEvent(
+                        order_event_id=1,
+                        order_id=2,
+                        algorithm_id="MyAlgorithm",
+                        symbol="SPY 2T",
+                        symbol_value="SPY",
+                        ms_utc=1_725_000_000_000,
+                        status="Filled",
+                        direction="Buy",
+                        quantity=10,
+                        fill_price=501.25,
+                        fill_price_currency="USD",
+                        fill_quantity=10,
+                        is_assignment=False,
+                        order_fee_amount=1.0,
+                        order_fee_currency="USD",
+                    )
+                ],
+                total_order_events=1,
+                total_equity_points=0,
+            )
+            return TrustedRunResult(
+                run_id="unit_lean_result",
+                is_clean=True,
+                exit_code=0,
+                duration_ms=123,
+                timed_out=False,
+                lean_errors={"runtime_error": []},
+                log_tail="ok",
+                manifest_path=Path("/tmp/manifest.json"),
+                workspace_root=Path("/tmp/workspace"),
+                observations_path=Path("/tmp/observations.csv"),
+                lean_log_path=Path("/tmp/lean.log"),
+                normalized_path=Path("/tmp/result.json"),
+                normalized=normalized,
+                strategy_execution_id=42,
+            )
+
+        monkeypatch.setattr(jobs_router, "run_in_thread", run_sync)
+        monkeypatch.setattr(lean_sidecar_service, "run_trusted_sample", fake_run_trusted_sample)
+
+        response = await start_lean_engine_run_job(
+            LeanEngineRunJobRequest(
+                job_id="job-1",
+                request={
+                    "run_id": "unit_lean_result",
+                    "start_ms_utc": 1_736_778_600_000,
+                    "end_ms_utc": 1_736_865_000_000,
+                    "starting_cash": 100_000,
+                    "template": "ema_crossover",
+                    "data_policy": {
+                        "source": "polygon",
+                        "symbol": "SPY",
+                        "adjusted": True,
+                        "session": "regular",
+                        "input_bars": {"timespan": "minute", "multiplier": 1},
+                        "strategy_bars": {"timespan": "minute", "multiplier": 15},
+                        "timestamp_policy": "bar_close_ms_utc",
+                        "timezone": "America/New_York",
+                        "provider_kind": "live",
+                        "fixture_id": None,
+                        "fixture_sha256": None,
+                    },
+                },
+            )
+        )
+
+        assert response == {"job_id": "job-1", "status": "queued"}
+        assert len(completed_results) == 1
+        completed = completed_results[0]
+        assert completed["manifest_path"] == "/tmp/manifest.json"
+        assert completed["workspace_root"] == "/tmp/workspace"
+        assert completed["normalized"]["order_events"][0]["order_event_id"] == 1
+        assert "orderEventId" not in completed["normalized"]["order_events"][0]
