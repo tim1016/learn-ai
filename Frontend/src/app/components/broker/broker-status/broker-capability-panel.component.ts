@@ -22,7 +22,7 @@ export class BrokerCapabilityPanelComponent {
   readonly loading = input(false);
   readonly error = input<unknown>(null);
   readonly connected = input(false);
-  readonly probe = output<void>();
+  readonly probe = output();
 
   readonly sessions = SESSION_ORDER;
 

@@ -25,6 +25,7 @@ from app.schemas.account_truth import (
     AccountTruthMessage,
     AccountTruthResponse,
 )
+from app.schemas.broker_capability import SessionCapability, SessionDataCapability
 from app.schemas.daemon_diagnostics import DaemonDominantCondition
 from app.schemas.live_runs import (
     DesiredStateView,
@@ -39,7 +40,6 @@ from app.schemas.live_runs import (
     ReadinessGate,
     ReadinessVector,
 )
-from app.schemas.broker_capability import SessionCapability, SessionDataCapability
 from app.services import operator_surface as operator_surface_module
 from app.services.account_truth_snapshot import AccountTruthSnapshot
 from app.services.deploy_preflight import DeployPreflightSignals, author_deploy_blockers

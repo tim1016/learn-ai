@@ -48,6 +48,24 @@ class SessionWindow:
     close_ms: int
 
 
+# IBKR reports US-equity ``timeZoneId`` as DST-blind abbreviations (notably
+# ``EST``, which ``ZoneInfo`` resolves to a *fixed* UTC-05 zone). Parsing a
+# summer schedule in a fixed offset shifts every window by an hour. Map the
+# abbreviations IBKR actually emits onto the DST-aware IANA zone so session
+# boundaries stay correct across the DST transition (temporal-rigor: "DST via
+# the NY zone, never a fixed offset").
+_IBKR_TIMEZONE_ALIASES: dict[str, str] = {
+    "EST": "America/New_York",
+    "EDT": "America/New_York",
+    "EST5EDT": "America/New_York",
+    "US/Eastern": "America/New_York",
+}
+
+
+def _normalize_ibkr_timezone(time_zone_id: str) -> str:
+    return _IBKR_TIMEZONE_ALIASES.get(time_zone_id.strip(), time_zone_id.strip())
+
+
 def parse_ibkr_schedule(schedule: str, time_zone_id: str) -> list[SessionWindow]:
     """Parse IBKR ``tradingHours`` / ``liquidHours`` into UTC-ms windows.
 
@@ -57,7 +75,7 @@ def parse_ibkr_schedule(schedule: str, time_zone_id: str) -> list[SessionWindow]
     if not schedule.strip():
         raise ValueError("IBKR schedule string is empty.")
     try:
-        zone = ZoneInfo(time_zone_id)
+        zone = ZoneInfo(_normalize_ibkr_timezone(time_zone_id))
     except ZoneInfoNotFoundError as exc:
         raise ValueError(f"unknown IBKR schedule timezone: {time_zone_id!r}") from exc
 

@@ -35,6 +35,19 @@ def test_parse_ibkr_schedule_converts_segments_through_instrument_timezone() -> 
     assert len(windows) == 2
 
 
+def test_parse_ibkr_schedule_maps_est_abbreviation_to_dst_aware_zone() -> None:
+    # IBKR reports US-equity timeZoneId as "EST", which ZoneInfo would resolve
+    # to a fixed UTC-05 zone. A summer session must still land in EDT (UTC-04):
+    # 09:30 ET on 2026-07-02 is 13:30 UTC, not 14:30 UTC.
+    summer = parse_ibkr_schedule("20260702:0930-20260702:1600", "EST")
+    assert summer[0].open_ms == _ms(2026, 7, 2, 9, 30)
+    assert summer[0].close_ms == _ms(2026, 7, 2, 16, 0)
+
+    # A winter session in the same "EST" tag stays in EST (UTC-05).
+    winter = parse_ibkr_schedule("20260115:0930-20260115:1600", "EST")
+    assert winter[0].open_ms == _ms(2026, 1, 15, 9, 30)
+
+
 def test_parse_ibkr_schedule_fails_loudly_on_malformed_segment() -> None:
     with pytest.raises(ValueError, match="malformed IBKR schedule segment"):
         parse_ibkr_schedule("20260702:0400", "America/New_York")
