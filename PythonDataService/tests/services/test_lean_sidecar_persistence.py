@@ -337,6 +337,16 @@ def test_build_persist_payload_pairs_round_trip(tmp_path: Path) -> None:
     assert payload["winning_trades"] == 1
     assert payload["total_pnl"] == pytest.approx(9.0)
     assert payload["total_fees"] == pytest.approx(1.0)
+    verdict = json.loads(payload["run_verdict_json"])
+    assert verdict["verdict_version"] == 1
+    assert verdict["engine"] == "lean"
+    assert payload["verdict_version"] == 1
+    assert payload["verdict_grade"] == verdict["grade"]
+    assert payload["verdict_signal"] == verdict["signal"]
+    equity = json.loads(payload["equity_curve_json"])
+    assert equity["cadence"] == "lean_chart_sampling"
+    assert equity["downsample"]["raw_points"] == 2
+    assert equity["points"][-1] == {"t": 1_700_000_600_000, "e": 100_009.0}
     # pnl=9.0 already nets the $1 of fees (pair_order_events: pnl = gross - entry_fee - exit_fee).
     # final_equity = starting_cash + total_pnl; do NOT subtract total_fees again.
     assert payload["final_equity"] == pytest.approx(100_009.0)  # 100000 + 9
@@ -360,6 +370,84 @@ def test_build_persist_payload_pairs_round_trip(tmp_path: Path) -> None:
     assert stats["portfolio"]["end_equity"] == pytest.approx(100_009.0)
     assert stats["trade"]["total_number_of_trades"] == 1
     assert stats["runtime"]["total_orders"] == 1
+
+
+def test_build_persist_payload_folds_unclean_lean_run_into_verdict(tmp_path: Path) -> None:
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    ws = _write_fixture_workspace(
+        tmp_path,
+        "ui_run_unclean",
+        order_events=[
+            _filled_event(1, "buy", 1_700_000_060_000, 100.0, 10, fee=0.5),
+            _filled_event(2, "sell", 1_700_000_600_000, 102.0, 10, fee=0.5),
+        ],
+        equity_curve=[
+            {"ms_utc": 1_700_000_000_000, "value": 100_000.0},
+            {"ms_utc": 1_700_000_600_000, "value": 100_019.0},
+        ],
+        statistics={"Sharpe Ratio": "1.5", "Profit Factor": "2.0", "Drawdown": "5.0%"},
+    )
+
+    payload = build_persist_payload(
+        workspace_path=ws,
+        run_id="ui_run_unclean",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="ema_crossover",
+        start_date_ms=1_700_000_000_000,
+        end_date_ms=1_700_000_600_000,
+        cleanliness={
+            "is_clean": False,
+            "is_reconciliation_grade": False,
+            "error_counts": {"runtime_error": 2},
+        },
+    )
+
+    verdict = json.loads(payload["run_verdict_json"])
+    assert verdict["signal"] == "Rework"
+    assert "lean_run_not_clean" in verdict["red_flags"]
+    assert verdict["cleanliness"]["error_counts"] == {"runtime_error": 2}
+
+
+def test_build_persist_payload_does_not_map_lean_expectancy_into_pct_grader(tmp_path: Path) -> None:
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    ws = _write_fixture_workspace(
+        tmp_path,
+        "ui_run_expectancy_unit",
+        order_events=[
+            _filled_event(1, "buy", 1_700_000_060_000, 100.0, 10, fee=0.5),
+            _filled_event(2, "sell", 1_700_000_600_000, 103.0, 10, fee=0.5),
+        ],
+        equity_curve=[
+            {"ms_utc": 1_700_000_000_000, "value": 100_000.0},
+            {"ms_utc": 1_700_000_600_000, "value": 100_029.0},
+        ],
+        statistics={
+            "Expectancy": "0.30",
+            "Profit Factor": "2.0",
+            "Sharpe Ratio": "1.4",
+            "Sortino Ratio": "1.8",
+            "Drawdown": "6.0%",
+        },
+    )
+
+    payload = build_persist_payload(
+        workspace_path=ws,
+        run_id="ui_run_expectancy_unit",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="ema_crossover",
+        start_date_ms=1_700_000_000_000,
+        end_date_ms=1_700_000_600_000,
+    )
+
+    verdict = json.loads(payload["run_verdict_json"])
+    trade_edge = next(d for d in verdict["dimensions"] if d["key"] == "trade_edge")
+    expectancy = next(s for s in trade_edge["sub_scores"] if s["key"] == "expectancy")
+    assert expectancy["score"] is None
+    assert expectancy["raw_value"] is None
 
 
 def test_build_persist_payload_synthesizes_mtm_for_half_open(tmp_path: Path) -> None:
@@ -860,6 +948,10 @@ def test_failed_run_payload_emits_canonical_shape(tmp_path: Path) -> None:
     assert parsed.portfolio.end_equity == 0.0
     assert parsed.trade.total_number_of_trades == 0
     assert parsed.runtime.total_orders == 0
+    verdict = json.loads(payload["run_verdict_json"])
+    assert verdict["grade"] == "F"
+    assert verdict["signal"] == "Reject"
+    assert "lean_run_failed" in verdict["red_flags"]
 
 
 @pytest.mark.asyncio

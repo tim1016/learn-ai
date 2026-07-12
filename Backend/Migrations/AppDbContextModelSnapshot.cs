@@ -372,6 +372,51 @@ namespace Backend.Migrations
                     b.ToTable("OptionsIvSnapshots");
                 });
 
+            modelBuilder.Entity("Backend.Models.MarketData.ParityVerdict", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("LeftExecutionId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ParityGroupId")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<int>("RightExecutionId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)");
+
+                    b.Property<string>("VerdictJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<int>("VerdictVersion")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LeftExecutionId", "RightExecutionId")
+                        .IsUnique();
+
+                    b.HasIndex("ParityGroupId");
+
+                    b.HasIndex("RightExecutionId");
+
+                    b.ToTable("ParityVerdicts");
+                });
+
             modelBuilder.Entity("Backend.Models.MarketData.Quote", b =>
                 {
                     b.Property<long>("Id")
@@ -720,6 +765,9 @@ namespace Backend.Migrations
                     b.Property<long>("DurationMs")
                         .HasColumnType("bigint");
 
+                    b.Property<string>("EquityCurveJson")
+                        .HasColumnType("jsonb");
+
                     b.Property<string>("EndDate")
                         .IsRequired()
                         .HasMaxLength(20)
@@ -736,6 +784,9 @@ namespace Backend.Migrations
                     b.Property<decimal>("FinalEquity")
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
+
+                    b.Property<string>("InsightSummaryJson")
+                        .HasColumnType("jsonb");
 
                     b.Property<decimal>("InformationRatio")
                         .HasPrecision(18, 8)
@@ -769,6 +820,10 @@ namespace Backend.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("ParityGroupId")
+                        .HasMaxLength(64)
+                        .HasColumnType("varchar(64)");
+
                     b.Property<decimal>("ProbabilisticSharpeRatio")
                         .HasPrecision(18, 8)
                         .HasColumnType("numeric(18,8)");
@@ -776,6 +831,9 @@ namespace Backend.Migrations
                     b.Property<decimal>("ProfitFactor")
                         .HasPrecision(18, 8)
                         .HasColumnType("numeric(18,8)");
+
+                    b.Property<string>("RunVerdictJson")
+                        .HasColumnType("jsonb");
 
                     b.Property<decimal>("SharpeRatio")
                         .HasPrecision(18, 8)
@@ -835,6 +893,17 @@ namespace Backend.Migrations
                         .HasPrecision(18, 8)
                         .HasColumnType("numeric(18,8)");
 
+                    b.Property<string>("VerdictGrade")
+                        .HasMaxLength(4)
+                        .HasColumnType("varchar(4)");
+
+                    b.Property<string>("VerdictSignal")
+                        .HasMaxLength(16)
+                        .HasColumnType("varchar(16)");
+
+                    b.Property<int?>("VerdictVersion")
+                        .HasColumnType("integer");
+
                     b.Property<decimal>("WinRate")
                         .HasPrecision(18, 8)
                         .HasColumnType("numeric(18,8)");
@@ -847,6 +916,8 @@ namespace Backend.Migrations
                     b.HasIndex("ExecutedAt");
 
                     b.HasIndex("Source");
+
+                    b.HasIndex("ParityGroupId");
 
                     b.HasIndex("Source", "LeanRunId")
                         .IsUnique()
@@ -1515,6 +1586,25 @@ namespace Backend.Migrations
                         .IsRequired();
 
                     b.Navigation("Ticker");
+                });
+
+            modelBuilder.Entity("Backend.Models.MarketData.ParityVerdict", b =>
+                {
+                    b.HasOne("Backend.Models.MarketData.StrategyExecution", "LeftExecution")
+                        .WithMany()
+                        .HasForeignKey("LeftExecutionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Backend.Models.MarketData.StrategyExecution", "RightExecution")
+                        .WithMany()
+                        .HasForeignKey("RightExecutionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("LeftExecution");
+
+                    b.Navigation("RightExecution");
                 });
 
             modelBuilder.Entity("Backend.Models.MarketData.Quote", b =>

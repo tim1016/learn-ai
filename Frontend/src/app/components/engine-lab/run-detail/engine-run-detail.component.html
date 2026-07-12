@@ -1,0 +1,83 @@
+<main class="run-detail">
+  <a class="back-link" routerLink="/engine">Back to Engine Lab</a>
+
+  @if (loading()) {
+    <section class="empty-state">Loading run...</section>
+  } @else if (run(); as r) {
+    <header class="run-header">
+      <div>
+        <p class="eyebrow">{{ r.engine }}</p>
+        <h1>{{ r.strategyName }} / {{ r.symbol }}</h1>
+        <p class="meta">
+          {{ r.startDate }} to {{ r.endDate }} · executed {{ r.executedAt | timestampDisplay }}
+        </p>
+      </div>
+      <div class="engine-chip">{{ r.source }}</div>
+    </header>
+
+    <section class="verdict-band">
+      @if (verdict(); as v) {
+        @if (v.kind === "ready") {
+          <div class="verdict-score">
+            <strong>{{ v.verdict.grade ?? "N/A" }}</strong>
+            <span>{{ v.verdict.composite ?? "—" }}</span>
+          </div>
+          <div>
+            <p class="eyebrow">{{ v.verdict.signal ?? "No signal" }}</p>
+            <h2>{{ v.verdict.headline }}</h2>
+            @if (v.verdict.missing_metrics.length > 0) { <p class="muted">{{ v.verdict.missing_metrics.length }} missing metrics recorded in the frozen verdict.</p> }
+          </div>
+        } @else if (v.kind === "unreadable") {
+          <h2>Verdict unreadable</h2>
+        } @else {
+          <h2>No verdict — pre-versioning run</h2>
+        }
+      }
+    </section>
+
+    <section class="kpi-grid" aria-label="Run KPIs">
+      <div><span>Net PnL</span><strong>{{ r.totalPnL | currency }}</strong></div>
+      <div><span>Final equity</span><strong>{{ r.finalEquity | currency }}</strong></div>
+      <div><span>Win rate</span><strong>{{ r.winRate | percent: "1.1-1" }}</strong></div>
+      <div><span>Trades</span><strong>{{ r.totalTrades }}</strong></div>
+      <div><span>Sharpe</span><strong>{{ r.sharpeRatio }}</strong></div>
+      <div><span>Sortino</span><strong>{{ r.sortinoRatio }}</strong></div>
+      <div><span>Profit factor</span><strong>{{ r.profitFactor }}</strong></div>
+    </section>
+
+    <section class="detail-section">
+      <div class="section-head">
+        <h2>Equity Curve</h2>
+        <span>{{ equityReceipt() }}</span>
+      </div>
+      @if (equityCurve().length > 0) {
+        <div class="sparkline" aria-label="Persisted equity curve point count">
+          {{ equityCurve().length }} persisted display points
+        </div>
+      } @else {
+        <p class="empty-state">Equity curve not recorded for this run.</p>
+      }
+    </section>
+
+    <section class="detail-section">
+      <div class="section-head">
+        <h2>Trades</h2>
+        <span>{{ tradeReceipt() }}</span>
+      </div>
+      <div class="trade-list">
+        @for (trade of visibleTrades(); track trade.id) {
+          <div class="trade-row">
+            <span>{{ trade.entryTimestamp | timestampDisplay }}</span>
+            <strong>{{ trade.pnL | currency }}</strong>
+            <span>{{ trade.quantity }} @ {{ trade.entryPrice | currency }}</span>
+            <span>{{ trade.signalReason }}</span>
+          </div>
+        } @empty {
+          <p class="empty-state">No trades recorded.</p>
+        }
+      </div>
+    </section>
+  } @else {
+    <section class="empty-state">Run not found.</section>
+  }
+</main>
