@@ -10,6 +10,7 @@ Validated against: PythonDataService/tests/engine/results/test_equity_downsample
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -93,7 +94,7 @@ def _select_points(
         return points
     required_indexes = _required_indexes(points, trade_marks)
     if len(required_indexes) >= max_points:
-        return [points[i] for i in sorted(required_indexes)[: max_points - 1]] + [points[-1]]
+        return [points[i] for i in _evenly_sample_sorted_indexes(sorted(required_indexes), max_points)]
 
     remaining_slots = max_points - len(required_indexes)
     optional = [i for i in range(len(points)) if i not in required_indexes]
@@ -103,6 +104,17 @@ def _select_points(
     if len(selected) > max_points:
         selected = [*selected[: max_points - 1], len(points) - 1]
     return [points[i] for i in selected]
+
+
+def _evenly_sample_sorted_indexes(indexes: list[int], max_points: int) -> list[int]:
+    if len(indexes) <= max_points:
+        return indexes
+    if max_points == 1:
+        return [indexes[-1]]
+
+    last_position = len(indexes) - 1
+    step = last_position / (max_points - 1)
+    return [indexes[math.floor(i * step + 0.5)] for i in range(max_points)]
 
 
 def _required_indexes(points: list[EquityCurvePoint], trade_marks: set[int]) -> set[int]:

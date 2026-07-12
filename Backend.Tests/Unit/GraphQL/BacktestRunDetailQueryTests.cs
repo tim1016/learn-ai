@@ -69,4 +69,38 @@ public class BacktestRunDetailQueryTests
         Assert.Equal("Equity curve envelope unreadable.", detail.EquityCurve.Error);
         Assert.Empty(detail.EquityCurve.Points);
     }
+
+    [Fact]
+    public void FromExecution_LeanRunWithStoredLeanStats_UsesLeanKpis()
+    {
+        var execution = new StrategyExecution
+        {
+            Ticker = new Ticker { Symbol = "SPY", Name = "SPY", Market = "stocks" },
+            Source = "lean-sidecar",
+            StrategyName = "ema_crossover",
+            MaxDrawdown = 0m,
+            SharpeRatio = 0m,
+            SortinoRatio = 0m,
+            ProfitFactor = 0m,
+            LeanStatisticsJson = """
+            {
+              "portfolio": {
+                "drawdown": 0.123,
+                "sharpe_ratio": 1.45,
+                "sortino_ratio": 2.10
+              },
+              "trade": {
+                "profit_factor": 2.35
+              }
+            }
+            """,
+        };
+
+        var detail = BacktestRunDetailType.FromExecution(execution, [], NullLogger.Instance);
+
+        Assert.Equal(0.123m, detail.MaxDrawdown);
+        Assert.Equal(1.45m, detail.SharpeRatio);
+        Assert.Equal(2.10m, detail.SortinoRatio);
+        Assert.Equal(2.35m, detail.ProfitFactor);
+    }
 }

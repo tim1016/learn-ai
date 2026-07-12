@@ -58,3 +58,16 @@ def test_downsample_preserves_trough_above_start_after_new_peak() -> None:
 
     timestamps = {point["t"] for point in envelope["points"]}
     assert 3 in timestamps
+
+
+def test_downsample_samples_required_extrema_when_they_exceed_cap() -> None:
+    points = [EquityCurvePoint(t=i, e=float(i)) for i in range(1, 21)]
+
+    envelope = build_equity_curve_envelope(
+        points,
+        cadence="strategy_bar_close",
+        max_points=5,
+    )
+
+    timestamps = [point["t"] for point in envelope["points"]]
+    assert timestamps == [1, 6, 11, 15, 20]

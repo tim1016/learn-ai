@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Globalization;
 using Backend.Data;
 using Backend.GraphQL.Types;
 using Backend.Models.MarketData;
@@ -94,47 +95,114 @@ public sealed record BacktestRunDetailType
     public static BacktestRunDetailType FromExecution(
         StrategyExecution execution,
         IReadOnlyList<BacktestRunParityVerdictType> parityVerdicts,
-        ILogger logger) => new()
+        ILogger logger)
     {
-        Id = execution.Id,
-        Engine = EngineExtensions.FromSource(execution.Source),
-        Source = execution.Source,
-        StrategyName = execution.StrategyName,
-        Symbol = execution.Ticker.Symbol,
-        LeanRunId = execution.LeanRunId,
-        Parameters = execution.Parameters,
-        StartDate = execution.StartDate,
-        EndDate = execution.EndDate,
-        FillMode = execution.FillMode,
-        ExecutedAtUtc = execution.ExecutedAt,
-        DurationMs = execution.DurationMs,
-        TotalTrades = execution.TotalTrades,
-        WinningTrades = execution.WinningTrades,
-        LosingTrades = execution.LosingTrades,
-        WinRate = execution.WinRate,
-        TotalPnL = execution.TotalPnL,
-        InitialCash = execution.InitialCash,
-        FinalEquity = execution.FinalEquity,
-        TotalFees = execution.TotalFees,
-        MaxDrawdown = execution.MaxDrawdown,
-        SharpeRatio = execution.SharpeRatio,
-        SortinoRatio = execution.SortinoRatio,
-        ProfitFactor = execution.ProfitFactor,
-        LeanStatisticsJson = execution.LeanStatisticsJson,
-        VerdictJson = execution.RunVerdictJson,
-        VerdictVersion = execution.VerdictVersion,
-        VerdictGrade = execution.VerdictGrade,
-        VerdictSignal = execution.VerdictSignal,
-        EquityCurve = ParseEquityCurve(execution.EquityCurveJson, execution.Id, logger),
-        InsightSummaryJson = execution.InsightSummaryJson,
-        DataPolicyJson = execution.DataPolicyJson,
-        ParityGroupId = execution.ParityGroupId,
-        Trades = execution.Trades
-            .OrderBy(t => t.EntryTimestamp)
-            .Select(BacktestRunTradeDetailType.FromTrade)
-            .ToList(),
-        ParityVerdicts = parityVerdicts,
-    };
+        var leanKpis = ParseLeanKpis(execution, logger);
+        return new BacktestRunDetailType
+        {
+            Id = execution.Id,
+            Engine = EngineExtensions.FromSource(execution.Source),
+            Source = execution.Source,
+            StrategyName = execution.StrategyName,
+            Symbol = execution.Ticker.Symbol,
+            LeanRunId = execution.LeanRunId,
+            Parameters = execution.Parameters,
+            StartDate = execution.StartDate,
+            EndDate = execution.EndDate,
+            FillMode = execution.FillMode,
+            ExecutedAtUtc = execution.ExecutedAt,
+            DurationMs = execution.DurationMs,
+            TotalTrades = execution.TotalTrades,
+            WinningTrades = execution.WinningTrades,
+            LosingTrades = execution.LosingTrades,
+            WinRate = execution.WinRate,
+            TotalPnL = execution.TotalPnL,
+            InitialCash = execution.InitialCash,
+            FinalEquity = execution.FinalEquity,
+            TotalFees = execution.TotalFees,
+            MaxDrawdown = leanKpis?.MaxDrawdown ?? execution.MaxDrawdown,
+            SharpeRatio = leanKpis?.SharpeRatio ?? execution.SharpeRatio,
+            SortinoRatio = leanKpis?.SortinoRatio ?? execution.SortinoRatio,
+            ProfitFactor = leanKpis?.ProfitFactor ?? execution.ProfitFactor,
+            LeanStatisticsJson = execution.LeanStatisticsJson,
+            VerdictJson = execution.RunVerdictJson,
+            VerdictVersion = execution.VerdictVersion,
+            VerdictGrade = execution.VerdictGrade,
+            VerdictSignal = execution.VerdictSignal,
+            EquityCurve = ParseEquityCurve(execution.EquityCurveJson, execution.Id, logger),
+            InsightSummaryJson = execution.InsightSummaryJson,
+            DataPolicyJson = execution.DataPolicyJson,
+            ParityGroupId = execution.ParityGroupId,
+            Trades = execution.Trades
+                .OrderBy(t => t.EntryTimestamp)
+                .Select(BacktestRunTradeDetailType.FromTrade)
+                .ToList(),
+            ParityVerdicts = parityVerdicts,
+        };
+    }
+
+    private static BacktestRunLeanKpiType? ParseLeanKpis(StrategyExecution execution, ILogger logger)
+    {
+        if (execution.Source != "lean-sidecar" || string.IsNullOrWhiteSpace(execution.LeanStatisticsJson))
+            return null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(execution.LeanStatisticsJson);
+            var portfolio = doc.RootElement.TryGetProperty("portfolio", out var portfolioElement) &&
+                portfolioElement.ValueKind == JsonValueKind.Object
+                    ? portfolioElement
+                    : default;
+            var trade = doc.RootElement.TryGetProperty("trade", out var tradeElement) &&
+                tradeElement.ValueKind == JsonValueKind.Object
+                    ? tradeElement
+                    : default;
+
+            return new BacktestRunLeanKpiType
+            {
+                MaxDrawdown = TryReadDecimal(portfolio, "drawdown"),
+                SharpeRatio = TryReadDecimal(portfolio, "sharpe_ratio"),
+                SortinoRatio = TryReadDecimal(portfolio, "sortino_ratio"),
+                ProfitFactor = TryReadDecimal(trade, "profit_factor"),
+            };
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
+        {
+            logger.LogWarning(
+                ex,
+                "StrategyExecution {ExecutionId} LEAN statistics JSON is unreadable",
+                execution.Id);
+            return null;
+        }
+    }
+
+    private static decimal? TryReadDecimal(JsonElement parent, string propertyName)
+    {
+        if (parent.ValueKind != JsonValueKind.Object ||
+            !parent.TryGetProperty(propertyName, out var value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetDecimal(out var number))
+            return number;
+
+        if (value.ValueKind == JsonValueKind.String &&
+            decimal.TryParse(value.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
+        {
+            return parsed;
+        }
+
+        return null;
+    }
+
+    private sealed record BacktestRunLeanKpiType
+    {
+        public decimal? MaxDrawdown { get; init; }
+        public decimal? SharpeRatio { get; init; }
+        public decimal? SortinoRatio { get; init; }
+        public decimal? ProfitFactor { get; init; }
+    }
 
     private static BacktestRunEquityCurveType? ParseEquityCurve(string? json, int executionId, ILogger logger)
     {
