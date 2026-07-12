@@ -35,6 +35,7 @@ import { TICKER_POOL, RECENT_TICKERS } from "../../shared/ticker-catalog";
 import { JobsService } from "../../services/jobs.service";
 import { LeanSidecarService } from "../../services/lean-sidecar.service";
 import type { DataPolicy } from "../../models/data-policy";
+import type { LeanLauncherDiagnosticReport } from "../../services/lean-sidecar.types";
 import { RunDockComponent } from "../../shared/run-dock/run-dock.component";
 import {
   RUN_DOCK_SOURCE,
@@ -48,6 +49,8 @@ import { toMostRecentWeekday } from "../../shared/date/weekday";
 
 /** Engine choice on the unified launch surface. */
 export type EngineChoice = "python" | "lean";
+type LeanLauncherStatus = "unknown" | "checking" | "ready" | "blocked";
+type LeanAlgorithmMode = "template" | "custom";
 
 // Severity for pre-flight: re-declared locally so we don't import the panel's types.
 type PreflightSeverity = "ok" | "warning" | "blocking";
@@ -255,6 +258,15 @@ export class LeanEngineComponent implements OnInit {
    * trusted-run submission body without reaching into the child.
    */
   readonly leanSource = signal<string>(EMA_CROSSOVER_SOURCE_TEMPLATE);
+  readonly leanAlgorithmMode = signal<LeanAlgorithmMode>("template");
+  readonly leanLauncherCommand =
+    "cd PythonDataService && PYTHONPATH=. ./.venv/bin/python -m uvicorn app.lean_sidecar.launcher.app:app --host 0.0.0.0 --port 8090";
+  readonly leanLauncherStatus = signal<LeanLauncherStatus>("unknown");
+  readonly leanLauncherDetail = signal<string>("");
+  readonly leanLauncherCopied = signal(false);
+  readonly leanLauncherBlocksRun = computed(
+    () => this.engine() === "lean" && this.leanLauncherStatus() !== "ready",
+  );
 
   // ------------------------------------------------------------------
   // State (signals)
@@ -437,27 +449,38 @@ export class LeanEngineComponent implements OnInit {
    * The hidden defaults are documented in
    * `docs/superpowers/specs/2026-05-19-pr-b-engine-lab-unified-design.md`
    * § 4.4: ``adjusted=true`` (pre-adjusted Polygon staging), regular
-   * session, ``input_bars`` and ``strategy_bars`` both at the
-   * timeframe carried by the resolution toggle. Intra-strategy
-   * consolidation (e.g., minute-1 → minute-15) lives inside the
-   * strategy code itself, not in DataPolicy.
+   * session, and input bars at the resolution toggle. ``strategy_bars``
+   * carries the strategy's canonical evaluation cadence so LEAN and
+   * Python persist comparable DataPolicy blocks.
    */
   composeDataPolicy(): DataPolicy {
     const timespan: DataPolicy['input_bars']['timespan'] =
       this.resolution() === 'daily' ? 'day' : 'minute';
+    const strategyBars = this.strategyBarsSpec(timespan);
     return {
       source: 'polygon',
       symbol: this.effectiveSymbol(),
       adjusted: true,
       session: 'regular',
       input_bars: { timespan, multiplier: 1 },
-      strategy_bars: { timespan, multiplier: 1 },
+      strategy_bars: strategyBars,
       timestamp_policy: 'bar_close_ms_utc',
       timezone: 'America/New_York',
       provider_kind: 'live',
       fixture_id: null,
       fixture_sha256: null,
     };
+  }
+
+  private strategyBarsSpec(
+    timespan: DataPolicy['input_bars']['timespan'],
+  ): DataPolicy['strategy_bars'] {
+    const isEmaCrossoverRun =
+      this.selectedStrategyName() === 'spy_ema_crossover' || this.engine() === 'lean';
+    if (timespan === 'minute' && isEmaCrossoverRun) {
+      return { timespan, multiplier: 15 };
+    }
+    return { timespan, multiplier: 1 };
   }
 
   readonly tickerPool = TICKER_POOL;
@@ -802,6 +825,16 @@ export class LeanEngineComponent implements OnInit {
    * the Python path does.
    */
   private async runLean(): Promise<void> {
+    if (this.leanLauncherStatus() !== "ready") {
+      await this.checkLeanLauncher();
+      if (this.leanLauncherStatus() !== "ready") {
+        const message = this.leanLauncherDetail() || "Start the LEAN launcher before running.";
+        this.runError.set(message);
+        this.setRunStatus("failed", "LEAN launcher unavailable", message);
+        return;
+      }
+    }
+
     this.running.set(true);
     this.runError.set(null);
     this.result.set(null);
@@ -843,7 +876,8 @@ export class LeanEngineComponent implements OnInit {
       const id = await this.jobsService.startJob("lean_engine_run", {
         request: {
           run_id: this.composeRunId(),
-          algorithm_source: this.leanSource(),
+          algorithm_source: this.leanAlgorithmMode() === "custom" ? this.leanSource() : null,
+          template: "ema_crossover",
           starting_cash: this.initialCash(),
           start_ms_utc: this.composeStartMs(),
           end_ms_utc: endResolution.session_open_ms_utc,
@@ -863,6 +897,14 @@ export class LeanEngineComponent implements OnInit {
     }
   }
 
+  useCustomLeanAlgorithm(): void {
+    this.leanAlgorithmMode.set("custom");
+  }
+
+  useBuiltInLeanAlgorithm(): void {
+    this.leanAlgorithmMode.set("template");
+  }
+
   /**
    * Build a sidecar-compatible run id. Slug must match
    * ``^[a-z0-9][a-z0-9_-]{2,63}$``. Use a UTC-millisecond suffix so
@@ -872,6 +914,38 @@ export class LeanEngineComponent implements OnInit {
     const symbol = this.effectiveSymbol().toLowerCase().replace(/[^a-z0-9]/g, "");
     const stamp = Date.now().toString(36);
     return `engine_lab_${symbol}_${stamp}`;
+  }
+
+  async checkLeanLauncher(): Promise<void> {
+    this.leanLauncherStatus.set("checking");
+    this.leanLauncherDetail.set("");
+    try {
+      const report = await this.leanSidecarService.diagnose();
+      this.applyLeanLauncherReport(report);
+    } catch (err) {
+      this.leanLauncherStatus.set("blocked");
+      this.leanLauncherDetail.set(err instanceof Error ? err.message : "Launcher check failed.");
+    }
+  }
+
+  async copyLeanLauncherCommand(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(this.leanLauncherCommand);
+      this.leanLauncherCopied.set(true);
+    } catch {
+      this.leanLauncherCopied.set(false);
+    }
+  }
+
+  private applyLeanLauncherReport(report: LeanLauncherDiagnosticReport): void {
+    const launcher = report.checks.find((check) => check.name === "launcher_healthz");
+    if (launcher?.status === "pass") {
+      this.leanLauncherStatus.set("ready");
+      this.leanLauncherDetail.set(launcher.detail);
+      return;
+    }
+    this.leanLauncherStatus.set("blocked");
+    this.leanLauncherDetail.set(launcher?.fix ?? launcher?.detail ?? "LEAN launcher is not reachable.");
   }
 
   /**

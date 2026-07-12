@@ -173,11 +173,16 @@ services:
       # (./PythonDataService/artifacts:/app/artifacts).
       - IBKR_LIVE_RUNS_ROOT=/app/artifacts/live_runs
       # PRD #684 — macOS/Podman bind mounts do not propagate inotify
-      # reliably into the container. Force watchfiles polling so
-      # ``uvicorn --reload`` sees host edits, and surface the mode via
-      # /api/broker/data-plane/health.
+      # reliably into the container. Force watchfiles polling when
+      # ``uvicorn --reload`` is explicitly enabled, and surface the mode
+      # via /api/broker/data-plane/health.
       - WATCHFILES_FORCE_POLLING=${WATCHFILES_FORCE_POLLING:-true}
-      - UVICORN_RELOAD=${UVICORN_RELOAD:-true}
+      # Default reload off: LEAN stages runnable Python algorithms under
+      # /app/artifacts, and WatchFiles can treat those generated files as
+      # app changes. A mid-run reload orphans the job worker while the
+      # launcher keeps running. Opt in locally with UVICORN_RELOAD=true
+      # when editing Python service code and not running LEAN jobs.
+      - UVICORN_RELOAD=${UVICORN_RELOAD:-false}
     # Map stable host aliases to the container's default gateway (the
     # host on Linux Podman and Windows Podman). ``host.containers.internal``
     # is the Podman-native spelling; ``host.docker.internal`` remains
@@ -199,7 +204,7 @@ services:
             exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --timeout-graceful-shutdown 10
             ;;
         esac
-        exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --timeout-graceful-shutdown 10
+        exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app --reload-exclude 'artifacts/*' --reload-exclude 'artifacts/**' --timeout-graceful-shutdown 10
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s

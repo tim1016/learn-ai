@@ -262,6 +262,148 @@
   input[type="checkbox"] { width: auto; margin: 0; }
 }
 
+.lean-launcher-card {
+  display: grid;
+  gap: 0.75rem;
+
+  &[data-status="ready"] {
+    border-color: rgba($bull, 0.35);
+  }
+
+  &[data-status="blocked"] {
+    border-color: rgba($warn, 0.45);
+  }
+}
+
+.lean-template-summary,
+.lean-custom-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.lean-template-summary {
+  min-height: 44px;
+
+  > div {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    min-width: 0;
+  }
+
+  strong {
+    color: $text-primary;
+    font-size: 0.88rem;
+  }
+
+  span {
+    color: $text-subtle;
+    font-size: 0.74rem;
+  }
+}
+
+.lean-custom-toolbar {
+  margin-bottom: 0.75rem;
+
+  span {
+    color: $text-secondary;
+    font-size: 0.8rem;
+    font-weight: 650;
+  }
+}
+
+.launcher-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: fit-content;
+  color: $text-primary;
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.launcher-status__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: $text-muted;
+
+  .lean-launcher-card[data-status="checking"] & {
+    background: $accent;
+  }
+
+  .lean-launcher-card[data-status="ready"] & {
+    background: $bull;
+  }
+
+  .lean-launcher-card[data-status="blocked"] & {
+    background: $warn;
+  }
+}
+
+.launcher-command {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0.65rem 0.75rem;
+  background: $bg-canvas;
+  border: 1px solid $border;
+  border-radius: 6px;
+  color: $text-secondary;
+  font-family: $font-mono;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.launcher-detail {
+  margin: 0;
+  color: $text-subtle;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.launcher-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.launcher-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid rgba($accent, 0.45);
+  background: rgba($accent, 0.1);
+  color: $text-primary;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 650;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: rgba($accent, 0.16);
+  }
+
+  &:disabled {
+    color: $text-muted;
+    cursor: not-allowed;
+    opacity: 0.65;
+  }
+
+  &.secondary {
+    background: transparent;
+    border-color: $border;
+    color: $text-secondary;
+  }
+
+  .pi { font-size: 0.8rem; }
+}
+
 .range-presets-field {
   grid-column: 1 / -1;
 }

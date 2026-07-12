@@ -93,6 +93,20 @@ describe("RunHistoryComponent", () => {
     expect(t).toMatch(/\$42\.50/);
   });
 
+  it("labels custom LEAN runs as user-modified algorithms", async () => {
+    const fixture = await renderWith([
+      row({
+        source: "lean-sidecar",
+        engine: "LEAN",
+        strategyName: "user_provided",
+      }),
+    ]);
+
+    const t = text(fixture);
+    expect(t).toContain("User-modified algorithm");
+    expect(t).not.toContain("user_provided");
+  });
+
   it("dashes out symbol when null", async () => {
     const fixture = await renderWith([row({ symbol: null })]);
     expect(text(fixture)).toContain("—");
@@ -250,7 +264,7 @@ describe("RunHistoryComponent — multi-select", () => {
 });
 
 describe("RunHistoryComponent — Bars summary column (PR B.3)", () => {
-  it("renders 'm/1 → m/15' for a minute-1 → minute-15 DataPolicy", async () => {
+  it("renders explicit input and strategy cadences for minute-1 → minute-15 DataPolicy", async () => {
     const fixture = await renderWith([
       row({
         id: "1",
@@ -269,7 +283,7 @@ describe("RunHistoryComponent — Bars summary column (PR B.3)", () => {
         },
       }),
     ]);
-    expect(text(fixture)).toContain("m/1 → m/15");
+    expect(text(fixture)).toContain("Input M1 / Strategy M15");
   });
 
   it("collapses to a single token when input_bars and strategy_bars match", async () => {
@@ -292,7 +306,7 @@ describe("RunHistoryComponent — Bars summary column (PR B.3)", () => {
       }),
     ]);
     const cell = (fixture.nativeElement as HTMLElement).querySelector(".bars-cell")?.textContent ?? "";
-    expect(cell.trim()).toBe("d/1");
+    expect(cell.trim()).toBe("Input and strategy D1");
   });
 
   it("renders an em-dash when DataPolicy is null (legacy row)", async () => {
