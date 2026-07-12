@@ -36,3 +36,25 @@ def test_downsample_preserves_first_last_trade_marks_and_extrema() -> None:
 def test_downsample_rejects_impossible_cap() -> None:
     with pytest.raises(ValueError, match="max_points"):
         build_equity_curve_envelope([], cadence="strategy_bar_close", max_points=1)
+
+
+def test_downsample_preserves_trough_above_start_after_new_peak() -> None:
+    points = [
+        EquityCurvePoint(t=1, e=100.0),
+        EquityCurvePoint(t=2, e=120.0),
+        EquityCurvePoint(t=3, e=105.0),
+        EquityCurvePoint(t=4, e=121.0),
+        EquityCurvePoint(t=5, e=118.0),
+        EquityCurvePoint(t=6, e=122.0),
+        EquityCurvePoint(t=7, e=119.0),
+        EquityCurvePoint(t=8, e=123.0),
+    ]
+
+    envelope = build_equity_curve_envelope(
+        points,
+        cadence="strategy_bar_close",
+        max_points=7,
+    )
+
+    timestamps = {point["t"] for point in envelope["points"]}
+    assert 3 in timestamps

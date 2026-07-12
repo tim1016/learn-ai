@@ -6,6 +6,7 @@ using Backend.Temporal;
 using HotChocolate;
 using HotChocolate.Types;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace Backend.GraphQL;
 
@@ -16,6 +17,7 @@ public class BacktestRunDetailQuery
     public async Task<BacktestRunDetailType?> GetBacktestRun(
         int id,
         [Service] AppDbContext context,
+        [Service] ILogger<BacktestRunDetailQuery> logger,
         CancellationToken ct)
     {
         var execution = await context.StrategyExecutions
@@ -43,7 +45,7 @@ public class BacktestRunDetailQuery
             })
             .ToListAsync(ct);
 
-        return BacktestRunDetailType.FromExecution(execution, parityVerdicts);
+        return BacktestRunDetailType.FromExecution(execution, parityVerdicts, logger);
     }
 }
 
@@ -81,8 +83,7 @@ public sealed record BacktestRunDetailType
     public int? VerdictVersion { get; init; }
     public string? VerdictGrade { get; init; }
     public string? VerdictSignal { get; init; }
-    public string? EquityCurveJson { get; init; }
-    public IReadOnlyList<BacktestRunEquityPointType> EquityCurve { get; init; } = [];
+    public BacktestRunEquityCurveType? EquityCurve { get; init; }
     public string? InsightSummaryJson { get; init; }
     public string? DataPolicyJson { get; init; }
     public DataPolicyType? DataPolicy => DataPolicyType.TryParse(DataPolicyJson);
@@ -92,7 +93,8 @@ public sealed record BacktestRunDetailType
 
     public static BacktestRunDetailType FromExecution(
         StrategyExecution execution,
-        IReadOnlyList<BacktestRunParityVerdictType> parityVerdicts) => new()
+        IReadOnlyList<BacktestRunParityVerdictType> parityVerdicts,
+        ILogger logger) => new()
     {
         Id = execution.Id,
         Engine = EngineExtensions.FromSource(execution.Source),
@@ -123,8 +125,7 @@ public sealed record BacktestRunDetailType
         VerdictVersion = execution.VerdictVersion,
         VerdictGrade = execution.VerdictGrade,
         VerdictSignal = execution.VerdictSignal,
-        EquityCurveJson = execution.EquityCurveJson,
-        EquityCurve = ParseEquityCurve(execution.EquityCurveJson),
+        EquityCurve = ParseEquityCurve(execution.EquityCurveJson, execution.Id, logger),
         InsightSummaryJson = execution.InsightSummaryJson,
         DataPolicyJson = execution.DataPolicyJson,
         ParityGroupId = execution.ParityGroupId,
@@ -135,18 +136,42 @@ public sealed record BacktestRunDetailType
         ParityVerdicts = parityVerdicts,
     };
 
-    private static IReadOnlyList<BacktestRunEquityPointType> ParseEquityCurve(string? json)
+    private static BacktestRunEquityCurveType? ParseEquityCurve(string? json, int executionId, ILogger logger)
     {
         if (string.IsNullOrWhiteSpace(json))
-            return [];
+            return null;
 
         try
         {
             using var doc = JsonDocument.Parse(json);
+            var cadence = doc.RootElement.TryGetProperty("cadence", out var cadenceElement) &&
+                cadenceElement.ValueKind == JsonValueKind.String
+                    ? cadenceElement.GetString()
+                    : null;
+            var rawPoints = 0;
+            var keptPoints = 0;
+            if (doc.RootElement.TryGetProperty("downsample", out var downsample) &&
+                downsample.ValueKind == JsonValueKind.Object)
+            {
+                if (downsample.TryGetProperty("raw_points", out var raw))
+                    rawPoints = raw.GetInt32();
+                if (downsample.TryGetProperty("kept_points", out var kept))
+                    keptPoints = kept.GetInt32();
+            }
             if (!doc.RootElement.TryGetProperty("points", out var points) ||
                 points.ValueKind != JsonValueKind.Array)
             {
-                return [];
+                logger.LogWarning(
+                    "StrategyExecution {ExecutionId} equity curve JSON has no points array",
+                    executionId);
+                return new BacktestRunEquityCurveType
+                {
+                    Cadence = cadence,
+                    RawPoints = rawPoints,
+                    KeptPoints = keptPoints,
+                    Error = "Equity curve envelope missing points.",
+                    Points = [],
+                };
             }
 
             var parsed = new List<BacktestRunEquityPointType>();
@@ -156,13 +181,36 @@ public sealed record BacktestRunDetailType
                     continue;
                 parsed.Add(new BacktestRunEquityPointType(t.GetInt64(), e.GetDecimal()));
             }
-            return parsed;
+            return new BacktestRunEquityCurveType
+            {
+                Cadence = cadence,
+                RawPoints = rawPoints == 0 ? parsed.Count : rawPoints,
+                KeptPoints = keptPoints == 0 ? parsed.Count : keptPoints,
+                Points = parsed,
+            };
         }
-        catch (JsonException)
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
         {
-            return [];
+            logger.LogWarning(
+                ex,
+                "StrategyExecution {ExecutionId} equity curve JSON is unreadable",
+                executionId);
+            return new BacktestRunEquityCurveType
+            {
+                Error = "Equity curve envelope unreadable.",
+                Points = [],
+            };
         }
     }
+}
+
+public sealed record BacktestRunEquityCurveType
+{
+    public string? Cadence { get; init; }
+    public int RawPoints { get; init; }
+    public int KeptPoints { get; init; }
+    public string? Error { get; init; }
+    public IReadOnlyList<BacktestRunEquityPointType> Points { get; init; } = [];
 }
 
 public sealed record BacktestRunEquityPointType(long T, decimal E);

@@ -3,7 +3,7 @@
 Formula: Weighted production-readiness composite from five 0-100 dimensions
   with unavailable sub-scores omitted and scored dimensions reweighted.
 Reference: Frontend/src/app/components/lean-engine/readiness-score-card/
-  readiness-score.util.ts at commit 70ac76d1, intentionally ported before
+  readiness-score.util.ts at commit fe0e9e1c1, intentionally ported before
   deleting the frontend scorer.
 Canonical implementation: this file.
 Validated against: PythonDataService/tests/services/test_run_verdict_parity.py.
@@ -49,7 +49,7 @@ def compute_run_verdict(
         return _apply_cleanliness(verdict)
 
     dimensions = [
-        _score_return_quality(data, engine),
+        _score_return_quality(data),
         _score_risk_control(data),
         _score_trade_edge(data),
         _score_statistical_confidence(data, engine),
@@ -81,7 +81,7 @@ def compute_run_verdict(
             cleanliness=clean,
         )
 
-    composite = round(sum((d.score or 0) * (d.weight / total_weight) for d in scored))
+    composite = _round_half_up(sum((d.score or 0) * (d.weight / total_weight) for d in scored))
     grade, signal, headline = _grade_and_signal(composite, len(missing_metrics))
     verdict = RunVerdict(
         verdict_version=RUN_VERDICT_VERSION,
@@ -98,6 +98,29 @@ def compute_run_verdict(
         cleanliness=clean,
     )
     return _apply_cleanliness(verdict)
+
+
+def failed_run_verdict(error: str, *, generated_at_ms: int | None = None) -> RunVerdict:
+    generated = generated_at_ms if generated_at_ms is not None else int(time.time() * 1000)
+    verdict = _empty_verdict(
+        headline=f"LEAN run failed before producing normalized results: {error}",
+        engine="lean",
+        generated_at_ms=generated,
+        cleanliness=RunVerdictCleanliness(
+            is_clean=False,
+            is_reconciliation_grade=False,
+            error_counts={"runtime_error": 1},
+        ),
+    )
+    return verdict.model_copy(
+        update={
+            "composite": 0,
+            "grade": "F",
+            "signal": "Reject",
+            "headline": "Reject - " + verdict.headline,
+            "red_flags": ["lean_run_failed"],
+        }
+    )
 
 
 def _coerce_input(payload: RunVerdictInput | Mapping[str, Any] | None) -> RunVerdictInput | None:
@@ -154,8 +177,7 @@ def _apply_cleanliness(verdict: RunVerdict) -> RunVerdict:
     )
 
 
-def _score_return_quality(r: RunVerdictInput, engine: EngineKind) -> RunVerdictDimension:
-    _ = engine
+def _score_return_quality(r: RunVerdictInput) -> RunVerdictDimension:
     stats = r.statistics or {}
     lean = _lean_portfolio(r)
     sub_scores = [
@@ -163,8 +185,7 @@ def _score_return_quality(r: RunVerdictInput, engine: EngineKind) -> RunVerdictD
         _grade_sortino_sub(_first_not_none(_num(stats.get("sortino_ratio")), _num(lean.get("sortino_ratio")))),
         _grade_cagr_sub(_num(lean.get("compounding_annual_return"))),
         _grade_calmar_sub(
-            _num(stats.get("sharpe_ratio")),
-            _num(stats.get("max_drawdown_pct")),
+            _first_not_none(_num(stats.get("max_drawdown_pct")), _num(lean.get("drawdown"))),
             _num(lean.get("compounding_annual_return")),
         ),
         _grade_annual_vol_sub(_num(lean.get("annual_standard_deviation"))),
@@ -183,7 +204,7 @@ def _score_risk_control(r: RunVerdictInput) -> RunVerdictDimension:
     lean = _lean_portfolio(r)
     trade = _lean_trade(r)
     sub_scores = [
-        _grade_max_drawdown_sub(_num(stats.get("max_drawdown_pct"))),
+        _grade_max_drawdown_sub(_first_not_none(_num(stats.get("max_drawdown_pct")), _num(lean.get("drawdown")))),
         _grade_recovery_sub(_num(lean.get("drawdown_recovery"))),
         _grade_consecutive_losses_sub(_num(trade.get("max_consecutive_losing_trades"))),
         _sub("dd_duration", "Drawdown duration", None, None, "-", "Not yet computed - needs equity-curve timestamps."),
@@ -376,8 +397,7 @@ def _grade_cagr_sub(v: float | None) -> RunVerdictSubScore:
     return base.model_copy(update={"score": 14, "note": "Very high CAGR - check for overfitting or leverage."})
 
 
-def _grade_calmar_sub(sharpe: float | None, max_dd: float | None, cagr: float | None) -> RunVerdictSubScore:
-    _ = sharpe
+def _grade_calmar_sub(max_dd: float | None, cagr: float | None) -> RunVerdictSubScore:
     base = _sub("calmar", "Calmar ratio", None, None, "-", "")
     if cagr is None or max_dd is None or max_dd <= 0:
         return base.model_copy(update={"note": "Needs CAGR and Max DD to compute Calmar."})
@@ -625,7 +645,11 @@ def _average_subs(subs: list[RunVerdictSubScore]) -> int | None:
     scored = [sub for sub in subs if isinstance(sub.score, int)]
     if not scored:
         return None
-    return round((sum(sub.score or 0 for sub in scored) / (len(scored) * 20)) * 100)
+    return _round_half_up((sum(sub.score or 0 for sub in scored) / (len(scored) * 20)) * 100)
+
+
+def _round_half_up(value: float) -> int:
+    return math.floor(value + 0.5)
 
 
 def _num(v: Any) -> float | None:
@@ -653,7 +677,7 @@ def _ratio_display(v: float | None) -> str:
     if v is None:
         return "-"
     if not math.isfinite(v):
-        return "infinity"
+        return "∞"
     return f"{v:.2f}"
 
 

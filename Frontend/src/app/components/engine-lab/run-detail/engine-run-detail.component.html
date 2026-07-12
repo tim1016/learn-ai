@@ -17,17 +17,21 @@
 
     <section class="verdict-band">
       @if (verdict(); as v) {
-        <div class="verdict-score">
-          <strong>{{ v.grade ?? "N/A" }}</strong>
-          <span>{{ v.composite ?? "—" }}</span>
-        </div>
-        <div>
-          <p class="eyebrow">{{ v.signal ?? "No signal" }}</p>
-          <h2>{{ v.headline }}</h2>
-          @if (v.missing_metrics.length > 0) { <p class="muted">{{ v.missing_metrics.length }} missing metrics recorded in the frozen verdict.</p> }
-        </div>
-      } @else {
-        <h2>No verdict — pre-versioning run</h2>
+        @if (v.kind === "ready") {
+          <div class="verdict-score">
+            <strong>{{ v.verdict.grade ?? "N/A" }}</strong>
+            <span>{{ v.verdict.composite ?? "—" }}</span>
+          </div>
+          <div>
+            <p class="eyebrow">{{ v.verdict.signal ?? "No signal" }}</p>
+            <h2>{{ v.verdict.headline }}</h2>
+            @if (v.verdict.missing_metrics.length > 0) { <p class="muted">{{ v.verdict.missing_metrics.length }} missing metrics recorded in the frozen verdict.</p> }
+          </div>
+        } @else if (v.kind === "unreadable") {
+          <h2>Verdict unreadable</h2>
+        } @else {
+          <h2>No verdict — pre-versioning run</h2>
+        }
       }
     </section>
 
@@ -58,10 +62,10 @@
     <section class="detail-section">
       <div class="section-head">
         <h2>Trades</h2>
-        <span>{{ trades().length }} rows</span>
+        <span>{{ tradeReceipt() }}</span>
       </div>
       <div class="trade-list">
-        @for (trade of trades().slice(0, 12); track trade.id) {
+        @for (trade of visibleTrades(); track trade.id) {
           <div class="trade-row">
             <span>{{ trade.entryTimestamp | timestampDisplay }}</span>
             <strong>{{ trade.pnL | currency }}</strong>

@@ -29,6 +29,7 @@ export interface LeanStatsLike {
 interface LeanPortfolioLike {
   probabilistic_sharpe_ratio: number;
   compounding_annual_return: number;
+  drawdown: number;
   drawdown_recovery: number;
   sharpe_ratio: number;
   sortino_ratio: number;
@@ -45,6 +46,7 @@ interface LeanTradeLike {
 
 export type Grade = "A+" | "A" | "B" | "C" | "D" | "F";
 export type Signal = "Deploy" | "Paper-trade" | "Iterate" | "Rework" | "Reject";
+export type ReadinessEngine = "python" | "lean";
 
 export interface SubScore {
   key: string;
@@ -76,14 +78,24 @@ export interface ReadinessReport {
 
 // ----- Public entry point ---------------------------------------------------
 
-export function computeReadiness(result: ReadinessResultLike | null): ReadinessReport {
+/**
+ * Legacy UI mirror of the backend-authored RunVerdict v1 scorer.
+ *
+ * Formula: Weighted production-readiness composite from five 0-100 dimensions
+ *   with unavailable sub-scores omitted and scored dimensions reweighted.
+ * Reference: Frontend scorer at commit fe0e9e1c1.
+ * Canonical implementation: PythonDataService/app/services/run_verdict_service.py.
+ * Validated against: Frontend/src/app/components/lean-engine/readiness-score-card/
+ *   readiness-score.util.spec.ts and PythonDataService/tests/services/test_run_verdict_parity.py.
+ */
+export function computeReadiness(result: ReadinessResultLike | null, engine: ReadinessEngine = "python"): ReadinessReport {
   if (!result || !result.statistics) return emptyReport("Run a backtest to generate a Production Readiness score.");
 
   const dimensions: DimensionScore[] = [
     scoreReturnQuality(result),
     scoreRiskControl(result),
     scoreTradeEdge(result),
-    scoreStatisticalConfidence(result),
+    scoreStatisticalConfidence(result, engine),
     scoreAlphaCalibration(result),
   ];
 
@@ -145,7 +157,7 @@ function scoreReturnQuality(r: ReadinessResultLike): DimensionScore {
     gradeSharpeSub(num(stats["sharpe_ratio"]) ?? num(lean.sharpe_ratio)),
     gradeSortinoSub(num(stats["sortino_ratio"]) ?? num(lean.sortino_ratio)),
     gradeCagrSub(num(lean.compounding_annual_return)),
-    gradeCalmarSub(num(stats["sharpe_ratio"]), num(stats["max_drawdown_pct"]), num(lean.compounding_annual_return)),
+    gradeCalmarSub(num(stats["max_drawdown_pct"]) ?? num(lean.drawdown), num(lean.compounding_annual_return)),
     gradeAnnualVolSub(num(lean.annual_standard_deviation)),
   ];
   return {
@@ -163,7 +175,7 @@ function scoreRiskControl(r: ReadinessResultLike): DimensionScore {
   const lean = r.lean_statistics?.portfolio ?? {};
   const tr = r.lean_statistics?.trade ?? {};
   const subScores: SubScore[] = [
-    gradeMaxDrawdownSub(num(stats["max_drawdown_pct"])),
+    gradeMaxDrawdownSub(num(stats["max_drawdown_pct"]) ?? num(lean.drawdown)),
     gradeRecoverySub(num(lean.drawdown_recovery)),
     gradeConsecutiveLossesSub(num(tr.max_consecutive_losing_trades)),
     { key: "dd_duration", label: "Drawdown duration", score: null, rawValue: null, display: "—", note: "Not yet computed — needs equity-curve timestamps." },
@@ -200,16 +212,18 @@ function scoreTradeEdge(r: ReadinessResultLike): DimensionScore {
   };
 }
 
-function scoreStatisticalConfidence(r: ReadinessResultLike): DimensionScore {
+function scoreStatisticalConfidence(r: ReadinessResultLike, engine: ReadinessEngine): DimensionScore {
   const stats = r.statistics ?? {};
   const lean = r.lean_statistics?.portfolio ?? {};
   const tr = r.lean_statistics?.trade ?? {};
   const portfolioSharpe = num(stats["sharpe_ratio"]) ?? num(lean.sharpe_ratio);
+  let tradeSharpe = num(tr.sharpe_ratio);
+  if (engine === "lean" && tradeSharpe === 0) tradeSharpe = null;
   const subScores: SubScore[] = [
     gradePsrSub(num(lean.probabilistic_sharpe_ratio)),
     gradeSampleSizeSub(num(r.total_trades)),
     gradeSkepticismSub(portfolioSharpe, num(stats["profit_factor"]) ?? num(tr.profit_factor), num(r.win_rate)),
-    gradeTradeGapSub(portfolioSharpe, num(tr.sharpe_ratio)),
+    gradeTradeGapSub(portfolioSharpe, tradeSharpe),
     { key: "benchmark", label: "Benchmark outperformance", score: null, rawValue: null, display: "—", note: "Planned — requires a Buy-and-Hold return series alongside the backtest." },
   ];
   return {
@@ -276,7 +290,7 @@ function gradeCagrSub(v: number | null): SubScore {
   return { ...base, score: 14, note: "Very high CAGR — check for overfitting or leverage." };
 }
 
-function gradeCalmarSub(sharpe: number | null, maxDd: number | null, cagr: number | null): SubScore {
+function gradeCalmarSub(maxDd: number | null, cagr: number | null): SubScore {
   const base: SubScore = { key: "calmar", label: "Calmar ratio", score: null, rawValue: null, display: "—", note: "" };
   if (cagr === null || maxDd === null || maxDd <= 0) {
     return { ...base, note: "Needs CAGR and Max DD to compute Calmar." };

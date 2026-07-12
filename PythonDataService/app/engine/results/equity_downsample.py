@@ -115,12 +115,13 @@ def _required_indexes(points: list[EquityCurvePoint], trade_marks: set[int]) -> 
             required.add(by_timestamp[timestamp])
 
     running_high = float("-inf")
-    running_low = float("inf")
+    low_since_peak = float("inf")
     for i, point in enumerate(points):
         if point.e > running_high:
             running_high = point.e
+            low_since_peak = point.e
             required.add(i)
-        if point.e < running_low:
-            running_low = point.e
+        if point.e < low_since_peak:
+            low_since_peak = point.e
             required.add(i)
     return required

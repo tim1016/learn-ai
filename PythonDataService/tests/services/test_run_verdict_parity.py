@@ -15,10 +15,11 @@ def _dimension_scores(verdict: Any) -> dict[str, int | None]:
     return {dimension.key: dimension.score for dimension in verdict.dimensions}
 
 
-def _trade_gap_score(verdict: Any) -> int | None:
-    stat_dimension = next(d for d in verdict.dimensions if d.key == "stat_confidence")
-    trade_gap = next(s for s in stat_dimension.sub_scores if s.key == "trade_gap")
-    return trade_gap.score
+def _sub_scores(verdict: Any) -> dict[str, dict[str, int | None]]:
+    return {
+        dimension.key: {sub_score.key: sub_score.score for sub_score in dimension.sub_scores}
+        for dimension in verdict.dimensions
+    }
 
 
 @pytest.mark.parametrize("case", json.loads(FIXTURE_PATH.read_text())["cases"], ids=lambda c: c["id"])
@@ -42,7 +43,25 @@ def test_compute_run_verdict_matches_golden_fixture(case: dict[str, Any]) -> Non
     assert len(verdict.missing_metrics) == expected["missing_metrics_count"]
     assert verdict.normalized_weights is expected["normalized_weights"]
     assert _dimension_scores(verdict) == expected["dimension_scores"]
-    assert _trade_gap_score(verdict) == expected["trade_gap_score"]
+    assert _sub_scores(verdict) == expected["sub_scores"]
+
+
+def test_compute_run_verdict_grades_infinite_profit_factor_as_unavailable_edge() -> None:
+    verdict = compute_run_verdict(
+        {
+            "statistics": {"profit_factor": "Infinity"},
+            "total_trades": 30,
+            "net_profit": 1000,
+            "total_fees": 50,
+        },
+        engine="python",
+        generated_at_ms=1_700_000_000_000,
+    )
+
+    trade_edge = next(d for d in verdict.dimensions if d.key == "trade_edge")
+    profit_factor = next(s for s in trade_edge.sub_scores if s.key == "pf")
+    assert profit_factor.score == 10
+    assert profit_factor.display == "∞"
 
 
 def test_lean_unclean_run_forces_rework_signal() -> None:
@@ -64,4 +83,3 @@ def test_lean_unclean_run_forces_rework_signal() -> None:
     assert "lean_run_not_clean" in verdict.red_flags
     assert verdict.cleanliness is not None
     assert verdict.cleanliness.error_counts == {"runtime_error": 1}
-

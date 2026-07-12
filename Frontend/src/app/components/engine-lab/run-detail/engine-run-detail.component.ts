@@ -1,10 +1,11 @@
 import { CurrencyPipe, PercentPipe } from "@angular/common";
-import { ChangeDetectionStrategy, Component, computed, inject } from "@angular/core";
-import { toSignal } from "@angular/core/rxjs-interop";
-import { ActivatedRoute, RouterLink } from "@angular/router";
+import { ChangeDetectionStrategy, Component, computed, inject, input } from "@angular/core";
+import { rxResource } from "@angular/core/rxjs-interop";
+import { RouterLink } from "@angular/router";
 import { Apollo } from "apollo-angular";
-import { map, of, switchMap } from "rxjs";
+import { map, of } from "rxjs";
 
+import type { RunVerdict } from "../../../api/run-verdict.types";
 import {
   BACKTEST_RUN_DETAIL_QUERY,
   BacktestRunDetail,
@@ -12,13 +13,10 @@ import {
 } from "../../../graphql/backtest-runs.query";
 import { TimestampDisplayPipe } from "../../../shared/timestamp";
 
-interface ParsedVerdict {
-  headline: string;
-  grade: string | null;
-  signal: string | null;
-  composite: number | null;
-  missing_metrics: string[];
-}
+type VerdictState =
+  | { kind: "ready"; verdict: RunVerdict }
+  | { kind: "missing" }
+  | { kind: "unreadable" };
 
 @Component({
   selector: "app-engine-run-detail",
@@ -29,61 +27,66 @@ interface ParsedVerdict {
 })
 export class EngineRunDetailComponent {
   private readonly apollo = inject(Apollo);
-  private readonly route = inject(ActivatedRoute);
+  readonly id = input<string | null>(null);
 
-  private readonly result = toSignal(
-    this.route.paramMap.pipe(
-      map((params) => Number(params.get("id"))),
-      switchMap((id) => {
-        if (!Number.isFinite(id) || id <= 0) {
-          return of({ data: { backtestRun: null }, loading: false });
-        }
-        return this.apollo.watchQuery<BacktestRunDetailQueryResult>({
+  private readonly runResource = rxResource<BacktestRunDetail | null, number | null>({
+    params: () => {
+      const parsed = Number(this.id());
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    },
+    stream: ({ params }) => {
+      if (params === null) {
+        return of(null);
+      }
+      return this.apollo.watchQuery<BacktestRunDetailQueryResult>({
           query: BACKTEST_RUN_DETAIL_QUERY,
-          variables: { id },
+          variables: { id: params },
           fetchPolicy: "cache-and-network",
-        }).valueChanges;
-      }),
-    ),
-    { initialValue: { data: { backtestRun: null }, loading: true } },
-  );
+        }).valueChanges.pipe(
+          map((result): BacktestRunDetail | null => (result.data?.backtestRun as BacktestRunDetail | null | undefined) ?? null),
+        );
+    },
+  });
 
-  readonly run = computed(() => (this.result().data?.backtestRun ?? null) as BacktestRunDetail | null);
-  readonly loading = computed(() => this.result().loading);
+  readonly run = computed(() => this.runResource.value() ?? null);
+  readonly loading = computed(() => this.runResource.isLoading());
   readonly verdict = computed(() => this.parseVerdict(this.run()));
-  readonly equityReceipt = computed(() => this.parseEquityReceipt(this.run()));
-  readonly equityCurve = computed(() => this.run()?.equityCurve ?? []);
+  readonly equityReceipt = computed(() => {
+    const curve = this.run()?.equityCurve;
+    if (!curve) return "Equity curve not recorded.";
+    if (curve.error) return curve.error;
+    return `${curve.cadence ?? "unknown"}: ${curve.keptPoints} of ${curve.rawPoints} points`;
+  });
+  readonly equityCurve = computed(() => this.run()?.equityCurve?.points ?? []);
   readonly trades = computed(() => this.run()?.trades ?? []);
+  readonly visibleTrades = computed(() => this.trades().slice(0, 12));
+  readonly tradeReceipt = computed(() => {
+    const total = this.trades().length;
+    const visible = this.visibleTrades().length;
+    return visible === total ? `${total} rows` : `showing ${visible} of ${total}`;
+  });
 
-  private parseVerdict(run: BacktestRunDetail | null): ParsedVerdict | null {
-    if (!run?.verdictJson) return null;
+  private parseVerdict(run: BacktestRunDetail | null): VerdictState {
+    if (!run?.verdictJson) return { kind: "missing" };
     try {
-      const parsed = JSON.parse(run.verdictJson) as Partial<ParsedVerdict>;
-      return {
-        headline: typeof parsed.headline === "string" ? parsed.headline : "Run verdict unavailable.",
-        grade: typeof parsed.grade === "string" ? parsed.grade : null,
-        signal: typeof parsed.signal === "string" ? parsed.signal : null,
-        composite: typeof parsed.composite === "number" ? parsed.composite : null,
-        missing_metrics: Array.isArray(parsed.missing_metrics) ? parsed.missing_metrics : [],
-      };
+      const parsed = JSON.parse(run.verdictJson) as unknown;
+      return isRunVerdict(parsed) ? { kind: "ready", verdict: parsed } : { kind: "unreadable" };
     } catch {
-      return null;
+      return { kind: "unreadable" };
     }
   }
+}
 
-  private parseEquityReceipt(run: BacktestRunDetail | null): string {
-    if (!run?.equityCurveJson) return "Equity curve not recorded.";
-    try {
-      const parsed = JSON.parse(run.equityCurveJson) as {
-        cadence?: string;
-        downsample?: { raw_points?: number; kept_points?: number };
-      };
-      const cadence = parsed.cadence ?? "unknown";
-      const raw = parsed.downsample?.raw_points ?? run.equityCurve.length;
-      const kept = parsed.downsample?.kept_points ?? run.equityCurve.length;
-      return `${cadence}: ${kept} of ${raw} points`;
-    } catch {
-      return "Equity receipt unreadable.";
-    }
-  }
+function isRunVerdict(value: unknown): value is RunVerdict {
+  if (value === null || typeof value !== "object") return false;
+  const candidate = value as Partial<RunVerdict>;
+  return (
+    typeof candidate.verdict_version === "number" &&
+    typeof candidate.engine === "string" &&
+    typeof candidate.generated_at_ms === "number" &&
+    typeof candidate.headline === "string" &&
+    Array.isArray(candidate.red_flags) &&
+    Array.isArray(candidate.dimensions) &&
+    Array.isArray(candidate.missing_metrics)
+  );
 }

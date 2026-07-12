@@ -99,10 +99,15 @@ export const BACKTEST_RUN_DETAIL_QUERY = gql`
       verdictVersion
       verdictGrade
       verdictSignal
-      equityCurveJson
       equityCurve {
-        t
-        e
+        cadence
+        rawPoints
+        keptPoints
+        error
+        points {
+          t
+          e
+        }
       }
       insightSummaryJson
       parityGroupId
@@ -144,9 +149,9 @@ export interface BacktestRunNode {
   commissionPerOrder: number | null;
   /** PR B — brokerage policy ("algorithm_default" / IB / etc.). Null on legacy rows. */
   brokeragePolicy: string | null;
-  verdictGrade?: string | null;
-  verdictSignal?: string | null;
-  parityGroupId?: string | null;
+  verdictGrade: string | null;
+  verdictSignal: string | null;
+  parityGroupId: string | null;
   /** Free-text researcher notes. Edited via the updateBacktestRunNotes mutation. */
   notes: string | null;
   /** PR B — canonical DataPolicy block. Null on legacy rows (predate the column). */
@@ -192,8 +197,7 @@ export interface BacktestRunDetail {
   verdictVersion: number | null;
   verdictGrade: string | null;
   verdictSignal: string | null;
-  equityCurveJson: string | null;
-  equityCurve: { t: number; e: number }[];
+  equityCurve: BacktestRunEquityCurve | null;
   insightSummaryJson: string | null;
   parityGroupId: string | null;
   trades: BacktestRunDetailTrade[];
@@ -210,6 +214,14 @@ export interface BacktestRunDetailTrade {
   pnL: number;
   signalReason: string;
   isSyntheticExit: boolean;
+}
+
+export interface BacktestRunEquityCurve {
+  cadence: string | null;
+  rawPoints: number;
+  keptPoints: number;
+  error: string | null;
+  points: { t: number; e: number }[];
 }
 
 export interface BacktestRunDetailQueryResult {
@@ -237,9 +249,9 @@ export function toRunHistoryRow(node: BacktestRunNode): RunHistoryRow {
     notes: node.notes,
     commissionPerOrder: node.commissionPerOrder,
     brokeragePolicy: node.brokeragePolicy,
-    verdictGrade: node.verdictGrade ?? null,
-    verdictSignal: node.verdictSignal ?? null,
-    parityGroupId: node.parityGroupId ?? null,
+    verdictGrade: node.verdictGrade,
+    verdictSignal: node.verdictSignal,
+    parityGroupId: node.parityGroupId,
   };
 }
 

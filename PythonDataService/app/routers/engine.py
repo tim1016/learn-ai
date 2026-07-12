@@ -1169,7 +1169,7 @@ def _save_study_sync(
                 trade_timestamps={t.entry_time for t in response.trades} | {t.exit_time for t in response.trades},
             )
         ),
-        "insightSummaryJson": json.dumps(response.insight_summary),
+        "insightSummaryJson": json.dumps(response.insight_summary) if response.insight_summary else None,
         # Dollar PnL net of commission, matching LEAN's persisted
         # ``t.pnL`` semantics. The engine charges ``commission_per_order``
         # on both entry and exit fills, so each round-trip incurs

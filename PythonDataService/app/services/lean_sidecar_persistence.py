@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -26,8 +25,8 @@ from app.models.responses import (
     LeanStatisticsResponse,
     LeanTradeStatsResponse,
 )
-from app.schemas.run_verdict import RunVerdict, RunVerdictCleanliness
-from app.services.run_verdict_service import compute_run_verdict
+from app.schemas.run_verdict import RunVerdictCleanliness
+from app.services.run_verdict_service import compute_run_verdict, failed_run_verdict
 
 if TYPE_CHECKING:
     from app.lean_sidecar.manifest import RunManifest
@@ -516,6 +515,7 @@ def build_persist_payload(
     start_date_ms: int,
     end_date_ms: int,
     manifest: RunManifest | Mapping[str, Any] | None = None,
+    cleanliness: RunVerdictCleanliness | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a JSON-serializable payload to POST to the .NET persist endpoint.
 
@@ -527,9 +527,9 @@ def build_persist_payload(
     persisting the payload into the StrategyExecution + BacktestTrade tables.
 
     If the workspace has no normalized/result.json (LEAN crashed before output),
-    returns a "failed run" payload with TotalTrades=0 and the error noted in
-    lean_statistics. The .NET endpoint should still persist this so the failed
-    run appears in the unified history.
+    returns a "failed run" payload with TotalTrades=0 and a frozen Reject
+    verdict. The .NET endpoint should still persist this so the failed run
+    appears in the unified history.
 
     All timestamps in the returned payload are int64 ms UTC (canonical).
 
@@ -662,7 +662,7 @@ def build_persist_payload(
         total_fees=total_fees,
         win_rate=agg.win_rate,
         lean_statistics=lean_statistics,
-        cleanliness=None,
+        cleanliness=cleanliness,
     )
 
 
@@ -679,7 +679,7 @@ def _failed_run_payload(
     manifest: RunManifest | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a zero-trade payload for a LEAN run that failed or produced no result."""
-    failed_verdict = _failed_run_verdict(error)
+    failed_verdict = failed_run_verdict(error)
     return {
         "lean_run_id": run_id,
         "source": "lean-sidecar",
@@ -725,19 +725,11 @@ def _run_verdict_fields(
     total_fees: float,
     win_rate: float,
     lean_statistics: dict[str, Any],
-    cleanliness: RunVerdictCleanliness | None,
+    cleanliness: RunVerdictCleanliness | Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    portfolio = lean_statistics.get("portfolio") if isinstance(lean_statistics, dict) else {}
-    trade = lean_statistics.get("trade") if isinstance(lean_statistics, dict) else {}
     verdict = compute_run_verdict(
         {
-            "statistics": {
-                "sharpe_ratio": portfolio.get("sharpe_ratio") if isinstance(portfolio, dict) else None,
-                "sortino_ratio": portfolio.get("sortino_ratio") if isinstance(portfolio, dict) else None,
-                "max_drawdown_pct": portfolio.get("drawdown") if isinstance(portfolio, dict) else None,
-                "profit_factor": trade.get("profit_factor") if isinstance(trade, dict) else None,
-                "expectancy_pct": portfolio.get("expectancy") if isinstance(portfolio, dict) else None,
-            },
+            "statistics": {},
             "win_rate": win_rate,
             "total_trades": total_trades,
             "net_profit": total_pnl,
@@ -753,28 +745,6 @@ def _run_verdict_fields(
         "verdict_grade": verdict.grade,
         "verdict_signal": verdict.signal,
     }
-
-
-def _failed_run_verdict(error: str) -> RunVerdict:
-    generated_at_ms = int(time.time() * 1000)
-    return RunVerdict(
-        verdict_version=1,
-        engine="lean",
-        generated_at_ms=generated_at_ms,
-        composite=None,
-        grade="F",
-        signal="Reject",
-        headline=f"Reject — LEAN run failed before producing normalized results: {error}",
-        red_flags=["lean_run_failed"],
-        dimensions=[],
-        missing_metrics=[],
-        normalized_weights=False,
-        cleanliness=RunVerdictCleanliness(
-            is_clean=False,
-            is_reconciliation_grade=True,
-            error_counts={"lean_run_failed": 1},
-        ),
-    )
 
 
 async def persist_via_dotnet(

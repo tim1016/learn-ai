@@ -38,7 +38,7 @@ export interface RunHistoryRow {
   commissionPerOrder: number | null;
   /** PR B — brokerage policy ("algorithm_default" / IB / etc.). */
   brokeragePolicy: string | null;
-  verdictGrade?: string | null;
-  verdictSignal?: string | null;
-  parityGroupId?: string | null;
+  verdictGrade: string | null;
+  verdictSignal: string | null;
+  parityGroupId: string | null;
 }

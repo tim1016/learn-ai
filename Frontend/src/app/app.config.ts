@@ -1,5 +1,10 @@
 import { ApplicationConfig, inject, provideZonelessChangeDetection } from "@angular/core";
-import { provideRouter, withInMemoryScrolling, withExperimentalAutoCleanupInjectors } from "@angular/router";
+import {
+  provideRouter,
+  withComponentInputBinding,
+  withExperimentalAutoCleanupInjectors,
+  withInMemoryScrolling,
+} from "@angular/router";
 import { provideHttpClient, withInterceptors } from "@angular/common/http";
 import { provideAnimationsAsync } from "@angular/platform-browser/animations/async";
 import { providePrimeNG } from "primeng/config";
@@ -17,6 +22,7 @@ export const appConfig: ApplicationConfig = {
     provideZonelessChangeDetection(),
     provideRouter(
       routes,
+      withComponentInputBinding(),
       withInMemoryScrolling({ anchorScrolling: 'enabled', scrollPositionRestoration: 'enabled' }),
       withExperimentalAutoCleanupInjectors(),
     ),
