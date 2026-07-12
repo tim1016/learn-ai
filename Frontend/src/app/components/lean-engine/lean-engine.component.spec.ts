@@ -417,6 +417,43 @@ describe('LeanEngineComponent engine selector', () => {
     expect(component.runError()).toContain('Start the launcher');
   });
 
+  it('allows LEAN runs when launcher health passes with non-fatal warnings', async () => {
+    const diagnose = vi.fn().mockResolvedValue({
+      overall_status: 'warn',
+      fetched_at_ms: 1_783_875_135_460,
+      checks: [
+        {
+          name: 'launcher_healthz',
+          label: 'GET launcher /healthz',
+          status: 'pass',
+          detail: 'launcher reachable',
+          fix: null,
+        },
+        {
+          name: 'backend_launcher_url',
+          label: 'Backend launcher URL',
+          status: 'warn',
+          detail: 'private LAN URL configured',
+          fix: 'Use localhost if running locally.',
+        },
+      ],
+    } satisfies LeanLauncherDiagnosticReport);
+    const { startJob } = configureTestBed({ diagnose });
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+
+    component.engine.set('lean');
+    component.startDate.set('2025-01-13');
+    component.endDate.set('2025-01-17');
+
+    await component.run();
+
+    expect(diagnose).toHaveBeenCalledTimes(1);
+    expect(startJob).toHaveBeenCalledTimes(1);
+    expect(component.leanLauncherStatus()).toBe('ready');
+  });
+
   it('advances end_ms_utc past the user-picked end so single-day LEAN runs are not rejected as start == end', async () => {
     // Regression for the P1 finding on PR #307: when the operator
     // picks start_date == end_date the previous flow built start ==
