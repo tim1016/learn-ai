@@ -59,25 +59,26 @@ export class RunHistoryComponent {
   }
 
   /**
-   * PR B.3 — compact summary of the persisted DataPolicy bars pair, formatted
-   * as ``m/1 → m/15`` (input → strategy). Falls back to a single token when
-   * the two specs are equal (typical for daily-resolution runs). Returns an
-   * em-dash for legacy rows without a DataPolicy block so the column doesn't
-   * collapse visually.
+   * PR B.3 — explicit summary of the persisted DataPolicy bars pair. Keep
+   * input bars and strategy bars named so LEAN runs that consume M1 data but
+   * calculate indicators on M15 consolidated bars never look like an M1
+   * strategy.
    */
   barsSummary(dp: DataPolicy | null): string {
     if (!dp) return "—";
     const code = (timespan: string): string => {
       switch (timespan) {
-        case "minute": return "m";
-        case "hour": return "h";
-        case "day": return "d";
+        case "minute": return "M";
+        case "hour": return "H";
+        case "day": return "D";
         default: return timespan;
       }
     };
-    const i = `${code(dp.input_bars.timespan)}/${dp.input_bars.multiplier}`;
-    const s = `${code(dp.strategy_bars.timespan)}/${dp.strategy_bars.multiplier}`;
-    return i === s ? i : `${i} → ${s}`;
+    const label = (bars: DataPolicy['input_bars']): string =>
+      `${code(bars.timespan)}${bars.multiplier}`;
+    const input = label(dp.input_bars);
+    const strategy = label(dp.strategy_bars);
+    return input === strategy ? `Input and strategy ${strategy}` : `Input ${input} / Strategy ${strategy}`;
   }
 
   isSelected(id: string): boolean {

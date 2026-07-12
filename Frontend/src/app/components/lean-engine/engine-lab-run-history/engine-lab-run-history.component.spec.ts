@@ -176,10 +176,10 @@ describe("EngineLabRunHistoryComponent", () => {
     expect(html).toContain("LEAN");
   });
 
-  it("renders the DataPolicy bars summary (m/1 → m/15)", async () => {
+  it("renders the DataPolicy bars summary with explicit input and strategy cadences", async () => {
     const fixture = await setup();
     const html = (fixture.nativeElement as HTMLElement).textContent ?? "";
-    expect(html).toContain("m/1 → m/15");
+    expect(html).toContain("Input M1 / Strategy M15");
   });
 
   it("renders 'Open at end' for rows with a synthetic exit", async () => {

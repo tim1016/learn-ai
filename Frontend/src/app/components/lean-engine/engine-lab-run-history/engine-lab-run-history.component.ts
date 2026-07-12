@@ -243,7 +243,7 @@ export class EngineLabRunHistoryComponent {
     if (visible.has("strategy")) headers.push("strategy");
     if (visible.has("symbol")) headers.push("symbol");
     if (visible.has("window")) headers.push("start_date", "end_date");
-    if (visible.has("bars")) headers.push("input_bars", "strategy_bars");
+    if (visible.has("bars")) headers.push("input_bars", "strategy_indicator_bars");
     if (visible.has("trades")) headers.push("total_trades");
     if (visible.has("pnl")) headers.push("total_pnl");
     if (visible.has("notes")) headers.push("notes");
