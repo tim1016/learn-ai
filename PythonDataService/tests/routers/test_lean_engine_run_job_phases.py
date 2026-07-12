@@ -96,3 +96,13 @@ class TestRunTrustedSamplePhaseSequence:
             assert param.kind is inspect.Parameter.KEYWORD_ONLY, (
                 f"{name} must be keyword-only so existing positional callers don't break"
             )
+
+    def test_job_wrapper_serializes_dataclass_result_with_jsonable_encoder(self) -> None:
+        """``run_trusted_sample`` returns a dataclass, not a Pydantic
+        model. The job wrapper must use FastAPI's jsonable encoder so
+        Path fields and nested Pydantic DTOs survive the Redis JSON hop."""
+        import app.routers.jobs as jobs_router
+
+        source = inspect.getsource(jobs_router.start_lean_engine_run_job)
+        assert "jsonable_encoder(result)" in source
+        assert "result.model_dump" not in source

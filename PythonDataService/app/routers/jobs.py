@@ -23,10 +23,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import asdict
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, status
+from fastapi.encoders import jsonable_encoder
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
@@ -536,7 +536,7 @@ async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
                 on_phase=emit.phase,
                 on_log=emit.log,
             )
-            return result.model_dump(mode="json")
+            return jsonable_encoder(result)
 
         try:
             # ``run_trusted_sample`` is async because the launcher and
