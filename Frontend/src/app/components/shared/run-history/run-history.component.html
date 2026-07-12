@@ -50,7 +50,7 @@
           <td>
             <span class="badge" [attr.data-source]="row.source">{{ badge(row.source) }}</span>
           </td>
-          <td>{{ row.strategyName }}</td>
+          <td>{{ strategyLabel(row) }}</td>
           <td>{{ row.symbol ?? '—' }}</td>
           <td>{{ row.startDate }} – {{ row.endDate }}</td>
           <td class="bars-cell">{{ barsSummary(row.dataPolicy) }}</td>

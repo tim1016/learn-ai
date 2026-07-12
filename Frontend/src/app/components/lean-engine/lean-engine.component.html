@@ -88,7 +88,72 @@
             } @else {
               <div class="params-card lean-script-card">
                 <h3 data-section="01">LEAN algorithm</h3>
-                <app-lean-script-editor [(source)]="leanSource" />
+                @if (leanAlgorithmMode() === 'template') {
+                  <div class="lean-template-summary">
+                    <div>
+                      <strong>EMA crossover</strong>
+                      <span>Built-in template</span>
+                    </div>
+                    <button
+                      type="button"
+                      class="launcher-btn secondary"
+                      (click)="useCustomLeanAlgorithm()">
+                      <i class="pi pi-pencil" aria-hidden="true"></i>
+                      Customize algorithm
+                    </button>
+                  </div>
+                } @else {
+                  <div class="lean-custom-toolbar">
+                    <span>User-provided algorithm</span>
+                    <button
+                      type="button"
+                      class="launcher-btn secondary"
+                      (click)="useBuiltInLeanAlgorithm()">
+                      <i class="pi pi-undo" aria-hidden="true"></i>
+                      Use built-in
+                    </button>
+                  </div>
+                  <app-lean-script-editor [(source)]="leanSource" />
+                }
+              </div>
+              <div class="params-card lean-launcher-card" [attr.data-status]="leanLauncherStatus()">
+                <h3 data-section="01A">
+                  <i class="pi pi-server" aria-hidden="true"></i>
+                  Launcher
+                </h3>
+                <div class="launcher-status">
+                  <span class="launcher-status__dot" aria-hidden="true"></span>
+                  <span>
+                    @switch (leanLauncherStatus()) {
+                      @case ('ready') { Ready }
+                      @case ('checking') { Checking... }
+                      @case ('blocked') { Not running }
+                      @default { Not checked }
+                    }
+                  </span>
+                </div>
+                <code class="launcher-command">{{ leanLauncherCommand }}</code>
+                @if (leanLauncherDetail()) {
+                  <p class="launcher-detail">{{ leanLauncherDetail() }}</p>
+                }
+                <div class="launcher-actions">
+                  <button
+                    type="button"
+                    class="launcher-btn"
+                    [disabled]="leanLauncherStatus() === 'checking'"
+                    (click)="checkLeanLauncher()">
+                    <i class="pi pi-refresh" aria-hidden="true"></i>
+                    @if (leanLauncherStatus() === 'checking') { Checking... }
+                    @else { Check launcher }
+                  </button>
+                  <button
+                    type="button"
+                    class="launcher-btn secondary"
+                    (click)="copyLeanLauncherCommand()">
+                    <i class="pi pi-copy" aria-hidden="true"></i>
+                    {{ leanLauncherCopied() ? 'Copied' : 'Copy command' }}
+                  </button>
+                </div>
               </div>
             }
 
@@ -222,14 +287,17 @@
                   type="button"
                   class="run-btn"
                   data-testid="run-btn"
-                  [disabled]="running() || (engine() === 'python' && !selectedStrategyName()) || preflightBlocks()"
-                  [title]="preflightBlocks()
+                  [disabled]="running() || (engine() === 'python' && !selectedStrategyName()) || preflightBlocks() || leanLauncherBlocksRun()"
+                  [title]="leanLauncherBlocksRun()
+                    ? 'Check the LEAN launcher before running.'
+                    : preflightBlocks()
                     ? 'Pre-flight has blocking issues. See the panel above.'
                     : 'Run the backtest with the current configuration.'"
                   (click)="run(); activeTab.set('1')"
                 >
                   <i class="pi pi-play" aria-hidden="true"></i>
                   @if (running()) { Running… }
+                  @else if (leanLauncherBlocksRun()) { Check launcher }
                   @else if (preflightBlocks()) { Run blocked }
                   @else { Run backtest }
                 </button>

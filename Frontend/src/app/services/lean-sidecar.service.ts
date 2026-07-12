@@ -5,6 +5,7 @@ import { firstValueFrom } from "rxjs";
 import { environment } from "../../environments/environment";
 import type {
   LeanSidecarErrorEnvelope,
+  LeanLauncherDiagnosticReport,
   TrustedRunRequest,
   TrustedRunResponse,
 } from "./lean-sidecar.types";
@@ -45,6 +46,16 @@ export class LeanSidecarService {
     try {
       return await firstValueFrom(
         this.http.post<TrustedRunResponse>(`${this.base}/trusted-runs`, request),
+      );
+    } catch (err) {
+      throw this.translate(err);
+    }
+  }
+
+  async diagnose(): Promise<LeanLauncherDiagnosticReport> {
+    try {
+      return await firstValueFrom(
+        this.http.get<LeanLauncherDiagnosticReport>(`${this.base}/diagnose`),
       );
     } catch (err) {
       throw this.translate(err);

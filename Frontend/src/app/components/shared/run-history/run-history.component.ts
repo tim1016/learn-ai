@@ -51,6 +51,13 @@ export class RunHistoryComponent {
     return ENGINE_LABELS[source];
   }
 
+  strategyLabel(row: RunHistoryRow): string {
+    if (row.source === "lean-sidecar" && row.strategyName === "user_provided") {
+      return "User-modified algorithm";
+    }
+    return row.strategyName;
+  }
+
   /**
    * PR B.3 — compact summary of the persisted DataPolicy bars pair, formatted
    * as ``m/1 → m/15`` (input → strategy). Falls back to a single token when

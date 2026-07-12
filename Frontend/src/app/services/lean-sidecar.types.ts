@@ -125,3 +125,19 @@ export interface LeanSidecarErrorEnvelope {
   reason: string;
   message: string;
 }
+
+export type LeanLauncherCheckStatus = "pass" | "fail" | "warn";
+
+export interface LeanLauncherDiagnosticCheck {
+  name: string;
+  label: string;
+  status: LeanLauncherCheckStatus;
+  detail: string;
+  fix: string | null;
+}
+
+export interface LeanLauncherDiagnosticReport {
+  overall_status: LeanLauncherCheckStatus;
+  checks: LeanLauncherDiagnosticCheck[];
+  fetched_at_ms: number;
+}

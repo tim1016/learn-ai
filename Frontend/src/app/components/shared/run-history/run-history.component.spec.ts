@@ -93,6 +93,20 @@ describe("RunHistoryComponent", () => {
     expect(t).toMatch(/\$42\.50/);
   });
 
+  it("labels custom LEAN runs as user-modified algorithms", async () => {
+    const fixture = await renderWith([
+      row({
+        source: "lean-sidecar",
+        engine: "LEAN",
+        strategyName: "user_provided",
+      }),
+    ]);
+
+    const t = text(fixture);
+    expect(t).toContain("User-modified algorithm");
+    expect(t).not.toContain("user_provided");
+  });
+
   it("dashes out symbol when null", async () => {
     const fixture = await renderWith([row({ symbol: null })]);
     expect(text(fixture)).toContain("—");

@@ -154,6 +154,31 @@ describe("LeanSidecarService", () => {
     expect(result.session_open_ms_utc).toBe(1737466200000);
   });
 
+  it("diagnose GETs the launcher health report", async () => {
+    const promise = service.diagnose();
+    const req = httpMock.expectOne(
+      (r) =>
+        r.method === "GET" && r.url.endsWith("/api/lean-sidecar/diagnose"),
+    );
+    req.flush({
+      overall_status: "pass",
+      fetched_at_ms: 1_783_875_135_460,
+      checks: [
+        {
+          name: "launcher_healthz",
+          label: "GET launcher /healthz",
+          status: "pass",
+          detail: "200 OK",
+          fix: null,
+        },
+      ],
+    });
+
+    const result = await promise;
+    expect(result.overall_status).toBe("pass");
+    expect(result.checks[0].name).toBe("launcher_healthz");
+  });
+
   it("nextTradingDayOpen translates a launcher error envelope to LeanSidecarApiError", async () => {
     const promise = service.nextTradingDayOpen("9999-99-99").catch((e) => e);
     const req = httpMock.expectOne((r) =>
