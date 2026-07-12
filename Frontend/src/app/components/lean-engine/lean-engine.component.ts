@@ -475,7 +475,9 @@ export class LeanEngineComponent implements OnInit {
   private strategyBarsSpec(
     timespan: DataPolicy['input_bars']['timespan'],
   ): DataPolicy['strategy_bars'] {
-    if (timespan === 'minute' && this.selectedStrategyName() === 'spy_ema_crossover') {
+    const isEmaCrossoverRun =
+      this.selectedStrategyName() === 'spy_ema_crossover' || this.engine() === 'lean';
+    if (timespan === 'minute' && isEmaCrossoverRun) {
       return { timespan, multiplier: 15 };
     }
     return { timespan, multiplier: 1 };

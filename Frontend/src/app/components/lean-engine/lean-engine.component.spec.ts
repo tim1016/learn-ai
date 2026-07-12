@@ -148,6 +148,20 @@ describe('LeanEngineComponent.composeDataPolicy', () => {
     expect(dp.strategy_bars).toEqual({ timespan: 'minute', multiplier: 15 });
   });
 
+  it('uses 15-minute strategy bars for LEAN EMA template runs before the strategy selector hydrates', () => {
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    const component = fixture.componentInstance;
+
+    component.engine.set('lean');
+    component.selectedStrategyName.set(null);
+    component.resolution.set('minute');
+
+    const dp = component.composeDataPolicy();
+
+    expect(dp.input_bars).toEqual({ timespan: 'minute', multiplier: 1 });
+    expect(dp.strategy_bars).toEqual({ timespan: 'minute', multiplier: 15 });
+  });
+
   it('falls back to SPY when no symbol is configured (matches effectiveSymbol)', () => {
     const fixture = TestBed.createComponent(LeanEngineComponent);
     const component = fixture.componentInstance;
@@ -308,7 +322,7 @@ describe('LeanEngineComponent engine selector', () => {
 
     component.engine.set('lean');
     component.leanLauncherStatus.set('ready');
-    component.selectedStrategyName.set('spy_ema_crossover');
+    component.selectedStrategyName.set(null);
     component.leanSource.set('class MyAlgorithm: pass');
     component.startDate.set('2025-01-13');
     component.endDate.set('2025-01-17');
