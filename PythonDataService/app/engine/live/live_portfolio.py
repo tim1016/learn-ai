@@ -45,7 +45,9 @@ from app.engine.live.account_owner_fence import (
     current_account_owner_write_grant,
 )
 from app.engine.live.intent_events import DropReason
+from app.schemas.broker_capability import SessionKind
 from app.schemas.live_runs import GateResult
+from app.services.session_authority import SessionAuthorityState
 
 
 def _try_int(value: object) -> int | None:
@@ -160,10 +162,40 @@ class AccountTruthBlockError(SubmitGateBlockError):
         self.gate_result = gate_result
 
 
+class SessionPolicyBlockError(SubmitGateBlockError):
+    """Raised when the current session is outside the strategy submit policy."""
+
+    def __init__(
+        self,
+        *,
+        session_state: SessionAuthorityState,
+        allowed_sessions: tuple[SessionKind, ...],
+        order_mechanism_sessions: tuple[SessionKind, ...],
+        reason: str,
+    ) -> None:
+        super().__init__(
+            "SessionPolicyBlockError("
+            f"phase={session_state.phase!r}, "
+            f"allowed_sessions={allowed_sessions!r}, "
+            f"order_mechanism_sessions={order_mechanism_sessions!r}, "
+            f"reason={reason!r})"
+        )
+        self.session_state = session_state
+        self.allowed_sessions = allowed_sessions
+        self.order_mechanism_sessions = order_mechanism_sessions
+        self.reason = reason
+
+
 class GateResultProvider(Protocol):
     """Provider returning a canonical submit gate result."""
 
     def __call__(self) -> GateResult | None: ...
+
+
+class SessionGateProvider(Protocol):
+    """Provider returning the current centralized session-authority state."""
+
+    def __call__(self) -> SessionAuthorityState | None: ...
 
 
 class SubmitUncertainHaltError(RuntimeError):
@@ -559,6 +591,14 @@ class LivePortfolio:
     # submit is refused before any broker call. The provider must read cached
     # Account Truth only; it must not sweep IBKR from the submit path.
     account_truth_gate_provider: GateResultProvider | None = None
+    # PRD #1005 Slice 2 — centralized session-authority submit gate. When
+    # wired, pending orders are refused before any broker call unless the
+    # current phase is both strategy-declared and supported by the active order
+    # mechanism. Until Slice 3 lands extended-hours placement, the mechanism
+    # side stays RTH-only even if the strategy declares PRE/POST/OVERNIGHT.
+    session_gate_provider: SessionGateProvider | None = None
+    allowed_sessions: tuple[SessionKind, ...] = ("RTH",)
+    order_mechanism_sessions: tuple[SessionKind, ...] = ("RTH",)
     # AccountOwner mode: when set, runner code emits an AccountOwnerSubmitIntent
     # to this callable instead of placing the order through its broker adapter.
     account_owner_submitter: object = None
@@ -955,6 +995,35 @@ class LivePortfolio:
                 )
                 raise AccountTruthBlockError(gate_result=account_truth_gate)
 
+        session_state_for_submit: SessionAuthorityState | None = None
+        if self.pending_orders and self.session_gate_provider is not None:
+            session_state = self.session_gate_provider()
+            if session_state is not None:
+                session_state_for_submit = session_state
+                block_reason: str | None = None
+                if session_state.phase not in ("PRE", "RTH", "POST", "OVERNIGHT"):
+                    block_reason = "session_closed"
+                elif session_state.phase not in self.allowed_sessions:
+                    block_reason = "strategy_session_not_permitted"
+                elif session_state.phase not in self.order_mechanism_sessions:
+                    block_reason = "order_mechanism_not_enabled"
+                elif session_state.phase in ("PRE", "POST", "OVERNIGHT") and any(
+                    self.reference_price.get(order.symbol) is None or self.reference_price[order.symbol] <= 0
+                    for order in self.pending_orders
+                ):
+                    block_reason = "extended_limit_price_unavailable"
+                if block_reason is not None:
+                    self.drop_pending_before_submit(
+                        drop_reason="session_policy_block",
+                        ts_ms=now_ms_utc(),
+                    )
+                    raise SessionPolicyBlockError(
+                        session_state=session_state,
+                        allowed_sessions=self.allowed_sessions,
+                        order_mechanism_sessions=self.order_mechanism_sessions,
+                        reason=block_reason,
+                    )
+
         # Phase 7B / VCR-0010 — broker safety verdict gate. Consulted once at
         # the start of the submit pass (the verdict can't flip mid-call) so
         # the cost is a single getter call per bar, not per order. When the
@@ -980,6 +1049,11 @@ class LivePortfolio:
         for order in self.drain_pending():
             intent_id = self._intent_by_order_id.pop(order.order_id, None)
             order_ref: str | None = None
+            extended_session = (
+                session_state_for_submit is not None
+                and session_state_for_submit.phase in ("PRE", "POST", "OVERNIGHT")
+            )
+            limit_price = float(self.reference_price[order.symbol]) if extended_session else None
 
             if self.account_owner_submitter is not None:
                 if intent_id is None:
@@ -1004,8 +1078,10 @@ class LivePortfolio:
                 sec_type="STK",
                 action="BUY" if order.quantity > 0 else "SELL",
                 quantity=abs(order.quantity),
-                order_type="MKT",
+                order_type="LMT" if extended_session else "MKT",
+                limit_price=limit_price,
                 time_in_force="DAY",
+                outside_rth=extended_session,
                 confirm_paper=True,
                 client_order_id=f"live-{order.order_id}",
                 order_ref=order_ref,

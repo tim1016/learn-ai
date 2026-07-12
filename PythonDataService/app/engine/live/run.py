@@ -811,6 +811,7 @@ def _live_config_from_ledger(payload: dict) -> LiveConfig:  # noqa: F821
     from app.engine.live.config import (
         LIVE_CONFIG_LEDGER_KEYS,
         LiveConfig,
+        normalize_allowed_sessions,
         stock_symbol_from_action_plan,
     )
 
@@ -834,6 +835,10 @@ def _live_config_from_ledger(payload: dict) -> LiveConfig:  # noqa: F821
                 "live_config.action must declare exactly one long stock leg when live_config.symbol is absent"
             )
         kwargs["symbol"] = symbol_from_action
+    allowed_sessions = None
+    if "allowed_sessions" in payload:
+        allowed_sessions = normalize_allowed_sessions(payload["allowed_sessions"])
+        kwargs["allowed_sessions"] = allowed_sessions
     if "force_flat_at" in payload:
         raw = payload["force_flat_at"]
         if raw is None:
@@ -864,6 +869,10 @@ def _live_config_from_ledger(payload: dict) -> LiveConfig:  # noqa: F821
             kwargs["sizing"] = None
         else:
             kwargs["sizing"] = parse_sizing_policy(raw)
+    if "force_flat_at" not in payload and allowed_sessions is not None and any(
+        session != "RTH" for session in allowed_sessions
+    ):
+        kwargs["force_flat_at"] = None
     if "reconciliation_timing_policy" in payload:
         # ADR 0014 §6 — round-trip through the Pydantic model so a
         # malformed ledger fails fast at run start, not when the

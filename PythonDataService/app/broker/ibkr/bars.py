@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from app.broker.ibkr.api_evidence import (
     evidence_request,
@@ -39,7 +40,8 @@ from app.broker.ibkr.api_evidence import (
 )
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.contracts import qualify_underlying
-from app.broker.ibkr.models import IbkrMinuteBar
+from app.broker.ibkr.models import BarProvenance, IbkrMinuteBar
+from app.lean_sidecar.trading_calendar import session_window_for_date
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -47,6 +49,8 @@ logger = logging.getLogger(__name__)
 DuplicatePolicy = Literal["strict", "live_idempotent"]
 NO_BAR_WARNING_INITIAL_INTERVAL_S = 30.0
 NO_BAR_WARNING_MAX_INTERVAL_S = 300.0
+_HISTORICAL_BARS_TIMEOUT_S = 15.0
+_NY_TZ = ZoneInfo("America/New_York")
 
 
 class IBKRBarStreamError(Exception):
@@ -140,12 +144,21 @@ class _BarDeliveryLogger:
         self.first_bar_logged = True
 
 
-def _to_utc_ms(value: datetime | int | float) -> int:
+def _to_utc_ms(value: datetime | int | float | str) -> int:
     """Convert an IBKR bar timestamp to canonical int64 ms UTC."""
     if isinstance(value, datetime):
         if value.tzinfo is None:
             raise IBKRBarStreamError("IBKR bar timestamp is naive; expected tz-aware UTC datetime.")
         return int(value.astimezone(UTC).timestamp() * 1000)
+    if isinstance(value, str):
+        text = value.strip()
+        for fmt in ("%Y%m%d %H:%M:%S", "%Y%m%d"):
+            try:
+                parsed = datetime.strptime(text, fmt)
+            except ValueError:
+                continue
+            return int(parsed.replace(tzinfo=_NY_TZ).astimezone(UTC).timestamp() * 1000)
+        raise IBKRBarStreamError(f"IBKR bar timestamp string has unsupported format: {value!r}.")
     numeric = float(value)
     # ib_async/IB API bars commonly expose epoch seconds. Accept ms too for
     # tests/future wrappers by checking magnitude.
@@ -156,6 +169,30 @@ def _to_utc_ms(value: datetime | int | float) -> int:
 
 def _minute_start_ms(ts_ms: int) -> int:
     return ts_ms - (ts_ms % 60_000)
+
+
+def _session_phase_for_ms(ts_ms: int) -> Literal["PRE", "RTH", "POST", "OVERNIGHT", "CLOSED", "UNKNOWN"]:
+    """Classify a bar timestamp into the exchange session used for provenance."""
+    now_ny = datetime.fromtimestamp(ts_ms / 1000, tz=UTC).astimezone(_NY_TZ)
+    minutes = now_ny.hour * 60 + now_ny.minute
+    if minutes < 4 * 60 or minutes >= 20 * 60:
+        return "OVERNIGHT"
+    try:
+        window = session_window_for_date(now_ny.date())
+    except LookupError:
+        return "CLOSED"
+    if ts_ms < window.open_ms_utc:
+        return "PRE"
+    if ts_ms < window.close_ms_utc:
+        return "RTH"
+    return "POST"
+
+
+def _contract_venue(contract: object) -> str | None:
+    exchange = getattr(contract, "exchange", None)
+    primary = getattr(contract, "primaryExchange", None)
+    venue = str(primary or exchange or "").strip().upper()
+    return venue or None
 
 
 @dataclass(frozen=True)
@@ -181,6 +218,9 @@ class _MinuteAccumulator:
 
     symbol: str
     start_ms: int
+    venue: str | None = None
+    use_rth: bool | None = None
+    provenance: BarProvenance = "ibkr_realtime"
     contributions: dict[int, _Contribution] = field(default_factory=dict)
 
     @property
@@ -214,6 +254,10 @@ class _MinuteAccumulator:
             close=self.close,
             volume=self.volume,
             fetched_at_ms=now_ms_utc(),
+            provenance=self.provenance,
+            venue=self.venue,
+            session_phase=_session_phase_for_ms(self.start_ms),
+            use_rth=self.use_rth,
         )
 
 
@@ -319,6 +363,9 @@ def aggregate_realtime_bar(
     last_source_ms: int | None,
     policy: DuplicatePolicy = "strict",
     counters: LiveBarCounters | None = None,
+    venue: str | None = None,
+    use_rth: bool | None = None,
+    provenance: BarProvenance = "ibkr_realtime",
 ) -> tuple[_MinuteAccumulator, IbkrMinuteBar | None, int]:
     """Fold one IBKR 5-second bar into a minute accumulator.
 
@@ -348,7 +395,18 @@ def aggregate_realtime_bar(
     start_ms = _minute_start_ms(source_ms)
 
     if current is None:
-        return _MinuteAccumulator(symbol, start_ms, {source_ms: incoming}), None, source_ms
+        return (
+            _MinuteAccumulator(
+                symbol=symbol,
+                start_ms=start_ms,
+                venue=venue,
+                use_rth=use_rth,
+                provenance=provenance,
+                contributions={source_ms: incoming},
+            ),
+            None,
+            source_ms,
+        )
 
     if start_ms == current.start_ms:
         current.contributions[source_ms] = incoming
@@ -358,7 +416,97 @@ def aggregate_realtime_bar(
         raise IBKRBarStreamError(f"IBKR bar minute regressed from {current.start_ms} to {start_ms}.")
 
     emitted = current.to_model()
-    return _MinuteAccumulator(symbol, start_ms, {source_ms: incoming}), emitted, source_ms
+    return (
+        _MinuteAccumulator(
+            symbol=symbol,
+            start_ms=start_ms,
+            venue=venue,
+            use_rth=use_rth,
+            provenance=provenance,
+            contributions={source_ms: incoming},
+        ),
+        emitted,
+        source_ms,
+    )
+
+
+async def fetch_historical_minute_bars(
+    client: IbkrClient,
+    symbol: str,
+    *,
+    duration: str = "1 D",
+    end_datetime: str = "",
+    use_rth: bool = True,
+) -> list[IbkrMinuteBar]:
+    """Fetch read-only IBKR historical 1-minute TRADES bars with provenance."""
+    client.require_connected()
+    contract = await qualify_underlying(client, symbol)
+    sym = symbol.upper()
+    venue = _contract_venue(contract)
+    recorder = get_ibkr_api_evidence_recorder()
+    request = evidence_request(
+        "reqHistoricalDataAsync",
+        contract={"conId": int(contract.conId), "symbol": contract.symbol, "secType": contract.secType},
+        endDateTime=end_datetime,
+        durationStr=duration,
+        barSizeSetting="1 min",
+        whatToShow="TRADES",
+        useRTH=use_rth,
+        formatDate=2,
+        keepUpToDate=False,
+    )
+    try:
+        raw_bars = await asyncio.wait_for(
+            client.ib.reqHistoricalDataAsync(
+                contract,
+                endDateTime=end_datetime,
+                durationStr=duration,
+                barSizeSetting="1 min",
+                whatToShow="TRADES",
+                useRTH=use_rth,
+                formatDate=2,
+                keepUpToDate=False,
+            ),
+            timeout=_HISTORICAL_BARS_TIMEOUT_S,
+        )
+    except TimeoutError as exc:
+        raise IBKRBarStreamError(f"IBKR historical bars timed out for {symbol}.") from exc
+    recorder.record(
+        source="bars.fetch_historical_minute_bars",
+        symbol=sym,
+        request=request,
+        response=evidence_response("historicalData", fields={"bar_count": len(raw_bars)}),
+    )
+
+    out: list[IbkrMinuteBar] = []
+    last_start_ms: int | None = None
+    fetched_at_ms = now_ms_utc()
+    for raw_bar in raw_bars:
+        start_ms = _bar_time_ms(raw_bar)
+        if last_start_ms is not None and start_ms <= last_start_ms:
+            raise IBKRBarStreamError(
+                f"Non-monotonic IBKR historical minute bar timestamp: {start_ms} after {last_start_ms}."
+            )
+        last_start_ms = start_ms
+        contribution = _contribution(raw_bar)
+        out.append(
+            IbkrMinuteBar(
+                symbol=sym,
+                start_ms=start_ms,
+                end_ms=start_ms + 60_000,
+                open=contribution.open,
+                high=contribution.high,
+                low=contribution.low,
+                close=contribution.close,
+                volume=contribution.volume,
+                fetched_at_ms=fetched_at_ms,
+                provenance="ibkr_historical",
+                venue=venue,
+                session_phase=_session_phase_for_ms(start_ms),
+                use_rth=use_rth,
+            )
+        )
+    return out
 
 
 async def stream_raw_5s_bars(
@@ -391,6 +539,7 @@ async def stream_raw_5s_bars(
     contract = await qualify_underlying(client, symbol)
     bars = client.ib.reqRealTimeBars(contract, 5, "TRADES", useRTH=use_rth)
     sym = symbol.upper()
+    venue = _contract_venue(contract)
     delivery_logger = _BarDeliveryLogger(
         symbol=sym,
         con_id=int(contract.conId),
@@ -454,6 +603,10 @@ async def stream_raw_5s_bars(
                 close=contribution.close,
                 volume=contribution.volume,
                 fetched_at_ms=now_ms_utc(),
+                provenance="ibkr_realtime",
+                venue=venue,
+                session_phase=_session_phase_for_ms(source_ms),
+                use_rth=use_rth,
             )
     finally:
         try:
@@ -480,6 +633,7 @@ async def stream_minute_bars(
     contract = await qualify_underlying(client, symbol)
     bars = client.ib.reqRealTimeBars(contract, 5, "TRADES", useRTH=use_rth)
     sym = symbol.upper()
+    venue = _contract_venue(contract)
     delivery_logger = _BarDeliveryLogger(
         symbol=sym,
         con_id=int(contract.conId),
@@ -546,6 +700,9 @@ async def stream_minute_bars(
                 last_source_ms=last_source_ms,
                 policy="live_idempotent",
                 counters=counters,
+                venue=venue,
+                use_rth=use_rth,
+                provenance="ibkr_realtime",
             )
             if emitted is not None:
                 yield emitted

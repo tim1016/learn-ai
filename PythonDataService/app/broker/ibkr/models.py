@@ -87,13 +87,17 @@ IbkrApiRequestName = Literal[
     "accountSummaryAsync",
     "cancelOrder",
     "placeOrder",
+    "cancelMktData",
     "qualifyContractsAsync",
     "reqAllOpenOrders",
     "reqCompletedOrdersAsync",
+    "reqContractDetailsAsync",
     "reqCurrentTimeAsync",
     "reqExecutionsAsync",
+    "reqHistoricalDataAsync",
     "reqMatchingSymbolsAsync",
     "reqMktData",
+    "reqMarketDataType",
     "reqPnL",
     "reqPnLSingle",
     "reqPositionsAsync",
@@ -110,6 +114,8 @@ IbkrApiCallbackName = Literal[
     "openOrder",
     "orderStatus",
     "execDetails",
+    "historicalData",
+    "marketDataType",
     "pnl",
     "pnlSingle",
     "position",
@@ -431,6 +437,10 @@ class IbkrSurfaceSnapshot(BaseModel):
     as_of_ms: int
 
 
+BarProvenance = Literal["ibkr_realtime", "ibkr_historical", "polygon_historical", "mixed"]
+BarSessionPhase = Literal["PRE", "RTH", "POST", "OVERNIGHT", "CLOSED", "UNKNOWN"]
+
+
 class IbkrMinuteBar(BaseModel):
     """One closed 1-minute TRADES bar from IBKR real-time bars.
 
@@ -451,6 +461,10 @@ class IbkrMinuteBar(BaseModel):
     volume: int
     fetched_at_ms: int
     source: Literal["ibkr", "polygon", "mixed"] = "ibkr"
+    provenance: BarProvenance = "ibkr_realtime"
+    venue: str | None = None
+    session_phase: BarSessionPhase = "UNKNOWN"
+    use_rth: bool | None = None
 
 
 class IbkrBarsSnapshot(BaseModel):
@@ -513,6 +527,10 @@ class IbkrOrderSpec(BaseModel):
         description="Required when order_type='LMT'.",
     )
     time_in_force: OrderTimeInForce = "DAY"
+    outside_rth: bool = Field(
+        default=False,
+        description="When true, stamp IBKR Order.outsideRth for explicit extended-hours eligibility.",
+    )
 
     # Option-only fields
     expiry_ms: int | None = None

@@ -360,6 +360,7 @@ export type TradingSessionPhase =
   | 'PRE'
   | 'RTH'
   | 'POST'
+  | 'OVERNIGHT'
   | 'CLOSED'
   | 'UNKNOWN';
 

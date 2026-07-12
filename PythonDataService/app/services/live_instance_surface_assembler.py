@@ -116,6 +116,7 @@ class LiveInstanceSurfaceDependencies:
     project_bot_daily_lifecycle: Callable[..., Any]
     provenance: Callable[..., Any]
     resolve_symbol: Callable[..., Any]
+    resolve_session_capability_for_symbol: Callable[..., Any]
     resolve_instrument_surface: Callable[..., Any]
     resolve_lineage: Callable[..., Any]
     read_instance_live_state: Callable[..., Any]
@@ -248,6 +249,8 @@ class LiveInstanceSurfaceAssembler:
         incident_headline = d.resolve_incident_headline(root, live_binding, runs)
         lifecycle_state = d.resolve_bot_lifecycle_state(root, sid)
         live_run_dir = d.resolve_live_run_dir(root, live_binding)
+        symbol = d.resolve_symbol(root, live_binding, runs)
+        session_capability = d.resolve_session_capability_for_symbol(symbol)
         operator_surface = d.compute_operator_surface(
             process=process,
             last_exit=last_exit,
@@ -291,6 +294,7 @@ class LiveInstanceSurfaceAssembler:
             activity_publisher=activity_publisher,
             activity_publisher_registered_at_ms=activity_publisher_registered_at_ms,
             incident_headline_notice=incident_headline,
+            session_capability=session_capability,
             now_ms=observed_at_ms,
         )
         roll_call_offer = d.active_roll_call_offer(root, sid, now_ms=observed_at_ms)
@@ -321,7 +325,6 @@ class LiveInstanceSurfaceAssembler:
             and start_defaults.qc_cloud_backtest_id
         )
         provenance = d.provenance(root, live_binding, runs)
-        symbol = d.resolve_symbol(root, live_binding, runs)
         instrument_surface = d.resolve_instrument_surface(root, live_binding, runs)
         lineage = d.resolve_lineage(root, live_binding, runs)
         receipt_context = LifecycleReceiptContext(

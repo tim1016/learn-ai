@@ -275,6 +275,15 @@
     }
   </article>
 
+  @let capabilityState = capability();
+  <app-broker-capability-panel
+    [snapshots]="capabilityState.data?.snapshots ?? []"
+    [loading]="capabilityState.loading"
+    [error]="capabilityState.error"
+    [connected]="h?.connected === true"
+    (probe)="probeCapability()"
+  />
+
   @if (showAccountAndPositions()) {
     @let accountState = account();
     <article class="card">

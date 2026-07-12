@@ -12,6 +12,7 @@ from pathlib import Path
 
 from app.engine.execution.order_sizer import SizingPolicy
 from app.engine.live.order_identity import DEFAULT_ORDER_REF_MAX_LENGTH
+from app.schemas.broker_capability import SessionKind
 
 # Single source of truth for the operator-supplied ``live_config`` dict keys.
 # The deploy boundary (``HostRunnerDeployRequest._validate_sizing``) rejects
@@ -25,6 +26,7 @@ LIVE_CONFIG_LEDGER_KEYS: frozenset[str] = frozenset(
         "run_dir",
         "max_submit_latency_ms",
         "sizing",
+        "allowed_sessions",
         # PRD #593 Slice 1A — operator-declared instrument plan.
         # Hashed into ``run_id`` like every other key here. The current
         # deployment-validation live path consumes exactly one long stock leg;
@@ -38,6 +40,9 @@ LIVE_CONFIG_LEDGER_KEYS: frozenset[str] = frozenset(
         "reconciliation_timing_policy",
     }
 )
+
+DEFAULT_ALLOWED_SESSIONS: tuple[SessionKind, ...] = ("RTH",)
+_SESSION_ORDER: tuple[SessionKind, ...] = ("PRE", "RTH", "POST", "OVERNIGHT")
 
 
 @dataclass(frozen=True)
@@ -63,6 +68,12 @@ class LiveConfig:
     # canary. Hashed into ``run_id`` through ``live_config`` like every other
     # field on this dataclass.
     sizing: SizingPolicy | None = None
+    # PRD #1005 Slice 2 — strategy-declared sessions in which this live
+    # instance is allowed to submit. The default is regular trading hours
+    # only. The submit path additionally intersects this with the order
+    # mechanism's supported sessions, so declaring PRE/POST/OVERNIGHT cannot
+    # activate extended-hours placement until that mechanism ships.
+    allowed_sessions: tuple[SessionKind, ...] = DEFAULT_ALLOWED_SESSIONS
 
     # ── Durable submit protocol (ADR-0008 / PRD #446) ──────────────────────────
     # Master switch. Stays False until BOTH Acceptance-Gate receipts exist;
@@ -86,6 +97,29 @@ class LiveConfig:
     # ``None`` ⇒ publisher uses the policy's built-in defaults
     # (``caveat_lag_ms=2000``, ``excessive_lag_ms=10000``).
     reconciliation_timing_policy: dict | None = None
+
+
+def normalize_allowed_sessions(value: object | None) -> tuple[SessionKind, ...]:
+    """Normalize the live_config.allowed_sessions allow-list.
+
+    The ledger stores the canonical order so semantically identical lists hash
+    identically. Strings are rejected because ``"RTH"`` is too easy to confuse
+    with an iterable of characters.
+    """
+    if value is None:
+        return DEFAULT_ALLOWED_SESSIONS
+    if isinstance(value, str) or not isinstance(value, (list, tuple, set, frozenset)):
+        raise TypeError("allowed_sessions must be an array of session names")
+    raw_values = [str(item).strip().upper() for item in value]
+    if not raw_values:
+        raise ValueError("allowed_sessions must contain at least one session")
+    invalid = sorted(set(raw_values) - set(_SESSION_ORDER))
+    if invalid:
+        raise ValueError(f"allowed_sessions contains unsupported sessions: {invalid}")
+    normalized = tuple(kind for kind in _SESSION_ORDER if kind in raw_values)
+    if not normalized:
+        raise ValueError("allowed_sessions must contain at least one supported session")
+    return normalized
 
 
 def stock_symbol_from_action_plan(action: object) -> str | None:

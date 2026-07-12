@@ -33,6 +33,7 @@ DropReason = Literal[
     "account_truth_block",
     "account_freeze_block",
     "account_registry_block",
+    "session_policy_block",
 ]
 
 

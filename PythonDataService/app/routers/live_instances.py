@@ -229,6 +229,7 @@ from app.services.bot_roll_call import (
 )
 from app.services.broker_activity_publisher_registry import get_publisher_registry
 from app.services.broker_activity_wal import BrokerActivityWal, instance_broker_activity_wal_path
+from app.services.broker_capability_service import get_broker_capability_service
 from app.services.daemon_diagnostics import (
     get_daemon_diagnostics_service,
     project_daemon_diagnostic_report,
@@ -1169,6 +1170,17 @@ def _resolve_symbol(root: Path, live_binding: LiveBinding | None, runs: list[dic
     return resolution.value if resolution is not None else None
 
 
+def _resolve_session_capability_for_symbol(symbol: str | None):
+    if symbol is None:
+        return None
+    symbol_normalized = symbol.upper()
+    snapshots = get_broker_capability_service().read_latest()
+    matches = [snapshot for snapshot in snapshots if snapshot.symbol == symbol_normalized]
+    if not matches:
+        return None
+    return max(matches, key=lambda snapshot: snapshot.probed_at_ms)
+
+
 def _container_resolve_repo_path(path: str) -> list[Path]:
     """Yield candidate container paths for a host-recorded repo path.
 
@@ -1801,6 +1813,7 @@ def _get_surface_assembler() -> LiveInstanceSurfaceAssembler:
             project_bot_daily_lifecycle=project_bot_daily_lifecycle,
             provenance=_provenance,
             resolve_symbol=_resolve_symbol,
+            resolve_session_capability_for_symbol=_resolve_session_capability_for_symbol,
             resolve_instrument_surface=_resolve_instrument_surface,
             resolve_lineage=_resolve_lineage,
             read_instance_live_state=_read_instance_live_state,

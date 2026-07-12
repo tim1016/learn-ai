@@ -1273,6 +1273,45 @@ def test_live_config_from_ledger_handles_null_force_flat() -> None:
     assert cfg.force_flat_at is None
 
 
+def test_live_config_from_ledger_normalizes_allowed_sessions() -> None:
+    from app.engine.live.run import _live_config_from_ledger
+
+    cfg = _live_config_from_ledger({"allowed_sessions": ["POST", "RTH"]})
+
+    assert cfg.allowed_sessions == ("RTH", "POST")
+
+
+def test_live_config_from_ledger_extended_sessions_default_to_continuous_lifecycle() -> None:
+    from app.engine.live.run import _live_config_from_ledger
+
+    cfg = _live_config_from_ledger({"allowed_sessions": ["RTH", "POST", "OVERNIGHT"]})
+
+    assert cfg.allowed_sessions == ("RTH", "POST", "OVERNIGHT")
+    assert cfg.force_flat_at is None
+
+
+def test_live_config_from_ledger_explicit_force_flat_wins_for_extended_sessions() -> None:
+    from datetime import time as time_cls
+
+    from app.engine.live.run import _live_config_from_ledger
+
+    cfg = _live_config_from_ledger(
+        {"allowed_sessions": ["RTH", "POST"], "force_flat_at": "19:55"}
+    )
+
+    assert cfg.allowed_sessions == ("RTH", "POST")
+    assert cfg.force_flat_at == time_cls(19, 55)
+
+
+def test_live_config_from_ledger_rejects_unknown_allowed_session() -> None:
+    import pytest
+
+    from app.engine.live.run import _live_config_from_ledger
+
+    with pytest.raises(ValueError, match="unsupported sessions"):
+        _live_config_from_ledger({"allowed_sessions": ["RTH", "WEEKEND"]})
+
+
 def test_live_config_from_ledger_returns_defaults_for_empty_payload() -> None:
     from datetime import time as time_cls
 
@@ -1283,6 +1322,7 @@ def test_live_config_from_ledger_returns_defaults_for_empty_payload() -> None:
     # defaults can't silently change what an empty payload means.
     assert cfg.symbol == "SPY"
     assert cfg.force_flat_at == time_cls(15, 55)
+    assert cfg.allowed_sessions == ("RTH",)
 
 
 def test_live_config_from_ledger_rejects_unknown_keys() -> None:

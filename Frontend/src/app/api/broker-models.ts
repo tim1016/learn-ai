@@ -61,15 +61,18 @@ export type GreeksSource = 'model' | 'bid' | 'ask' | 'last' | 'none';
 export type OrderEventType = 'status' | 'fill' | 'cancel' | 'error';
 export type IbkrApiRequestName =
   | 'accountSummaryAsync'
+  | 'cancelMktData'
   | 'placeOrder'
   | 'cancelOrder'
   | 'qualifyContractsAsync'
   | 'reqAllOpenOrders'
   | 'reqCompletedOrdersAsync'
+  | 'reqContractDetailsAsync'
   | 'reqCurrentTimeAsync'
   | 'reqExecutionsAsync'
   | 'reqMatchingSymbolsAsync'
   | 'reqMktData'
+  | 'reqMarketDataType'
   | 'reqPnL'
   | 'reqPnLSingle'
   | 'reqPositionsAsync'
@@ -82,6 +85,7 @@ export type IbkrApiCallbackName =
   | 'contractDetails'
   | 'currentTime'
   | 'error'
+  | 'marketDataType'
   | 'openOrder'
   | 'orderStatus'
   | 'execDetails'
@@ -194,6 +198,40 @@ export interface DataPlaneHealth {
   process_start_ms: number;
   fetched_at_ms: number;
   reload: DataPlaneReloadMode;
+}
+
+export type SessionKind = 'RTH' | 'PRE' | 'POST' | 'OVERNIGHT';
+export type CapabilityDataQuality =
+  | 'live'
+  | 'delayed'
+  | 'frozen'
+  | 'delayed_frozen'
+  | 'none';
+export type CapabilityTradeability = 'yes' | 'needs_enablement' | 'no';
+export type CapabilityAccountMode = 'live' | 'paper';
+
+export interface SessionCapability {
+  window_today_open_ms: number | null;
+  window_today_close_ms: number | null;
+  data: CapabilityDataQuality;
+  tradeable: CapabilityTradeability;
+  order_eligible_outside_rth: boolean;
+  evidence_codes: number[];
+}
+
+export interface SessionDataCapability {
+  symbol: string;
+  con_id: number;
+  account_mode: CapabilityAccountMode;
+  account_id: string;
+  probed_at_ms: number;
+  time_zone_id: string;
+  sessions: Record<SessionKind, SessionCapability>;
+  raw_evidence: IbkrApiEvidenceEvent[];
+}
+
+export interface BrokerCapabilityResponse {
+  snapshots: SessionDataCapability[];
 }
 
 // ── SSE payload models (hand-mirrored from app.broker.ibkr.models) ────

@@ -12,7 +12,9 @@ import { PageGuideComponent } from '../../../shared/page-guide/page-guide.compon
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
+import { BrokerCapabilityPanelComponent } from './broker-capability-panel.component';
 import type {
+  BrokerCapabilityResponse,
   DiagnosticReport,
   DiagnosticReportActive,
   IbkrAccountSummary,
@@ -46,7 +48,14 @@ const EMPTY_CARD: AsyncCard<never> = { data: null, loading: false, error: null }
 @Component({
   selector: 'app-broker-status',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PageHeaderComponent, PageGuideComponent, SectionErrorComponent, UpperCasePipe, RouterLink],
+  imports: [
+    BrokerCapabilityPanelComponent,
+    PageHeaderComponent,
+    PageGuideComponent,
+    SectionErrorComponent,
+    UpperCasePipe,
+    RouterLink,
+  ],
   styleUrl: './broker-status.component.scss',
   templateUrl: './broker-status.component.html',
 })
@@ -60,6 +69,7 @@ export class BrokerStatusComponent {
   readonly account = signal<AsyncCard<IbkrAccountSummary>>({ ...EMPTY_CARD });
   readonly positions = signal<AsyncCard<IbkrPositionsSnapshot>>({ ...EMPTY_CARD });
   readonly diagnostics = signal<AsyncCard<DiagnosticReport>>({ ...EMPTY_CARD });
+  readonly capability = signal<AsyncCard<BrokerCapabilityResponse>>({ ...EMPTY_CARD });
 
   /**
    * The lifecycle action signals live on ``BrokerHealthService`` so the
@@ -134,12 +144,33 @@ export class BrokerStatusComponent {
 
   async refresh(): Promise<void> {
     await this.healthService.refresh();
+    await this.loadCapability();
     if (!this.showAccountAndPositions()) {
       this.account.set({ ...EMPTY_CARD });
       this.positions.set({ ...EMPTY_CARD });
       return;
     }
     await Promise.all([this.loadAccount(), this.loadPositions()]);
+  }
+
+  async loadCapability(): Promise<void> {
+    this.capability.set({ data: this.capability().data, loading: true, error: null });
+    try {
+      const data = await this.broker.capability();
+      this.capability.set({ data, loading: false, error: null });
+    } catch (err) {
+      this.capability.set({ data: this.capability().data, loading: false, error: err });
+    }
+  }
+
+  async probeCapability(): Promise<void> {
+    this.capability.set({ data: this.capability().data, loading: true, error: null });
+    try {
+      const data = await this.broker.probeCapability();
+      this.capability.set({ data, loading: false, error: null });
+    } catch (err) {
+      this.capability.set({ data: this.capability().data, loading: false, error: err });
+    }
   }
 
   async loadAccount(): Promise<void> {

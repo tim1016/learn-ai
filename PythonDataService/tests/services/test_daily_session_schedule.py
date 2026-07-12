@@ -18,6 +18,36 @@ def test_effective_stop_uses_default_force_flat_before_regular_close() -> None:
     assert stop == _ms_utc(2026, 7, 8, 19, 55)
 
 
+def test_effective_stop_is_disabled_for_extended_session_lifecycle_by_default() -> None:
+    stop = effective_stop_ms_for_date(
+        date(2026, 7, 8),
+        {"allowed_sessions": ["RTH", "POST", "OVERNIGHT"]},
+    )
+
+    assert stop is None
+
+
+def test_start_boundary_allows_extended_session_after_default_rth_stop() -> None:
+    verdict = start_boundary_verdict(
+        _ms_utc(2026, 7, 8, 21, 15),
+        {"allowed_sessions": ["RTH", "POST"]},
+    )
+
+    assert verdict.allowed is True
+    assert verdict.effective_stop_ms is None
+
+
+def test_explicit_force_flat_still_blocks_extended_session_lifecycle() -> None:
+    verdict = start_boundary_verdict(
+        _ms_utc(2026, 7, 8, 23, 55),
+        {"allowed_sessions": ["RTH", "POST"], "force_flat_at": "19:55"},
+    )
+
+    assert verdict.allowed is False
+    assert verdict.reason_code == "SESSION_STOP_REACHED"
+    assert verdict.effective_stop_ms == _ms_utc(2026, 7, 8, 23, 55)
+
+
 def test_effective_stop_clamps_configured_stop_to_half_day_close() -> None:
     stop = effective_stop_ms_for_date(
         date(2026, 11, 27),

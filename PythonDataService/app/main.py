@@ -24,6 +24,7 @@ from app.routers import (
     bot_events,
     broker,
     broker_account_truth,
+    broker_capability,
     broker_session,
     chart,
     data_quality,
@@ -384,6 +385,8 @@ app.include_router(research_divergence.router)
 # Interactive Brokers paper-trading endpoints (Phase 1: read-only chain).
 # Router carries its own /api/broker prefix.
 app.include_router(broker.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
+# IBKR account/session capability probe (issue #1005 Slice 0).
+app.include_router(broker_capability.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 # Account Truth and account-wide broker ledger endpoints.
 app.include_router(broker_account_truth.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 # Account-scoped reconciliation and recovery triage endpoints.

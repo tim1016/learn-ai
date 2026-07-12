@@ -79,13 +79,15 @@ def test_unknown_sibling_key_rejected_at_schema_boundary() -> None:
 
 def test_live_config_with_only_known_siblings_accepted() -> None:
     """The fields ``_live_config_from_ledger`` already round-trips (``symbol``,
-    ``force_flat_at``, ``consolidator_period_min``, ``max_submit_latency_ms``)
-    are legal siblings of ``sizing`` and must continue to round-trip cleanly."""
+    ``force_flat_at``, ``consolidator_period_min``, ``max_submit_latency_ms``,
+    ``allowed_sessions``) are legal siblings of ``sizing`` and must continue
+    to round-trip cleanly."""
     req = HostRunnerDeployRequest(
         **_base_kwargs(
             live_config={
                 "symbol": "QQQ",
                 "consolidator_period_min": 30,
+                "allowed_sessions": ["POST", "RTH"],
                 "sizing": {"kind": "FixedShares", "value": 1},
             }
         )
@@ -93,6 +95,7 @@ def test_live_config_with_only_known_siblings_accepted() -> None:
     assert req.live_config == {
         "symbol": "QQQ",
         "consolidator_period_min": 30,
+        "allowed_sessions": ["RTH", "POST"],
         "sizing": {"kind": "FixedShares", "value": 1},
     }
 
