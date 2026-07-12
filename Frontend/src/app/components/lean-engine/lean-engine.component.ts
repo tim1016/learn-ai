@@ -939,7 +939,7 @@ export class LeanEngineComponent implements OnInit {
 
   private applyLeanLauncherReport(report: LeanLauncherDiagnosticReport): void {
     const launcher = report.checks.find((check) => check.name === "launcher_healthz");
-    if (report.overall_status === "pass" && launcher?.status === "pass") {
+    if (launcher?.status === "pass") {
       this.leanLauncherStatus.set("ready");
       this.leanLauncherDetail.set(launcher.detail);
       return;
