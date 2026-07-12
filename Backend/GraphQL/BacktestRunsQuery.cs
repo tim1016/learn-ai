@@ -84,6 +84,9 @@ public class BacktestRunsQuery
                 BrokeragePolicy = s.BrokeragePolicy,
                 Notes = s.Notes,
                 DataPolicyJson = s.DataPolicyJson,
+                VerdictGrade = s.VerdictGrade,
+                VerdictSignal = s.VerdictSignal,
+                ParityGroupId = s.ParityGroupId,
                 Trades = s.Trades.Select(t => new BacktestRunTradeSummaryType
                 {
                     IsSyntheticExit = t.IsSyntheticExit,
@@ -114,6 +117,9 @@ public sealed record BacktestRunNodeType
     [GraphQLIgnore]
     public string? DataPolicyJson { get; init; }
     public DataPolicyType? DataPolicy => DataPolicyType.TryParse(DataPolicyJson);
+    public string? VerdictGrade { get; init; }
+    public string? VerdictSignal { get; init; }
+    public string? ParityGroupId { get; init; }
     public IReadOnlyList<BacktestRunTradeSummaryType> Trades { get; init; } = [];
 
     // Keep this materialized mapping aligned with GetBacktestRuns' projection.
@@ -134,6 +140,9 @@ public sealed record BacktestRunNodeType
         BrokeragePolicy = execution.BrokeragePolicy,
         Notes = execution.Notes,
         DataPolicyJson = execution.DataPolicyJson,
+        VerdictGrade = execution.VerdictGrade,
+        VerdictSignal = execution.VerdictSignal,
+        ParityGroupId = execution.ParityGroupId,
         Trades = execution.Trades.Select(t => new BacktestRunTradeSummaryType
         {
             IsSyntheticExit = t.IsSyntheticExit,

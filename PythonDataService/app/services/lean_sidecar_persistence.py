@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -18,12 +19,15 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from app.engine.results.equity_downsample import from_lean_curve
 from app.models.responses import (
     LeanPortfolioStatsResponse,
     LeanRuntimeStatsResponse,
     LeanStatisticsResponse,
     LeanTradeStatsResponse,
 )
+from app.schemas.run_verdict import RunVerdict, RunVerdictCleanliness
+from app.services.run_verdict_service import compute_run_verdict
 
 if TYPE_CHECKING:
     from app.lean_sidecar.manifest import RunManifest
@@ -593,6 +597,13 @@ def build_persist_payload(
             manifest=manifest,
         )
 
+    lean_statistics = _normalized_to_lean_statistics_response(
+        normalized_statistics=normalized.statistics,
+        paired_trades=paired_trades,
+        starting_cash=starting_cash,
+        total_fees=total_fees,
+    ).model_dump(mode="json")
+
     return {
         "lean_run_id": run_id,
         "source": "lean-sidecar",
@@ -629,12 +640,7 @@ def build_persist_payload(
         # dashboard on history-click (undefined ``.portfolio``). The
         # helper below applies typed parsing + paired-trade aggregation
         # so both engines persist the same shape.
-        "lean_statistics": _normalized_to_lean_statistics_response(
-            normalized_statistics=normalized.statistics,
-            paired_trades=paired_trades,
-            starting_cash=starting_cash,
-            total_fees=total_fees,
-        ).model_dump(mode="json"),
+        "lean_statistics": lean_statistics,
         # PR B P1 fix — forward the manifest's brokerage/data_policy so the
         # .NET row is the truthful record. ``commission_per_order`` stays at
         # 0 for LEAN: LEAN charges per-fill (captured in ``total_fees``),
@@ -644,7 +650,20 @@ def build_persist_payload(
         "data_policy_json": _data_policy_json_from_manifest(manifest),
         "brokerage_policy": _brokerage_policy_from_manifest(manifest),
         "commission_per_order": 0.0,
-    }
+        "equity_curve_json": json.dumps(
+            from_lean_curve(
+                normalized.equity_curve,
+                trade_timestamps={t.entry_ms_utc for t in paired_trades} | {t.exit_ms_utc for t in paired_trades},
+            )
+        ),
+    } | _run_verdict_fields(
+        total_trades=agg.total_trades,
+        total_pnl=agg.total_pnl,
+        total_fees=total_fees,
+        win_rate=agg.win_rate,
+        lean_statistics=lean_statistics,
+        cleanliness=None,
+    )
 
 
 def _failed_run_payload(
@@ -660,6 +679,7 @@ def _failed_run_payload(
     manifest: RunManifest | Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a zero-trade payload for a LEAN run that failed or produced no result."""
+    failed_verdict = _failed_run_verdict(error)
     return {
         "lean_run_id": run_id,
         "source": "lean-sidecar",
@@ -691,7 +711,70 @@ def _failed_run_payload(
         "data_policy_json": _data_policy_json_from_manifest(manifest),
         "brokerage_policy": _brokerage_policy_from_manifest(manifest),
         "commission_per_order": 0.0,
+        "run_verdict_json": failed_verdict.model_dump_json(),
+        "verdict_version": failed_verdict.verdict_version,
+        "verdict_grade": failed_verdict.grade,
+        "verdict_signal": failed_verdict.signal,
     }
+
+
+def _run_verdict_fields(
+    *,
+    total_trades: int,
+    total_pnl: float,
+    total_fees: float,
+    win_rate: float,
+    lean_statistics: dict[str, Any],
+    cleanliness: RunVerdictCleanliness | None,
+) -> dict[str, Any]:
+    portfolio = lean_statistics.get("portfolio") if isinstance(lean_statistics, dict) else {}
+    trade = lean_statistics.get("trade") if isinstance(lean_statistics, dict) else {}
+    verdict = compute_run_verdict(
+        {
+            "statistics": {
+                "sharpe_ratio": portfolio.get("sharpe_ratio") if isinstance(portfolio, dict) else None,
+                "sortino_ratio": portfolio.get("sortino_ratio") if isinstance(portfolio, dict) else None,
+                "max_drawdown_pct": portfolio.get("drawdown") if isinstance(portfolio, dict) else None,
+                "profit_factor": trade.get("profit_factor") if isinstance(trade, dict) else None,
+                "expectancy_pct": portfolio.get("expectancy") if isinstance(portfolio, dict) else None,
+            },
+            "win_rate": win_rate,
+            "total_trades": total_trades,
+            "net_profit": total_pnl,
+            "total_fees": total_fees,
+            "lean_statistics": lean_statistics,
+        },
+        engine="lean",
+        cleanliness=cleanliness,
+    )
+    return {
+        "run_verdict_json": verdict.model_dump_json(),
+        "verdict_version": verdict.verdict_version,
+        "verdict_grade": verdict.grade,
+        "verdict_signal": verdict.signal,
+    }
+
+
+def _failed_run_verdict(error: str) -> RunVerdict:
+    generated_at_ms = int(time.time() * 1000)
+    return RunVerdict(
+        verdict_version=1,
+        engine="lean",
+        generated_at_ms=generated_at_ms,
+        composite=None,
+        grade="F",
+        signal="Reject",
+        headline=f"Reject — LEAN run failed before producing normalized results: {error}",
+        red_flags=["lean_run_failed"],
+        dimensions=[],
+        missing_metrics=[],
+        normalized_weights=False,
+        cleanliness=RunVerdictCleanliness(
+            is_clean=False,
+            is_reconciliation_grade=True,
+            error_counts={"lean_run_failed": 1},
+        ),
+    )
 
 
 async def persist_via_dotnet(

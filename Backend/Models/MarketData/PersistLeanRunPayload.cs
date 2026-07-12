@@ -53,6 +53,27 @@ public record PersistLeanRunPayload(
     /// </summary>
     [JsonPropertyName("brokerage_policy")]
     public string? BrokeragePolicy { get; init; }
+
+    [JsonPropertyName("run_verdict_json")]
+    public string? RunVerdictJson { get; init; }
+
+    [JsonPropertyName("verdict_version")]
+    public int? VerdictVersion { get; init; }
+
+    [JsonPropertyName("verdict_grade")]
+    public string? VerdictGrade { get; init; }
+
+    [JsonPropertyName("verdict_signal")]
+    public string? VerdictSignal { get; init; }
+
+    [JsonPropertyName("equity_curve_json")]
+    public string? EquityCurveJson { get; init; }
+
+    [JsonPropertyName("insight_summary_json")]
+    public string? InsightSummaryJson { get; init; }
+
+    [JsonPropertyName("parity_group_id")]
+    public string? ParityGroupId { get; init; }
 }
 
 public record PersistLeanTradePayload(

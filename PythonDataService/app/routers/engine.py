@@ -37,6 +37,7 @@ from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReade
 from app.engine.engine import BacktestEngine
 from app.engine.execution.execution_config import ExecutionConfig
 from app.engine.execution.order import FillMode
+from app.engine.results.equity_downsample import from_engine_curve
 from app.engine.results.statistics import summarize
 from app.engine.strategy.base import Strategy
 from app.engine.strategy.registry import _STRATEGY_REGISTRY, StrategyRegistration
@@ -46,6 +47,8 @@ from app.models.responses import (
     LeanStatisticsResponse,
     LeanTradeStatsResponse,
 )
+from app.schemas.run_verdict import RunVerdict
+from app.services.run_verdict_service import compute_run_verdict
 from app.services.strategies.common import TradeRecord
 from app.services.strategies.lean_statistics import compute_lean_statistics
 from app.utils.timestamps import to_ms_utc
@@ -398,6 +401,7 @@ class EngineBacktestResponse(BaseModel):
     # (which may differ from the request when the legacy synthesizer kicked
     # in). Never null on a successful run.
     data_policy: _EngineDataPolicyModel | None = None
+    run_verdict: RunVerdict | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1013,6 +1017,18 @@ def execute_engine_backtest(
     # ── Serialize insights ──
     insights_dicts = [i.to_dict() for i in result.insights]
 
+    run_verdict = compute_run_verdict(
+        {
+            "statistics": stats,
+            "win_rate": win_rate,
+            "total_trades": total,
+            "net_profit": float(result.net_profit),
+            "total_fees": float(result.total_fees),
+            "lean_statistics": lean_stats_resp.model_dump(mode="json") if lean_stats_resp else None,
+        },
+        engine="python",
+    )
+
     response = EngineBacktestResponse(
         success=True,
         strategy_name=request.strategy_name,
@@ -1034,6 +1050,7 @@ def execute_engine_backtest(
         insights=insights_dicts,
         insight_summary=result.insight_summary,
         data_policy=request.data_policy,  # PR B — echo the normalized policy
+        run_verdict=run_verdict,
     )
 
     # ── Auto-save to .NET backend (synchronous so we can return the id) ──
@@ -1142,6 +1159,17 @@ def _save_study_sync(
         # Python engine doesn't model brokerage — record the LEAN-side
         # convention so the compare-view's soft-match treats it correctly.
         "brokeragePolicy": "algorithm_default",
+        "runVerdictJson": response.run_verdict.model_dump_json() if response.run_verdict else None,
+        "verdictVersion": response.run_verdict.verdict_version if response.run_verdict else None,
+        "verdictGrade": response.run_verdict.grade if response.run_verdict else None,
+        "verdictSignal": response.run_verdict.signal if response.run_verdict else None,
+        "equityCurveJson": json.dumps(
+            from_engine_curve(
+                response.equity_curve,
+                trade_timestamps={t.entry_time for t in response.trades} | {t.exit_time for t in response.trades},
+            )
+        ),
+        "insightSummaryJson": json.dumps(response.insight_summary),
         # Dollar PnL net of commission, matching LEAN's persisted
         # ``t.pnL`` semantics. The engine charges ``commission_per_order``
         # on both entry and exit fills, so each round-trip incurs

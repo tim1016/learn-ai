@@ -60,7 +60,14 @@ public class BacktestRunPersistenceServiceTests
                     Pnl: 9m,
                     SignalReason: "EMA exit",
                     IsSyntheticExit: false),
-            });
+            }) with
+        {
+            RunVerdictJson = """{"verdict_version":1,"grade":"A","signal":"Paper-trade"}""",
+            VerdictVersion = 1,
+            VerdictGrade = "A",
+            VerdictSignal = "Paper-trade",
+            ParityGroupId = "parity-123",
+        };
 
         var id = await service.PersistAsync(payload, CancellationToken.None);
 
@@ -71,6 +78,11 @@ public class BacktestRunPersistenceServiceTests
         Assert.Equal(1, row.TotalTrades);
         Assert.Equal(9m, row.TotalPnL);
         Assert.Equal(100_008m, row.FinalEquity);
+        Assert.Equal("""{"verdict_version":1,"grade":"A","signal":"Paper-trade"}""", row.RunVerdictJson);
+        Assert.Equal(1, row.VerdictVersion);
+        Assert.Equal("A", row.VerdictGrade);
+        Assert.Equal("Paper-trade", row.VerdictSignal);
+        Assert.Equal("parity-123", row.ParityGroupId);
 
         var trade = await db.BacktestTrades.SingleAsync(t => t.StrategyExecutionId == id);
         Assert.Equal(100m, trade.EntryPrice);

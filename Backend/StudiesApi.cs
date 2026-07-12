@@ -89,6 +89,13 @@ public static class StudiesApi
             DataPolicyJson = request.DataPolicyJson ?? SynthesizeLegacyDataPolicy(request.Symbol),
             CommissionPerOrder = request.CommissionPerOrder ?? 0m,
             BrokeragePolicy = request.BrokeragePolicy ?? "algorithm_default",
+            RunVerdictJson = request.RunVerdictJson,
+            VerdictVersion = request.VerdictVersion,
+            VerdictGrade = request.VerdictGrade,
+            VerdictSignal = request.VerdictSignal,
+            EquityCurveJson = request.EquityCurveJson,
+            InsightSummaryJson = request.InsightSummaryJson,
+            ParityGroupId = request.ParityGroupId,
         };
 
         // Attach trades if provided
@@ -205,6 +212,9 @@ public static class StudiesApi
                 Notes = e.Notes,
                 ExecutedAt = UnixMs.FromUtc(e.ExecutedAt),
                 DurationMs = e.DurationMs,
+                VerdictGrade = e.VerdictGrade,
+                VerdictSignal = e.VerdictSignal,
+                ParityGroupId = e.ParityGroupId,
             })
             .ToListAsync(ct);
 
@@ -270,6 +280,13 @@ public static class StudiesApi
             Notes = execution.Notes,
             ExecutedAt = UnixMs.FromUtc(execution.ExecutedAt),
             DurationMs = execution.DurationMs,
+            RunVerdictJson = execution.RunVerdictJson,
+            VerdictVersion = execution.VerdictVersion,
+            VerdictGrade = execution.VerdictGrade,
+            VerdictSignal = execution.VerdictSignal,
+            EquityCurveJson = execution.EquityCurveJson,
+            InsightSummaryJson = execution.InsightSummaryJson,
+            ParityGroupId = execution.ParityGroupId,
             Trades = execution.Trades.OrderBy(t => t.EntryTimestamp).Select(t => new StudyTradeItem
             {
                 TradeType = t.TradeType,
@@ -404,6 +421,13 @@ public record SaveStudyRequest
     /// ``"algorithm_default"`` because it doesn't model brokerage.
     /// </summary>
     public string? BrokeragePolicy { get; init; }
+    public string? RunVerdictJson { get; init; }
+    public int? VerdictVersion { get; init; }
+    public string? VerdictGrade { get; init; }
+    public string? VerdictSignal { get; init; }
+    public string? EquityCurveJson { get; init; }
+    public string? InsightSummaryJson { get; init; }
+    public string? ParityGroupId { get; init; }
 }
 
 public record SaveStudyTrade
@@ -466,6 +490,9 @@ public record StudyListItem
     public string? Notes { get; init; }
     public long ExecutedAt { get; init; }
     public long DurationMs { get; init; }
+    public string? VerdictGrade { get; init; }
+    public string? VerdictSignal { get; init; }
+    public string? ParityGroupId { get; init; }
 }
 
 public record StudyDetailResponse : StudyListItem
@@ -478,6 +505,10 @@ public record StudyDetailResponse : StudyListItem
     public decimal AnnualStandardDeviation { get; init; }
     public int DrawdownRecoveryDays { get; init; }
     public string? LeanStatisticsJson { get; init; }
+    public string? RunVerdictJson { get; init; }
+    public int? VerdictVersion { get; init; }
+    public string? EquityCurveJson { get; init; }
+    public string? InsightSummaryJson { get; init; }
     public List<StudyTradeItem> Trades { get; init; } = [];
 }
 

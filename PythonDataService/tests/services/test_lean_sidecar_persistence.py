@@ -337,6 +337,16 @@ def test_build_persist_payload_pairs_round_trip(tmp_path: Path) -> None:
     assert payload["winning_trades"] == 1
     assert payload["total_pnl"] == pytest.approx(9.0)
     assert payload["total_fees"] == pytest.approx(1.0)
+    verdict = json.loads(payload["run_verdict_json"])
+    assert verdict["verdict_version"] == 1
+    assert verdict["engine"] == "lean"
+    assert payload["verdict_version"] == 1
+    assert payload["verdict_grade"] == verdict["grade"]
+    assert payload["verdict_signal"] == verdict["signal"]
+    equity = json.loads(payload["equity_curve_json"])
+    assert equity["cadence"] == "lean_chart_sampling"
+    assert equity["downsample"]["raw_points"] == 2
+    assert equity["points"][-1] == {"t": 1_700_000_600_000, "e": 100_009.0}
     # pnl=9.0 already nets the $1 of fees (pair_order_events: pnl = gross - entry_fee - exit_fee).
     # final_equity = starting_cash + total_pnl; do NOT subtract total_fees again.
     assert payload["final_equity"] == pytest.approx(100_009.0)  # 100000 + 9
@@ -860,6 +870,10 @@ def test_failed_run_payload_emits_canonical_shape(tmp_path: Path) -> None:
     assert parsed.portfolio.end_equity == 0.0
     assert parsed.trade.total_number_of_trades == 0
     assert parsed.runtime.total_orders == 0
+    verdict = json.loads(payload["run_verdict_json"])
+    assert verdict["grade"] == "F"
+    assert verdict["signal"] == "Reject"
+    assert "lean_run_failed" in verdict["red_flags"]
 
 
 @pytest.mark.asyncio

@@ -23,6 +23,9 @@ export const BACKTEST_RUNS_QUERY = gql`
         totalPnL
         commissionPerOrder
         brokeragePolicy
+        verdictGrade
+        verdictSignal
+        parityGroupId
         notes
         dataPolicy {
           source
@@ -65,6 +68,65 @@ export const UPDATE_BACKTEST_RUN_NOTES_MUTATION = gql`
   }
 `;
 
+export const BACKTEST_RUN_DETAIL_QUERY = gql`
+  query BacktestRunDetail($id: Int!) {
+    backtestRun(id: $id) {
+      id
+      engine
+      source
+      strategyName
+      symbol
+      leanRunId
+      startDate
+      endDate
+      fillMode
+      executedAt
+      durationMs
+      totalTrades
+      winningTrades
+      losingTrades
+      winRate
+      totalPnL
+      initialCash
+      finalEquity
+      totalFees
+      maxDrawdown
+      sharpeRatio
+      sortinoRatio
+      profitFactor
+      leanStatisticsJson
+      verdictJson
+      verdictVersion
+      verdictGrade
+      verdictSignal
+      equityCurveJson
+      equityCurve {
+        t
+        e
+      }
+      insightSummaryJson
+      parityGroupId
+      trades {
+        id
+        entryTimestamp
+        exitTimestamp
+        entryPrice
+        exitPrice
+        quantity
+        pnL
+        signalReason
+        isSyntheticExit
+      }
+      parityVerdicts {
+        id
+        status
+        verdictJson
+        createdAt
+      }
+    }
+  }
+`;
+
 export interface BacktestRunNode {
   id: number;
   source: "engine" | "strategy-lab" | "lean-sidecar";
@@ -82,6 +144,9 @@ export interface BacktestRunNode {
   commissionPerOrder: number | null;
   /** PR B — brokerage policy ("algorithm_default" / IB / etc.). Null on legacy rows. */
   brokeragePolicy: string | null;
+  verdictGrade?: string | null;
+  verdictSignal?: string | null;
+  parityGroupId?: string | null;
   /** Free-text researcher notes. Edited via the updateBacktestRunNotes mutation. */
   notes: string | null;
   /** PR B — canonical DataPolicy block. Null on legacy rows (predate the column). */
@@ -96,6 +161,59 @@ export interface BacktestRunsConnection {
 
 export interface BacktestRunsQueryResult {
   backtestRuns: BacktestRunsConnection;
+}
+
+export interface BacktestRunDetail {
+  id: number;
+  engine: Engine;
+  source: "engine" | "strategy-lab" | "lean-sidecar";
+  strategyName: string;
+  symbol: string;
+  leanRunId: string | null;
+  startDate: string;
+  endDate: string;
+  fillMode: string;
+  executedAt: number;
+  durationMs: number;
+  totalTrades: number;
+  winningTrades: number;
+  losingTrades: number;
+  winRate: number;
+  totalPnL: number;
+  initialCash: number;
+  finalEquity: number;
+  totalFees: number;
+  maxDrawdown: number;
+  sharpeRatio: number;
+  sortinoRatio: number;
+  profitFactor: number;
+  leanStatisticsJson: string | null;
+  verdictJson: string | null;
+  verdictVersion: number | null;
+  verdictGrade: string | null;
+  verdictSignal: string | null;
+  equityCurveJson: string | null;
+  equityCurve: { t: number; e: number }[];
+  insightSummaryJson: string | null;
+  parityGroupId: string | null;
+  trades: BacktestRunDetailTrade[];
+  parityVerdicts: { id: number; status: string; verdictJson: string; createdAt: number }[];
+}
+
+export interface BacktestRunDetailTrade {
+  id: number;
+  entryTimestamp: number;
+  exitTimestamp: number;
+  entryPrice: number;
+  exitPrice: number;
+  quantity: number;
+  pnL: number;
+  signalReason: string;
+  isSyntheticExit: boolean;
+}
+
+export interface BacktestRunDetailQueryResult {
+  backtestRun: BacktestRunDetail | null;
 }
 
 /** PR B (2026-05-19) — unified engine identity used by the GraphQL filter. */
@@ -119,6 +237,9 @@ export function toRunHistoryRow(node: BacktestRunNode): RunHistoryRow {
     notes: node.notes,
     commissionPerOrder: node.commissionPerOrder,
     brokeragePolicy: node.brokeragePolicy,
+    verdictGrade: node.verdictGrade ?? null,
+    verdictSignal: node.verdictSignal ?? null,
+    parityGroupId: node.parityGroupId ?? null,
   };
 }
 
