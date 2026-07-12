@@ -26,33 +26,59 @@
   }
 
   @if (status(); as s) {
-    <div class="operator-truth-layout">
-      <div class="operator-main-column">
-        <app-verdict-card
+    <header class="bot-lens-header">
+      <p class="bot-lens-header__identity">
+        <strong>{{ s.strategy_instance_id }}</strong>
+        @if (s.symbol; as symbol) { <span aria-hidden="true">·</span><span>{{ symbol }}</span> }
+        <span aria-hidden="true">·</span><span class="bot-lens-header__mode">{{ tradingModeLabel() }}</span>
+      </p>
+      <div class="bot-lens-switch" role="group" aria-label="Bot information lens">
+        <button type="button" [attr.aria-pressed]="activeLens() === 'trader'" (click)="activeLens.set('trader')">Trader view</button>
+        <button type="button" [attr.aria-pressed]="activeLens() === 'operations'" (click)="activeLens.set('operations')">Operations</button>
+      </div>
+    </header>
+
+    @if (activeLens() === 'trader') {
+      <app-trader-view
+        [status]="s"
+        [busy]="busyAction() !== null || readOnly()"
+        [renderedRemediation]="renderedPrimaryRemediation()"
+        (lifecycleAction)="dispatchOverviewAction($event)"
+        (remediationInvoked)="invokePrimaryRemediation()"
+        (crashRecoveryRequested)="dispatchCrashRecoveryOverride()"
+        (blockerMoveRequested)="invokeBlockerMove($event)"
+        (operationsRequested)="activeLens.set('operations')"
+      />
+    } @else {
+      <div class="operator-truth-layout">
+        <div class="operator-main-column">
+          <app-verdict-card
+            [status]="s"
+            [busy]="busyAction() !== null || readOnly()"
+            [renderedRemediation]="renderedPrimaryRemediation()"
+            (lifecycleAction)="dispatchOverviewAction($event)"
+            (remediationInvoked)="invokePrimaryRemediation()"
+            (crashRecoveryRequested)="dispatchCrashRecoveryOverride()"
+            (settingsRequested)="onSettingsRequested()"
+            (accountMonitorRequested)="openAccountMonitor()"
+            (blockerMoveRequested)="invokeBlockerMove($event)"
+          />
+        </div>
+        <app-bot-control-side-panel
           [status]="s"
-          [busy]="busyAction() !== null || readOnly()"
-          [renderedRemediation]="renderedPrimaryRemediation()"
-          (lifecycleAction)="dispatchOverviewAction($event)"
-          (remediationInvoked)="invokePrimaryRemediation()"
-          (crashRecoveryRequested)="dispatchCrashRecoveryOverride()"
-          (settingsRequested)="onSettingsRequested()"
-          (accountMonitorRequested)="openAccountMonitor()"
-          (blockerMoveRequested)="invokeBlockerMove($event)"
+          [commandsDisabled]="busyAction() !== null || readOnly()"
+          (freshRunRequested)="onGateRedeploy()"
+          (streamActionInvoked)="invokeStreamAction($event)"
         />
         <app-overview-tab
+          class="lifecycle-overview-wide"
           [status]="s"
           [recoveryOverrideBusy]="busyAction() === 'crash_recovery_override'"
           (crashRecoveryOverrideRequested)="dispatchCrashRecoveryOverride()"
         />
       </div>
-      <app-bot-control-side-panel
-        [status]="s"
-        [commandsDisabled]="busyAction() !== null || readOnly()"
-        (freshRunRequested)="onGateRedeploy()"
-        (streamActionInvoked)="invokeStreamAction($event)"
-      />
-    </div>
-    <app-trader-guidance-pane [surface]="s.operator_surface" />
+      <app-trader-guidance-pane [surface]="s.operator_surface" />
+    }
   } @else if (!errorMessage()) {
     <p class="loading">Loading bot control...</p>
   }

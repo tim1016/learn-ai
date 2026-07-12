@@ -1,0 +1,82 @@
+:host {
+  display: block;
+  min-width: 0;
+  width: max(100%, var(--board-width));
+}
+
+.joint-board {
+  position: relative;
+  width: max(100%, var(--board-width));
+  height: var(--board-height);
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  overflow: visible;
+}
+
+.joint-stage {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--board-width);
+  height: var(--board-height);
+  transform-origin: top left;
+}
+
+.joint-paper-host,
+.joint-nodes-layer {
+  position: absolute;
+  inset: 0;
+}
+
+.joint-paper-host {
+  z-index: 1;
+  pointer-events: none;
+}
+
+.joint-nodes-layer {
+  z-index: 2;
+}
+
+.joint-node-shell {
+  position: absolute;
+  width: 176px;
+  min-height: 128px;
+}
+
+.edge-summary {
+  position: absolute;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  white-space: nowrap;
+}
+
+:host ::ng-deep .lifecycle-joint-link {
+  pointer-events: none;
+}
+
+:host ::ng-deep .lifecycle-joint-link .connection-wrap {
+  display: none;
+}
+
+:host ::ng-deep .lifecycle-joint-link.signal-link.edge-animated .connection {
+  animation: lifecycle-joint-edge-march 850ms linear infinite;
+}
+
+@keyframes lifecycle-joint-edge-march {
+  to {
+    stroke-dashoffset: -16;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :host ::ng-deep .lifecycle-joint-link.signal-link.edge-animated .connection {
+    animation: none;
+  }
+}

@@ -1,28 +1,21 @@
 import { ChangeDetectionStrategy, Component, computed, input, output, signal } from '@angular/core';
 
 import type {
-  LifecycleChartEdge,
   LifecycleChartNode,
-  LifecycleChartStatus,
   LiveInstanceStatus,
   OperatorSurfaceAttentionGroup,
   OperatorSurfaceBlockageStage,
 } from '../../../../api/live-instances.types';
-import { LifecycleNodeCardComponent } from './lifecycle-node-card.component';
+import { LifecycleJointBoardComponent } from './lifecycle-joint-board.component';
 
 interface ExpandedGraphSelection {
   readonly chartKey: string;
   readonly graphId: string;
 }
 
-interface LifecycleFlowRow {
-  readonly node: LifecycleChartNode;
-  readonly outgoingEdges: readonly LifecycleChartEdge[];
-}
-
 @Component({
   selector: 'app-overview-tab',
-  imports: [LifecycleNodeCardComponent],
+  imports: [LifecycleJointBoardComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './overview-tab.component.html',
   styleUrl: './overview-tab.component.scss',
@@ -69,26 +62,6 @@ export class OverviewTabComponent {
     () => this.status().operator_surface.trader_guidance?.additional_attention_groups ?? [],
   );
   readonly lifecycleNodes = computed(() => this.currentGraph().nodes);
-  readonly lifecycleEdges = computed(() => this.currentGraph().edges);
-  readonly lifecycleFlowRows = computed<readonly LifecycleFlowRow[]>(() => {
-    const edgesBySource = new Map<string, LifecycleChartEdge[]>();
-    for (const edge of this.lifecycleEdges()) {
-      const edges = edgesBySource.get(edge.source);
-      if (edges) {
-        edges.push(edge);
-      } else {
-        edgesBySource.set(edge.source, [edge]);
-      }
-    }
-    return this.lifecycleNodes().map((node) => ({
-      node,
-      outgoingEdges: edgesBySource.get(node.id) ?? [],
-    }));
-  });
-  readonly nodeLabels = computed(() => {
-    const graph = this.currentGraph();
-    return new Map(graph.nodes.map((node) => [node.id, node.label]));
-  });
 
   collapse(): void {
     this.expandedGraphSelection.set(null);
@@ -139,66 +112,8 @@ export class OverviewTabComponent {
     this.crashRecoveryOverrideRequested.emit();
   }
 
-  isPrimaryNode(node: LifecycleChartNode): boolean {
-    return node.id === this.currentGraph().primary_node_id;
-  }
-
-  isBlockingNode(node: LifecycleChartNode): boolean {
-    return this.isPrimaryNode(node) && this.isBlockingStatus(node.status);
-  }
-
-  isBlockingStatus(status: LifecycleChartStatus): boolean {
-    return status === 'blocked' || status === 'poison' || status === 'freeze' || status === 'unknown';
-  }
-
-  edgeColor(status: LifecycleChartStatus): string {
-    switch (status) {
-      case 'passed':
-        return 'var(--bull)';
-      case 'active':
-        return 'var(--accent)';
-      case 'blocked':
-        return 'var(--warn)';
-      case 'poison':
-        return 'var(--bear)';
-      case 'freeze':
-        return 'var(--info)';
-      case 'unknown':
-        return 'var(--text-muted)';
-      case 'inactive':
-        return 'var(--border-light)';
-    }
-  }
-
-  edgeEndpointLabel(nodeId: string): string {
-    return this.nodeLabels().get(nodeId) ?? nodeId;
-  }
-
-  edgeStatusLabel(edge: LifecycleChartEdge): string {
-    return this.lifecycleStatusLabel(edge.status);
-  }
-
   blockageStageAria(stage: OperatorSurfaceBlockageStage): string {
     const current = stage.current ? ' Current signal.' : '';
     return `${stage.label}. ${stage.title}. ${stage.summary}${current}`;
-  }
-
-  lifecycleStatusLabel(status: LifecycleChartStatus): string {
-    switch (status) {
-      case 'passed':
-        return 'Passed';
-      case 'active':
-        return 'Active';
-      case 'blocked':
-        return 'Blocked';
-      case 'poison':
-        return 'Poison';
-      case 'freeze':
-        return 'Freeze';
-      case 'unknown':
-        return 'Needs proof';
-      case 'inactive':
-        return 'Waiting';
-    }
   }
 }

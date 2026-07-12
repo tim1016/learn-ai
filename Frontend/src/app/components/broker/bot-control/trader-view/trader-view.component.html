@@ -1,0 +1,95 @@
+@let m = model();
+
+<section class="trader-view" aria-labelledby="trader-view-headline">
+  <section class="market-rail" aria-labelledby="market-session-title">
+    <div class="market-rail__summary">
+      <i class="pi pi-clock" aria-hidden="true"></i>
+      <div>
+        <h2 id="market-session-title">{{ m.marketTitle }}</h2>
+        <p>{{ m.marketDetail }}</p>
+      </div>
+    </div>
+    <ol class="market-rail__phases" aria-label="Market session phases">
+      @for (phase of marketPhases; track phase.id) {
+        <li [class.is-current]="isCurrentMarketPhase(phase.id)">
+          <span class="market-rail__dot" aria-hidden="true"></span>
+          <span>{{ phase.label }}</span>
+        </li>
+      }
+    </ol>
+  </section>
+
+  <section class="trader-hero" [attr.data-tone]="m.tone">
+    <div class="trader-hero__mark"><i class="pi {{ m.heroIcon }}" aria-hidden="true"></i></div>
+    <div class="trader-hero__copy">
+      <h2 id="trader-view-headline">{{ m.headline }}</h2>
+      <p>{{ m.explanation }}</p>
+      <div class="trader-hero__actions">
+        @if (m.primaryActionLabel; as label) {
+          <button type="button" class="primary-action" data-testid="trader-primary-action" [disabled]="busy()" (click)="invokePrimaryAction()">
+            {{ label }}
+          </button>
+        }
+        @for (move of m.terminalActions; track move.label + move.action.kind) {
+          <button type="button" class="primary-action trader-terminal-action" [disabled]="busy()" (click)="blockerMoveRequested.emit(move)">
+            {{ move.label }}
+          </button>
+        }
+        <button type="button" class="secondary-action" (click)="operationsRequested.emit()">View operations</button>
+      </div>
+    </div>
+    <dl class="trader-hero__proofs" aria-label="Current trading proofs">
+      <div><dt>Broker</dt><dd>{{ m.trustRows[0].value }}</dd></div>
+      <div><dt>Account</dt><dd>{{ m.trustRows[1].value }}</dd></div>
+      <div><dt>Positions</dt><dd>{{ m.metrics[2].value }}</dd></div>
+    </dl>
+  </section>
+
+  <div class="trader-body">
+    <section class="today" aria-labelledby="today-title">
+      <h2 id="today-title">Today</h2>
+      <dl class="metric-row">
+        @for (metric of m.metrics; track metric.label) {
+          <div [attr.data-tone]="metric.tone"><dt>{{ metric.label }}</dt><dd>{{ metric.value }}</dd></div>
+        }
+      </dl>
+      <div class="holdings">
+        <h3>Current holdings</h3>
+        @if (m.holdings.length === 0) {
+          <div class="holdings__empty"><i class="pi pi-chart-bar" aria-hidden="true"></i><p>No open bot-owned positions</p></div>
+        } @else {
+          <ul>
+            @for (holding of m.holdings; track holding.symbol) {
+              <li><strong>{{ holding.symbol }}</strong><span>{{ holding.quantity }} shares</span></li>
+            }
+          </ul>
+        }
+      </div>
+    </section>
+
+    <section class="next" aria-labelledby="next-title">
+      <h2 id="next-title">What happens next</h2>
+      <ol>
+        @for (item of m.timeline; track item.title) {
+          <li [attr.data-tone]="item.tone">
+            <i class="pi {{ item.icon }}" aria-hidden="true"></i>
+            <div><h3>{{ item.title }}</h3><p>{{ item.detail }}</p></div>
+          </li>
+        }
+      </ol>
+    </section>
+  </div>
+
+  <section class="trust" aria-labelledby="trust-title">
+    <h2 id="trust-title">Account and bot</h2>
+    <dl>
+      @for (row of m.trustRows; track row.label) {
+        <div [attr.data-tone]="row.tone">
+          <dt><i class="pi {{ row.icon }}" aria-hidden="true"></i>{{ row.label }}</dt>
+          <dd class="trust__value">{{ row.value }}</dd>
+          <dd class="trust__detail">{{ row.detail }}</dd>
+        </div>
+      }
+    </dl>
+  </section>
+</section>

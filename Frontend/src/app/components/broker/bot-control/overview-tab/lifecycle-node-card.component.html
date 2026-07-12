@@ -6,6 +6,7 @@
   [class.highlighted]="highlighted()"
   [class.primary-node]="primary()"
   [class.blocking-node]="blocking()"
+  [class.compact-node]="compact()"
   [attr.aria-labelledby]="headingId()"
 >
   <header class="node-card-header">
@@ -16,27 +17,12 @@
         <span class="node-technical">{{ currentNode.technical_label }}</span>
       }
     </div>
-    <div class="node-actions">
-      <button
-        type="button"
-        class="node-primary-action"
-        [attr.aria-label]="selectLabel()"
-        (click)="selectNode()"
-      >
-        Select
-      </button>
-      <button
-        type="button"
-        class="node-receipts-toggle"
-        [attr.aria-label]="receiptToggleLabel()"
-        [attr.aria-expanded]="receiptsExpanded()"
-        [attr.aria-controls]="receiptRegionId()"
-        (click)="toggleReceipts()"
-      >
-        Receipts
-      </button>
-    </div>
   </header>
+  @if (currentNode.evidence_summary || currentNode.summary || currentNode.operator_next_step) {
+    <p class="node-evidence">
+      {{ currentNode.operator_next_step ?? currentNode.evidence_summary ?? currentNode.summary }}
+    </p>
+  }
   <span class="node-footer">
     <span class="node-status">{{ currentNode.status_label }}</span>
     @if (blocking()) {
@@ -44,17 +30,41 @@
     } @else if (primary()) {
       <span class="node-callout">Current step</span>
     }
+  </span>
+  <div class="node-actions">
+    <button
+      type="button"
+      class="node-primary-action"
+      [attr.aria-label]="selectLabel()"
+      title="Select node"
+      (click)="selectNode()"
+    >
+      <i class="pi pi-check-square" aria-hidden="true"></i>
+    </button>
     @if (currentNode.expandable) {
       <button
         type="button"
         class="node-expand"
         [attr.aria-label]="openSubgraphLabel()"
+        title="Open details"
         (click)="openSubgraph()"
       >
-        Open
+        <i class="pi pi-external-link" aria-hidden="true"></i>
       </button>
     }
-  </span>
+    <button
+      type="button"
+      class="node-receipts-toggle"
+      [class.receipts-open]="receiptsExpanded()"
+      [attr.aria-label]="receiptToggleLabel()"
+      [attr.aria-expanded]="receiptsExpanded()"
+      [attr.aria-controls]="receiptRegionId()"
+      title="Toggle receipts"
+      (click)="toggleReceipts()"
+    >
+      <i class="pi pi-chevron-down" aria-hidden="true"></i>
+    </button>
+  </div>
   @if (receiptsExpanded()) {
     <section
       class="node-receipts-region"

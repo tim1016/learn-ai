@@ -27,6 +27,7 @@ import { VerdictCardComponent } from './verdict-card/verdict-card.component';
 import { BotControlSidePanelComponent } from './bot-control-side-panel.component';
 import { OverviewTabComponent } from './overview-tab/overview-tab.component';
 import { TraderGuidancePaneComponent } from './overview-tab/trader-guidance-pane.component';
+import { TraderViewComponent } from './trader-view/trader-view.component';
 import { TypedHaltConfirmComponent } from './reused/typed-halt-confirm/typed-halt-confirm.component';
 import type { BotEventStreamCommand } from './reused/bot-event-stream/bot-event-stream-action';
 import { redeployQueryParamsForStatus } from './lib/redeploy-query-params';
@@ -49,6 +50,7 @@ const MISSING_CONFIRMATION_COPY_ERROR =
     OverviewTabComponent,
     BotControlSidePanelComponent,
     TraderGuidancePaneComponent,
+    TraderViewComponent,
     TypedHaltConfirmComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -69,6 +71,7 @@ export class BotControlPageComponent {
   readonly pendingAttemptId = this.surface.pendingAttemptId;
   readonly mutationError = signal<string | null>(null);
   readonly busyAction = signal<string | null>(null);
+  readonly activeLens = signal<'trader' | 'operations'>('trader');
   readonly typedHaltOpen = signal<boolean>(false);
   private readonly typedHaltInstanceId = signal<string | null>(null);
   readonly crashRecoveryConfirmOpen = signal<boolean>(false);
@@ -190,6 +193,13 @@ export class BotControlPageComponent {
   readonly renderedPrimaryRemediation = computed<PresentedAction | null>(() =>
     presentTraderRemediation(this.traderGuidance()?.primary_remediation ?? null),
   );
+
+  readonly tradingModeLabel = computed(() => {
+    const verdict = this.status()?.operator_surface.broker.safety_verdict;
+    if (verdict === 'PAPER_ONLY') return 'Paper';
+    if (verdict === 'UNSAFE') return 'Live';
+    return 'Mode unknown';
+  });
 
   constructor() {
     effect(() => {

@@ -308,114 +308,12 @@
 }
 
 .flow-panel {
-  padding: 1.1rem 1rem 1.5rem;
   background: var(--bg-canvas);
+  overflow-x: auto;
+  overflow-y: visible;
 
   &[hidden] {
     display: none;
-  }
-}
-
-.gate-flow {
-  display: grid;
-  grid-template-columns: minmax(0, min(100%, 32rem));
-  justify-content: center;
-  align-items: start;
-}
-
-.connector-group {
-  display: grid;
-  gap: 0.45rem;
-  padding: 0.35rem 0;
-  min-width: 0;
-
-  &.branching {
-    grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr));
-    column-gap: 0.75rem;
-  }
-}
-
-.flow-connector {
-  --edge-color: var(--border-light);
-
-  display: grid;
-  grid-template-columns: 2rem minmax(0, 1fr);
-  align-items: center;
-  gap: 0.55rem;
-  min-width: 0;
-  min-height: 2.6rem;
-  color: var(--text-secondary);
-}
-
-.connector-line {
-  position: relative;
-  justify-self: center;
-  width: 2px;
-  height: 100%;
-  min-height: 2.25rem;
-  border-radius: var(--radius-pill);
-  background: var(--edge-color);
-  opacity: 0.95;
-
-  &::after {
-    content: '';
-    position: absolute;
-    left: 50%;
-    bottom: 0;
-    width: 0.5rem;
-    height: 0.5rem;
-    border-right: 2px solid var(--edge-color);
-    border-bottom: 2px solid var(--edge-color);
-    transform: translate(-50%, 0.05rem) rotate(45deg);
-  }
-}
-
-.connector-copy {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.22rem 0.45rem;
-  align-items: baseline;
-  min-width: 0;
-  padding: 0.48rem 0.6rem;
-  border: 1px solid color-mix(in srgb, var(--edge-color) 36%, var(--border));
-  border-left: 3px solid var(--edge-color);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--edge-color) 8%, var(--bg-surface));
-  color: var(--text-secondary);
-  font-size: var(--fs-xs);
-}
-
-.connector-status {
-  color: var(--text-primary);
-  font-weight: 700;
-}
-
-.connector-path,
-.connector-label {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.connector-label {
-  color: var(--text-muted);
-}
-
-.connector-animated .connector-line {
-  background:
-    repeating-linear-gradient(
-      to bottom,
-      var(--edge-color) 0,
-      var(--edge-color) 0.5rem,
-      transparent 0.5rem,
-      transparent 0.82rem
-    );
-  background-size: 100% 1.32rem;
-  animation: connector-flow 900ms linear infinite;
-}
-
-@keyframes connector-flow {
-  to {
-    background-position-y: 1.32rem;
   }
 }
 
@@ -435,10 +333,6 @@
   .overview-actions {
     justify-content: flex-start;
     width: 100%;
-  }
-
-  .flow-panel {
-    padding-inline: 0.75rem;
   }
 
   .connector-group.branching {

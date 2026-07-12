@@ -133,20 +133,29 @@ describe('BotControlPageComponent', () => {
     window.localStorage.clear();
   });
 
-  it('renders stream-primary cockpit surfaces without the deleted timeline fetch', async () => {
+  it('opens in the trader lens and preserves the operator cockpit behind the lens switch', async () => {
     const { fixture, element, liveRuns } = await setupBotControlPage({
       status: startableReadyStatus(),
     });
     await flush(fixture);
+
+    expect(element.querySelector('app-trader-view')).not.toBeNull();
+    expect(element.querySelector('app-verdict-card')).toBeNull();
+    expect(element.textContent).toContain('This bot is ready');
+    expect(element.textContent).toContain('Market hours unavailable');
+    expect(liveRuns.getLifecycleTimeline).not.toHaveBeenCalled();
+
+    const operations = Array.from(element.querySelectorAll<HTMLButtonElement>('.bot-lens-switch button'))
+      .find((button) => button.textContent?.trim() === 'Operations');
+    operations?.click();
+    fixture.detectChanges();
 
     expect(element.querySelector('app-verdict-card')).not.toBeNull();
     expect(element.querySelector('app-overview-tab')).not.toBeNull();
     expect(element.querySelector('app-trader-guidance-pane')).not.toBeNull();
     expect(element.querySelector('app-bot-control-side-panel')).not.toBeNull();
     expect(element.querySelector('#verdict-state')?.textContent).toContain('Ready');
-    expect(liveRuns.getLifecycleTimeline).not.toHaveBeenCalled();
-    expect(element.querySelector('app-trader-guidance-pane')?.textContent)
-      .toContain('Proof stack');
+    expect(element.querySelector('app-trader-guidance-pane')?.textContent).toContain('Proof stack');
     // Deleted surfaces must not return.
     expect(element.querySelector('[data-testid="bot-control-workbench-tabs"]')).toBeNull();
     expect(element.querySelector('.posture-pills')).toBeNull();
@@ -162,7 +171,7 @@ describe('BotControlPageComponent', () => {
       },
     });
 
-    const verb = element.querySelector<HTMLButtonElement>('[data-testid="verdict-verb"]');
+    const verb = element.querySelector<HTMLButtonElement>('[data-testid="trader-primary-action"]');
     expect(verb?.textContent?.trim()).toBe('Start');
 
     verb?.click();
@@ -184,7 +193,7 @@ describe('BotControlPageComponent', () => {
       mutationResponses: { recordCrashRecoveryOverride: crashRecoveryResponse() },
     });
 
-    const verb = element.querySelector<HTMLButtonElement>('[data-testid="verdict-verb"]');
+    const verb = element.querySelector<HTMLButtonElement>('[data-testid="trader-primary-action"]');
     expect(verb?.textContent?.trim()).toBe('Record recovery evidence');
 
     verb?.click();
@@ -205,7 +214,7 @@ describe('BotControlPageComponent', () => {
       mutationResponses: { deleteBot: removeBotResponse() },
     });
 
-    const remove = element.querySelector<HTMLButtonElement>('.vc-terminal-action');
+    const remove = element.querySelector<HTMLButtonElement>('.trader-terminal-action');
     expect(remove?.textContent?.trim()).toBe('Remove');
 
     remove?.click();
@@ -231,7 +240,7 @@ describe('BotControlPageComponent', () => {
       mutationResponses: { botLifecycleMutation: makeBotLifecycleMutationResponse() },
     });
 
-    const replace = element.querySelector<HTMLButtonElement>('.vc-terminal-action');
+    const replace = element.querySelector<HTMLButtonElement>('.trader-terminal-action');
     expect(replace?.textContent?.trim()).toBe('Replace');
 
     replace?.click();
@@ -259,6 +268,7 @@ describe('BotControlPageComponent', () => {
 
     const banner = element.querySelector('.error-banner');
     expect(banner?.textContent).toContain('status boom');
+    expect(element.querySelector('app-trader-view')).toBeNull();
     expect(element.querySelector('app-verdict-card')).toBeNull();
   });
 
@@ -277,7 +287,7 @@ describe('BotControlPageComponent', () => {
     const copy = banner?.textContent?.replace(/\s+/g, ' ');
     expect(copy).toContain('Command loop: FRESH · 100 ms old');
     expect(copy).toContain('Runtime control plane: STALE · 30000 ms old');
-    expect(element.querySelector<HTMLButtonElement>('[data-testid="verdict-verb"]')?.disabled)
+    expect(element.querySelector<HTMLButtonElement>('[data-testid="trader-primary-action"]')?.disabled)
       .toBe(true);
   });
 });

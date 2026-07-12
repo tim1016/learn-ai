@@ -73,8 +73,32 @@ function statusWithGlobalBranchEdges(): LiveInstanceStatus {
   return status;
 }
 
+function statusWithFullLifecycleEdges(): LiveInstanceStatus {
+  const status = makeStatus();
+  status.lifecycle_chart.global_graph.edges = [
+    ['deploy_to_preflight', 'deploy', 'preflight'],
+    ['preflight_to_account_safety', 'preflight', 'account_safety'],
+    ['account_safety_to_reconcile', 'account_safety', 'reconcile'],
+    ['reconcile_to_activate', 'reconcile', 'activate'],
+    ['activate_to_active', 'activate', 'active'],
+    ['active_to_submit_order', 'active', 'submit_order'],
+    ['active_to_recovery', 'active', 'recovery'],
+    ['submit_order_to_broker_writer', 'submit_order', 'broker_writer'],
+  ].map(([id, source, target]) => ({
+    id,
+    source,
+    target,
+    status: 'inactive' as const,
+    label: null,
+    animated: false,
+    source_handle: null,
+    target_handle: null,
+  }));
+  return status;
+}
+
 describe('OverviewTabComponent', () => {
-  it('renders every global lifecycle gate as document-flow cards with themed blocked states', () => {
+  it('renders every global lifecycle gate as compact horizontal JointJS control nodes with themed blocked states', () => {
     TestBed.configureTestingModule({
       imports: [OverviewTabComponent],
       providers: [provideZonelessChangeDetection()],
@@ -88,8 +112,8 @@ describe('OverviewTabComponent', () => {
 
     expect(renderedText(fixture)).toContain('Deploy or start · Server clear');
     const el = fixture.nativeElement as HTMLElement;
-    expect(el.querySelector('vflow')).toBeNull();
-    const gateLabels = Array.from(el.querySelectorAll<HTMLElement>('.flow-node strong'))
+    expect(el.querySelector('app-lifecycle-joint-board')).not.toBeNull();
+    const gateLabels = Array.from(el.querySelectorAll<HTMLElement>('.joint-node-shell .flow-node strong'))
       .map((node) => node.textContent?.trim());
     expect(gateLabels).toEqual([
       'Deploy or start',
@@ -102,8 +126,44 @@ describe('OverviewTabComponent', () => {
       'Broker activity',
       'Recovery lane',
     ]);
+    const nodePositions = Array.from(el.querySelectorAll<HTMLElement>('.joint-node-shell'))
+      .map((node) => `${node.style.left}, ${node.style.top}`);
+    expect(nodePositions).toEqual([
+      '18px, 42px',
+      '228px, 42px',
+      '438px, 248px',
+      '648px, 248px',
+      '858px, 42px',
+      '1068px, 42px',
+      '1278px, 248px',
+      '1488px, 248px',
+      '1698px, 248px',
+    ]);
     const blockedGate = el.querySelector<HTMLElement>('.flow-node.status-blocked');
     expect(blockedGate?.querySelector('strong')?.textContent?.trim()).toBe('Reconcile broker state');
+  });
+
+  it('places same-column nodes only when they share a branching parent', () => {
+    TestBed.configureTestingModule({
+      imports: [OverviewTabComponent],
+      providers: [provideZonelessChangeDetection()],
+    });
+
+    const fixture = TestBed.createComponent(OverviewTabComponent);
+    fixture.componentRef.setInput('status', statusWithFullLifecycleEdges());
+    fixture.detectChanges();
+
+    const positions = new Map(
+      Array.from((fixture.nativeElement as HTMLElement).querySelectorAll<HTMLElement>('.joint-node-shell'))
+        .map((node) => [
+          node.querySelector('.flow-node strong')?.textContent?.trim(),
+          `${node.style.left}, ${node.style.top}`,
+        ]),
+    );
+    expect(positions.get('Monitor live bot')).toBe('1068px, 42px');
+    expect(positions.get('Submit order path')).toBe('1278px, 42px');
+    expect(positions.get('Recovery lane')).toBe('1278px, 248px');
+    expect(positions.get('Broker activity')).toBe('1488px, 42px');
   });
 
   it('marks the blocking node while preserving backend-authored edge status', () => {
@@ -136,11 +196,9 @@ describe('OverviewTabComponent', () => {
     const blockingNode = el.querySelector<HTMLElement>('.flow-node.blocking-node');
     expect(blockingNode?.querySelector('strong')?.textContent?.trim()).toBe('Deploy or start');
     expect(blockingNode?.querySelector('.node-callout')?.textContent?.trim()).toBe('Blocking step');
-    expect(el.querySelector<HTMLElement>('.flow-connector.status-blocked')).toBeNull();
-    const waitingConnector = el.querySelector<HTMLElement>('.flow-connector.status-inactive');
-    expect(waitingConnector?.textContent?.replace(/\s+/g, ' ')).toContain(
-      'Waiting Deploy or start -> Pre-flight gates',
-    );
+    expect(el.querySelector<HTMLElement>('.lifecycle-joint-edge-summary.status-blocked')).toBeNull();
+    const waitingConnector = el.querySelector<HTMLElement>('.lifecycle-joint-edge-summary.status-inactive');
+    expect(waitingConnector?.textContent?.trim()).toBe('Waiting');
   });
 
   it('renders the backend-authored lifecycle signals as a compact strip', () => {
@@ -339,12 +397,15 @@ describe('OverviewTabComponent', () => {
     const deployNode = el.querySelector<HTMLElement>('app-lifecycle-node-card .flow-node');
     expect(deployNode?.getAttribute('role')).toBeNull();
 
-    const deployToggle = el.querySelector<HTMLButtonElement>(
+    let deployToggle = el.querySelector<HTMLButtonElement>(
       '[aria-controls="lifecycle-node-receipts-global-deploy"]',
     );
     expect(deployToggle?.getAttribute('aria-expanded')).toBe('false');
     deployToggle?.click();
     fixture.detectChanges();
+    deployToggle = el.querySelector<HTMLButtonElement>(
+      '[aria-controls="lifecycle-node-receipts-global-deploy"]',
+    );
 
     const deployReceipts = el.querySelector<HTMLElement>('[data-testid="lifecycle-node-receipts-deploy"]');
     expect(deployToggle?.getAttribute('aria-expanded')).toBe('true');
@@ -353,11 +414,14 @@ describe('OverviewTabComponent', () => {
     expect(deployReceipts?.querySelector(':scope > app-node-receipts-list')).not.toBeNull();
     expect(deployReceipts?.querySelector(':scope > details')).toBeNull();
 
-    const preflightToggle = el.querySelector<HTMLButtonElement>(
+    let preflightToggle = el.querySelector<HTMLButtonElement>(
       '[aria-controls="lifecycle-node-receipts-global-preflight"]',
     );
     preflightToggle?.click();
     fixture.detectChanges();
+    preflightToggle = el.querySelector<HTMLButtonElement>(
+      '[aria-controls="lifecycle-node-receipts-global-preflight"]',
+    );
 
     expect(el.querySelector('[data-testid="lifecycle-node-receipts-deploy"]')).toBeNull();
     expect(el.querySelector('[data-testid="lifecycle-node-receipts-preflight"]')?.textContent)
@@ -366,7 +430,7 @@ describe('OverviewTabComponent', () => {
     expect(preflight.id).toBe('preflight');
   });
 
-  it('renders backend-authored branch transitions as in-flow arrows without requiring a pan-zoom viewport', () => {
+  it('renders backend-authored branch transitions as horizontal JointJS arrows', () => {
     TestBed.configureTestingModule({
       imports: [OverviewTabComponent],
       providers: [provideZonelessChangeDetection()],
@@ -377,12 +441,13 @@ describe('OverviewTabComponent', () => {
     fixture.detectChanges();
 
     const el = fixture.nativeElement as HTMLElement;
-    expect(el.querySelector('vflow')).toBeNull();
-    const transitionText = el.querySelector('.connector-group')?.textContent?.replace(/\s+/g, ' ') ?? '';
-    expect(transitionText).toContain('Active Monitor live bot -> Submit order path Signal arrives');
-    expect(transitionText).toContain('Blocked Monitor live bot -> Recovery lane Safety incident');
-    const animatedConnector = el.querySelector<HTMLElement>('.flow-connector.connector-animated');
-    expect(animatedConnector?.textContent?.replace(/\s+/g, ' ')).toContain('Signal arrives');
+    expect(el.querySelector('app-lifecycle-joint-board')).not.toBeNull();
+    const edgeTitles = Array.from(el.querySelectorAll<HTMLElement>('.lifecycle-joint-edge-summary'))
+      .map((edge) => edge.textContent?.trim());
+    expect(edgeTitles).toContain('Active: Signal arrives');
+    expect(edgeTitles).toContain('Blocked: Safety incident');
+    const animatedConnector = el.querySelector<HTMLElement>('.lifecycle-joint-edge-summary.edge-animated');
+    expect(animatedConnector?.textContent?.trim()).toBe('Active: Signal arrives');
   });
 
   it('returns to the global graph when the bot identity changes', () => {

@@ -28,6 +28,24 @@
     </div>
   </header>
 
+  <section
+    id="lifecycle-flow-panel"
+    class="flow-panel"
+    aria-label="Lifecycle gates"
+    [hidden]="flowCollapsed()"
+  >
+    <app-lifecycle-joint-board
+      [graph]="currentGraph()"
+      [chartKey]="chartKey()"
+      [selectedNodeId]="selectedNodeId()"
+      [highlightedNodeId]="highlightedNodeId()"
+      [expandedReceiptNodeKey]="expandedReceiptNodeId()"
+      (selectedRequested)="selectNode($event)"
+      (subgraphRequested)="expandNode($event)"
+      (receiptsToggled)="toggleNodeReceipts($event)"
+    />
+  </section>
+
   <section class="blockage-ladder" aria-label="Lifecycle signals">
     <header class="blockage-header">
       <div>
@@ -85,56 +103,4 @@
     }
   </section>
 
-  <section
-    id="lifecycle-flow-panel"
-    class="flow-panel"
-    aria-label="Lifecycle gates"
-    [hidden]="flowCollapsed()"
-  >
-    <div class="gate-flow">
-      @for (row of lifecycleFlowRows(); track row.node.id) {
-        @let node = row.node;
-        <app-lifecycle-node-card
-          [node]="node"
-          [selected]="selectedNodeId() === node.id"
-          [highlighted]="highlightedNodeId() === node.id"
-          [primary]="isPrimaryNode(node)"
-          [blocking]="isBlockingNode(node)"
-          [receiptsExpanded]="isNodeReceiptsExpanded(node)"
-          [headingId]="nodeHeadingId(node)"
-          [receiptRegionId]="nodeReceiptRegionId(node)"
-          (selectedRequested)="selectNode($event)"
-          (subgraphRequested)="expandNode($event)"
-          (receiptsToggled)="toggleNodeReceipts($event)"
-        />
-
-        @if (row.outgoingEdges.length) {
-          <div
-            class="connector-group"
-            [class.branching]="row.outgoingEdges.length > 1"
-            aria-label="Lifecycle transitions"
-          >
-            @for (edge of row.outgoingEdges; track edge.id) {
-              <div
-                [class]="'flow-connector status-' + edge.status"
-                [class.connector-animated]="edge.animated"
-                [style.--edge-color]="edgeColor(edge.status)"
-              >
-                <span class="connector-line" aria-hidden="true"></span>
-                <span class="connector-copy">
-                  <span class="connector-status">{{ edgeStatusLabel(edge) }}</span>
-                  <span class="connector-path">
-                    {{ edgeEndpointLabel(edge.source) }} -&gt; {{ edgeEndpointLabel(edge.target) }}
-                  </span>
-                  @if (edge.label) {
-                    <span class="connector-label">{{ edge.label }}</span>
-                  }
-                </span>
-              </div>
-            }
-          </div>
-        }
-      }
-    </div>
-  </section>
 </section>

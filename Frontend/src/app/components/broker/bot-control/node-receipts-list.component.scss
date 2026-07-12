@@ -4,6 +4,7 @@
 
 .context-receipts-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.45rem;
   margin: 0;
   padding: 0;
@@ -11,7 +12,9 @@
 
   li {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 0.35rem;
+    min-width: 0;
     padding: 0.5rem 0;
     border-top: 1px solid var(--border-light);
   }
