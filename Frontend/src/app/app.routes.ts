@@ -130,6 +130,13 @@ export const routes: Routes = [
       ).then((m) => m.DataQualityDocsComponent),
   },
   {
+    path: "engine/runs/:id",
+    loadComponent: () =>
+      import("./components/engine-lab/run-detail/engine-run-detail.component").then(
+        (m) => m.EngineRunDetailComponent
+      ),
+  },
+  {
     path: "engine",
     loadComponent: () =>
       import("./components/lean-engine/lean-engine.component").then(

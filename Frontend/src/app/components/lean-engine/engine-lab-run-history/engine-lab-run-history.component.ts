@@ -153,7 +153,7 @@ export class EngineLabRunHistoryComponent {
   }
 
   onRowSelected(id: string): void {
-    this.runSelected.emit(id);
+    void this.router.navigate(["/engine/runs", id]);
   }
 
   // ------------------------------------------------------------------

@@ -67,6 +67,9 @@ function baseNode(over: Partial<BacktestRunNode> = {}): BacktestRunNode {
     totalPnL: 42.0,
     commissionPerOrder: 1.0,
     brokeragePolicy: "algorithm_default",
+    verdictGrade: null,
+    verdictSignal: null,
+    parityGroupId: null,
     notes: null,
     dataPolicy: {
       source: "polygon",

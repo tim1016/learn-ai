@@ -22,6 +22,7 @@ public class AppDbContext : DbContext
     // Backtesting models
     public DbSet<StrategyExecution> StrategyExecutions => Set<StrategyExecution>();
     public DbSet<BacktestTrade> BacktestTrades => Set<BacktestTrade>();
+    public DbSet<ParityVerdict> ParityVerdicts => Set<ParityVerdict>();
 
     // Data lake catalog (Slice 1a)
     public DbSet<DataLakeArtifact> DataLakeArtifacts => Set<DataLakeArtifact>();
@@ -181,6 +182,12 @@ public class AppDbContext : DbContext
             entity.Property(e => e.ValueAtRisk99).HasPrecision(18, 8);
             entity.Property(e => e.AnnualStandardDeviation).HasPrecision(18, 8);
             entity.Property(e => e.LeanRunId).HasMaxLength(128);
+            entity.Property(e => e.RunVerdictJson).HasColumnType("jsonb");
+            entity.Property(e => e.VerdictGrade).HasMaxLength(4).HasColumnType("varchar(4)");
+            entity.Property(e => e.VerdictSignal).HasMaxLength(16).HasColumnType("varchar(16)");
+            entity.Property(e => e.EquityCurveJson).HasColumnType("jsonb");
+            entity.Property(e => e.InsightSummaryJson).HasColumnType("jsonb");
+            entity.Property(e => e.ParityGroupId).HasMaxLength(64).HasColumnType("varchar(64)");
             entity.HasOne(e => e.Ticker)
                   .WithMany()
                   .HasForeignKey(e => e.TickerId)
@@ -188,9 +195,28 @@ public class AppDbContext : DbContext
             entity.HasIndex(e => new { e.TickerId, e.StrategyName });
             entity.HasIndex(e => e.ExecutedAt);
             entity.HasIndex(e => e.Source);
+            entity.HasIndex(e => e.ParityGroupId);
             entity.HasIndex(e => new { e.Source, e.LeanRunId })
                   .IsUnique()
                   .HasFilter("\"LeanRunId\" IS NOT NULL");
+        });
+
+        modelBuilder.Entity<ParityVerdict>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.ParityGroupId).HasMaxLength(64).HasColumnType("varchar(64)");
+            entity.Property(e => e.Status).IsRequired().HasMaxLength(16).HasColumnType("varchar(16)");
+            entity.Property(e => e.VerdictJson).IsRequired().HasColumnType("jsonb");
+            entity.HasOne(e => e.LeftExecution)
+                  .WithMany()
+                  .HasForeignKey(e => e.LeftExecutionId)
+                  .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(e => e.RightExecution)
+                  .WithMany()
+                  .HasForeignKey(e => e.RightExecutionId)
+                  .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(e => new { e.LeftExecutionId, e.RightExecutionId }).IsUnique();
+            entity.HasIndex(e => e.ParityGroupId);
         });
 
         // BacktestTrade configuration

@@ -89,6 +89,13 @@ public static class StudiesApi
             DataPolicyJson = request.DataPolicyJson ?? SynthesizeLegacyDataPolicy(request.Symbol),
             CommissionPerOrder = request.CommissionPerOrder ?? 0m,
             BrokeragePolicy = request.BrokeragePolicy ?? "algorithm_default",
+            RunVerdictJson = request.RunVerdictJson,
+            VerdictVersion = request.VerdictVersion,
+            VerdictGrade = request.VerdictGrade,
+            VerdictSignal = request.VerdictSignal,
+            EquityCurveJson = request.EquityCurveJson,
+            InsightSummaryJson = request.InsightSummaryJson,
+            ParityGroupId = request.ParityGroupId,
         };
 
         // Attach trades if provided
@@ -404,6 +411,13 @@ public record SaveStudyRequest
     /// ``"algorithm_default"`` because it doesn't model brokerage.
     /// </summary>
     public string? BrokeragePolicy { get; init; }
+    public string? RunVerdictJson { get; init; }
+    public int? VerdictVersion { get; init; }
+    public string? VerdictGrade { get; init; }
+    public string? VerdictSignal { get; init; }
+    public string? EquityCurveJson { get; init; }
+    public string? InsightSummaryJson { get; init; }
+    public string? ParityGroupId { get; init; }
 }
 
 public record SaveStudyTrade

@@ -133,6 +133,13 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
             CommissionPerOrder = payload.CommissionPerOrder ?? 0m,
             BrokeragePolicy = payload.BrokeragePolicy
                 ?? (payload.Source == "engine" ? "algorithm_default" : null),
+            RunVerdictJson = payload.RunVerdictJson,
+            VerdictVersion = payload.VerdictVersion,
+            VerdictGrade = payload.VerdictGrade,
+            VerdictSignal = payload.VerdictSignal,
+            EquityCurveJson = payload.EquityCurveJson,
+            InsightSummaryJson = payload.InsightSummaryJson,
+            ParityGroupId = payload.ParityGroupId,
         };
 
         // Wrap the entire write in a transaction so a trade-save failure also rolls back

@@ -63,6 +63,26 @@ public class StrategyExecution
     [Column(TypeName = "jsonb")]
     public string? LeanStatisticsJson { get; set; }
 
+    /// <summary>Frozen backend-authored run verdict JSONB. Null for pre-versioning rows.</summary>
+    [Column(TypeName = "jsonb")]
+    public string? RunVerdictJson { get; set; }
+
+    public int? VerdictVersion { get; set; }
+
+    [MaxLength(4)]
+    [Column(TypeName = "varchar(4)")]
+    public string? VerdictGrade { get; set; }
+
+    [MaxLength(16)]
+    [Column(TypeName = "varchar(16)")]
+    public string? VerdictSignal { get; set; }
+
+    [Column(TypeName = "jsonb")]
+    public string? EquityCurveJson { get; set; }
+
+    [Column(TypeName = "jsonb")]
+    public string? InsightSummaryJson { get; set; }
+
     // ── Metadata ──
     /// <summary>Origin: "engine" or "strategy-lab".</summary>
     [MaxLength(20)]
@@ -101,6 +121,10 @@ public class StrategyExecution
     [MaxLength(40)]
     [Column(TypeName = "varchar(40)")]
     public string? BrokeragePolicy { get; set; }
+
+    [MaxLength(64)]
+    [Column(TypeName = "varchar(64)")]
+    public string? ParityGroupId { get; set; }
 
     public DateTime ExecutedAt { get; set; } = DateTime.UtcNow;
     public long DurationMs { get; set; }

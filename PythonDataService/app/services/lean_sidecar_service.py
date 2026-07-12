@@ -77,6 +77,7 @@ from app.lean_sidecar.trusted_samples.deployment_validation import (
 )
 from app.lean_sidecar.trusted_samples.ema_crossover import EMA_CROSSOVER_SOURCE
 from app.lean_sidecar.workspace import Workspace, resolve_workspace
+from app.schemas.run_verdict import RunVerdictCleanliness
 from app.services.lean_sidecar_persistence import (
     _algorithm_name_for_run,
     build_persist_payload,
@@ -745,6 +746,11 @@ async def run_trusted_sample(
         # been silently labeled ``algorithm_default`` even for IBKR
         # reconciliation runs.
         manifest=manifest,
+        cleanliness=RunVerdictCleanliness(
+            is_clean=response.is_clean,
+            is_reconciliation_grade=not any(response.lean_errors.values()),
+            error_counts={category: len(errors) for category, errors in response.lean_errors.items() if errors},
+        ),
     )
     _emit_phase("persisting")
     _emit_log("Persisting run to history")

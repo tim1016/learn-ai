@@ -22,6 +22,9 @@ function row(over: Partial<RunHistoryRow> = {}): RunHistoryRow {
     notes: null,
     commissionPerOrder: null,
     brokeragePolicy: null,
+    verdictGrade: null,
+    verdictSignal: null,
+    parityGroupId: null,
     ...over,
   };
 }
