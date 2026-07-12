@@ -25,6 +25,7 @@ from app.schemas.account_truth import (
     AccountTruthMessage,
     AccountTruthResponse,
 )
+from app.schemas.broker_capability import SessionCapability, SessionDataCapability
 from app.schemas.daemon_diagnostics import DaemonDominantCondition
 from app.schemas.live_runs import (
     DesiredStateView,
@@ -1867,6 +1868,43 @@ def test_trading_session_next_transition_ms_after_post_points_to_next_day() -> N
     now = _ny_ms(2026, 6, 23, 21, 0)
     surface = _surface(now_ms=now)
     assert surface.trading_session.phase == "CLOSED"
+    assert surface.trading_session.next_transition_ms == _ny_ms(2026, 6, 24, 4, 0)
+
+
+def test_trading_session_can_derive_overnight_from_capability_snapshot() -> None:
+    def session(open_ms: int | None, close_ms: int | None) -> SessionCapability:
+        return SessionCapability(
+            window_today_open_ms=open_ms,
+            window_today_close_ms=close_ms,
+            data="live" if open_ms is not None else "none",
+            tradeable="yes" if open_ms is not None else "no",
+            order_eligible_outside_rth=True,
+            evidence_codes=[],
+        )
+
+    capability = SessionDataCapability(
+        symbol="SPY",
+        con_id=756733,
+        account_mode="live",
+        account_id="U1234567",
+        probed_at_ms=_ny_ms(2026, 6, 23, 12, 0),
+        time_zone_id="America/New_York",
+        sessions={
+            "PRE": session(_ny_ms(2026, 6, 23, 4, 0), _ny_ms(2026, 6, 23, 9, 30)),
+            "RTH": session(_ny_ms(2026, 6, 23, 9, 30), _ny_ms(2026, 6, 23, 16, 0)),
+            "POST": session(_ny_ms(2026, 6, 23, 16, 0), _ny_ms(2026, 6, 23, 20, 0)),
+            "OVERNIGHT": session(_ny_ms(2026, 6, 23, 20, 0), _ny_ms(2026, 6, 24, 4, 0)),
+        },
+        raw_evidence=[],
+    )
+
+    surface = _surface(
+        now_ms=_ny_ms(2026, 6, 23, 22, 0),
+        session_capability=capability,
+    )
+
+    assert surface.trading_session.phase == "OVERNIGHT"
+    assert surface.trading_session.permits_strategy_activity is False
     assert surface.trading_session.next_transition_ms == _ny_ms(2026, 6, 24, 4, 0)
 
 

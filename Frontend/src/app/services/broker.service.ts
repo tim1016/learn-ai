@@ -14,6 +14,7 @@ import type {
   DataPlaneHealth,
   DiagnosticReport,
   ExpirationsResponse,
+  BrokerCapabilityResponse,
   IbkrApiEvidenceEvent,
   IbkrAccountSummary,
   IbkrConnectionHealth,
@@ -89,6 +90,22 @@ export class BrokerService {
   reconnect(): Promise<IbkrConnectionHealth> {
     return firstValueFrom(
       this.http.post<IbkrConnectionHealth>(`${this.base}/reconnect`, {}),
+    );
+  }
+
+  capability(): Promise<BrokerCapabilityResponse> {
+    return firstValueFrom(
+      this.http.get<BrokerCapabilityResponse>(`${this.base}/capability`),
+    );
+  }
+
+  probeCapability(symbols: string[] = ['SPY', 'QQQ']): Promise<BrokerCapabilityResponse> {
+    return firstValueFrom(
+      this.http.post<BrokerCapabilityResponse>(
+        `${this.base}/capability/probe`,
+        {},
+        { params: { symbols: symbols.join(',') } },
+      ),
     );
   }
 

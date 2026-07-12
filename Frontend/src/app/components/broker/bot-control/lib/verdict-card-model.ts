@@ -109,6 +109,7 @@ const SESSION_PHASE_LABEL: Record<TradingSessionPhase, string> = {
   PRE: 'Pre-market',
   RTH: 'Open',
   POST: 'After hours',
+  OVERNIGHT: 'Overnight',
   CLOSED: 'Closed',
   UNKNOWN: 'Unknown',
 };

@@ -94,6 +94,31 @@ def test_dual_fields_survive_persistence_round_trip(
     assert isinstance(rt.end_ms, int)
 
 
+def test_bar_provenance_fields_survive_persistence_round_trip(tmp_path) -> None:
+    start_ms = 1_775_001_600_000
+    bar = _bar(start_ms, 60_000).model_copy(
+        update={
+            "provenance": "ibkr_realtime",
+            "venue": "SMART",
+            "session_phase": "PRE",
+            "use_rth": False,
+        }
+    )
+
+    store = BarPersistence(root=tmp_path)
+    store.append("SPY", "1m", bar)
+    replayed = store.replay("SPY", "1m", date(2026, 4, 1))[0]
+    parquet_path = store.compact("SPY", "1m", date(2026, 4, 1))
+    assert parquet_path.is_file()
+    compacted = store.read_parquet("SPY", "1m", date(2026, 4, 1))[0]
+
+    for rt in (replayed, compacted):
+        assert rt.provenance == "ibkr_realtime"
+        assert rt.venue == "SMART"
+        assert rt.session_phase == "PRE"
+        assert rt.use_rth is False
+
+
 @pytest.mark.parametrize("resolution,window_ms", RESOLUTIONS)
 def test_monotonic_sequence_preserves_window_for_every_bar(
     tmp_path, resolution: str, window_ms: int

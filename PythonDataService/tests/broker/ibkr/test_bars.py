@@ -12,6 +12,7 @@ from app.broker.ibkr.bars import (
     IBKRBarStreamError,
     LiveBarCounters,
     aggregate_realtime_bar,
+    fetch_historical_minute_bars,
     stream_minute_bars,
 )
 
@@ -51,6 +52,40 @@ def test_realtime_bars_aggregate_within_one_minute() -> None:
     assert minute.low == Decimal("98.50")
     assert minute.close == Decimal("99.50")
     assert minute.volume == 60
+
+
+def test_realtime_bar_provenance_stamped_on_emitted_minute() -> None:
+    current = None
+    last_ms = None
+    current, _, last_ms = aggregate_realtime_bar(
+        current,
+        _bar(55, "100", "101", "99", "100.5", 10),
+        symbol="SPY",
+        last_source_ms=last_ms,
+        venue="SMART",
+        use_rth=False,
+    )
+    _current, emitted, _last_ms = aggregate_realtime_bar(
+        current,
+        SimpleNamespace(
+            time=datetime(2026, 5, 4, 14, 31, 0, tzinfo=UTC),
+            open=Decimal("101"),
+            high=Decimal("102"),
+            low=Decimal("100"),
+            close=Decimal("101.5"),
+            volume=20,
+        ),
+        symbol="SPY",
+        last_source_ms=last_ms,
+        venue="SMART",
+        use_rth=False,
+    )
+
+    assert emitted is not None
+    assert emitted.provenance == "ibkr_realtime"
+    assert emitted.venue == "SMART"
+    assert emitted.session_phase == "RTH"
+    assert emitted.use_rth is False
 
 
 def test_new_minute_fires_previous_closed_bar() -> None:
@@ -271,6 +306,8 @@ class _FakeIb:
         ]
         self.cancelled = False
         self.use_rth_seen: bool | None = None
+        self.historical_bars = []
+        self.historical_use_rth_seen: bool | None = None
 
     def reqRealTimeBars(self, contract, bar_size: int, what_to_show: str, *, useRTH: bool):
         self.use_rth_seen = useRTH
@@ -282,6 +319,11 @@ class _FakeIb:
     def cancelRealTimeBars(self, bars) -> None:
         assert bars is self.bars
         self.cancelled = True
+
+    async def reqHistoricalDataAsync(self, contract, **kwargs):
+        assert contract.symbol == "SPY"
+        self.historical_use_rth_seen = kwargs["useRTH"]
+        return self.historical_bars
 
     async def qualifyContractsAsync(self, contract):
         contract.conId = 1
@@ -311,6 +353,34 @@ async def test_stream_minute_bars_yields_closed_bar_and_cancels() -> None:
     assert emitted.close == Decimal("100.5")
     assert client.ib.use_rth_seen is True
     assert client.ib.cancelled is True
+    assert emitted.provenance == "ibkr_realtime"
+    assert emitted.venue == "SMART"
+    assert emitted.session_phase == "RTH"
+    assert emitted.use_rth is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_historical_minute_bars_stamps_provenance() -> None:
+    client = _FakeClient()
+    client.ib.historical_bars = [
+        SimpleNamespace(
+            date=datetime(2026, 5, 4, 14, 30, tzinfo=UTC),
+            open=Decimal("100"),
+            high=Decimal("101"),
+            low=Decimal("99"),
+            close=Decimal("100.5"),
+            volume=20,
+        )
+    ]
+
+    bars = await fetch_historical_minute_bars(client, "SPY", use_rth=False)
+
+    assert len(bars) == 1
+    assert bars[0].provenance == "ibkr_historical"
+    assert bars[0].venue == "SMART"
+    assert bars[0].session_phase == "RTH"
+    assert bars[0].use_rth is False
+    assert client.ib.historical_use_rth_seen is False
 
 
 @pytest.mark.asyncio

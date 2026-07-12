@@ -695,7 +695,7 @@ class HostRunnerDeployBaseRequest(BaseModel):
             parse_sizing_policy,
             policy_to_ledger_dict,
         )
-        from app.engine.live.config import LIVE_CONFIG_LEDGER_KEYS
+        from app.engine.live.config import LIVE_CONFIG_LEDGER_KEYS, normalize_allowed_sessions
         from app.schemas.action_plan import ActionPlan
 
         unknown = set(value.keys()) - LIVE_CONFIG_LEDGER_KEYS
@@ -712,6 +712,8 @@ class HostRunnerDeployBaseRequest(BaseModel):
         value["sizing"] = policy_to_ledger_dict(policy)
         if "action" in value:
             value["action"] = ActionPlan.model_validate(value["action"]).model_dump()
+        if "allowed_sessions" in value:
+            value["allowed_sessions"] = list(normalize_allowed_sessions(value["allowed_sessions"]))
         # ADR 0014 §6 — round-trip the reconciliation_timing_policy block
         # through its Pydantic model so the deploy boundary rejects
         # mis-shaped configs (e.g. excessive_lag_ms <= caveat_lag_ms) at
@@ -1297,7 +1299,7 @@ ExecutionPosture = Literal["PAPER_EXECUTION", "READ_ONLY", "UNSAFE", "UNKNOWN"]
 OperatorVerdict = Literal["READY", "ATTENTION", "UNKNOWN"]
 RiskPosture = Literal["FLAT", "LONG", "SHORT", "MIXED", "UNKNOWN"]
 ActionPlanConsumption = Literal["ACTIVE", "DECLARATIVE_ONLY", "UNKNOWN"]
-TradingSessionPhase = Literal["PRE", "RTH", "POST", "CLOSED", "UNKNOWN"]
+TradingSessionPhase = Literal["PRE", "RTH", "POST", "OVERNIGHT", "CLOSED", "UNKNOWN"]
 AccountOwnerPhase = Literal["accepting", "reconnecting", "draining", "frozen", "unknown"]
 SubmitReadinessCode = Literal[
     "safe_to_submit",

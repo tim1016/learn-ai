@@ -241,6 +241,19 @@ async def test_place_paper_order_limit_sell_passes_price_through() -> None:
 
 
 @pytest.mark.asyncio
+async def test_place_paper_order_stamps_outside_rth_flag() -> None:
+    client = _client()
+    with _owner_grant():
+        await place_paper_order(
+            client,
+            _spec(order_type="LMT", limit_price=421.50, outside_rth=True),
+        )
+
+    submitted_order = client.ib.placeOrder.call_args.args[1]
+    assert submitted_order.outsideRth is True
+
+
+@pytest.mark.asyncio
 async def test_place_paper_order_option_requires_expiry_strike_right() -> None:
     client = _client()
     bad = _spec(sec_type="OPT")  # missing expiry_ms / strike / right

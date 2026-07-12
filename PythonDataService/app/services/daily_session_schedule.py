@@ -1,9 +1,11 @@
 """Daily live-session stop-time policy.
 
-The lifecycle PRD is day-strategy-only: a bot may start only before its
-effective stop for the NYSE session.  The configured stop is the run's
-``live_config.force_flat_at`` when present, otherwise the live runtime default,
-and it is always clamped to the canonical exchange close for that date.
+RTH-only bots may start only before their effective stop for the NYSE session.
+The configured stop is the run's ``live_config.force_flat_at`` when present,
+otherwise the live runtime default, and it is clamped to the canonical
+exchange close for that date. Extended-session bots (PRE/POST/OVERNIGHT in
+``allowed_sessions``) default to no daily stop; the session gate controls
+submissions while the process can continue across day/night boundaries.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
 from zoneinfo import ZoneInfo
 
-from app.engine.live.config import LiveConfig
+from app.engine.live.config import LiveConfig, normalize_allowed_sessions
 from app.lean_sidecar.trading_calendar import session_close_ms_utc
 
 _NY_TZ = ZoneInfo("America/New_York")
@@ -29,15 +31,17 @@ class StartBoundaryVerdict:
     effective_stop_ms: int | None
 
 
-def effective_stop_ms_for_date(session_date: date, live_config: Mapping[str, object] | None) -> int:
-    """Return ``min(configured_stop, session_close)`` for one NYSE session."""
+def effective_stop_ms_for_date(session_date: date, live_config: Mapping[str, object] | None) -> int | None:
+    """Return the effective stop for one NYSE session, or ``None`` for continuous lifecycle."""
 
     close_ms = session_close_ms_utc(session_date)
     configured = configured_stop_from_live_config(live_config)
     if configured is None:
-        return close_ms
+        return None
     configured_dt = datetime.combine(session_date, configured, tzinfo=_NY_TZ)
     configured_ms = int(configured_dt.astimezone(UTC).timestamp() * 1000)
+    if live_config is not None and _declares_extended_session(live_config):
+        return configured_ms
     return min(configured_ms, close_ms)
 
 
@@ -54,7 +58,7 @@ def start_boundary_verdict(now_ms: int, live_config: Mapping[str, object] | None
             session_date=session_date.isoformat(),
             effective_stop_ms=None,
         )
-    if now_ms >= effective_stop_ms:
+    if effective_stop_ms is not None and now_ms >= effective_stop_ms:
         return StartBoundaryVerdict(
             allowed=False,
             reason_code="SESSION_STOP_REACHED",
@@ -74,9 +78,12 @@ def start_boundary_verdict(now_ms: int, live_config: Mapping[str, object] | None
 def configured_stop_from_live_config(live_config: Mapping[str, object] | None) -> time | None:
     if live_config is None:
         return _DEFAULT_STOP
+    has_force_flat = "force_flat_at" in live_config
+    if not has_force_flat and _declares_extended_session(live_config):
+        return None
     raw = live_config.get("force_flat_at")
     if raw is None:
-        return _DEFAULT_STOP
+        return None if has_force_flat else _DEFAULT_STOP
     if raw == "":
         return _DEFAULT_STOP
     if isinstance(raw, time):
@@ -96,6 +103,17 @@ def configured_stop_from_live_config(live_config: Mapping[str, object] | None) -
         except ValueError:
             return _DEFAULT_STOP
     return _DEFAULT_STOP
+
+
+def _declares_extended_session(live_config: Mapping[str, object]) -> bool:
+    raw = live_config.get("allowed_sessions")
+    if raw is None:
+        return False
+    try:
+        allowed = normalize_allowed_sessions(raw)
+    except (TypeError, ValueError):
+        return False
+    return any(session != "RTH" for session in allowed)
 
 
 __all__ = [

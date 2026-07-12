@@ -20,6 +20,7 @@ from app.engine.live.live_portfolio import (
     AccountRegistryBlockError,
     AccountTruthBlockError,
     LivePortfolio,
+    SessionPolicyBlockError,
     SubmitUncertainHaltError,
 )
 from app.schemas.account_truth import (
@@ -28,6 +29,7 @@ from app.schemas.account_truth import (
 )
 from app.schemas.live_runs import GateResult
 from app.services.account_truth_snapshot import AccountTruthSnapshot, account_truth_gate_result
+from app.services.session_authority import SessionAuthorityState, TradingSessionPhase
 from tests._helpers.account_truth import fresh_account_truth_source_freshness
 from tests.engine.live.fixtures.fake_broker import FakeBroker
 
@@ -69,6 +71,17 @@ def _account_truth_snapshot(
         source_freshness=fresh_account_truth_source_freshness(generated_at_ms),
     )
     return AccountTruthSnapshot(truth=truth, cached_at_ms=generated_at_ms)
+
+
+def _session_state(phase: TradingSessionPhase) -> SessionAuthorityState:
+    return SessionAuthorityState(
+        phase=phase,
+        permits_strategy_activity=phase == "RTH",
+        next_transition_ms=_NOW_MS + 60_000,
+        timezone="America/New_York",
+        as_of_ms=_NOW_MS,
+        source="nyse_calendar",
+    )
 
 
 @pytest.mark.asyncio
@@ -324,6 +337,7 @@ async def test_submit_pending_orders_routes_through_paper_order_spec() -> None:
     assert broker.orders[0].action == "BUY"
     assert broker.orders[0].quantity == 200
     assert broker.orders[0].order_type == "MKT"
+    assert broker.orders[0].outside_rth is False
     assert broker.orders[0].confirm_paper is True
     assert broker.orders[0].client_order_id == "live-1"
     assert list(portfolio.drain_pending()) == []
@@ -443,6 +457,142 @@ async def test_submit_pending_orders_blocks_when_account_truth_rejects_unexplain
     assert exc.value.gate_result == gate
     assert gate.gate_id == "account.account_truth"
     assert gate.operator_reason == "ACCOUNT_TRUTH_UNKNOWN_POSITIONS"
+    assert broker.orders == []
+    assert list(portfolio.drain_pending()) == []
+
+
+@pytest.mark.asyncio
+async def test_submit_pending_orders_blocks_outside_allowed_session_before_broker_call() -> None:
+    broker = FakeBroker()
+    portfolio = LivePortfolio(
+        broker,
+        session_gate_provider=lambda: _session_state("POST"),
+        allowed_sessions=("RTH",),
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    with pytest.raises(SessionPolicyBlockError) as exc:
+        await portfolio.submit_pending_orders()
+
+    assert exc.value.reason == "strategy_session_not_permitted"
+    assert exc.value.session_state.phase == "POST"
+    assert broker.orders == []
+    assert list(portfolio.drain_pending()) == []
+
+
+@pytest.mark.asyncio
+async def test_submit_pending_orders_allows_rth_session() -> None:
+    broker = FakeBroker()
+    portfolio = LivePortfolio(
+        broker,
+        session_gate_provider=lambda: _session_state("RTH"),
+        allowed_sessions=("RTH",),
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    acks = await portfolio.submit_pending_orders()
+
+    assert len(acks) == 1
+    assert len(broker.orders) == 1
+    assert broker.orders[0].symbol == "SPY"
+
+
+@pytest.mark.asyncio
+async def test_submit_pending_orders_uses_limit_outside_rth_for_declared_extended_session() -> None:
+    broker = FakeBroker()
+    portfolio = LivePortfolio(
+        broker,
+        session_gate_provider=lambda: _session_state("POST"),
+        allowed_sessions=("RTH", "POST"),
+        order_mechanism_sessions=("RTH", "POST"),
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500.25"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    acks = await portfolio.submit_pending_orders()
+
+    assert len(acks) == 1
+    assert len(broker.orders) == 1
+    assert broker.orders[0].order_type == "LMT"
+    assert broker.orders[0].limit_price == 500.25
+    assert broker.orders[0].outside_rth is True
+
+
+@pytest.mark.asyncio
+async def test_submit_pending_orders_blocks_extended_session_without_reference_price() -> None:
+    broker = FakeBroker()
+    portfolio = LivePortfolio(
+        broker,
+        session_gate_provider=lambda: _session_state("POST"),
+        allowed_sessions=("RTH", "POST"),
+        order_mechanism_sessions=("RTH", "POST"),
+    )
+    portfolio.submit_market_order("SPY", 1, datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    with pytest.raises(SessionPolicyBlockError) as exc:
+        await portfolio.submit_pending_orders()
+
+    assert exc.value.reason == "extended_limit_price_unavailable"
+    assert broker.orders == []
+    assert list(portfolio.drain_pending()) == []
+
+
+@pytest.mark.asyncio
+async def test_submit_pending_orders_blocks_declared_extended_session_until_mechanism_enabled() -> None:
+    broker = FakeBroker()
+    portfolio = LivePortfolio(
+        broker,
+        session_gate_provider=lambda: _session_state("POST"),
+        allowed_sessions=("RTH", "POST"),
+        order_mechanism_sessions=("RTH",),
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    with pytest.raises(SessionPolicyBlockError) as exc:
+        await portfolio.submit_pending_orders()
+
+    assert exc.value.reason == "order_mechanism_not_enabled"
+    assert broker.orders == []
+    assert list(portfolio.drain_pending()) == []
+
+
+@pytest.mark.asyncio
+async def test_submit_pending_orders_drops_wal_intent_when_session_policy_blocks(tmp_path: Path) -> None:
+    from app.engine.execution.order_sizer import FixedShares, OrderSizer
+    from app.engine.live.intent_events import IntentEventType
+    from app.engine.live.intent_wal import IntentWal
+    from app.engine.live.order_identity import build_bot_order_namespace
+
+    broker = FakeBroker()
+    wal = IntentWal(tmp_path / "intent_events.jsonl")
+    portfolio = LivePortfolio(
+        broker,
+        intent_wal=wal,
+        bot_order_namespace=build_bot_order_namespace("session-policy-block"),
+        session_gate_provider=lambda: _session_state("PRE"),
+        allowed_sessions=("RTH",),
+    )
+    portfolio.order_sizer = OrderSizer(FixedShares(value=10))
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    with pytest.raises(SessionPolicyBlockError):
+        await portfolio.submit_pending_orders()
+
+    events = wal.read_tail()
+    assert [event.event_type for event in events] == [
+        IntentEventType.SIZING_RESOLVED,
+        IntentEventType.INTENT_DROPPED_BEFORE_SUBMIT,
+    ]
+    assert events[1].intent_id == events[0].intent_id
+    assert events[1].drop_reason == "session_policy_block"
     assert broker.orders == []
     assert list(portfolio.drain_pending()) == []
 

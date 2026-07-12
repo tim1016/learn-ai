@@ -17,9 +17,7 @@ for the operator-surface inclusion boundary.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime, time
 from typing import Literal, assert_never
-from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
 
@@ -28,10 +26,10 @@ from app.engine.live.bot_lifecycle_state import BotLifecyclePhase
 from app.engine.live.daemon_connectivity_monitor import DaemonConnectivityState
 from app.engine.live.daemon_transport import DaemonResultKind
 from app.engine.live.exit_taxonomy import RunExitEvidence, classify_run_exit
-from app.lean_sidecar.trading_calendar import next_trading_day, session_window_for_date
 from app.operator.notices.broker_activity_health import compose_broker_activity_health
 from app.operator.notices.runtime_freshness import compose_runtime_freshness_notices
 from app.operator.notices.schema import OperatorNotice
+from app.schemas.broker_capability import SessionDataCapability
 from app.schemas.daemon_diagnostics import DaemonDominantCondition
 from app.schemas.live_runs import (
     ActionCapability,
@@ -112,6 +110,7 @@ from app.services.runtime_freshness import (
     RuntimeFreshness,
     runtime_freshness_reason_codes,
 )
+from app.services.session_authority import session_state_at_ms
 
 TraderExecutionPosture = Literal["PAPER_EXECUTION", "READ_ONLY", "UNSAFE", "UNKNOWN"]
 
@@ -883,98 +882,30 @@ def _project_configuration(
     return OperatorSurfaceConfiguration(verdict=verdict, reason_codes=reasons)
 
 
-# ---------------------------------------------------------------------------
-# trading_session — server-authored phase + permission + next-transition
-# ---------------------------------------------------------------------------
-
-_NY = ZoneInfo("America/New_York")
-
-_PRE_OPEN = time(4, 0)
-_POST_CLOSE = time(20, 0)
-
-
-def _ny_dt(ms: int) -> datetime:
-    return datetime.fromtimestamp(ms / 1000.0, tz=UTC).astimezone(_NY)
-
-
-def _at(ny_day: datetime, t: time) -> datetime:
-    return datetime.combine(ny_day.date(), t, tzinfo=_NY)
-
-
-def _ms_utc(dt: datetime) -> int:
-    return int(dt.astimezone(UTC).timestamp() * 1000)
-
-
-def _next_session_pre_open(now_ny: datetime) -> int:
-    """Return the next NYSE session's 04:00 NY pre-open as int64 ms UTC."""
-    candidate = next_trading_day(now_ny.date())
-    target = datetime.combine(candidate, _PRE_OPEN, tzinfo=_NY)
-    return _ms_utc(target)
-
-
 def _project_trading_session(
     *,
     now_ms: int,
+    session_capability: SessionDataCapability | None = None,
     strategy_session_policy: Literal["rth_only"] | None = None,
 ) -> OperatorSurfaceTradingSession:
     """Compute the trading-session phase + the *next* boundary transition.
 
-    PRD #616 — ``next_transition_ms`` was hard-coded ``None``.  We now
-    compute the next boundary in America/New_York accounting for
-    weekday/weekend and the default RTH-only policy.  Per-strategy
-    session policies (extended hours, RTH+POST, ...) are a future
-    field on the wire; until then the policy defaults to RTH-only.
+    Issue #1005 Slice 1 routes phase through the session authority. When a
+    capability snapshot exists, IBKR-published windows are the live authority;
+    otherwise this falls back to the offline NYSE calendar.
     """
-    now_ny = _ny_dt(now_ms)
-
-    phase: str
-    permits: bool | None
-    next_transition_ms: int | None
-
-    try:
-        session_window = session_window_for_date(now_ny.date())
-    except LookupError:
-        phase = "CLOSED"
-        permits = False
-        next_transition_ms = _next_session_pre_open(now_ny)
-    else:
-        session_open_ny = _ny_dt(session_window.open_ms_utc)
-        session_close_ny = _ny_dt(session_window.close_ms_utc)
-        pre_open_ny = _at(now_ny, _PRE_OPEN)
-        post_close_ny = _at(now_ny, _POST_CLOSE)
-
-        if now_ny < pre_open_ny:
-            phase = "CLOSED"
-            permits = False
-            next_transition_ms = _ms_utc(pre_open_ny)
-        elif now_ny < session_open_ny:
-            phase = "PRE"
-            permits = False
-            next_transition_ms = session_window.open_ms_utc
-        elif now_ny < session_close_ny:
-            phase = "RTH"
-            permits = True
-            next_transition_ms = session_window.close_ms_utc
-        elif now_ny < post_close_ny:
-            phase = "POST"
-            permits = False
-            next_transition_ms = _ms_utc(post_close_ny)
-        else:
-            # After 20:00 ET on a session day → CLOSED until the next session's 04:00 ET.
-            phase = "CLOSED"
-            permits = False
-            next_transition_ms = _next_session_pre_open(now_ny)
-
-    if strategy_session_policy is None:
-        # Default policy = RTH-only.
-        permits = phase == "RTH"
+    state = session_state_at_ms(
+        now_ms=now_ms,
+        capability=session_capability,
+        strategy_session_policy=strategy_session_policy,
+    )
 
     return OperatorSurfaceTradingSession(
-        phase=phase,  # type: ignore[arg-type]
-        permits_strategy_activity=permits,
-        next_transition_ms=next_transition_ms,
-        timezone="America/New_York",
-        as_of_ms=now_ms,
+        phase=state.phase,
+        permits_strategy_activity=state.permits_strategy_activity,
+        next_transition_ms=state.next_transition_ms,
+        timezone=state.timezone,
+        as_of_ms=state.as_of_ms,
     )
 
 
@@ -1385,6 +1316,7 @@ def compute_operator_surface(
     activity_publisher_registered_at_ms: int | None = None,
     # PR 2 — post-halt watchdog incident headline forwarded verbatim.
     incident_headline_notice: OperatorNotice | None = None,
+    session_capability: SessionDataCapability | None = None,
     now_ms: int,
 ) -> OperatorSurface:
     """Build the operator-surface projection for one instance.
@@ -1447,7 +1379,10 @@ def compute_operator_surface(
         now_ms=now_ms,
         account_freeze=account_freeze,
     )
-    trading_session = _project_trading_session(now_ms=now_ms)
+    trading_session = _project_trading_session(
+        now_ms=now_ms,
+        session_capability=session_capability,
+    )
     readiness_gates = project_readiness_gates(readiness)
     reconciliation_projection = _project_reconciliation(
         reconciliation_receipt,

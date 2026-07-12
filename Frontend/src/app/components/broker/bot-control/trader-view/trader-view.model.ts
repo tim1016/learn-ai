@@ -60,6 +60,7 @@ export const MARKET_PHASES: readonly {
   { id: 'PRE', label: 'Pre-market' },
   { id: 'RTH', label: 'Market open' },
   { id: 'POST', label: 'After hours' },
+  { id: 'OVERNIGHT', label: 'Overnight' },
   { id: 'CLOSED', label: 'Closed' },
 ];
 
@@ -97,6 +98,7 @@ const MARKET_TITLE: Record<TradingSessionPhase, string> = {
   PRE: 'Pre-market',
   RTH: 'Market open',
   POST: 'After hours',
+  OVERNIGHT: 'Overnight',
   CLOSED: 'Market closed',
   UNKNOWN: 'Market hours unavailable',
 };
@@ -105,6 +107,7 @@ const NEXT_MARKET_EVENT: Record<TradingSessionPhase, string> = {
   PRE: 'Market opens',
   RTH: 'Regular trading ends',
   POST: 'After-hours trading ends',
+  OVERNIGHT: 'Overnight trading ends',
   CLOSED: 'Market opens',
   UNKNOWN: 'Next session change',
 };

@@ -28,6 +28,8 @@ def _bar(symbol: str, start_ms: int, close: str, *, source: str = "ibkr") -> Ibk
         volume=100,
         fetched_at_ms=start_ms + 60_000,
         source=source,
+        session_phase="RTH",
+        use_rth=True,
     )
 
 
@@ -103,6 +105,10 @@ async def test_polygon_overlay_is_not_persisted_and_aggregates_from_minute_base(
     assert len(result.bars) == 1
     bucket = result.bars[0]
     assert bucket.source == "mixed"
+    assert bucket.provenance == "mixed"
+    assert bucket.venue == "MIXED"
+    assert bucket.session_phase == "RTH"
+    assert bucket.use_rth is True
     assert bucket.open == Decimal("100.00")
     assert bucket.close == Decimal("102.5")
     assert bucket.volume == 123

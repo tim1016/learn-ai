@@ -920,6 +920,47 @@ class LiveEngine:
                 snapshot = get_account_truth_snapshot_provider().get(self._account_id)
                 return account_truth_gate_result(snapshot, now_ms=now_ms_utc())
 
+        session_gate_provider = None
+        if getattr(self._broker, "requires_durable_submit", False):
+            from app.services.broker_capability_service import get_broker_capability_service
+            from app.services.session_authority import session_state_at_ms
+
+            capability_service = get_broker_capability_service()
+
+            def session_gate_provider():
+                capability = None
+                try:
+                    matching = [
+                        snapshot
+                        for snapshot in capability_service.read_latest()
+                        if snapshot.symbol.upper() == self._config.symbol.upper()
+                        and (not self._account_id or snapshot.account_id == self._account_id)
+                    ]
+                except Exception:
+                    logger.exception("session capability snapshot read failed; falling back to calendar authority")
+                    matching = []
+                if matching:
+                    capability = max(matching, key=lambda snapshot: snapshot.probed_at_ms)
+                return session_state_at_ms(
+                    now_ms=now_ms_utc(),
+                    capability=capability,
+                    allowed_sessions=self._config.allowed_sessions,
+                )
+
+        # PRD #1005 — the order mechanism only supports RTH placement until the
+        # spread-guarded marketable-limit mechanism (Slice 3) ships and is
+        # proven against the capability probe. Deriving RTH-only (extended
+        # placement disabled) keeps off-hours placement off regardless of the
+        # strategy's declared allowed_sessions: a strategy cannot self-authorize
+        # orders into a session the broker or the data can't support.
+        from app.services.session_authority import (
+            order_mechanism_sessions_from_capability,
+        )
+
+        order_mechanism_sessions = order_mechanism_sessions_from_capability(
+            None, extended_placement_enabled=False
+        )
+
         portfolio = LivePortfolio(
             self._broker,
             intent_wal=intent_wal_for_portfolio,
@@ -929,6 +970,9 @@ class LiveEngine:
                 self._account_registry_gate_result if self._account_registry_gate_enabled else None
             ),
             account_truth_gate_provider=account_truth_gate_provider,
+            session_gate_provider=session_gate_provider,
+            allowed_sessions=self._config.allowed_sessions,
+            order_mechanism_sessions=order_mechanism_sessions,
             account_owner_submitter=self._account_owner_submitter,
             account_id=self._account_id,
             strategy_instance_id=self._strategy_instance_id,

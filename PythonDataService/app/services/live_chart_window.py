@@ -12,10 +12,10 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Literal, Protocol
+from typing import Literal, Protocol, cast
 from zoneinfo import ZoneInfo
 
-from app.broker.ibkr.models import IbkrMinuteBar
+from app.broker.ibkr.models import BarProvenance, BarSessionPhase, IbkrMinuteBar
 from app.data_lake.polygon_fetcher import (
     PolygonAuthError,
     PolygonBar,
@@ -351,6 +351,10 @@ def _convert_polygon_bars(
                 volume=int(bar.volume),
                 fetched_at_ms=fetched_at_ms,
                 source="polygon",
+                provenance="polygon_historical",
+                venue="POLYGON",
+                session_phase="RTH",
+                use_rth=True,
             )
         )
     return out
@@ -413,6 +417,16 @@ def _bucket_to_bar(start_ms: int, end_ms: int, bars: list[IbkrMinuteBar]) -> Ibk
     ordered = sorted(bars, key=lambda bar: bar.start_ms)
     sources = {getattr(bar, "source", "ibkr") for bar in ordered}
     source: Literal["ibkr", "polygon", "mixed"] = sources.pop() if len(sources) == 1 else "mixed"
+    provenances = {getattr(bar, "provenance", "ibkr_realtime") for bar in ordered}
+    provenance = cast(BarProvenance, provenances.pop() if len(provenances) == 1 else "mixed")
+    venue_values = {bar.venue or "UNKNOWN" for bar in ordered}
+    venue = venue_values.pop() if len(venue_values) == 1 else "MIXED"
+    if venue == "UNKNOWN":
+        venue = None
+    phases = {getattr(bar, "session_phase", "UNKNOWN") for bar in ordered}
+    session_phase = cast(BarSessionPhase, phases.pop() if len(phases) == 1 else "UNKNOWN")
+    use_rth_values = {bar.use_rth for bar in ordered}
+    use_rth = use_rth_values.pop() if len(use_rth_values) == 1 else None
     return IbkrMinuteBar(
         symbol=ordered[0].symbol,
         start_ms=start_ms,
@@ -424,6 +438,10 @@ def _bucket_to_bar(start_ms: int, end_ms: int, bars: list[IbkrMinuteBar]) -> Ibk
         volume=sum(int(bar.volume) for bar in ordered),
         fetched_at_ms=max(int(bar.fetched_at_ms) for bar in ordered),
         source=source,
+        provenance=provenance,
+        venue=venue,
+        session_phase=session_phase,
+        use_rth=use_rth,
     )
 
 
