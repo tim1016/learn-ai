@@ -59,6 +59,15 @@ async function installBotControlRoutes(
   );
 }
 
+async function openOperationsLens(page: Page): Promise<void> {
+  await expect(page.getByRole('button', { name: 'Trader view', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.verdict-card')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Operations', exact: true }).click();
+
+  await expect(page.getByRole('button', { name: 'Operations', exact: true })).toHaveAttribute('aria-pressed', 'true');
+}
+
 test.describe('Bot Control route and page shell', () => {
   test('legacy instance route redirects to the canonical Bot Control route', async ({ page }) => {
     const status = buildScenarioStatus({
@@ -74,6 +83,8 @@ test.describe('Bot Control route and page shell', () => {
 
     await expect(page).toHaveURL(new RegExp(`/broker/bots/${SID}(?:$|[?#])`));
     await expect(page.locator('#bot-control-title')).toContainText(SID);
+    await expect(page.locator('.trader-view')).toBeVisible();
+    await openOperationsLens(page);
     await expect(page.locator('.verdict-card')).toHaveAttribute('data-state', 'On duty');
     await expect(page.getByTestId('verdict-verb')).toHaveText('End day now');
   });
@@ -92,6 +103,8 @@ test.describe('Bot Control route and page shell', () => {
 
     await page.goto(`/broker/bots/${SID}`);
 
+    await expect(page.locator('.trader-view')).toBeVisible();
+    await openOperationsLens(page);
     await expect(page.locator('.verdict-card')).toHaveAttribute('data-layout', 'strip');
     await expect(page.locator('.vc-state')).toHaveText('On duty');
     await expect(page.getByTestId('verdict-verb')).toHaveText('End day now');
@@ -138,6 +151,7 @@ test.describe('Bot Control route and page shell', () => {
 
     await page.goto(`/broker/bots/${SID}`);
 
+    await openOperationsLens(page);
     await expect(page.locator('.verdict-card')).toHaveAttribute('data-state', 'Off duty');
     await expect(page.locator('.vc-state')).toHaveText('Off duty');
     await expect(page.locator('.vc-reason')).toContainText('Run roll call to issue a start offer.');
@@ -187,6 +201,7 @@ test.describe('Bot Control route and page shell', () => {
 
     await page.goto(`/broker/bots/${SID}`);
 
+    await openOperationsLens(page);
     await expect(page.locator('.verdict-card')).toHaveCount(1);
     await expect(page.locator('.verdict-card')).toHaveAttribute('data-state', 'On duty');
     await expect(page.locator('.vc-state')).toHaveText('On duty');

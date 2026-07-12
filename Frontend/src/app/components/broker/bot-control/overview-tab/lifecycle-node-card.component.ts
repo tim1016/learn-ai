@@ -17,6 +17,7 @@ export class LifecycleNodeCardComponent {
   readonly primary = input<boolean>(false);
   readonly blocking = input<boolean>(false);
   readonly receiptsExpanded = input<boolean>(false);
+  readonly compact = input<boolean>(false);
   readonly headingId = input.required<string>();
   readonly receiptRegionId = input.required<string>();
 

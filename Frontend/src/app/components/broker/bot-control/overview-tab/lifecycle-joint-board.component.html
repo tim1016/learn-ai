@@ -1,0 +1,44 @@
+<div
+  class="joint-board"
+  [style.--board-width.px]="boardSize().width"
+  [style.--board-height.px]="boardSize().height"
+>
+  <div class="joint-stage">
+    <div #paperHost class="joint-paper-host" aria-hidden="true"></div>
+    <div class="joint-nodes-layer">
+      @for (nodeView of nodeViews(); track nodeView.node.id) {
+        <div
+          class="joint-node-shell"
+          [attr.data-node-id]="nodeView.node.id"
+          [style.left.px]="nodeView.x"
+          [style.top.px]="nodeView.y"
+        >
+          <app-lifecycle-node-card
+            [node]="nodeView.node"
+            [selected]="nodeView.selected"
+            [highlighted]="nodeView.highlighted"
+            [primary]="nodeView.primary"
+            [blocking]="nodeView.blocking"
+            [receiptsExpanded]="nodeView.receiptsExpanded"
+            [compact]="true"
+            [headingId]="nodeView.headingId"
+            [receiptRegionId]="nodeView.receiptRegionId"
+            (selectedRequested)="selectedRequested.emit($event)"
+            (subgraphRequested)="subgraphRequested.emit($event)"
+            (receiptsToggled)="receiptsToggled.emit($event)"
+          />
+        </div>
+      }
+    </div>
+  </div>
+
+  <div class="edge-summary" aria-label="Lifecycle flow transitions">
+    @for (edge of connectorEdges(); track edge.id) {
+      <span
+        [attr.class]="'lifecycle-joint-edge-summary status-' + edge.status + (edge.animated ? ' edge-animated' : '')"
+      >
+        {{ edgeAccessibleLabel(edge) }}
+      </span>
+    }
+  </div>
+</div>
