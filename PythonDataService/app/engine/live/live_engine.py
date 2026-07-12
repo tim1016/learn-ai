@@ -947,6 +947,20 @@ class LiveEngine:
                     allowed_sessions=self._config.allowed_sessions,
                 )
 
+        # PRD #1005 — the order mechanism only supports RTH placement until the
+        # spread-guarded marketable-limit mechanism (Slice 3) ships and is
+        # proven against the capability probe. Deriving RTH-only (extended
+        # placement disabled) keeps off-hours placement off regardless of the
+        # strategy's declared allowed_sessions: a strategy cannot self-authorize
+        # orders into a session the broker or the data can't support.
+        from app.services.session_authority import (
+            order_mechanism_sessions_from_capability,
+        )
+
+        order_mechanism_sessions = order_mechanism_sessions_from_capability(
+            None, extended_placement_enabled=False
+        )
+
         portfolio = LivePortfolio(
             self._broker,
             intent_wal=intent_wal_for_portfolio,
@@ -958,7 +972,7 @@ class LiveEngine:
             account_truth_gate_provider=account_truth_gate_provider,
             session_gate_provider=session_gate_provider,
             allowed_sessions=self._config.allowed_sessions,
-            order_mechanism_sessions=self._config.allowed_sessions,
+            order_mechanism_sessions=order_mechanism_sessions,
             account_owner_submitter=self._account_owner_submitter,
             account_id=self._account_id,
             strategy_instance_id=self._strategy_instance_id,

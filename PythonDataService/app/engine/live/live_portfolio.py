@@ -47,7 +47,10 @@ from app.engine.live.account_owner_fence import (
 from app.engine.live.intent_events import DropReason
 from app.schemas.broker_capability import SessionKind
 from app.schemas.live_runs import GateResult
-from app.services.session_authority import SessionAuthorityState
+from app.services.session_authority import (
+    SessionAuthorityState,
+    evaluate_session_submit,
+)
 
 
 def _try_int(value: object) -> int | None:
@@ -1000,18 +1003,17 @@ class LivePortfolio:
             session_state = self.session_gate_provider()
             if session_state is not None:
                 session_state_for_submit = session_state
-                block_reason: str | None = None
-                if session_state.phase not in ("PRE", "RTH", "POST", "OVERNIGHT"):
-                    block_reason = "session_closed"
-                elif session_state.phase not in self.allowed_sessions:
-                    block_reason = "strategy_session_not_permitted"
-                elif session_state.phase not in self.order_mechanism_sessions:
-                    block_reason = "order_mechanism_not_enabled"
-                elif session_state.phase in ("PRE", "POST", "OVERNIGHT") and any(
-                    self.reference_price.get(order.symbol) is None or self.reference_price[order.symbol] <= 0
+                extended_reference_price_ok = not any(
+                    self.reference_price.get(order.symbol) is None
+                    or self.reference_price[order.symbol] <= 0
                     for order in self.pending_orders
-                ):
-                    block_reason = "extended_limit_price_unavailable"
+                )
+                block_reason = evaluate_session_submit(
+                    phase=session_state.phase,
+                    allowed_sessions=self.allowed_sessions,
+                    order_mechanism_sessions=self.order_mechanism_sessions,
+                    extended_reference_price_ok=extended_reference_price_ok,
+                )
                 if block_reason is not None:
                     self.drop_pending_before_submit(
                         drop_reason="session_policy_block",

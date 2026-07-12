@@ -218,3 +218,70 @@ def _next_session_pre_open(now_ny: datetime) -> int:
     candidate = next_trading_day(now_ny.date())
     target = datetime.combine(candidate, _PRE_OPEN, tzinfo=_NY)
     return _ms_utc(target)
+
+
+SessionSubmitBlockReason = Literal[
+    "session_closed",
+    "strategy_session_not_permitted",
+    "order_mechanism_not_enabled",
+    "extended_limit_price_unavailable",
+]
+
+_TRADEABLE_PHASES: tuple[TradingSessionPhase, ...] = ("PRE", "RTH", "POST", "OVERNIGHT")
+_EXTENDED_PHASES: tuple[TradingSessionPhase, ...] = ("PRE", "POST", "OVERNIGHT")
+
+
+def evaluate_session_submit(
+    *,
+    phase: TradingSessionPhase,
+    allowed_sessions: tuple[SessionKind, ...],
+    order_mechanism_sessions: tuple[SessionKind, ...],
+    extended_reference_price_ok: bool,
+) -> SessionSubmitBlockReason | None:
+    """Pure submit-gate decision: return a block reason, or ``None`` to allow.
+
+    Kept free of portfolio state so the branch logic is unit-testable in
+    isolation and the submit path carries no session branching of its own.
+    ``order_mechanism_sessions`` is the set the *mechanism* can actually place
+    into (see :func:`order_mechanism_sessions_from_capability`), a distinct axis
+    from the strategy-declared ``allowed_sessions``.
+    """
+    if phase not in _TRADEABLE_PHASES:
+        return "session_closed"
+    if phase not in allowed_sessions:
+        return "strategy_session_not_permitted"
+    if phase not in order_mechanism_sessions:
+        return "order_mechanism_not_enabled"
+    if phase in _EXTENDED_PHASES and not extended_reference_price_ok:
+        return "extended_limit_price_unavailable"
+    return None
+
+
+def order_mechanism_sessions_from_capability(
+    capability: SessionDataCapability | None,
+    *,
+    extended_placement_enabled: bool,
+) -> tuple[SessionKind, ...]:
+    """Which sessions the *order mechanism* can actually place into.
+
+    RTH is always mechanism-ready (market orders in regular hours). An extended
+    session is added only when BOTH (a) extended placement is explicitly enabled
+    — which requires the spread-guarded marketable-limit mechanism (PRD #1005
+    Slice 3) that is not yet built — AND (b) the capability probe proves the
+    broker will accept a live off-hours order on live data. Derived from the
+    probe, never from the strategy's declared allow-list, so a strategy cannot
+    self-authorize placement into a session the broker or the data can't
+    support.
+    """
+    ready: list[SessionKind] = ["RTH"]
+    if extended_placement_enabled and capability is not None:
+        for kind in ("PRE", "POST", "OVERNIGHT"):
+            session = capability.sessions.get(kind)
+            if (
+                session is not None
+                and session.tradeable == "yes"
+                and session.order_eligible_outside_rth
+                and session.data == "live"
+            ):
+                ready.append(kind)
+    return tuple(ready)
