@@ -72,6 +72,9 @@ public record PersistLeanRunPayload(
     [JsonPropertyName("insight_summary_json")]
     public string? InsightSummaryJson { get; init; }
 
+    [JsonPropertyName("validation_analytics_json")]
+    public string? ValidationAnalyticsJson { get; init; }
+
     [JsonPropertyName("parity_group_id")]
     public string? ParityGroupId { get; init; }
 }

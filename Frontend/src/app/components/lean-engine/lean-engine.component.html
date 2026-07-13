@@ -283,24 +283,9 @@
               <div class="notice error">{{ err }}</div>
             }
 
-            @if (result(); as r) {
+            @if (completedRunId(); as runId) {
               <section class="workbench-results" aria-label="Current validation run results">
-                <app-engine-results
-                  [result]="r"
-                  [symbol]="effectiveSymbol()"
-                  [chartBars]="chartBars()"
-                  [chartTrades]="chartTrades()"
-                  [equityCurve]="equityCurve()"
-                  [fromDate]="startDate()"
-                  [toDate]="endDate()"
-                  [resolution]="resolution()" />
-
-                @if (insights().length > 0) {
-                  <app-insight-panel
-                    [insights]="insights()"
-                    [summary]="insightSummary()"
-                  />
-                }
+                <app-engine-run-report [runId]="runId" />
               </section>
             } @else {
               <section class="validation-stage-placeholder" aria-label="Validation preview">

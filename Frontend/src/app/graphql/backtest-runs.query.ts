@@ -1,4 +1,5 @@
 import { gql } from "apollo-angular";
+import type { EngineValidationAnalytics } from "../components/lean-engine/engine-results/engine-validation-analytics.types";
 import { RunHistoryRow } from "../components/shared/run-history/run-history.types";
 import type { DataPolicy } from "../models/data-policy";
 
@@ -109,6 +110,68 @@ export const BACKTEST_RUN_DETAIL_QUERY = gql`
           e
         }
       }
+      # Frozen validation-analytics envelope. Aliased to the canonical
+      # snake_case wire shape (EngineValidationAnalytics) — same PR B.3
+      # convention as the dataPolicy block below.
+      validationAnalytics {
+        schemaVersion
+        computedAtMs
+        engine
+        error
+        horizons {
+          key
+          label
+          start_ms_utc: startMsUtc
+          end_ms_utc: endMsUtc
+          has_full_coverage: hasFullCoverage
+          net_return: netReturn
+          trade_count: tradeCount
+          win_rate: winRate
+          profit_factor: profitFactor
+        }
+        timing_cells: timingCells {
+          weekday
+          weekday_label: weekdayLabel
+          hour_et: hourEt
+          trade_count: tradeCount
+          win_rate: winRate
+          average_return: averageReturn
+        }
+        seasonality {
+          month
+          month_label: monthLabel
+          observation_count: observationCount
+          median_compounded_return: medianCompoundedReturn
+        }
+        rolling_trade_stability: rollingTradeStability {
+          trade_number: tradeNumber
+          end_ms_utc: endMsUtc
+          window_size: windowSize
+          average_return: averageReturn
+          win_rate: winRate
+        }
+      }
+      # DataPolicy is the key the run report uses to re-fetch chart bars
+      # from the shared bar store (symbol/adjusted/session/timeframe).
+      dataPolicy {
+        source
+        symbol
+        adjusted
+        session
+        input_bars: inputBars {
+          timespan
+          multiplier
+        }
+        strategy_bars: strategyBars {
+          timespan
+          multiplier
+        }
+        timestamp_policy: timestampPolicy
+        timezone
+        provider_kind: providerKind
+        fixture_id: fixtureId
+        fixture_sha256: fixtureSha256
+      }
       insightSummaryJson
       parityGroupId
       trades {
@@ -198,10 +261,22 @@ export interface BacktestRunDetail {
   verdictGrade: string | null;
   verdictSignal: string | null;
   equityCurve: BacktestRunEquityCurve | null;
+  validationAnalytics: BacktestRunValidationAnalytics | null;
+  /** Canonical DataPolicy block — the run report's key for re-fetching chart bars. */
+  dataPolicy: DataPolicy | null;
   insightSummaryJson: string | null;
   parityGroupId: string | null;
   trades: BacktestRunDetailTrade[];
   parityVerdicts: { id: number; status: string; verdictJson: string; createdAt: number }[];
+}
+
+/** Frozen validation-analytics envelope: canonical snake_case analytics
+ *  body (EngineValidationAnalytics) plus envelope metadata. */
+export interface BacktestRunValidationAnalytics extends EngineValidationAnalytics {
+  schemaVersion: number;
+  computedAtMs: number;
+  engine: string;
+  error: string | null;
 }
 
 export interface BacktestRunDetailTrade {

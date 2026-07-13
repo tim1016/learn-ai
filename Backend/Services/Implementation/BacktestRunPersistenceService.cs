@@ -139,6 +139,7 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
             VerdictSignal = payload.VerdictSignal,
             EquityCurveJson = payload.EquityCurveJson,
             InsightSummaryJson = payload.InsightSummaryJson,
+            ValidationAnalyticsJson = payload.ValidationAnalyticsJson,
             ParityGroupId = payload.ParityGroupId,
         };
 

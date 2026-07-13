@@ -23,6 +23,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from statistics import median
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from app.engine.results.statistics import compute_trade_statistics
@@ -81,6 +82,34 @@ class ValidationTrade:
 class ValidationEquityPoint:
     timestamp_ms_utc: int
     equity: float
+
+
+# Version stamp for the persisted ``ValidationAnalyticsJson`` envelope.
+# Bump when the analytics shape changes so old rows stay interpretable
+# (persisted analytics are frozen at run time, never recomputed).
+VALIDATION_ANALYTICS_SCHEMA_VERSION = 1
+
+
+def build_validation_analytics_envelope(
+    analytics: EngineValidationAnalyticsResponse,
+    *,
+    engine: Literal["python", "lean"],
+    computed_at_ms: int,
+) -> dict[str, Any]:
+    """Canonical persisted envelope for run validation analytics.
+
+    Both persist paths (Python engine study save, LEAN sidecar persist)
+    wrap their analytics through this single constructor so the
+    ``ValidationAnalyticsJson`` column has exactly one shape. ``engine``
+    is recorded because LEAN analytics derive from paired trades with
+    synthetic-exit caveats — a reader must be able to tell.
+    """
+    return {
+        "schema_version": VALIDATION_ANALYTICS_SCHEMA_VERSION,
+        "computed_at_ms": computed_at_ms,
+        "engine": engine,
+        "analytics": analytics.model_dump(mode="json"),
+    }
 
 
 def compute_engine_validation_analytics(

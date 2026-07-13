@@ -95,6 +95,7 @@ public static class StudiesApi
             VerdictSignal = request.VerdictSignal,
             EquityCurveJson = request.EquityCurveJson,
             InsightSummaryJson = request.InsightSummaryJson,
+            ValidationAnalyticsJson = request.ValidationAnalyticsJson,
             ParityGroupId = request.ParityGroupId,
         };
 
@@ -417,6 +418,7 @@ public record SaveStudyRequest
     public string? VerdictSignal { get; init; }
     public string? EquityCurveJson { get; init; }
     public string? InsightSummaryJson { get; init; }
+    public string? ValidationAnalyticsJson { get; init; }
     public string? ParityGroupId { get; init; }
 }
 

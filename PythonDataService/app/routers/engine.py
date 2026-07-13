@@ -60,12 +60,13 @@ from app.services.engine_bars_service import read_consolidated_bars
 from app.services.engine_validation_analytics import (
     ValidationEquityPoint,
     ValidationTrade,
+    build_validation_analytics_envelope,
     compute_engine_validation_analytics,
 )
 from app.services.run_verdict_service import compute_run_verdict
 from app.services.strategies.common import TradeRecord
 from app.services.strategies.lean_statistics import compute_lean_statistics
-from app.utils.timestamps import to_ms_utc
+from app.utils.timestamps import now_ms_utc, to_ms_utc
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -611,7 +612,6 @@ def export_polygon_to_lean(request: LeanExportRequest) -> LeanExportResponse:
     # that don't provide a Polygon API key.
     from app.engine.data.polygon_export import export_polygon_range_to_lean
     from app.services.polygon_client import PolygonClientService
-    from app.utils.timestamps import now_ms_utc
 
     cache_root = resolve_policy_root(source="polygon", adjusted=request.adjusted)
     cache_root.mkdir(parents=True, exist_ok=True)
@@ -1099,6 +1099,15 @@ def execute_engine_backtest(
     # ── Serialize consolidated bars for charting ──
     chart_bars_dicts = [_serialize_chart_bar(b) for b in (strategy.ctx.consolidated_bars if strategy.ctx else [])]
 
+    # Correct the policy's strategy_bars to the strategy's ACTUAL
+    # consolidation timeframe. The legacy synthesizer writes minute/1,
+    # but e.g. the EMA crossover consolidates 15-minute bars — the
+    # persisted DataPolicy is the key the run report uses to re-fetch
+    # chart bars from the store, so it must record the real timeframe.
+    # Only single-consolidator strategies are corrected; a multi-
+    # consolidator chart is a mix no single timeframe can reproduce.
+    _record_actual_strategy_bars(request, strategy)
+
     # ── Serialize insights ──
     insights_dicts = [i.to_dict() for i in result.insights]
 
@@ -1197,6 +1206,30 @@ def _to_ms_utc(dt: datetime) -> int:
         raise ValueError("engine timestamp must be timezone-aware before serialization") from exc
 
 
+def _record_actual_strategy_bars(request: EngineBacktestRequest, strategy: Strategy) -> None:
+    """Overwrite ``data_policy.strategy_bars`` with the strategy's real timeframe.
+
+    Reads the registered consolidator's period after the run. No-op when
+    the request has no policy, the strategy has no context/symbols, or it
+    registered more than one consolidator (no single timeframe exists).
+    """
+    if request.data_policy is None or strategy.ctx is None or not strategy.ctx.symbols:
+        return
+    consolidators = strategy.ctx.get_consolidators(strategy.ctx.symbols[0])
+    if len(consolidators) != 1:
+        return
+    total_minutes = int(consolidators[0].period.total_seconds() // 60)
+    if total_minutes <= 0:
+        return
+    if total_minutes % 1440 == 0:
+        timespan, multiplier = "day", total_minutes // 1440
+    elif total_minutes % 60 == 0:
+        timespan, multiplier = "hour", total_minutes // 60
+    else:
+        timespan, multiplier = "minute", total_minutes
+    request.data_policy.strategy_bars = _EngineBarsSpecModel(timespan=timespan, multiplier=multiplier)
+
+
 def _serialize_chart_bar(b: TradeBar) -> dict[str, Any]:
     """One wire shape for consolidated chart bars — used by the live run's
     ``chart_bars`` and the ``/bars`` store endpoint, so the two can be
@@ -1292,6 +1325,21 @@ def _save_study_sync(
                 response.equity_curve,
                 trade_timestamps={t.entry_time for t in response.trades} | {t.exit_time for t in response.trades},
             )
+        ),
+        # Frozen at run time — the persisted run is the single render
+        # source for the workbench and the run-detail page, so the atlas
+        # analytics must survive the response. Null when the analytics
+        # computation rejected the run's output (honest missing).
+        "validationAnalyticsJson": (
+            json.dumps(
+                build_validation_analytics_envelope(
+                    response.validation_analytics,
+                    engine="python",
+                    computed_at_ms=now_ms_utc(),
+                )
+            )
+            if response.validation_analytics
+            else None
         ),
         "insightSummaryJson": json.dumps(response.insight_summary) if response.insight_summary else None,
         # Dollar PnL net of commission, matching LEAN's persisted

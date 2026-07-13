@@ -16,11 +16,9 @@ import { toSignal } from "@angular/core/rxjs-interop";
 import { environment } from "../../../environments/environment";
 import { ButtonModule } from "primeng/button";
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from "primeng/tabs";
-import { EngineResultsComponent } from "./engine-results/engine-results.component";
+import { RunReportComponent } from "../engine-lab/run-report/run-report.component";
 import { StudyListItem } from "./study-list-item";
 import { EngineLabRunHistoryComponent } from "./engine-lab-run-history/engine-lab-run-history.component";
-import { ChartBar, EngineTradeForChart, EquityCurvePoint } from "./engine-chart/engine-chart.component";
-import { InsightPanelComponent } from "./insight-panel/insight-panel.component";
 import { EngineReplayV2Component } from "./engine-replay-v2/engine-replay-v2.component";
 import { PageHeaderComponent } from "../../shared/page-header/page-header.component";
 import {
@@ -190,48 +188,6 @@ interface EngineTrade {
   signal_reason: string;
 }
 
-/**
- * StudyTradeItem (camelCase) shape from GET /api/studies/{id}.
- * Defined narrow + exported so the trade-mapper helper has a typed input
- * and can be unit-tested in isolation.
- */
-export interface StudyTradeApiItem {
-  entryTimestamp: number;
-  exitTimestamp: number;
-  entryPrice: number;
-  exitPrice: number;
-  pnL: number;
-  quantity?: number | null;
-  signalReason?: string | null;
-}
-
-/**
- * Reconstruct an EngineTrade from a persisted StudyTradeItem. The .NET
- * BacktestTrade entity does not store the percent return, so derive it
- * from `pnL / entryPrice` — matches the Python engine's definition
- * (`pnl_pct = pnl_pts / entry.entry_price`). Guard against entry_price
- * <= 0 to avoid NaN/Infinity propagating into the trade-log table.
- */
-export function mapStudyTradeToEngineTrade(
-  t: StudyTradeApiItem,
-  index: number,
-): EngineTrade {
-  const pnlPct = t.entryPrice > 0 ? t.pnL / t.entryPrice : 0;
-  return {
-    trade_number: index + 1,
-    entry_time: t.entryTimestamp,
-    entry_price: t.entryPrice,
-    exit_time: t.exitTimestamp,
-    exit_price: t.exitPrice,
-    quantity: t.quantity ?? undefined,
-    pnl_pts: t.pnL,
-    pnl_pct: pnlPct,
-    result: t.pnL > 0 ? 'WIN' : 'LOSS',
-    signal_reason: t.signalReason ?? '',
-    indicators: {},
-  };
-}
-
 interface EngineBacktestResponse {
   success: boolean;
   strategy_name: string;
@@ -277,8 +233,7 @@ interface DataAvailability {
   imports: [
     CommonModule, FormsModule, RouterModule, ButtonModule,
     Tabs, TabList, Tab, TabPanel, TabPanels,
-    EngineResultsComponent, EngineLabRunHistoryComponent,
-    InsightPanelComponent,
+    RunReportComponent, EngineLabRunHistoryComponent,
     EngineReplayV2Component,
     PageHeaderComponent,
     TickerRangePickerComponent,
@@ -406,33 +361,11 @@ export class LeanEngineComponent implements OnInit {
   readonly replayEnabled = true;
   readonly selectedStudyForReplay = signal<StudyListItem | null>(null);
 
-  readonly result = signal<EngineBacktestResponse | null>(null);
+  /** Persisted-run id rendered by the shared run report. The persisted
+   *  run is the ONLY render source — there is no transient results path,
+   *  so the workbench stage and /engine/runs/:id cannot diverge. */
+  readonly completedRunId = signal<number | null>(null);
   readonly runError = signal<string | null>(null);
-
-  // Computed chart data derived from backtest result
-  readonly chartBars = computed<ChartBar[]>(() => {
-    return this.result()?.chart_bars ?? [];
-  });
-  readonly chartTrades = computed<EngineTradeForChart[]>(() => {
-    const r = this.result();
-    if (!r?.trades) return [];
-    return r.trades.map(t => ({
-      entry_time: t.entry_time,
-      exit_time: t.exit_time,
-      entry_price: t.entry_price,
-      exit_price: t.exit_price,
-      pnl_pts: t.pnl_pts,
-      result: t.result,
-    }));
-  });
-  readonly equityCurve = computed<EquityCurvePoint[]>(() => {
-    return (this.result()?.equity_curve ?? []).map(pt => ({
-      timestamp: pt.timestamp,
-      equity: pt.equity,
-    }));
-  });
-  readonly insights = computed(() => this.result()?.insights ?? []);
-  readonly insightSummary = computed(() => this.result()?.insight_summary ?? {});
 
   // ------------------------------------------------------------------
   // Dynamic data layer state — availability + on-demand fetch
@@ -749,7 +682,7 @@ export class LeanEngineComponent implements OnInit {
       }
     }
     this.paramValues.set(defaults);
-    this.result.set(null);
+    this.completedRunId.set(null);
     this.runError.set(null);
   }
 
@@ -913,7 +846,7 @@ export class LeanEngineComponent implements OnInit {
 
     this.running.set(true);
     this.runError.set(null);
-    this.result.set(null);
+    this.completedRunId.set(null);
     this.setRunStatus(
       "connecting",
       "Submitting backtest…",
@@ -982,7 +915,7 @@ export class LeanEngineComponent implements OnInit {
 
     this.running.set(true);
     this.runError.set(null);
-    this.result.set(null);
+    this.completedRunId.set(null);
     this.setRunStatus(
       "connecting",
       "Submitting LEAN run…",
@@ -1303,7 +1236,6 @@ export class LeanEngineComponent implements OnInit {
   private async handleEngineJobCompleted(jobId: string): Promise<void> {
     try {
       const response = await this.jobsService.fetchResult<EngineBacktestResponse>(jobId);
-      this.result.set(response);
       if (response.error) {
         this.runError.set(response.error);
         this.setRunStatus("failed", "Backtest failed", response.error);
@@ -1313,8 +1245,15 @@ export class LeanEngineComponent implements OnInit {
           `Completed — ${response.total_trades} trade${response.total_trades === 1 ? "" : "s"}, net ${this.formatCurrency(response.net_profit)}`,
         );
         if (response.study_id != null) {
+          // The persisted run is the only render source — the report
+          // reads back exactly what history will show for this run.
+          this.completedRunId.set(response.study_id);
           this.pythonStudyId.set(response.study_id);
           this.selectedStudyForReplay.set(this.synthesizeStudyForReplay(response));
+        } else {
+          this.runError.set(
+            "Run completed but persistence failed — no report available. The run was not saved to history; check backend logs.",
+          );
         }
         this.activeTab.set("configuration");
       }
@@ -1331,10 +1270,20 @@ export class LeanEngineComponent implements OnInit {
     try {
       const response = await this.jobsService.fetchResult<TrustedRunResponse>(jobId);
       this.leanStudyId.set(response.strategy_execution_id);
-      const detail = response.strategy_execution_id === null
-        ? "Run completed, but no persisted study ID was returned."
-        : `Persisted as study #${response.strategy_execution_id}.`;
-      this.setRunStatus("completed", "LEAN run finished", detail);
+      if (response.strategy_execution_id !== null) {
+        // LEAN runs render the same persisted report as Python runs.
+        this.completedRunId.set(response.strategy_execution_id);
+        this.setRunStatus(
+          "completed",
+          "LEAN run finished",
+          `Persisted as study #${response.strategy_execution_id}.`,
+        );
+      } else {
+        this.runError.set(
+          "LEAN run completed but persistence failed — no report available. The run was not saved to history; check backend logs.",
+        );
+        this.setRunStatus("completed", "LEAN run finished", "Run completed, but no persisted study ID was returned.");
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Failed to fetch LEAN run result";
       this.runError.set(message);
@@ -1441,53 +1390,12 @@ export class LeanEngineComponent implements OnInit {
   }
 
   // ------------------------------------------------------------------
-  // History → load past study into Results tab
+  // History → render the persisted run through the shared report
   // ------------------------------------------------------------------
-  async onStudySelected(studyId: number): Promise<void> {
-    const backendBase = environment.backendUrl.replace(/\/graphql$/, '');
-    try {
-      const detail = await firstValueFrom(
-        this.http.get<any>(`${backendBase}/api/studies/${studyId}`)
-      );
-      // Parse LEAN statistics from JSON blob if present
-      let leanStats = null;
-      if (detail.leanStatisticsJson) {
-        try { leanStats = JSON.parse(detail.leanStatisticsJson); } catch { /* invalid JSON, keep null */ }
-      }
-      // Construct an EngineBacktestResponse-shaped object for the results component
-      this.result.set({
-        success: true,
-        strategy_name: detail.strategyName,
-        fill_mode: detail.fillMode,
-        initial_cash: detail.initialCash,
-        final_equity: detail.finalEquity,
-        net_profit: detail.totalPnL,
-        total_fees: detail.totalFees ?? 0,
-        total_trades: detail.totalTrades,
-        winning_trades: detail.winningTrades,
-        losing_trades: detail.losingTrades,
-        win_rate: detail.winRate,
-        statistics: {
-          max_drawdown_pct: detail.maxDrawdown,
-          sharpe_ratio: detail.sharpeRatio,
-          sortino_ratio: detail.sortinoRatio,
-          profit_factor: detail.profitFactor,
-        },
-        lean_statistics: leanStats,
-        trades: (detail.trades ?? []).map((t: StudyTradeApiItem, i: number) =>
-          mapStudyTradeToEngineTrade(t, i),
-        ),
-        log_lines: [],
-        equity_curve: [],
-        chart_bars: [],
-        insights: [],
-        insight_summary: {},
-      });
-      this.pythonStudyId.set(studyId);
-      this.activeTab.set("configuration");
-    } catch (err: any) {
-      this.runError.set(err?.message ?? 'Failed to load study');
-    }
+  onStudySelected(studyId: number): void {
+    this.completedRunId.set(studyId);
+    this.pythonStudyId.set(studyId);
+    this.activeTab.set("configuration");
   }
 
   availabilitySourceChips(av: DataAvailability): { label: string; days: number }[] {

@@ -83,6 +83,15 @@ public class StrategyExecution
     [Column(TypeName = "jsonb")]
     public string? InsightSummaryJson { get; set; }
 
+    /// <summary>
+    /// Frozen validation-analytics envelope (horizons, timing heatmap,
+    /// seasonality, rolling stability) computed at run completion by the
+    /// producing engine. Never recomputed server-side. Null for rows that
+    /// predate the envelope or whose run rejected analytics computation.
+    /// </summary>
+    [Column(TypeName = "jsonb")]
+    public string? ValidationAnalyticsJson { get; set; }
+
     // ── Metadata ──
     /// <summary>Origin: "engine" or "strategy-lab".</summary>
     [MaxLength(20)]

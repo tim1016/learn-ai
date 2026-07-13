@@ -1,0 +1,44 @@
+<section class="run-report">
+  @if (loading()) {
+    <div class="empty-state">Loading run…</div>
+  } @else if (run(); as r) {
+    <header class="report-header">
+      <div>
+        <p class="eyebrow">{{ r.engine }} · {{ r.source }}</p>
+        <h2>{{ r.strategyName }} / {{ r.symbol }}</h2>
+        <p class="meta">
+          {{ r.startDate }} → {{ r.endDate }} · executed
+          <app-timestamp-display [value]="r.executedAt" mode="local" />
+        </p>
+      </div>
+      <span class="run-id-chip">run #{{ r.id }}</span>
+    </header>
+
+    @if (barsNotice(); as notice) {
+      <p class="report-notice" role="note">{{ notice }}</p>
+    }
+    @if (equityNotice(); as notice) {
+      <p class="report-notice" role="note">{{ notice }}</p>
+    }
+    @if (analyticsNotice(); as notice) {
+      <p class="report-notice" role="note">{{ notice }}</p>
+    }
+
+    @if (engineResult(); as result) {
+      <app-engine-results
+        [result]="result"
+        [verdict]="verdict()"
+        [symbol]="r.symbol"
+        [chartBars]="chartBars()"
+        [chartTrades]="chartTrades()"
+        [equityCurve]="equityCurve()"
+        [runStamp]="r.executedAt | timestampDisplay"
+        [fromDate]="r.startDate"
+        [toDate]="r.endDate"
+        [resolution]="resolutionLabel()"
+      />
+    }
+  } @else {
+    <div class="empty-state">Run not found.</div>
+  }
+</section>

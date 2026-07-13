@@ -70,7 +70,7 @@
       <span class="hero-col__sub">peak-to-trough</span>
     </header>
     <div class="hero-col__value mono negative">
-      {{ formatPct(r.statistics['max_drawdown_pct'] ?? 0) }}
+      {{ formatPctOrDash(r.statistics['max_drawdown_pct']) }}
     </div>
     <div class="hero-col__delta mono">{{ maxDrawdownGrade().subtitle }}</div>
   </article>
@@ -121,7 +121,7 @@
       <span class="hero-col__label">Expectancy</span>
       <span class="hero-col__sub">per trade</span>
     </header>
-    <div class="hero-col__value mono">{{ formatPct(r.statistics['expectancy_pct'] ?? 0) }}</div>
+    <div class="hero-col__value mono">{{ formatPctOrDash(r.statistics['expectancy_pct']) }}</div>
     <div class="hero-col__delta mono">{{ expectancyGrade().subtitle }}</div>
   </article>
 </div>
@@ -139,7 +139,7 @@
     />
   </div>
   <div class="results-split__side">
-    <app-readiness-score-card [result]="r" />
+    <app-readiness-score-card [verdict]="verdict()" />
   </div>
 </div>
 

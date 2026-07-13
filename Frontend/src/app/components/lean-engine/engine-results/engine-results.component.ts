@@ -15,6 +15,7 @@ import {
   gradeSharpe, gradeSortino, gradeProfitFactor, gradeWinRate,
   gradeMaxDrawdown, gradeExpectancy, gradeNetProfit,
 } from '../metric-grade.util';
+import type { RunVerdict } from '../../../api/run-verdict.types';
 import type { EngineValidationAnalytics } from './engine-validation-analytics.types';
 import { TradeLedgerComponent } from './trade-ledger/trade-ledger.component';
 import { ValidationAtlasComponent } from './validation-atlas/validation-atlas.component';
@@ -106,6 +107,10 @@ export interface EngineResultData {
 export class EngineResultsComponent {
   result = input.required<EngineResultData>();
   symbol = input<string>('SPY');
+
+  /** Backend-authored frozen run verdict — feeds the readiness card.
+   *  Null renders the card's honest empty state. */
+  readonly verdict = input<RunVerdict | null>(null);
 
   /** Bars + trade markers for the price chart panel. Optional —
    *  when not supplied, the chart panel renders empty placeholders. */
@@ -241,6 +246,13 @@ export class EngineResultsComponent {
 
   formatPct(val: number): string {
     return (val * 100).toFixed(2) + '%';
+  }
+
+  /** Honest display for stats that may be absent on persisted runs —
+   *  a missing value renders as an em dash, never as a fake 0.00%. */
+  formatPctOrDash(val: number | null | undefined): string {
+    if (val == null || Number.isNaN(val)) return '—';
+    return this.formatPct(val);
   }
 
   formatNumber(value: number | null | undefined, places = 2): string {

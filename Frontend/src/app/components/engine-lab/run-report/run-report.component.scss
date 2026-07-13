@@ -1,0 +1,56 @@
+.run-report {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.report-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+
+  .eyebrow {
+    margin: 0;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-subtle, #9598a1);
+  }
+
+  h2 {
+    margin: 0.15rem 0;
+    font-size: 1.15rem;
+  }
+
+  .meta {
+    margin: 0;
+    font-size: 0.8rem;
+    color: var(--text-subtle, #9598a1);
+  }
+}
+
+.run-id-chip {
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--border-light, #2a2e39);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  color: var(--text-subtle, #9598a1);
+  white-space: nowrap;
+}
+
+.report-notice {
+  margin: 0;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--border-light, #2a2e39);
+  border-left: 3px solid var(--amber, #d0a648);
+  border-radius: 4px;
+  font-size: 0.8rem;
+  color: var(--text-subtle, #9598a1);
+}
+
+.empty-state {
+  padding: 1.5rem;
+  text-align: center;
+  color: var(--text-subtle, #9598a1);
+}

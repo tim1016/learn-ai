@@ -26,7 +26,14 @@ from app.models.responses import (
     LeanTradeStatsResponse,
 )
 from app.schemas.run_verdict import RunVerdictCleanliness
+from app.services.engine_validation_analytics import (
+    ValidationEquityPoint,
+    ValidationTrade,
+    build_validation_analytics_envelope,
+    compute_engine_validation_analytics,
+)
 from app.services.run_verdict_service import compute_run_verdict, failed_run_verdict
+from app.utils.timestamps import now_ms_utc
 
 if TYPE_CHECKING:
     from app.lean_sidecar.manifest import RunManifest
@@ -656,6 +663,7 @@ def build_persist_payload(
                 trade_timestamps={t.entry_ms_utc for t in paired_trades} | {t.exit_ms_utc for t in paired_trades},
             )
         ),
+        "validation_analytics_json": _validation_analytics_json(paired_trades, normalized.equity_curve),
     } | _run_verdict_fields(
         total_trades=agg.total_trades,
         total_pnl=agg.total_pnl,
@@ -663,6 +671,57 @@ def build_persist_payload(
         win_rate=agg.win_rate,
         lean_statistics=lean_statistics,
         cleanliness=cleanliness,
+    )
+
+
+def _trade_return(trade: PairedTrade) -> float:
+    """Per-trade fractional return on deployed capital, net of fees.
+
+    LEAN's paired trades carry dollar PnL; the validation analytics
+    consume fractional returns (the engine path's ``pnl_pct``
+    convention). Deployed capital is ``entry_price × quantity``.
+    """
+    deployed = trade.entry_price * trade.quantity
+    if deployed == 0:
+        return 0.0
+    return trade.pnl / deployed
+
+
+def _validation_analytics_json(
+    paired_trades: Sequence[PairedTrade],
+    equity_curve: Sequence[dict[str, Any]],
+) -> str | None:
+    """Frozen validation-analytics envelope for a LEAN run, or None.
+
+    ``None`` (honest missing) when the analytics computation rejects the
+    run's output — e.g. a non-strictly-increasing equity curve — mirroring
+    the engine router's behavior for its own runs.
+    """
+    try:
+        analytics = compute_engine_validation_analytics(
+            trades=[
+                ValidationTrade(
+                    trade_number=t.trade_number,
+                    entry_ms_utc=t.entry_ms_utc,
+                    exit_ms_utc=t.exit_ms_utc,
+                    pnl_pct=_trade_return(t),
+                )
+                for t in paired_trades
+            ],
+            equity_curve=[
+                ValidationEquityPoint(timestamp_ms_utc=int(p["ms_utc"]), equity=float(p["value"]))
+                for p in equity_curve
+            ],
+        )
+    except (ValueError, KeyError, TypeError) as exc:
+        logger.warning("Validation analytics unavailable for LEAN run: %s", exc)
+        return None
+    return json.dumps(
+        build_validation_analytics_envelope(
+            analytics,
+            engine="lean",
+            computed_at_ms=now_ms_utc(),
+        )
     )
 
 
@@ -711,6 +770,7 @@ def _failed_run_payload(
         "data_policy_json": _data_policy_json_from_manifest(manifest),
         "brokerage_policy": _brokerage_policy_from_manifest(manifest),
         "commission_per_order": 0.0,
+        "validation_analytics_json": None,
         "run_verdict_json": failed_verdict.model_dump_json(),
         "verdict_version": failed_verdict.verdict_version,
         "verdict_grade": failed_verdict.grade,

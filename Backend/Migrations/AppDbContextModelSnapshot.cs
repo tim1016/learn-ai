@@ -885,6 +885,9 @@ namespace Backend.Migrations
                         .HasPrecision(18, 8)
                         .HasColumnType("numeric(18,8)");
 
+                    b.Property<string>("ValidationAnalyticsJson")
+                        .HasColumnType("jsonb");
+
                     b.Property<decimal>("ValueAtRisk95")
                         .HasPrecision(18, 8)
                         .HasColumnType("numeric(18,8)");
