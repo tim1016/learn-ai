@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from app.engine.live.account_artifacts import AccountArtifactError, AccountFreezeEvidence
 from app.engine.live.account_identity import InvalidAccountIdError
+from app.operator.notices.schema import OperatorNotice, notice_code_lifecycle_cure_action
 from app.schemas.account_condition_actions import AccountCureAction
 from app.schemas.account_reconciliation import AccountConditionRow
 from app.schemas.live_runs import BotLifecycleCondition
@@ -25,19 +26,20 @@ LIFECYCLE_CONDITION_CURE_LABELS: dict[AccountCureAction, str] = {
     "retire_replace": "Retire & Replace",
 }
 
-
 def lifecycle_conditions_for_instance(
     root: Path,
     *,
     account_id: str | None,
     sid: str,
     account_freeze: AccountFreezeEvidence | None,
+    incident_headline_notice: OperatorNotice | None = None,
     now_ms: int,
 ) -> list[BotLifecycleCondition]:
     """Return renderable lifecycle conditions for one strategy instance."""
 
+    incident_condition = _incident_condition(sid=sid, notice=incident_headline_notice)
     if account_id is None:
-        return _fallback_freeze_condition(account_freeze)
+        return [*_fallback_freeze_condition(account_freeze), *incident_condition]
     try:
         triage = AccountReconciliationService(artifacts_root=root.parent).triage(
             account_id=account_id,
@@ -59,11 +61,34 @@ def lifecycle_conditions_for_instance(
                 "error": str(exc),
             },
         )
-        return _fallback_freeze_condition(account_freeze)
+        return [*_fallback_freeze_condition(account_freeze), *incident_condition]
 
     conditions = [condition for condition in triage.conditions if _condition_applies_to_instance(condition, sid)]
     conditions.sort(key=_lifecycle_condition_sort_key)
-    return [_to_lifecycle_condition(condition) for condition in conditions]
+    return [*_to_lifecycle_conditions(conditions), *incident_condition]
+
+
+def _incident_condition(
+    *,
+    sid: str,
+    notice: OperatorNotice | None,
+) -> list[BotLifecycleCondition]:
+    if notice is None:
+        return []
+    cure_action = notice_code_lifecycle_cure_action(notice.code)
+    if cure_action is None:
+        return []
+    return [
+        BotLifecycleCondition(
+            scope="bot",
+            severity="critical" if notice.tier == "critical" else "warning",
+            title=notice.title,
+            detail=notice.message,
+            owner_label=f"Bot {sid}",
+            cure_action=cure_action,
+            cure_label=LIFECYCLE_CONDITION_CURE_LABELS[cure_action],
+        )
+    ]
 
 
 def _fallback_freeze_condition(
@@ -102,16 +127,19 @@ def _lifecycle_condition_sort_key(condition: AccountConditionRow) -> tuple[int, 
     return (severity_rank, scope_rank, -condition.evidence_at_ms, condition.condition_type)
 
 
-def _to_lifecycle_condition(condition: AccountConditionRow) -> BotLifecycleCondition:
-    return BotLifecycleCondition(
-        scope=condition.scope,
-        severity=condition.severity,
-        title=condition.title,
-        detail=condition.detail,
-        owner_label=condition.owner.label,
-        cure_action=condition.cure_action,
-        cure_label=LIFECYCLE_CONDITION_CURE_LABELS[condition.cure_action],
-    )
+def _to_lifecycle_conditions(conditions: list[AccountConditionRow]) -> list[BotLifecycleCondition]:
+    return [
+        BotLifecycleCondition(
+            scope=condition.scope,
+            severity=condition.severity,
+            title=condition.title,
+            detail=condition.detail,
+            owner_label=condition.owner.label,
+            cure_action=condition.cure_action,
+            cure_label=LIFECYCLE_CONDITION_CURE_LABELS[condition.cure_action],
+        )
+        for condition in conditions
+    ]
 
 
 __all__ = ["lifecycle_conditions_for_instance"]

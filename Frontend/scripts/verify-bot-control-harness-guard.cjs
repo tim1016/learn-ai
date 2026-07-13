@@ -27,6 +27,7 @@ const harnessObjectTokens = [
 ];
 const mutationMethods = [
   'renewControlPlaneLease',
+  'runRollCall',
   'startHostRunner',
   'endDayNow',
   'setBotLifecycleRoster',
@@ -41,6 +42,7 @@ const mutationMethods = [
 const mutationMethodSet = new Set(mutationMethods);
 const mutationHelperNames = [
   'allowRenewControlPlaneLeaseCall',
+  'allowRunRollCallCall',
   'allowStartHostRunnerCall',
   'allowEndDayNowCall',
   'allowBotLifecycleMutationCall',

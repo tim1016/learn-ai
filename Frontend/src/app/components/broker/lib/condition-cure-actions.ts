@@ -5,7 +5,7 @@ import type {
 import type { BotLifecycleCondition } from '../../../api/live-instances.types';
 
 export type AccountConditionActionKind = 'resolveExposure' | 'clearFreeze' | 'reconcile';
-export type LifecycleConditionCureTarget = 'accountMonitor' | 'retireReplace';
+export type LifecycleConditionCureTarget = 'accountMonitor' | 'reconcile' | 'retireReplace';
 
 const CONDITION_ACTION_LABELS: Record<AccountCureAction, string> = {
   resolve_exposure: 'Resolve exposure',
@@ -13,6 +13,14 @@ const CONDITION_ACTION_LABELS: Record<AccountCureAction, string> = {
   reconcile_now: 'Run account reconcile',
   prove_evidence: 'Prove broker evidence',
   retire_replace: 'Retire & Replace',
+};
+
+const LIFECYCLE_CONDITION_CURE_TARGETS: Record<AccountCureAction, LifecycleConditionCureTarget> = {
+  resolve_exposure: 'accountMonitor',
+  clear_freeze: 'accountMonitor',
+  reconcile_now: 'reconcile',
+  prove_evidence: 'accountMonitor',
+  retire_replace: 'retireReplace',
 };
 
 export function conditionActionLabel(action: AccountCureAction): string {
@@ -38,5 +46,5 @@ export function accountConditionActionKind(
 export function lifecycleConditionCureTarget(
   condition: Pick<BotLifecycleCondition, 'cure_action'>,
 ): LifecycleConditionCureTarget {
-  return condition.cure_action === 'retire_replace' ? 'retireReplace' : 'accountMonitor';
+  return LIFECYCLE_CONDITION_CURE_TARGETS[condition.cure_action];
 }

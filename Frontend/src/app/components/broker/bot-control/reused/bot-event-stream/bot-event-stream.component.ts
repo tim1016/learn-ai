@@ -69,7 +69,10 @@ export class BotEventStreamComponent {
     this.stream()?.isLoading() ?? true,
   );
   readonly errorMessage = computed<string | null>(() => this.stream()?.errorMessage() ?? null);
-  readonly rowCountLabel = computed<string>(() => `${this.rows().length} row(s)`);
+  readonly rowCountLabel = computed<string>(() => {
+    const count = this.rows().length;
+    return `${count} ${count === 1 ? 'event' : 'events'}`;
+  });
 
   isExpanded(seq: number): boolean {
     return this.expanded().has(seq);
@@ -86,10 +89,6 @@ export class BotEventStreamComponent {
 
   severityClass(severity: BotEventSeverity): string {
     return `severity-${severity}`;
-  }
-
-  trackRow(_index: number, display: DisplayRow): number {
-    return display.row.seq;
   }
 
   invokeAction(action: BotEventStreamAction): void {

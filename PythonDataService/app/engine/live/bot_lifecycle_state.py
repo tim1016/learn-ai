@@ -167,6 +167,23 @@ class BotLifecycleStateRepo:
             replacement_strategy_instance_id=replacement_strategy_instance_id,
         )
 
+    def reopen_for_deploy(
+        self,
+        *,
+        now_ms: int,
+        updated_by: str,
+        reason: str,
+    ) -> BotLifecycleStateRecord:
+        return self.update(
+            now_ms=now_ms,
+            updated_by=updated_by,
+            phase=BotLifecyclePhase.OFF_DUTY,
+            on_roster=True,
+            active_run_id=None,
+            reason=reason,
+            clear_retirement=True,
+        )
+
     def update(
         self,
         *,
@@ -179,6 +196,7 @@ class BotLifecycleStateRepo:
         retired_at_ms: int | None = None,
         retired_reason: str | None = None,
         replacement_strategy_instance_id: str | None = None,
+        clear_retirement: bool = False,
     ) -> BotLifecycleStateRecord:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with _file_lock(self._path):
@@ -205,19 +223,31 @@ class BotLifecycleStateRepo:
                 updated_by=updated_by,
                 reason=reason,
                 retired_at_ms=(
-                    retired_at_ms
-                    if retired_at_ms is not None
-                    else (existing.retired_at_ms if existing is not None else None)
+                    None
+                    if clear_retirement
+                    else (
+                        retired_at_ms
+                        if retired_at_ms is not None
+                        else (existing.retired_at_ms if existing is not None else None)
+                    )
                 ),
                 retired_reason=(
-                    retired_reason
-                    if retired_reason is not None
-                    else (existing.retired_reason if existing is not None else None)
+                    None
+                    if clear_retirement
+                    else (
+                        retired_reason
+                        if retired_reason is not None
+                        else (existing.retired_reason if existing is not None else None)
+                    )
                 ),
                 replacement_strategy_instance_id=(
-                    replacement_strategy_instance_id
-                    if replacement_strategy_instance_id is not None
-                    else (existing.replacement_strategy_instance_id if existing is not None else None)
+                    None
+                    if clear_retirement
+                    else (
+                        replacement_strategy_instance_id
+                        if replacement_strategy_instance_id is not None
+                        else (existing.replacement_strategy_instance_id if existing is not None else None)
+                    )
                 ),
                 version=(existing.version + 1) if existing is not None else 1,
             )

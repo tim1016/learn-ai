@@ -57,9 +57,9 @@ const COLUMN_GAP = 210;
 const START_X = 18;
 const START_Y = 42;
 const TOP_ROW_Y = START_Y;
-const BOTTOM_ROW_Y = 248;
+const BOTTOM_ROW_Y = 332;
 const BOARD_PADDING = 18;
-const MIN_BOARD_HEIGHT = 430;
+const MIN_BOARD_HEIGHT = 560;
 
 const FALLBACK_ROW_BY_LANE: Record<LifecycleChartLane, 0 | 1> = {
   bot: 0,

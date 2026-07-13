@@ -14,6 +14,8 @@ import { timer } from 'rxjs';
 import type {
   BotLifecycleAction,
   BotLifecycleActionId,
+  BotRollCallOffer,
+  LiveInstanceStatus,
   OperatorSurfaceConfirmations,
   TraderPrimaryRemediation,
 } from '../../../api/live-instances.types';
@@ -42,6 +44,17 @@ import { BotSurfaceStore } from './bot-surface-store.service';
 
 const MISSING_CONFIRMATION_COPY_ERROR =
   'Backend confirmation copy is unavailable; refusing unsafe action.';
+
+type StartupAutomationState =
+  | { readonly phase: 'idle' }
+  | { readonly phase: 'running'; readonly label: string; readonly detail: string }
+  | { readonly phase: 'ready'; readonly label: string; readonly detail: string }
+  | { readonly phase: 'blocked'; readonly label: string; readonly detail: string };
+
+interface StartReadyCapability {
+  readonly run_id: string;
+  readonly request: HostRunnerStartRequest;
+}
 
 @Component({
   selector: 'app-bot-control-page',
@@ -72,6 +85,7 @@ export class BotControlPageComponent {
   readonly mutationError = signal<string | null>(null);
   readonly busyAction = signal<string | null>(null);
   readonly activeLens = signal<'trader' | 'operations'>('trader');
+  readonly startupAutomation = signal<StartupAutomationState>({ phase: 'idle' });
   readonly typedHaltOpen = signal<boolean>(false);
   private readonly typedHaltInstanceId = signal<string | null>(null);
   readonly crashRecoveryConfirmOpen = signal<boolean>(false);
@@ -79,6 +93,7 @@ export class BotControlPageComponent {
   readonly removeBotConfirmOpen = signal<boolean>(false);
   private readonly retireReplaceMoveConfirmation = signal<OperatorConfirmationCopy | null>(null);
   private readonly removeBotMoveConfirmation = signal<OperatorConfirmationCopy | null>(null);
+  private readonly automaticRollCallKey = signal<string | null>(null);
   private readonly confirmations = computed<OperatorSurfaceConfirmations | null>(
     () => this.status()?.operator_surface.confirmations ?? null,
   );
@@ -218,6 +233,16 @@ export class BotControlPageComponent {
           : null,
       );
     });
+    effect(() => {
+      const status = this.status();
+      if (!status || this.readOnly() || this.busyAction() !== null) return;
+      if (!this.needsRollCallOffer(status)) return;
+      const runId = status.operator_surface.host_process.start_capability.run_id;
+      const key = `${status.strategy_instance_id}:${runId ?? 'no-run'}`;
+      if (this.automaticRollCallKey() === key) return;
+      this.automaticRollCallKey.set(key);
+      void this.prepareRollCallOfferOnly();
+    });
     this.destroyRef.onDestroy(() => {
       this.activeBotSidebarNotice.clearForInstance(this.instanceId());
     });
@@ -317,19 +342,10 @@ export class BotControlPageComponent {
     if (!id || this.mutationsDisabled() || !cap || !canStartHostProcess(cap)) return;
     const request = this.startRequestWithRollCallOffer(cap.request);
     if (!request) {
-      this.mutationError.set('Run roll call before starting this bot.');
+      await this.prepareAndStartWithRollCall();
       return;
     }
-    this.busyAction.set('start_process');
-    this.mutationError.set(null);
-    try {
-      const response = await this.liveRuns.startHostRunner(cap.run_id, request);
-      this.surface.establishPending(response);
-    } catch (err) {
-      this.mutationError.set(this.operationErrorMessage('start', err));
-    } finally {
-      this.busyAction.set(null);
-    }
+    await this.startHostProcess(cap.run_id, request);
   }
 
   // Opening the attestation dialog is the only entry point. Recording recovery
@@ -612,6 +628,131 @@ export class BotControlPageComponent {
     const offerId = this.lifecycleAction('confirm_start')?.offer_id ?? null;
     if (!offerId) return null;
     return { ...request, roll_call_offer_id: offerId };
+  }
+
+  private needsRollCallOffer(status: LiveInstanceStatus): boolean {
+    const lifecycle = status.daily_lifecycle;
+    const capability = status.operator_surface.host_process.start_capability;
+    return (
+      lifecycle.on_roster &&
+      lifecycle.phase === 'OFF_DUTY' &&
+      lifecycle.primary_action === null &&
+      canStartHostProcess(capability)
+    );
+  }
+
+  private async prepareRollCallOfferOnly(): Promise<void> {
+    await this.prepareRollCallOffer({
+      busyAction: 'startup_automation',
+      offerFound: () => {
+        this.startupAutomation.set({
+          phase: 'ready',
+          label: 'Start offer ready',
+          detail: 'Roll call issued a fresh offer; waiting for the cockpit snapshot to show Start.',
+        });
+      },
+    });
+  }
+
+  private async prepareAndStartWithRollCall(): Promise<void> {
+    await this.prepareRollCallOffer({
+      busyAction: 'startup_automation_start',
+      offerFound: async (cap, offer) => {
+        this.startupAutomation.set({
+          phase: 'running',
+          label: 'Starting bot',
+          detail: 'Roll call issued a fresh offer; starting the bot with that offer.',
+        });
+        await this.startHostProcess(cap.run_id, {
+          ...cap.request,
+          roll_call_offer_id: offer.offer_id,
+        });
+      },
+    });
+  }
+
+  private async prepareRollCallOffer(options: {
+    busyAction: string;
+    offerFound: (
+      cap: StartReadyCapability,
+      offer: BotRollCallOffer,
+    ) => void | Promise<void>;
+  }): Promise<void> {
+    const status = this.status();
+    const id = this.instanceId();
+    const cap = status?.operator_surface.host_process.start_capability;
+    if (
+      !id ||
+      !status ||
+      this.mutationsDisabled() ||
+      !cap ||
+      !canStartHostProcess(cap) ||
+      !cap.run_id ||
+      !cap.request
+    ) {
+      return;
+    }
+    const readyCap: StartReadyCapability = {
+      run_id: cap.run_id,
+      request: cap.request,
+    };
+    this.busyAction.set(options.busyAction);
+    this.mutationError.set(null);
+    this.startupAutomation.set({
+      phase: 'running',
+      label: 'Preparing start offer',
+      detail: 'Running roll call for this bot before start.',
+    });
+    try {
+      const response = await this.liveRuns.runRollCall();
+      const offer = this.rollCallOfferForCurrentBot(response.offers, id, readyCap.run_id);
+      if (!offer) {
+        this.startupAutomation.set({
+          phase: 'blocked',
+          label: 'Roll call finished',
+          detail: 'This bot did not receive a current start offer. Check the lifecycle blockers below.',
+        });
+        return;
+      }
+      await options.offerFound(readyCap, offer);
+    } catch (err) {
+      this.startupAutomation.set({
+        phase: 'blocked',
+        label: 'Startup automation stopped',
+        detail: this.humanError(err),
+      });
+      this.mutationError.set(this.humanError(err));
+    } finally {
+      this.busyAction.set(null);
+    }
+  }
+
+  private rollCallOfferForCurrentBot(
+    offers: readonly BotRollCallOffer[],
+    instanceId: string,
+    runId: string,
+  ): BotRollCallOffer | null {
+    return offers.find(
+      (offer) => offer.strategy_instance_id === instanceId && offer.run_id === runId,
+    ) ?? null;
+  }
+
+  private async startHostProcess(runId: string, request: HostRunnerStartRequest): Promise<void> {
+    this.busyAction.set('start_process');
+    this.mutationError.set(null);
+    try {
+      const response = await this.liveRuns.startHostRunner(runId, request);
+      this.surface.establishPending(response);
+      this.startupAutomation.set({
+        phase: 'ready',
+        label: 'Startup request sent',
+        detail: 'The host runner accepted the start request; waiting for live runtime proof.',
+      });
+    } catch (err) {
+      this.mutationError.set(this.operationErrorMessage('start', err));
+    } finally {
+      this.busyAction.set(null);
+    }
   }
 
   private async setIntent(action: 'resume' | 'stop', label: string): Promise<void> {

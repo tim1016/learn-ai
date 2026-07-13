@@ -181,6 +181,10 @@ async def reconcile(
     else:
         ledger_view = fold(projection_from_envelope(envelope), wal_events)
     ledger_view = _with_account_durable_intents(ledger_view, account_durable_intents)
+    effective_known_sibling_namespaces = known_sibling_namespaces | _durable_sibling_namespaces(
+        account_durable_intents,
+        owned_namespaces=owned_namespaces,
+    )
 
     # Step 4: prior-run unresolved tail. Corruption here is informational —
     # treat as empty so a single broken prior-run WAL doesn't gate this boot.
@@ -226,7 +230,7 @@ async def reconcile(
         projection=ledger_view,
         broker_snapshot=broker_snapshot,
         owned_namespaces=owned_namespaces,
-        known_sibling_namespaces=known_sibling_namespaces,
+        known_sibling_namespaces=effective_known_sibling_namespaces,
         prior_run_unacked_tail=prior_tail,
         emergency_audit=emergency_audit,
         ignore_unknown_namespaces_before_ms=ignore_unknown_namespaces_before_ms,
@@ -405,6 +409,19 @@ def _with_account_durable_intents(
         known_exec_ids=frozenset(known_exec_ids),
         unresolved_intent_ids=frozenset(unresolved),
     )
+
+
+def _durable_sibling_namespaces(
+    account_durable_intents: tuple[object, ...],
+    *,
+    owned_namespaces: frozenset[str],
+) -> frozenset[str]:
+    namespaces: set[str] = set()
+    for durable in account_durable_intents:
+        namespace = getattr(durable, "bot_order_namespace", None)
+        if isinstance(namespace, str) and namespace and namespace not in owned_namespaces:
+            namespaces.add(namespace)
+    return frozenset(namespaces)
 
 
 def _intent_event_type_for_account_durable_status(status: str):

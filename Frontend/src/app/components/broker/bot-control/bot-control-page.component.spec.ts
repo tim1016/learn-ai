@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type {
+  BotRollCallResponse,
   BotDeleteResponse,
   CrashRecoveryOverrideResponse,
   LiveInstanceStatus,
@@ -23,6 +24,57 @@ function startableReadyStatus(): LiveInstanceStatus {
     startCapabilityEnabled: true,
     startRunId: 'run-x',
   });
+}
+
+function offDutyNeedsRollCallStatus(): LiveInstanceStatus {
+  const status = makeStatus({
+    startCapabilityEnabled: true,
+    startRunId: 'run-x',
+  });
+  status.daily_lifecycle.display_status = 'Off duty';
+  status.daily_lifecycle.attention_badge = null;
+  status.daily_lifecycle.reason = 'Run roll call to issue a start offer.';
+  status.daily_lifecycle.primary_action = null;
+  return status;
+}
+
+function startableStatusWithoutOffer(): LiveInstanceStatus {
+  const status = startableReadyStatus();
+  if (!status.daily_lifecycle.primary_action) {
+    throw new Error('Fixture expected a primary start action.');
+  }
+  status.daily_lifecycle.primary_action = {
+    ...status.daily_lifecycle.primary_action,
+    offer_id: null,
+    expires_at_ms: null,
+  };
+  return status;
+}
+
+function rollCallResponse(): BotRollCallResponse {
+  return {
+    summary: {
+      ready: 1,
+      off_roster: 0,
+      sick_bay: 0,
+      on_duty: 0,
+      off_duty: 0,
+      retired: 0,
+      generated_at_ms: 1_700_000_000_000,
+      session_date: '2026-07-13',
+      effective_stop_ms: 1_700_050_000_000,
+    },
+    offers: [
+      {
+        offer_id: 'offer-from-roll-call',
+        strategy_instance_id: 'sid-x',
+        run_id: 'run-x',
+        session_date: '2026-07-13',
+        issued_at_ms: 1_700_000_000_000,
+        expires_at_ms: 1_700_000_600_000,
+      },
+    ],
+  };
 }
 
 function crashRecoveryStatus(): LiveInstanceStatus {
@@ -141,6 +193,7 @@ describe('BotControlPageComponent', () => {
 
     expect(element.querySelector('app-trader-view')).not.toBeNull();
     expect(element.querySelector('app-verdict-card')).toBeNull();
+    expect(element.querySelectorAll('app-overview-tab')).toHaveLength(0);
     expect(element.textContent).toContain('This bot is ready');
     expect(element.textContent).toContain('Market hours unavailable');
     expect(liveRuns.getLifecycleTimeline).not.toHaveBeenCalled();
@@ -151,7 +204,7 @@ describe('BotControlPageComponent', () => {
     fixture.detectChanges();
 
     expect(element.querySelector('app-verdict-card')).not.toBeNull();
-    expect(element.querySelector('app-overview-tab')).not.toBeNull();
+    expect(element.querySelectorAll('app-overview-tab')).toHaveLength(1);
     expect(element.querySelector('app-trader-guidance-pane')).not.toBeNull();
     expect(element.querySelector('app-bot-control-side-panel')).not.toBeNull();
     expect(element.querySelector('#verdict-state')?.textContent).toContain('Ready');
@@ -184,6 +237,42 @@ describe('BotControlPageComponent', () => {
       max_orders_per_day: 2,
       ibkr_host: '127.0.0.1',
       roll_call_offer_id: 'offer-run-x',
+    });
+  });
+
+  it('prepares a roll-call start offer in the bot cockpit when the bot is off duty', async () => {
+    const { fixture, element, liveRuns } = await setupBotControlPage({
+      status: offDutyNeedsRollCallStatus(),
+      mutationResponses: { runRollCall: rollCallResponse() },
+    });
+    await flush(fixture);
+
+    expect(liveRuns.runRollCall).toHaveBeenCalledTimes(1);
+    expect(liveRuns.startHostRunner).not.toHaveBeenCalled();
+    expect(element.textContent).toContain('Start offer ready');
+    expect(element.textContent).toContain('waiting for the cockpit snapshot to show Start');
+  });
+
+  it('runs roll call and starts with the returned offer when start is requested without one', async () => {
+    const { fixture, component, liveRuns } = await setupBotControlPage({
+      status: startableStatusWithoutOffer(),
+      mutationResponses: {
+        runRollCall: rollCallResponse(),
+        startHostRunner: { accepted: true, process: makeHostRunnerHealth().process },
+      },
+    });
+
+    await component.dispatchStartProcess();
+    await flush(fixture);
+
+    expect(liveRuns.runRollCall).toHaveBeenCalledTimes(1);
+    expect(liveRuns.startHostRunner).toHaveBeenCalledWith('run-x', {
+      readonly: false,
+      hydrate_policy: 'require',
+      strategy: 'deployment_validation',
+      max_orders_per_day: 2,
+      ibkr_host: '127.0.0.1',
+      roll_call_offer_id: 'offer-from-roll-call',
     });
   });
 

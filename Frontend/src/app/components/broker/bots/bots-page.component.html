@@ -62,6 +62,32 @@
     }
   </section>
 
+  @if (launchProgress().phase !== 'idle') {
+    <section class="launch-progress" aria-live="polite" aria-label="Start ready progress">
+      <div class="launch-progress-header">
+        <div>
+          <strong>{{ launchProgress().title }}</strong>
+          <span>{{ launchProgress().detail }}</span>
+        </div>
+        <p-tag
+          [severity]="launchProgress().phase === 'blocked' ? 'danger' : 'secondary'"
+          [value]="launchProgress().phase"
+        />
+      </div>
+      @if (launchProgress().rows.length > 0) {
+        <ol>
+          @for (row of launchProgress().rows; track row.botId) {
+            <li [class.is-active]="launchProgress().activeBotId === row.botId">
+              <span class="launch-row-status">{{ row.status }}</span>
+              <strong>{{ row.botName }}</strong>
+              <span>{{ row.detail }}</span>
+            </li>
+          }
+        </ol>
+      }
+    </section>
+  }
+
   <section class="filters" aria-label="Bot filters">
     <label class="filter-field search-field">
       <span>Search</span>
@@ -180,7 +206,7 @@
   }
 
   <div class="result-summary" aria-live="polite">
-    <span>{{ activeTabCount() }} bots in {{ activeModeTab() }} mode</span>
+    <span>{{ activeTabSummary() }}</span>
     <span>{{ visibleBots().length }} total after filters</span>
   </div>
 
@@ -433,11 +459,17 @@
                       severity="secondary"
                       [outlined]="true"
                       icon="pi pi-arrow-right"
+                      [loading]="conditionActionBotId() === row.id"
                       [attr.data-testid]="'bot-condition-action-' + row.id"
                       (click)="runConditionCure(row, $event)"
                     >
                       <span class="p-button-label">{{ condition.cure_label }}</span>
                     </button>
+                    @if (conditionActionError(); as error) {
+                      @if (error.botId === row.id) {
+                        <span class="condition-error" role="alert">{{ error.message }}</span>
+                      }
+                    }
                   </div>
                 }
               </div>
@@ -536,11 +568,17 @@
                           severity="secondary"
                           [outlined]="true"
                           icon="pi pi-arrow-right"
+                          [loading]="conditionActionBotId() === row.id"
                           [attr.data-testid]="'bot-condition-action-mobile-' + row.id"
                           (click)="runConditionCure(row, $event)"
                         >
                           <span class="p-button-label">{{ condition.cure_label }}</span>
                         </button>
+                        @if (conditionActionError(); as error) {
+                          @if (error.botId === row.id) {
+                            <span class="condition-error" role="alert">{{ error.message }}</span>
+                          }
+                        }
                       </div>
                     }
                   </div>

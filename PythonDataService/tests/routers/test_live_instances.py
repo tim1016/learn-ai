@@ -1646,7 +1646,7 @@ async def test_status_start_defaults_seed_strategy_from_ledger_key(
     # explicit mode → treated as paper); see the dedicated paper/live tests.
     assert defaults["readonly"] is False
     assert defaults["hydrate_policy"] == "require"
-    assert defaults["max_orders_per_day"] == 2
+    assert defaults["max_orders_per_day"] == 2_000
     assert defaults["ibkr_host"] == "127.0.0.1"
 
 
@@ -3056,6 +3056,32 @@ async def test_roll_call_tick_persists_start_offer_and_catalog_reads_it(
     assert catalog.json()["evening_report"]["summary"].endswith("0 retired")
 
 
+async def test_roll_call_uses_instance_process_when_bulk_snapshot_omits_idle_bot(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-offer", "spy_ema_paper", 100, strategy_key="spy_ema")
+    _set_startable_now(monkeypatch)
+    _set_daemon(
+        monkeypatch,
+        instances={"instances": [], "fetched_at_ms": 1},
+        process={"state": "idle", "run_id": "run-offer"},
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        roll_call = await client.post("/api/live-instances/roll-call")
+        catalog = await client.get("/api/live-instances/catalog")
+
+    assert roll_call.status_code == 200
+    body = roll_call.json()
+    assert body["summary"]["ready"] == 1
+    assert body["offers"][0]["strategy_instance_id"] == "spy_ema_paper"
+    row = catalog.json()["bots"][0]
+    assert row["daily_lifecycle"]["display_status"] == "Ready"
+    assert row["daily_lifecycle"]["primary_action"]["offer_id"] == body["offers"][0]["offer_id"]
+
+
 async def test_status_marks_bot_sick_bay_for_terminal_account_condition(
     app_with_root,
     monkeypatch: pytest.MonkeyPatch,
@@ -3102,6 +3128,56 @@ async def test_status_marks_bot_sick_bay_for_terminal_account_condition(
         "owner_label": "Account DU1234567",
         "cure_action": "reconcile_now",
         "cure_label": "Run account reconcile",
+    } in lifecycle["conditions"]
+
+
+async def test_status_sick_bay_surfaces_submit_halt_incident(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    sid = "spy_submit_halt"
+    run_id = "run-submit-halt"
+    _write_ledger(root, run_id, sid, 100, strategy_key="spy_ema_crossover")
+    _append_operator_incident(
+        root / run_id,
+        incident_id="submit-halted-cap",
+        category="submit",
+        code="submit.halted",
+        title="Bot halted before submit",
+        message=(
+            "The bot halted before it could continue trading: would push total to 3 "
+            "on 2026-07-13 (cap=2); dropped 1 pending order(s) without submission"
+        ),
+        started_at_ms=1_783_961_225_698,
+    )
+    _set_daemon(
+        monkeypatch,
+        process={
+            "state": "exited",
+            "run_id": run_id,
+            "exit_code": 1,
+            "exit_reason": "max_orders_exceeded",
+        },
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/status?refresh=true")
+
+    assert response.status_code == 200
+    lifecycle = response.json()["daily_lifecycle"]
+    assert lifecycle["display_status"] == "Sick bay"
+    assert {
+        "scope": "bot",
+        "severity": "critical",
+        "title": "Bot halted before submit",
+        "detail": (
+            "The bot halted before it could continue trading: would push total to 3 "
+            "on 2026-07-13 (cap=2); dropped 1 pending order(s) without submission"
+        ),
+        "owner_label": f"Bot {sid}",
+        "cure_action": "retire_replace",
+        "cure_label": "Retire & Replace",
     } in lifecycle["conditions"]
 
 
@@ -4468,6 +4544,70 @@ async def test_deploy_instance_idempotent_returns_200(app_with_root, monkeypatch
     assert response.json()["created"] is False
 
 
+async def test_deploy_instance_reopens_retired_replacement(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _set_connected_broker_account(monkeypatch, "DU111")
+    repo = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper"))
+    repo.retire(
+        now_ms=200,
+        updated_by="operator",
+        reason="Retire & Replace",
+    )
+    monkeypatch.setattr(live_instances, "_now_ms", lambda: 300)
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        return {"run_id": "run-replacement", "run_dir": "/runs/run-replacement", "created": True, "start": None}
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=_deploy_body())
+
+    assert response.status_code == 201
+    lifecycle = repo.read()
+    assert lifecycle is not None
+    assert lifecycle.phase == "OFF_DUTY"
+    assert lifecycle.on_roster is True
+    assert lifecycle.retired_at_ms is None
+    assert lifecycle.retired_reason is None
+    assert lifecycle.reason == "deploy.replacement"
+
+
+async def test_deploy_instance_reports_lifecycle_reopen_failure(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _set_connected_broker_account(monkeypatch, "DU111")
+    repo = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper"))
+    repo.retire(
+        now_ms=200,
+        updated_by="operator",
+        reason="Retire & Replace",
+    )
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        return {"run_id": "run-replacement", "run_dir": "/runs/run-replacement", "created": True, "start": None}
+
+    def fail_reopen(_self: object, **_kwargs: object) -> None:
+        raise OSError("state file is not writable")
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+    monkeypatch.setattr(BotLifecycleStateRepo, "reopen_for_deploy", fail_reopen)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=_deploy_body())
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "BOT_LIFECYCLE_REOPEN_FAILED"
+    assert detail["strategy_instance_id"] == "spy_ema_paper"
+    assert detail["run_id"] == "run-replacement"
+
+
 async def test_deploy_instance_dirty_tree_propagates_409(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _ = app_with_root
     _set_connected_broker_account(monkeypatch, "DU111")
@@ -4878,6 +5018,41 @@ async def test_start_run_ignores_legacy_stopped_latch_when_roll_call_offer_is_cu
     assert record.desired_state is DesiredState.RUNNING
     assert record.reason == "daily_lifecycle.start"
     assert record.updated_by == "system"
+
+
+async def test_start_run_hydrates_omitted_strategy_from_run_ledger(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(
+        root,
+        "run-deploy-validation",
+        "sem",
+        100,
+        strategy_key="deployment_validation",
+    )
+    offer_id = _write_roll_call_offer(root.parent, sid="sem", run_id="run-deploy-validation")
+    _set_startable_now(monkeypatch)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+    forwarded_payload: dict | None = None
+
+    async def fake_start(_base_url: str, run_id: str, payload: dict) -> dict:
+        nonlocal forwarded_payload
+        forwarded_payload = payload
+        return {"accepted": True, "process": _running_process(run_id)}
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/runs/run-deploy-validation/start",
+            json={"roll_call_offer_id": offer_id},
+        )
+
+    assert response.status_code == 200
+    assert forwarded_payload is not None
+    assert forwarded_payload["strategy"] == "deployment_validation"
+    assert "roll_call_offer_id" not in forwarded_payload
 
 
 async def test_start_run_rejects_retired_bot_even_with_stale_roll_call_offer(

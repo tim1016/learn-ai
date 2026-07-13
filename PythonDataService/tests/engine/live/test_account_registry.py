@@ -95,7 +95,7 @@ def test_account_instance_registry_accepts_current_binding(tmp_path: Path) -> No
     assert gate.operator_next_step == "GATE_PASSING"
 
 
-def test_compute_reconcile_namespaces_splits_owned_from_active_siblings(tmp_path: Path) -> None:
+def test_compute_reconcile_namespaces_splits_owned_from_durable_siblings(tmp_path: Path) -> None:
     write_account_instance_binding(
         tmp_path,
         _binding(
@@ -140,10 +140,10 @@ def test_compute_reconcile_namespaces_splits_owned_from_active_siblings(tmp_path
     )
 
     assert owned == frozenset({"learn-ai/aapl/v1"})
-    assert siblings == frozenset({"learn-ai/spy/v1"})
+    assert siblings == frozenset({"learn-ai/retired/v1", "learn-ai/spy/v1"})
 
 
-def test_compute_reconcile_namespaces_drops_later_retired_and_wrong_account_bindings(
+def test_compute_reconcile_namespaces_keeps_retired_sibling_but_drops_wrong_account_bindings(
     tmp_path: Path,
 ) -> None:
     write_account_instance_binding(
@@ -183,7 +183,7 @@ def test_compute_reconcile_namespaces_drops_later_retired_and_wrong_account_bind
     )
 
     assert owned == frozenset({"learn-ai/aapl/v1"})
-    assert siblings == frozenset()
+    assert siblings == frozenset({"learn-ai/retiring-spy/v1"})
 
 
 def test_latest_account_instance_binding_uses_later_append_on_timestamp_tie() -> None:

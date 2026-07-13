@@ -257,7 +257,7 @@ class IncidentRecord(BaseModel):
 
 
 HydratePolicy = Literal["require", "optional", "disabled"]
-DEFAULT_MAX_ORDERS_PER_DAY = 2
+DEFAULT_MAX_ORDERS_PER_DAY = 2_000
 
 
 class HostRunnerProcessState(StrEnum):

@@ -859,7 +859,7 @@ async def test_child_without_status_retires_account_registry_binding_as_ended_wi
         account_id="DU111",
         current_namespace="learn-ai/other_bot/v1",
     )
-    assert "learn-ai/spy_ema_paper/v1" not in siblings
+    assert "learn-ai/spy_ema_paper/v1" in siblings
 
 
 async def test_child_controlled_halt_does_not_emit_launch_failed_event(

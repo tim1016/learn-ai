@@ -2055,11 +2055,11 @@ async def _bot_catalog_row_for_sid(
     by_instance: dict[str, list[dict]],
     trading_mode: TradingMode,
 ) -> BotCatalogRow:
-    status_view = await _resolve_instance_status_from_process(
+    status_view = await _resolve_instance_status_for_fleet_sid(
         sid,
         root,
         settings,
-        _daemon_process_from_instance(daemon_instance),
+        daemon_instance,
         runs_by_instance=by_instance,
     )
     row = compose_bot_catalog_row(status_view, trading_mode)
@@ -2074,9 +2074,38 @@ async def _bot_catalog_row_for_sid(
     )
 
 
+async def _resolve_instance_status_for_fleet_sid(
+    sid: str,
+    root: Path,
+    settings: IbkrSettings,
+    daemon_instance: dict | None,
+    *,
+    runs_by_instance: dict[str, list[dict]],
+) -> LiveInstanceStatus:
+    daemon_process = _daemon_process_from_instance(daemon_instance)
+    if daemon_process is None:
+        _result, daemon_process = await host_daemon_client.fetch_instance_process(
+            settings.live_runner_daemon_url,
+            sid,
+        )
+    return await _resolve_instance_status_from_process(
+        sid,
+        root,
+        settings,
+        daemon_process,
+        runs_by_instance=runs_by_instance,
+    )
+
+
 @router.post("/roll-call", response_model=BotRollCallResponse)
 async def run_roll_call() -> BotRollCallResponse:
-    """Persist the morning roll-call offers for all eligible non-retired bots."""
+    """Persist start offers for all eligible non-retired bots.
+
+    The daemon bulk snapshot may omit idle instances, so resolving each fleet
+    row can fall back to one daemon process probe per omitted bot. Keep those
+    probes concurrent; otherwise a morning roll call degrades into an
+    operator-visible sequential N-call path.
+    """
 
     settings = get_settings()
     root = Path(settings.live_runs_root)
@@ -2096,18 +2125,26 @@ async def run_roll_call() -> BotRollCallResponse:
     trading_mode = trading_mode_from_configured_mode(getattr(settings, "mode", None))
     summary_session_date: str | None = None
     summary_effective_stop_ms: int | None = None
+    candidate_sids: list[str] = []
     for sid in sorted(set(by_instance) | set(daemon_by_sid)):
         lifecycle_state = _resolve_bot_lifecycle_state(root, sid)
         if lifecycle_state is not None and lifecycle_state.phase == BotLifecyclePhase.RETIRED:
             retired_count += 1
             continue
-        status_view = await _resolve_instance_status_from_process(
-            sid,
-            root,
-            settings,
-            _daemon_process_from_instance(daemon_by_sid.get(sid)),
-            runs_by_instance=by_instance,
+        candidate_sids.append(sid)
+    status_views = await asyncio.gather(
+        *(
+            _resolve_instance_status_for_fleet_sid(
+                sid,
+                root,
+                settings,
+                daemon_by_sid.get(sid),
+                runs_by_instance=by_instance,
+            )
+            for sid in candidate_sids
         )
+    )
+    for sid, status_view in zip(candidate_sids, status_views, strict=True):
         rows.append(compose_bot_catalog_row(status_view, trading_mode))
         if not status_is_roll_call_eligible(status_view):
             continue
@@ -2406,9 +2443,10 @@ async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -
     ``created=false`` rather than erroring (the run already exists).
     """
     settings = get_settings()
+    root = Path(settings.live_runs_root)
     daemon_request = await _host_deploy_request_from_public(body)
     account_freeze = read_account_freeze(
-        Path(settings.live_runs_root).parent,
+        root.parent,
         daemon_request.account_id,
     )
     if account_freeze is not None:
@@ -2422,12 +2460,12 @@ async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -
         )
     if daemon_request.start and daemon_request.strategy_instance_id:
         _raise_if_crash_recovery_blocks_start(
-            Path(settings.live_runs_root).parent,
+            root.parent,
             account_id=daemon_request.account_id,
             strategy_instance_id=daemon_request.strategy_instance_id,
         )
     _raise_if_deploy_admission_blocks_start(
-        Path(settings.live_runs_root),
+        root,
         body,
     )
     await _raise_if_deploy_preflight_blocks_start(daemon_request)
@@ -2468,8 +2506,38 @@ async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -
         ) from exc
     if not parsed.created:
         response.status_code = status.HTTP_200_OK
-    if body.strategy_instance_id:
-        await _ensure_surface_hub_started(body.strategy_instance_id)
+    if daemon_request.strategy_instance_id:
+        lifecycle_repo = _bot_lifecycle_state_repo(root, daemon_request.strategy_instance_id)
+        try:
+            lifecycle_state = lifecycle_repo.read()
+            if lifecycle_state is not None and lifecycle_state.phase == BotLifecyclePhase.RETIRED:
+                lifecycle_repo.reopen_for_deploy(
+                    now_ms=_now_ms(),
+                    updated_by="system",
+                    reason="deploy.replacement",
+                )
+        except (BotLifecycleStateCorruptError, OSError) as exc:
+            logger.error(
+                "failed to reopen retired bot lifecycle after deploy",
+                extra={
+                    "strategy_instance_id": daemon_request.strategy_instance_id,
+                    "run_id": parsed.run_id,
+                    "error": str(exc),
+                },
+            )
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "reason_code": "BOT_LIFECYCLE_REOPEN_FAILED",
+                    "message": (
+                        "The deploy was accepted, but the bot lifecycle marker could not be "
+                        "reopened. Retry deploy after repairing the lifecycle state."
+                    ),
+                    "strategy_instance_id": daemon_request.strategy_instance_id,
+                    "run_id": parsed.run_id,
+                },
+            ) from exc
+        await _ensure_surface_hub_started(daemon_request.strategy_instance_id)
     return parsed
 
 
@@ -2596,6 +2664,7 @@ def _assert_roll_call_offer_allows_start(
             detail={
                 "reason_code": "ROLL_CALL_OFFER_REQUIRED",
                 "message": "Run roll call and start from the current offer.",
+                "remediation": "Run roll call, wait for this bot to show Ready, then click Start before the offer expires.",
                 "gate_id": "daily_lifecycle.roll_call_offer",
                 "strategy_instance_id": sid,
             },
@@ -2607,6 +2676,7 @@ def _assert_roll_call_offer_allows_start(
             detail={
                 "reason_code": "ROLL_CALL_OFFER_EXPIRED",
                 "message": "The roll-call start offer is absent or expired. Run roll call again.",
+                "remediation": "Run roll call again, wait for this bot to show Ready, then click Start before the offer expires.",
                 "gate_id": "daily_lifecycle.roll_call_offer",
                 "strategy_instance_id": sid,
             },
@@ -2617,6 +2687,7 @@ def _assert_roll_call_offer_allows_start(
             detail={
                 "reason_code": "ROLL_CALL_OFFER_STALE",
                 "message": "This start request does not match the current roll-call offer.",
+                "remediation": "Refresh Bot Control, then start from the current roll-call offer.",
                 "gate_id": "daily_lifecycle.roll_call_offer",
                 "strategy_instance_id": sid,
                 "current_offer_id": active.offer_id,
@@ -2628,12 +2699,52 @@ def _assert_roll_call_offer_allows_start(
             detail={
                 "reason_code": "ROLL_CALL_OFFER_RUN_MISMATCH",
                 "message": "This roll-call offer belongs to a different run. Run roll call again.",
+                "remediation": "Run roll call again, then start the run attached to the new offer.",
                 "gate_id": "daily_lifecycle.roll_call_offer",
                 "strategy_instance_id": sid,
                 "run_id": run_id,
                 "offer_run_id": active.run_id,
             },
         )
+
+
+def _start_request_with_ledger_strategy_default(
+    root: Path,
+    run_id: str,
+    body: HostRunnerStartRequest,
+) -> HostRunnerStartRequest:
+    """Hydrate omitted Start strategy from the run ledger.
+
+    ``HostRunnerStartRequest`` still has a legacy schema default so direct
+    daemon callers remain backward compatible. The data-plane Start route has
+    stronger evidence: it knows the run directory and must forward the same
+    strategy key the ledger was reconciled against when the browser sends only
+    a roll-call offer id.
+    """
+
+    if "strategy" in body.model_fields_set:
+        return body
+    try:
+        ledger = _read_ledger(root / run_id)
+    except (OSError, ValueError, KeyError):
+        return body
+    strategy_key = ledger.get("strategy_key")
+    if not isinstance(strategy_key, str) or not strategy_key.strip():
+        return body
+    try:
+        return HostRunnerStartRequest.model_validate(
+            {**body.model_dump(), "strategy": strategy_key.strip()}
+        )
+    except ValidationError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "START_SETTINGS_INCOMPLETE",
+                "message": "The run ledger strategy key is not valid for Start.",
+                "gate_id": "start.strategy",
+                "run_id": run_id,
+            },
+        ) from exc
 
 
 def _raise_if_lifecycle_retired(root: Path, sid: str) -> None:
@@ -2858,6 +2969,7 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
     settings = get_settings()
     root = Path(settings.live_runs_root)
     await _assert_start_allowed(run_id, body, settings)
+    body = _start_request_with_ledger_strategy_default(root, run_id, body)
     sid = _strategy_instance_id_for_run(root, run_id)
     if sid is None:
         raise HTTPException(

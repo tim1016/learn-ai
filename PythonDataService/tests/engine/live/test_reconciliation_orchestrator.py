@@ -289,6 +289,51 @@ async def test_account_owner_durable_intent_allows_missing_order_ref_by_perm_id(
 
 
 @pytest.mark.asyncio
+async def test_account_owner_durable_intent_marks_retired_sibling_namespace_known(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    repo = _make_envelope(run_dir)
+    sibling_intent = "sibling-intent-1"
+    sibling_ref = build_order_ref(SIBLING_NS, sibling_intent)
+
+    async def probe() -> BrokerSnapshot:
+        return BrokerSnapshot(
+            executions=(
+                BrokerExecutionView(
+                    order_ref=sibling_ref,
+                    perm_id=90045,
+                    exec_id="exec-sibling-1",
+                    exec_time_ms=1_700_000_020_000,
+                ),
+            )
+        )
+
+    result = await reconcile(
+        run_dir=run_dir,
+        sidecar=repo,
+        broker_probe=probe,
+        owned_namespaces=ALLOWED,
+        now_ms=_clock(),
+        account_durable_intents=(
+            AccountDurableIntent(
+                account_id="DU123",
+                strategy_instance_id="sibling-strategy",
+                run_id="run-sibling",
+                bot_order_namespace=SIBLING_NS,
+                intent_id=sibling_intent,
+                order_ref=sibling_ref,
+                status="account_owner_submit_accepted",
+                recorded_at_ms=1_700_000_010_000,
+            ),
+        ),
+    )
+
+    assert isinstance(result.verdict, Continue)
+    assert result.receipt.status == "passed"
+    assert not (run_dir / POISONED_FLAG_FILENAME).exists()
+
+
+@pytest.mark.asyncio
 async def test_broker_probe_failure_poisons(tmp_path: Path) -> None:
     """Broker probe raises → Poison, failed receipt reason starts broker_probe_failed."""
     run_dir = tmp_path / "run"
