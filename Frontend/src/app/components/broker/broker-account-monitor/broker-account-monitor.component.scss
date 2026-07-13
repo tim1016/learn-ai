@@ -270,6 +270,37 @@
   max-width: 720px;
 }
 
+.reconciliation-automation {
+  margin-top: 0.75rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border-light, #2a2e39);
+  border-radius: 6px;
+  background: var(--bg-sunken, #070a11);
+
+  p {
+    margin: 0.35rem 0 0 1.45rem;
+  }
+}
+
+.reconciliation-automation-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-primary, #f0f3fa);
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+
+  input {
+    margin: 0;
+  }
+
+  &:has(input:disabled) {
+    cursor: wait;
+    opacity: 0.7;
+  }
+}
+
 .receipt-reason {
   margin: 0.75rem 0 0;
   color: var(--text-secondary, #b2b5be);

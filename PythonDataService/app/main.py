@@ -69,7 +69,8 @@ from app.security.data_plane_control import (
     require_data_plane_control_secret,
     require_data_plane_control_secret_always,
 )
-from app.services.account_truth_refresh import AccountTruthRefreshLoop
+from app.services.account_reconciliation import AccountReconciliationService
+from app.services.account_truth_refresh import AccountTruthRefreshLoop, account_truth_artifacts_root
 from app.utils.error_handlers import polygon_exception_handler
 
 # Configure logging
@@ -187,7 +188,13 @@ async def lifespan(app: FastAPI):
         monitor.start()
         set_monitor(monitor)
 
-        account_truth_refresh_loop = AccountTruthRefreshLoop(client=ibkr_client)
+        reconciliation_service = AccountReconciliationService(
+            artifacts_root=account_truth_artifacts_root(ibkr_settings)
+        )
+        account_truth_refresh_loop = AccountTruthRefreshLoop(
+            client=ibkr_client,
+            account_truth_observer=reconciliation_service.observe_account_truth,
+        )
         account_truth_refresh_loop.start()
     else:
         set_client(None)

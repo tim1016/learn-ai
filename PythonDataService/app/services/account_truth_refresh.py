@@ -159,6 +159,7 @@ class AccountTruthRefreshLoop:
         interval_ms: int = DEFAULT_ACCOUNT_TRUTH_REFRESH_INTERVAL_MS,
         snapshot_provider: AccountTruthSnapshotProvider | None = None,
         refresh_now: Callable[..., Awaitable[AccountTruthResponse]] = refresh_account_truth_now,
+        account_truth_observer: Callable[[AccountTruthResponse], object] | None = None,
     ) -> None:
         self._client = client
         self._artifacts_root = artifacts_root
@@ -169,6 +170,7 @@ class AccountTruthRefreshLoop:
             hard_ttl_ms=self._snapshot_provider.hard_ttl_ms,
         )
         self._refresh_now = refresh_now
+        self._account_truth_observer = account_truth_observer
         self._task: asyncio.Task[None] | None = None
         self._stopped = asyncio.Event()
         self._refresh_lock = asyncio.Lock()
@@ -237,6 +239,14 @@ class AccountTruthRefreshLoop:
                 if self._artifacts_root is not None:
                     refresh_kwargs["artifacts_root"] = self._artifacts_root
                 result = await self._refresh_now(self._client, **refresh_kwargs)
+                if self._account_truth_observer is not None:
+                    try:
+                        self._account_truth_observer(result)
+                    except Exception:
+                        logger.exception(
+                            "account truth observer failed",
+                            extra={"account_id": result.account_id},
+                        )
                 self._last_refresh_result = "success"
                 return result
             except BrokerError as exc:

@@ -1,6 +1,7 @@
 import type {
   AccountConditionRow,
   AccountFreezeBanner,
+  AccountReconciliationAutomationPolicy,
   AccountReconciliationReceipt,
   AccountTriageBotRef,
   AccountTriageResponse,
@@ -10,6 +11,8 @@ interface AccountTriageFixtureOptions {
   accountId?: string;
   generatedAtMs?: number;
   receipt?: AccountReconciliationReceipt | null;
+  reconciliationValidUntilMs?: number | null;
+  automationPolicy?: AccountReconciliationAutomationPolicy;
   summaryHeadline?: string;
   summaryDetail?: string;
   gate?: Partial<AccountTriageResponse['overall_gate_result']>;
@@ -43,6 +46,7 @@ export function makeCleanAccountTriage(
 ): AccountTriageResponse {
   const accountId = options.accountId ?? 'DU1234567';
   const generatedAtMs = options.generatedAtMs ?? 1_780_000_002_000;
+  const receipt = options.receipt ?? null;
   return {
     schema_version: 1,
     generated_at_ms: generatedAtMs,
@@ -60,7 +64,16 @@ export function makeCleanAccountTriage(
       evidence_at_ms: generatedAtMs,
       ...options.gate,
     },
-    account_reconciliation_receipt: options.receipt ?? null,
+    account_reconciliation_receipt: receipt,
+    account_reconciliation_valid_until_ms:
+      options.reconciliationValidUntilMs ?? receipt?.expires_at_ms ?? null,
+    reconciliation_automation_policy: options.automationPolicy ?? {
+      schema_version: 1,
+      account_id: accountId,
+      enabled: false,
+      updated_at_ms: 0,
+      updated_by: 'system.default',
+    },
     gate_rows: [],
     conditions: options.conditions ?? [],
     freeze_banner: options.freezeBanner ?? null,

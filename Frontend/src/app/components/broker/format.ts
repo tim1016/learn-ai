@@ -113,6 +113,15 @@ export function fmtBrokerExpiryDate(ms: number | null | undefined): string {
   return formatTimestampDisplay(ms, { mode: 'date-utc' });
 }
 
+/** Format a live freshness countdown without deriving any domain state. */
+export function fmtDurationRemaining(remainingMs: number): string {
+  if (remainingMs <= 0) return 'Expired';
+  const totalSeconds = Math.ceil(remainingMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+}
+
 /**
  * Compare two scalars and return their divergence in basis points.
  * Returns ``null`` when either side is missing or the reference is zero

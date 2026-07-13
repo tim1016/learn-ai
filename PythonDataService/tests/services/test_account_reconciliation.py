@@ -28,7 +28,12 @@ from app.engine.live.account_artifacts import (
     write_account_instance_binding,
 )
 from app.schemas.account_reconciliation import AccountConditionType, AccountCureAction
-from app.schemas.account_truth import AccountTruthEvidenceGap
+from app.schemas.account_truth import (
+    AccountTruthEvidenceGap,
+    AccountTruthExecutionRow,
+    AccountTruthFactOwner,
+    AccountTruthOwnerClass,
+)
 from app.services.account_reconciliation import AccountReconciliationService
 
 
@@ -131,6 +136,31 @@ def _retired_binding(
     )
 
 
+def _execution(
+    *,
+    exec_id: str,
+    observed_at_ms: int,
+    owner_class: AccountTruthOwnerClass = "bot",
+) -> AccountTruthExecutionRow:
+    return AccountTruthExecutionRow(
+        account_id="DU1234567",
+        exec_id=exec_id,
+        order_id=17,
+        observed_at_ms=observed_at_ms,
+        owner=AccountTruthFactOwner(
+            owner_class=owner_class,
+            owner_key="bot-a" if owner_class == "bot" else "unclaimed",
+            owner_label="Bot bot-a" if owner_class == "bot" else "Foreign or unclaimed",
+            evidence_tier="bot_order_ref" if owner_class == "bot" else "foreign_or_unclaimed",
+            owner_binding_state="ACTIVE" if owner_class == "bot" else "UNKNOWN",
+            evidence_label="Bot order reference" if owner_class == "bot" else "Unclaimed",
+            severity="ok" if owner_class == "bot" else "critical",
+        ),
+        headline="Bot execution" if owner_class == "bot" else "Unclaimed execution",
+        detail="Broker execution observed.",
+    )
+
+
 def test_write_receipt_wraps_clean_account_truth(tmp_path: Path) -> None:
     service = AccountReconciliationService(artifacts_root=tmp_path, ttl_ms=60_000)
 
@@ -146,6 +176,156 @@ def test_write_receipt_wraps_clean_account_truth(tmp_path: Path) -> None:
     assert receipt.final_gate_result.status == "pass"
     assert receipt.expires_at_ms == 1_780_000_062_000
     assert service.read_latest_receipt("DU1234567") == receipt
+
+
+def test_default_receipt_ttl_is_five_minutes(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+
+    receipt = service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(),
+        now_ms=1_780_000_002_000,
+    )
+
+    assert receipt.ttl_ms == 300_000
+    assert receipt.expires_at_ms == 1_780_000_302_000
+
+
+def test_new_execution_invalidates_prior_receipt_until_reconciled(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    receipt = service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(),
+        now_ms=1_780_000_002_000,
+    )
+    updated_truth = _truth().model_copy(
+        update={
+            "generated_at_ms": 1_780_000_003_000,
+            "executions": [_execution(exec_id="exec-1", observed_at_ms=1_780_000_002_500)],
+        }
+    )
+
+    assert service.observe_account_truth(updated_truth, now_ms=1_780_000_003_000) is None
+
+    triage = service.triage(account_id="DU1234567", now_ms=1_780_000_003_500)
+    assert triage.account_reconciliation_receipt == receipt
+    assert triage.account_reconciliation_valid_until_ms == 1_780_000_003_000
+    assert triage.overall_gate_result.status == "unknown"
+    assert triage.conditions[0].title == "Account evidence changed"
+    assert "exec-1" in triage.conditions[0].detail
+
+
+def test_auto_reconcile_replaces_receipt_after_new_bot_execution(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(),
+        now_ms=1_780_000_002_000,
+    )
+    service.update_automation_policy(
+        account_id="DU1234567",
+        enabled=True,
+        updated_by="test.operator",
+        now_ms=1_780_000_002_100,
+    )
+    updated_truth = _truth().model_copy(
+        update={
+            "generated_at_ms": 1_780_000_003_000,
+            "executions": [_execution(exec_id="exec-1", observed_at_ms=1_780_000_002_500)],
+        }
+    )
+
+    replacement = service.observe_account_truth(updated_truth, now_ms=1_780_000_003_000)
+
+    assert replacement is not None
+    assert replacement.generated_at_ms == 1_780_000_003_000
+    assert [row.exec_id for row in replacement.account_truth.executions] == ["exec-1"]
+    triage = service.triage(account_id="DU1234567", now_ms=1_780_000_003_500)
+    assert triage.overall_gate_result.status == "pass"
+    assert triage.account_reconciliation_valid_until_ms == replacement.expires_at_ms
+    assert triage.conditions == []
+
+
+def test_auto_reconcile_does_not_bless_unclaimed_execution(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    original = service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(),
+        now_ms=1_780_000_002_000,
+    )
+    service.update_automation_policy(
+        account_id="DU1234567",
+        enabled=True,
+        updated_by="test.operator",
+        now_ms=1_780_000_002_100,
+    )
+    updated_truth = _truth().model_copy(
+        update={
+            "generated_at_ms": 1_780_000_003_000,
+            "executions": [
+                _execution(
+                    exec_id="exec-foreign",
+                    observed_at_ms=1_780_000_002_500,
+                    owner_class="foreign_or_unclaimed",
+                )
+            ],
+        }
+    )
+
+    assert service.observe_account_truth(updated_truth, now_ms=1_780_000_003_000) is None
+    assert service.read_latest_receipt("DU1234567") == original
+    assert service.triage(
+        account_id="DU1234567",
+        now_ms=1_780_000_003_500,
+    ).overall_gate_result.status == "unknown"
+
+
+def test_enabling_auto_reconcile_retries_an_invalidated_bot_execution(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(),
+        now_ms=1_780_000_002_000,
+    )
+    updated_truth = _truth().model_copy(
+        update={
+            "generated_at_ms": 1_780_000_003_000,
+            "executions": [_execution(exec_id="exec-1", observed_at_ms=1_780_000_002_500)],
+        }
+    )
+    assert service.observe_account_truth(updated_truth, now_ms=1_780_000_003_000) is None
+    service.update_automation_policy(
+        account_id="DU1234567",
+        enabled=True,
+        updated_by="test.operator",
+        now_ms=1_780_000_003_100,
+    )
+
+    replacement = service.observe_account_truth(updated_truth, now_ms=1_780_000_004_000)
+
+    assert replacement is not None
+    assert replacement.generated_at_ms == 1_780_000_004_000
+    assert service.triage(
+        account_id="DU1234567",
+        now_ms=1_780_000_004_500,
+    ).overall_gate_result.status == "pass"
+
+
+def test_automation_policy_is_durable_and_defaults_disabled(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+
+    default = service.read_automation_policy("DU1234567")
+    updated = service.update_automation_policy(
+        account_id="du1234567",
+        enabled=True,
+        updated_by="test.operator",
+        now_ms=1_780_000_002_000,
+    )
+
+    assert default.enabled is False
+    assert updated.account_id == "DU1234567"
+    assert updated.enabled is True
+    assert service.read_automation_policy("DU1234567") == updated
 
 
 def test_write_receipt_uses_canonical_account_id_for_storage(tmp_path: Path) -> None:

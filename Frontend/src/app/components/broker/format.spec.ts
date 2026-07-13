@@ -4,6 +4,7 @@ import {
   deltaAbsBand,
   diffBps,
   fmtBrokerExpiryDate,
+  fmtDurationRemaining,
   toleranceBand,
 } from './format';
 
@@ -14,6 +15,20 @@ describe('fmtBrokerExpiryDate', () => {
 
   it('returns a dash for absent expiry markers', () => {
     expect(fmtBrokerExpiryDate(null)).toBe('—');
+  });
+});
+
+describe('fmtDurationRemaining', () => {
+  it('renders a concise minute-and-second countdown', () => {
+    expect(fmtDurationRemaining(300_000)).toBe('5m 0s');
+    expect(fmtDurationRemaining(270_000)).toBe('4m 30s');
+    expect(fmtDurationRemaining(59_001)).toBe('1m 0s');
+    expect(fmtDurationRemaining(59_000)).toBe('59s');
+  });
+
+  it('renders expired when no freshness remains', () => {
+    expect(fmtDurationRemaining(0)).toBe('Expired');
+    expect(fmtDurationRemaining(-1)).toBe('Expired');
   });
 });
 

@@ -288,6 +288,30 @@
           }
         </header>
 
+        @if (accountReconciliationAutomationPolicy(); as policy) {
+          <div class="reconciliation-automation">
+            <label class="reconciliation-automation-control">
+              <input
+                type="checkbox"
+                [checked]="policy.enabled"
+                [disabled]="accountReconciliationAutomationSaving()"
+                aria-describedby="reconciliation-automation-help"
+                (change)="updateAccountReconciliationAutomation($event)"
+              />
+              <span>Auto-reconcile after bot trades</span>
+            </label>
+            <p id="reconciliation-automation-help" class="muted">
+              New executions expire the previous receipt. When enabled, bot-owned executions create
+              a fresh receipt automatically; manual or unclaimed activity still needs review.
+            </p>
+            @if (accountReconciliationAutomationSaving()) {
+              <p class="muted" aria-live="polite">Saving auto-reconcile setting…</p>
+            } @else if (accountReconciliationAutomationError()) {
+              <p class="error" role="alert">We couldn't save the auto-reconcile setting.</p>
+            }
+          </div>
+        }
+
         @if (accountReconciliationError(); as err) {
           <app-section-error
             [error]="err"
@@ -300,10 +324,16 @@
             <dd class="mono">{{ accountReconciliationDisplayState() | receiptLabel }}</dd>
             <dt>Final gate</dt>
             <dd class="mono">{{ accountReconciliationDisplayGateLabel() | receiptLabel }}</dd>
-            <dt>Generated</dt>
-            <dd class="mono">{{ fmtDateNy(receipt.generated_at_ms) }}</dd>
-            <dt>Expires</dt>
-            <dd class="mono">{{ fmtBrokerExpiryDate(receipt.expires_at_ms) }}</dd>
+            <dt>Last reconciled</dt>
+            <dd class="mono">
+              <app-timestamp-display [value]="receipt.generated_at_ms" mode="local" />
+            </dd>
+            <dt>Time remaining</dt>
+            <dd class="mono">{{ accountReconciliationRemainingLabel() }}</dd>
+            <dt>Fresh until</dt>
+            <dd class="mono">
+              <app-timestamp-display [value]="accountReconciliationValidUntilMs()" mode="local" />
+            </dd>
           </dl>
           <p class="receipt-reason">{{ accountReconciliationReason() }}</p>
         } @else {

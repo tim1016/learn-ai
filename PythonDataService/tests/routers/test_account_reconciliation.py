@@ -119,6 +119,35 @@ async def test_triage_returns_latest_receipt(tmp_path: Path) -> None:
     assert body["account_reconciliation_receipt"]["receipt_id"] == receipt.receipt_id
     assert body["overall_gate_result"]["status"] == "pass"
     assert body["conditions"] == []
+    assert body["reconciliation_automation_policy"]["enabled"] is False
+    assert body["account_reconciliation_valid_until_ms"] == receipt.expires_at_ms
+
+
+async def test_update_reconciliation_automation_policy(tmp_path: Path) -> None:
+    from app.main import app
+
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    app.dependency_overrides[
+        account_reconciliation.get_account_reconciliation_service
+    ] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.put(
+                "/api/accounts/du1234567/reconciliation/automation",
+                json={"enabled": True, "updated_by": "test.operator"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "schema_version": 1,
+        "account_id": "DU1234567",
+        "enabled": True,
+        "updated_at_ms": response.json()["updated_at_ms"],
+        "updated_by": "test.operator",
+    }
+    assert service.read_automation_policy("DU1234567").enabled is True
 
 
 async def test_triage_returns_unknown_when_registry_is_corrupt(tmp_path: Path) -> None:

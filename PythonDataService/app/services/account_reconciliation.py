@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -39,13 +40,18 @@ from app.schemas.account_reconciliation import (
     AccountConditionRow,
     AccountExposureResolution,
     AccountFreezeBanner,
+    AccountReconciliationAutomationPolicy,
     AccountReconciliationEvidenceRef,
     AccountReconciliationReceipt,
     AccountTriageBotRef,
     AccountTriageGateRow,
     AccountTriageResponse,
 )
-from app.schemas.account_truth import AccountTruthResponse, AccountTruthSourceFreshness
+from app.schemas.account_truth import (
+    AccountTruthExecutionRow,
+    AccountTruthResponse,
+    AccountTruthSourceFreshness,
+)
 from app.schemas.artifact_io import (
     atomic_write_pydantic_artifact,
     read_pydantic_artifact,
@@ -54,9 +60,17 @@ from app.schemas.live_runs import GateResult
 from app.utils.timestamps import now_ms_utc
 
 ACCOUNT_RECONCILIATION_RECEIPT_FILENAME = "account_reconciliation_receipt.json"
-DEFAULT_ACCOUNT_RECONCILIATION_TTL_MS = 60_000
+ACCOUNT_RECONCILIATION_POLICY_FILENAME = "account_reconciliation_policy.json"
+ACCOUNT_RECONCILIATION_INVALIDATED_EVENT = "account_reconciliation_invalidated"
+DEFAULT_ACCOUNT_RECONCILIATION_TTL_MS = 5 * 60 * 1000
 MAX_EVIDENCE_REF_DETAIL_LENGTH = 512
 CLEARABLE_EXPOSURE_RESOLUTIONS = frozenset({"flat", "intended", "accepted_override"})
+
+
+@dataclass(frozen=True)
+class _ReceiptInvalidation:
+    recorded_at_ms: int
+    execution_ids: tuple[str, ...]
 
 
 class AccountReconciliationService:
@@ -72,8 +86,115 @@ class AccountReconciliationService:
             / ACCOUNT_RECONCILIATION_RECEIPT_FILENAME
         )
 
+    def automation_policy_path(self, account_id: str) -> Path:
+        return (
+            account_artifacts_root(self._artifacts_root, normalize_account_id(account_id))
+            / ACCOUNT_RECONCILIATION_POLICY_FILENAME
+        )
+
     def read_latest_receipt(self, account_id: str) -> AccountReconciliationReceipt | None:
         return read_pydantic_artifact(self.receipt_path(account_id), AccountReconciliationReceipt)
+
+    def read_automation_policy(self, account_id: str) -> AccountReconciliationAutomationPolicy:
+        canonical_account_id = normalize_account_id(account_id)
+        policy = read_pydantic_artifact(
+            self.automation_policy_path(canonical_account_id),
+            AccountReconciliationAutomationPolicy,
+        )
+        if policy is not None:
+            return policy
+        return AccountReconciliationAutomationPolicy(
+            account_id=canonical_account_id,
+            enabled=False,
+            updated_at_ms=0,
+            updated_by="system.default",
+        )
+
+    def update_automation_policy(
+        self,
+        *,
+        account_id: str,
+        enabled: bool,
+        updated_by: str,
+        now_ms: int | None = None,
+    ) -> AccountReconciliationAutomationPolicy:
+        canonical_account_id = normalize_account_id(account_id)
+        policy = AccountReconciliationAutomationPolicy(
+            account_id=canonical_account_id,
+            enabled=enabled,
+            updated_at_ms=now_ms_utc() if now_ms is None else now_ms,
+            updated_by=updated_by,
+        )
+        atomic_write_pydantic_artifact(self.automation_policy_path(canonical_account_id), policy)
+        append_account_event(
+            self._artifacts_root,
+            canonical_account_id,
+            {
+                "event_type": "account_reconciliation_automation_policy_updated",
+                "enabled": enabled,
+                "updated_by": updated_by,
+                "recorded_at_ms": policy.updated_at_ms,
+            },
+        )
+        return policy
+
+    def observe_account_truth(
+        self,
+        account_truth: AccountTruthResponse,
+        *,
+        now_ms: int | None = None,
+    ) -> AccountReconciliationReceipt | None:
+        """Invalidate a receipt on new executions and optionally replace it safely."""
+
+        canonical_account_id = _normalize_optional_account_id(
+            account_truth.account_id or account_truth.health.account_id
+        )
+        if canonical_account_id is None:
+            return None
+        observed_at_ms = now_ms_utc() if now_ms is None else now_ms
+        receipt = self.read_latest_receipt(canonical_account_id)
+        receipted_execution_ids = (
+            {row.exec_id for row in receipt.account_truth.executions}
+            if receipt is not None
+            else set()
+        )
+        recorded_execution_ids = _recorded_invalidated_execution_ids(
+            read_account_events(self._artifacts_root, canonical_account_id)
+        )
+        unreceipted_executions = [
+            execution
+            for execution in account_truth.executions
+            if execution.exec_id not in receipted_execution_ids
+        ]
+        if not unreceipted_executions:
+            return None
+        new_executions = [
+            execution
+            for execution in unreceipted_executions
+            if execution.exec_id not in recorded_execution_ids
+        ]
+
+        if new_executions:
+            append_account_event(
+                self._artifacts_root,
+                canonical_account_id,
+                {
+                    "event_type": ACCOUNT_RECONCILIATION_INVALIDATED_EVENT,
+                    "execution_ids": [execution.exec_id for execution in new_executions],
+                    "execution_owner_classes": [
+                        execution.owner.owner_class for execution in new_executions
+                    ],
+                    "recorded_at_ms": observed_at_ms,
+                },
+            )
+        policy = self.read_automation_policy(canonical_account_id)
+        if policy.enabled and _all_executions_bot_owned(unreceipted_executions):
+            return self.write_receipt(
+                requested_account_id=canonical_account_id,
+                account_truth=account_truth,
+                now_ms=observed_at_ms,
+            )
+        return None
 
     def write_receipt(
         self,
@@ -182,12 +303,17 @@ class AccountReconciliationService:
         if freeze is None:
             raise AccountArtifactError(f"account freeze does not exist for {canonical_account_id!r}")
         receipt = self.read_latest_receipt(canonical_account_id)
+        receipt_invalidation = _latest_receipt_invalidation(
+            read_account_events(self._artifacts_root, canonical_account_id),
+            receipt=receipt,
+        )
         clear_blocker = _clear_freeze_blocker(
             account_id=canonical_account_id,
             receipt=receipt,
             freeze=freeze,
             now_ms=recorded_at_ms,
             receipt_id=receipt_id,
+            receipt_invalidation=receipt_invalidation,
         )
         if clear_blocker is not None:
             raise AccountArtifactError(clear_blocker)
@@ -317,6 +443,7 @@ class AccountReconciliationService:
             generated_at_ms=generated_at_ms,
         )
         account_events = read_account_events(self._artifacts_root, canonical_account_id)
+        receipt_invalidation = _latest_receipt_invalidation(account_events, receipt=receipt)
         latest_bindings = _latest_bindings(bindings)
         active_bindings = [
             binding
@@ -331,6 +458,7 @@ class AccountReconciliationService:
             receipt=receipt,
             generated_at_ms=generated_at_ms,
             affected_bindings=active_bindings,
+            receipt_invalidation=receipt_invalidation,
         )
         gate_rows.append(reconciliation_gate)
         if registry_gap is not None:
@@ -357,6 +485,7 @@ class AccountReconciliationService:
                     account_id=canonical_account_id,
                     receipt=receipt,
                     generated_at_ms=generated_at_ms,
+                    receipt_invalidation=receipt_invalidation,
                 ),
                 *_terminal_binding_conditions(
                     latest_bindings,
@@ -390,6 +519,11 @@ class AccountReconciliationService:
             summary_detail=overall.operator_reason,
             overall_gate_result=overall,
             account_reconciliation_receipt=receipt,
+            account_reconciliation_valid_until_ms=_receipt_valid_until_ms(
+                receipt,
+                receipt_invalidation,
+            ),
+            reconciliation_automation_policy=self.read_automation_policy(canonical_account_id),
             gate_rows=gate_rows,
             conditions=conditions,
             freeze_banner=_freeze_banner(freeze),
@@ -397,6 +531,7 @@ class AccountReconciliationService:
                 receipt=receipt,
                 freeze=freeze,
                 now_ms=generated_at_ms,
+                receipt_invalidation=receipt_invalidation,
             ),
             affected_bots=[
                 AccountTriageBotRef(
@@ -417,6 +552,93 @@ def _normalize_optional_account_id(account_id: str | None) -> str | None:
         return normalize_account_id(account_id)
     except InvalidAccountIdError:
         return None
+
+
+def _recorded_invalidated_execution_ids(account_events: list[dict]) -> set[str]:
+    execution_ids: set[str] = set()
+    for event in account_events:
+        if event.get("event_type") != ACCOUNT_RECONCILIATION_INVALIDATED_EVENT:
+            continue
+        raw_ids = event.get("execution_ids")
+        if isinstance(raw_ids, list):
+            execution_ids.update(value for value in raw_ids if isinstance(value, str))
+    return execution_ids
+
+
+def _all_executions_bot_owned(executions: list[AccountTruthExecutionRow]) -> bool:
+    return bool(executions) and all(
+        execution.owner.owner_class == "bot" for execution in executions
+    )
+
+
+def _latest_receipt_invalidation(
+    account_events: list[dict],
+    *,
+    receipt: AccountReconciliationReceipt | None,
+) -> _ReceiptInvalidation | None:
+    if receipt is None:
+        return None
+    latest: _ReceiptInvalidation | None = None
+    for event in account_events:
+        if event.get("event_type") != ACCOUNT_RECONCILIATION_INVALIDATED_EVENT:
+            continue
+        recorded_at_ms = event.get("recorded_at_ms")
+        if not isinstance(recorded_at_ms, int) or recorded_at_ms <= receipt.generated_at_ms:
+            continue
+        raw_ids = event.get("execution_ids")
+        execution_ids = (
+            tuple(value for value in raw_ids if isinstance(value, str))
+            if isinstance(raw_ids, list)
+            else ()
+        )
+        candidate = _ReceiptInvalidation(
+            recorded_at_ms=recorded_at_ms,
+            execution_ids=execution_ids,
+        )
+        if latest is None or candidate.recorded_at_ms > latest.recorded_at_ms:
+            latest = candidate
+    return latest
+
+
+def _receipt_valid_until_ms(
+    receipt: AccountReconciliationReceipt | None,
+    receipt_invalidation: _ReceiptInvalidation | None,
+) -> int | None:
+    if receipt is None:
+        return None
+    if receipt_invalidation is None:
+        return receipt.expires_at_ms
+    return min(receipt.expires_at_ms, receipt_invalidation.recorded_at_ms)
+
+
+def _receipt_invalidation_detail(
+    receipt: AccountReconciliationReceipt,
+    receipt_invalidation: _ReceiptInvalidation,
+) -> str:
+    execution_label = ", ".join(receipt_invalidation.execution_ids) or "unknown execution"
+    subject = (
+        "Broker execution"
+        if len(receipt_invalidation.execution_ids) <= 1
+        else "Broker executions"
+    )
+    verb = "was" if len(receipt_invalidation.execution_ids) <= 1 else "were"
+    return (
+        f"{subject} {execution_label} {verb} observed after receipt "
+        f"{receipt.receipt_id} was reconciled."
+    )
+
+
+def _receipt_invalidation_evidence_refs(
+    receipt_invalidation: _ReceiptInvalidation,
+) -> list[AccountReconciliationEvidenceRef]:
+    return [
+        AccountReconciliationEvidenceRef(
+            source="broker.execution",
+            ref=execution_id,
+            detail="Execution observed after the latest account reconciliation.",
+        )
+        for execution_id in receipt_invalidation.execution_ids
+    ]
 
 
 def _receipt_id(
@@ -617,6 +839,7 @@ def _reconciliation_conditions(
     account_id: str,
     receipt: AccountReconciliationReceipt | None,
     generated_at_ms: int,
+    receipt_invalidation: _ReceiptInvalidation | None,
 ) -> list[AccountConditionRow]:
     if receipt is None:
         return [
@@ -630,6 +853,22 @@ def _reconciliation_conditions(
                 operator_next_step="RUN_ACCOUNT_RECONCILIATION",
                 source="account_reconciliation_receipt",
                 evidence_at_ms=generated_at_ms,
+                cure_action="reconcile_now",
+            )
+        ]
+    if receipt_invalidation is not None:
+        return [
+            AccountConditionRow(
+                condition_type="evidence_stale",
+                scope="account",
+                owner=_account_owner(account_id),
+                severity="warning",
+                title="Account evidence changed",
+                detail=_receipt_invalidation_detail(receipt, receipt_invalidation),
+                operator_next_step="RUN_ACCOUNT_RECONCILIATION",
+                source=ACCOUNT_RECONCILIATION_INVALIDATED_EVENT,
+                evidence_at_ms=receipt_invalidation.recorded_at_ms,
+                evidence_refs=_receipt_invalidation_evidence_refs(receipt_invalidation),
                 cure_action="reconcile_now",
             )
         ]
@@ -832,6 +1071,7 @@ def _clear_freeze_blocker(
     now_ms: int,
     account_id: str | None = None,
     receipt_id: str | None = None,
+    receipt_invalidation: _ReceiptInvalidation | None = None,
 ) -> str | None:
     if freeze is None:
         return (
@@ -851,6 +1091,8 @@ def _clear_freeze_blocker(
         return "latest account receipt belongs to a different account"
     if receipt_id is not None and receipt.receipt_id != receipt_id:
         return "submitted receipt_id does not match the latest account receipt"
+    if receipt_invalidation is not None:
+        return "account reconciliation receipt predates newly observed broker execution"
     if receipt.expires_at_ms < now_ms:
         return "account reconciliation receipt is stale"
     if receipt.generated_at_ms <= freeze.recorded_at_ms:
@@ -867,8 +1109,17 @@ def _clear_freeze_actionable(
     receipt: AccountReconciliationReceipt | None,
     freeze: AccountFreezeEvidence | None,
     now_ms: int,
+    receipt_invalidation: _ReceiptInvalidation | None = None,
 ) -> bool:
-    return _clear_freeze_blocker(receipt=receipt, freeze=freeze, now_ms=now_ms) is None
+    return (
+        _clear_freeze_blocker(
+            receipt=receipt,
+            freeze=freeze,
+            now_ms=now_ms,
+            receipt_invalidation=receipt_invalidation,
+        )
+        is None
+    )
 
 
 def _reconciliation_triage_row(
@@ -877,6 +1128,7 @@ def _reconciliation_triage_row(
     receipt: AccountReconciliationReceipt | None,
     generated_at_ms: int,
     affected_bindings: list[AccountInstanceBinding],
+    receipt_invalidation: _ReceiptInvalidation | None,
 ) -> AccountTriageGateRow:
     affected = [binding.strategy_instance_id for binding in affected_bindings]
     if receipt is None:
@@ -891,6 +1143,21 @@ def _reconciliation_triage_row(
             source="account_reconciliation_receipt",
             evidence_at_ms=generated_at_ms,
             affected_strategy_instance_ids=affected,
+            primary_remediation="refresh_account_truth",
+        )
+    if receipt_invalidation is not None:
+        return AccountTriageGateRow(
+            gate_id="account.reconciliation",
+            status="unknown",
+            scope="reconciliation",
+            severity="warning",
+            title="Account evidence changed",
+            detail=_receipt_invalidation_detail(receipt, receipt_invalidation),
+            operator_next_step="RUN_ACCOUNT_RECONCILIATION",
+            source=ACCOUNT_RECONCILIATION_INVALIDATED_EVENT,
+            evidence_at_ms=receipt_invalidation.recorded_at_ms,
+            affected_strategy_instance_ids=affected,
+            evidence_refs=_receipt_invalidation_evidence_refs(receipt_invalidation),
             primary_remediation="refresh_account_truth",
         )
     if receipt.expires_at_ms < generated_at_ms:

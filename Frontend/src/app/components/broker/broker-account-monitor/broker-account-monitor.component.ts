@@ -17,6 +17,7 @@ import { DialogModule } from 'primeng/dialog';
 import { DataSourceComponent } from '../../../shared/data-source/data-source.component';
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import { AccountTruthBoardComponent } from '../account-truth-board/account-truth-board.component';
 import type { OperatorBlockerMoveEvent } from '../shared/operator-blocker-list/operator-blocker-list.component';
 import { AccountFreezeBannerComponent } from '../account-freeze-banner/account-freeze-banner.component';
@@ -40,6 +41,7 @@ import {
   fmtBrokerExpiryDate,
   fmtCurrency,
   fmtDateNy,
+  fmtDurationRemaining,
   fmtSignedCurrency,
   fmtSignedNumber,
 } from '../format';
@@ -89,6 +91,7 @@ interface AccountConditionGroups {
     AccountTruthBoardComponent,
     AccountFreezeBannerComponent,
     ReceiptLabelPipe,
+    TimestampDisplayComponent,
   ],
   styleUrl: './broker-account-monitor.component.scss',
   templateUrl: './broker-account-monitor.component.html',
@@ -114,6 +117,8 @@ export class BrokerAccountMonitorComponent {
   readonly accountReconciliationNowMs = signal(Date.now());
   readonly accountReconciliationLoading = signal(false);
   readonly accountReconciliationError = signal<unknown>(null);
+  readonly accountReconciliationAutomationSaving = signal(false);
+  readonly accountReconciliationAutomationError = signal<unknown>(null);
   readonly accountTriageLoading = signal(false);
   readonly accountTriageError = signal<unknown>(null);
   readonly accountCureError = signal<unknown>(null);
@@ -144,9 +149,29 @@ export class BrokerAccountMonitorComponent {
     return { account, bot };
   });
   readonly accountFreezeBanner = computed(() => this.accountTriage()?.freeze_banner ?? null);
-  readonly accountReconciliationExpired = computed(() => {
+  readonly accountReconciliationAutomationPolicy = computed(
+    () => this.accountTriage()?.reconciliation_automation_policy ?? null,
+  );
+  readonly accountReconciliationValidUntilMs = computed(() => {
     const receipt = this.accountReconciliation();
-    return receipt !== null && receipt.expires_at_ms < this.accountReconciliationNowMs();
+    const triage = this.accountTriage();
+    if (
+      receipt !== null &&
+      triage?.account_reconciliation_receipt?.receipt_id === receipt.receipt_id
+    ) {
+      return triage.account_reconciliation_valid_until_ms ?? receipt.expires_at_ms;
+    }
+    return receipt?.expires_at_ms ?? null;
+  });
+  readonly accountReconciliationExpired = computed(() => {
+    const validUntilMs = this.accountReconciliationValidUntilMs();
+    return validUntilMs !== null && validUntilMs < this.accountReconciliationNowMs();
+  });
+  readonly accountReconciliationRemainingLabel = computed(() => {
+    const validUntilMs = this.accountReconciliationValidUntilMs();
+    return validUntilMs === null
+      ? 'Expired'
+      : fmtDurationRemaining(validUntilMs - this.accountReconciliationNowMs());
   });
   readonly accountHasOpenBrokerExposure = computed(() =>
     this.truthHasOpenBrokerExposure(this.accountTruth()),
@@ -414,6 +439,33 @@ export class BrokerAccountMonitorComponent {
       this.accountReconciliationError.set(err);
     } finally {
       this.accountReconciliationLoading.set(false);
+    }
+  }
+
+  async updateAccountReconciliationAutomation(event: Event): Promise<void> {
+    const input = event.target;
+    const accountId = this.accountReconciliationAccountId();
+    if (
+      !(input instanceof HTMLInputElement) ||
+      !accountId ||
+      this.accountReconciliationAutomationSaving()
+    ) {
+      return;
+    }
+    this.accountReconciliationAutomationSaving.set(true);
+    this.accountReconciliationAutomationError.set(null);
+    try {
+      const policy = await this.broker.updateAccountReconciliationAutomation(accountId, {
+        enabled: input.checked,
+      });
+      this.accountTriage.update((triage) =>
+        triage === null ? null : { ...triage, reconciliation_automation_policy: policy },
+      );
+    } catch (err) {
+      this.accountReconciliationAutomationError.set(err);
+      input.checked = this.accountReconciliationAutomationPolicy()?.enabled ?? false;
+    } finally {
+      this.accountReconciliationAutomationSaving.set(false);
     }
   }
 

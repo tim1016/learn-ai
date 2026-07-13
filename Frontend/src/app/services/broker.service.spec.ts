@@ -103,6 +103,25 @@ describe('BrokerService diagnostics endpoints', () => {
     await expect(promise).resolves.toEqual([]);
   });
 
+  it('updates the saved account reconciliation automation policy', async () => {
+    const promise = service.updateAccountReconciliationAutomation('DU 123', {
+      enabled: true,
+    });
+    const req = http.expectOne('/api/accounts/DU%20123/reconciliation/automation');
+
+    expect(req.request.method).toBe('PUT');
+    expect(req.request.body).toEqual({ enabled: true });
+    req.flush({
+      schema_version: 1,
+      account_id: 'DU 123',
+      enabled: true,
+      updated_at_ms: 1_780_000_000_000,
+      updated_by: 'account-monitor.operator',
+    });
+
+    await expect(promise).resolves.toMatchObject({ enabled: true });
+  });
+
   it('posts what-if previews to the non-submitting endpoint', async () => {
     const spec = {
       symbol: 'SPY',
