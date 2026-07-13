@@ -43,6 +43,32 @@ describe('resolveVerdictCardModel', () => {
     expect(model.showChart).toBe(false);
   });
 
+  it('does not synthesize a start verb when an Off duty bot has no roll-call offer', () => {
+    const model = resolveVerdictCardModel(
+      statusWith({ display_status: 'Off duty', primary_action: null }, (status) => {
+        status.operator_surface.host_process.start_capability = {
+          enabled: true,
+          run_id: 'run-x',
+          request: {
+            readonly: false,
+            hydrate_policy: 'require',
+            strategy: 'deployment_validation',
+            max_orders_per_day: 2,
+            ibkr_host: '127.0.0.1',
+          },
+          disabled_reason_code: null,
+          gate_results: [],
+        };
+        status.operator_surface.trader_guidance.primary_remediation = {
+          kind: 'none',
+          reason: 'Run roll call to issue a start offer.',
+        };
+      }),
+    );
+
+    expect(model.verb).toEqual({ kind: 'none' });
+  });
+
   it('maps an On duty bot to a strip layout with vitals and the chart', () => {
     const model = resolveVerdictCardModel(
       statusWith(

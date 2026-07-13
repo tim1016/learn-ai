@@ -1646,7 +1646,7 @@ async def test_status_start_defaults_seed_strategy_from_ledger_key(
     # explicit mode → treated as paper); see the dedicated paper/live tests.
     assert defaults["readonly"] is False
     assert defaults["hydrate_policy"] == "require"
-    assert defaults["max_orders_per_day"] == 2
+    assert defaults["max_orders_per_day"] == 2_000
     assert defaults["ibkr_host"] == "127.0.0.1"
 
 
@@ -3056,6 +3056,32 @@ async def test_roll_call_tick_persists_start_offer_and_catalog_reads_it(
     assert catalog.json()["evening_report"]["summary"].endswith("0 retired")
 
 
+async def test_roll_call_uses_instance_process_when_bulk_snapshot_omits_idle_bot(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-offer", "spy_ema_paper", 100, strategy_key="spy_ema")
+    _set_startable_now(monkeypatch)
+    _set_daemon(
+        monkeypatch,
+        instances={"instances": [], "fetched_at_ms": 1},
+        process={"state": "idle", "run_id": "run-offer"},
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        roll_call = await client.post("/api/live-instances/roll-call")
+        catalog = await client.get("/api/live-instances/catalog")
+
+    assert roll_call.status_code == 200
+    body = roll_call.json()
+    assert body["summary"]["ready"] == 1
+    assert body["offers"][0]["strategy_instance_id"] == "spy_ema_paper"
+    row = catalog.json()["bots"][0]
+    assert row["daily_lifecycle"]["display_status"] == "Ready"
+    assert row["daily_lifecycle"]["primary_action"]["offer_id"] == body["offers"][0]["offer_id"]
+
+
 async def test_status_marks_bot_sick_bay_for_terminal_account_condition(
     app_with_root,
     monkeypatch: pytest.MonkeyPatch,
@@ -3102,6 +3128,56 @@ async def test_status_marks_bot_sick_bay_for_terminal_account_condition(
         "owner_label": "Account DU1234567",
         "cure_action": "reconcile_now",
         "cure_label": "Run account reconcile",
+    } in lifecycle["conditions"]
+
+
+async def test_status_sick_bay_surfaces_submit_halt_incident(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    sid = "spy_submit_halt"
+    run_id = "run-submit-halt"
+    _write_ledger(root, run_id, sid, 100, strategy_key="spy_ema_crossover")
+    _append_operator_incident(
+        root / run_id,
+        incident_id="submit-halted-cap",
+        category="submit",
+        code="submit.halted",
+        title="Bot halted before submit",
+        message=(
+            "The bot halted before it could continue trading: would push total to 3 "
+            "on 2026-07-13 (cap=2); dropped 1 pending order(s) without submission"
+        ),
+        started_at_ms=1_783_961_225_698,
+    )
+    _set_daemon(
+        monkeypatch,
+        process={
+            "state": "exited",
+            "run_id": run_id,
+            "exit_code": 1,
+            "exit_reason": "max_orders_exceeded",
+        },
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(f"/api/live-instances/{sid}/status?refresh=true")
+
+    assert response.status_code == 200
+    lifecycle = response.json()["daily_lifecycle"]
+    assert lifecycle["display_status"] == "Sick bay"
+    assert {
+        "scope": "bot",
+        "severity": "critical",
+        "title": "Bot halted before submit",
+        "detail": (
+            "The bot halted before it could continue trading: would push total to 3 "
+            "on 2026-07-13 (cap=2); dropped 1 pending order(s) without submission"
+        ),
+        "owner_label": f"Bot {sid}",
+        "cure_action": "retire_replace",
+        "cure_label": "Retire & Replace",
     } in lifecycle["conditions"]
 
 

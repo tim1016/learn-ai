@@ -303,6 +303,7 @@ class LiveInstanceSurfaceAssembler:
             account_id=instance_account_id,
             sid=sid,
             account_freeze=account_freeze,
+            incident_headline_notice=incident_headline,
             now_ms=observed_at_ms,
         )
         daily_lifecycle = d.project_bot_daily_lifecycle(

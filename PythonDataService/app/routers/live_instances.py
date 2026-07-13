@@ -2055,11 +2055,11 @@ async def _bot_catalog_row_for_sid(
     by_instance: dict[str, list[dict]],
     trading_mode: TradingMode,
 ) -> BotCatalogRow:
-    status_view = await _resolve_instance_status_from_process(
+    status_view = await _resolve_instance_status_for_fleet_sid(
         sid,
         root,
         settings,
-        _daemon_process_from_instance(daemon_instance),
+        daemon_instance,
         runs_by_instance=by_instance,
     )
     row = compose_bot_catalog_row(status_view, trading_mode)
@@ -2071,6 +2071,29 @@ async def _bot_catalog_row_for_sid(
                 read_sidecar=_read_sidecar,
             )
         }
+    )
+
+
+async def _resolve_instance_status_for_fleet_sid(
+    sid: str,
+    root: Path,
+    settings: IbkrSettings,
+    daemon_instance: dict | None,
+    *,
+    runs_by_instance: dict[str, list[dict]],
+) -> LiveInstanceStatus:
+    daemon_process = _daemon_process_from_instance(daemon_instance)
+    if daemon_process is None:
+        _result, daemon_process = await host_daemon_client.fetch_instance_process(
+            settings.live_runner_daemon_url,
+            sid,
+        )
+    return await _resolve_instance_status_from_process(
+        sid,
+        root,
+        settings,
+        daemon_process,
+        runs_by_instance=runs_by_instance,
     )
 
 
@@ -2101,11 +2124,11 @@ async def run_roll_call() -> BotRollCallResponse:
         if lifecycle_state is not None and lifecycle_state.phase == BotLifecyclePhase.RETIRED:
             retired_count += 1
             continue
-        status_view = await _resolve_instance_status_from_process(
+        status_view = await _resolve_instance_status_for_fleet_sid(
             sid,
             root,
             settings,
-            _daemon_process_from_instance(daemon_by_sid.get(sid)),
+            daemon_by_sid.get(sid),
             runs_by_instance=by_instance,
         )
         rows.append(compose_bot_catalog_row(status_view, trading_mode))
@@ -2596,6 +2619,7 @@ def _assert_roll_call_offer_allows_start(
             detail={
                 "reason_code": "ROLL_CALL_OFFER_REQUIRED",
                 "message": "Run roll call and start from the current offer.",
+                "remediation": "Run roll call, wait for this bot to show Ready, then click Start before the offer expires.",
                 "gate_id": "daily_lifecycle.roll_call_offer",
                 "strategy_instance_id": sid,
             },
@@ -2607,6 +2631,7 @@ def _assert_roll_call_offer_allows_start(
             detail={
                 "reason_code": "ROLL_CALL_OFFER_EXPIRED",
                 "message": "The roll-call start offer is absent or expired. Run roll call again.",
+                "remediation": "Run roll call again, wait for this bot to show Ready, then click Start before the offer expires.",
                 "gate_id": "daily_lifecycle.roll_call_offer",
                 "strategy_instance_id": sid,
             },
@@ -2617,6 +2642,7 @@ def _assert_roll_call_offer_allows_start(
             detail={
                 "reason_code": "ROLL_CALL_OFFER_STALE",
                 "message": "This start request does not match the current roll-call offer.",
+                "remediation": "Refresh Bot Control, then start from the current roll-call offer.",
                 "gate_id": "daily_lifecycle.roll_call_offer",
                 "strategy_instance_id": sid,
                 "current_offer_id": active.offer_id,
@@ -2628,6 +2654,7 @@ def _assert_roll_call_offer_allows_start(
             detail={
                 "reason_code": "ROLL_CALL_OFFER_RUN_MISMATCH",
                 "message": "This roll-call offer belongs to a different run. Run roll call again.",
+                "remediation": "Run roll call again, then start the run attached to the new offer.",
                 "gate_id": "daily_lifecycle.roll_call_offer",
                 "strategy_instance_id": sid,
                 "run_id": run_id,
