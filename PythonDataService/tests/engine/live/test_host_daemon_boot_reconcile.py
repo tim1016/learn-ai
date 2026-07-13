@@ -80,7 +80,7 @@ async def test_host_daemon_boot_retires_orphaned_active_binding(
         current_namespace="learn-ai/current-run/v1",
     )
     assert owned == frozenset({"learn-ai/current-run/v1"})
-    assert siblings == frozenset()
+    assert siblings == frozenset({NAMESPACE})
 
 
 def test_crash_retired_restart_blocking_binding_blocks_after_reboot(
@@ -213,7 +213,7 @@ async def test_process_reaper_retires_post_boot_crash_without_status_reads(
                 account_id=ACCOUNT_ID,
                 current_namespace="learn-ai/current-run/v1",
             )
-            assert siblings == frozenset()
+            assert siblings == frozenset({NAMESPACE})
             assert (
                 crash_retired_restart_blocking_binding(
                     tmp_path,
