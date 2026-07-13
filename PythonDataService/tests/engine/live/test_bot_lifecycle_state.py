@@ -66,6 +66,32 @@ def test_lifecycle_state_repo_clears_active_run_on_off_duty_and_retire(tmp_path:
     assert retired.replacement_strategy_instance_id == "paper-vwap-v2"
 
 
+def test_lifecycle_state_repo_reopen_for_deploy_clears_retirement(tmp_path: Path) -> None:
+    repo = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(tmp_path, "paper-vwap"))
+    repo.retire(
+        now_ms=300,
+        updated_by="operator",
+        reason="machinery_replaced",
+        replacement_strategy_instance_id="paper-vwap-v2",
+    )
+
+    reopened = repo.reopen_for_deploy(
+        now_ms=400,
+        updated_by="system",
+        reason="deploy.replacement",
+    )
+
+    assert reopened.version == 2
+    assert reopened.phase is BotLifecyclePhase.OFF_DUTY
+    assert reopened.on_roster is True
+    assert reopened.active_run_id is None
+    assert reopened.reason == "deploy.replacement"
+    assert reopened.retired_at_ms is None
+    assert reopened.retired_reason is None
+    assert reopened.replacement_strategy_instance_id is None
+    assert repo.read() == reopened
+
+
 def test_roll_call_offer_repo_round_trips_active_and_consumed_offers(tmp_path: Path) -> None:
     repo = BotRollCallOfferRepo(stable_bot_roll_call_offers_path(tmp_path, "paper-roll"))
     offer = BotRollCallOfferRecord(

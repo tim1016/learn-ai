@@ -4544,6 +4544,38 @@ async def test_deploy_instance_idempotent_returns_200(app_with_root, monkeypatch
     assert response.json()["created"] is False
 
 
+async def test_deploy_instance_reopens_retired_replacement(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _set_connected_broker_account(monkeypatch, "DU111")
+    repo = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper"))
+    repo.retire(
+        now_ms=200,
+        updated_by="operator",
+        reason="Retire & Replace",
+    )
+    monkeypatch.setattr(live_instances, "_now_ms", lambda: 300)
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        return {"run_id": "run-replacement", "run_dir": "/runs/run-replacement", "created": True, "start": None}
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=_deploy_body())
+
+    assert response.status_code == 201
+    lifecycle = repo.read()
+    assert lifecycle is not None
+    assert lifecycle.phase == "OFF_DUTY"
+    assert lifecycle.on_roster is True
+    assert lifecycle.retired_at_ms is None
+    assert lifecycle.retired_reason is None
+    assert lifecycle.reason == "deploy.replacement"
+
+
 async def test_deploy_instance_dirty_tree_propagates_409(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _ = app_with_root
     _set_connected_broker_account(monkeypatch, "DU111")

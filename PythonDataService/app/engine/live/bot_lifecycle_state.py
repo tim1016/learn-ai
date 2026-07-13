@@ -167,6 +167,31 @@ class BotLifecycleStateRepo:
             replacement_strategy_instance_id=replacement_strategy_instance_id,
         )
 
+    def reopen_for_deploy(
+        self,
+        *,
+        now_ms: int,
+        updated_by: str,
+        reason: str,
+    ) -> BotLifecycleStateRecord:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        with _file_lock(self._path):
+            existing = self.read()
+            record = BotLifecycleStateRecord(
+                phase=BotLifecyclePhase.OFF_DUTY,
+                on_roster=True,
+                active_run_id=None,
+                last_transition_at_ms=now_ms,
+                updated_by=updated_by,
+                reason=reason,
+                retired_at_ms=None,
+                retired_reason=None,
+                replacement_strategy_instance_id=None,
+                version=(existing.version + 1) if existing is not None else 1,
+            )
+            self._write_locked(record)
+            return record
+
     def update(
         self,
         *,

@@ -2429,9 +2429,10 @@ async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -
     ``created=false`` rather than erroring (the run already exists).
     """
     settings = get_settings()
+    root = Path(settings.live_runs_root)
     daemon_request = await _host_deploy_request_from_public(body)
     account_freeze = read_account_freeze(
-        Path(settings.live_runs_root).parent,
+        root.parent,
         daemon_request.account_id,
     )
     if account_freeze is not None:
@@ -2445,12 +2446,12 @@ async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -
         )
     if daemon_request.start and daemon_request.strategy_instance_id:
         _raise_if_crash_recovery_blocks_start(
-            Path(settings.live_runs_root).parent,
+            root.parent,
             account_id=daemon_request.account_id,
             strategy_instance_id=daemon_request.strategy_instance_id,
         )
     _raise_if_deploy_admission_blocks_start(
-        Path(settings.live_runs_root),
+        root,
         body,
     )
     await _raise_if_deploy_preflight_blocks_start(daemon_request)
@@ -2491,8 +2492,16 @@ async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -
         ) from exc
     if not parsed.created:
         response.status_code = status.HTTP_200_OK
-    if body.strategy_instance_id:
-        await _ensure_surface_hub_started(body.strategy_instance_id)
+    if daemon_request.strategy_instance_id:
+        lifecycle_repo = _bot_lifecycle_state_repo(root, daemon_request.strategy_instance_id)
+        lifecycle_state = lifecycle_repo.read()
+        if lifecycle_state is not None and lifecycle_state.phase == BotLifecyclePhase.RETIRED:
+            lifecycle_repo.reopen_for_deploy(
+                now_ms=_now_ms(),
+                updated_by="system",
+                reason="deploy.replacement",
+            )
+        await _ensure_surface_hub_started(daemon_request.strategy_instance_id)
     return parsed
 
 
