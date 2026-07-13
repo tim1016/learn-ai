@@ -96,11 +96,15 @@ export class StrategyValidationComponent {
   protected engineLabQueryParams(strategy: StrategyValidationDetail): Record<string, string> {
     return {
       strategy: strategy.strategy_key,
-      engine: 'both',
+      engine: this.engineLabEngine(strategy),
       symbol: strategy.validation_case_symbol ?? 'SPY',
       tab: 'configuration',
       qc_backtest_id: strategy.qc_cloud_backtest_id ?? '',
     };
+  }
+
+  private engineLabEngine(strategy: StrategyValidationDetail): string {
+    return strategy.validator_code_ref ? 'both' : 'python';
   }
 
   protected isSelected(strategy: StrategyValidationSummary): boolean {

@@ -24,6 +24,9 @@ from app.services.strategy_validation_manifest import (
 )
 
 TEST_FLAG_ACTOR = "local:test-operator"
+VALIDATOR_CODE_REF = "PythonDataService/app/lean_sidecar/trusted_samples/deployment_validation.py"
+VALIDATOR_CODE_SHA256 = "validator-sha"
+SETTINGS_FILE_REF = "PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json"
 
 
 def _accepted_flag_event(
@@ -44,7 +47,9 @@ def _accepted_flag_event(
             detail="Human validation accepted the current engine evidence for deployment.",
         ),
         evidence_snapshot=StrategyEvidenceSnapshot(
-            settings_file_ref="PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json",
+            validator_code_ref=VALIDATOR_CODE_REF,
+            validator_code_sha256=VALIDATOR_CODE_SHA256,
+            settings_file_ref=SETTINGS_FILE_REF,
             settings_file_sha256="spec-sha",
             qc_cloud_backtest_id="d2fe45a7142e88575f6fbd75229f8681",
             audit_copy_ref="references/qc-shadow/DeploymentValidationAlgorithm.py",
@@ -79,7 +84,9 @@ def test_seed_manifest_marks_deployment_validation_deployable() -> None:
     evidence = [
         StrategyEvidenceSeed(
             strategy_key="deployment_validation",
-            settings_file_ref="PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json",
+            validator_code_ref=VALIDATOR_CODE_REF,
+            validator_code_sha256=VALIDATOR_CODE_SHA256,
+            settings_file_ref=SETTINGS_FILE_REF,
             settings_file_sha256="spec-sha",
             qc_cloud_backtest_id="d2fe45a7142e88575f6fbd75229f8681",
             audit_copy_ref="references/qc-shadow/DeploymentValidationAlgorithm.py",
@@ -118,6 +125,39 @@ def test_seed_manifest_marks_deployment_validation_deployable() -> None:
     assert unvalidated.diagnostics is None
 
 
+def test_seed_manifest_fails_closed_without_validator_binding() -> None:
+    registry = [
+        StrategyRegistrySeed(
+            strategy_key="deployment_validation",
+            display_name="Deployment Validation",
+            description="Two-green-minute deployment validation primitive.",
+        ),
+    ]
+    evidence = [
+        StrategyEvidenceSeed(
+            strategy_key="deployment_validation",
+            settings_file_ref=SETTINGS_FILE_REF,
+            settings_file_sha256="spec-sha",
+            qc_cloud_backtest_id="d2fe45a7142e88575f6fbd75229f8681",
+            audit_copy_ref="references/qc-shadow/DeploymentValidationAlgorithm.py",
+            audit_copy_sha256="audit-sha",
+            reconciliation_ref="references/qc-shadow/backtests/2024-03-28_to_2026-03-03/attribution.md",
+            validation_case_symbol="SPY",
+            trades_matched=56,
+            trades_validated=56,
+            pnl_max_abs_diff="0.00",
+            divergence_counts={},
+        )
+    ]
+
+    [entry] = seed_strategy_validation_manifest(registry, evidence, [_accepted_flag_event()])
+
+    assert entry.validation_state == "validated"
+    assert entry.deployable is False
+    assert entry.diagnostics is not None
+    assert "LEAN validator evidence is missing" in " ".join(entry.diagnostics.notes)
+
+
 def test_seed_manifest_does_not_deploy_passing_evidence_without_human_flag() -> None:
     registry = [
         StrategyRegistrySeed(
@@ -129,7 +169,9 @@ def test_seed_manifest_does_not_deploy_passing_evidence_without_human_flag() -> 
     evidence = [
         StrategyEvidenceSeed(
             strategy_key="deployment_validation",
-            settings_file_ref="PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json",
+            validator_code_ref=VALIDATOR_CODE_REF,
+            validator_code_sha256=VALIDATOR_CODE_SHA256,
+            settings_file_ref=SETTINGS_FILE_REF,
             settings_file_sha256="spec-sha",
             qc_cloud_backtest_id="d2fe45a7142e88575f6fbd75229f8681",
             audit_copy_ref="references/qc-shadow/DeploymentValidationAlgorithm.py",
@@ -162,7 +204,7 @@ def test_seed_manifest_fails_closed_for_failed_reconciliation() -> None:
     evidence = [
         StrategyEvidenceSeed(
             strategy_key="deployment_validation",
-            settings_file_ref="PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json",
+            settings_file_ref=SETTINGS_FILE_REF,
             settings_file_sha256="spec-sha",
             qc_cloud_backtest_id="d2fe45a7142e88575f6fbd75229f8681",
             audit_copy_ref="references/qc-shadow/DeploymentValidationAlgorithm.py",
@@ -196,7 +238,7 @@ def test_validated_failed_reconciliation_remains_auditable_but_not_deployable() 
     evidence = [
         StrategyEvidenceSeed(
             strategy_key="deployment_validation",
-            settings_file_ref="PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json",
+            settings_file_ref=SETTINGS_FILE_REF,
             settings_file_sha256="spec-sha",
             qc_cloud_backtest_id="d2fe45a7142e88575f6fbd75229f8681",
             audit_copy_ref="references/qc-shadow/DeploymentValidationAlgorithm.py",
@@ -230,7 +272,9 @@ def test_seed_manifest_uses_latest_non_superseded_flag_event_by_timestamp() -> N
     evidence = [
         StrategyEvidenceSeed(
             strategy_key="deployment_validation",
-            settings_file_ref="PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json",
+            validator_code_ref=VALIDATOR_CODE_REF,
+            validator_code_sha256=VALIDATOR_CODE_SHA256,
+            settings_file_ref=SETTINGS_FILE_REF,
             settings_file_sha256="spec-sha",
             qc_cloud_backtest_id="d2fe45a7142e88575f6fbd75229f8681",
             audit_copy_ref="references/qc-shadow/DeploymentValidationAlgorithm.py",
@@ -338,6 +382,62 @@ def test_load_manifest_fails_closed_when_event_snapshot_hash_mismatches(tmp_path
         load_strategy_validation_entries([], manifest_path=manifest_path, repo_root=repo_root)
 
 
+def test_load_manifest_keeps_legacy_snapshot_hashes_verifiable(tmp_path) -> None:
+    repo_root = tmp_path / "repo"
+    manifest_path = tmp_path / "strategy_validation_manifest.json"
+    snapshot = StrategyEvidenceSnapshot(
+        settings_file_ref=SETTINGS_FILE_REF,
+        settings_file_sha256="spec-sha",
+        qc_cloud_backtest_id="d2fe45a7142e88575f6fbd75229f8681",
+        audit_copy_ref="references/qc-shadow/DeploymentValidationAlgorithm.py",
+        audit_copy_sha256="audit-sha",
+        reconciliation_ref="references/qc-shadow/backtests/2024-03-28_to_2026-03-03/attribution.md",
+        validation_case_symbol="SPY",
+        reconciliation_status="passed",
+    )
+    legacy_payload = snapshot.model_dump()
+    legacy_payload.pop("validator_code_ref", None)
+    legacy_payload.pop("validator_code_sha256", None)
+    legacy_hash = hashlib.sha256(
+        json.dumps(
+            legacy_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    event = _accepted_flag_event().model_copy(
+        update={
+            "evidence_snapshot": snapshot,
+            "evidence_snapshot_sha256": legacy_hash,
+        }
+    ).model_dump()
+
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "validated_strategies": [],
+                "seed_flag_events": [event],
+            },
+        ),
+        encoding="utf-8",
+    )
+
+    entries = load_strategy_validation_entries(
+        [
+            StrategyRegistrySeed(
+                strategy_key="deployment_validation",
+                display_name="Deployment Validation",
+                description="Two-green-minute deployment validation primitive.",
+            ),
+        ],
+        manifest_path=manifest_path,
+        repo_root=repo_root,
+    )
+
+    assert entries[0].validation_state == "validated"
+
+
 def test_append_flag_event_derives_actor_and_snapshots_evidence(tmp_path) -> None:
     repo_root = tmp_path / "repo"
     settings_ref = "PythonDataService/app/engine/strategy/spec/fixtures/test.spec.json"
@@ -346,6 +446,12 @@ def test_append_flag_event_derives_actor_and_snapshots_evidence(tmp_path) -> Non
     settings_payload = b'{"name":"deployment_validation"}'
     settings_path.write_bytes(settings_payload)
     settings_sha = hashlib.sha256(settings_payload).hexdigest()
+    validator_ref = "PythonDataService/app/lean_sidecar/trusted_samples/test_validator.py"
+    validator_path = repo_root / validator_ref
+    validator_path.parent.mkdir(parents=True)
+    validator_payload = b"class MyAlgorithm: pass\n"
+    validator_path.write_bytes(validator_payload)
+    validator_sha = hashlib.sha256(validator_payload).hexdigest()
     manifest_path = tmp_path / "strategy_validation_manifest.json"
     flag_events_path = tmp_path / "flag_events.json"
     manifest_path.write_text(
@@ -355,6 +461,8 @@ def test_append_flag_event_derives_actor_and_snapshots_evidence(tmp_path) -> Non
                 "validated_strategies": [
                     {
                         "strategy_key": "deployment_validation",
+                        "validator_code_ref": validator_ref,
+                        "validator_code_sha256": validator_sha,
                         "settings_file_ref": settings_ref,
                         "settings_file_sha256": settings_sha,
                         "qc_cloud_backtest_id": "bt-1",
@@ -407,6 +515,7 @@ def test_append_flag_event_derives_actor_and_snapshots_evidence(tmp_path) -> Non
     assert entry.current_flag_event.flagged_at_ms == 1234567890
     assert entry.current_flag_event.behavioral_equivalence.tolerance == "manifest_reconciliation_passed"
     assert entry.current_flag_event.behavioral_equivalence.gating_divergence_counts == {}
+    assert entry.current_flag_event.evidence_snapshot.validator_code_sha256 == validator_sha
     assert entry.current_flag_event.evidence_snapshot.settings_file_sha256 == settings_sha
     assert entry.current_flag_event.evidence_snapshot.qc_cloud_backtest_id == "bt-operator-accepted"
     assert entry.qc_cloud_backtest_id == "bt-operator-accepted"

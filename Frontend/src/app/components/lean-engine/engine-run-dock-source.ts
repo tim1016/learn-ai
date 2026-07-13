@@ -30,13 +30,10 @@ export class EngineRunDockSource implements RunDockSource {
   private readonly jobs = inject(JobsService);
 
   private readonly _log = signal<readonly RunLogEntry[]>([]);
-  /** Per-job high-water-mark for log sequence numbers we've already
-   *  folded in. Lets us dedupe when ``JobsService.recentLogs`` updates
-   *  by appending the newest entry on top of the previous rolling
-   *  window — without growing memory unbounded as the run's seq
-   *  counter climbs. `recentLogs` entries arrive in increasing-seq
-   *  order, so a single ``maxSeen`` per job is sufficient. */
-  private readonly _maxSeqByJob = new Map<string, number>();
+  /** Per-job high-water-mark for structured SSE event ids we've already
+   *  folded in. ``JobsService.recentEvents`` is a rolling window, so an
+   *  array index is not stable after the service trims older entries. */
+  private readonly _lastEventIdByJob = new Map<string, string>();
 
   private readonly engineJobs = computed(() =>
     this.jobs.jobs().filter((job) => ENGINE_JOB_TYPES.has(job.type)),
@@ -140,7 +137,7 @@ export class EngineRunDockSource implements RunDockSource {
 
   clearLog(): void {
     this._log.set([]);
-    // Leave _maxSeqByJob populated so already-folded entries from the
+    // Leave _lastEventIdByJob populated so already-folded entries from the
     // current job's rolling window don't re-appear on the next update.
   }
 
@@ -157,10 +154,15 @@ export class EngineRunDockSource implements RunDockSource {
       const entries: RunLogEntry[] = [];
       for (const job of this.engineJobs()) {
         const events = job.recentEvents ?? [];
-        const maxSeen = this._maxSeqByJob.get(job.id) ?? -1;
-        const fresh = events.slice(maxSeen + 1);
+        const lastEventId = this._lastEventIdByJob.get(job.id);
+        const lastEventIndex = lastEventId
+          ? events.findIndex((event) => event.id === lastEventId)
+          : -1;
+        const fresh = lastEventId && lastEventIndex === -1
+          ? events
+          : events.slice(lastEventIndex + 1);
         if (fresh.length === 0) continue;
-        this._maxSeqByJob.set(job.id, events.length - 1);
+        this._lastEventIdByJob.set(job.id, fresh[fresh.length - 1].id);
         const engineLabel = job.type === 'lean_engine_run' ? 'LEAN' : 'Python';
         entries.push(...fresh.map((event) => ({
           id: `${job.id}-${event.id}`,
