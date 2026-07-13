@@ -1,0 +1,17 @@
+<section class="validation-stage-placeholder" aria-label="Validation preview">
+  <header>
+    <div>
+      <p class="stage-eyebrow">Current configuration</p>
+      <h2>{{ symbol() }} validation run</h2>
+    </div>
+    <div class="stage-chips">
+      <span>{{ resolution() }}</span>
+      <span>{{ fillMode() === 'signal_bar_close' ? 'signal close' : 'next open' }}</span>
+      <span>{{ engine() }}</span>
+    </div>
+  </header>
+  <div class="stage-empty">
+    <i class="pi pi-play-circle" aria-hidden="true"></i>
+    <p>Run a validation to populate the equity curve, trade ledger, and performance metrics.</p>
+  </div>
+</section>

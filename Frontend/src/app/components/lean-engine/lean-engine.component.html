@@ -262,58 +262,20 @@
                 <app-engine-run-report [runId]="runId" />
               </section>
             } @else {
-              <section class="validation-stage-placeholder" aria-label="Validation preview">
-                <header>
-                  <div>
-                    <p class="stage-eyebrow">Current configuration</p>
-                    <h2>{{ effectiveSymbol() }} validation run</h2>
-                  </div>
-                  <div class="stage-chips">
-                    <span>{{ resolution() }}</span>
-                    <span>{{ fillMode() === 'signal_bar_close' ? 'signal close' : 'next open' }}</span>
-                    <span>{{ engine() }}</span>
-                  </div>
-                </header>
-                <div class="preview-chart" aria-hidden="true">
-                  <span class="preview-line preview-line--equity"></span>
-                  <span class="preview-line preview-line--baseline"></span>
-                  <span class="preview-marker preview-marker--buy">BUY</span>
-                  <span class="preview-marker preview-marker--exit">EXIT</span>
-                </div>
-                <div class="preview-kpis" aria-label="Metrics populate after run">
-                  <article><span>Net P&amp;L</span><strong>pending</strong></article>
-                  <article><span>Max drawdown</span><strong>pending</strong></article>
-                  <article><span>Trades</span><strong>pending</strong></article>
-                  <article><span>Sharpe</span><strong>pending</strong></article>
-                  <article><span>Profit factor</span><strong>pending</strong></article>
-                </div>
-              </section>
+              <app-validation-stage-placeholder
+                [symbol]="effectiveSymbol()"
+                [resolution]="resolution()"
+                [fillMode]="fillMode()"
+                [engine]="engine()" />
             }
 
             </div><!-- end ide-main -->
 
             <div class="ide-rail-right">
 
-            <section class="validation-evidence-card" aria-label="Validation evidence">
-              <header>
-                <h3>Validation evidence</h3>
-              </header>
-              <ol>
-                <li [class.ready]="true">
-                  <strong>Data policy matches</strong>
-                  <small>{{ effectiveSymbol() }} · {{ resolution() }} · RTH · adjusted</small>
-                </li>
-                <li [class.ready]="false">
-                  <strong>Trades reconcile</strong>
-                  <small>Eligible raw-bar runs spawn a LEAN validating companion automatically; the frozen parity verdict lands on the run report.</small>
-                </li>
-                <li [class.ready]="false">
-                  <strong>Backtest receipt</strong>
-                  <small>Attach the accepted external backtest ID before deploy.</small>
-                </li>
-              </ol>
-              <p>Parity runs per-study — open a run report to see its frozen verdict.</p>
-            </section>
+            <app-validation-evidence-card
+              [symbol]="effectiveSymbol()"
+              [resolution]="resolution()" />
 
             @if (selectedStrategy(); as strategy) {
               @if (strategy.algorithm_pseudocode) {
@@ -342,40 +304,10 @@
 
         @if (strategyDetail(); as strategy) {
           <p-tabpanel [value]="'strategy:' + strategy.name">
-            <article class="strategy-detail-tab">
-              <header>
-                <div>
-                  <p class="strategy-detail-tab__eyebrow">Strategy definition</p>
-                  <h2>{{ strategy.display_name }}</h2>
-                  <p>{{ strategy.description }}</p>
-                </div>
-                <button type="button" class="launcher-btn secondary" (click)="closeStrategyDetail()">
-                  <i class="pi pi-times" aria-hidden="true"></i> Close tab
-                </button>
-              </header>
-              <div class="strategy-detail-grid">
-                <section>
-                  <h3>Validation contract</h3>
-                  <dl>
-                    <div><dt>Registry key</dt><dd class="mono">{{ strategy.name }}</dd></div>
-                    <div><dt>Resolutions</dt><dd>{{ strategy.supported_resolutions.join(', ') }}</dd></div>
-                  </dl>
-                </section>
-                <section>
-                  <h3>Known constraints</h3>
-                  @if (strategy.gotchas?.length) {
-                    <ul>
-                      @for (gotcha of strategy.gotchas; track gotcha) { <li>{{ gotcha }}</li> }
-                    </ul>
-                  } @else {
-                    <p>No strategy-specific constraints are registered.</p>
-                  }
-                </section>
-              </div>
-              <button type="button" class="run-btn" (click)="activeTab.set('configuration')">
-                Configure this strategy
-              </button>
-            </article>
+            <app-strategy-detail-tab
+              [strategy]="strategy"
+              (closed)="closeStrategyDetail()"
+              (configure)="activeTab.set('configuration')" />
           </p-tabpanel>
         }
 

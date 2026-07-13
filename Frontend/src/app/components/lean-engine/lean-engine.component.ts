@@ -18,6 +18,9 @@ import { ButtonModule } from "primeng/button";
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from "primeng/tabs";
 import { RunReportComponent } from "../engine-lab/run-report/run-report.component";
 import { EngineLabRunHistoryComponent } from "./engine-lab-run-history/engine-lab-run-history.component";
+import { ValidationEvidenceCardComponent } from "./validation-evidence-card/validation-evidence-card.component";
+import { ValidationStagePlaceholderComponent } from "./validation-stage-placeholder/validation-stage-placeholder.component";
+import { StrategyDetailTabComponent } from "./strategy-detail-tab/strategy-detail-tab.component";
 import { PageHeaderComponent } from "../../shared/page-header/page-header.component";
 import {
   TickerRangePickerComponent,
@@ -57,7 +60,7 @@ type LeanLauncherStatus = "unknown" | "checking" | "ready" | "blocked";
  * the trade table. The Docs tab planned in §2.4a ships as a separate
  * component in a follow-up commit.
  */
-interface StrategyInfo {
+export interface StrategyInfo {
   name: string;
   display_name: string;
   description: string;
@@ -229,6 +232,9 @@ interface DataAvailability {
     CommonModule, FormsModule, RouterModule, ButtonModule,
     Tabs, TabList, Tab, TabPanel, TabPanels,
     RunReportComponent, EngineLabRunHistoryComponent,
+    ValidationEvidenceCardComponent,
+    ValidationStagePlaceholderComponent,
+    StrategyDetailTabComponent,
     PageHeaderComponent,
     TickerRangePickerComponent,
     RunDockComponent,

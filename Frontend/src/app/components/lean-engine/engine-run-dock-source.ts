@@ -126,7 +126,9 @@ export class EngineRunDockSource implements RunDockSource {
     return {
       runId: job.id,
       runType: job.type,
-      phase: job.phase ?? null,
+      // Prefer the humanised label so the dock renders "Running indicators",
+      // not the raw backend phase id "running_indicators" (JobState contract).
+      phase: job.phaseLabel ?? job.phase ?? null,
       startedAt: job.startedAt ?? null,
       finishedAt: job.finishedAt ?? null,
       current: job.current ?? null,
