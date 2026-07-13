@@ -32,11 +32,11 @@ describe('TradeLedgerComponent', () => {
     expect(screen.getByRole('heading', { name: 'Trade history' })).toBeTruthy();
     expect(screen.getByText('Showing 6 of 7 closed trades · viewer-local time')).toBeTruthy();
     expect(screen.queryByText('signal-1')).toBeNull();
-    expect(screen.getByText('signal-7')).toBeTruthy();
+    expect(screen.getByText('Signal 7')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Open complete trade ledger' }));
 
     expect(screen.getByText('Showing 7 of 7 closed trades · viewer-local time')).toBeTruthy();
-    expect(screen.getByText('signal-1')).toBeTruthy();
+    expect(screen.getByText('Signal 1')).toBeTruthy();
   });
 });

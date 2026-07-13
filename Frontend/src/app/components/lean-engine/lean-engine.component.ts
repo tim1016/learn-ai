@@ -405,8 +405,10 @@ export class LeanEngineComponent implements OnInit {
   private strategyBarsSpec(
     timespan: DataPolicy['input_bars']['timespan'],
   ): DataPolicy['strategy_bars'] {
+    const strategyName = this.selectedStrategyName();
     const isEmaCrossoverRun =
-      this.selectedStrategyName() === 'spy_ema_crossover' || this.engine() !== 'python';
+      strategyName === 'spy_ema_crossover' ||
+      (strategyName === null && this.engine() === 'lean');
     if (timespan === 'minute' && isEmaCrossoverRun) {
       return { timespan, multiplier: 15 };
     }
@@ -931,7 +933,7 @@ export class LeanEngineComponent implements OnInit {
       const id = await this.jobsService.startJob("lean_engine_run", {
         request: {
           run_id: this.composeRunId(),
-          template: "ema_crossover",
+          template: this.leanTemplateForSelectedStrategy(),
           starting_cash: this.initialCash(),
           start_ms_utc: this.composeStartMs(),
           end_ms_utc: endResolution.session_open_ms_utc,
@@ -949,6 +951,12 @@ export class LeanEngineComponent implements OnInit {
       this.setRunStatus("failed", "LEAN run request failed", message);
       this.updateRunningState();
     }
+  }
+
+  private leanTemplateForSelectedStrategy(): "ema_crossover" | "deployment_validation" {
+    return this.selectedStrategyName() === "deployment_validation"
+      ? "deployment_validation"
+      : "ema_crossover";
   }
 
   /**

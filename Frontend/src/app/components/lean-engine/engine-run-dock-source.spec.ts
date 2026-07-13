@@ -10,6 +10,7 @@ function job(
   type: string,
   timestamp: number,
   summary: string,
+  eventId = `${timestamp}-0`,
 ): JobState {
   return {
     id,
@@ -19,7 +20,7 @@ function job(
     recentLogs: [],
     logSeq: 0,
     recentEvents: [{
-      id: `${timestamp}-0`,
+      id: eventId,
       type: 'job.phase',
       timestamp,
       level: 'info',
@@ -51,5 +52,27 @@ describe('EngineRunDockSource', () => {
       '[Python] Running indicators',
     ]);
     expect(source.runMeta()?.runId).toBe('py-1');
+  });
+
+  it('continues folding events after the service trims the rolling event window', () => {
+    const jobs = signal<JobState[]>([]);
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        EngineRunDockSource,
+        { provide: JobsService, useValue: { jobs } },
+      ],
+    });
+    const source = TestBed.inject(EngineRunDockSource);
+
+    jobs.set([job('py-1', 'engine_backtest', 1000, 'Event 499', '499-0')]);
+    TestBed.flushEffects();
+    jobs.set([job('py-1', 'engine_backtest', 1001, 'Event 500', '500-0')]);
+    TestBed.flushEffects();
+
+    expect(source.log().map((event) => event.message)).toEqual([
+      '[Python] Event 499',
+      '[Python] Event 500',
+    ]);
   });
 });

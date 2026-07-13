@@ -17,7 +17,7 @@
               <td class="mono">{{ trade.quantity ?? '—' }}</td>
               <td class="mono pnl" [class.negative]="trade.pnl_pts < 0">{{ trade.pnl_pts > 0 ? '+' : '' }}{{ formatNumber(trade.pnl_pts, 4) }}</td>
               <td class="mono pnl" [class.negative]="trade.pnl_pct < 0">{{ formatPercent(trade.pnl_pct) }}</td>
-              <td class="signal">{{ trade.signal_reason || '—' }}</td>
+              <td class="signal">{{ trade.signal_reason ? (trade.signal_reason | receiptLabel) : '—' }}</td>
             </tr>
           }
         </tbody>
@@ -26,4 +26,3 @@
     <footer><span>Showing {{ visibleTrades().length }} of {{ trades().length }} closed trades · viewer-local time</span><button type="button" (click)="toggleExpanded()">{{ expanded() ? 'Show recent trades' : 'Open complete trade ledger' }}</button></footer>
   } @else { <p class="empty-state">This run did not close any trades.</p> }
 </section>
-

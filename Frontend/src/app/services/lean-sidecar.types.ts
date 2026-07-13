@@ -59,7 +59,7 @@ export interface TrustedRunRequest {
    * is provided (operator-pasted source pins its own brokerage via
    * ``SetBrokerageModel``).
    */
-  template?: "trusted_default" | "reconciliation" | "ema_crossover";
+  template?: "trusted_default" | "reconciliation" | "ema_crossover" | "deployment_validation";
   /**
    * PR B (2026-05-19) — canonical DataPolicy block. When provided, the
    * legacy top-level ``symbol`` field must be omitted (the router rejects

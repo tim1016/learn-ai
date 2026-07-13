@@ -432,12 +432,23 @@ def _snapshot_for_proof(proof: StrategyEvidenceSeed | None) -> StrategyEvidenceS
 
 def _snapshot_sha256(snapshot: StrategyEvidenceSnapshot) -> str:
     payload = json.dumps(
-        snapshot.model_dump(),
+        _snapshot_hash_payload(snapshot),
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
     ).encode("utf-8")
     return _sha256_bytes(payload)
+
+
+def _snapshot_hash_payload(snapshot: StrategyEvidenceSnapshot) -> dict[str, Any]:
+    payload = snapshot.model_dump()
+    if (
+        snapshot.validator_code_ref is None
+        and snapshot.validator_code_sha256 is None
+    ):
+        payload.pop("validator_code_ref", None)
+        payload.pop("validator_code_sha256", None)
+    return payload
 
 
 def _behavioral_equivalence_for_flag(
@@ -501,10 +512,20 @@ def _entry_by_strategy(
 
 def _evidence_seed_from_raw(raw: dict[str, Any], *, repo_root: Path) -> StrategyEvidenceSeed:
     diagnostics = raw.get("diagnostics") or {}
-    validator_code_ref = str(raw.get("validator_code_ref") or raw["settings_file_ref"])
-    validator_code_sha256 = str(raw.get("validator_code_sha256") or raw["settings_file_sha256"])
+    validator_code_ref = _optional_manifest_string(raw.get("validator_code_ref"))
+    validator_code_sha256 = _optional_manifest_string(raw.get("validator_code_sha256"))
     settings_file_ref = str(raw["settings_file_ref"])
     settings_file_sha256 = str(raw["settings_file_sha256"])
+    settings_file_verified = _ref_matches_sha256(
+        repo_root,
+        settings_file_ref,
+        settings_file_sha256,
+    )
+    validator_code_verified = (
+        validator_code_ref is not None
+        and validator_code_sha256 is not None
+        and _ref_matches_sha256(repo_root, validator_code_ref, validator_code_sha256)
+    )
     return StrategyEvidenceSeed(
         strategy_key=str(raw["strategy_key"]),
         validator_code_ref=validator_code_ref,
@@ -522,11 +543,7 @@ def _evidence_seed_from_raw(raw: dict[str, Any], *, repo_root: Path) -> Strategy
         divergence_counts=dict(diagnostics.get("divergence_counts") or {}),
         verdict=str(diagnostics.get("verdict", "passed")),
         reconciliation_status=str(raw.get("reconciliation_status", "passed")),
-        settings_file_verified=_ref_matches_sha256(
-            repo_root,
-            settings_file_ref,
-            settings_file_sha256,
-        ) and _ref_matches_sha256(repo_root, validator_code_ref, validator_code_sha256),
+        settings_file_verified=settings_file_verified and validator_code_verified,
         notes=list(diagnostics.get("notes") or []),
     )
 
@@ -536,6 +553,8 @@ def _evidence_is_deployable(proof: StrategyEvidenceSeed) -> bool:
         proof.reconciliation_status == "passed"
         and proof.verdict == "passed"
         and proof.settings_file_verified
+        and proof.validator_code_ref is not None
+        and proof.validator_code_sha256 is not None
     )
 
 
@@ -545,9 +564,18 @@ def _validation_failure_notes(proof: StrategyEvidenceSeed) -> list[str]:
         notes.append(f"Reconciliation status is {proof.reconciliation_status}; deployability requires passed.")
     if proof.verdict != "passed":
         notes.append(f"Diagnostics verdict is {proof.verdict}; deployability requires passed.")
+    if proof.validator_code_ref is None or proof.validator_code_sha256 is None:
+        notes.append("LEAN validator evidence is missing; deployability requires an explicit validator binding.")
     if not proof.settings_file_verified:
         notes.append("Validator/deploy binding hash no longer matches the validation manifest.")
     return notes
+
+
+def _optional_manifest_string(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
 
 
 def _validate_divergence_categories(counts: dict[str, int]) -> None:

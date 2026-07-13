@@ -1132,7 +1132,7 @@ def execute_engine_backtest(
                 for point in equity_curve_dicts
             ],
         )
-    except ValueError as exc:
+    except Exception as exc:
         logger.exception("[ENGINE] Validation analytics rejected engine output")
         on_log(f"Validation analytics unavailable: {exc}")
 

@@ -109,6 +109,20 @@ describe('LeanEngineComponent.composeDataPolicy', () => {
     expect(dp.strategy_bars).toEqual({ timespan: 'minute', multiplier: 15 });
   });
 
+  it('keeps deployment-validation minute strategy bars in both-engine mode', () => {
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    const component = fixture.componentInstance;
+
+    component.engine.set('both');
+    component.selectedStrategyName.set('deployment_validation');
+    component.resolution.set('minute');
+
+    const dp = component.composeDataPolicy();
+
+    expect(dp.input_bars).toEqual({ timespan: 'minute', multiplier: 1 });
+    expect(dp.strategy_bars).toEqual({ timespan: 'minute', multiplier: 1 });
+  });
+
   it('falls back to SPY when no symbol is configured (matches effectiveSymbol)', () => {
     const fixture = TestBed.createComponent(LeanEngineComponent);
     const component = fixture.componentInstance;
@@ -385,6 +399,28 @@ describe('LeanEngineComponent engine selector', () => {
       adjusted: true,
       input_bars: { timespan: 'minute', multiplier: 1 },
       strategy_bars: { timespan: 'minute', multiplier: 15 },
+    });
+  });
+
+  it('submits the deployment-validation LEAN template for the matching Python strategy', async () => {
+    const { startJob } = configureTestBed();
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+
+    component.engine.set('lean');
+    component.leanLauncherStatus.set('ready');
+    component.selectedStrategyName.set('deployment_validation');
+    component.startDate.set('2025-01-13');
+    component.endDate.set('2025-01-17');
+
+    await component.run();
+
+    const envelope = startJob.mock.calls[0][1] as { request: TrustedRunRequest };
+
+    expect(envelope.request.template).toBe('deployment_validation');
+    expect(envelope.request.data_policy).toMatchObject({
+      strategy_bars: { timespan: 'minute', multiplier: 1 },
     });
   });
 
