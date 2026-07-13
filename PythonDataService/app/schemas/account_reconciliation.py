@@ -64,6 +64,27 @@ class AccountReconciliationReceipt(BaseModel):
     ttl_ms: int = Field(ge=1)
 
 
+class AccountReconciliationAutomationPolicy(BaseModel):
+    """Durable operator policy for bot-owned trade reconciliation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    enabled: bool = False
+    updated_at_ms: int = Field(ge=0)
+    updated_by: str = Field(min_length=1, max_length=128)
+
+
+class AccountReconciliationAutomationPolicyUpdate(BaseModel):
+    """Operator request to enable or disable automatic reconciliation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool
+    updated_by: str = Field(default="account-monitor.operator", min_length=1, max_length=128)
+
+
 class AccountTriageBotRef(BaseModel):
     """Bot identity affected by an account-scoped triage row."""
 
@@ -148,6 +169,8 @@ class AccountTriageResponse(BaseModel):
     summary_detail: str = Field(min_length=1)
     overall_gate_result: GateResult
     account_reconciliation_receipt: AccountReconciliationReceipt | None = None
+    account_reconciliation_valid_until_ms: int | None = Field(default=None, ge=0)
+    reconciliation_automation_policy: AccountReconciliationAutomationPolicy
     gate_rows: list[AccountTriageGateRow] = Field(default_factory=list)
     conditions: list[AccountConditionRow] = Field(default_factory=list)
     freeze_banner: AccountFreezeBanner | None = None

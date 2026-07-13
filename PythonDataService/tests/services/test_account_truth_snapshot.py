@@ -447,6 +447,33 @@ async def test_refresh_loop_refreshes_during_data_farm_degradation(
 
 
 @pytest.mark.asyncio
+async def test_refresh_loop_notifies_account_truth_observer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    observed: list[AccountTruthResponse] = []
+    monkeypatch.setattr(account_truth_refresh, "get_monitor", lambda: None)
+
+    async def fake_refresh_now(
+        _client,
+        **_kwargs,
+    ) -> AccountTruthResponse:
+        return _truth(generated_at_ms=2_000)
+
+    loop = AccountTruthRefreshLoop(
+        client=_FakeClient(_health(account_id="DU123", fetched_at_ms=2_000)),  # type: ignore[arg-type]
+        snapshot_provider=provider,
+        refresh_now=fake_refresh_now,
+        account_truth_observer=observed.append,
+    )
+
+    result = await loop.refresh_once()
+
+    assert result is not None
+    assert observed == [result]
+
+
+@pytest.mark.asyncio
 async def test_refresh_loop_marks_last_account_failed_when_broker_disconnects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

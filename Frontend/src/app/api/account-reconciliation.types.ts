@@ -47,6 +47,19 @@ export interface AccountReconciliationReceipt {
   ttl_ms: number;
 }
 
+export interface AccountReconciliationAutomationPolicy {
+  schema_version: number;
+  account_id: string;
+  enabled: boolean;
+  updated_at_ms: number;
+  updated_by: string;
+}
+
+export interface AccountReconciliationAutomationPolicyUpdate {
+  enabled: boolean;
+  updated_by?: string;
+}
+
 export interface AccountConditionOwner {
   owner_type: 'account' | 'bot';
   owner_id: string;
@@ -107,6 +120,8 @@ export interface AccountTriageResponse {
   summary_detail: string;
   overall_gate_result: GateResult;
   account_reconciliation_receipt: AccountReconciliationReceipt | null;
+  account_reconciliation_valid_until_ms: number | null;
+  reconciliation_automation_policy: AccountReconciliationAutomationPolicy;
   gate_rows: AccountTriageGateRow[];
   conditions: AccountConditionRow[];
   freeze_banner: AccountFreezeBanner | null;

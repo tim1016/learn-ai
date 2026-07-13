@@ -14,6 +14,7 @@ import type { GateResult } from '../../../api/live-instances.types';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
+import { formatTimestampDisplay } from '../../../shared/timestamp';
 import {
   makeAccountFreezeCondition,
   makeCleanAccountTriage,
@@ -64,6 +65,13 @@ class FakeBrokerService {
     cleared_source: 'account_audited_override',
     override_id: 'acct-exposure-override-DU1234567-1',
     triage: cleanTriage(accountReconciliationReceipt()),
+  });
+  updateAccountReconciliationAutomation = vi.fn().mockResolvedValue({
+    schema_version: 1,
+    account_id: 'DU1234567',
+    enabled: true,
+    updated_at_ms: 1_780_000_002_500,
+    updated_by: 'account-monitor.operator',
   });
   reconcileAccount = vi.fn().mockResolvedValue(accountReconciliationReceipt());
   positions = vi.fn().mockResolvedValue(positionsSnapshot());
@@ -145,6 +153,122 @@ describe('BrokerAccountMonitorComponent', () => {
     ).toBeTruthy();
     expect(screen.getByText('Not yet proven')).toBeTruthy();
     expect(screen.queryByText('Unknown')).toBeNull();
+  });
+
+  it('shows when the account was reconciled and how much freshness remains', async () => {
+    const generatedAtMs = 1_780_000_002_000;
+    const expiresAtMs = generatedAtMs + 300_000;
+    const broker = new FakeBrokerService();
+    broker.accountTriage.mockResolvedValue(
+      cleanTriage(accountReconciliationReceipt({ generatedAtMs, expiresAtMs, ttlMs: 300_000 })),
+    );
+    const view = await render(BrokerAccountMonitorComponent, {
+      providers: [
+        { provide: BrokerService, useValue: broker },
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useClass: FakeLiveRunsService },
+        routeFragment(),
+      ],
+    });
+
+    await screen.findByText('Last reconciled');
+    view.fixture.componentInstance.accountReconciliationNowMs.set(generatedAtMs + 30_000);
+    view.fixture.detectChanges();
+
+    expect(
+      screen.getByText(formatTimestampDisplay(generatedAtMs, { mode: 'local' })),
+    ).toBeTruthy();
+    expect(screen.getByText('Time remaining')).toBeTruthy();
+    expect(screen.getByText('4m 30s')).toBeTruthy();
+
+    view.fixture.componentInstance.accountReconciliationNowMs.set(expiresAtMs + 1);
+    view.fixture.detectChanges();
+
+    expect(screen.getByText('Expired')).toBeTruthy();
+  });
+
+  it('uses the trade-adjusted reconciliation validity from account triage', async () => {
+    const receipt = accountReconciliationReceipt({
+      generatedAtMs: 1_780_000_002_000,
+      expiresAtMs: 1_780_000_302_000,
+    });
+    const broker = new FakeBrokerService();
+    broker.accountTriage.mockResolvedValue(
+      makeCleanAccountTriage({
+        receipt,
+        reconciliationValidUntilMs: 1_780_000_003_000,
+      }),
+    );
+    const view = await render(BrokerAccountMonitorComponent, {
+      providers: [
+        { provide: BrokerService, useValue: broker },
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useClass: FakeLiveRunsService },
+        routeFragment(),
+      ],
+    });
+
+    await screen.findByText('Fresh until');
+    view.fixture.componentInstance.accountReconciliationNowMs.set(1_780_000_003_001);
+    view.fixture.detectChanges();
+
+    expect(screen.getByText('Expired')).toBeTruthy();
+    expect(screen.getByText('Not Proven')).toBeTruthy();
+    expect(
+      screen.getByText(formatTimestampDisplay(1_780_000_003_000, { mode: 'local' })),
+    ).toBeTruthy();
+  });
+
+  it('enables automatic reconciliation for bot-owned trades from the UI', async () => {
+    const broker = new FakeBrokerService();
+    await render(BrokerAccountMonitorComponent, {
+      providers: [
+        { provide: BrokerService, useValue: broker },
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useClass: FakeLiveRunsService },
+        routeFragment(),
+      ],
+    });
+
+    const checkbox = (await screen.findByRole('checkbox', {
+      name: 'Auto-reconcile after bot trades',
+    })) as HTMLInputElement;
+    expect(checkbox.checked).toBe(false);
+
+    fireEvent.click(checkbox);
+
+    await waitFor(() => {
+      expect(broker.updateAccountReconciliationAutomation).toHaveBeenCalledWith(
+        'DU1234567',
+        { enabled: true },
+      );
+      expect(checkbox.checked).toBe(true);
+    });
+  });
+
+  it('restores the saved auto-reconcile setting when the update fails', async () => {
+    const broker = new FakeBrokerService();
+    broker.updateAccountReconciliationAutomation.mockRejectedValueOnce(
+      new Error('policy write failed'),
+    );
+    await render(BrokerAccountMonitorComponent, {
+      providers: [
+        { provide: BrokerService, useValue: broker },
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useClass: FakeLiveRunsService },
+        routeFragment(),
+      ],
+    });
+    const checkbox = (await screen.findByRole('checkbox', {
+      name: 'Auto-reconcile after bot trades',
+    })) as HTMLInputElement;
+
+    fireEvent.click(checkbox);
+
+    expect((await screen.findByRole('alert')).textContent).toContain(
+      "We couldn't save the auto-reconcile setting.",
+    );
+    expect(checkbox.checked).toBe(false);
   });
 
   it('promotes exposure resolution after reconciliation returns unresolved exposure', async () => {
@@ -452,12 +576,15 @@ function accountReconciliationReceipt(
     accountTruth?: AccountTruthResponse;
     exposureResolution?: AccountReconciliationReceipt['exposure_resolution'];
     expiresAtMs?: number;
+    generatedAtMs?: number;
     gate?: Partial<GateResult>;
     state?: AccountReconciliationReceipt['state'];
+    ttlMs?: number;
   } = {},
 ): AccountReconciliationReceipt {
   const truth = overrides.accountTruth ?? accountTruthResponse();
-  const generatedAtMs = Date.now();
+  const generatedAtMs = overrides.generatedAtMs ?? Date.now();
+  const ttlMs = overrides.ttlMs ?? 300_000;
   return {
     schema_version: 1,
     receipt_id: 'acct-recon-DU1234567-1',
@@ -473,8 +600,8 @@ function accountReconciliationReceipt(
     evidence_refs: [],
     generated_at_ms: generatedAtMs,
     account_truth_generated_at_ms: truth.generated_at_ms,
-    expires_at_ms: overrides.expiresAtMs ?? generatedAtMs + 60_000,
-    ttl_ms: 60_000,
+    expires_at_ms: overrides.expiresAtMs ?? generatedAtMs + ttlMs,
+    ttl_ms: ttlMs,
   };
 }
 

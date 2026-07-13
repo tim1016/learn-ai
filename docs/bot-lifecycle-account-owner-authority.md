@@ -7,7 +7,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-07-10 (Real-broker runner submits require AccountOwner, the owner generation is persisted and re-read at both intake and the broker-write boundary, production IBKR adapter writes and raw broker order helpers require AccountOwner grants, and recovery flatten routes managed cancel/flatten writes through the AccountOwner broker-write runner. R3 daemon/IPC AccountOwner remains unshipped.)
+> **Last reviewed:** 2026-07-13 (Account-level reconciliation receipts have a five-minute TTL, are invalidated by newly observed broker executions, and may be automatically replaced for bot-owned executions under a durable opt-in account policy. Real-broker runner submits still require AccountOwner grants; R3 daemon/IPC AccountOwner remains unshipped.)
 
 ---
 
@@ -216,6 +216,8 @@ state to guess around.
 | `accounts/<account_id>/unresolved_exposure.flag` | account | Durable account-level freeze evidence. Blocks deploy, start, router/operator-surface resume, and broker submit while active. |
 | `accounts/<account_id>/owner_generation.json` | account | Current AccountOwner fencing generation and phase (`accepting`, `reconnecting`, `draining`, `frozen`). |
 | `accounts/<account_id>/account_events.jsonl` | account | Append-only audit events for account freeze recorded/cleared transitions, recovery proofs, audited overrides, owner generation/reconnect, submit lane evidence, instance registry writes, and restart-intensity breaches. |
+| `accounts/<account_id>/account_reconciliation_receipt.json` | account | Latest account-level Account Truth receipt. Its effective freshness ends at the earlier of its five-minute TTL or the first subsequently observed broker execution. |
+| `accounts/<account_id>/account_reconciliation_policy.json` | account | Durable operator opt-in for automatically replacing the account receipt after newly observed executions attributed entirely to bots. Manual, mixed, foreign, or unclaimed executions are never auto-reconciled. |
 | Postgres lifecycle projection tables | rebuildable read model | Queryable projection over canonical artifacts for operator timelines and safety triage. Not canonical; safe to truncate and rebuild from files. |
 
 Account Truth reads `instance_registry.jsonl` as its bot ownership source. Its attribution namespace view includes every namespace ever recorded for the account, including retired bindings, so stopped bots keep ownership of terminal completed orders and historical executions. Its active-known/current-risk namespace view is limited to currently-bound `DEPLOYED` or `ACTIVE` bindings; a live working order or current position under a retired binding is emitted as `retired_owner_live_exposure`, not as clean bot-owned exposure and not as `foreign_or_unclaimed`.
@@ -585,7 +587,9 @@ This is not a second account-clean engine. `Account Truth` remains the sole owne
 
 `GET /api/accounts/{account_id}/reconciliation/latest` returns the latest receipt without sweeping IBKR. `GET /api/accounts/{account_id}/triage` returns a thin account triage projection over the latest receipt, account freeze evidence, and active account registry bindings. Triage is a routing/read model: it authors affected bots and recovery rows, but it does not replace `operator_surface`, run-scoped reconciliation, or Account Truth.
 
-Account Monitor now surfaces the account reconciliation receipt and can request a fresh account-level reconcile for the connected account. Angular renders the backend-authored receipt and gate reason; it does not compute account-clean status or recovery eligibility. Tests pin the Python receipt service and router in `PythonDataService/tests/services/test_account_reconciliation.py` and `PythonDataService/tests/routers/test_account_reconciliation.py`, and the Account Monitor affordance in `Frontend/src/app/components/broker/broker-account-monitor/broker-account-monitor.component.spec.ts`.
+The main-process Account Truth refresh loop observes the broker execution set every refresh. A newly observed execution appends `account_reconciliation_invalidated` to `account_events.jsonl`; triage then exposes the backend-authored effective `account_reconciliation_valid_until_ms`. `PUT /api/accounts/{account_id}/reconciliation/automation` persists the opt-in policy. When enabled, the same fresh Account Truth sweep replaces the receipt only if every newly observed execution is bot-owned. Manual, mixed-known, foreign, and unclaimed executions remain invalidated and require operator review. Host-child refresh loops do not run this account-scoped observer, avoiding duplicate writers.
+
+Account Monitor surfaces last-reconciled time, effective freshness remaining, and the saved “Auto-reconcile after bot trades” control. Angular formats the server timestamp and countdown for display; it does not infer execution ownership, receipt validity, account-clean status, or recovery eligibility. Tests pin the Python receipt service, refresh-loop observer, and router in `PythonDataService/tests/services/test_account_reconciliation.py`, `PythonDataService/tests/services/test_account_truth_snapshot.py`, and `PythonDataService/tests/routers/test_account_reconciliation.py`, and the Account Monitor affordance in `Frontend/src/app/components/broker/broker-account-monitor/broker-account-monitor.component.spec.ts`.
 
 ### Lifecycle Template Receipt Snapshot
 

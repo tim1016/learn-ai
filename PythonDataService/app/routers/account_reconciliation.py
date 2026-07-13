@@ -18,6 +18,8 @@ from app.schemas.account_reconciliation import (
     AccountClearFreezeRequest,
     AccountClearFreezeResponse,
     AccountFalseCrashBackfillResponse,
+    AccountReconciliationAutomationPolicy,
+    AccountReconciliationAutomationPolicyUpdate,
     AccountReconciliationReceipt,
     AccountTriageResponse,
 )
@@ -83,6 +85,29 @@ async def latest_account_reconciliation_endpoint(
         if receipt is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "account reconciliation receipt not found")
         return receipt
+    except AccountArtifactError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+
+@router.put(
+    "/{account_id}/reconciliation/automation",
+    response_model=AccountReconciliationAutomationPolicy,
+)
+async def update_account_reconciliation_automation_endpoint(
+    account_id: str,
+    request: AccountReconciliationAutomationPolicyUpdate,
+    service: Annotated[
+        AccountReconciliationService,
+        Depends(get_account_reconciliation_service),
+    ],
+) -> AccountReconciliationAutomationPolicy:
+    """Persist the account policy for bot-owned execution reconciliation."""
+    try:
+        return service.update_automation_policy(
+            account_id=_canonical_account_id(account_id),
+            enabled=request.enabled,
+            updated_by=request.updated_by,
+        )
     except AccountArtifactError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 

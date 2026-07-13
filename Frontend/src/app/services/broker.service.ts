@@ -6,6 +6,8 @@ import type {
   AccountAcceptExposureOverrideResponse,
   AccountClearFreezeRequest,
   AccountClearFreezeResponse,
+  AccountReconciliationAutomationPolicy,
+  AccountReconciliationAutomationPolicyUpdate,
   AccountReconciliationReceipt,
   AccountTriageResponse,
 } from '../api/account-reconciliation.types';
@@ -136,6 +138,18 @@ export class BrokerService {
     return firstValueFrom(
       this.http.get<AccountReconciliationReceipt>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/reconciliation/latest`,
+      ),
+    );
+  }
+
+  updateAccountReconciliationAutomation(
+    accountId: string,
+    payload: AccountReconciliationAutomationPolicyUpdate,
+  ): Promise<AccountReconciliationAutomationPolicy> {
+    return firstValueFrom(
+      this.http.put<AccountReconciliationAutomationPolicy>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/reconciliation/automation`,
+        payload,
       ),
     );
   }
