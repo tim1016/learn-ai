@@ -182,6 +182,8 @@ export const BACKTEST_RUN_DETAIL_QUERY = gql`
         exitPrice
         quantity
         pnL
+        pnlPts
+        pnlPct
         signalReason
         isSyntheticExit
       }
@@ -287,6 +289,8 @@ export interface BacktestRunDetailTrade {
   exitPrice: number;
   quantity: number;
   pnL: number;
+  pnlPts: number;
+  pnlPct: number;
   signalReason: string;
   isSyntheticExit: boolean;
 }

@@ -102,7 +102,9 @@ public class ParityVerdictService : IParityVerdictService
                 VerdictVersion = VerdictVersion,
                 Status = status,
                 VerdictJson = verdictJson,
-                CreatedAtUtc = DateTime.UtcNow,
+                // CreatedAtUtc is a DateTime column; use UtcDateTime from DateTimeOffset
+                // to guarantee Kind=Utc (avoids Local-kind ambiguity, temporal-rigor.md).
+                CreatedAtUtc = DateTimeOffset.UtcNow.UtcDateTime,
             });
         }
         else if (row.Status == "pending")

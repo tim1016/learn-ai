@@ -26,7 +26,6 @@ from __future__ import annotations
 import contextlib
 import io
 import os
-import tempfile
 import zipfile
 from collections.abc import Iterator, Sequence
 from datetime import date, datetime, timedelta
@@ -71,22 +70,31 @@ _DETERMINISTIC_ZIP_DATE_TIME: tuple[int, int, int, int, int, int] = (
 )
 
 
-def _atomic_write_bytes(path: Path, data: bytes) -> None:
+def _atomic_write_bytes(path: Path, data: bytes, *, trusted_root: Path) -> None:
     """Write ``data`` to ``path`` via a same-directory temp file + rename.
 
     ``os.replace`` is atomic on POSIX, so a concurrent reader of the
     shared bar store either sees the previous complete zip or the new
-    complete zip — never a torn write. The temp file lands in the target
-    directory to guarantee same-filesystem rename semantics.
+    complete zip — never a torn write. ``trusted_root`` confines the
+    operation to a service-owned directory; the inline ``startswith``
+    check is the sanitizer CodeQL recognizes (``ensure_within_root``
+    alone is not tracked through function-call boundaries).
     """
-    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    root_real = os.path.realpath(os.fspath(trusted_root))
+    candidate = os.path.realpath(os.fspath(path))
+    root_prefix = root_real.rstrip(os.sep) + os.sep
+    if candidate != root_real and not candidate.startswith(root_prefix):
+        raise ValueError(f"path {candidate!r} escapes root {root_real!r}")
+    safe = Path(candidate)
+    safe.parent.mkdir(parents=True, exist_ok=True)
+    tmp = safe.with_name(safe.name + ".tmp")
     try:
-        with os.fdopen(fd, "wb") as handle:
+        with open(tmp, "wb") as handle:
             handle.write(data)
-        os.replace(tmp_name, path)
+        os.replace(tmp, safe)
     except BaseException:
         with contextlib.suppress(FileNotFoundError):
-            os.unlink(tmp_name)
+            tmp.unlink()
         raise
 
 
@@ -472,7 +480,6 @@ def write_lean_daily_zip(
         output_root,
         Path(output_root) / "equity" / "usa" / "daily" / f"{safe}.zip",
     )
-    zip_path.parent.mkdir(parents=True, exist_ok=True)
     csv_name = f"{safe}.csv"
 
     # Merge with any existing file so partial-range fetches don't clobber
@@ -504,7 +511,7 @@ def write_lean_daily_zip(
 
     buf = io.BytesIO()
     _write_deterministic_csv_zip(buf, csv_name, "\n".join(lines))
-    _atomic_write_bytes(zip_path, buf.getvalue())
+    _atomic_write_bytes(zip_path, buf.getvalue(), trusted_root=Path(output_root))
     return zip_path
 
 
@@ -537,7 +544,6 @@ def write_lean_quote_day_zip(
         output_root,
         Path(output_root) / "equity" / "usa" / "minute" / safe / f"{trading_date.strftime('%Y%m%d')}_quote.zip",
     )
-    zip_path.parent.mkdir(parents=True, exist_ok=True)
     csv_name = f"{trading_date.strftime('%Y%m%d')}_{safe}_minute_quote.csv"
     midnight = datetime(
         trading_date.year,
@@ -560,7 +566,7 @@ def write_lean_quote_day_zip(
         )
     buf = io.BytesIO()
     _write_deterministic_csv_zip(buf, csv_name, "\n".join(lines))
-    _atomic_write_bytes(zip_path, buf.getvalue())
+    _atomic_write_bytes(zip_path, buf.getvalue(), trusted_root=Path(output_root))
     return zip_path
 
 
@@ -586,7 +592,6 @@ def write_lean_day_zip(
         output_root,
         Path(output_root) / "equity" / "usa" / "minute" / safe / f"{trading_date.strftime('%Y%m%d')}_trade.zip",
     )
-    zip_path.parent.mkdir(parents=True, exist_ok=True)
     csv_name = f"{trading_date.strftime('%Y%m%d')}_{safe}_minute_trade.csv"
     midnight = datetime(
         trading_date.year,
@@ -608,5 +613,5 @@ def write_lean_day_zip(
         )
     buf = io.BytesIO()
     _write_deterministic_csv_zip(buf, csv_name, "\n".join(lines))
-    _atomic_write_bytes(zip_path, buf.getvalue())
+    _atomic_write_bytes(zip_path, buf.getvalue(), trusted_root=Path(output_root))
     return zip_path

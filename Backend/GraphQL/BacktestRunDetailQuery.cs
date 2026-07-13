@@ -405,6 +405,8 @@ public sealed record BacktestRunTradeDetailType
     [GraphQLName("pnL")]
     public decimal PnL { get; init; }
     public decimal CumulativePnL { get; init; }
+    public decimal PnlPts { get; init; }
+    public decimal PnlPct { get; init; }
     public string SignalReason { get; init; } = "";
     public bool IsSyntheticExit { get; init; }
 
@@ -419,6 +421,8 @@ public sealed record BacktestRunTradeDetailType
         Quantity = trade.Quantity,
         PnL = trade.PnL,
         CumulativePnL = trade.CumulativePnL,
+        PnlPts = trade.ExitPrice - trade.EntryPrice,
+        PnlPct = trade.EntryPrice > 0 ? (trade.ExitPrice - trade.EntryPrice) / trade.EntryPrice : 0m,
         SignalReason = trade.SignalReason,
         IsSyntheticExit = trade.IsSyntheticExit,
     };

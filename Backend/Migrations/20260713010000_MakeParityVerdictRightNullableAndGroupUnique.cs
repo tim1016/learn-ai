@@ -32,24 +32,12 @@ namespace Backend.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.DropIndex(
-                name: "IX_ParityVerdicts_ParityGroupId",
-                table: "ParityVerdicts");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_ParityVerdicts_ParityGroupId",
-                table: "ParityVerdicts",
-                column: "ParityGroupId");
-
-            migrationBuilder.AlterColumn<int>(
-                name: "RightExecutionId",
-                table: "ParityVerdicts",
-                type: "integer",
-                nullable: false,
-                defaultValue: 0,
-                oldClrType: typeof(int),
-                oldType: "integer",
-                oldNullable: true);
+            // This migration is intentionally irreversible. Rows with NULL RightExecutionId
+            // cannot be safely restored to NOT NULL without violating the FK constraint.
+            // Delete all rows with NULL RightExecutionId before attempting a rollback.
+            throw new InvalidOperationException(
+                "MakeParityVerdictRightNullableAndGroupUnique is not reversible. " +
+                "Delete rows with NULL RightExecutionId before reverting this migration.");
         }
     }
 }

@@ -212,7 +212,7 @@ export class RunReportComponent {
       exit_time: t.exitTimestamp,
       entry_price: t.entryPrice,
       exit_price: t.exitPrice,
-      pnl_pts: t.exitPrice - t.entryPrice,
+      pnl_pts: t.pnlPts,
       result: t.pnL > 0 ? "WIN" : "LOSS",
     })),
   );
@@ -302,10 +302,6 @@ function toParityView(verdict: { status: string; verdictJson: string; createdAt:
 }
 
 export function toEngineTrade(trade: BacktestRunDetailTrade, index: number): EngineTrade {
-  // Display-only arithmetic mirroring the engine's per-trade convention
-  // (pnl_pts = exit − entry; pnl_pct relative to entry price). The
-  // authoritative dollar PnL stays the persisted ``pnL`` column.
-  const pnlPts = trade.exitPrice - trade.entryPrice;
   return {
     trade_number: index + 1,
     entry_time: trade.entryTimestamp,
@@ -314,8 +310,8 @@ export function toEngineTrade(trade: BacktestRunDetailTrade, index: number): Eng
     exit_price: trade.exitPrice,
     quantity: trade.quantity,
     indicators: {},
-    pnl_pts: pnlPts,
-    pnl_pct: trade.entryPrice > 0 ? pnlPts / trade.entryPrice : 0,
+    pnl_pts: trade.pnlPts,
+    pnl_pct: trade.pnlPct,
     result: trade.pnL > 0 ? "WIN" : "LOSS",
     signal_reason: trade.signalReason,
   };

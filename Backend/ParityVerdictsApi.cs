@@ -78,7 +78,10 @@ public static class ParityVerdictsApi
             VerdictVersion = Services.Implementation.ParityVerdictService.VerdictVersion,
             Status = request.Status,
             VerdictJson = string.IsNullOrWhiteSpace(request.VerdictJson) ? "{}" : request.VerdictJson,
-            CreatedAtUtc = DateTime.UtcNow,
+            // CreatedAtUtc is a DateTime column (no migration needed); the model default
+            // DateTime.UtcNow is overridden here with the authoritative value from
+            // DateTimeOffset to avoid Local-kind ambiguity (temporal-rigor.md).
+            CreatedAtUtc = DateTimeOffset.UtcNow.UtcDateTime,
         };
         db.ParityVerdicts.Add(row);
         try
@@ -111,19 +114,10 @@ public static class ParityVerdictsApi
         if (!FailureStatuses.Contains(request.Status))
             return Results.BadRequest(new { error = $"status must be one of {string.Join('|', FailureStatuses)}" });
 
-        var row = await db.ParityVerdicts.FirstOrDefaultAsync(v => v.ParityGroupId == parityGroupId, ct);
-        if (row is null)
-            return Results.NotFound(new { error = $"no parity verdict for group '{parityGroupId}'" });
-
-        if (row.Status != "pending")
-        {
-            // First terminal state wins — the persist step froze a verdict
-            // before the failure report arrived (or vice versa earlier).
-            return Results.Ok(new { id = row.Id, status = row.Status, transitioned = false });
-        }
-
-        row.Status = request.Status;
-        row.VerdictJson = JsonSerializer.Serialize(new
+        // Atomic conditional update: only transitions if Status is still "pending".
+        // ExecuteUpdateAsync translates to a single UPDATE … WHERE Status = 'pending',
+        // preventing two concurrent requests from both winning the transition.
+        var newVerdictJson = JsonSerializer.Serialize(new
         {
             schema_version = 1,
             parity_group_id = parityGroupId,
@@ -131,12 +125,32 @@ public static class ParityVerdictsApi
             reason = request.Detail,
             computed_at_ms = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         });
-        await db.SaveChangesAsync(ct);
+        var rowsAffected = await db.ParityVerdicts
+            .Where(v => v.ParityGroupId == parityGroupId && v.Status == "pending")
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(v => v.Status, request.Status)
+                .SetProperty(v => v.VerdictJson, newVerdictJson),
+                ct);
 
+        if (rowsAffected == 0)
+        {
+            // Either the group doesn't exist or it's already terminal — first
+            // terminal state wins; reload to return the winner's state.
+            var existing = await db.ParityVerdicts
+                .AsNoTracking()
+                .FirstOrDefaultAsync(v => v.ParityGroupId == parityGroupId, ct);
+            if (existing is null)
+                return Results.NotFound(new { error = $"no parity verdict for group '{parityGroupId}'" });
+            return Results.Ok(new { id = existing.Id, status = existing.Status, transitioned = false });
+        }
+
+        var updated = await db.ParityVerdicts
+            .AsNoTracking()
+            .FirstAsync(v => v.ParityGroupId == parityGroupId, ct);
         logger.LogInformation(
             "[PARITY] Group {Group} marked {Status}: {Detail}",
             parityGroupId, request.Status, request.Detail);
-        return Results.Ok(new { id = row.Id, status = row.Status, transitioned = true });
+        return Results.Ok(new { id = updated.Id, status = updated.Status, transitioned = true });
     }
 }
 

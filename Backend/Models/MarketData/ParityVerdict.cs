@@ -32,5 +32,7 @@ public class ParityVerdict
     [Column(TypeName = "jsonb")]
     public string VerdictJson { get; set; } = "{}";
 
-    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    // DateTime column (no migration needed). Use DateTimeOffset.UtcNow.UtcDateTime to
+    // guarantee Kind=Utc; DateTime.UtcNow can return Kind=Local on some hosts (temporal-rigor.md).
+    public DateTime CreatedAtUtc { get; set; } = DateTimeOffset.UtcNow.UtcDateTime;
 }

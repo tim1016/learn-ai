@@ -45,8 +45,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Literal
 
-from app.engine.data.path_safety import ensure_within_root
-
 logger = logging.getLogger(__name__)
 
 PROVENANCE_SCHEMA_VERSION = 1
@@ -136,9 +134,13 @@ def symbol_write_lock(policy_root: Path, symbol: str) -> Iterator[None]:
     the Linux container filesystems this service runs on.
     """
     safe = _safe_symbol(symbol)
-    lock_dir = policy_root / "locks"
-    lock_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = ensure_within_root(policy_root, lock_dir / f"{safe.lower()}.lock")
+    root_real = os.path.realpath(os.fspath(policy_root))
+    root_prefix = root_real.rstrip(os.sep) + os.sep
+    lock_candidate = os.path.realpath(os.path.join(root_real, "locks", f"{safe.lower()}.lock"))
+    if not lock_candidate.startswith(root_prefix):
+        raise ValueError(f"lock path {lock_candidate!r} escapes root {root_real!r}")
+    lock_path = Path(lock_candidate)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
     with open(lock_path, "w", encoding="ascii") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
         try:
@@ -148,15 +150,17 @@ def symbol_write_lock(policy_root: Path, symbol: str) -> Iterator[None]:
 
 
 def _provenance_path(policy_root: Path, symbol: str) -> Path:
-    return ensure_within_root(
-        policy_root,
-        policy_root / "provenance" / f"{_safe_symbol(symbol).lower()}.json",
-    )
+    return policy_root / "provenance" / f"{_safe_symbol(symbol).lower()}.json"
 
 
 def read_provenance(policy_root: Path, symbol: str) -> dict | None:
     """Return the symbol's provenance document, or None when absent."""
-    path = _provenance_path(policy_root, symbol)
+    root_real = os.path.realpath(os.fspath(policy_root))
+    candidate = os.path.realpath(os.fspath(_provenance_path(policy_root, symbol)))
+    root_prefix = root_real.rstrip(os.sep) + os.sep
+    if not candidate.startswith(root_prefix):
+        raise ValueError(f"provenance path {candidate!r} escapes root {root_real!r}")
+    path = Path(candidate)
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
@@ -182,7 +186,12 @@ def record_fetch(
     resolved the wrong policy root, exactly the silent-mismatch class
     this store exists to prevent.
     """
-    path = _provenance_path(policy_root, symbol)
+    root_real = os.path.realpath(os.fspath(policy_root))
+    candidate = os.path.realpath(os.fspath(_provenance_path(policy_root, symbol)))
+    root_prefix = root_real.rstrip(os.sep) + os.sep
+    if not candidate.startswith(root_prefix):
+        raise ValueError(f"provenance path {candidate!r} escapes root {root_real!r}")
+    path = Path(candidate)
     expected_policy = {"source": source, "adjusted": adjusted}
     doc = read_provenance(policy_root, symbol)
     if doc is None:

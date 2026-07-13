@@ -69,7 +69,7 @@ def test_new_parity_group_id_is_run_id_safe():
             REASON_ADJUSTMENT,
         ),
         ("spy_ema_crossover", {"resolution": "daily"}, REASON_RESOLUTION),
-        ("spy_ema_crossover", {"from_date": None, "to_date": None, "params": {"symbol": "SPY"}}, None),
+        ("spy_ema_crossover", {"from_date": None, "to_date": None, "params": {"symbol": "SPY"}}, REASON_WINDOW),
         ("spy_ema_crossover", {}, None),
     ],
 )
@@ -77,15 +77,7 @@ def test_companion_ineligibility_reasons(strategy, overrides, expected):
     registration = _STRATEGY_REGISTRY[strategy]
     request = _request(strategy_name=strategy, **overrides)
     reason = companion_ineligibility_reason(registration, request)
-    if strategy == "spy_ema_crossover" and overrides.get("from_date", "set") is None:
-        # No explicit window → honest unavailable (the synthesized policy
-        # is adjusted=True for legacy requests, so adjustment trips first
-        # only when a policy is present; here we passed one explicitly).
-        assert reason == REASON_WINDOW
-    elif expected is None:
-        assert reason is None
-    else:
-        assert reason == expected
+    assert reason == expected
 
 
 @respx.mock

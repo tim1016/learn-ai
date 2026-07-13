@@ -162,7 +162,13 @@ def stage_minute_zips_from_store(
                 f"bar store has no {filename} for {safe_symbol} under any of {[str(r) for r in roots]}"
             )
         dest = dest_dir / filename
-        shutil.copyfile(source, dest)
+        tmp_path = dest.with_name(dest.name + ".tmp")
+        try:
+            shutil.copyfile(source, tmp_path)
+            os.replace(tmp_path, dest)
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
         written.append(dest)
     return tuple(written)
 
