@@ -3,6 +3,9 @@
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-2) 0 var(--space-3);
+  width: fit-content;
+  max-width: 100%;
+  flex-wrap: wrap;
 
   .filter {
     display: flex;

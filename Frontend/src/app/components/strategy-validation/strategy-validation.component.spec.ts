@@ -162,6 +162,22 @@ describe('StrategyValidationComponent', () => {
     expect(screen.queryByText(/DeploymentValidationConsecutiveGreen/)).toBeNull();
   });
 
+  it('links the selected strategy directly into Engine Lab validation mode', async () => {
+    await render(StrategyValidationComponent, {
+      providers: [
+        provideRouter([]),
+        { provide: StrategyValidationService, useClass: FakeStrategyValidationService },
+      ],
+    });
+
+    const link = await screen.findByRole('link', { name: /Validate in Engine Lab/ });
+
+    expect(link.getAttribute('href')).toContain('/engine?');
+    expect(link.getAttribute('href')).toContain('strategy=deployment_validation');
+    expect(link.getAttribute('href')).toContain('engine=both');
+    expect(link.getAttribute('href')).toContain('symbol=SPY');
+  });
+
   it('switches to the selected strategy detail', async () => {
     await render(StrategyValidationComponent, {
       providers: [
@@ -216,6 +232,30 @@ describe('StrategyValidationComponent', () => {
       expect(service.flagValidation).toHaveBeenCalledWith('deployment_validation', {
         flag: 'invalidated',
         reason: 'Reject this evidence.',
+      });
+    });
+  });
+
+  it('attaches a backtest ID when accepting reconciled evidence', async () => {
+    const service = new FakeStrategyValidationService();
+    await render(StrategyValidationComponent, {
+      providers: [
+        provideRouter([]),
+        { provide: StrategyValidationService, useValue: service },
+      ],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Opening Range Breakout/ }));
+    await screen.findByRole('heading', { name: 'Opening Range Breakout' });
+    fireEvent.input(screen.getByLabelText('Reason'), { target: { value: 'Trades match within the accepted gate.' } });
+    fireEvent.input(screen.getByLabelText('QC Cloud backtest ID'), { target: { value: 'qc-backtest-42' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save flag' }));
+
+    await waitFor(() => {
+      expect(service.flagValidation).toHaveBeenCalledWith('spy_orb', {
+        flag: 'validated',
+        reason: 'Trades match within the accepted gate.',
+        qc_cloud_backtest_id: 'qc-backtest-42',
       });
     });
   });

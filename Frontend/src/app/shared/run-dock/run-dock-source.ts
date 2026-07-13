@@ -26,6 +26,17 @@ export interface RunLogEntry {
   message: string;
 }
 
+export interface RunDockMeta {
+  runId: string;
+  runType: string;
+  phase: string | null;
+  startedAt: number | null;
+  finishedAt: number | null;
+  current: number | null;
+  total: number | null;
+  unit: string | null;
+}
+
 /**
  * Contract a surface (data-lab, engine-lab) provides to the shared
  * `RunDockComponent`. Each surface implements this with its own state
@@ -42,6 +53,8 @@ export interface RunDockSource {
   etaText: Signal<string | null>;
   canCancel: Signal<boolean>;
   log: Signal<readonly RunLogEntry[]>;
+  /** Optional structured run identity and counters for richer dock surfaces. */
+  runMeta?: Signal<RunDockMeta | null>;
   clearLog(): void;
   cancel(): Promise<void> | void;
 }

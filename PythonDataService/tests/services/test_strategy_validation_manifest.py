@@ -316,7 +316,7 @@ def test_load_manifest_fails_closed_when_settings_hash_mismatches(tmp_path) -> N
     assert entry.validation_state == "needs_validation"
     assert entry.deployable is False
     assert entry.diagnostics is not None
-    assert "Settings file hash no longer matches" in " ".join(entry.diagnostics.notes)
+    assert "Validator/deploy binding hash no longer matches" in " ".join(entry.diagnostics.notes)
 
 
 def test_load_manifest_fails_closed_when_event_snapshot_hash_mismatches(tmp_path) -> None:
@@ -381,7 +381,11 @@ def test_append_flag_event_derives_actor_and_snapshots_evidence(tmp_path) -> Non
 
     entry = append_strategy_validation_flag_event(
         "deployment_validation",
-        StrategyValidationFlagRequest(flag="validated", reason="Operator accepted this evidence."),
+        StrategyValidationFlagRequest(
+            flag="validated",
+            reason="Operator accepted this evidence.",
+            qc_cloud_backtest_id="bt-operator-accepted",
+        ),
         [
             StrategyRegistrySeed(
                 strategy_key="deployment_validation",
@@ -404,6 +408,8 @@ def test_append_flag_event_derives_actor_and_snapshots_evidence(tmp_path) -> Non
     assert entry.current_flag_event.behavioral_equivalence.tolerance == "manifest_reconciliation_passed"
     assert entry.current_flag_event.behavioral_equivalence.gating_divergence_counts == {}
     assert entry.current_flag_event.evidence_snapshot.settings_file_sha256 == settings_sha
+    assert entry.current_flag_event.evidence_snapshot.qc_cloud_backtest_id == "bt-operator-accepted"
+    assert entry.qc_cloud_backtest_id == "bt-operator-accepted"
     assert entry.current_flag_event.evidence_snapshot_sha256
     manifest_raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest_raw["seed_flag_events"] == []

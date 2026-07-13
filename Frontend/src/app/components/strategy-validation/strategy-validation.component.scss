@@ -260,6 +260,14 @@
   text-transform: uppercase;
 }
 
+.sv-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  min-width: min(22rem, 100%);
+}
+
 .sv-deploy-link,
 .sv-refresh,
 .sv-save {
@@ -288,6 +296,12 @@
   white-space: normal;
 }
 
+.sv-deploy-link.secondary {
+  border-color: var(--border-light);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+
 .sv-refresh {
   border-color: var(--border-light);
   background: var(--bg-elevated);
@@ -310,7 +324,7 @@
 
 .sv-actions {
   display: grid;
-  grid-template-columns: auto minmax(12rem, auto) minmax(16rem, 1fr) auto;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
   gap: var(--space-3);
   align-items: end;
   padding: var(--space-3);
@@ -325,7 +339,8 @@
 }
 
 .sv-flag-choice legend,
-.sv-reason span {
+.sv-reason span,
+.sv-backtest-id span {
   margin-bottom: var(--space-1);
   color: var(--text-subtle);
   font-size: var(--fs-xs);
@@ -350,7 +365,8 @@
   color: var(--text-primary);
 }
 
-.sv-reason {
+.sv-reason,
+.sv-backtest-id {
   display: grid;
   gap: var(--space-1);
 }
@@ -364,6 +380,21 @@
   color: var(--text-primary);
   font: inherit;
   resize: vertical;
+}
+
+.sv-backtest-id input {
+  min-height: 2.4rem;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-sunken);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.sv-backtest-id small {
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
 }
 
 .sv-action-message,
@@ -491,6 +522,7 @@
     justify-self: stretch;
   }
 
+  .sv-panel-actions,
   .sv-deploy-link {
     justify-self: stretch;
     width: 100%;

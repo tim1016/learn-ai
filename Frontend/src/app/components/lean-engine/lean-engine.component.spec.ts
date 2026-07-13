@@ -1,8 +1,9 @@
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
-import { provideRouter } from '@angular/router';
+import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { provideZonelessChangeDetection } from '@angular/core';
+import { of } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -53,7 +54,7 @@ describe('mapStudyTradeToEngineTrade', () => {
 
   it('passes through trade fields and assigns a 1-based trade_number', () => {
     const trade = mapStudyTradeToEngineTrade(
-      makeItem({ pnL: 2.5, entryPrice: 100, signalReason: 'rsi_oversold' }),
+      makeItem({ pnL: 2.5, entryPrice: 100, quantity: 3, signalReason: 'rsi_oversold' }),
       4,
     );
     expect(trade.trade_number).toBe(5);
@@ -61,6 +62,7 @@ describe('mapStudyTradeToEngineTrade', () => {
     expect(trade.exit_time).toBe(Date.UTC(2026, 3, 1, 15, 0));
     expect(trade.entry_price).toBe(100);
     expect(trade.exit_price).toBe(505);
+    expect(trade.quantity).toBe(3);
     expect(trade.signal_reason).toBe('rsi_oversold');
     expect(trade.result).toBe('WIN');
     expect(trade.indicators).toEqual({});
@@ -185,6 +187,7 @@ describe('LeanEngineComponent engine selector', () => {
     startTrustedRun?: ReturnType<typeof vi.fn>;
     nextTradingDayOpen?: ReturnType<typeof vi.fn>;
     diagnose?: ReturnType<typeof vi.fn>;
+    queryParams?: Record<string, string>;
   } = {}) {
     const startJob =
       overrides.startJob ?? vi.fn().mockResolvedValue('job-id');
@@ -251,6 +254,12 @@ describe('LeanEngineComponent engine selector', () => {
           provide: LeanSidecarService,
           useValue: { startTrustedRun, nextTradingDayOpen, diagnose },
         },
+        {
+          provide: ActivatedRoute,
+          useValue: {
+            queryParamMap: of(convertToParamMap(overrides.queryParams ?? {})),
+          },
+        },
       ],
     });
 
@@ -265,6 +274,56 @@ describe('LeanEngineComponent engine selector', () => {
     expect(component.engine()).toBe('python');
     component.engine.set('lean');
     expect(component.engine()).toBe('lean');
+  });
+
+  it('hydrates Engine Lab launch state from query params after strategies load', async () => {
+    configureTestBed({
+      queryParams: {
+        strategy: 'deployment_validation',
+        engine: 'both',
+        symbol: 'AAPL',
+        resolution: 'minute',
+        from: '2025-01-13',
+        to: '2025-01-17',
+      },
+    });
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+
+    component.strategies.set([
+      {
+        name: 'spy_ema_crossover',
+        display_name: 'SPY EMA Crossover',
+        description: '',
+        params_schema: { properties: {} },
+        supported_resolutions: ['minute'],
+      },
+      {
+        name: 'deployment_validation',
+        display_name: 'Deployment Validation',
+        description: '',
+        params_schema: {
+          properties: {
+            symbol: { type: 'string', default: 'SPY' },
+          },
+        },
+        supported_resolutions: ['minute'],
+      },
+    ]);
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    expect(component.engine()).toBe('both');
+    expect(component.selectedStrategyName()).toBe('deployment_validation');
+    expect(component.rangeState()).toMatchObject({
+      symbol: 'AAPL',
+      from: '2025-01-13',
+      to: '2025-01-17',
+      resolution: 'minute',
+    });
+    expect(component.paramValues()['symbol']).toBe('AAPL');
+    expect(component.activeTab()).toBe('configuration');
   });
 
   it('defaults to the built-in EMA template while keeping custom source seeded', () => {
@@ -312,6 +371,33 @@ describe('LeanEngineComponent engine selector', () => {
       adjusted: true,
       strategy_bars: { timespan: 'minute', multiplier: 15 },
     });
+  });
+
+  it('starts Python and LEAN jobs together in validation mode', async () => {
+    const { startJob } = configureTestBed();
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+
+    component.engine.set('both');
+    component.leanLauncherStatus.set('ready');
+    component.strategies.set([
+      {
+        name: 'spy_ema_crossover',
+        display_name: 'SPY EMA Crossover',
+        description: '',
+        params_schema: { properties: {} },
+        supported_resolutions: ['minute'],
+      },
+    ]);
+    component.selectedStrategyName.set('spy_ema_crossover');
+
+    await component.run();
+
+    expect(startJob.mock.calls.map((call) => call[0])).toEqual([
+      'engine_backtest',
+      'lean_engine_run',
+    ]);
   });
 
   it('submits the built-in EMA template for default LEAN runs', async () => {

@@ -906,7 +906,7 @@ describe('BrokerDeployFormComponent', () => {
     fillRequired(component);
 
     fieldControl(fixture, 'Strategy').value = '';
-    fieldControl(fixture, 'Strategy settings file').value = '';
+    fieldControl(fixture, 'Validated deploy binding').value = '';
     fieldControl(fixture, 'Backtest ID').value = '';
     fieldControl(fixture, 'Algorithm audit copy').value = '';
     fieldControl(fixture, 'Deployment name').value = '';
@@ -922,7 +922,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(component.qcAuditCopyPath()).toBe('');
     expect(component.instanceId()).toBe('');
     expect(blockerText(component)).toContain(
-      'Missing: Strategy, Strategy settings file, Backtest ID, Algorithm audit copy, Deployment name.',
+      'Missing: Strategy, Validated deploy binding, Backtest ID, Algorithm audit copy, Deployment name.',
     );
     expect(deployButton(fixture).disabled).toBe(true);
   });

@@ -47,7 +47,13 @@ from app.models.responses import (
     LeanStatisticsResponse,
     LeanTradeStatsResponse,
 )
+from app.schemas.engine_validation import EngineValidationAnalyticsResponse
 from app.schemas.run_verdict import RunVerdict
+from app.services.engine_validation_analytics import (
+    ValidationEquityPoint,
+    ValidationTrade,
+    compute_engine_validation_analytics,
+)
 from app.services.run_verdict_service import compute_run_verdict
 from app.services.strategies.common import TradeRecord
 from app.services.strategies.lean_statistics import compute_lean_statistics
@@ -402,6 +408,7 @@ class EngineBacktestResponse(BaseModel):
     # in). Never null on a successful run.
     data_policy: _EngineDataPolicyModel | None = None
     run_verdict: RunVerdict | None = None
+    validation_analytics: EngineValidationAnalyticsResponse | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1017,6 +1024,30 @@ def execute_engine_backtest(
     # ── Serialize insights ──
     insights_dicts = [i.to_dict() for i in result.insights]
 
+    validation_analytics: EngineValidationAnalyticsResponse | None = None
+    try:
+        validation_analytics = compute_engine_validation_analytics(
+            trades=[
+                ValidationTrade(
+                    trade_number=trade.trade_number,
+                    entry_ms_utc=trade.entry_time,
+                    exit_ms_utc=trade.exit_time,
+                    pnl_pct=trade.pnl_pct,
+                )
+                for trade in formatted
+            ],
+            equity_curve=[
+                ValidationEquityPoint(
+                    timestamp_ms_utc=point["timestamp"],
+                    equity=point["equity"],
+                )
+                for point in equity_curve_dicts
+            ],
+        )
+    except ValueError as exc:
+        logger.exception("[ENGINE] Validation analytics rejected engine output")
+        on_log(f"Validation analytics unavailable: {exc}")
+
     run_verdict = compute_run_verdict(
         {
             "statistics": stats,
@@ -1051,6 +1082,7 @@ def execute_engine_backtest(
         insight_summary=result.insight_summary,
         data_policy=request.data_policy,  # PR B — echo the normalized policy
         run_verdict=run_verdict,
+        validation_analytics=validation_analytics,
     )
 
     # ── Auto-save to .NET backend (synchronous so we can return the id) ──

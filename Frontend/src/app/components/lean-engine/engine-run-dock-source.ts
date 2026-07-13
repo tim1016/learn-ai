@@ -5,12 +5,13 @@ import type {
   RunDockSource,
   RunDockState,
   RunLogEntry,
+  RunDockMeta,
 } from '../../shared/run-dock/run-dock-source';
 
-/** Engine-lab job types this dock surfaces. Add `lean_engine_run` here
- *  once #470 lands. Keeping the set explicit avoids the dock reacting to
+/** Engine-lab job types this dock surfaces. Keeping the set explicit avoids
+ *  the dock reacting to
  *  data-lab's `dataset-zip` job while a user navigates between labs. */
-const ENGINE_JOB_TYPES = new Set<string>(['engine_backtest']);
+const ENGINE_JOB_TYPES = new Set<string>(['engine_backtest', 'lean_engine_run']);
 
 const RUN_LOG_MAX_LINES = 500;
 
@@ -37,13 +38,21 @@ export class EngineRunDockSource implements RunDockSource {
    *  order, so a single ``maxSeen`` per job is sufficient. */
   private readonly _maxSeqByJob = new Map<string, number>();
 
+  private readonly engineJobs = computed(() =>
+    this.jobs.jobs().filter((job) => ENGINE_JOB_TYPES.has(job.type)),
+  );
+
   private readonly currentJob = computed<JobState | null>(() => {
-    const jobs = this.jobs.jobs().filter((j) => ENGINE_JOB_TYPES.has(j.type));
+    const jobs = this.engineJobs();
     if (jobs.length === 0) return null;
-    // Most recent by startedAt (jobs without startedAt sort as oldest).
+    // Keep an active run ahead of a terminal sibling, then prefer the most
+    // recently updated run within the same lifecycle class.
     return jobs.reduce((latest, j) => {
-      const lt = latest.startedAt ?? 0;
-      const jt = j.startedAt ?? 0;
+      const latestActive = latest.status === 'queued' || latest.status === 'running';
+      const jobActive = j.status === 'queued' || j.status === 'running';
+      if (jobActive !== latestActive) return jobActive ? j : latest;
+      const lt = latest.finishedAt ?? latest.startedAt ?? 0;
+      const jt = j.finishedAt ?? j.startedAt ?? 0;
       return jt >= lt ? j : latest;
     });
   });
@@ -114,6 +123,21 @@ export class EngineRunDockSource implements RunDockSource {
 
   readonly log = this._log.asReadonly();
 
+  readonly runMeta = computed<RunDockMeta | null>(() => {
+    const job = this.currentJob();
+    if (!job) return null;
+    return {
+      runId: job.id,
+      runType: job.type,
+      phase: job.phase ?? null,
+      startedAt: job.startedAt ?? null,
+      finishedAt: job.finishedAt ?? null,
+      current: job.current ?? null,
+      total: job.total ?? null,
+      unit: job.unit ?? null,
+    };
+  });
+
   clearLog(): void {
     this._log.set([]);
     // Leave _maxSeqByJob populated so already-folded entries from the
@@ -127,27 +151,27 @@ export class EngineRunDockSource implements RunDockSource {
   }
 
   constructor() {
-    // Fold new log entries from the current job's rolling `recentLogs`
-    // window into our own accumulated buffer, deduped by sequence number.
+    // Fold every structured SSE event into the visible timeline. This keeps
+    // phase and progress events observable instead of showing only job.log.
     effect(() => {
-      const j = this.currentJob();
-      if (!j) return;
-      const maxSeen = this._maxSeqByJob.get(j.id) ?? -1;
-      const fresh = j.recentLogs.filter((l) => l.seq > maxSeen);
-      if (fresh.length === 0) return;
-      // ``recentLogs`` arrives in seq order — take the last entry's
-      // seq as the new high-water-mark in one O(1) lookup. Falls back
-      // to a defensive max over the fresh slice in case a future
-      // change relaxes the ordering guarantee.
-      const newMax = fresh.reduce((m, l) => (l.seq > m ? l.seq : m), maxSeen);
-      this._maxSeqByJob.set(j.id, newMax);
-      const entries: RunLogEntry[] = fresh.map((l) => ({
-        id: `${j.id}-${l.seq}`,
-        timestamp: l.ts,
-        level: mapLogLevel(l.level),
-        glyph: glyphForLevel(l.level),
-        message: l.message,
-      }));
+      const entries: RunLogEntry[] = [];
+      for (const job of this.engineJobs()) {
+        const events = job.recentEvents ?? [];
+        const maxSeen = this._maxSeqByJob.get(job.id) ?? -1;
+        const fresh = events.slice(maxSeen + 1);
+        if (fresh.length === 0) continue;
+        this._maxSeqByJob.set(job.id, events.length - 1);
+        const engineLabel = job.type === 'lean_engine_run' ? 'LEAN' : 'Python';
+        entries.push(...fresh.map((event) => ({
+          id: `${job.id}-${event.id}`,
+          timestamp: event.timestamp,
+          level: mapLogLevel(event.level),
+          glyph: glyphForEvent(event.type, event.level),
+          message: `[${engineLabel}] ${event.summary}`,
+        })));
+      }
+      if (entries.length === 0) return;
+      entries.sort((left, right) => left.timestamp - right.timestamp);
       this._log.update((curr) => {
         const next = [...curr, ...entries];
         return next.length > RUN_LOG_MAX_LINES
@@ -165,9 +189,13 @@ function mapLogLevel(raw: string): RunDockLevel {
   return 'info';
 }
 
-function glyphForLevel(raw: string): string {
+function glyphForEvent(type: string, raw: string): string {
   if (raw === 'error') return '✗';
   if (raw === 'warn' || raw === 'warning') return '⚠';
   if (raw === 'success') return '✓';
+  if (type === 'job.phase') return '◆';
+  if (type === 'job.progress') return '↗';
+  if (type === 'job.started') return '▶';
+  if (type === 'job.completed') return '✓';
   return '·';
 }

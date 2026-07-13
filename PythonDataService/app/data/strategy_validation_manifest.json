@@ -3,6 +3,8 @@
   "validated_strategies": [
     {
       "strategy_key": "deployment_validation",
+      "validator_code_ref": "PythonDataService/app/lean_sidecar/trusted_samples/deployment_validation.py",
+      "validator_code_sha256": "980b5f3d4809e28794062ef00f7fe0c649c5b7892f0a3201f45344b75ecca895",
       "settings_file_ref": "PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json",
       "settings_file_sha256": "0a0f0b8937464ef1ad85a9f2e658b481f520b5a177d35445a95eceef9beb21b0",
       "qc_cloud_backtest_id": "d2fe45a7142e88575f6fbd75229f8681",
@@ -37,10 +39,12 @@
         "verdict": "accepted_for_deploy",
         "detail": "Human validation accepted the current engine evidence for deployment.",
         "tolerance": "manifest_reconciliation_passed",
-        "tolerance_reason": "Registered reconciliation status and diagnostics verdict are passed; the manifest settings-file hash also matches the current source.",
+        "tolerance_reason": "Registered reconciliation status and diagnostics verdict are passed; the manifest LEAN validator hash and deploy binding hash also match the current source.",
         "gating_divergence_counts": {}
       },
       "evidence_snapshot": {
+        "validator_code_ref": "PythonDataService/app/lean_sidecar/trusted_samples/deployment_validation.py",
+        "validator_code_sha256": "980b5f3d4809e28794062ef00f7fe0c649c5b7892f0a3201f45344b75ecca895",
         "settings_file_ref": "PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json",
         "settings_file_sha256": "0a0f0b8937464ef1ad85a9f2e658b481f520b5a177d35445a95eceef9beb21b0",
         "qc_cloud_backtest_id": "d2fe45a7142e88575f6fbd75229f8681",
@@ -61,7 +65,7 @@
           ]
         }
       },
-      "evidence_snapshot_sha256": "a8be19fbb65b321ffa1a599d460af7031ad2963f7890f33536d546c30e6be22c",
+      "evidence_snapshot_sha256": "1ecd82810bc477490eb7b181e3b747b5b05cfeaf8f4a71e1727a6281b2e26da8",
       "superseded_by_event_id": null
     }
   ]

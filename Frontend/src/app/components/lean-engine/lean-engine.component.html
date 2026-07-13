@@ -3,7 +3,7 @@
     title="Engine Lab"
     icon="pi-bolt"
     [hasTabs]="true"
-    subtitle="LEAN-compatible backtest engine with full statistics, trade history, and research journal."
+    subtitle="Validate one strategy across Python and LEAN, reconcile every trade, and promote accepted evidence to Deploy Bot."
   />
 
   @if (strategiesLoading()) {
@@ -17,23 +17,22 @@
   @if (!strategiesLoading() && strategies().length > 0) {
     <p-tabs [(value)]="activeTab">
       <p-tablist>
-        <p-tab value="0">
-          <i class="pi pi-cog"></i> Configure
+        <p-tab value="configuration">
+          <i class="pi pi-cog"></i> Workbench
         </p-tab>
-        <!-- Always clickable — the empty-state inside the panel handles the
-             "no backtest run yet" case. Disabling this tab was preventing
-             navigation in some timing scenarios with PrimeNG 21. -->
-        <p-tab value="1">
-          <i class="pi pi-chart-line"></i> Results
-        </p-tab>
-        <p-tab value="2">
+        <p-tab value="history">
           <i class="pi pi-history"></i> History
         </p-tab>
-        <p-tab value="3">
-          <i class="pi pi-book"></i> Docs
-        </p-tab>
-        @if (replayEnabled) {
-          <p-tab value="4" [disabled]="!selectedStudyForReplay()">
+        @if (strategyDetail(); as strategy) {
+          <p-tab [value]="'strategy:' + strategy.name">
+            <i class="pi pi-sliders-h"></i> {{ strategy.display_name }}
+          </p-tab>
+        }
+        @if (comparisonReady()) {
+          <p-tab value="comparison"><i class="pi pi-arrows-h"></i> Trade match</p-tab>
+        }
+        @if (replayEnabled && selectedStudyForReplay()) {
+          <p-tab value="replay">
             <i class="pi pi-play-circle"></i> Replay
           </p-tab>
         }
@@ -41,25 +40,9 @@
 
       <p-tabpanels>
         <!-- ═══ Configure Tab ═══ -->
-        <p-tabpanel value="0">
+        <p-tabpanel value="configuration">
           <section class="config-card">
-            <!-- PR B.5 — engine choice gates which script surface renders below. -->
-            <div class="engine-selector params-card">
-              <h3 data-section="00">Engine</h3>
-              <label class="field">
-                <span class="label">Engine</span>
-                <select
-                  data-testid="engine-select"
-                  [ngModel]="engine()"
-                  (ngModelChange)="engine.set($event)"
-                >
-                  <option value="python">Python (in-process)</option>
-                  <option value="lean">LEAN (sidecar)</option>
-                </select>
-              </label>
-            </div>
-
-            @if (engine() === 'python') {
+            @if (engine() !== 'lean') {
               <!-- Top strip: strategy params form (full-width inside the tab) -->
               @if (paramEntries().length > 0) {
                 <div class="params-card">
@@ -85,7 +68,8 @@
                   </div>
                 </div>
               }
-            } @else {
+            }
+            @if (engine() !== 'python') {
               <div class="params-card lean-script-card">
                 <h3 data-section="01">LEAN algorithm</h3>
                 @if (leanAlgorithmMode() === 'template') {
@@ -162,6 +146,23 @@
 
             <div class="ide-rail-left">
 
+            <!-- PR B.5 — engine choice gates which script surface renders below. -->
+            <div class="engine-selector params-card">
+              <h3 data-section="00">Engine</h3>
+              <label class="field">
+                <span class="label">Engine</span>
+                <select
+                  data-testid="engine-select"
+                  [ngModel]="engine()"
+                  (ngModelChange)="engine.set($event)"
+                >
+                  <option value="python">Python (in-process)</option>
+                  <option value="lean">LEAN (sidecar)</option>
+                  <option value="both">Both — validate equivalence</option>
+                </select>
+              </label>
+            </div>
+
             <app-ticker-range-picker
               [(value)]="rangeState"
               [tickerPool]="tickerPool"
@@ -171,44 +172,33 @@
               (advisoryAction)="onPickerAdvisoryAction($event)"
             />
 
-            @if (engine() === 'python') {
-              <div class="options-card">
+            @if (engine() !== 'lean') {
+              <div class="options-card strategy-card">
                 <h3 data-section="02">
-                  <i class="pi pi-cog" aria-hidden="true"></i>
-                  Strategy
+                  <i class="pi pi-list" aria-hidden="true"></i>
+                  Strategy queue
                 </h3>
-                <label class="field">
-                  <span class="label">Strategy</span>
-                  <select
-                    [ngModel]="selectedStrategyName()"
-                    (ngModelChange)="onStrategyChange($event)"
-                    [disabled]="availableStrategies().length === 0"
-                  >
-                    @for (s of availableStrategies(); track s.name) {
-                      <option [value]="s.name">{{ s.display_name }}</option>
-                    }
-                  </select>
-                  @if (availableStrategies().length === 0) {
-                    <span class="field-hint">
-                      No strategies registered for <strong>{{ resolution() }}</strong> resolution.
-                    </span>
+                <div class="strategy-list" role="list" aria-label="Available strategies">
+                  @for (strategy of availableStrategies(); track strategy.name) {
+                    <button
+                      type="button"
+                      class="strategy-list__item"
+                      [class.selected]="selectedStrategyName() === strategy.name"
+                      (click)="openStrategyDetail(strategy.name)">
+                      <span>
+                        <strong>{{ strategy.display_name }}</strong>
+                        <small class="mono">{{ strategy.name }}</small>
+                      </span>
+                      <i class="pi pi-arrow-up-right" aria-hidden="true"></i>
+                    </button>
+                  } @empty {
+                    <p class="strategy-list__empty">No strategies support {{ resolution() }} data.</p>
                   }
-                </label>
-                @if (selectedStrategy(); as strat) {
-                  <div class="strategy-meta">
-                    <div class="strategy-meta__desc">{{ strat.description }}</div>
-                    <div class="strategy-meta__badges">
-                      @if (strat.pine_available) {
-                        <span class="meta-badge meta-badge--parity">parity ✓</span>
-                        <span class="meta-badge meta-badge--pine">pine v6</span>
-                      }
-                    </div>
-                  </div>
-                }
+                </div>
               </div>
             }
 
-            <div class="options-card">
+            <div class="options-card execution-card">
               <h3 data-section="03">
                 <i class="pi pi-bolt" aria-hidden="true"></i>
                 Execution
@@ -270,56 +260,114 @@
                 }
               </div>
               <div class="run-bar-actions">
-                @if (selectedStrategy()?.pine_available) {
-                  <button
-                    type="button"
-                    class="pine-btn"
-                    [disabled]="pineDownloading() || !selectedStrategyName()"
-                    title="Download a Pine v6 script that matches the current parameter values. Paste into TradingView to validate trade-by-trade."
-                    (click)="downloadPineScript()"
-                  >
-                    <i class="pi pi-download" aria-hidden="true"></i>
-                    @if (pineDownloading()) { Generating… }
-                    @else { Download Pine script }
-                  </button>
-                }
                 <button
                   type="button"
                   class="run-btn"
                   data-testid="run-btn"
-                  [disabled]="running() || (engine() === 'python' && !selectedStrategyName()) || preflightBlocks() || leanLauncherBlocksRun()"
+                  [disabled]="running() || (engine() !== 'lean' && !selectedStrategyName()) || leanLauncherBlocksRun()"
                   [title]="leanLauncherBlocksRun()
                     ? 'Check the LEAN launcher before running.'
-                    : preflightBlocks()
-                    ? 'Pre-flight has blocking issues. See the panel above.'
                     : 'Run the backtest with the current configuration.'"
-                  (click)="run(); activeTab.set('1')"
+                  (click)="run()"
                 >
                   <i class="pi pi-play" aria-hidden="true"></i>
                   @if (running()) { Running… }
                   @else if (leanLauncherBlocksRun()) { Check launcher }
-                  @else if (preflightBlocks()) { Run blocked }
-                  @else { Run backtest }
+                  @else if (engine() === 'both') { Run both engines }
+                  @else { Run validation }
                 </button>
               </div>
             </div>
-            @if (pineError(); as err) {
-              <div class="notice error" role="alert">{{ err }}</div>
+
+            @if (runError(); as err) {
+              <div class="notice error">{{ err }}</div>
+            }
+
+            @if (result(); as r) {
+              <section class="workbench-results" aria-label="Current validation run results">
+                <app-engine-results
+                  [result]="r"
+                  [symbol]="effectiveSymbol()"
+                  [chartBars]="chartBars()"
+                  [chartTrades]="chartTrades()"
+                  [equityCurve]="equityCurve()"
+                  [fromDate]="startDate()"
+                  [toDate]="endDate()"
+                  [resolution]="resolution()" />
+
+                @if (insights().length > 0) {
+                  <app-insight-panel
+                    [insights]="insights()"
+                    [summary]="insightSummary()"
+                  />
+                }
+              </section>
+            } @else {
+              <section class="validation-stage-placeholder" aria-label="Validation preview">
+                <header>
+                  <div>
+                    <p class="stage-eyebrow">Current configuration</p>
+                    <h2>{{ effectiveSymbol() }} validation run</h2>
+                  </div>
+                  <div class="stage-chips">
+                    <span>{{ resolution() }}</span>
+                    <span>{{ fillMode() === 'signal_bar_close' ? 'signal close' : 'next open' }}</span>
+                    <span>{{ engine() }}</span>
+                  </div>
+                </header>
+                <div class="preview-chart" aria-hidden="true">
+                  <span class="preview-line preview-line--equity"></span>
+                  <span class="preview-line preview-line--baseline"></span>
+                  <span class="preview-marker preview-marker--buy">BUY</span>
+                  <span class="preview-marker preview-marker--exit">EXIT</span>
+                </div>
+                <div class="preview-kpis" aria-label="Metrics populate after run">
+                  <article><span>Net P&amp;L</span><strong>pending</strong></article>
+                  <article><span>Max drawdown</span><strong>pending</strong></article>
+                  <article><span>Trades</span><strong>pending</strong></article>
+                  <article><span>Sharpe</span><strong>pending</strong></article>
+                  <article><span>Profit factor</span><strong>pending</strong></article>
+                </div>
+              </section>
             }
 
             </div><!-- end ide-main -->
 
             <div class="ide-rail-right">
 
-            <!-- TradingView-compatibility panel: safe defaults + live pre-flight -->
-            <app-tv-compat-panel
-              [strategyName]="selectedStrategyName()"
-              [symbol]="effectiveSymbol()"
-              [timeframe]="preflightTimeframe()"
-              [startDate]="startDate()"
-              [endDate]="endDate()"
-              [indicators]="strategyIndicators()"
-              (preflightStatus)="onPreflightUpdate($event)" />
+            <section class="validation-evidence-card" aria-label="Validation evidence">
+              <header>
+                <h3>Validation evidence</h3>
+                <span [class.ready]="comparisonReady()">{{ comparisonReady() ? 'ready' : 'blocked' }}</span>
+              </header>
+              <ol>
+                <li [class.ready]="true">
+                  <strong>Data policy matches</strong>
+                  <small>{{ effectiveSymbol() }} · {{ resolution() }} · RTH · adjusted</small>
+                </li>
+                <li [class.ready]="comparisonReady()">
+                  <strong>Trades reconcile</strong>
+                  <small>
+                    @if (comparisonReady()) {
+                      Python #{{ pythonStudyId() }} · LEAN #{{ leanStudyId() }}
+                    } @else {
+                      Run both engines to create the validation pair.
+                    }
+                  </small>
+                </li>
+                <li [class.ready]="false">
+                  <strong>Backtest receipt</strong>
+                  <small>Attach the accepted external backtest ID before deploy.</small>
+                </li>
+              </ol>
+              <p>
+                @if (comparisonReady()) {
+                  Engines are ready for trade-match review. Deploy remains blocked until the external receipt is attached.
+                } @else {
+                  Not validated yet. Run Python and LEAN, reconcile the trades, then attach the external receipt.
+                }
+              </p>
+            </section>
 
             @if (selectedStrategy(); as strategy) {
               @if (strategy.algorithm_pseudocode) {
@@ -346,43 +394,49 @@
           </section>
         </p-tabpanel>
 
-        <!-- ═══ Results Tab ═══ -->
-        <p-tabpanel value="1">
-          @if (runError(); as err) {
-            <div class="notice error">{{ err }}</div>
-          }
-
-          @if (result(); as r) {
-            <!-- Results tab body — engine-results now hosts the
-                 run-summary bar + hero columns + chart/readiness split
-                 + secondary drawer + LEAN stats + trade log. -->
-            <app-engine-results
-              [result]="r"
-              [symbol]="effectiveSymbol()"
-              [chartBars]="chartBars()"
-              [chartTrades]="chartTrades()"
-              [equityCurve]="equityCurve()"
-              [fromDate]="startDate()"
-              [toDate]="endDate()"
-              [resolution]="resolution()" />
-
-            <!-- Insight analysis (only shown when insights exist) -->
-            @if (insights().length > 0) {
-              <app-insight-panel
-                [insights]="insights()"
-                [summary]="insightSummary()"
-              />
-            }
-          } @else {
-            <div class="empty-tab">
-              <i class="pi pi-play"></i>
-              <p>Run a backtest to see results here.</p>
-            </div>
-          }
-        </p-tabpanel>
+        @if (strategyDetail(); as strategy) {
+          <p-tabpanel [value]="'strategy:' + strategy.name">
+            <article class="strategy-detail-tab">
+              <header>
+                <div>
+                  <p class="strategy-detail-tab__eyebrow">Strategy definition</p>
+                  <h2>{{ strategy.display_name }}</h2>
+                  <p>{{ strategy.description }}</p>
+                </div>
+                <button type="button" class="launcher-btn secondary" (click)="closeStrategyDetail()">
+                  <i class="pi pi-times" aria-hidden="true"></i> Close tab
+                </button>
+              </header>
+              <div class="strategy-detail-grid">
+                <section>
+                  <h3>Validation contract</h3>
+                  <dl>
+                    <div><dt>Registry key</dt><dd class="mono">{{ strategy.name }}</dd></div>
+                    <div><dt>Resolutions</dt><dd>{{ strategy.supported_resolutions.join(', ') }}</dd></div>
+                    <div><dt>Python result</dt><dd>{{ pythonStudyId() ? '#' + pythonStudyId() : 'Not run' }}</dd></div>
+                    <div><dt>LEAN result</dt><dd>{{ leanStudyId() ? '#' + leanStudyId() : 'Not run' }}</dd></div>
+                  </dl>
+                </section>
+                <section>
+                  <h3>Known constraints</h3>
+                  @if (strategy.gotchas?.length) {
+                    <ul>
+                      @for (gotcha of strategy.gotchas; track gotcha) { <li>{{ gotcha }}</li> }
+                    </ul>
+                  } @else {
+                    <p>No strategy-specific constraints are registered.</p>
+                  }
+                </section>
+              </div>
+              <button type="button" class="run-btn" (click)="activeTab.set('configuration')">
+                Configure this strategy
+              </button>
+            </article>
+          </p-tabpanel>
+        }
 
         <!-- ═══ History Tab ═══ -->
-        <p-tabpanel value="2">
+        <p-tabpanel value="history">
           <!-- PR B.3 (2026-05-19) — the REST-backed EngineHistoryComponent
                retired here; the unified GraphQL-backed history table
                below is now the single source of truth for past runs.
@@ -391,14 +445,30 @@
             (runSelected)="onStudySelected(+$event)" />
         </p-tabpanel>
 
-        <!-- ═══ Docs Tab ═══ -->
-        <p-tabpanel value="3">
-          <app-lean-engine-docs [result]="result()" />
-        </p-tabpanel>
+        @if (comparisonReady()) {
+          <p-tabpanel value="comparison">
+            <section class="comparison-ready">
+              <div>
+                <p class="comparison-ready__eyebrow">Validation pair ready</p>
+                <h2>Match Python and LEAN trade by trade</h2>
+                <p>The canonical reconciler checks data policy, fill timing, prices, quantity, fees, and P&amp;L.</p>
+              </div>
+              <dl>
+                <div><dt>Python study</dt><dd class="mono">#{{ pythonStudyId() }}</dd></div>
+                <div><dt>LEAN study</dt><dd class="mono">#{{ leanStudyId() }}</dd></div>
+              </dl>
+              <a class="run-btn" routerLink="/runs/compare"
+                 [queryParams]="{ left: pythonStudyId(), right: leanStudyId() }">
+                Open trade reconciliation
+              </a>
+              <p class="comparison-ready__gate">Attach the external backtest ID in Strategy Validation after the reconciliation is accepted. Deploy Bot remains blocked until both receipts exist.</p>
+            </section>
+          </p-tabpanel>
+        }
 
         <!-- ═══ Replay Tab (feature-flagged) ═══ -->
-        @if (replayEnabled) {
-          <p-tabpanel value="4">
+        @if (replayEnabled && selectedStudyForReplay()) {
+          <p-tabpanel value="replay">
             <app-engine-replay-v2 [study]="selectedStudyForReplay()" />
           </p-tabpanel>
         }

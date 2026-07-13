@@ -225,6 +225,10 @@
   </div>
 </details>
 
+@if (r.validation_analytics; as analytics) {
+  <app-validation-atlas [analytics]="analytics" />
+}
+
 <!-- ═════════ LEAN statistics dashboard (kept) ═════════ -->
 @if (leanStats(); as lean) {
   <details class="lean-stats-drawer">
@@ -239,117 +243,4 @@
   </details>
 }
 
-<!-- ═════════ Trade Log (kept, collapsed) ═════════ -->
-@if (r.trades.length > 0) {
-  <div class="trade-log-panel">
-    <button class="panel-toggle" (click)="showTradeLog.set(!showTradeLog())">
-      <i class="pi" [class.pi-chevron-right]="!showTradeLog()" [class.pi-chevron-down]="showTradeLog()"></i>
-      <span>Trade Log</span>
-      <span class="panel-badge">{{ r.trades.length }} trades</span>
-    </button>
-
-    @if (showTradeLog()) {
-      <div class="trade-log-toolbar">
-        <div class="tz-selector">
-          <label>Timezone:</label>
-          <select [ngModel]="selectedTimezone()" (ngModelChange)="selectedTimezone.set($event)">
-            @for (tz of timezoneOptions; track tz.value) {
-              <option [value]="tz.value">{{ tz.label }}</option>
-            }
-          </select>
-        </div>
-        <button type="button" class="csv-btn" (click)="downloadTradesCsv()" title="Download CSV">
-          <i class="pi pi-download"></i> CSV
-        </button>
-      </div>
-
-      <div class="table-wrapper">
-        <table>
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Entry Time</th>
-              <th>Entry $</th>
-              <th>Exit Time</th>
-              <th>Exit $</th>
-              <th>PnL Pts</th>
-              <th>PnL %</th>
-              <th>Result</th>
-              <th>Signal</th>
-              <th>Indicators</th>
-            </tr>
-          </thead>
-          <tbody>
-            @for (t of r.trades; track t.trade_number) {
-              <tr [class.win]="t.result === 'WIN'" [class.loss]="t.result === 'LOSS'">
-                <td>{{ t.trade_number }}</td>
-                <td>{{ formatTradeTime(t.entry_time) }}</td>
-                <td>{{ formatNumber(t.entry_price) }}</td>
-                <td>{{ formatTradeTime(t.exit_time) }}</td>
-                <td>{{ formatNumber(t.exit_price) }}</td>
-                <td [class.positive]="t.pnl_pts > 0" [class.negative]="t.pnl_pts < 0">
-                  {{ t.pnl_pts > 0 ? '+' : '' }}{{ formatNumber(t.pnl_pts, 4) }}
-                </td>
-                <td [class.positive]="t.pnl_pct > 0" [class.negative]="t.pnl_pct < 0">
-                  {{ formatPct(t.pnl_pct) }}
-                </td>
-                <td>
-                  <span class="result-badge" [class.win-badge]="t.result === 'WIN'" [class.loss-badge]="t.result === 'LOSS'">
-                    {{ t.result }}
-                  </span>
-                </td>
-                <td class="signal-cell">{{ t.signal_reason }}</td>
-                <td>
-                  @if (isOptionsIndicators(t)) {
-                    @let g = groupedIndicators(t);
-                    <div class="options-indicators">
-                      <div class="ind-group">
-                        <span class="ind-group-label">Signal</span>
-                        @for (ind of g.signal; track ind.key) {
-                          <span class="indicator-chip">{{ ind.key }}: {{ formatNumber(ind.value, 4) }}</span>
-                        }
-                      </div>
-                      <div class="ind-group">
-                        <span class="ind-group-label">Spread</span>
-                        @for (ind of g.spread; track ind.key) {
-                          <span class="indicator-chip">{{ ind.key }}: {{ formatNumber(ind.value, 4) }}</span>
-                        }
-                      </div>
-                      <div class="ind-group">
-                        <span class="ind-group-label">Long Leg</span>
-                        @for (ind of g.longLeg; track ind.key) {
-                          <span class="indicator-chip">{{ ind.key }}: {{ formatNumber(ind.value, 4) }}</span>
-                        }
-                      </div>
-                      <div class="ind-group">
-                        <span class="ind-group-label">Short Leg</span>
-                        @for (ind of g.shortLeg; track ind.key) {
-                          <span class="indicator-chip">{{ ind.key }}: {{ formatNumber(ind.value, 4) }}</span>
-                        }
-                      </div>
-                      <div class="ind-group">
-                        <span class="ind-group-label">PnL</span>
-                        @for (ind of g.pnl; track ind.key) {
-                          <span class="indicator-chip"
-                            [class.positive-chip]="ind.key === 'dollar_pnl' && ind.value > 0"
-                            [class.negative-chip]="ind.key === 'dollar_pnl' && ind.value < 0"
-                          >{{ ind.key }}: {{ formatNumber(ind.value, 4) }}</span>
-                        }
-                      </div>
-                    </div>
-                  } @else {
-                    <div class="indicators">
-                      @for (ind of tradeIndicatorEntries(t); track ind.key) {
-                        <span class="indicator-chip">{{ ind.key }}: {{ formatNumber(ind.value, 4) }}</span>
-                      }
-                    </div>
-                  }
-                </td>
-              </tr>
-            }
-          </tbody>
-        </table>
-      </div>
-    }
-  </div>
-}
+<app-engine-trade-ledger [trades]="r.trades" />

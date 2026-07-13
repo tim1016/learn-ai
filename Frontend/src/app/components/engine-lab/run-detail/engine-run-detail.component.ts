@@ -23,7 +23,7 @@ type VerdictState =
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [CurrencyPipe, PercentPipe, RouterLink, TimestampDisplayPipe],
   templateUrl: "./engine-run-detail.component.html",
-  styleUrl: "./engine-run-detail.component.scss",
+  styleUrls: ["./engine-run-detail.component.scss"],
 })
 export class EngineRunDetailComponent {
   private readonly apollo = inject(Apollo);

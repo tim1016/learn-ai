@@ -446,7 +446,7 @@ export class BrokerDeployFormComponent {
   readonly missingRequiredFields = computed<string[]>(() => {
     const missing: string[] = [];
     if (this.strategyKey().trim() === '') missing.push('Strategy');
-    if (this.specPath().trim() === '') missing.push('Strategy settings file');
+    if (this.specPath().trim() === '') missing.push('Validated deploy binding');
     if (this.resolvedSignalStream() === '') missing.push('Signal stream');
     if (this.accountId().trim() === '') missing.push('Connected broker account');
     if (this.qcBacktestId().trim() === '') missing.push('Backtest ID');

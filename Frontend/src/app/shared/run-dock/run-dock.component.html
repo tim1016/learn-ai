@@ -41,6 +41,17 @@
     </header>
 
     <div #logScroll class="run-dock__log" (scroll)="onLogScroll()" role="log" aria-live="polite" aria-atomic="false">
+      @if (runMeta(); as meta) {
+        <dl class="run-dock__meta" aria-label="Run details">
+          <div><dt>Run</dt><dd class="mono" [title]="meta.runId">{{ meta.runId }}</dd></div>
+          <div><dt>Engine</dt><dd>{{ meta.runType === 'lean_engine_run' ? 'LEAN' : 'Python' }}</dd></div>
+          <div><dt>Phase</dt><dd>{{ meta.phase ?? 'queued' }}</dd></div>
+          <div><dt>Elapsed</dt><dd>{{ formatDuration(meta.startedAt, meta.finishedAt) }}</dd></div>
+          @if (meta.current !== null && meta.total !== null) {
+            <div><dt>Progress</dt><dd>{{ meta.current }} / {{ meta.total }} {{ meta.unit ?? '' }}</dd></div>
+          }
+        </dl>
+      }
       @if (log().length === 0) {
         <div class="run-dock__log-empty">
           No events yet. The dock will stream run updates as they happen.

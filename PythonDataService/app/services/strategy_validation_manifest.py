@@ -61,6 +61,8 @@ class StrategyEvidenceSeed:
     verdict: str = "passed"
     reconciliation_status: str = "passed"
     settings_file_verified: bool = True
+    validator_code_ref: str | None = None
+    validator_code_sha256: str | None = None
     notes: list[str] = field(default_factory=list)
 
 
@@ -105,7 +107,12 @@ def seed_strategy_validation_manifest(
             continue
 
         _validate_divergence_categories(proof.divergence_counts)
-        evidence_deployable = _evidence_is_deployable(proof)
+        qc_cloud_backtest_id = (
+            current_event.evidence_snapshot.qc_cloud_backtest_id
+            if current_event is not None and current_event.evidence_snapshot.qc_cloud_backtest_id
+            else proof.qc_cloud_backtest_id
+        )
+        evidence_deployable = _evidence_is_deployable(proof) and bool(qc_cloud_backtest_id)
         deployable = _event_accepts_deploy(current_event) and evidence_deployable
         notes = list(proof.notes)
         if not evidence_deployable:
@@ -117,9 +124,11 @@ def seed_strategy_validation_manifest(
                 description=strategy.description,
                 validation_state=_validation_state_for_event(current_event),
                 deployable=deployable,
+                validator_code_ref=proof.validator_code_ref,
+                validator_code_sha256=proof.validator_code_sha256,
                 settings_file_ref=proof.settings_file_ref,
                 settings_file_sha256=proof.settings_file_sha256,
-                qc_cloud_backtest_id=proof.qc_cloud_backtest_id,
+                qc_cloud_backtest_id=qc_cloud_backtest_id,
                 audit_copy_ref=proof.audit_copy_ref,
                 audit_copy_sha256=proof.audit_copy_sha256,
                 reconciliation_ref=proof.reconciliation_ref,
@@ -184,6 +193,10 @@ def append_strategy_validation_flag_event(
         _validate_divergence_categories(proof.divergence_counts)
     current_ms = now_ms if now_ms is not None else int(time.time() * 1000)
     snapshot = _snapshot_for_proof(proof)
+    if request.qc_cloud_backtest_id is not None:
+        snapshot = snapshot.model_copy(
+            update={"qc_cloud_backtest_id": request.qc_cloud_backtest_id}
+        )
     event = StrategyValidationFlagEvent(
         event_id=uuid.uuid4().hex,
         strategy_key=strategy_key,
@@ -191,7 +204,11 @@ def append_strategy_validation_flag_event(
         flagged_by=flagged_by,
         flagged_at_ms=current_ms,
         reason=request.reason,
-        behavioral_equivalence=_behavioral_equivalence_for_flag(request.flag, proof),
+        behavioral_equivalence=_behavioral_equivalence_for_flag(
+            request.flag,
+            proof,
+            qc_cloud_backtest_id=snapshot.qc_cloud_backtest_id,
+        ),
         evidence_snapshot=snapshot,
         evidence_snapshot_sha256=_snapshot_sha256(snapshot),
     )
@@ -394,6 +411,8 @@ def _snapshot_for_proof(proof: StrategyEvidenceSeed | None) -> StrategyEvidenceS
     return StrategyEvidenceSnapshot(
         settings_file_ref=proof.settings_file_ref,
         settings_file_sha256=proof.settings_file_sha256,
+        validator_code_ref=proof.validator_code_ref,
+        validator_code_sha256=proof.validator_code_sha256,
         qc_cloud_backtest_id=proof.qc_cloud_backtest_id,
         audit_copy_ref=proof.audit_copy_ref,
         audit_copy_sha256=proof.audit_copy_sha256,
@@ -424,6 +443,8 @@ def _snapshot_sha256(snapshot: StrategyEvidenceSnapshot) -> str:
 def _behavioral_equivalence_for_flag(
     flag: str,
     proof: StrategyEvidenceSeed | None,
+    *,
+    qc_cloud_backtest_id: str | None = None,
 ) -> StrategyBehavioralEquivalence:
     if flag == "invalidated":
         return StrategyBehavioralEquivalence(
@@ -438,22 +459,28 @@ def _behavioral_equivalence_for_flag(
             detail="Human validation recorded without a registered engine evidence snapshot.",
             tolerance_reason="No registered evidence snapshot is available for a deployability decision.",
         )
-    if _evidence_is_deployable(proof):
+    if _evidence_is_deployable(proof) and bool(qc_cloud_backtest_id or proof.qc_cloud_backtest_id):
         return StrategyBehavioralEquivalence(
             verdict="accepted_for_deploy",
             detail="Human validation accepted the current engine evidence for deployment.",
-            tolerance="manifest_reconciliation_passed",
-            tolerance_reason=(
-                "Registered reconciliation status and diagnostics verdict are passed; "
-                "the manifest settings-file hash also matches the current source."
-            ),
+                tolerance="manifest_reconciliation_passed",
+                tolerance_reason=(
+                    "Registered reconciliation status and diagnostics verdict are passed; "
+                    "the manifest LEAN validator hash and deploy binding hash also match "
+                    "the current source."
+                ),
             gating_divergence_counts=_gating_divergence_counts(proof),
         )
+    missing_id_reason = (
+        " A QC Cloud backtest ID is also required."
+        if not (qc_cloud_backtest_id or proof.qc_cloud_backtest_id)
+        else ""
+    )
     return StrategyBehavioralEquivalence(
         verdict="evidence_only",
         detail="Human validation recorded, but engine evidence is not deployable.",
         tolerance="manifest_reconciliation_not_accepted",
-        tolerance_reason=" ".join(_validation_failure_notes(proof)),
+        tolerance_reason=(" ".join(_validation_failure_notes(proof)) + missing_id_reason).strip(),
         gating_divergence_counts=_gating_divergence_counts(proof),
     )
 
@@ -474,10 +501,14 @@ def _entry_by_strategy(
 
 def _evidence_seed_from_raw(raw: dict[str, Any], *, repo_root: Path) -> StrategyEvidenceSeed:
     diagnostics = raw.get("diagnostics") or {}
+    validator_code_ref = str(raw.get("validator_code_ref") or raw["settings_file_ref"])
+    validator_code_sha256 = str(raw.get("validator_code_sha256") or raw["settings_file_sha256"])
     settings_file_ref = str(raw["settings_file_ref"])
     settings_file_sha256 = str(raw["settings_file_sha256"])
     return StrategyEvidenceSeed(
         strategy_key=str(raw["strategy_key"]),
+        validator_code_ref=validator_code_ref,
+        validator_code_sha256=validator_code_sha256,
         settings_file_ref=settings_file_ref,
         settings_file_sha256=settings_file_sha256,
         qc_cloud_backtest_id=str(raw["qc_cloud_backtest_id"]),
@@ -495,7 +526,7 @@ def _evidence_seed_from_raw(raw: dict[str, Any], *, repo_root: Path) -> Strategy
             repo_root,
             settings_file_ref,
             settings_file_sha256,
-        ),
+        ) and _ref_matches_sha256(repo_root, validator_code_ref, validator_code_sha256),
         notes=list(diagnostics.get("notes") or []),
     )
 
@@ -515,7 +546,7 @@ def _validation_failure_notes(proof: StrategyEvidenceSeed) -> list[str]:
     if proof.verdict != "passed":
         notes.append(f"Diagnostics verdict is {proof.verdict}; deployability requires passed.")
     if not proof.settings_file_verified:
-        notes.append("Settings file hash no longer matches the validation manifest.")
+        notes.append("Validator/deploy binding hash no longer matches the validation manifest.")
     return notes
 
 

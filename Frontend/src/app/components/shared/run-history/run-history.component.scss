@@ -7,6 +7,7 @@
 
 .run-history {
   width: 100%;
+  min-width: 920px;
   border-collapse: collapse;
   font-size: var(--fs-sm);
 
@@ -37,6 +38,18 @@
 
   .negative {
     color: var(--bear);
+  }
+}
+
+.run-history-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 }
 

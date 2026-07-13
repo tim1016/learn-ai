@@ -42,6 +42,7 @@ async def test_strategy_validation_catalog_and_detail_expose_manifest(tmp_path) 
     assert detail["strategy_key"] == "deployment_validation"
     assert detail["qc_cloud_backtest_id"] == "d2fe45a7142e88575f6fbd75229f8681"
     assert detail["validation_case_symbol"] == "SPY"
+    assert detail["validator_code_ref"].endswith("lean_sidecar/trusted_samples/deployment_validation.py")
     assert detail["settings_file_ref"].endswith("deployment_validation.spec.json")
     assert detail["audit_copy_ref"] == "references/qc-shadow/DeploymentValidationAlgorithm.py"
     assert detail["diagnostics"]["trades_matched"] == 56

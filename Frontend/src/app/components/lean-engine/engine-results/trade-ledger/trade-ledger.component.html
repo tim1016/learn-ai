@@ -1,0 +1,29 @@
+<section class="ledger" aria-labelledby="trade-ledger-title">
+  <header>
+    <div><p>Execution audit</p><h2 id="trade-ledger-title">Trade history</h2></div>
+    <div class="counts"><span>All {{ trades().length }}</span><span>{{ winners() }} winners</span><span>{{ losses() }} losses</span></div>
+  </header>
+  @if (trades().length > 0) {
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Entry</th><th>Exit</th><th>Entry → exit</th><th>Quantity</th><th>P&amp;L / unit</th><th>Net return</th><th>Signal</th></tr></thead>
+        <tbody>
+          @for (trade of visibleTrades(); track trade.trade_number) {
+            <tr [class.loss]="trade.result === 'LOSS'">
+              <td class="mono">{{ trade.trade_number }}</td>
+              <td><app-timestamp-display [value]="trade.entry_time" mode="local" /></td>
+              <td><app-timestamp-display [value]="trade.exit_time" mode="local" /></td>
+              <td class="mono">{{ formatNumber(trade.entry_price) }} → {{ formatNumber(trade.exit_price) }}</td>
+              <td class="mono">{{ trade.quantity ?? '—' }}</td>
+              <td class="mono pnl" [class.negative]="trade.pnl_pts < 0">{{ trade.pnl_pts > 0 ? '+' : '' }}{{ formatNumber(trade.pnl_pts, 4) }}</td>
+              <td class="mono pnl" [class.negative]="trade.pnl_pct < 0">{{ formatPercent(trade.pnl_pct) }}</td>
+              <td class="signal">{{ trade.signal_reason || '—' }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+    <footer><span>Showing {{ visibleTrades().length }} of {{ trades().length }} closed trades · viewer-local time</span><button type="button" (click)="toggleExpanded()">{{ expanded() ? 'Show recent trades' : 'Open complete trade ledger' }}</button></footer>
+  } @else { <p class="empty-state">This run did not close any trades.</p> }
+</section>
+
