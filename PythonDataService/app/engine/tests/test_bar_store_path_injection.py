@@ -25,6 +25,7 @@ from app.engine.data.path_safety import ensure_within_root
 from app.lean_sidecar.workspace import SymbolValidationError
 
 TRADING_DATE = date(2025, 1, 6)
+PATH_UNSAFE_SYMBOLS = ("../evil", "a/b", r"a\b", "..", "AB/../CD", "\0")
 
 
 def test_ensure_within_root_returns_contained_path(tmp_path: Path):
@@ -49,19 +50,19 @@ def test_ensure_within_root_rejects_symlink_escape(tmp_path: Path):
         ensure_within_root(root, root / "link" / "escape.zip")
 
 
-@pytest.mark.parametrize("bad_symbol", ["../evil", "a/b", "..", "AB/../CD"])
+@pytest.mark.parametrize("bad_symbol", PATH_UNSAFE_SYMBOLS)
 def test_minute_writer_rejects_path_unsafe_symbol(tmp_path: Path, bad_symbol: str):
     with pytest.raises(SymbolValidationError):
         write_lean_day_zip(tmp_path, bad_symbol, TRADING_DATE, [])
 
 
-@pytest.mark.parametrize("bad_symbol", ["../evil", "a/b", "..", "AB/../CD"])
+@pytest.mark.parametrize("bad_symbol", PATH_UNSAFE_SYMBOLS)
 def test_quote_writer_rejects_path_unsafe_symbol(tmp_path: Path, bad_symbol: str):
     with pytest.raises(SymbolValidationError):
         write_lean_quote_day_zip(tmp_path, bad_symbol, TRADING_DATE, [])
 
 
-@pytest.mark.parametrize("bad_symbol", ["../evil", "a/b", "..", "AB/../CD"])
+@pytest.mark.parametrize("bad_symbol", PATH_UNSAFE_SYMBOLS)
 def test_daily_writer_rejects_path_unsafe_symbol(tmp_path: Path, bad_symbol: str):
     with pytest.raises(SymbolValidationError):
         write_lean_daily_zip(tmp_path, bad_symbol, [])

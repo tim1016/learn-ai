@@ -76,14 +76,13 @@ def _atomic_write_bytes(path: Path, data: bytes, *, trusted_root: Path) -> None:
     ``os.replace`` is atomic on POSIX, so a concurrent reader of the
     shared bar store either sees the previous complete zip or the new
     complete zip — never a torn write. ``trusted_root`` confines the
-    operation to a service-owned directory; the inline ``startswith``
-    check is the sanitizer CodeQL recognizes (``ensure_within_root``
-    alone is not tracked through function-call boundaries).
+    operation to a service-owned directory and the repeated containment
+    check protects this final filesystem boundary from traversal and
+    symlink escapes.
     """
-    root_real = os.path.realpath(os.fspath(trusted_root))
+    root_real = os.path.realpath(os.fspath(trusted_root)).rstrip(os.sep) + os.sep
     candidate = os.path.realpath(os.fspath(path))
-    root_prefix = root_real.rstrip(os.sep) + os.sep
-    if candidate != root_real and not candidate.startswith(root_prefix):
+    if not candidate.startswith(root_real):
         raise ValueError(f"path {candidate!r} escapes root {root_real!r}")
     safe = Path(candidate)
     safe.parent.mkdir(parents=True, exist_ok=True)

@@ -18,6 +18,8 @@ function makeTrade(overrides: Partial<BacktestRunDetailTrade> = {}): BacktestRun
     exitPrice: 505,
     quantity: 10,
     pnL: 48,
+    pnlPts: 5,
+    pnlPct: 0.01,
     signalReason: "crossover",
     isSyntheticExit: false,
     ...overrides,
@@ -283,15 +285,15 @@ describe("RunReportComponent", () => {
 
 // ─────────────────────────────────────────────────────────────────────────
 // Persisted-trade adapter — regression coverage moved from the deleted
-// lean-engine mapStudyTradeToEngineTrade helper. pnl_pct must be derived
-// as pnl_pts / entryPrice (the engine's convention); the .NET
-// BacktestTrade entity does not persist a percent column.
+// lean-engine mapStudyTradeToEngineTrade helper. Numerical fields are
+// passed through from the persisted run contract; the UI must not
+// independently recompute P&L.
 // ─────────────────────────────────────────────────────────────────────────
 describe("toEngineTrade", () => {
-  it("derives pnl_pct from price delta over entry price", () => {
-    const trade = toEngineTrade(makeTrade({ entryPrice: 500, exitPrice: 505 }), 0);
-    expect(trade.pnl_pts).toBe(5);
-    expect(trade.pnl_pct).toBeCloseTo(0.01, 10);
+  it("passes through persisted pnl points and percent", () => {
+    const trade = toEngineTrade(makeTrade({ pnlPts: 7, pnlPct: 0.02 }), 0);
+    expect(trade.pnl_pts).toBe(7);
+    expect(trade.pnl_pct).toBe(0.02);
   });
 
   it("classifies WIN/LOSS from the persisted dollar PnL, not the price delta", () => {
@@ -300,8 +302,8 @@ describe("toEngineTrade", () => {
     expect(trade.result).toBe("LOSS");
   });
 
-  it("falls back to 0 pct when entry price is zero to avoid NaN/Infinity", () => {
-    const trade = toEngineTrade(makeTrade({ entryPrice: 0, exitPrice: 5 }), 0);
+  it("passes through a persisted zero percent", () => {
+    const trade = toEngineTrade(makeTrade({ entryPrice: 0, exitPrice: 5, pnlPct: 0 }), 0);
     expect(trade.pnl_pct).toBe(0);
   });
 
