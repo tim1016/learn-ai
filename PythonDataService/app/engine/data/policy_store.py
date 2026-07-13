@@ -45,6 +45,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Literal
 
+from app.engine.data.path_safety import ensure_within_root
+
 logger = logging.getLogger(__name__)
 
 PROVENANCE_SCHEMA_VERSION = 1
@@ -136,7 +138,7 @@ def symbol_write_lock(policy_root: Path, symbol: str) -> Iterator[None]:
     safe = _safe_symbol(symbol)
     lock_dir = policy_root / "locks"
     lock_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = lock_dir / f"{safe.lower()}.lock"
+    lock_path = ensure_within_root(policy_root, lock_dir / f"{safe.lower()}.lock")
     with open(lock_path, "w", encoding="ascii") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
         try:
@@ -146,7 +148,10 @@ def symbol_write_lock(policy_root: Path, symbol: str) -> Iterator[None]:
 
 
 def _provenance_path(policy_root: Path, symbol: str) -> Path:
-    return policy_root / "provenance" / f"{_safe_symbol(symbol).lower()}.json"
+    return ensure_within_root(
+        policy_root,
+        policy_root / "provenance" / f"{_safe_symbol(symbol).lower()}.json",
+    )
 
 
 def read_provenance(policy_root: Path, symbol: str) -> dict | None:

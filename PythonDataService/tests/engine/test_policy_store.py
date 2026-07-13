@@ -124,6 +124,25 @@ def test_symbol_write_lock_rejects_path_unsafe_symbol(tmp_path: Path):
         pass
 
 
+def test_read_provenance_rejects_path_unsafe_symbol(tmp_path: Path):
+    with pytest.raises(SymbolValidationError):
+        read_provenance(tmp_path, "../evil")
+
+
+def test_record_fetch_rejects_path_unsafe_symbol(tmp_path: Path):
+    with pytest.raises(SymbolValidationError):
+        record_fetch(
+            tmp_path,
+            "../evil",
+            source="polygon",
+            adjusted=False,
+            resolution="minute",
+            from_date="2025-01-06",
+            to_date="2025-01-06",
+            fetched_at_ms=FETCHED_AT_MS,
+        )
+
+
 def test_symbol_write_lock_serializes_writers(tmp_path: Path):
     """Two threads contending for the same symbol never overlap."""
     active = 0

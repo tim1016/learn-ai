@@ -35,10 +35,24 @@ from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+from app.engine.data.path_safety import ensure_within_root
 from app.engine.data.trade_bar import TradeBar
 
 # LEAN's price scale factor: prices on disk are multiplied by 10000.
 PRICE_SCALE = Decimal(10000)
+
+
+def _safe_symbol(symbol: str) -> str:
+    """Validate a ticker before it flows into a filesystem path.
+
+    Lazy import: the canonical validator lives with the sidecar workspace
+    code; the engine layer reuses it rather than duplicating the ticker
+    alphabet (guiding-philosophy #5). Callers such as ``polygon_export`` do
+    not pre-validate, so the writers guard the symbol here.
+    """
+    from app.lean_sidecar.workspace import validate_symbol
+
+    return validate_symbol(symbol)
 
 # Phase 5f determinism gate: every staged zip must hash identically
 # across re-runs with the same inputs. ``zipfile.ZipFile.writestr``
@@ -453,10 +467,13 @@ def write_lean_daily_zip(
     Returns:
         Path to the written zip file.
     """
-    out_dir = Path(output_root) / "equity" / "usa" / "daily"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = out_dir / f"{symbol.lower()}.zip"
-    csv_name = f"{symbol.lower()}.csv"
+    safe = _safe_symbol(symbol).lower()
+    zip_path = ensure_within_root(
+        output_root,
+        Path(output_root) / "equity" / "usa" / "daily" / f"{safe}.zip",
+    )
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+    csv_name = f"{safe}.csv"
 
     # Merge with any existing file so partial-range fetches don't clobber
     # previously cached history.
@@ -515,10 +532,13 @@ def write_lean_quote_day_zip(
     Row format (per LEAN docs):
         ms,bid_o,bid_h,bid_l,bid_c,bid_size,ask_o,ask_h,ask_l,ask_c,ask_size
     """
-    out_dir = Path(output_root) / "equity" / "usa" / "minute" / symbol.lower()
-    out_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = out_dir / f"{trading_date.strftime('%Y%m%d')}_quote.zip"
-    csv_name = f"{trading_date.strftime('%Y%m%d')}_{symbol.lower()}_minute_quote.csv"
+    safe = _safe_symbol(symbol).lower()
+    zip_path = ensure_within_root(
+        output_root,
+        Path(output_root) / "equity" / "usa" / "minute" / safe / f"{trading_date.strftime('%Y%m%d')}_quote.zip",
+    )
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+    csv_name = f"{trading_date.strftime('%Y%m%d')}_{safe}_minute_quote.csv"
     midnight = datetime(
         trading_date.year,
         trading_date.month,
@@ -561,10 +581,13 @@ def write_lean_day_zip(
     Returns:
         Path to the written zip file.
     """
-    out_dir = Path(output_root) / "equity" / "usa" / "minute" / symbol.lower()
-    out_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = out_dir / f"{trading_date.strftime('%Y%m%d')}_trade.zip"
-    csv_name = f"{trading_date.strftime('%Y%m%d')}_{symbol.lower()}_minute_trade.csv"
+    safe = _safe_symbol(symbol).lower()
+    zip_path = ensure_within_root(
+        output_root,
+        Path(output_root) / "equity" / "usa" / "minute" / safe / f"{trading_date.strftime('%Y%m%d')}_trade.zip",
+    )
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+    csv_name = f"{trading_date.strftime('%Y%m%d')}_{safe}_minute_trade.csv"
     midnight = datetime(
         trading_date.year,
         trading_date.month,
