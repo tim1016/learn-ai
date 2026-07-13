@@ -185,6 +185,11 @@ class TrustedRunRequest:
     # caller supplies their own ``algorithm_source`` — operator-pasted
     # source picks its own brokerage via SetBrokerageModel.
     template: TrustedTemplate = "trusted_default"
+    # Engine Lab parity — set when this run is the LEAN validating
+    # companion of a Python engine run. Persisted onto the
+    # StrategyExecution row so the .NET persist step can compute the
+    # frozen ParityVerdict for the group.
+    parity_group_id: str | None = None
 
     @property
     def symbol(self) -> str:
@@ -809,6 +814,7 @@ async def run_trusted_sample(
             is_reconciliation_grade=not any(response.lean_errors.values()),
             error_counts={category: len(errors) for category, errors in response.lean_errors.items() if errors},
         ),
+        parity_group_id=request.parity_group_id,
     )
     _emit_phase("persisting")
     _emit_log("Persisting run to history")

@@ -523,6 +523,7 @@ def build_persist_payload(
     end_date_ms: int,
     manifest: RunManifest | Mapping[str, Any] | None = None,
     cleanliness: RunVerdictCleanliness | Mapping[str, Any] | None = None,
+    parity_group_id: str | None = None,
 ) -> dict[str, Any]:
     """Build a JSON-serializable payload to POST to the .NET persist endpoint.
 
@@ -664,6 +665,10 @@ def build_persist_payload(
             )
         ),
         "validation_analytics_json": _validation_analytics_json(paired_trades, normalized.equity_curve),
+        # Engine Lab parity — only successful runs carry the group id.
+        # Failed runs never trigger verdict computation at persist time;
+        # the job worker marks the group run_failed instead.
+        "parity_group_id": parity_group_id,
     } | _run_verdict_fields(
         total_trades=agg.total_trades,
         total_pnl=agg.total_pnl,

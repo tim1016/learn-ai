@@ -10,8 +10,12 @@ public class ParityVerdict
     public int LeftExecutionId { get; set; }
     public StrategyExecution LeftExecution { get; set; } = null!;
 
-    public int RightExecutionId { get; set; }
-    public StrategyExecution RightExecution { get; set; } = null!;
+    /// <summary>
+    /// The LEAN companion run. Null while the verdict is pending (the
+    /// companion hasn't landed) and on unavailable/failed dispositions.
+    /// </summary>
+    public int? RightExecutionId { get; set; }
+    public StrategyExecution? RightExecution { get; set; }
 
     [MaxLength(64)]
     [Column(TypeName = "varchar(64)")]

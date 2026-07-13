@@ -63,6 +63,7 @@ from app.services.engine_validation_analytics import (
     build_validation_analytics_envelope,
     compute_engine_validation_analytics,
 )
+from app.services.parity_companion import dispatch_parity_companion, new_parity_group_id
 from app.services.run_verdict_service import compute_run_verdict
 from app.services.strategies.common import TradeRecord
 from app.services.strategies.lean_statistics import compute_lean_statistics
@@ -1179,6 +1180,10 @@ def execute_engine_backtest(
     # logs the failure but does not fail the backtest response.
     on_phase("persisting")
     on_log("Persisting run to history")
+    # Minted BEFORE persisting so the row itself carries the group id —
+    # the .NET persist step joins the LEAN companion back to this run
+    # through it when computing the frozen ParityVerdict.
+    parity_group_id = new_parity_group_id()
     response.study_id = _save_study_sync(
         response=response,
         symbol=strategy.ctx.symbols[0] if strategy.ctx.symbols else "SPY",
@@ -1188,9 +1193,22 @@ def execute_engine_backtest(
         params_json=json.dumps(request.params) if request.params else "{}",
         duration_ms=int((time.time() - _run_start) * 1000),
         commission_per_order=float(request.commission_per_order),
+        parity_group_id=parity_group_id,
     )
 
     on_log(f"Saved study {response.study_id}")
+
+    if response.study_id is not None:
+        # Every persisted run gets a parity disposition: an async LEAN
+        # validating companion when eligible, an honest "unavailable"
+        # verdict row otherwise. Best-effort — never fails the run.
+        on_log("Recording parity disposition")
+        dispatch_parity_companion(
+            registration=registration,
+            request=request,
+            parity_group_id=parity_group_id,
+            left_execution_id=response.study_id,
+        )
 
     return response
 
@@ -1257,6 +1275,7 @@ def _save_study_sync(
     params_json: str,
     duration_ms: int,
     commission_per_order: float = 0.0,
+    parity_group_id: str | None = None,
 ) -> int | None:
     """POST the backtest result to the .NET backend for persistence.
 
@@ -1316,6 +1335,7 @@ def _save_study_sync(
         # Python engine doesn't model brokerage — record the LEAN-side
         # convention so the compare-view's soft-match treats it correctly.
         "brokeragePolicy": "algorithm_default",
+        "parityGroupId": parity_group_id,
         "runVerdictJson": response.run_verdict.model_dump_json() if response.run_verdict else None,
         "verdictVersion": response.run_verdict.verdict_version if response.run_verdict else None,
         "verdictGrade": response.run_verdict.grade if response.run_verdict else None,

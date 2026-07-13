@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Backend.Models.Comparison;
 using Backend.Services.Interfaces;
 
@@ -22,6 +23,11 @@ public class ComparisonService : IComparisonService
     private static readonly JsonSerializerOptions _jsonOpts = new()
     {
         PropertyNameCaseInsensitive = true,
+        // The Python compare endpoint emits Decimal values as strings so
+        // they round-trip without float drift (see reconcile_trade_lists);
+        // divergence records carry left/right prices and quantities in
+        // that form.
+        NumberHandling = JsonNumberHandling.AllowReadingFromString,
     };
 
     public ComparisonService(HttpClient http, ILogger<ComparisonService> logger)

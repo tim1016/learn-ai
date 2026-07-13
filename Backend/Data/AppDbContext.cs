@@ -214,9 +214,12 @@ public class AppDbContext : DbContext
             entity.HasOne(e => e.RightExecution)
                   .WithMany()
                   .HasForeignKey(e => e.RightExecutionId)
+                  .IsRequired(false)
                   .OnDelete(DeleteBehavior.Cascade);
             entity.HasIndex(e => new { e.LeftExecutionId, e.RightExecutionId }).IsUnique();
-            entity.HasIndex(e => e.ParityGroupId);
+            // One verdict row per parity group — the pending row is updated
+            // in place when the companion lands, never duplicated.
+            entity.HasIndex(e => e.ParityGroupId).IsUnique();
         });
 
         // BacktestTrade configuration

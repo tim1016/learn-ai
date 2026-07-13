@@ -284,6 +284,17 @@ class TrustedRunRequestModel(BaseModel):
         ),
     )
 
+    # Engine Lab parity — set when this run is the LEAN validating
+    # companion of a Python engine run. Written onto the persisted
+    # StrategyExecution row; the .NET persist step computes the frozen
+    # ParityVerdict for the group when it lands.
+    parity_group_id: str | None = Field(
+        default=None,
+        max_length=64,
+        pattern=r"^[a-z0-9][a-z0-9_-]{2,63}$",
+        description="Parity group shared with the Python engine run this LEAN run validates.",
+    )
+
     # Legacy top-level fields (one deprecation cycle).
     symbol: str | None = Field(
         default=None,
@@ -585,6 +596,7 @@ async def post_trusted_run(payload: TrustedRunRequestModel) -> TrustedRunRespons
         algorithm_source=payload.algorithm_source,
         template=payload.template,
         data_policy=data_policy,
+        parity_group_id=payload.parity_group_id,
     )
     try:
         result = await run_trusted_sample(request)

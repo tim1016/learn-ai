@@ -167,6 +167,7 @@ builder.Services.ConfigureHttpJsonOptions(opts =>
 builder.Services.AddScoped<IMarketDataService, MarketDataService>();
 builder.Services.AddScoped<IBacktestService, BacktestService>();
 builder.Services.AddScoped<IBacktestRunPersistenceService, BacktestRunPersistenceService>();
+builder.Services.AddScoped<IParityVerdictService, ParityVerdictService>();
 builder.Services.AddScoped<IPositionEngine, PositionEngine>();
 builder.Services.AddScoped<IPortfolioService, PortfolioService>();
 builder.Services.AddScoped<IPortfolioValuationService, PortfolioValuationService>();
@@ -233,6 +234,7 @@ app.UseCors();
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 app.MapStudiesEndpoints();
 app.MapBacktestRunsEndpoints();
+app.MapParityVerdictsEndpoints();
 app.MapCompareEndpoints();
 app.MapJobsEndpoints();
 app.MapGraphQL();

@@ -9,11 +9,16 @@ namespace Backend.Services.Implementation;
 public class BacktestRunPersistenceService : IBacktestRunPersistenceService
 {
     private readonly AppDbContext _db;
+    private readonly IParityVerdictService _parityVerdicts;
     private readonly ILogger<BacktestRunPersistenceService> _logger;
 
-    public BacktestRunPersistenceService(AppDbContext db, ILogger<BacktestRunPersistenceService> logger)
+    public BacktestRunPersistenceService(
+        AppDbContext db,
+        IParityVerdictService parityVerdicts,
+        ILogger<BacktestRunPersistenceService> logger)
     {
         _db = db;
+        _parityVerdicts = parityVerdicts;
         _logger = logger;
     }
 
@@ -64,6 +69,10 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
                 _logger.LogInformation(
                     "[STEP 1] PersistLean idempotent: LeanRunId={LeanRunId} already exists as StrategyExecutionId={Id}",
                     payload.LeanRunId, existing.Value);
+                // A retried persist still gets a shot at freezing the parity
+                // verdict — the computation is conditional (pending-only), so
+                // this can only repair a stalled group, never overwrite.
+                await TryComputeParityVerdictAsync(payload, existing.Value, ct);
                 return existing.Value;
             }
         }
@@ -199,7 +208,33 @@ public class BacktestRunPersistenceService : IBacktestRunPersistenceService
         }
 
         await tx.CommitAsync(ct);
+
+        // Engine Lab parity — a LEAN companion landing with a group id
+        // freezes the group's verdict. Computed AFTER the commit and
+        // best-effort: the run row must persist even when the compare
+        // hop fails (the verdict stays pending; the report shows the
+        // stall honestly).
+        await TryComputeParityVerdictAsync(payload, execution.Id, ct);
+
         return execution.Id;
+    }
+
+    private async Task TryComputeParityVerdictAsync(PersistLeanRunPayload payload, int executionId, CancellationToken ct)
+    {
+        if (payload.Source != "lean-sidecar" || string.IsNullOrWhiteSpace(payload.ParityGroupId))
+            return;
+
+        try
+        {
+            await _parityVerdicts.ComputeForLeanRunAsync(executionId, payload.ParityGroupId, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(
+                ex,
+                "[PARITY] Verdict computation failed for group {Group} (right={RightId}); verdict left pending",
+                payload.ParityGroupId, executionId);
+        }
     }
 
     private static bool IsUniqueViolation(DbUpdateException ex)

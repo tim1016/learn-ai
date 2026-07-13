@@ -12,6 +12,7 @@ import {
   BacktestRunDetailQueryResult,
   BacktestRunDetailTrade,
 } from "../../../graphql/backtest-runs.query";
+import { ReceiptLabelPipe } from "../../../shared/pipes/receipt-label.pipe";
 import { TimestampDisplayComponent, TimestampDisplayPipe } from "../../../shared/timestamp";
 import type {
   ChartBar,
@@ -66,7 +67,7 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 @Component({
   selector: "app-engine-run-report",
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [EngineResultsComponent, TimestampDisplayComponent, TimestampDisplayPipe],
+  imports: [EngineResultsComponent, ReceiptLabelPipe, TimestampDisplayComponent, TimestampDisplayPipe],
   templateUrl: "./run-report.component.html",
   styleUrls: ["./run-report.component.scss"],
 })
@@ -78,19 +79,26 @@ export class RunReportComponent {
 
   private readonly runResource = rxResource<BacktestRunDetail | null, number>({
     params: () => this.runId(),
-    stream: ({ params }) =>
-      this.apollo
-        .watchQuery<BacktestRunDetailQueryResult>({
-          query: BACKTEST_RUN_DETAIL_QUERY,
-          variables: { id: params },
-          fetchPolicy: "cache-and-network",
-        })
-        .valueChanges.pipe(
-          map(
-            (result): BacktestRunDetail | null =>
-              (result.data?.backtestRun as BacktestRunDetail | null | undefined) ?? null,
-          ),
-        ),
+    stream: ({ params }) => {
+      // Poll while a parity verdict is pending (the async LEAN companion
+      // is still running); stop the moment every verdict is terminal so
+      // settled reports cost nothing.
+      const ref = this.apollo.watchQuery<BacktestRunDetailQueryResult>({
+        query: BACKTEST_RUN_DETAIL_QUERY,
+        variables: { id: params },
+        fetchPolicy: "cache-and-network",
+        pollInterval: 5000,
+      });
+      return ref.valueChanges.pipe(
+        map((result): BacktestRunDetail | null => {
+          const run = (result.data?.backtestRun as BacktestRunDetail | null | undefined) ?? null;
+          if (!run || !run.parityVerdicts.some((v) => v.status === "pending")) {
+            ref.stopPolling();
+          }
+          return run;
+        }),
+      );
+    },
   });
 
   readonly run = computed(() => this.runResource.value() ?? null);
@@ -228,12 +236,69 @@ export class RunReportComponent {
     return null;
   });
 
+  /** Latest parity disposition for this run (a run appears on the left
+   *  side as the Python original or the right side as the LEAN
+   *  companion — both render the same frozen verdict). */
+  readonly parity = computed<ParityView | null>(() => {
+    const verdicts = this.run()?.parityVerdicts ?? [];
+    if (verdicts.length === 0) return null;
+    const latest = [...verdicts].sort((a, b) => b.createdAt - a.createdAt)[0];
+    return toParityView(latest);
+  });
+
   readonly resolutionLabel = computed<string>(() => {
     const bars = this.run()?.dataPolicy?.strategy_bars;
     if (!bars) return "";
     const unit = bars.timespan === "minute" ? "m" : bars.timespan === "hour" ? "h" : "d";
     return `${bars.multiplier}${unit}`;
   });
+}
+
+/** Template view-model for the parity panel. */
+export interface ParityView {
+  status: string;
+  createdAt: number;
+  reason: string | null;
+  countsByCategory: { category: string; count: number }[];
+  divergences: ParityDivergenceView[];
+}
+
+export interface ParityDivergenceView {
+  category: string;
+  trade_number: number | null;
+  ms_utc: number | null;
+  message: string;
+}
+
+const UNAVAILABLE_REASON_COPY: Record<string, string> = {
+  no_lean_counterpart: "No LEAN counterpart is registered for this strategy.",
+  adjustment_unsupported: "LEAN validates raw bars only — run with adjusted=false to get a companion.",
+  resolution_unsupported: "LEAN companions run on minute resolution only.",
+  window_unsupported: "The run has no explicit date window for the companion to reproduce.",
+};
+
+function toParityView(verdict: { status: string; verdictJson: string; createdAt: number }): ParityView {
+  let parsed: {
+    reason?: string | null;
+    counts_by_category?: Record<string, number>;
+    divergences?: ParityDivergenceView[];
+  } = {};
+  try {
+    parsed = JSON.parse(verdict.verdictJson) as typeof parsed;
+  } catch {
+    // Unreadable verdict JSON degrades to status-only display.
+  }
+  const rawReason = parsed.reason ?? null;
+  return {
+    status: verdict.status,
+    createdAt: verdict.createdAt,
+    reason: rawReason ? (UNAVAILABLE_REASON_COPY[rawReason] ?? rawReason) : null,
+    countsByCategory: Object.entries(parsed.counts_by_category ?? {}).map(([category, count]) => ({
+      category,
+      count,
+    })),
+    divergences: parsed.divergences ?? [],
+  };
 }
 
 export function toEngineTrade(trade: BacktestRunDetailTrade, index: number): EngineTrade {

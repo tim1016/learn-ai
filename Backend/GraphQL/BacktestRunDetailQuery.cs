@@ -428,7 +428,8 @@ public sealed record BacktestRunParityVerdictType
 {
     public int Id { get; init; }
     public int LeftExecutionId { get; init; }
-    public int RightExecutionId { get; init; }
+    /// <summary>Null while pending / on unavailable and failed dispositions.</summary>
+    public int? RightExecutionId { get; init; }
     public string? ParityGroupId { get; init; }
     public int VerdictVersion { get; init; }
     public string Status { get; init; } = "";

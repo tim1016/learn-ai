@@ -104,7 +104,10 @@ async function renderReport(run: BacktestRunDetail | null): Promise<{
   httpMock: HttpTestingController;
 }> {
   const apolloMock = {
-    watchQuery: vi.fn(() => ({ valueChanges: of({ data: { backtestRun: run } }) })),
+    watchQuery: vi.fn(() => ({
+      valueChanges: of({ data: { backtestRun: run } }),
+      stopPolling: vi.fn(),
+    })),
   };
   TestBed.resetTestingModule();
   await TestBed.configureTestingModule({
@@ -219,6 +222,62 @@ describe("RunReportComponent", () => {
     const { fixture } = await renderReport(null);
     const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
     expect(text).toContain("Run not found.");
+  });
+
+  async function renderWithParity(verdict: {
+    status: string;
+    verdictJson: string;
+  }): Promise<ComponentFixture<RunReportComponent>> {
+    const { fixture, httpMock } = await renderReport(
+      makeRun({ parityVerdicts: [{ id: 1, createdAt: Date.UTC(2026, 0, 6, 21, 5), ...verdict }] }),
+    );
+    httpMock.expectOne((req) => req.url.includes("/api/engine/bars")).flush({
+      policy_key: "polygon-adjusted",
+      symbol: "SPY",
+      count: 0,
+      bars: [],
+      coverage: { expected_days: 2, available_days: 2, is_complete: true, missing_days: [] },
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    return fixture;
+  }
+
+  it("shows the pending parity state while the LEAN companion runs", async () => {
+    const fixture = await renderWithParity({
+      status: "pending",
+      verdictJson: JSON.stringify({ schema_version: 1, status: "pending", reason: null }),
+    });
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    expect(text).toContain("LEAN validating companion is running");
+  });
+
+  it("shows divergence categories when the engines disagree", async () => {
+    const fixture = await renderWithParity({
+      status: "diverged",
+      verdictJson: JSON.stringify({
+        schema_version: 1,
+        status: "diverged",
+        counts_by_category: { FILL_PRICE_DRIFT: 2 },
+        divergences: [
+          { category: "FILL_PRICE_DRIFT", trade_number: 1, ms_utc: 1, message: "fill differs by $0.03" },
+          { category: "FILL_PRICE_DRIFT", trade_number: 2, ms_utc: 2, message: "fill differs by $0.02" },
+        ],
+      }),
+    });
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    expect(text).toContain("The engines disagree");
+    expect(text).toContain("2");
+    expect(text).toContain("Show 2 divergence details");
+  });
+
+  it("explains honest unavailability with trader copy", async () => {
+    const fixture = await renderWithParity({
+      status: "unavailable",
+      verdictJson: JSON.stringify({ schema_version: 1, status: "unavailable", reason: "no_lean_counterpart" }),
+    });
+    const text = (fixture.nativeElement as HTMLElement).textContent ?? "";
+    expect(text).toContain("No LEAN counterpart is registered for this strategy.");
   });
 });
 
