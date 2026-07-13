@@ -59,6 +59,44 @@
   font-family: var(--font-mono);
 }
 
+.startup-automation {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+
+  i {
+    flex: 0 0 auto;
+    margin-top: 0.1rem;
+    color: var(--accent);
+  }
+
+  div {
+    display: grid;
+    gap: 0.15rem;
+  }
+
+  span {
+    color: var(--text-secondary);
+  }
+}
+
+.startup-automation[data-phase='blocked'] {
+  border-color: var(--bear);
+  background: var(--bear-soft);
+}
+
+.startup-automation[data-phase='ready'] {
+  border-color: var(--bull);
+  background: var(--bull-soft);
+}
+
 .operator-truth-layout {
   display: grid;
   grid-template-columns: minmax(22rem, 28rem) minmax(0, 1fr);

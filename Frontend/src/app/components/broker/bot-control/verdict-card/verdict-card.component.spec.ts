@@ -129,7 +129,7 @@ describe('VerdictCardComponent', () => {
     );
   });
 
-  it('renders the Sick bay condition with its Account Monitor cure', () => {
+  it('renders the Sick bay condition with its in-place reconcile cure', () => {
     const fixture = renderCard(
       statusWith({
         display_status: 'Sick bay',
@@ -138,8 +138,8 @@ describe('VerdictCardComponent', () => {
       }),
     );
     const el = fixture.nativeElement as HTMLElement;
-    const accountMonitorRequested = vi.fn();
-    fixture.componentInstance.accountMonitorRequested.subscribe(accountMonitorRequested);
+    const reconcileRequested = vi.fn();
+    fixture.componentInstance.reconcileRequested.subscribe(reconcileRequested);
 
     expect(el.textContent).toContain('Account evidence stale');
     expect(el.textContent).toContain(
@@ -151,7 +151,7 @@ describe('VerdictCardComponent', () => {
 
     button?.click();
 
-    expect(accountMonitorRequested).toHaveBeenCalledTimes(1);
+    expect(reconcileRequested).toHaveBeenCalledTimes(1);
   });
 
   it('opens the why drawer when a self-runbook verb is clicked', () => {

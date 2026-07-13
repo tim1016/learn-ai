@@ -11,6 +11,23 @@
     </p>
   }
 
+  @if (startupAutomation(); as automation) {
+    @if (automation.phase !== 'idle') {
+      <section
+        class="startup-automation"
+        [attr.data-phase]="automation.phase"
+        aria-label="Startup automation"
+        role="status"
+      >
+        <i class="pi pi-sparkles" aria-hidden="true"></i>
+        <div>
+          <strong>{{ automation.label }}</strong>
+          <span>{{ automation.detail }}</span>
+        </div>
+      </section>
+    }
+  }
+
   @if (readOnly() && status()) {
     <section class="stale-banner" aria-label="Read-only source freshness">
       <strong>Read-only while the control-plane stream reconnects.</strong>
@@ -61,6 +78,7 @@
             (crashRecoveryRequested)="dispatchCrashRecoveryOverride()"
             (settingsRequested)="onSettingsRequested()"
             (accountMonitorRequested)="openAccountMonitor()"
+            (reconcileRequested)="dispatchReconcileNow()"
             (blockerMoveRequested)="invokeBlockerMove($event)"
           />
         </div>

@@ -51,6 +51,7 @@ export class VerdictCardComponent {
   readonly crashRecoveryRequested = output();
   readonly settingsRequested = output();
   readonly accountMonitorRequested = output();
+  readonly reconcileRequested = output();
   readonly blockerMoveRequested = output<OperatorMove>();
 
   readonly whyOpen = signal(false);
@@ -154,8 +155,13 @@ export class VerdictCardComponent {
       this.accountMonitorRequested.emit();
       return;
     }
-    if (lifecycleConditionCureTarget(condition) === 'retireReplace') {
+    const target = lifecycleConditionCureTarget(condition);
+    if (target === 'retireReplace') {
       this.lifecycleAction.emit('retire_replace');
+      return;
+    }
+    if (target === 'reconcile') {
+      this.reconcileRequested.emit();
       return;
     }
     this.accountMonitorRequested.emit();

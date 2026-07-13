@@ -27,6 +27,7 @@ const harnessObjectTokens = [
 ];
 const mutationMethods = [
   'renewControlPlaneLease',
+  'runRollCall',
   'startHostRunner',
   'endDayNow',
   'setBotLifecycleRoster',

@@ -20,6 +20,7 @@ import type {
   FleetAccountSummary,
   LifecycleTimelineResponse,
   LiveInstanceStatus,
+  BotRollCallResponse,
   SetInstanceDesiredStateResponse,
 } from '../../../api/live-instances.types';
 import type {
@@ -90,6 +91,7 @@ export class FakeLiveRunsService {
   getAccountSummary = vi.fn<LiveRunsService['getAccountSummary']>();
   getLifecycleTimeline = vi.fn<LiveRunsService['getLifecycleTimeline']>();
   renewControlPlaneLease = vi.fn<LiveRunsService['renewControlPlaneLease']>();
+  runRollCall = vi.fn<LiveRunsService['runRollCall']>();
   startHostRunner = vi.fn<LiveRunsService['startHostRunner']>();
   endDayNow = vi.fn<LiveRunsService['endDayNow']>();
   setBotLifecycleRoster = vi.fn<LiveRunsService['setBotLifecycleRoster']>();
@@ -256,6 +258,7 @@ type AsyncMockValue<T> = T | Promise<T>;
 
 interface BotControlMutationResponses {
   renewControlPlaneLease?: HostRunnerHealth;
+  runRollCall?: BotRollCallResponse;
   startHostRunner?: HostRunnerActionResponse;
   endDayNow?: HostRunnerActionResponse;
   botLifecycleMutation?: BotLifecycleMutationResponse;
@@ -340,6 +343,9 @@ function applyMutationResponses(
   if (responses.renewControlPlaneLease) {
     allowRenewControlPlaneLeaseCall(liveRuns, responses.renewControlPlaneLease);
   }
+  if (responses.runRollCall) {
+    liveRuns.runRollCall.mockResolvedValue(responses.runRollCall);
+  }
   if (responses.startHostRunner) {
     allowStartHostRunnerCall(liveRuns, responses.startHostRunner);
   }
@@ -416,6 +422,7 @@ export function makeFailClosedLiveRuns(options: BotControlLiveRunsOptions = {}):
     );
   }
   liveRuns.renewControlPlaneLease.mockRejectedValue(unexpectedMutation('renewControlPlaneLease'));
+  liveRuns.runRollCall.mockRejectedValue(unexpectedMutation('runRollCall'));
   liveRuns.startHostRunner.mockRejectedValue(unexpectedMutation('startHostRunner'));
   liveRuns.endDayNow.mockRejectedValue(unexpectedMutation('endDayNow'));
   liveRuns.setBotLifecycleRoster.mockRejectedValue(unexpectedMutation('setBotLifecycleRoster'));
