@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from collections.abc import Callable
 from datetime import date, datetime
@@ -34,6 +33,14 @@ from app.engine.data.availability import (
     ensure_range,
 )
 from app.engine.data.lean_format import LeanDailyDataReader, LeanMinuteDataReader
+from app.engine.data.policy_store import (
+    policy_key,
+    record_fetch,
+    resolve_data_roots,
+    resolve_policy_root,
+    symbol_write_lock,
+)
+from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import BacktestEngine
 from app.engine.execution.execution_config import ExecutionConfig
 from app.engine.execution.order import FillMode
@@ -49,6 +56,7 @@ from app.models.responses import (
 )
 from app.schemas.engine_validation import EngineValidationAnalyticsResponse
 from app.schemas.run_verdict import RunVerdict
+from app.services.engine_bars_service import read_consolidated_bars
 from app.services.engine_validation_analytics import (
     ValidationEquityPoint,
     ValidationTrade,
@@ -95,49 +103,25 @@ def _reject_hidden_params(reg: StrategyRegistration, params: dict[str, Any]) -> 
         )
 
 
-def _resolve_lean_data_root() -> Path:
-    """Return the LEAN reference Data directory.
-
-    Reads the ``LEAN_DATA_ROOT`` environment variable if set; otherwise
-    falls back to the standard local-development location. This root is
-    expected to be read-only in containerized deployments — any
-    Polygon-sourced data goes into the cache root instead.
-    """
-    configured = os.environ.get("LEAN_DATA_ROOT")
-    if configured:
-        return Path(configured)
-    return Path("/sessions/ecstatic-hopeful-volta/mnt/Lean/Data")
-
-
-def _resolve_lean_cache_root() -> Path:
-    """Return the writable cache root for Polygon-sourced LEAN zips.
-
-    Reads ``LEAN_DATA_CACHE`` if set, otherwise defaults to a sibling
-    ``lean-cache`` directory next to the service. This root is writable
-    and receives any data fetched on demand for symbols that aren't in
-    the read-only reference mount.
-    """
-    configured = os.environ.get("LEAN_DATA_CACHE")
-    if configured:
-        return Path(configured)
-    return Path(__file__).resolve().parents[2] / "lean-cache"
-
-
-def _resolve_lean_data_roots() -> list[Path]:
+def _resolve_lean_data_roots(*, adjusted: bool) -> list[Path]:
     """Return the ordered list of roots the reader should search.
 
-    Reference mount comes first so the bit-exact SPY fixture always wins
-    over anything that may have been materialized into the cache with the
-    same date range.
+    Delegates to the policy-keyed bar store: reference mount first (so
+    the bit-exact SPY fixture always wins), then the policy cache root
+    for the requested adjustment mode. See
+    :mod:`app.engine.data.policy_store` for the layout and the
+    adjusted-vs-raw seam bug this keying fixes.
     """
-    roots: list[Path] = []
-    ref = _resolve_lean_data_root()
-    if ref.exists():
-        roots.append(ref)
-    cache = _resolve_lean_cache_root()
-    cache.mkdir(parents=True, exist_ok=True)
-    roots.append(cache)
-    return roots
+    return resolve_data_roots(source="polygon", adjusted=adjusted)
+
+
+def _policy_adjusted(data_policy: _EngineDataPolicyModel | None) -> bool:
+    """Adjustment mode for root resolution; legacy requests default adjusted.
+
+    Matches the legacy synthesizer's ``adjusted=True`` so pre-DataPolicy
+    callers keep reading the tree their runs have always used.
+    """
+    return data_policy.adjusted if data_policy is not None else True
 
 
 # ---------------------------------------------------------------------------
@@ -627,21 +611,33 @@ def export_polygon_to_lean(request: LeanExportRequest) -> LeanExportResponse:
     # that don't provide a Polygon API key.
     from app.engine.data.polygon_export import export_polygon_range_to_lean
     from app.services.polygon_client import PolygonClientService
+    from app.utils.timestamps import now_ms_utc
 
-    cache_root = _resolve_lean_cache_root()
+    cache_root = resolve_policy_root(source="polygon", adjusted=request.adjusted)
     cache_root.mkdir(parents=True, exist_ok=True)
 
     try:
         polygon = PolygonClientService()
-        files = export_polygon_range_to_lean(
-            polygon=polygon,
-            output_root=cache_root,
-            symbol=request.symbol.upper(),
-            from_date=request.from_date,
-            to_date=request.to_date,
-            adjusted=request.adjusted,
-            resolution=request.resolution,
-        )
+        with symbol_write_lock(cache_root, request.symbol.upper()):
+            files = export_polygon_range_to_lean(
+                polygon=polygon,
+                output_root=cache_root,
+                symbol=request.symbol.upper(),
+                from_date=request.from_date,
+                to_date=request.to_date,
+                adjusted=request.adjusted,
+                resolution=request.resolution,
+            )
+            record_fetch(
+                cache_root,
+                request.symbol.upper(),
+                source="polygon",
+                adjusted=request.adjusted,
+                resolution=request.resolution,
+                from_date=request.from_date,
+                to_date=request.to_date,
+                fetched_at_ms=now_ms_utc(),
+            )
     except Exception as exc:
         logger.exception("[ENGINE] LEAN export failed for %s", request.symbol)
         return LeanExportResponse(
@@ -697,6 +693,10 @@ def get_data_availability(
         "minute",
         description="Resolution to check: 'minute' (per-day zips) or 'daily'",
     ),
+    adjusted: bool = Query(
+        True,
+        description="Adjustment mode — selects the policy-keyed cache subtree",
+    ),
 ) -> AvailabilityResponse:
     """Report how many trading days are already on disk for a symbol.
 
@@ -714,7 +714,7 @@ def get_data_availability(
             detail=f"end ({end}) must not precede start ({start})",
         )
 
-    roots = _resolve_lean_data_roots()
+    roots = _resolve_lean_data_roots(adjusted=adjusted)
     report: AvailabilityReport = check_availability(
         roots=roots,
         symbol=symbol,
@@ -724,6 +724,91 @@ def get_data_availability(
     )
     data = report.to_dict()
     return AvailabilityResponse(**data)
+
+
+# ---------------------------------------------------------------------------
+# Bars-by-policy endpoint (shared bar store → UI charting)
+# ---------------------------------------------------------------------------
+class EngineBarsCoverageResponse(BaseModel):
+    expected_days: int
+    available_days: int
+    is_complete: bool
+    missing_days: list[str] = []
+
+
+class EngineBarsResponse(BaseModel):
+    policy_key: str
+    symbol: str
+    session: str
+    timespan: str
+    multiplier: int
+    count: int
+    # Same wire shape as ``EngineBacktestResponse.chart_bars``:
+    # {t: int64 ms UTC bar start, o, h, l, c, v}.
+    bars: list[dict] = Field(default_factory=list)
+    coverage: EngineBarsCoverageResponse
+
+
+@router.get("/bars", response_model=EngineBarsResponse)
+def get_engine_bars(
+    symbol: str = Query(..., min_length=1, max_length=20),
+    from_date: str = Query(..., description="YYYY-MM-DD (inclusive)"),
+    to_date: str = Query(..., description="YYYY-MM-DD (inclusive)"),
+    adjusted: bool = Query(True, description="Adjustment mode — selects the policy-keyed cache subtree"),
+    session: Literal["regular", "extended"] = Query("regular"),
+    timespan: Literal["minute", "hour", "day"] = Query(
+        "minute",
+        description="Strategy timeframe unit (DataPolicy strategy_bars.timespan)",
+    ),
+    multiplier: int = Query(1, ge=1, description="Strategy timeframe multiplier"),
+) -> EngineBarsResponse:
+    """Serve consolidated bars from the shared bar store for run charting.
+
+    Reads the same roots, the same session filter, and the same
+    consolidator a backtest run used, so the returned bars equal the
+    run's transient ``chart_bars`` for the same DataPolicy + window.
+    Display reads never mutate the cache — missing days surface in
+    ``coverage``, not as a fetch and not as a 500.
+    """
+    from app.lean_sidecar.workspace import SymbolValidationError, validate_symbol
+
+    try:
+        safe_symbol = validate_symbol(symbol)
+    except SymbolValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    start_date = _parse_iso_date(from_date, "from_date")
+    end_date = _parse_iso_date(to_date, "to_date")
+    if end_date < start_date:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"to_date ({to_date}) must not precede from_date ({from_date})",
+        )
+
+    roots = _resolve_lean_data_roots(adjusted=adjusted)
+    result = read_consolidated_bars(
+        roots=roots,
+        symbol=safe_symbol,
+        start=start_date,
+        end=end_date,
+        session=session,
+        timespan=timespan,
+        multiplier=multiplier,
+    )
+    return EngineBarsResponse(
+        policy_key=policy_key(source="polygon", adjusted=adjusted),
+        symbol=safe_symbol,
+        session=session,
+        timespan=timespan,
+        multiplier=multiplier,
+        count=len(result.bars),
+        bars=[_serialize_chart_bar(b) for b in result.bars],
+        coverage=EngineBarsCoverageResponse(
+            expected_days=result.coverage.expected_days,
+            available_days=result.coverage.available_days,
+            is_complete=result.coverage.is_complete,
+            missing_days=[d.isoformat() for d in result.coverage.missing_days],
+        ),
+    )
 
 
 @router.post("/backtest", response_model=EngineBacktestResponse)
@@ -794,7 +879,7 @@ def execute_engine_backtest(
 
     fill_mode = _parse_fill_mode(request.fill_mode)
 
-    data_roots = _resolve_lean_data_roots()
+    data_roots = _resolve_lean_data_roots(adjusted=_policy_adjusted(request.data_policy))
     if not data_roots:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -821,6 +906,7 @@ def execute_engine_backtest(
                     start=_parse_iso_date(start_override, "start_date"),
                     end=_parse_iso_date(end_override, "end_date"),
                     polygon=polygon,
+                    adjusted=_policy_adjusted(request.data_policy),
                     resolution=request.resolution,
                 )
             except HTTPException:
@@ -915,7 +1001,9 @@ def execute_engine_backtest(
         )
 
     on_phase("aggregating_results")
-    on_log(f"Engine produced {len(getattr(strategy, 'trade_log', []) or [])} trades; aggregating results and statistics")
+    on_log(
+        f"Engine produced {len(getattr(strategy, 'trade_log', []) or [])} trades; aggregating results and statistics"
+    )
 
     trades = getattr(strategy, "trade_log", []) or []
     formatted = [_format_trade(i + 1, t) for i, t in enumerate(trades)]
@@ -1009,17 +1097,7 @@ def execute_engine_backtest(
     ]
 
     # ── Serialize consolidated bars for charting ──
-    chart_bars_dicts = [
-        {
-            "t": _to_ms_utc(b.time),
-            "o": float(b.open),
-            "h": float(b.high),
-            "l": float(b.low),
-            "c": float(b.close),
-            "v": int(b.volume),
-        }
-        for b in (strategy.ctx.consolidated_bars if strategy.ctx else [])
-    ]
+    chart_bars_dicts = [_serialize_chart_bar(b) for b in (strategy.ctx.consolidated_bars if strategy.ctx else [])]
 
     # ── Serialize insights ──
     insights_dicts = [i.to_dict() for i in result.insights]
@@ -1117,6 +1195,20 @@ def _to_ms_utc(dt: datetime) -> int:
         return to_ms_utc(dt)
     except ValueError as exc:
         raise ValueError("engine timestamp must be timezone-aware before serialization") from exc
+
+
+def _serialize_chart_bar(b: TradeBar) -> dict[str, Any]:
+    """One wire shape for consolidated chart bars — used by the live run's
+    ``chart_bars`` and the ``/bars`` store endpoint, so the two can be
+    equality-tested against each other."""
+    return {
+        "t": _to_ms_utc(b.time),
+        "o": float(b.open),
+        "h": float(b.high),
+        "l": float(b.low),
+        "c": float(b.close),
+        "v": int(b.volume),
+    }
 
 
 # ---------------------------------------------------------------------------

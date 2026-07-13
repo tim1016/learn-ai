@@ -29,6 +29,43 @@ class RunCancelledError(Exception):
     catch this to emit a cancellation event and stop cleanly."""
 
 
+class CanonicalBarsError(ValueError):
+    """Polygon returned bars that violate the canonical-input contract.
+
+    Per .claude/rules/numerical-rigor.md § "External-API ingestion",
+    duplicates and non-monotonic timestamps must surface as errors,
+    not be silently repaired.
+    """
+
+
+def assert_canonical_bar_stream(bars: list[dict[str, Any]], symbol: str) -> None:
+    """Fail fast on duplicate or non-monotonic wire timestamps.
+
+    The required companion of :func:`fetch_bars_chunks_raw` at every
+    canonical ingestion boundary (LEAN sidecar staging and the shared
+    bar-store exporter). One implementation — callers must not re-derive
+    this loop.
+    """
+    utc = ZoneInfo("UTC")
+    eastern = ZoneInfo("America/New_York")
+    prev_ts: int | None = None
+    seen: set[int] = set()
+    for bar in bars:
+        ts = int(bar["timestamp"])
+        if ts in seen:
+            et_repr = datetime.fromtimestamp(ts / 1000, tz=utc).astimezone(eastern).isoformat()
+            raise CanonicalBarsError(f"polygon_corrupt_timestamps: duplicate timestamp {ts} ({et_repr}) for {symbol}")
+        if prev_ts is not None and ts <= prev_ts:
+            et_repr = datetime.fromtimestamp(ts / 1000, tz=utc).astimezone(eastern).isoformat()
+            prev_et = datetime.fromtimestamp(prev_ts / 1000, tz=utc).astimezone(eastern).isoformat()
+            raise CanonicalBarsError(
+                f"polygon_corrupt_timestamps: non-monotonic timestamp {ts} ({et_repr}) "
+                f"after {prev_ts} ({prev_et}) for {symbol}"
+            )
+        seen.add(ts)
+        prev_ts = ts
+
+
 logger = logging.getLogger(__name__)
 
 _POLYGON_MAX_BARS = 50_000
@@ -579,7 +616,6 @@ def forward_fill_gaps(
     # Group by trading date and build continuous bar ranges
     filled_frames = []
     for trading_date, group in df.groupby(dt_et.dt.date):
-
         if session == "rth":
             try:
                 window = session_window_for_date(trading_date)

@@ -17,7 +17,7 @@ import logging
 import os
 import shutil
 import subprocess
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -117,6 +117,53 @@ def stage_minute_bars(
             bars,
         )
         written.append(path)
+    return tuple(written)
+
+
+def stage_minute_zips_from_store(
+    workspace: Workspace,
+    *,
+    symbol: str,
+    trading_dates: Iterable[date],
+    roots: Sequence[Path],
+) -> tuple[Path, ...]:
+    """Byte-copy per-day minute zips from the shared bar store.
+
+    The store (see :mod:`app.engine.data.policy_store`) is the canonical
+    bar source for both engines: the Python engine reads its zips
+    directly, and this function hands LEAN the *same bytes* by verbatim
+    ``shutil.copyfile`` — no re-fetch, no re-encode. The manifest's
+    staged-file hashes therefore double as proof that the sidecar ran on
+    the exact zips the Python engine read.
+
+    The first root containing a day's zip wins — the same
+    reference-first order ``LeanMinuteDataReader`` uses. A requested
+    date with no zip in any root raises: callers derive
+    ``trading_dates`` from the store, so a miss here means the store
+    changed mid-staging.
+    """
+    safe_symbol = validate_symbol(symbol)
+    workspace.ensure_layout()
+    dest_dir = workspace.data_dir / "equity" / "usa" / "minute" / safe_symbol.lower()
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    for trading_date in trading_dates:
+        filename = f"{trading_date.strftime('%Y%m%d')}_trade.zip"
+        source = next(
+            (
+                candidate
+                for root in roots
+                if (candidate := Path(root) / "equity" / "usa" / "minute" / safe_symbol.lower() / filename).exists()
+            ),
+            None,
+        )
+        if source is None:
+            raise FileNotFoundError(
+                f"bar store has no {filename} for {safe_symbol} under any of {[str(r) for r in roots]}"
+            )
+        dest = dest_dir / filename
+        shutil.copyfile(source, dest)
+        written.append(dest)
     return tuple(written)
 
 
@@ -493,9 +540,7 @@ def _stage_lean_metadata_via_launcher(
         # callers handle this delegation path the same way they handle
         # the local-podman path. The message preserves the launcher's
         # reason label so an operator can distinguish in logs.
-        raise MetadataStagingError(
-            f"metadata extraction via launcher failed: {e}"
-        ) from e
+        raise MetadataStagingError(f"metadata extraction via launcher failed: {e}") from e
 
     mh, sp = list_metadata_databases(workspace)
     if mh is None or sp is None:

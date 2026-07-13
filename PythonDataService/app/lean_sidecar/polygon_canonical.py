@@ -22,8 +22,22 @@ from zoneinfo import ZoneInfo
 from app.engine.data.polygon_export import group_by_trading_date, polygon_bar_to_trade_bar
 from app.engine.data.trade_bar import TradeBar
 from app.lean_sidecar.trading_calendar import is_regular_session_ms_utc
-from app.services.dataset_service import fetch_bars_chunks_raw
+from app.services.dataset_service import (
+    CanonicalBarsError,
+    assert_canonical_bar_stream,
+    fetch_bars_chunks_raw,
+)
 from app.services.polygon_client import PolygonClientService
+
+__all__ = [
+    "CanonicalBarsError",
+    "CanonicalBarsProvider",
+    "FixtureMetadataMismatchError",
+    "PolygonProvider",
+    "RecordedPolygonFixtureProvider",
+    "fetch_canonical_minute_bars",
+    "get_default_provider",
+]
 
 
 class CanonicalBarsProvider(Protocol):
@@ -217,15 +231,6 @@ _ET = ZoneInfo("America/New_York")
 _UTC = ZoneInfo("UTC")
 
 
-class CanonicalBarsError(ValueError):
-    """Polygon returned bars that violate the canonical-input contract.
-
-    Per .claude/rules/numerical-rigor.md § "External-API ingestion",
-    duplicates and non-monotonic timestamps must surface as errors,
-    not be silently repaired.
-    """
-
-
 def _is_rth(ts_ms: int) -> bool:
     return is_regular_session_ms_utc(ts_ms)
 
@@ -277,25 +282,10 @@ def fetch_canonical_minute_bars(
 
     # Fail-fast validation: strict monotonic, no duplicates. This is
     # the production canonical-input enforcement path; ``PolygonProvider``
-    # routes through ``fetch_bars_chunks_raw`` precisely so this loop —
-    # not a silent re-sort in ``fetch_bars_chunked`` — sees the raw wire
-    # bars.
-    prev_ts: int | None = None
-    seen: set[int] = set()
-    for bar in raw:
-        ts = int(bar["timestamp"])
-        if ts in seen:
-            et_repr = datetime.fromtimestamp(ts / 1000, tz=_UTC).astimezone(_ET).isoformat()
-            raise CanonicalBarsError(f"polygon_corrupt_timestamps: duplicate timestamp {ts} ({et_repr}) for {symbol}")
-        if prev_ts is not None and ts <= prev_ts:
-            et_repr = datetime.fromtimestamp(ts / 1000, tz=_UTC).astimezone(_ET).isoformat()
-            prev_et = datetime.fromtimestamp(prev_ts / 1000, tz=_UTC).astimezone(_ET).isoformat()
-            raise CanonicalBarsError(
-                f"polygon_corrupt_timestamps: non-monotonic timestamp {ts} ({et_repr}) "
-                f"after {prev_ts} ({prev_et}) for {symbol}"
-            )
-        seen.add(ts)
-        prev_ts = ts
+    # routes through ``fetch_bars_chunks_raw`` precisely so the shared
+    # validator — not a silent re-sort in ``fetch_bars_chunked`` — sees
+    # the raw wire bars.
+    assert_canonical_bar_stream(raw, symbol)
 
     # Session filter.
     if session == "regular":

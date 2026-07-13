@@ -220,15 +220,28 @@ def export_polygon_range_to_lean(
     symbol: str,
     from_date: str,
     to_date: str,
-    adjusted: bool = True,
+    *,
+    adjusted: bool,
     resolution: str = "minute",
 ) -> list[Path]:
     """Fetch a date range from Polygon and write it to LEAN zips.
 
-    Small convenience wrapper around ``fetch_bars_chunked`` + the
+    Small convenience wrapper around the raw chunked fetcher + the
     resolution-appropriate exporter. Kept in this module (rather than
     the router) so it can be called from scripts and tests without
     spinning up FastAPI.
+
+    ``adjusted`` is keyword-required with no default: this seam is where
+    the cache's policy identity is decided, and a silent default here is
+    exactly the bug that let the Python engine cache adjusted bars while
+    the LEAN sidecar fetched raw (see ``policy_store``).
+
+    The fetch goes through ``fetch_bars_chunks_raw`` + the shared
+    fail-fast validator — never the sanitizing ``fetch_bars_chunked`` —
+    because this writer is the canonical ingestion boundary for the
+    shared bar store (``.claude/rules/temporal-rigor.md`` § "External-API
+    ingestion": duplicates and non-monotonic timestamps halt the fetch,
+    they are not silently repaired).
 
     Args:
         resolution: ``"minute"`` writes one LEAN minute zip per trading
@@ -238,31 +251,24 @@ def export_polygon_range_to_lean(
     """
     # Imported lazily to avoid pulling the dataset_service / Polygon
     # stack when the exporter is used in tests with pre-supplied bars.
-    from app.services.dataset_service import fetch_bars_chunked
+    from app.services.dataset_service import assert_canonical_bar_stream, fetch_bars_chunks_raw
+
+    if resolution not in ("minute", "daily"):
+        raise ValueError(f"Unsupported resolution {resolution!r}; expected 'minute' or 'daily'")
+
+    bars = fetch_bars_chunks_raw(
+        polygon=polygon,
+        ticker=symbol,
+        from_date=from_date,
+        to_date=to_date,
+        timespan="minute" if resolution == "minute" else "day",
+        multiplier=1,
+        adjusted=adjusted,
+    )
+    assert_canonical_bar_stream(bars, symbol)
 
     if resolution == "minute":
-        bars = fetch_bars_chunked(
-            polygon=polygon,
-            ticker=symbol,
-            from_date=from_date,
-            to_date=to_date,
-            timespan="minute",
-            multiplier=1,
-            adjusted=adjusted,
-        )
         return export_polygon_bars_to_lean(output_root, symbol, bars)
 
-    if resolution == "daily":
-        bars = fetch_bars_chunked(
-            polygon=polygon,
-            ticker=symbol,
-            from_date=from_date,
-            to_date=to_date,
-            timespan="day",
-            multiplier=1,
-            adjusted=adjusted,
-        )
-        written = export_polygon_daily_bars_to_lean(output_root, symbol, bars)
-        return [written] if written is not None else []
-
-    raise ValueError(f"Unsupported resolution {resolution!r}; expected 'minute' or 'daily'")
+    written = export_polygon_daily_bars_to_lean(output_root, symbol, bars)
+    return [written] if written is not None else []

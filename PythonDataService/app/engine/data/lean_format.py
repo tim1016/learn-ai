@@ -23,7 +23,10 @@ Lean/Common/Util/LeanData.cs (GenerateZipFilePath / GenerateZipEntryName).
 
 from __future__ import annotations
 
+import contextlib
 import io
+import os
+import tempfile
 import zipfile
 from collections.abc import Iterator, Sequence
 from datetime import date, datetime, timedelta
@@ -52,6 +55,25 @@ _DETERMINISTIC_ZIP_DATE_TIME: tuple[int, int, int, int, int, int] = (
     0,
     0,
 )
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Write ``data`` to ``path`` via a same-directory temp file + rename.
+
+    ``os.replace`` is atomic on POSIX, so a concurrent reader of the
+    shared bar store either sees the previous complete zip or the new
+    complete zip — never a torn write. The temp file lands in the target
+    directory to guarantee same-filesystem rename semantics.
+    """
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        os.replace(tmp_name, path)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp_name)
+        raise
 
 
 def _write_deterministic_csv_zip(buf: io.BytesIO, csv_name: str, csv_body: str) -> None:
@@ -465,7 +487,7 @@ def write_lean_daily_zip(
 
     buf = io.BytesIO()
     _write_deterministic_csv_zip(buf, csv_name, "\n".join(lines))
-    zip_path.write_bytes(buf.getvalue())
+    _atomic_write_bytes(zip_path, buf.getvalue())
     return zip_path
 
 
@@ -518,7 +540,7 @@ def write_lean_quote_day_zip(
         )
     buf = io.BytesIO()
     _write_deterministic_csv_zip(buf, csv_name, "\n".join(lines))
-    zip_path.write_bytes(buf.getvalue())
+    _atomic_write_bytes(zip_path, buf.getvalue())
     return zip_path
 
 
@@ -563,5 +585,5 @@ def write_lean_day_zip(
         )
     buf = io.BytesIO()
     _write_deterministic_csv_zip(buf, csv_name, "\n".join(lines))
-    zip_path.write_bytes(buf.getvalue())
+    _atomic_write_bytes(zip_path, buf.getvalue())
     return zip_path

@@ -66,6 +66,7 @@ from app.lean_sidecar.staging import (
     stage_lean_config,
     stage_lean_metadata_from_image,
     stage_minute_bars,
+    stage_minute_zips_from_store,
     stage_quote_bars,
 )
 from app.lean_sidecar.trusted_samples.buy_and_hold import BUY_AND_HOLD_SOURCE
@@ -548,10 +549,18 @@ async def run_trusted_sample(
     data_source = request.data_policy.source
     polygon_adjustment = _runtime_polygon_adjustment(request.data_policy)
 
+    # Roots of the shared bar store when the run stages from it (live
+    # polygon runs). ``None`` for synthetic and fixture-replay runs,
+    # which stage their own bars directly.
+    store_roots: list[Path] | None = None
+
     if data_source == "synthetic":
         trading_dates = _iter_trading_dates(request.start_date, request.end_date)
         bars_by_date = [(d, _generate_synthetic_bars(request.symbol, d)) for d in trading_dates]
-    elif data_source == "polygon":
+    elif data_source == "polygon" and request.data_policy.provider_kind == "fixture":
+        # Fixture replay (parity tests / freshness canary): stage the
+        # recorded bars exactly as captured, bypassing the store — the
+        # fixture IS the frozen data authority for these runs.
         from app.lean_sidecar.polygon_canonical import (
             fetch_canonical_minute_bars,
             get_default_provider,
@@ -572,11 +581,60 @@ async def run_trusted_sample(
                 f"{request.end_date.isoformat()}; symbol={request.symbol}"
             )
         trading_dates = [d for d, _ in bars_by_date]
+    elif data_source == "polygon":
+        # Live polygon runs stage from the shared policy-keyed bar store —
+        # the same zips the Python engine reads — so both engines consume
+        # identical bytes. ``ensure_range`` materializes any missing days
+        # (fail-fast validated, locked, provenance-recorded).
+        from app.engine.data.availability import ensure_range
+        from app.engine.data.lean_format import LeanMinuteDataReader
+        from app.engine.data.policy_store import resolve_data_roots
+        from app.services.polygon_client import PolygonClientService
+
+        adjusted = polygon_adjustment != "raw"
+        store_roots = resolve_data_roots(source="polygon", adjusted=adjusted)
+        report = ensure_range(
+            reference_roots=store_roots[:-1],
+            cache_root=store_roots[-1],
+            symbol=request.symbol,
+            start=request.start_date,
+            end=request.end_date,
+            polygon=PolygonClientService(),
+            adjusted=adjusted,
+            resolution="minute",
+        )
+        _emit_log(f"Bar store coverage for {request.symbol}: {report.available_days}/{report.expected_days} weekdays")
+        # Session-filtered read for the synthesized quote/daily zips —
+        # the same read path the Python engine uses. The trade zips
+        # themselves are byte-copied unfiltered below; LEAN applies its
+        # own session filter at runtime (extendedMarketHours=False).
+        reader = LeanMinuteDataReader(store_roots, session=request.data_policy.session)
+        bars_by_date = []
+        for d in reader.iter_dates(request.symbol, request.start_date, request.end_date):
+            day_bars = reader.read_day(request.symbol, d)
+            if day_bars:
+                bars_by_date.append((d, day_bars))
+        if not bars_by_date:
+            raise LeanSidecarServiceError(
+                f"polygon_returned_zero_bars: window={request.start_date.isoformat()}.."
+                f"{request.end_date.isoformat()}; symbol={request.symbol}"
+            )
+        trading_dates = [d for d, _ in bars_by_date]
     else:
         # Defense-in-depth — Pydantic Literal already rejects unknown values.
         raise LeanSidecarServiceError(f"unknown data_source: {data_source!r}")
 
-    bar_zip_paths = list(stage_minute_bars(workspace, symbol=request.symbol, bars_by_date=bars_by_date))
+    if store_roots is not None:
+        bar_zip_paths = list(
+            stage_minute_zips_from_store(
+                workspace,
+                symbol=request.symbol,
+                trading_dates=trading_dates,
+                roots=store_roots,
+            )
+        )
+    else:
+        bar_zip_paths = list(stage_minute_bars(workspace, symbol=request.symbol, bars_by_date=bars_by_date))
     # Phase 5c: stage synthetic minute QUOTE zips alongside the trade
     # zips. LEAN's default minute subscription requests both; without
     # the quote zip the log carries known-noise ``Cannot find file:

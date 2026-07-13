@@ -210,14 +210,25 @@ def ensure_range(
     start: date,
     end: date,
     polygon: Any,
+    adjusted: bool,
     resolution: Resolution = "minute",
 ) -> AvailabilityReport:
     """Guarantee the given date range is available, fetching into the cache.
+
+    ``cache_root`` must be the **policy-keyed** root for the fetch's
+    ``adjusted`` mode (see :mod:`app.engine.data.policy_store`) — the
+    ``adjusted`` flag is keyword-required with no default so no caller
+    can silently mix adjusted and raw bars in one tree again.
 
     Checks availability across ``reference_roots`` plus ``cache_root`` and,
     if anything is missing, invokes the Polygon→LEAN exporter to write the
     missing span into ``cache_root``. Returns the post-fetch availability
     report so callers can log what was materialized.
+
+    The fetch-and-write happens under the store's per-symbol advisory
+    lock with a re-check inside: two concurrent runs asking for the same
+    symbol serialize, and the loser observes the winner's zips instead of
+    re-fetching. Every fetch appends to the symbol's provenance document.
 
     The function always exports the *full requested range* rather than
     cherry-picking missing days because the Polygon aggregates endpoint is
@@ -237,28 +248,55 @@ def ensure_range(
         )
         return pre
 
-    logger.info(
-        "[ENGINE] Materializing %s %s %s..%s into cache — %d/%d weekdays missing",
-        resolution,
-        symbol,
-        start,
-        end,
-        len(pre.missing_days),
-        pre.expected_days,
-    )
-
     # Imported lazily to avoid pulling the Polygon stack when callers only
     # want to read a report (e.g. the availability endpoint).
+    from app.engine.data.policy_store import record_fetch, symbol_write_lock
     from app.engine.data.polygon_export import export_polygon_range_to_lean
+    from app.utils.timestamps import now_ms_utc
 
     cache_root.mkdir(parents=True, exist_ok=True)
-    export_polygon_range_to_lean(
-        polygon=polygon,
-        output_root=cache_root,
-        symbol=symbol.upper(),
-        from_date=start.isoformat(),
-        to_date=end.isoformat(),
-        resolution=resolution,
-    )
+    with symbol_write_lock(cache_root, symbol):
+        # Re-check under the lock: a concurrent run may have just
+        # materialized the same range while we waited.
+        pre = check_availability(all_roots, symbol, start, end, resolution=resolution)
+        if pre.is_complete:
+            logger.info(
+                "[ENGINE] %s data for %s %s..%s materialized by a concurrent run",
+                resolution,
+                symbol,
+                start,
+                end,
+            )
+            return pre
+
+        logger.info(
+            "[ENGINE] Materializing %s %s %s..%s into cache — %d/%d weekdays missing",
+            resolution,
+            symbol,
+            start,
+            end,
+            len(pre.missing_days),
+            pre.expected_days,
+        )
+
+        export_polygon_range_to_lean(
+            polygon=polygon,
+            output_root=cache_root,
+            symbol=symbol.upper(),
+            from_date=start.isoformat(),
+            to_date=end.isoformat(),
+            adjusted=adjusted,
+            resolution=resolution,
+        )
+        record_fetch(
+            cache_root,
+            symbol,
+            source="polygon",
+            adjusted=adjusted,
+            resolution=resolution,
+            from_date=start.isoformat(),
+            to_date=end.isoformat(),
+            fetched_at_ms=now_ms_utc(),
+        )
 
     return check_availability(all_roots, symbol, start, end, resolution=resolution)
