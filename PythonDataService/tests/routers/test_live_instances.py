@@ -5020,6 +5020,41 @@ async def test_start_run_ignores_legacy_stopped_latch_when_roll_call_offer_is_cu
     assert record.updated_by == "system"
 
 
+async def test_start_run_hydrates_omitted_strategy_from_run_ledger(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(
+        root,
+        "run-deploy-validation",
+        "sem",
+        100,
+        strategy_key="deployment_validation",
+    )
+    offer_id = _write_roll_call_offer(root.parent, sid="sem", run_id="run-deploy-validation")
+    _set_startable_now(monkeypatch)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+    forwarded_payload: dict | None = None
+
+    async def fake_start(_base_url: str, run_id: str, payload: dict) -> dict:
+        nonlocal forwarded_payload
+        forwarded_payload = payload
+        return {"accepted": True, "process": _running_process(run_id)}
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/runs/run-deploy-validation/start",
+            json={"roll_call_offer_id": offer_id},
+        )
+
+    assert response.status_code == 200
+    assert forwarded_payload is not None
+    assert forwarded_payload["strategy"] == "deployment_validation"
+    assert "roll_call_offer_id" not in forwarded_payload
+
+
 async def test_start_run_rejects_retired_bot_even_with_stale_roll_call_offer(
     app_with_root,
     monkeypatch: pytest.MonkeyPatch,

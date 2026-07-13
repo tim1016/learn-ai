@@ -2708,6 +2708,45 @@ def _assert_roll_call_offer_allows_start(
         )
 
 
+def _start_request_with_ledger_strategy_default(
+    root: Path,
+    run_id: str,
+    body: HostRunnerStartRequest,
+) -> HostRunnerStartRequest:
+    """Hydrate omitted Start strategy from the run ledger.
+
+    ``HostRunnerStartRequest`` still has a legacy schema default so direct
+    daemon callers remain backward compatible. The data-plane Start route has
+    stronger evidence: it knows the run directory and must forward the same
+    strategy key the ledger was reconciled against when the browser sends only
+    a roll-call offer id.
+    """
+
+    if "strategy" in body.model_fields_set:
+        return body
+    try:
+        ledger = _read_ledger(root / run_id)
+    except (OSError, ValueError, KeyError):
+        return body
+    strategy_key = ledger.get("strategy_key")
+    if not isinstance(strategy_key, str) or not strategy_key.strip():
+        return body
+    try:
+        return HostRunnerStartRequest.model_validate(
+            {**body.model_dump(), "strategy": strategy_key.strip()}
+        )
+    except ValidationError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "START_SETTINGS_INCOMPLETE",
+                "message": "The run ledger strategy key is not valid for Start.",
+                "gate_id": "start.strategy",
+                "run_id": run_id,
+            },
+        ) from exc
+
+
 def _raise_if_lifecycle_retired(root: Path, sid: str) -> None:
     try:
         record = _bot_lifecycle_state_repo(root, sid).read()
@@ -2930,6 +2969,7 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
     settings = get_settings()
     root = Path(settings.live_runs_root)
     await _assert_start_allowed(run_id, body, settings)
+    body = _start_request_with_ledger_strategy_default(root, run_id, body)
     sid = _strategy_instance_id_for_run(root, run_id)
     if sid is None:
         raise HTTPException(
