@@ -4,7 +4,7 @@ import { map, tap } from 'rxjs/operators';
 import { Observable } from 'rxjs';
 import {
   SmartAggregatesResult, CalculateIndicatorsResult, OptionsContractsResult,
-  OptionsChainSnapshotResult, BacktestResult, StockSnapshotResult,
+  OptionsChainSnapshotResult, StockSnapshotResult,
   StockSnapshotsResult, MarketMoversResult, UnifiedSnapshotResult,
   TrackedTickersResult, TickerDetailResult, RelatedTickersResult,
   StrategyAnalyzeResult, StrategyAnalyzeOptions, StrategyLegInput, FetchProgress,
@@ -346,75 +346,6 @@ interface RelatedTickersResponseGql {
   errors?: { message: string }[];
 }
 
-const RUN_BACKTEST_MUTATION = `
-  mutation RunBacktest(
-    $ticker: String!
-    $strategyName: String!
-    $fromDate: String!
-    $toDate: String!
-    $timespan: String! = "minute"
-    $multiplier: Int! = 1
-    $parametersJson: String! = "{}"
-    $filterRth: Boolean! = true
-  ) {
-    runBacktest(
-      ticker: $ticker
-      strategyName: $strategyName
-      fromDate: $fromDate
-      toDate: $toDate
-      timespan: $timespan
-      multiplier: $multiplier
-      parametersJson: $parametersJson
-      filterRth: $filterRth
-    ) {
-      success id strategyName parameters
-      totalTrades winningTrades losingTrades
-      totalPnL maxDrawdown sharpeRatio durationMs
-      sourceBars rthBars resampledBars timeframe
-      trades {
-        tradeType entryTimestamp exitTimestamp
-        entryPrice exitPrice pnl cumulativePnl signalReason
-      }
-      error
-    }
-  }
-`;
-
-interface RunBacktestResponse {
-  data: { runBacktest: BacktestResult };
-  errors?: { message: string }[];
-}
-
-const RUN_BACKTEST_FROM_CSV_MUTATION = `
-  mutation RunBacktestFromCsvBars(
-    $strategyName: String!
-    $parametersJson: String! = "{}"
-    $bars: [CsvBarInputInput!]!
-    $filterRth: Boolean! = false
-  ) {
-    runBacktestFromCsvBars(
-      strategyName: $strategyName
-      parametersJson: $parametersJson
-      bars: $bars
-      filterRth: $filterRth
-    ) {
-      success id strategyName parameters
-      totalTrades winningTrades losingTrades
-      totalPnL maxDrawdown sharpeRatio durationMs
-      sourceBars rthBars resampledBars timeframe
-      trades {
-        tradeType entryTimestamp exitTimestamp
-        entryPrice exitPrice pnl cumulativePnl signalReason
-      }
-      error
-    }
-  }
-`;
-
-interface RunBacktestFromCsvResponse {
-  data: { runBacktestFromCsvBars: BacktestResult };
-  errors?: { message: string }[];
-}
 
 const RUN_RULE_BASED_BACKTEST_MUTATION = `
   mutation RunRuleBasedBacktest(
@@ -884,52 +815,6 @@ export class MarketDataService {
           }
         }),
         map(response => response.data.getRelatedTickers)
-      );
-  }
-
-  runBacktest(
-    ticker: string,
-    strategyName: string,
-    fromDate: string,
-    toDate: string,
-    timespan = 'minute',
-    multiplier = 1,
-    parametersJson = '{}',
-    filterRth = true
-  ): Observable<BacktestResult> {
-    return this.http
-      .post<RunBacktestResponse>(GRAPHQL_URL, {
-        query: RUN_BACKTEST_MUTATION,
-        variables: { ticker, strategyName, fromDate, toDate, timespan, multiplier, parametersJson, filterRth }
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.runBacktest)
-      );
-  }
-
-  runBacktestFromCsvBars(
-    strategyName: string,
-    bars: { timestamp: number; open: number; high: number; low: number; close: number; volume: number }[],
-    parametersJson = '{}',
-    filterRth = false
-  ): Observable<BacktestResult> {
-    return this.http
-      .post<RunBacktestFromCsvResponse>(GRAPHQL_URL, {
-        query: RUN_BACKTEST_FROM_CSV_MUTATION,
-        variables: { strategyName, bars, parametersJson, filterRth }
-      })
-      .pipe(
-        tap(response => {
-          if (response.errors?.length) {
-            throw new Error(response.errors.map(e => e.message).join(', '));
-          }
-        }),
-        map(response => response.data.runBacktestFromCsvBars)
       );
   }
 

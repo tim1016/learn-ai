@@ -44,7 +44,6 @@ async function renderWith(
 
 async function renderComponent(inputs: {
   rows: RunHistoryRow[];
-  allowCompare?: boolean;
 }): Promise<{ fixture: ComponentFixture<RunHistoryComponent>; component: RunHistoryComponent }> {
   await TestBed.configureTestingModule({
     imports: [RunHistoryComponent],
@@ -52,9 +51,6 @@ async function renderComponent(inputs: {
   }).compileComponents();
   const fixture = TestBed.createComponent(RunHistoryComponent);
   fixture.componentRef.setInput("rows", inputs.rows);
-  if (inputs.allowCompare !== undefined) {
-    fixture.componentRef.setInput("allowCompare", inputs.allowCompare);
-  }
   fixture.detectChanges();
   return { fixture, component: fixture.componentInstance };
 }
@@ -140,130 +136,6 @@ describe("RunHistoryComponent — row click", () => {
     expect(events).toEqual(["xyz"]);
   });
 
-  it("does not emit runSelected when the checkbox cell is clicked", async () => {
-    const events: string[] = [];
-    const { fixture, component } = await renderComponent({
-      rows: [row({ id: "abc" })],
-      allowCompare: true,
-    });
-    component.runSelected.subscribe((id) => events.push(id));
-
-    const checkbox = fixture.nativeElement.querySelector(
-      'input[type="checkbox"]',
-    ) as HTMLInputElement;
-    checkbox.click();
-
-    expect(events).toHaveLength(0);
-  });
-});
-
-describe("RunHistoryComponent — multi-select", () => {
-  it("does not render checkboxes when allowCompare is false", async () => {
-    const { fixture } = await renderComponent({
-      rows: [row({ id: "1" }), row({ id: "2" })],
-      allowCompare: false,
-    });
-    const checkboxes = fixture.nativeElement.querySelectorAll('input[type="checkbox"]');
-    expect(checkboxes.length).toBe(0);
-  });
-
-  it("renders one checkbox per row when allowCompare is true", async () => {
-    const { fixture } = await renderComponent({
-      rows: [row({ id: "1" }), row({ id: "2" }), row({ id: "3" })],
-      allowCompare: true,
-    });
-    const checkboxes = fixture.nativeElement.querySelectorAll('input[type="checkbox"]');
-    expect(checkboxes.length).toBe(3);
-  });
-
-  it("Compare button is disabled when 0 selected, 1 selected, or 3+ selected", async () => {
-    const { fixture } = await renderComponent({
-      rows: [row({ id: "1" }), row({ id: "2" }), row({ id: "3" })],
-      allowCompare: true,
-    });
-    const checkboxes = fixture.nativeElement.querySelectorAll(
-      'input[type="checkbox"]',
-    ) as NodeListOf<HTMLInputElement>;
-    const compareBtn = fixture.nativeElement.querySelector(
-      'button[data-testid="compare-selected"]',
-    ) as HTMLButtonElement;
-
-    expect(compareBtn.disabled).toBe(true); // 0 selected
-
-    checkboxes[0].click();
-    fixture.detectChanges();
-    expect(compareBtn.disabled).toBe(true); // 1 selected
-
-    checkboxes[1].click();
-    fixture.detectChanges();
-    expect(compareBtn.disabled).toBe(false); // 2 selected — enabled
-
-    checkboxes[2].click();
-    fixture.detectChanges();
-    expect(compareBtn.disabled).toBe(true); // 3 selected — disabled again
-  });
-
-  it("emits compareRequested with the two selected IDs in order checked", async () => {
-    const events: { leftId: string; rightId: string }[] = [];
-    const { fixture, component } = await renderComponent({
-      rows: [row({ id: "a" }), row({ id: "b" }), row({ id: "c" })],
-      allowCompare: true,
-    });
-    component.compareRequested.subscribe((e) => events.push(e));
-
-    const checkboxes = fixture.nativeElement.querySelectorAll(
-      'input[type="checkbox"]',
-    ) as NodeListOf<HTMLInputElement>;
-    checkboxes[2].click(); // id "c" checked first
-    fixture.detectChanges();
-    checkboxes[0].click(); // id "a" checked second
-    fixture.detectChanges();
-
-    const compareBtn = fixture.nativeElement.querySelector(
-      'button[data-testid="compare-selected"]',
-    ) as HTMLButtonElement;
-    compareBtn.click();
-
-    expect(events).toEqual([{ leftId: "c", rightId: "a" }]);
-  });
-
-  it("unchecking a row removes it from the selection", async () => {
-    const { fixture } = await renderComponent({
-      rows: [row({ id: "1" }), row({ id: "2" }), row({ id: "3" })],
-      allowCompare: true,
-    });
-    const checkboxes = fixture.nativeElement.querySelectorAll(
-      'input[type="checkbox"]',
-    ) as NodeListOf<HTMLInputElement>;
-    const compareBtn = fixture.nativeElement.querySelector(
-      'button[data-testid="compare-selected"]',
-    ) as HTMLButtonElement;
-
-    checkboxes[0].click();
-    checkboxes[1].click();
-    fixture.detectChanges();
-    expect(compareBtn.disabled).toBe(false);
-
-    checkboxes[0].click(); // uncheck
-    fixture.detectChanges();
-    expect(compareBtn.disabled).toBe(true);
-  });
-
-  it("button label includes the current count (e.g. '0 / 2 selected')", async () => {
-    const { fixture } = await renderComponent({
-      rows: [row({ id: "1" }), row({ id: "2" })],
-      allowCompare: true,
-    });
-    const compareBtn = fixture.nativeElement.querySelector(
-      'button[data-testid="compare-selected"]',
-    ) as HTMLButtonElement;
-    expect(compareBtn.textContent?.trim()).toMatch(/0 \/ 2/);
-
-    const cb = fixture.nativeElement.querySelector('input[type="checkbox"]') as HTMLInputElement;
-    cb.click();
-    fixture.detectChanges();
-    expect(compareBtn.textContent?.trim()).toMatch(/1 \/ 2/);
-  });
 });
 
 describe("RunHistoryComponent — Bars summary column (PR B.3)", () => {

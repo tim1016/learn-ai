@@ -271,15 +271,6 @@ describe('LeanEngineComponent engine selector', () => {
     expect(component.activeTab()).toBe('configuration');
   });
 
-  it('defaults to the built-in EMA template while keeping custom source seeded', () => {
-    configureTestBed();
-    const fixture = TestBed.createComponent(LeanEngineComponent);
-    const component = fixture.componentInstance;
-
-    expect(component.leanAlgorithmMode()).toBe('template');
-    expect(component.leanSource()).toContain('class MyAlgorithm');
-  });
-
   it('submit routes to jobsService.startJob for the Python engine', async () => {
     const { startJob, startTrustedRun } = configureTestBed();
     const fixture = TestBed.createComponent(LeanEngineComponent);
@@ -354,7 +345,6 @@ describe('LeanEngineComponent engine selector', () => {
     component.engine.set('lean');
     component.leanLauncherStatus.set('ready');
     component.selectedStrategyName.set(null);
-    component.leanSource.set('class MyAlgorithm: pass');
     component.startDate.set('2025-01-13');
     component.endDate.set('2025-01-17');
     component.initialCash.set(100_000);
@@ -378,7 +368,7 @@ describe('LeanEngineComponent engine selector', () => {
     // existing ``TrustedRunRequestModel`` Pydantic schema.
     const envelope = startJob.mock.calls[0][1] as { request: TrustedRunRequest };
     const payload = envelope.request;
-    expect(payload.algorithm_source).toBeNull();
+    expect(payload.algorithm_source).toBeUndefined();
     expect(payload.template).toBe('ema_crossover');
     expect(payload.starting_cash).toBe(100_000);
     expect(payload.run_id).toMatch(/^engine_lab_spy_[a-z0-9]+$/);
@@ -396,27 +386,6 @@ describe('LeanEngineComponent engine selector', () => {
       input_bars: { timespan: 'minute', multiplier: 1 },
       strategy_bars: { timespan: 'minute', multiplier: 15 },
     });
-  });
-
-  it('sends algorithm_source only after the operator chooses a custom LEAN algorithm', async () => {
-    const { startJob } = configureTestBed();
-    const fixture = TestBed.createComponent(LeanEngineComponent);
-    fixture.detectChanges();
-    const component = fixture.componentInstance;
-
-    component.engine.set('lean');
-    component.leanLauncherStatus.set('ready');
-    component.selectedStrategyName.set('spy_ema_crossover');
-    component.useCustomLeanAlgorithm();
-    component.leanSource.set('class MyAlgorithm: pass');
-    component.startDate.set('2025-01-13');
-    component.endDate.set('2025-01-17');
-
-    await component.run();
-
-    const envelope = startJob.mock.calls[0][1] as { request: TrustedRunRequest };
-    expect(envelope.request.algorithm_source).toBe('class MyAlgorithm: pass');
-    expect(envelope.request.template).toBe('ema_crossover');
   });
 
   it('checks launcher readiness before submitting a LEAN run', async () => {
@@ -503,7 +472,6 @@ describe('LeanEngineComponent engine selector', () => {
 
     component.engine.set('lean');
     component.leanLauncherStatus.set('ready');
-    component.leanSource.set('class MyAlgorithm: pass');
     component.startDate.set('2025-01-13');
     component.endDate.set('2025-01-13');
     component.initialCash.set(100_000);

@@ -26,23 +26,14 @@ const ENGINE_LABELS: Record<EngineSourceLiteral, string> = {
 })
 export class RunHistoryComponent {
   readonly rows = input.required<RunHistoryRow[]>();
-  readonly allowCompare = input<boolean>(true);
-
-  readonly compareRequested = output<{ leftId: string; rightId: string }>();
   readonly runSelected = output<string>();
   /** PR B.3 (2026-05-19) — emitted when the user saves a notes edit on a row.
    *  The host component owns the persistence side (GraphQL mutation). */
   readonly notesEdited = output<{ id: string; notes: string }>();
 
-  // Ordered array — preserves the sequence in which the user checked rows.
-  private readonly _selectedIds = signal<readonly string[]>([]);
   private readonly _editingId = signal<string | null>(null);
   private readonly _editingValue = signal<string>("");
 
-  readonly selectedIds = computed(() => this._selectedIds());
-  readonly canCompare = computed(
-    () => this.allowCompare() && this._selectedIds().length === 2,
-  );
   readonly isEmpty = computed(() => this.rows().length === 0);
   readonly editingId = computed(() => this._editingId());
   readonly editingValue = computed(() => this._editingValue());
@@ -79,22 +70,6 @@ export class RunHistoryComponent {
     const input = label(dp.input_bars);
     const strategy = label(dp.strategy_bars);
     return input === strategy ? `Input and strategy ${strategy}` : `Input ${input} / Strategy ${strategy}`;
-  }
-
-  isSelected(id: string): boolean {
-    return this._selectedIds().includes(id);
-  }
-
-  toggle(id: string): void {
-    this._selectedIds.update((ids) =>
-      ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id],
-    );
-  }
-
-  emitCompare(): void {
-    const ids = this._selectedIds();
-    if (ids.length !== 2) return;
-    this.compareRequested.emit({ leftId: ids[0], rightId: ids[1] });
   }
 
   onRowClick(id: string): void {

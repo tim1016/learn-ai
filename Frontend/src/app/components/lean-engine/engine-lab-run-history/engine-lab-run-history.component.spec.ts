@@ -191,16 +191,6 @@ describe("EngineLabRunHistoryComponent", () => {
     expect(html).toContain("Open at end");
   });
 
-  it("navigates to /runs/compare when onCompare is called", async () => {
-    const navigateSpy = vi.fn().mockResolvedValue(true);
-    const fixture = await setup(makeApollo(), navigateSpy);
-    fixture.componentInstance.onCompare({ leftId: "30", rightId: "31" });
-    expect(navigateSpy).toHaveBeenCalledWith(
-      ["/runs/compare"],
-      { queryParams: { left: "30", right: "31" } },
-    );
-  });
-
   it("renders the empty state when no rows are returned", async () => {
     const fixture = await setup(makeApollo([]));
     const html = (fixture.nativeElement as HTMLElement).textContent ?? "";

@@ -28,6 +28,8 @@ FORBIDDEN_SUBSTRINGS = (
 # - app/engine/data/lean_format.py: existing LEAN reader; replaced in Slice 2
 # - app/engine/data/polygon_export.py: existing exporter; docstrings reference paths; replaced in Slice 2
 # - app/engine/data/availability.py: existing availability checker; docstrings reference paths; replaced in Slice 2
+# - app/engine/data/policy_store.py: policy-keyed shared bar store (2026-07-12); docstring documents
+#   the layout the readers above consume; migrates to path_policy with them in Slice 2
 # - app/engine/tests/: engine-internal tests referencing the above; retired alongside source in Slice 2
 # - app/routers/engine.py: existing route docstrings reference path layout; updated in Slice 1d
 # - app/research/: existing research scripts with hardcoded paths; cleaned up post-Slice 2
@@ -37,6 +39,7 @@ ALLOWLISTED = (
     "app/engine/data/lean_format.py",
     "app/engine/data/polygon_export.py",
     "app/engine/data/availability.py",
+    "app/engine/data/policy_store.py",
     "app/engine/tests/",
     "app/routers/engine.py",
     "app/research/",

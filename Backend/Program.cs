@@ -1,9 +1,7 @@
 using Backend;
 using Backend.Configuration;
-using Backend.Controllers;
 using Backend.Data;
 using Backend.GraphQL;
-using Backend.GraphQL.Comparison;
 using Backend.GraphQL.Resolvers;
 using Backend.Jobs;
 using Backend.Services;
@@ -165,7 +163,6 @@ builder.Services.ConfigureHttpJsonOptions(opts =>
 
 // Register business services (testable via interfaces)
 builder.Services.AddScoped<IMarketDataService, MarketDataService>();
-builder.Services.AddScoped<IBacktestService, BacktestService>();
 builder.Services.AddScoped<IBacktestRunPersistenceService, BacktestRunPersistenceService>();
 builder.Services.AddScoped<IParityVerdictService, ParityVerdictService>();
 builder.Services.AddScoped<IPositionEngine, PositionEngine>();
@@ -181,7 +178,6 @@ builder.Services.AddScoped<IPortfolioValidationService, PortfolioValidationServi
 // scoped so each request gets a fresh instance and the unit tests stay
 // independent. No HttpClient injected here — the controller passes the
 // named "python" client through to ReconcileTrades.
-builder.Services.AddScoped<RunCompareService>();
 
 // Add GraphQL services
 builder.Services
@@ -191,7 +187,6 @@ builder.Services
     .AddTypeExtension<DataLabQuery>()
     .AddTypeExtension<BacktestRunsQuery>()
     .AddTypeExtension<BacktestRunDetailQuery>()
-    .AddTypeExtension<CompareBacktestRunsResolver>()
     .AddTypeExtension<BacktestRunResolver>()
     .AddMutationType<Mutation>()
     .AddTypeExtension<PortfolioMutation>()
@@ -235,7 +230,6 @@ app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 app.MapStudiesEndpoints();
 app.MapBacktestRunsEndpoints();
 app.MapParityVerdictsEndpoints();
-app.MapCompareEndpoints();
 app.MapJobsEndpoints();
 app.MapGraphQL();
 

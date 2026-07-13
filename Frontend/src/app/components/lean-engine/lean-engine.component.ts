@@ -17,9 +17,7 @@ import { environment } from "../../../environments/environment";
 import { ButtonModule } from "primeng/button";
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from "primeng/tabs";
 import { RunReportComponent } from "../engine-lab/run-report/run-report.component";
-import { StudyListItem } from "./study-list-item";
 import { EngineLabRunHistoryComponent } from "./engine-lab-run-history/engine-lab-run-history.component";
-import { EngineReplayV2Component } from "./engine-replay-v2/engine-replay-v2.component";
 import { PageHeaderComponent } from "../../shared/page-header/page-header.component";
 import {
   TickerRangePickerComponent,
@@ -42,15 +40,12 @@ import {
   RUN_DOCK_STORAGE_KEY,
 } from "../../shared/run-dock/run-dock-source";
 import { EngineRunDockSource } from "./engine-run-dock-source";
-import { LeanScriptEditorComponent } from "../lean-script-editor/lean-script-editor.component";
-import { EMA_CROSSOVER_SOURCE_TEMPLATE } from "../lean-script-editor/lean-script-editor.template";
 import { toMostRecentWeekday } from "../../shared/date/weekday";
 import type { EngineValidationAnalytics } from "./engine-results/engine-validation-analytics.types";
 
 /** Engine choice on the unified launch surface. */
 export type EngineChoice = "python" | "lean" | "both";
 type LeanLauncherStatus = "unknown" | "checking" | "ready" | "blocked";
-type LeanAlgorithmMode = "template" | "custom";
 
 /**
  * LEAN Engine — Phase 2 first cut.
@@ -234,10 +229,8 @@ interface DataAvailability {
     CommonModule, FormsModule, RouterModule, ButtonModule,
     Tabs, TabList, Tab, TabPanel, TabPanels,
     RunReportComponent, EngineLabRunHistoryComponent,
-    EngineReplayV2Component,
     PageHeaderComponent,
     TickerRangePickerComponent,
-    LeanScriptEditorComponent,
     RunDockComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -276,8 +269,6 @@ export class LeanEngineComponent implements OnInit {
    * ``LeanScriptEditorComponent`` so the parent can synthesize the
    * trusted-run submission body without reaching into the child.
    */
-  readonly leanSource = signal<string>(EMA_CROSSOVER_SOURCE_TEMPLATE);
-  readonly leanAlgorithmMode = signal<LeanAlgorithmMode>("template");
   readonly leanLauncherCommand =
     "cd PythonDataService && PYTHONPATH=. ./.venv/bin/python -m uvicorn app.lean_sidecar.launcher.app:app --host 0.0.0.0 --port 8090";
   readonly leanLauncherStatus = signal<LeanLauncherStatus>("unknown");
@@ -330,11 +321,6 @@ export class LeanEngineComponent implements OnInit {
     const name = this.strategyDetailName();
     return name ? this.strategies().find((strategy) => strategy.name === name) ?? null : null;
   });
-  readonly pythonStudyId = signal<number | null>(null);
-  readonly leanStudyId = signal<number | null>(null);
-  readonly comparisonReady = computed(
-    () => this.pythonStudyId() !== null && this.leanStudyId() !== null,
-  );
 
   readonly running = signal(false);
 
@@ -353,13 +339,6 @@ export class LeanEngineComponent implements OnInit {
     this.runStatusBanner.set(headline);
     this.runPhaseDetail.set(detail);
   }
-
-  // ------------------------------------------------------------------
-  // Replay — always enabled; the tab unlocks once a study (just-run or
-  // selected from History) is available.
-  // ------------------------------------------------------------------
-  readonly replayEnabled = true;
-  readonly selectedStudyForReplay = signal<StudyListItem | null>(null);
 
   /** Persisted-run id rendered by the shared run report. The persisted
    *  run is the ONLY render source — there is no transient results path,
@@ -828,8 +807,6 @@ export class LeanEngineComponent implements OnInit {
 
   async run(): Promise<void> {
     if (this.engine() === "both") {
-      this.pythonStudyId.set(null);
-      this.leanStudyId.set(null);
       await Promise.all([this.runPython(), this.runLean()]);
       return;
     }
@@ -954,7 +931,6 @@ export class LeanEngineComponent implements OnInit {
       const id = await this.jobsService.startJob("lean_engine_run", {
         request: {
           run_id: this.composeRunId(),
-          algorithm_source: this.leanAlgorithmMode() === "custom" ? this.leanSource() : null,
           template: "ema_crossover",
           starting_cash: this.initialCash(),
           start_ms_utc: this.composeStartMs(),
@@ -973,14 +949,6 @@ export class LeanEngineComponent implements OnInit {
       this.setRunStatus("failed", "LEAN run request failed", message);
       this.updateRunningState();
     }
-  }
-
-  useCustomLeanAlgorithm(): void {
-    this.leanAlgorithmMode.set("custom");
-  }
-
-  useBuiltInLeanAlgorithm(): void {
-    this.leanAlgorithmMode.set("template");
   }
 
   /**
@@ -1248,8 +1216,6 @@ export class LeanEngineComponent implements OnInit {
           // The persisted run is the only render source — the report
           // reads back exactly what history will show for this run.
           this.completedRunId.set(response.study_id);
-          this.pythonStudyId.set(response.study_id);
-          this.selectedStudyForReplay.set(this.synthesizeStudyForReplay(response));
         } else {
           this.runError.set(
             "Run completed but persistence failed — no report available. The run was not saved to history; check backend logs.",
@@ -1269,7 +1235,6 @@ export class LeanEngineComponent implements OnInit {
   private async handleLeanJobCompleted(jobId: string): Promise<void> {
     try {
       const response = await this.jobsService.fetchResult<TrustedRunResponse>(jobId);
-      this.leanStudyId.set(response.strategy_execution_id);
       if (response.strategy_execution_id !== null) {
         // LEAN runs render the same persisted report as Python runs.
         this.completedRunId.set(response.strategy_execution_id);
@@ -1295,45 +1260,6 @@ export class LeanEngineComponent implements OnInit {
 
   private updateRunningState(): void {
     this.running.set(this.engineJobId() !== null || this.leanJobId() !== null);
-  }
-
-  /** Build a StudyListItem-shaped object from the just-finished backtest
-   *  response so the Replay component can drive itself off it without
-   *  refetching from /api/studies. Only the fields the replay actually
-   *  reads (id, symbol, strategyName, startDate, endDate, timespan)
-   *  carry meaningful values; everything else is filled with safe
-   *  defaults so the type lines up. */
-  private synthesizeStudyForReplay(r: EngineBacktestResponse): StudyListItem {
-    return {
-      id: r.study_id as number,
-      symbol: this.effectiveSymbol(),
-      strategyName: r.strategy_name,
-      startDate: this.startDate(),
-      endDate: this.endDate(),
-      timespan: this.resolution(),
-      fillMode: r.fill_mode,
-      source: "engine",
-      totalTrades: r.total_trades,
-      winningTrades: r.winning_trades,
-      losingTrades: r.losing_trades,
-      winRate: r.win_rate,
-      totalPnL: r.net_profit,
-      maxDrawdown: (r.statistics?.["max_drawdown_pct"] as number) ?? 0,
-      sharpeRatio: (r.statistics?.["sharpe_ratio"] as number) ?? 0,
-      sortinoRatio: (r.statistics?.["sortino_ratio"] as number) ?? 0,
-      compoundingAnnualReturn: 0,
-      probabilisticSharpeRatio: 0,
-      profitFactor: (r.statistics?.["profit_factor"] as number) ?? 0,
-      valueAtRisk95: 0,
-      alpha: 0,
-      beta: 0,
-      initialCash: r.initial_cash,
-      finalEquity: r.final_equity,
-      parameters: JSON.stringify(this.paramValues()),
-      notes: null,
-      executedAt: Date.now(),
-      durationMs: 0,
-    };
   }
 
   // ------------------------------------------------------------------
@@ -1394,7 +1320,6 @@ export class LeanEngineComponent implements OnInit {
   // ------------------------------------------------------------------
   onStudySelected(studyId: number): void {
     this.completedRunId.set(studyId);
-    this.pythonStudyId.set(studyId);
     this.activeTab.set("configuration");
   }
 
