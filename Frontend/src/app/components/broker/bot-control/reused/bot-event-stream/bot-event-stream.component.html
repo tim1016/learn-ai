@@ -17,59 +17,88 @@
   }
 
   @if (actionRows().length > 0) {
-    <ol class="event-feed" aria-label="Bot event rows">
-      @for (actionRow of actionRows(); track trackRow($index, actionRow.display)) {
-        @let display = actionRow.display;
-        @let row = actionRow.display.row;
-        <li class="event-card" [class.expanded]="isExpanded(row.seq)" [attr.data-testid]="'bot-event-row-' + row.seq">
-          <div class="event-head">
-            <button
-              type="button"
-              class="icon-button"
-              [attr.aria-label]="'Toggle details for bot event ' + row.seq + ': ' + row.headline"
-              [attr.aria-expanded]="isExpanded(row.seq)"
-              [attr.aria-controls]="'bot-event-drawer-' + row.seq"
-              (click)="toggle(row.seq)"
-            >
-              <span class="pi" [class.pi-chevron-down]="isExpanded(row.seq)" [class.pi-chevron-right]="!isExpanded(row.seq)"></span>
-            </button>
-            <span class="chip" [class]="severityClass(row.severity)">{{ display.severityLabel }}</span>
-            <time class="ts" [attr.datetime]="display.isoTime">{{ display.localTime }}</time>
-          </div>
-          <div class="event-body">
-            <dl class="event-meta">
-              <div><dt>Time</dt><dd><time [attr.datetime]="display.isoTime">{{ display.localTime }}</time></dd></div>
-              <div><dt>Severity</dt><dd>{{ display.severityLabel }}</dd></div>
-              <div><dt>Event</dt><dd>{{ display.eventLabel }}</dd></div>
-              <div><dt>Source</dt><dd>{{ display.sourceLabel }}</dd></div>
-              <div><dt>Gates</dt><dd>{{ row.gate_steps.length }}</dd></div>
-            </dl>
-            <strong>{{ row.headline }}</strong>
-            <p class="narrative">{{ row.narrative }}</p>
-            @if (actionRow.action; as action) {
-              <div class="stream-actions">
+    <div class="event-table-scroll">
+      <table class="event-table" aria-label="Bot event rows">
+        <colgroup>
+          <col class="col-id" />
+          <col class="col-time" />
+          <col class="col-severity" />
+          <col class="col-event" />
+          <col class="col-source" />
+          <col class="col-gates" />
+          <col class="col-action" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th scope="col">ID</th>
+            <th scope="col">Time</th>
+            <th scope="col">Severity</th>
+            <th scope="col">Event</th>
+            <th scope="col">Source</th>
+            <th scope="col">Gates</th>
+            <th scope="col">Action</th>
+          </tr>
+        </thead>
+        @for (actionRow of actionRows(); track trackRow($index, actionRow.display)) {
+          @let display = actionRow.display;
+          @let row = actionRow.display.row;
+          <tbody [class.expanded]="isExpanded(row.seq)" [attr.data-testid]="'bot-event-row-' + row.seq">
+            <tr>
+              <td>
                 <button
                   type="button"
-                  class="stream-action"
-                  [disabled]="!action.enabled"
-                  [attr.data-testid]="'bot-event-row-action-' + row.seq"
-                  [attr.title]="action.disabledReason ?? action.label"
-                  (click)="invokeAction(action)"
+                  class="event-id"
+                  [attr.aria-label]="'Toggle details for bot event ' + row.seq + ': ' + row.headline"
+                  [attr.aria-expanded]="isExpanded(row.seq)"
+                  [attr.aria-controls]="'bot-event-drawer-' + row.seq"
+                  (click)="toggle(row.seq)"
                 >
-                  {{ action.label }}
+                  <span class="pi" [class.pi-chevron-down]="isExpanded(row.seq)" [class.pi-chevron-right]="!isExpanded(row.seq)" aria-hidden="true"></span>
+                  {{ row.seq }}
                 </button>
-                @if (!action.enabled && action.disabledReason) {
-                  <span class="stream-action-reason">{{ action.disabledReason }}</span>
+              </td>
+              <td><time class="ts" [attr.datetime]="display.isoTime">{{ display.localTime }}</time></td>
+              <td><span class="chip" [class]="severityClass(row.severity)">{{ display.severityLabel }}</span></td>
+              <td class="event-copy">
+                <strong>{{ display.eventLabel }}</strong>
+                <span>{{ row.headline }}</span>
+                <span class="event-narrative">{{ row.narrative }}</span>
+              </td>
+              <td>{{ display.sourceLabel }}</td>
+              <td class="gate-count">{{ row.gate_steps.length }}</td>
+              <td>
+                @if (actionRow.action; as action) {
+                  <div class="stream-actions">
+                    <button
+                      type="button"
+                      class="stream-action"
+                      [disabled]="!action.enabled"
+                      [attr.data-testid]="'bot-event-row-action-' + row.seq"
+                      [attr.title]="action.disabledReason ?? action.label"
+                      (click)="invokeAction(action)"
+                    >
+                      {{ action.label }}
+                    </button>
+                    @if (!action.enabled && action.disabledReason) {
+                      <span class="stream-action-reason">{{ action.disabledReason }}</span>
+                    }
+                  </div>
+                } @else {
+                  <span class="no-action" aria-label="No action available">—</span>
                 }
-              </div>
+              </td>
+            </tr>
+            @if (isExpanded(row.seq)) {
+              <tr class="event-detail-row">
+                <td colspan="7">
+                  <app-bot-event-drawer [display]="display" [drawerId]="'bot-event-drawer-' + row.seq" />
+                </td>
+              </tr>
             }
-          </div>
-          @if (isExpanded(row.seq)) {
-            <app-bot-event-drawer [display]="display" [drawerId]="'bot-event-drawer-' + row.seq" />
-          }
-        </li>
+          </tbody>
         }
-    </ol>
+      </table>
+    </div>
   } @else if (!isLoading() && !errorMessage()) {
     <p class="empty" data-testid="bot-event-stream-empty">No bot events yet for this run.</p>
   }

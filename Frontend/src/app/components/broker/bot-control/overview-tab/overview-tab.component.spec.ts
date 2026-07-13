@@ -131,13 +131,13 @@ describe('OverviewTabComponent', () => {
     expect(nodePositions).toEqual([
       '18px, 42px',
       '228px, 42px',
-      '438px, 248px',
-      '648px, 248px',
+      '438px, 332px',
+      '648px, 332px',
       '858px, 42px',
       '1068px, 42px',
-      '1278px, 248px',
-      '1488px, 248px',
-      '1698px, 248px',
+      '1278px, 332px',
+      '1488px, 332px',
+      '1698px, 332px',
     ]);
     const blockedGate = el.querySelector<HTMLElement>('.flow-node.status-blocked');
     expect(blockedGate?.querySelector('strong')?.textContent?.trim()).toBe('Reconcile broker state');
@@ -162,7 +162,7 @@ describe('OverviewTabComponent', () => {
     );
     expect(positions.get('Monitor live bot')).toBe('1068px, 42px');
     expect(positions.get('Submit order path')).toBe('1278px, 42px');
-    expect(positions.get('Recovery lane')).toBe('1278px, 248px');
+    expect(positions.get('Recovery lane')).toBe('1278px, 332px');
     expect(positions.get('Broker activity')).toBe('1488px, 42px');
   });
 

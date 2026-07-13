@@ -168,8 +168,9 @@
   min-width: 0;
 }
 
-.lifecycle-overview-wide {
-  grid-column: 1 / -1;
+.lifecycle-overview {
+  width: 100%;
+  min-width: 0;
 }
 
 .loading {

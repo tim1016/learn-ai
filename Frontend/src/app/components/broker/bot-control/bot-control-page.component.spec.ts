@@ -193,6 +193,7 @@ describe('BotControlPageComponent', () => {
 
     expect(element.querySelector('app-trader-view')).not.toBeNull();
     expect(element.querySelector('app-verdict-card')).toBeNull();
+    expect(element.querySelectorAll('app-overview-tab')).toHaveLength(1);
     expect(element.textContent).toContain('This bot is ready');
     expect(element.textContent).toContain('Market hours unavailable');
     expect(liveRuns.getLifecycleTimeline).not.toHaveBeenCalled();
@@ -203,7 +204,7 @@ describe('BotControlPageComponent', () => {
     fixture.detectChanges();
 
     expect(element.querySelector('app-verdict-card')).not.toBeNull();
-    expect(element.querySelector('app-overview-tab')).not.toBeNull();
+    expect(element.querySelectorAll('app-overview-tab')).toHaveLength(1);
     expect(element.querySelector('app-trader-guidance-pane')).not.toBeNull();
     expect(element.querySelector('app-bot-control-side-panel')).not.toBeNull();
     expect(element.querySelector('#verdict-state')?.textContent).toContain('Ready');

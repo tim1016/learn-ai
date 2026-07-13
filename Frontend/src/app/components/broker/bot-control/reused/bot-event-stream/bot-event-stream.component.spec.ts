@@ -128,11 +128,13 @@ describe('BotEventStreamComponent', () => {
     expect(screen.getByText('Order rejected - insufficient buying power')).toBeTruthy();
     expect(screen.getByText('Order Rejected')).toBeTruthy();
     expect(screen.getByText('Broker Session')).toBeTruthy();
+    expect(screen.getByText('ID')).toBeTruthy();
     expect(screen.getByText('Time')).toBeTruthy();
     expect(screen.getByText('Severity')).toBeTruthy();
     expect(screen.getByText('Event')).toBeTruthy();
     expect(screen.getByText('Source')).toBeTruthy();
     expect(screen.getByText('Gates')).toBeTruthy();
+    expect(screen.getByText('Action')).toBeTruthy();
     expect(screen.getAllByText('1').length).toBeGreaterThan(0);
   });
 
