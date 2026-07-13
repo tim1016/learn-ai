@@ -193,7 +193,7 @@ describe('BotControlPageComponent', () => {
 
     expect(element.querySelector('app-trader-view')).not.toBeNull();
     expect(element.querySelector('app-verdict-card')).toBeNull();
-    expect(element.querySelectorAll('app-overview-tab')).toHaveLength(1);
+    expect(element.querySelectorAll('app-overview-tab')).toHaveLength(0);
     expect(element.textContent).toContain('This bot is ready');
     expect(element.textContent).toContain('Market hours unavailable');
     expect(liveRuns.getLifecycleTimeline).not.toHaveBeenCalled();

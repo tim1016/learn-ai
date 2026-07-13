@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.schemas.account_condition_actions import AccountCureAction
+
 # ---------------------------------------------------------------------------
 # Tier
 # ---------------------------------------------------------------------------
@@ -67,6 +69,7 @@ class NoticeCodeContract(BaseModel):
     tier: OperatorNoticeTier
     actionability: OperatorNoticeActionability
     remedy_status: OperatorNoticeRemedyStatus | None = None
+    lifecycle_cure_action: AccountCureAction | None = None
 
 
 NOTICE_CODE_CONTRACTS: dict[str, NoticeCodeContract] = {
@@ -102,13 +105,43 @@ NOTICE_CODE_CONTRACTS: dict[str, NoticeCodeContract] = {
         actionability="routed",
     ),
     "broker_session.orphaned_socket": NoticeCodeContract(tier="critical", actionability="routed"),
-    "order.rejected": NoticeCodeContract(tier="critical", actionability="routed"),
-    "submit.uncertain": NoticeCodeContract(tier="critical", actionability="routed"),
-    "submit.halted": NoticeCodeContract(tier="critical", actionability="self_resolving"),
-    "submit.launch_failed": NoticeCodeContract(tier="critical", actionability="actuatable"),
-    "submit.unmapped_diagnostic": NoticeCodeContract(tier="critical", actionability="routed"),
-    "safety_halt.poisoned": NoticeCodeContract(tier="critical", actionability="actuatable"),
+    "order.rejected": NoticeCodeContract(
+        tier="critical",
+        actionability="routed",
+        lifecycle_cure_action="prove_evidence",
+    ),
+    "submit.uncertain": NoticeCodeContract(
+        tier="critical",
+        actionability="routed",
+        lifecycle_cure_action="prove_evidence",
+    ),
+    "submit.halted": NoticeCodeContract(
+        tier="critical",
+        actionability="self_resolving",
+        lifecycle_cure_action="retire_replace",
+    ),
+    "submit.launch_failed": NoticeCodeContract(
+        tier="critical",
+        actionability="actuatable",
+        lifecycle_cure_action="retire_replace",
+    ),
+    "submit.unmapped_diagnostic": NoticeCodeContract(
+        tier="critical",
+        actionability="routed",
+        lifecycle_cure_action="prove_evidence",
+    ),
+    "safety_halt.poisoned": NoticeCodeContract(
+        tier="critical",
+        actionability="actuatable",
+        lifecycle_cure_action="retire_replace",
+    ),
 }
+
+
+def notice_code_lifecycle_cure_action(code: OperatorNoticeCode) -> AccountCureAction | None:
+    """Return the bot lifecycle cure action associated with an incident code."""
+
+    return NOTICE_CODE_CONTRACTS[str(code)].lifecycle_cure_action
 
 # ---------------------------------------------------------------------------
 # Runtime freshness reason codes — moved from app/services/runtime_freshness.py.

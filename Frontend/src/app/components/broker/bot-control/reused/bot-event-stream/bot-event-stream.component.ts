@@ -91,10 +91,6 @@ export class BotEventStreamComponent {
     return `severity-${severity}`;
   }
 
-  trackRow(_index: number, display: DisplayRow): number {
-    return display.row.seq;
-  }
-
   invokeAction(action: BotEventStreamAction): void {
     if (!action.enabled) return;
     this.actionInvoked.emit(action.command);

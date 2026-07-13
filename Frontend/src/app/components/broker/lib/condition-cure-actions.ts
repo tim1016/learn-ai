@@ -15,6 +15,14 @@ const CONDITION_ACTION_LABELS: Record<AccountCureAction, string> = {
   retire_replace: 'Retire & Replace',
 };
 
+const LIFECYCLE_CONDITION_CURE_TARGETS: Record<AccountCureAction, LifecycleConditionCureTarget> = {
+  resolve_exposure: 'accountMonitor',
+  clear_freeze: 'accountMonitor',
+  reconcile_now: 'reconcile',
+  prove_evidence: 'accountMonitor',
+  retire_replace: 'retireReplace',
+};
+
 export function conditionActionLabel(action: AccountCureAction): string {
   return CONDITION_ACTION_LABELS[action];
 }
@@ -38,7 +46,5 @@ export function accountConditionActionKind(
 export function lifecycleConditionCureTarget(
   condition: Pick<BotLifecycleCondition, 'cure_action'>,
 ): LifecycleConditionCureTarget {
-  if (condition.cure_action === 'retire_replace') return 'retireReplace';
-  if (condition.cure_action === 'reconcile_now') return 'reconcile';
-  return 'accountMonitor';
+  return LIFECYCLE_CONDITION_CURE_TARGETS[condition.cure_action];
 }

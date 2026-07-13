@@ -91,14 +91,13 @@
       </div>
     }
 
-    <app-overview-tab
-      class="lifecycle-overview"
-      [status]="s"
-      [recoveryOverrideBusy]="busyAction() === 'crash_recovery_override'"
-      (crashRecoveryOverrideRequested)="dispatchCrashRecoveryOverride()"
-    />
-
     @if (activeLens() === 'operations') {
+      <app-overview-tab
+        class="lifecycle-overview"
+        [status]="s"
+        [recoveryOverrideBusy]="busyAction() === 'crash_recovery_override'"
+        (crashRecoveryOverrideRequested)="dispatchCrashRecoveryOverride()"
+      />
       <app-trader-guidance-pane [surface]="s.operator_surface" />
     }
   } @else if (!errorMessage()) {

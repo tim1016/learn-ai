@@ -4576,6 +4576,38 @@ async def test_deploy_instance_reopens_retired_replacement(
     assert lifecycle.reason == "deploy.replacement"
 
 
+async def test_deploy_instance_reports_lifecycle_reopen_failure(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _set_connected_broker_account(monkeypatch, "DU111")
+    repo = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(root.parent, "spy_ema_paper"))
+    repo.retire(
+        now_ms=200,
+        updated_by="operator",
+        reason="Retire & Replace",
+    )
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        return {"run_id": "run-replacement", "run_dir": "/runs/run-replacement", "created": True, "start": None}
+
+    def fail_reopen(_self: object, **_kwargs: object) -> None:
+        raise OSError("state file is not writable")
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+    monkeypatch.setattr(BotLifecycleStateRepo, "reopen_for_deploy", fail_reopen)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=_deploy_body())
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "BOT_LIFECYCLE_REOPEN_FAILED"
+    assert detail["strategy_instance_id"] == "spy_ema_paper"
+    assert detail["run_id"] == "run-replacement"
+
+
 async def test_deploy_instance_dirty_tree_propagates_409(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _ = app_with_root
     _set_connected_broker_account(monkeypatch, "DU111")

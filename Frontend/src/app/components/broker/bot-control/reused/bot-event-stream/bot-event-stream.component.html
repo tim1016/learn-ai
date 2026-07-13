@@ -39,7 +39,7 @@
             <th scope="col">Action</th>
           </tr>
         </thead>
-        @for (actionRow of actionRows(); track trackRow($index, actionRow.display)) {
+        @for (actionRow of actionRows(); track actionRow.display.row.seq) {
           @let display = actionRow.display;
           @let row = actionRow.display.row;
           <tbody [class.expanded]="isExpanded(row.seq)" [attr.data-testid]="'bot-event-row-' + row.seq">

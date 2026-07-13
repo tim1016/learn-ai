@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from app.engine.live.account_artifacts import AccountArtifactError, AccountFreezeEvidence
 from app.engine.live.account_identity import InvalidAccountIdError
-from app.operator.notices.schema import OperatorNotice
+from app.operator.notices.schema import OperatorNotice, notice_code_lifecycle_cure_action
 from app.schemas.account_condition_actions import AccountCureAction
 from app.schemas.account_reconciliation import AccountConditionRow
 from app.schemas.live_runs import BotLifecycleCondition
@@ -25,16 +25,6 @@ LIFECYCLE_CONDITION_CURE_LABELS: dict[AccountCureAction, str] = {
     "prove_evidence": "Prove broker evidence",
     "retire_replace": "Retire & Replace",
 }
-
-_INCIDENT_CONDITION_CODES = {
-    "order.rejected",
-    "submit.uncertain",
-    "submit.halted",
-    "submit.launch_failed",
-    "submit.unmapped_diagnostic",
-    "safety_halt.poisoned",
-}
-
 
 def lifecycle_conditions_for_instance(
     root: Path,
@@ -83,11 +73,11 @@ def _incident_condition(
     sid: str,
     notice: OperatorNotice | None,
 ) -> list[BotLifecycleCondition]:
-    if notice is None or notice.code not in _INCIDENT_CONDITION_CODES:
+    if notice is None:
         return []
-    cure_action: AccountCureAction = "retire_replace"
-    if notice.code in {"order.rejected", "submit.uncertain", "submit.unmapped_diagnostic"}:
-        cure_action = "prove_evidence"
+    cure_action = notice_code_lifecycle_cure_action(notice.code)
+    if cure_action is None:
+        return []
     return [
         BotLifecycleCondition(
             scope="bot",

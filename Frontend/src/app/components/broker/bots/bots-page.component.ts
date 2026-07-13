@@ -35,6 +35,8 @@ import { lifecycleConditionCureTarget } from '../lib/condition-cure-actions';
 type AttentionFilter = 'all' | 'needs-attention' | 'healthy';
 type BotModeTab = BotCatalogTradingMode;
 type LifecycleFilter = 'all' | BotLifecycleDisplayStatus;
+type BotLaunchProgressPhase = 'idle' | 'preparing' | 'running' | 'blocked' | 'complete';
+type BotLaunchRowStatus = 'queued' | 'starting' | 'accepted' | 'blocked';
 type TagSeverity = 'success' | 'warn' | 'danger' | 'secondary';
 
 const EMPTY_ROLL_CALL_SUMMARY: BotRollCallSummary = {
@@ -47,6 +49,14 @@ const EMPTY_ROLL_CALL_SUMMARY: BotRollCallSummary = {
   generated_at_ms: null,
   session_date: null,
   effective_stop_ms: null,
+};
+
+const EMPTY_LAUNCH_PROGRESS: BotLaunchProgress = {
+  phase: 'idle',
+  title: '',
+  detail: '',
+  activeBotId: null,
+  rows: [],
 };
 
 const BOT_TONE_SEVERITY: Record<BotCatalogTone, TagSeverity> = {
@@ -83,6 +93,21 @@ interface BotTableRow {
   searchText: string;
 }
 
+interface BotLaunchRowProgress {
+  botId: string;
+  botName: string;
+  status: BotLaunchRowStatus;
+  detail: string;
+}
+
+interface BotLaunchProgress {
+  phase: BotLaunchProgressPhase;
+  title: string;
+  detail: string;
+  activeBotId: string | null;
+  rows: readonly BotLaunchRowProgress[];
+}
+
 @Component({
   selector: 'app-bots-page',
   imports: [
@@ -114,6 +139,9 @@ export class BotsPageComponent {
   readonly isStartingReady = signal<boolean>(false);
   readonly errorMessage = signal<string | null>(null);
   readonly startAllErrorMessage = signal<string | null>(null);
+  readonly conditionActionBotId = signal<string | null>(null);
+  readonly conditionActionError = signal<{ botId: string; message: string } | null>(null);
+  readonly launchProgress = signal<BotLaunchProgress>(EMPTY_LAUNCH_PROGRESS);
   readonly searchQuery = signal<string>('');
   readonly attentionFilter = signal<AttentionFilter>('all');
   readonly lifecycleFilter = signal<LifecycleFilter>('all');
@@ -186,6 +214,11 @@ export class BotsPageComponent {
   });
   readonly eveningReportLine = computed(() => this.eveningReport()?.summary ?? null);
   readonly accountFreezeBanner = computed(() => this.accountTriage()?.freeze_banner ?? null);
+  readonly activeTabSummary = computed(() =>
+    this.isLoading()
+      ? `Loading ${this.activeModeTab()} bots...`
+      : `${this.activeTabCount()} bots in ${this.activeModeTab()} mode`,
+  );
 
   readonly selectedRows = computed<BotTableRow[]>(() => {
     const selected = this.selectedBotIds();
@@ -268,18 +301,76 @@ export class BotsPageComponent {
     if (rows.length === 0 || this.isStartingReady()) return;
     this.isStartingReady.set(true);
     this.startAllErrorMessage.set(null);
-    let started = false;
+    this.errorMessage.set(null);
+    this.launchProgress.set({
+      phase: 'preparing',
+      title: 'Preparing ready bots',
+      detail: 'Refreshing account proof before launch.',
+      activeBotId: null,
+      rows: rows.map((row) => ({
+        botId: row.id,
+        botName: row.name,
+        status: 'queued',
+        detail: 'Queued after preflight.',
+      })),
+    });
     try {
-      for (const row of rows) {
-        const request = this.startRequestForRow(row);
-        if (!row.latestRunId || !request) continue;
-        await this.liveRuns.startHostRunner(row.latestRunId, request);
-        started = true;
+      await this.refreshAccountTriage();
+      if (this.accountFreezeBanner()) {
+        this.blockLaunchProgress('Account sick bay is gating new starts.');
+        return;
       }
+
+      this.updateLaunchProgress({
+        phase: 'preparing',
+        title: 'Running roll call',
+        detail: 'Refreshing start offers and daemon state before starting a canary.',
+      });
+      const rollCall = await this.liveRuns.runRollCall();
+      this.rollCall.set(rollCall.summary);
       await this.refresh();
+
+      const refreshedRows = this.readyRows();
+      if (refreshedRows.length === 0) {
+        this.launchProgress.set({
+          phase: 'complete',
+          title: 'No ready bots after roll call',
+          detail: 'Roll call completed, but no bot has a current start offer.',
+          activeBotId: null,
+          rows: [],
+        });
+        return;
+      }
+
+      const canary = refreshedRows[0];
+      const request = this.startRequestForRow(canary);
+      if (!canary.latestRunId || !request) {
+        this.launchProgress.set({
+          phase: 'blocked',
+          title: 'Start offer is incomplete',
+          detail: `${canary.name} is marked ready, but its run id or offer id is missing.`,
+          activeBotId: canary.id,
+          rows: this.progressRowsForCanary(refreshedRows, canary, 'blocked', 'Missing run id or offer id.'),
+        });
+        return;
+      }
+
+      this.launchProgress.set({
+        phase: 'running',
+        title: 'Starting canary bot',
+        detail: `${canary.name} is starting. Remaining ready bots stay queued until this result is visible.`,
+        activeBotId: canary.id,
+        rows: this.progressRowsForCanary(refreshedRows, canary, 'starting', 'Start request is in flight.'),
+      });
+
+      await this.liveRuns.startHostRunner(canary.latestRunId, request);
+      await this.refresh();
+      this.launchProgress.set(this.progressAfterCanaryStart(refreshedRows, canary));
     } catch (err) {
-      if (started) await this.refresh();
-      this.startAllErrorMessage.set(this.humanError(err));
+      const message = this.humanError(err);
+      this.startAllErrorMessage.set(message);
+      this.blockLaunchProgress(message);
+      await this.refresh();
     } finally {
       this.isStartingReady.set(false);
     }
@@ -319,13 +410,21 @@ export class BotsPageComponent {
     });
   }
 
-  runConditionCure(row: BotTableRow, event: Event): void {
+  async runConditionCure(row: BotTableRow, event: Event): Promise<void> {
     event.stopPropagation();
+    if (this.conditionActionBotId()) return;
+    const target = row.sickBayCondition
+      ? lifecycleConditionCureTarget(row.sickBayCondition)
+      : 'accountMonitor';
     if (
       row.sickBayCondition &&
-      lifecycleConditionCureTarget(row.sickBayCondition) === 'retireReplace'
+      target === 'retireReplace'
     ) {
       void this.openBot(row.id);
+      return;
+    }
+    if (target === 'reconcile') {
+      await this.reconcileAccountFromRow(row);
       return;
     }
     this.openAccountMonitor();
@@ -471,6 +570,109 @@ export class BotsPageComponent {
     return {
       ...row.startRequest,
       roll_call_offer_id: row.startOfferId,
+    };
+  }
+
+  private accountId(): string | null {
+    return this.health.health()?.account_id ?? null;
+  }
+
+  private async reconcileAccountFromRow(row: BotTableRow): Promise<void> {
+    const accountId = this.accountId();
+    if (!accountId) {
+      this.conditionActionError.set({
+        botId: row.id,
+        message: 'No broker account is connected for account reconciliation.',
+      });
+      return;
+    }
+    this.conditionActionBotId.set(row.id);
+    this.conditionActionError.set(null);
+    try {
+      await this.broker.reconcileAccount(accountId);
+      await this.refreshAccountTriage();
+      await this.refresh();
+    } catch (err) {
+      this.conditionActionError.set({ botId: row.id, message: this.humanError(err) });
+    } finally {
+      this.conditionActionBotId.set(null);
+    }
+  }
+
+  private updateLaunchProgress(update: Partial<BotLaunchProgress>): void {
+    this.launchProgress.update((current) => ({ ...current, ...update }));
+  }
+
+  private blockLaunchProgress(detail: string): void {
+    this.launchProgress.update((current) => ({
+      ...current,
+      phase: 'blocked',
+      title: current.title || 'Launch blocked',
+      detail,
+      activeBotId: null,
+      rows: current.rows.map((row) =>
+        row.status === 'starting'
+          ? { ...row, status: 'blocked', detail }
+          : row,
+      ),
+    }));
+  }
+
+  private progressRowsForCanary(
+    rows: readonly BotTableRow[],
+    canary: BotTableRow,
+    status: BotLaunchRowStatus,
+    detail: string,
+  ): BotLaunchRowProgress[] {
+    return rows.map((row) => {
+      if (row.id === canary.id) {
+        return {
+          botId: row.id,
+          botName: row.name,
+          status,
+          detail,
+        };
+      }
+      return {
+        botId: row.id,
+        botName: row.name,
+        status: 'queued',
+        detail: 'Waiting for the canary result before another start.',
+      };
+    });
+  }
+
+  private progressAfterCanaryStart(
+    queuedRows: readonly BotTableRow[],
+    canary: BotTableRow,
+  ): BotLaunchProgress {
+    const refreshed = this.visibleBots().find((row) => row.id === canary.id);
+    const status = refreshed?.displayStatus ?? canary.displayStatus;
+    if (status === 'Sick bay') {
+      return {
+        phase: 'blocked',
+        title: 'Canary moved to sick bay',
+        detail: refreshed?.statusReason ?? `${canary.name} accepted the start but reported a blocker.`,
+        activeBotId: canary.id,
+        rows: this.progressRowsForCanary(
+          queuedRows,
+          canary,
+          'blocked',
+          refreshed?.statusReason ?? 'Start accepted, then a blocker appeared.',
+        ),
+      };
+    }
+    return {
+      phase: 'complete',
+      title: 'Canary start accepted',
+      detail: `${canary.name} accepted the start. Refresh before starting the next ready bot.`,
+      activeBotId: canary.id,
+      rows: this.progressRowsForCanary(
+        queuedRows,
+        canary,
+        'accepted',
+        status === 'On duty' ? 'Bot is on duty.' : 'Start accepted; waiting for runtime proof.',
+      ),
     };
   }
 }

@@ -130,6 +130,13 @@ export function allowRenewControlPlaneLeaseCall(
   liveRuns.renewControlPlaneLease.mockResolvedValue(response);
 }
 
+export function allowRunRollCallCall(
+  liveRuns: FakeLiveRunsService,
+  response: BotRollCallResponse,
+): void {
+  liveRuns.runRollCall.mockResolvedValue(response);
+}
+
 export function allowStartHostRunnerCall(
   liveRuns: FakeLiveRunsService,
   response: HostRunnerActionResponse,
@@ -344,7 +351,7 @@ function applyMutationResponses(
     allowRenewControlPlaneLeaseCall(liveRuns, responses.renewControlPlaneLease);
   }
   if (responses.runRollCall) {
-    liveRuns.runRollCall.mockResolvedValue(responses.runRollCall);
+    allowRunRollCallCall(liveRuns, responses.runRollCall);
   }
   if (responses.startHostRunner) {
     allowStartHostRunnerCall(liveRuns, responses.startHostRunner);

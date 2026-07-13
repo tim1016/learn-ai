@@ -183,6 +183,7 @@ class FakeLiveRunsService {
 
 class FakeBrokerService {
   accountTriage = vi.fn<(accountId: string) => Promise<AccountTriageResponse>>();
+  reconcileAccount = vi.fn<(accountId: string) => Promise<unknown>>();
 }
 
 class FakeBrokerHealthService {
@@ -204,6 +205,7 @@ async function setup(options: { triage?: AccountTriageResponse } = {}) {
   const broker = new FakeBrokerService();
   const health = new FakeBrokerHealthService();
   broker.accountTriage.mockResolvedValue(options.triage ?? cleanTriage());
+  broker.reconcileAccount.mockResolvedValue({});
   service.getBotCatalog.mockResolvedValue(
     catalog([
       bot(),
@@ -434,8 +436,8 @@ describe('BotsPageComponent', () => {
     expect(sickStatusCell?.textContent).toContain('Sick bay');
   });
 
-  it('renders the sick-bay condition and routes its cure to Account Monitor', async () => {
-    const { fixture, router } = await setup();
+  it('runs the sick-bay reconcile cure from the bot row', async () => {
+    const { fixture, broker, router } = await setup();
     const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
     const root = fixture.nativeElement as HTMLElement;
 
@@ -451,35 +453,65 @@ describe('BotsPageComponent', () => {
     button?.click();
     await settle(fixture);
 
-    expect(navigate).toHaveBeenCalledWith(['/broker/account-monitor'], {
+    expect(broker.reconcileAccount).toHaveBeenCalledWith('DU1234567');
+    expect(broker.accountTriage).toHaveBeenCalledWith('DU1234567');
+    expect(navigate).not.toHaveBeenCalledWith(['/broker/account-monitor'], {
       fragment: 'account-reconciliation-action',
     });
     expect(navigate).not.toHaveBeenCalledWith(['/broker/bots', 'live-running-aapl']);
   });
 
-  it('runs roll call and starts ready bots with their offer ids', async () => {
+  it('runs roll call and starts one ready canary with its offer id', async () => {
     const { fixture, service } = await setup();
-
-    await fixture.componentInstance.runRollCall();
+    const secondReady = bot({
+      strategy_instance_id: 'live-idle-qqq',
+      name: 'live-idle-qqq',
+      symbols: ['QQQ'],
+      daily_lifecycle: lifecycle({
+        latest_run_id: 'run-live-idle-qqq',
+        primary_action: action({
+          id: 'confirm_start',
+          label: 'Start',
+          offer_id: 'offer-live-idle-qqq',
+          expires_at_ms: OFFER_EXPIRES_AT,
+        }),
+      }),
+    });
+    service.getBotCatalog.mockResolvedValue(catalog([bot(), secondReady]));
+    await fixture.componentInstance.refresh();
     await settle(fixture);
-
-    expect(service.runRollCall).toHaveBeenCalledTimes(1);
-    expect(service.getBotCatalog).toHaveBeenCalledTimes(2);
-    expect(fixture.componentInstance.readyRows().map((row) => row.id)).toEqual([
-      'live-idle-spy',
-    ]);
+    vi.mocked(service.runRollCall).mockClear();
+    vi.mocked(service.startHostRunner).mockClear();
 
     await fixture.componentInstance.startReadyBots();
     await settle(fixture);
 
-    expect(service.startHostRunner).toHaveBeenCalledWith('run-live-idle-spy', {
+    expect(service.runRollCall).toHaveBeenCalledTimes(1);
+    expect(service.startHostRunner).toHaveBeenCalledTimes(1);
+    expect(service.startHostRunner).toHaveBeenCalledWith('run-live-idle-qqq', {
       readonly: false,
       hydrate_policy: 'require',
       strategy: 'spy_ema',
       max_orders_per_day: 2,
       ibkr_host: '127.0.0.1',
-      roll_call_offer_id: 'offer-live-idle-spy',
+      roll_call_offer_id: 'offer-live-idle-qqq',
     });
+    expect(fixture.componentInstance.launchProgress().title).toBe('Canary start accepted');
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain(
+      'Waiting for the canary result before another start.',
+    );
+  });
+
+  it('blocks Start ready before roll call when account sick bay is active', async () => {
+    const { fixture, service } = await setup({ triage: frozenTriage() });
+
+    await fixture.componentInstance.startReadyBots();
+    await settle(fixture);
+
+    expect(service.runRollCall).not.toHaveBeenCalled();
+    expect(service.startHostRunner).not.toHaveBeenCalled();
+    expect(fixture.componentInstance.launchProgress().phase).toBe('blocked');
+    expect(fixture.componentInstance.launchProgress().detail).toContain('Account sick bay');
   });
 
   it('renders the account freeze banner from account triage', async () => {

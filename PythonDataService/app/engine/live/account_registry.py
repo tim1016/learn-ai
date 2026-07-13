@@ -415,9 +415,9 @@ def compute_reconcile_namespaces(
     )
 
     sibling_namespaces = {
-        namespace
-        for namespace in binding_index.active_by_namespace
-        if namespace != current_namespace
+        binding.bot_order_namespace
+        for binding in binding_index.latest_by_instance.values()
+        if binding.bot_order_namespace != current_namespace
     }
     return frozenset({current_namespace}), frozenset(sibling_namespaces)
 

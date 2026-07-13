@@ -51,6 +51,11 @@ type StartupAutomationState =
   | { readonly phase: 'ready'; readonly label: string; readonly detail: string }
   | { readonly phase: 'blocked'; readonly label: string; readonly detail: string };
 
+interface StartReadyCapability {
+  readonly run_id: string;
+  readonly request: HostRunnerStartRequest;
+}
+
 @Component({
   selector: 'app-bot-control-page',
   imports: [
@@ -88,7 +93,7 @@ export class BotControlPageComponent {
   readonly removeBotConfirmOpen = signal<boolean>(false);
   private readonly retireReplaceMoveConfirmation = signal<OperatorConfirmationCopy | null>(null);
   private readonly removeBotMoveConfirmation = signal<OperatorConfirmationCopy | null>(null);
-  private automaticRollCallKey: string | null = null;
+  private readonly automaticRollCallKey = signal<string | null>(null);
   private readonly confirmations = computed<OperatorSurfaceConfirmations | null>(
     () => this.status()?.operator_surface.confirmations ?? null,
   );
@@ -234,9 +239,9 @@ export class BotControlPageComponent {
       if (!this.needsRollCallOffer(status)) return;
       const runId = status.operator_surface.host_process.start_capability.run_id;
       const key = `${status.strategy_instance_id}:${runId ?? 'no-run'}`;
-      if (this.automaticRollCallKey === key) return;
-      this.automaticRollCallKey = key;
-      void this.prepareRollCallOffer({ startAfterOffer: false });
+      if (this.automaticRollCallKey() === key) return;
+      this.automaticRollCallKey.set(key);
+      void this.prepareRollCallOfferOnly();
     });
     this.destroyRef.onDestroy(() => {
       this.activeBotSidebarNotice.clearForInstance(this.instanceId());
@@ -337,7 +342,7 @@ export class BotControlPageComponent {
     if (!id || this.mutationsDisabled() || !cap || !canStartHostProcess(cap)) return;
     const request = this.startRequestWithRollCallOffer(cap.request);
     if (!request) {
-      await this.prepareRollCallOffer({ startAfterOffer: true });
+      await this.prepareAndStartWithRollCall();
       return;
     }
     await this.startHostProcess(cap.run_id, request);
@@ -631,18 +636,67 @@ export class BotControlPageComponent {
     return (
       lifecycle.on_roster &&
       lifecycle.phase === 'OFF_DUTY' &&
-      lifecycle.display_status === 'Off duty' &&
       lifecycle.primary_action === null &&
       canStartHostProcess(capability)
     );
   }
 
-  private async prepareRollCallOffer(options: { startAfterOffer: boolean }): Promise<void> {
+  private async prepareRollCallOfferOnly(): Promise<void> {
+    await this.prepareRollCallOffer({
+      busyAction: 'startup_automation',
+      offerFound: () => {
+        this.startupAutomation.set({
+          phase: 'ready',
+          label: 'Start offer ready',
+          detail: 'Roll call issued a fresh offer; waiting for the cockpit snapshot to show Start.',
+        });
+      },
+    });
+  }
+
+  private async prepareAndStartWithRollCall(): Promise<void> {
+    await this.prepareRollCallOffer({
+      busyAction: 'startup_automation_start',
+      offerFound: async (cap, offer) => {
+        this.startupAutomation.set({
+          phase: 'running',
+          label: 'Starting bot',
+          detail: 'Roll call issued a fresh offer; starting the bot with that offer.',
+        });
+        await this.startHostProcess(cap.run_id, {
+          ...cap.request,
+          roll_call_offer_id: offer.offer_id,
+        });
+      },
+    });
+  }
+
+  private async prepareRollCallOffer(options: {
+    busyAction: string;
+    offerFound: (
+      cap: StartReadyCapability,
+      offer: BotRollCallOffer,
+    ) => void | Promise<void>;
+  }): Promise<void> {
     const status = this.status();
     const id = this.instanceId();
     const cap = status?.operator_surface.host_process.start_capability;
-    if (!id || !status || this.mutationsDisabled() || !cap || !canStartHostProcess(cap)) return;
-    this.busyAction.set(options.startAfterOffer ? 'startup_automation_start' : 'startup_automation');
+    if (
+      !id ||
+      !status ||
+      this.mutationsDisabled() ||
+      !cap ||
+      !canStartHostProcess(cap) ||
+      !cap.run_id ||
+      !cap.request
+    ) {
+      return;
+    }
+    const readyCap: StartReadyCapability = {
+      run_id: cap.run_id,
+      request: cap.request,
+    };
+    this.busyAction.set(options.busyAction);
     this.mutationError.set(null);
     this.startupAutomation.set({
       phase: 'running',
@@ -651,7 +705,7 @@ export class BotControlPageComponent {
     });
     try {
       const response = await this.liveRuns.runRollCall();
-      const offer = this.rollCallOfferForCurrentBot(response.offers, id, cap.run_id);
+      const offer = this.rollCallOfferForCurrentBot(response.offers, id, readyCap.run_id);
       if (!offer) {
         this.startupAutomation.set({
           phase: 'blocked',
@@ -660,19 +714,7 @@ export class BotControlPageComponent {
         });
         return;
       }
-      this.startupAutomation.set({
-        phase: options.startAfterOffer ? 'running' : 'ready',
-        label: options.startAfterOffer ? 'Starting bot' : 'Start offer ready',
-        detail: options.startAfterOffer
-          ? 'Roll call issued a fresh offer; starting the bot with that offer.'
-          : 'Roll call issued a fresh offer; waiting for the cockpit snapshot to show Start.',
-      });
-      if (options.startAfterOffer) {
-        await this.startHostProcess(cap.run_id, {
-          ...cap.request,
-          roll_call_offer_id: offer.offer_id,
-        });
-      }
+      await options.offerFound(readyCap, offer);
     } catch (err) {
       this.startupAutomation.set({
         phase: 'blocked',

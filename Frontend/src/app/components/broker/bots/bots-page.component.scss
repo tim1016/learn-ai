@@ -17,6 +17,7 @@
 .card-topline,
 .result-summary,
 .roll-call-strip,
+.launch-progress-header,
 .selection-bar,
 .delete-confirmation,
 .selection-actions {
@@ -67,6 +68,84 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+}
+
+.launch-progress {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-surface);
+
+  ol {
+    display: grid;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  li {
+    display: grid;
+    grid-template-columns: 6rem minmax(8rem, 14rem) minmax(0, 1fr);
+    gap: 8px;
+    align-items: center;
+    min-height: 28px;
+    padding: 6px 8px;
+    border: 1px solid var(--border-light);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 13px;
+  }
+
+  li.is-active {
+    border-color: var(--verdict-degraded);
+    background: var(--verdict-degraded-soft);
+  }
+
+  strong {
+    overflow: hidden;
+    color: var(--text-primary);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  span {
+    min-width: 0;
+  }
+}
+
+.launch-progress-header {
+  justify-content: space-between;
+  gap: 12px;
+
+  div {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+  }
+
+  strong {
+    color: var(--text-primary);
+    font-size: 14px;
+    line-height: 1.25;
+  }
+
+  span {
+    color: var(--text-subtle);
+    font-size: 13px;
+    line-height: 1.3;
+  }
+}
+
+.launch-row-status {
+  color: var(--text-subtle);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
 }
 
 .eyebrow {
@@ -358,6 +437,10 @@ h1 {
     line-height: 1.3;
   }
 
+  .condition-error {
+    color: var(--verdict-blocked-text);
+  }
+
   button {
     justify-self: start;
     margin-top: 2px;
@@ -577,6 +660,7 @@ dd {
 @media (max-width: 900px) {
   .result-summary,
   .roll-call-strip,
+  .launch-progress-header,
   .selection-bar,
   .delete-confirmation {
     align-items: flex-start;
@@ -590,6 +674,10 @@ dd {
 
   .selection-actions {
     width: 100%;
+  }
+
+  .launch-progress li {
+    grid-template-columns: 1fr;
   }
 
   .bot-table-wrap {
