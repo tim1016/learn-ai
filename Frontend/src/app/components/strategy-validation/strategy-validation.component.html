@@ -70,21 +70,31 @@
                 <p>Validation evidence is incomplete or has not been accepted for deployment.</p>
               }
             </div>
-            @if (isAcceptedForDeploy(selected)) {
+            <div class="sv-panel-actions">
               <a
                 class="sv-deploy-link"
+                routerLink="/engine"
+                [queryParams]="engineLabQueryParams(selected)"
+              >
+                <i class="pi pi-bolt" aria-hidden="true"></i>
+                Validate in Engine Lab
+              </a>
+              @if (isAcceptedForDeploy(selected)) {
+              <a
+                class="sv-deploy-link secondary"
                 routerLink="/broker/deploy"
                 [queryParams]="deployQueryParams(selected)"
               >
                 <i class="pi pi-send" aria-hidden="true"></i>
                 Deploy strategy
               </a>
-            } @else {
+              } @else {
               <button type="button" class="sv-refresh compact" [disabled]="actionBusy()" (click)="refreshValidationEvidence()">
                 <i class="pi pi-refresh" aria-hidden="true"></i>
                 Refresh evidence
               </button>
-            }
+              }
+            </div>
           </section>
 
           <dl class="sv-decision-facts" aria-label="Selected strategy deploy facts">
@@ -113,6 +123,17 @@
             <label class="sv-reason">
               <span>Reason</span>
               <textarea [value]="flagReason()" (input)="setFlagReason($event)" rows="3"></textarea>
+            </label>
+            <label class="sv-backtest-id">
+              <span>QC Cloud backtest ID</span>
+              <input
+                type="text"
+                [value]="backtestId() || selected.qc_cloud_backtest_id || ''"
+                (input)="setBacktestId($event)"
+                aria-label="QC Cloud backtest ID"
+                placeholder="Attach the accepted reference backtest"
+                autocomplete="off" />
+              <small>Required for acceptance. Trade reconciliation must also pass.</small>
             </label>
             <button type="button" class="sv-save" [disabled]="actionBusy()" (click)="submitFlag()">
               Save flag
@@ -149,7 +170,8 @@
             </dl>
 
             <section class="sv-provenance" aria-label="Validation provenance">
-              <p><span>Settings</span>{{ selected.settings_file_ref }}</p>
+              <p><span>LEAN validator</span>{{ selected.validator_code_ref ?? 'Not recorded' }}</p>
+              <p><span>Deploy binding</span>{{ selected.settings_file_ref }}</p>
               <p><span>Audit copy</span>{{ selected.audit_copy_ref }}</p>
               <p><span>Reconciliation</span>{{ selected.reconciliation_ref }}</p>
             </section>

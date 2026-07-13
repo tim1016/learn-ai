@@ -1,15 +1,12 @@
 import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
-import { provideRouter } from '@angular/router';
+import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { provideZonelessChangeDetection } from '@angular/core';
+import { of } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  LeanEngineComponent,
-  mapStudyTradeToEngineTrade,
-  StudyTradeApiItem,
-} from './lean-engine.component';
+import { LeanEngineComponent } from './lean-engine.component';
 import { JobsService } from '../../services/jobs.service';
 import { LeanSidecarService } from '../../services/lean-sidecar.service';
 import type {
@@ -18,59 +15,9 @@ import type {
   TrustedRunResponse,
 } from '../../services/lean-sidecar.types';
 
-describe('mapStudyTradeToEngineTrade', () => {
-  function makeItem(overrides: Partial<StudyTradeApiItem> = {}): StudyTradeApiItem {
-    return {
-      entryTimestamp: Date.UTC(2026, 3, 1, 13, 30),
-      exitTimestamp: Date.UTC(2026, 3, 1, 15, 0),
-      entryPrice: 500,
-      exitPrice: 505,
-      pnL: 5,
-      signalReason: 'crossover',
-      ...overrides,
-    };
-  }
-
-  // Regression: prior to the fix, History → reload populated pnl_pct as 0
-  // because the .NET BacktestTrade entity does not persist a percent column.
-  // pnl_pct must be derived as pnl / entryPrice, matching the Python engine.
-  it('derives pnl_pct from pnL / entryPrice when entry price is positive', () => {
-    const trade = mapStudyTradeToEngineTrade(makeItem({ pnL: 5, entryPrice: 500 }), 0);
-    expect(trade.pnl_pct).toBeCloseTo(0.01, 10);
-    expect(trade.pnl_pts).toBe(5);
-  });
-
-  it('preserves the sign of pnl_pct for losing trades', () => {
-    const trade = mapStudyTradeToEngineTrade(makeItem({ pnL: -1.705, entryPrice: 563.4 }), 0);
-    expect(trade.pnl_pct).toBeCloseTo(-0.00302627, 8);
-    expect(trade.result).toBe('LOSS');
-  });
-
-  it('falls back to 0 when entry price is zero or negative to avoid NaN/Infinity', () => {
-    expect(mapStudyTradeToEngineTrade(makeItem({ entryPrice: 0, pnL: 1 }), 0).pnl_pct).toBe(0);
-    expect(mapStudyTradeToEngineTrade(makeItem({ entryPrice: -5, pnL: 1 }), 0).pnl_pct).toBe(0);
-  });
-
-  it('passes through trade fields and assigns a 1-based trade_number', () => {
-    const trade = mapStudyTradeToEngineTrade(
-      makeItem({ pnL: 2.5, entryPrice: 100, signalReason: 'rsi_oversold' }),
-      4,
-    );
-    expect(trade.trade_number).toBe(5);
-    expect(trade.entry_time).toBe(Date.UTC(2026, 3, 1, 13, 30));
-    expect(trade.exit_time).toBe(Date.UTC(2026, 3, 1, 15, 0));
-    expect(trade.entry_price).toBe(100);
-    expect(trade.exit_price).toBe(505);
-    expect(trade.signal_reason).toBe('rsi_oversold');
-    expect(trade.result).toBe('WIN');
-    expect(trade.indicators).toEqual({});
-  });
-
-  it('handles missing signalReason as empty string', () => {
-    const trade = mapStudyTradeToEngineTrade(makeItem({ signalReason: null }), 0);
-    expect(trade.signal_reason).toBe('');
-  });
-});
+// The History → results trade-adapter tests moved with the adapter:
+// see run-report.component.spec.ts (the persisted run is now rendered
+// exclusively by the shared RunReportComponent).
 
 describe('LeanEngineComponent.composeDataPolicy', () => {
   beforeEach(() => {
@@ -162,6 +109,20 @@ describe('LeanEngineComponent.composeDataPolicy', () => {
     expect(dp.strategy_bars).toEqual({ timespan: 'minute', multiplier: 15 });
   });
 
+  it('keeps deployment-validation minute strategy bars in both-engine mode', () => {
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    const component = fixture.componentInstance;
+
+    component.engine.set('both');
+    component.selectedStrategyName.set('deployment_validation');
+    component.resolution.set('minute');
+
+    const dp = component.composeDataPolicy();
+
+    expect(dp.input_bars).toEqual({ timespan: 'minute', multiplier: 1 });
+    expect(dp.strategy_bars).toEqual({ timespan: 'minute', multiplier: 1 });
+  });
+
   it('falls back to SPY when no symbol is configured (matches effectiveSymbol)', () => {
     const fixture = TestBed.createComponent(LeanEngineComponent);
     const component = fixture.componentInstance;
@@ -185,6 +146,7 @@ describe('LeanEngineComponent engine selector', () => {
     startTrustedRun?: ReturnType<typeof vi.fn>;
     nextTradingDayOpen?: ReturnType<typeof vi.fn>;
     diagnose?: ReturnType<typeof vi.fn>;
+    queryParams?: Record<string, string>;
   } = {}) {
     const startJob =
       overrides.startJob ?? vi.fn().mockResolvedValue('job-id');
@@ -251,6 +213,12 @@ describe('LeanEngineComponent engine selector', () => {
           provide: LeanSidecarService,
           useValue: { startTrustedRun, nextTradingDayOpen, diagnose },
         },
+        {
+          provide: ActivatedRoute,
+          useValue: {
+            queryParamMap: of(convertToParamMap(overrides.queryParams ?? {})),
+          },
+        },
       ],
     });
 
@@ -267,13 +235,54 @@ describe('LeanEngineComponent engine selector', () => {
     expect(component.engine()).toBe('lean');
   });
 
-  it('defaults to the built-in EMA template while keeping custom source seeded', () => {
-    configureTestBed();
+  it('hydrates Engine Lab launch state from query params after strategies load', async () => {
+    configureTestBed({
+      queryParams: {
+        strategy: 'deployment_validation',
+        engine: 'both',
+        symbol: 'AAPL',
+        resolution: 'minute',
+        from: '2025-01-13',
+        to: '2025-01-17',
+      },
+    });
     const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
     const component = fixture.componentInstance;
 
-    expect(component.leanAlgorithmMode()).toBe('template');
-    expect(component.leanSource()).toContain('class MyAlgorithm');
+    component.strategies.set([
+      {
+        name: 'spy_ema_crossover',
+        display_name: 'SPY EMA Crossover',
+        description: '',
+        params_schema: { properties: {} },
+        supported_resolutions: ['minute'],
+      },
+      {
+        name: 'deployment_validation',
+        display_name: 'Deployment Validation',
+        description: '',
+        params_schema: {
+          properties: {
+            symbol: { type: 'string', default: 'SPY' },
+          },
+        },
+        supported_resolutions: ['minute'],
+      },
+    ]);
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    expect(component.engine()).toBe('both');
+    expect(component.selectedStrategyName()).toBe('deployment_validation');
+    expect(component.rangeState()).toMatchObject({
+      symbol: 'AAPL',
+      from: '2025-01-13',
+      to: '2025-01-17',
+      resolution: 'minute',
+    });
+    expect(component.paramValues()['symbol']).toBe('AAPL');
+    expect(component.activeTab()).toBe('configuration');
   });
 
   it('submit routes to jobsService.startJob for the Python engine', async () => {
@@ -314,6 +323,33 @@ describe('LeanEngineComponent engine selector', () => {
     });
   });
 
+  it('starts Python and LEAN jobs together in validation mode', async () => {
+    const { startJob } = configureTestBed();
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+
+    component.engine.set('both');
+    component.leanLauncherStatus.set('ready');
+    component.strategies.set([
+      {
+        name: 'spy_ema_crossover',
+        display_name: 'SPY EMA Crossover',
+        description: '',
+        params_schema: { properties: {} },
+        supported_resolutions: ['minute'],
+      },
+    ]);
+    component.selectedStrategyName.set('spy_ema_crossover');
+
+    await component.run();
+
+    expect(startJob.mock.calls.map((call) => call[0])).toEqual([
+      'engine_backtest',
+      'lean_engine_run',
+    ]);
+  });
+
   it('submits the built-in EMA template for default LEAN runs', async () => {
     const { startJob, startTrustedRun, nextTradingDayOpen } = configureTestBed();
     const fixture = TestBed.createComponent(LeanEngineComponent);
@@ -323,7 +359,6 @@ describe('LeanEngineComponent engine selector', () => {
     component.engine.set('lean');
     component.leanLauncherStatus.set('ready');
     component.selectedStrategyName.set(null);
-    component.leanSource.set('class MyAlgorithm: pass');
     component.startDate.set('2025-01-13');
     component.endDate.set('2025-01-17');
     component.initialCash.set(100_000);
@@ -347,7 +382,7 @@ describe('LeanEngineComponent engine selector', () => {
     // existing ``TrustedRunRequestModel`` Pydantic schema.
     const envelope = startJob.mock.calls[0][1] as { request: TrustedRunRequest };
     const payload = envelope.request;
-    expect(payload.algorithm_source).toBeNull();
+    expect(payload.algorithm_source).toBeUndefined();
     expect(payload.template).toBe('ema_crossover');
     expect(payload.starting_cash).toBe(100_000);
     expect(payload.run_id).toMatch(/^engine_lab_spy_[a-z0-9]+$/);
@@ -367,7 +402,7 @@ describe('LeanEngineComponent engine selector', () => {
     });
   });
 
-  it('sends algorithm_source only after the operator chooses a custom LEAN algorithm', async () => {
+  it('submits the deployment-validation LEAN template for the matching Python strategy', async () => {
     const { startJob } = configureTestBed();
     const fixture = TestBed.createComponent(LeanEngineComponent);
     fixture.detectChanges();
@@ -375,17 +410,18 @@ describe('LeanEngineComponent engine selector', () => {
 
     component.engine.set('lean');
     component.leanLauncherStatus.set('ready');
-    component.selectedStrategyName.set('spy_ema_crossover');
-    component.useCustomLeanAlgorithm();
-    component.leanSource.set('class MyAlgorithm: pass');
+    component.selectedStrategyName.set('deployment_validation');
     component.startDate.set('2025-01-13');
     component.endDate.set('2025-01-17');
 
     await component.run();
 
     const envelope = startJob.mock.calls[0][1] as { request: TrustedRunRequest };
-    expect(envelope.request.algorithm_source).toBe('class MyAlgorithm: pass');
-    expect(envelope.request.template).toBe('ema_crossover');
+
+    expect(envelope.request.template).toBe('deployment_validation');
+    expect(envelope.request.data_policy).toMatchObject({
+      strategy_bars: { timespan: 'minute', multiplier: 1 },
+    });
   });
 
   it('checks launcher readiness before submitting a LEAN run', async () => {
@@ -472,7 +508,6 @@ describe('LeanEngineComponent engine selector', () => {
 
     component.engine.set('lean');
     component.leanLauncherStatus.set('ready');
-    component.leanSource.set('class MyAlgorithm: pass');
     component.startDate.set('2025-01-13');
     component.endDate.set('2025-01-13');
     component.initialCash.set(100_000);

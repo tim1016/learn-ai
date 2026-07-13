@@ -85,6 +85,7 @@ public sealed record BacktestRunDetailType
     public string? VerdictGrade { get; init; }
     public string? VerdictSignal { get; init; }
     public BacktestRunEquityCurveType? EquityCurve { get; init; }
+    public BacktestRunValidationAnalyticsType? ValidationAnalytics { get; init; }
     public string? InsightSummaryJson { get; init; }
     public string? DataPolicyJson { get; init; }
     public DataPolicyType? DataPolicy => DataPolicyType.TryParse(DataPolicyJson);
@@ -130,6 +131,7 @@ public sealed record BacktestRunDetailType
             VerdictGrade = execution.VerdictGrade,
             VerdictSignal = execution.VerdictSignal,
             EquityCurve = ParseEquityCurve(execution.EquityCurveJson, execution.Id, logger),
+            ValidationAnalytics = ParseValidationAnalytics(execution.ValidationAnalyticsJson, execution.Id, logger),
             InsightSummaryJson = execution.InsightSummaryJson,
             DataPolicyJson = execution.DataPolicyJson,
             ParityGroupId = execution.ParityGroupId,
@@ -203,6 +205,61 @@ public sealed record BacktestRunDetailType
         public decimal? SortinoRatio { get; init; }
         public decimal? ProfitFactor { get; init; }
     }
+
+    private static readonly JsonSerializerOptions SnakeCaseJson = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+    };
+
+    private static BacktestRunValidationAnalyticsType? ParseValidationAnalytics(
+        string? json,
+        int executionId,
+        ILogger logger)
+    {
+        if (string.IsNullOrWhiteSpace(json))
+            return null;
+
+        try
+        {
+            var envelope = JsonSerializer.Deserialize<ValidationAnalyticsEnvelopeDto>(json, SnakeCaseJson);
+            if (envelope is null)
+                return null;
+
+            return new BacktestRunValidationAnalyticsType
+            {
+                SchemaVersion = envelope.SchemaVersion,
+                ComputedAtMs = envelope.ComputedAtMs,
+                Engine = envelope.Engine ?? "",
+                Horizons = envelope.Analytics?.Horizons ?? [],
+                TimingCells = envelope.Analytics?.TimingCells ?? [],
+                Seasonality = envelope.Analytics?.Seasonality ?? [],
+                RollingTradeStability = envelope.Analytics?.RollingTradeStability ?? [],
+            };
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
+        {
+            logger.LogWarning(
+                ex,
+                "StrategyExecution {ExecutionId} validation analytics JSON is unreadable",
+                executionId);
+            return new BacktestRunValidationAnalyticsType
+            {
+                Error = "Validation analytics envelope unreadable.",
+            };
+        }
+    }
+
+    private sealed record ValidationAnalyticsEnvelopeDto(
+        int SchemaVersion,
+        long ComputedAtMs,
+        string? Engine,
+        ValidationAnalyticsBodyDto? Analytics);
+
+    private sealed record ValidationAnalyticsBodyDto(
+        List<ValidationHorizonType>? Horizons,
+        List<ValidationTimingCellType>? TimingCells,
+        List<ValidationSeasonalityMonthType>? Seasonality,
+        List<ValidationRollingTradePointType>? RollingTradeStability);
 
     private static BacktestRunEquityCurveType? ParseEquityCurve(string? json, int executionId, ILogger logger)
     {
@@ -281,6 +338,59 @@ public sealed record BacktestRunEquityCurveType
     public IReadOnlyList<BacktestRunEquityPointType> Points { get; init; } = [];
 }
 
+public sealed record BacktestRunValidationAnalyticsType
+{
+    public int SchemaVersion { get; init; }
+    public long ComputedAtMs { get; init; }
+    /// <summary>Engine that computed the frozen analytics ("python" | "lean").</summary>
+    public string Engine { get; init; } = "";
+    public string? Error { get; init; }
+    public IReadOnlyList<ValidationHorizonType> Horizons { get; init; } = [];
+    public IReadOnlyList<ValidationTimingCellType> TimingCells { get; init; } = [];
+    public IReadOnlyList<ValidationSeasonalityMonthType> Seasonality { get; init; } = [];
+    public IReadOnlyList<ValidationRollingTradePointType> RollingTradeStability { get; init; } = [];
+}
+
+public sealed record ValidationHorizonType
+{
+    public string Key { get; init; } = "";
+    public string Label { get; init; } = "";
+    public long StartMsUtc { get; init; }
+    public long EndMsUtc { get; init; }
+    public bool HasFullCoverage { get; init; }
+    public double? NetReturn { get; init; }
+    public int TradeCount { get; init; }
+    public double? WinRate { get; init; }
+    public double? ProfitFactor { get; init; }
+}
+
+public sealed record ValidationTimingCellType
+{
+    public int Weekday { get; init; }
+    public string WeekdayLabel { get; init; } = "";
+    public int HourEt { get; init; }
+    public int TradeCount { get; init; }
+    public double WinRate { get; init; }
+    public double AverageReturn { get; init; }
+}
+
+public sealed record ValidationSeasonalityMonthType
+{
+    public int Month { get; init; }
+    public string MonthLabel { get; init; } = "";
+    public int ObservationCount { get; init; }
+    public double? MedianCompoundedReturn { get; init; }
+}
+
+public sealed record ValidationRollingTradePointType
+{
+    public int TradeNumber { get; init; }
+    public long EndMsUtc { get; init; }
+    public int WindowSize { get; init; }
+    public double AverageReturn { get; init; }
+    public double WinRate { get; init; }
+}
+
 public sealed record BacktestRunEquityPointType(long T, decimal E);
 
 public sealed record BacktestRunTradeDetailType
@@ -295,6 +405,8 @@ public sealed record BacktestRunTradeDetailType
     [GraphQLName("pnL")]
     public decimal PnL { get; init; }
     public decimal CumulativePnL { get; init; }
+    public decimal PnlPts { get; init; }
+    public decimal PnlPct { get; init; }
     public string SignalReason { get; init; } = "";
     public bool IsSyntheticExit { get; init; }
 
@@ -309,6 +421,8 @@ public sealed record BacktestRunTradeDetailType
         Quantity = trade.Quantity,
         PnL = trade.PnL,
         CumulativePnL = trade.CumulativePnL,
+        PnlPts = trade.ExitPrice - trade.EntryPrice,
+        PnlPct = trade.EntryPrice > 0 ? (trade.ExitPrice - trade.EntryPrice) / trade.EntryPrice : 0m,
         SignalReason = trade.SignalReason,
         IsSyntheticExit = trade.IsSyntheticExit,
     };
@@ -318,7 +432,8 @@ public sealed record BacktestRunParityVerdictType
 {
     public int Id { get; init; }
     public int LeftExecutionId { get; init; }
-    public int RightExecutionId { get; init; }
+    /// <summary>Null while pending / on unavailable and failed dispositions.</summary>
+    public int? RightExecutionId { get; init; }
     public string? ParityGroupId { get; init; }
     public int VerdictVersion { get; init; }
     public string Status { get; init; } = "";

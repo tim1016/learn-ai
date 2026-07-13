@@ -12,6 +12,8 @@ export interface StrategyValidationDiagnostics {
 }
 
 export interface StrategyEvidenceSnapshot {
+  validator_code_ref?: string | null;
+  validator_code_sha256?: string | null;
   settings_file_ref: string | null;
   settings_file_sha256: string | null;
   qc_cloud_backtest_id: string | null;
@@ -58,6 +60,8 @@ export interface StrategyValidationSummary {
   description: string;
   validation_state: StrategyValidationState;
   deployable: boolean;
+  validator_code_ref?: string | null;
+  validator_code_sha256?: string | null;
   settings_file_ref: string | null;
   settings_file_sha256: string | null;
   qc_cloud_backtest_id: string | null;
@@ -83,6 +87,7 @@ export interface StrategyValidationCatalog {
 export interface StrategyValidationFlagRequest {
   flag: StrategyValidationFlag;
   reason: string;
+  qc_cloud_backtest_id?: string;
 }
 
 export interface StrategyValidationRefreshResult {

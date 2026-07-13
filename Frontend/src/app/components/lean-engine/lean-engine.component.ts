@@ -9,20 +9,18 @@ import {
 } from "@angular/core";
 import { CommonModule } from "@angular/common";
 import { FormsModule } from "@angular/forms";
-import { RouterModule } from "@angular/router";
+import { ActivatedRoute, ParamMap, RouterModule } from "@angular/router";
 import { HttpClient } from "@angular/common/http";
-import { firstValueFrom } from "rxjs";
+import { firstValueFrom, map } from "rxjs";
+import { toSignal } from "@angular/core/rxjs-interop";
 import { environment } from "../../../environments/environment";
 import { ButtonModule } from "primeng/button";
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from "primeng/tabs";
-import { EngineResultsComponent } from "./engine-results/engine-results.component";
-import { StudyListItem } from "./study-list-item";
+import { RunReportComponent } from "../engine-lab/run-report/run-report.component";
 import { EngineLabRunHistoryComponent } from "./engine-lab-run-history/engine-lab-run-history.component";
-import { LeanEngineDocsComponent } from "./lean-engine-docs/lean-engine-docs.component";
-import { ChartBar, EngineTradeForChart, EquityCurvePoint } from "./engine-chart/engine-chart.component";
-import { InsightPanelComponent } from "./insight-panel/insight-panel.component";
-import { TvCompatPanelComponent } from "./tv-compat-panel/tv-compat-panel.component";
-import { EngineReplayV2Component } from "./engine-replay-v2/engine-replay-v2.component";
+import { ValidationEvidenceCardComponent } from "./validation-evidence-card/validation-evidence-card.component";
+import { ValidationStagePlaceholderComponent } from "./validation-stage-placeholder/validation-stage-placeholder.component";
+import { StrategyDetailTabComponent } from "./strategy-detail-tab/strategy-detail-tab.component";
 import { PageHeaderComponent } from "../../shared/page-header/page-header.component";
 import {
   TickerRangePickerComponent,
@@ -35,29 +33,22 @@ import { TICKER_POOL, RECENT_TICKERS } from "../../shared/ticker-catalog";
 import { JobsService } from "../../services/jobs.service";
 import { LeanSidecarService } from "../../services/lean-sidecar.service";
 import type { DataPolicy } from "../../models/data-policy";
-import type { LeanLauncherDiagnosticReport } from "../../services/lean-sidecar.types";
+import type {
+  LeanLauncherDiagnosticReport,
+  TrustedRunResponse,
+} from "../../services/lean-sidecar.types";
 import { RunDockComponent } from "../../shared/run-dock/run-dock.component";
 import {
   RUN_DOCK_SOURCE,
   RUN_DOCK_STORAGE_KEY,
 } from "../../shared/run-dock/run-dock-source";
-import { formatTimestampIsoInZone } from "../../shared/timestamp";
 import { EngineRunDockSource } from "./engine-run-dock-source";
-import { LeanScriptEditorComponent } from "../lean-script-editor/lean-script-editor.component";
-import { EMA_CROSSOVER_SOURCE_TEMPLATE } from "../lean-script-editor/lean-script-editor.template";
 import { toMostRecentWeekday } from "../../shared/date/weekday";
+import type { EngineValidationAnalytics } from "./engine-results/engine-validation-analytics.types";
 
 /** Engine choice on the unified launch surface. */
-export type EngineChoice = "python" | "lean";
+export type EngineChoice = "python" | "lean" | "both";
 type LeanLauncherStatus = "unknown" | "checking" | "ready" | "blocked";
-type LeanAlgorithmMode = "template" | "custom";
-
-// Severity for pre-flight: re-declared locally so we don't import the panel's types.
-type PreflightSeverity = "ok" | "warning" | "blocking";
-interface PreflightSnapshot {
-  overall: PreflightSeverity;
-  summary: string;
-}
 
 /**
  * LEAN Engine — Phase 2 first cut.
@@ -69,7 +60,7 @@ interface PreflightSnapshot {
  * the trade table. The Docs tab planned in §2.4a ships as a separate
  * component in a follow-up commit.
  */
-interface StrategyInfo {
+export interface StrategyInfo {
   name: string;
   display_name: string;
   description: string;
@@ -81,12 +72,71 @@ interface StrategyInfo {
   /** Parity-critical gotchas surfaced from the validation studies.
    *  Render as a bullet list under the strategy description. */
   gotchas?: string[];
-  /** True when the backend can generate a Pine v6 script for this
-   *  strategy — controls visibility of the download button. */
-  pine_available?: boolean;
 }
 
 type EngineResolution = "minute" | "daily";
+
+interface EngineLaunchParams {
+  strategy?: string;
+  engine?: EngineChoice;
+  symbol?: string;
+  from?: string;
+  to?: string;
+  resolution?: EngineResolution;
+  tab?: "configuration" | "history" | "strategy";
+}
+
+function parseEngineLaunchParams(params: ParamMap): EngineLaunchParams {
+  return {
+    strategy: nonBlank(params.get("strategy")),
+    engine: parseEngineChoice(params.get("engine")),
+    symbol: nonBlank(params.get("symbol")),
+    from: parseIsoDate(params.get("from")),
+    to: parseIsoDate(params.get("to")),
+    resolution: parseEngineResolution(params.get("resolution")),
+    tab: parseLaunchTab(params.get("tab")),
+  };
+}
+
+function parseEngineChoice(value: string | null): EngineChoice | undefined {
+  return value === "python" || value === "lean" || value === "both" ? value : undefined;
+}
+
+function parseEngineResolution(value: string | null): EngineResolution | undefined {
+  return isEngineResolution(value) ? value : undefined;
+}
+
+function parseLaunchTab(value: string | null): EngineLaunchParams["tab"] | undefined {
+  if (value === "configuration" || value === "history" || value === "strategy") {
+    return value;
+  }
+  return undefined;
+}
+
+function parseIsoDate(value: string | null): string | undefined {
+  return value !== null && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : undefined;
+}
+
+function nonBlank(value: string | null): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function isEngineResolution(value: unknown): value is EngineResolution {
+  return value === "minute" || value === "daily";
+}
+
+function launchParamsKey(params: EngineLaunchParams): string {
+  return [
+    params.strategy ?? "",
+    params.engine ?? "",
+    params.symbol ?? "",
+    params.from ?? "",
+    params.to ?? "",
+    params.resolution ?? "",
+    params.tab ?? "",
+  ].join("|");
+}
 
 type RunPhase =
   | "idle"
@@ -128,51 +178,12 @@ interface EngineTrade {
   entry_price: number;
   exit_time: number;
   exit_price: number;
+  quantity?: number;
   indicators: Record<string, number>;
   pnl_pts: number;
   pnl_pct: number;
   result: string;
   signal_reason: string;
-}
-
-/**
- * StudyTradeItem (camelCase) shape from GET /api/studies/{id}.
- * Defined narrow + exported so the trade-mapper helper has a typed input
- * and can be unit-tested in isolation.
- */
-export interface StudyTradeApiItem {
-  entryTimestamp: number;
-  exitTimestamp: number;
-  entryPrice: number;
-  exitPrice: number;
-  pnL: number;
-  signalReason?: string | null;
-}
-
-/**
- * Reconstruct an EngineTrade from a persisted StudyTradeItem. The .NET
- * BacktestTrade entity does not store the percent return, so derive it
- * from `pnL / entryPrice` — matches the Python engine's definition
- * (`pnl_pct = pnl_pts / entry.entry_price`). Guard against entry_price
- * <= 0 to avoid NaN/Infinity propagating into the trade-log table.
- */
-export function mapStudyTradeToEngineTrade(
-  t: StudyTradeApiItem,
-  index: number,
-): EngineTrade {
-  const pnlPct = t.entryPrice > 0 ? t.pnL / t.entryPrice : 0;
-  return {
-    trade_number: index + 1,
-    entry_time: t.entryTimestamp,
-    entry_price: t.entryPrice,
-    exit_time: t.exitTimestamp,
-    exit_price: t.exitPrice,
-    pnl_pts: t.pnL,
-    pnl_pct: pnlPct,
-    result: t.pnL > 0 ? 'WIN' : 'LOSS',
-    signal_reason: t.signalReason ?? '',
-    indicators: {},
-  };
 }
 
 interface EngineBacktestResponse {
@@ -195,6 +206,7 @@ interface EngineBacktestResponse {
   chart_bars?: { t: number; o: number; h: number; l: number; c: number; v: number }[];
   insights?: Record<string, any>[];
   insight_summary?: Record<string, any>;
+  validation_analytics?: EngineValidationAnalytics | null;
   /** Auto-saved study row id, populated by the engine before returning so
    *  the Engine Lab can immediately enable the Replay tab. Null when the
    *  best-effort save call to the .NET backend failed. */
@@ -219,12 +231,12 @@ interface DataAvailability {
   imports: [
     CommonModule, FormsModule, RouterModule, ButtonModule,
     Tabs, TabList, Tab, TabPanel, TabPanels,
-    EngineResultsComponent, LeanEngineDocsComponent, EngineLabRunHistoryComponent,
-    InsightPanelComponent,
-    TvCompatPanelComponent, EngineReplayV2Component,
+    RunReportComponent, EngineLabRunHistoryComponent,
+    ValidationEvidenceCardComponent,
+    ValidationStagePlaceholderComponent,
+    StrategyDetailTabComponent,
     PageHeaderComponent,
     TickerRangePickerComponent,
-    LeanScriptEditorComponent,
     RunDockComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -241,9 +253,15 @@ interface DataAvailability {
 })
 export class LeanEngineComponent implements OnInit {
   private http = inject(HttpClient);
+  private route = inject(ActivatedRoute);
   private jobsService = inject(JobsService);
   private leanSidecarService = inject(LeanSidecarService);
   private readonly apiBase = `${environment.pythonServiceUrl}/api/engine`;
+  private readonly launchParams = toSignal(
+    this.route.queryParamMap.pipe(map(parseEngineLaunchParams)),
+    { initialValue: {} },
+  );
+  private readonly appliedLaunchParamsKey = signal<string | null>(null);
 
   /**
    * PR B.5 — engine choice for the unified launch surface. ``python``
@@ -257,15 +275,13 @@ export class LeanEngineComponent implements OnInit {
    * ``LeanScriptEditorComponent`` so the parent can synthesize the
    * trusted-run submission body without reaching into the child.
    */
-  readonly leanSource = signal<string>(EMA_CROSSOVER_SOURCE_TEMPLATE);
-  readonly leanAlgorithmMode = signal<LeanAlgorithmMode>("template");
   readonly leanLauncherCommand =
     "cd PythonDataService && PYTHONPATH=. ./.venv/bin/python -m uvicorn app.lean_sidecar.launcher.app:app --host 0.0.0.0 --port 8090";
   readonly leanLauncherStatus = signal<LeanLauncherStatus>("unknown");
   readonly leanLauncherDetail = signal<string>("");
   readonly leanLauncherCopied = signal(false);
   readonly leanLauncherBlocksRun = computed(
-    () => this.engine() === "lean" && this.leanLauncherStatus() !== "ready",
+    () => this.engine() !== "python" && this.leanLauncherStatus() !== "ready",
   );
 
   // ------------------------------------------------------------------
@@ -288,27 +304,7 @@ export class LeanEngineComponent implements OnInit {
   readonly endDate = signal<string>(LeanEngineComponent.defaultEnd());
   readonly initialCash = signal<number>(100000);
 
-  // Timezone used for rendering entry_time / exit_time in the trades table
-  // AND for the CSV download — whatever the table shows is what the file gets.
-  readonly selectedTimezone = signal<string>("UTC");
   readonly commissionPerOrder = signal<number>(1.0);
-
-  /** Curated list of commonly useful zones, plus the browser's detected local
-   *  zone (only appended if it isn't already in the curated list). */
-  readonly timezoneOptions = computed<{ value: string; label: string }[]>(() => {
-    const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const base = [
-      { value: "UTC", label: "UTC" },
-      { value: "America/New_York", label: "New York (ET)" },
-      { value: "America/Los_Angeles", label: "Los Angeles (PT)" },
-      { value: "Europe/London", label: "London" },
-      { value: "Asia/Kolkata", label: "Mumbai (IST)" },
-      { value: "Asia/Tokyo", label: "Tokyo (JST)" },
-    ];
-    return base.some((o) => o.value === localZone)
-      ? base
-      : [...base, { value: localZone, label: `Local (${localZone})` }];
-  });
 
   /** Preset quick-range buttons — matches the Data Lab style so a user
    *  flipping between the two pages sees the same shortcuts. ``days`` is
@@ -325,7 +321,12 @@ export class LeanEngineComponent implements OnInit {
     { label: "2Y", days: 730 },
   ];
 
-  readonly activeTab = signal<string>("0");
+  readonly activeTab = signal<string>("configuration");
+  readonly strategyDetailName = signal<string | null>(null);
+  readonly strategyDetail = computed(() => {
+    const name = this.strategyDetailName();
+    return name ? this.strategies().find((strategy) => strategy.name === name) ?? null : null;
+  });
 
   readonly running = signal(false);
 
@@ -345,76 +346,11 @@ export class LeanEngineComponent implements OnInit {
     this.runPhaseDetail.set(detail);
   }
 
-  // ------------------------------------------------------------------
-  // Replay — always enabled; the tab unlocks once a study (just-run or
-  // selected from History) is available.
-  // ------------------------------------------------------------------
-  readonly replayEnabled = true;
-  readonly selectedStudyForReplay = signal<StudyListItem | null>(null);
-
-  // ------------------------------------------------------------------
-  // TV-compatibility pre-flight
-  // ------------------------------------------------------------------
-  /** Latest snapshot from the embedded TvCompatPanel. Null until first emission. */
-  readonly preflight = signal<PreflightSnapshot | null>(null);
-  /** Run button is disabled while pre-flight reports `blocking`. */
-  readonly preflightBlocks = computed(() => this.preflight()?.overall === "blocking");
-  /** Indicators the current strategy uses — fed to the pre-flight panel. */
-  readonly strategyIndicators = computed<readonly { name: string; length: number }[]>(() => {
-    const name = this.selectedStrategyName();
-    // Hard-coded canonical mapping for the three reference strategies. Once
-    // strategies expose a metadata endpoint, read it from there instead.
-    if (name === "SpyEmaCrossover" || name === "spy_ema_crossover") {
-      return [{ name: "ema", length: 5 }, { name: "ema", length: 10 }, { name: "rsi", length: 14 }];
-    }
-    if (name === "RsiMeanReversion" || name === "rsi_mean_reversion") {
-      return [{ name: "rsi", length: 14 }];
-    }
-    if (name === "SmaCrossover" || name === "sma_crossover") {
-      return [{ name: "sma", length: 50 }, { name: "sma", length: 200 }];
-    }
-    // Fallback — unknown strategy, provide a safe conservative indicator so
-    // pre-flight still runs and surfaces session/warmup feedback.
-    return [{ name: "ema", length: 200 }];
-  });
-  /** Timeframe value passed to the pre-flight — derived from resolution. */
-  readonly preflightTimeframe = computed<"5m" | "15m" | "1h">(() => {
-    // The lean-engine currently supports minute + daily. Map to the pre-flight
-    // timeframes; when lean-engine adds 5m/1h explicitly, update this.
-    const res = this.resolution();
-    return res === "daily" ? "1h" : "15m";
-  });
-
-  onPreflightUpdate(snapshot: PreflightSnapshot | null): void {
-    this.preflight.set(snapshot);
-  }
-  readonly result = signal<EngineBacktestResponse | null>(null);
+  /** Persisted-run id rendered by the shared run report. The persisted
+   *  run is the ONLY render source — there is no transient results path,
+   *  so the workbench stage and /engine/runs/:id cannot diverge. */
+  readonly completedRunId = signal<number | null>(null);
   readonly runError = signal<string | null>(null);
-
-  // Computed chart data derived from backtest result
-  readonly chartBars = computed<ChartBar[]>(() => {
-    return this.result()?.chart_bars ?? [];
-  });
-  readonly chartTrades = computed<EngineTradeForChart[]>(() => {
-    const r = this.result();
-    if (!r?.trades) return [];
-    return r.trades.map(t => ({
-      entry_time: t.entry_time,
-      exit_time: t.exit_time,
-      entry_price: t.entry_price,
-      exit_price: t.exit_price,
-      pnl_pts: t.pnl_pts,
-      result: t.result,
-    }));
-  });
-  readonly equityCurve = computed<EquityCurvePoint[]>(() => {
-    return (this.result()?.equity_curve ?? []).map(pt => ({
-      timestamp: pt.timestamp,
-      equity: pt.equity,
-    }));
-  });
-  readonly insights = computed(() => this.result()?.insights ?? []);
-  readonly insightSummary = computed(() => this.result()?.insight_summary ?? {});
 
   // ------------------------------------------------------------------
   // Dynamic data layer state — availability + on-demand fetch
@@ -475,8 +411,10 @@ export class LeanEngineComponent implements OnInit {
   private strategyBarsSpec(
     timespan: DataPolicy['input_bars']['timespan'],
   ): DataPolicy['strategy_bars'] {
+    const strategyName = this.selectedStrategyName();
     const isEmaCrossoverRun =
-      this.selectedStrategyName() === 'spy_ema_crossover' || this.engine() === 'lean';
+      strategyName === 'spy_ema_crossover' ||
+      (strategyName === null && this.engine() === 'lean');
     if (timespan === 'minute' && isEmaCrossoverRun) {
       return { timespan, multiplier: 15 };
     }
@@ -530,7 +468,6 @@ export class LeanEngineComponent implements OnInit {
   onPickerAdvisoryAction(action: AdvisoryAction): void {
     if (action.triggerRun) {
       void this.run();
-      this.activeTab.set("1");
     }
     // ``refetchHoles`` is advisory for now — no backend endpoint yet.
   }
@@ -583,7 +520,7 @@ export class LeanEngineComponent implements OnInit {
 
     // Keep the legacy per-field signals in sync with the picker's
     // writable ``rangeState``. These signals are what the availability
-    // check, preflight panel, and ``run()`` body read from, so this
+    // check and ``run()`` body read from, so this
     // effect is the single bridge between the new picker and the rest
     // of the component — no consumer below the picker had to change.
     effect(() => {
@@ -604,7 +541,7 @@ export class LeanEngineComponent implements OnInit {
           this.paramValues.set({ ...current, symbol: v.symbol });
         }
       }
-    }, { allowSignalWrites: true });
+    });
 
     // Auto-refresh the availability report whenever the user changes
     // symbol, start date, or end date. We don't wait for a "Check" button
@@ -635,6 +572,22 @@ export class LeanEngineComponent implements OnInit {
       if (!current || !available.some((s) => s.name === current)) {
         this.onStrategyChange(available[0].name);
       }
+    });
+
+    // Deep links from Strategy Validation and run receipts land here.
+    // Apply once after strategy metadata loads so URL state wins over
+    // the first-compatible auto-selection above.
+    effect(() => {
+      const params = this.launchParams();
+      const key = launchParamsKey(params);
+      if (key === this.appliedLaunchParamsKey() || key === "||||||") {
+        return;
+      }
+      if (this.strategies().length === 0) {
+        return;
+      }
+      this.applyLaunchParams(params);
+      this.appliedLaunchParamsKey.set(key);
     });
   }
 
@@ -716,8 +669,114 @@ export class LeanEngineComponent implements OnInit {
       }
     }
     this.paramValues.set(defaults);
-    this.result.set(null);
+    this.completedRunId.set(null);
     this.runError.set(null);
+  }
+
+  private applyLaunchParams(params: EngineLaunchParams): void {
+    if (params.engine) {
+      this.engine.set(params.engine);
+    }
+
+    const strategy = params.strategy ? this.findLaunchStrategy(params.strategy) : null;
+    const resolution = this.resolveLaunchResolution(strategy, params.resolution);
+    this.applyLaunchRange(params, resolution);
+
+    if (strategy) {
+      this.onStrategyChange(strategy.name);
+      this.applyUnsupportedResolutionWarning(strategy, params.resolution, resolution);
+      if (params.symbol) {
+        this.applyLaunchSymbolParam(params.symbol);
+      }
+      if (params.tab === "strategy") {
+        this.strategyDetailName.set(strategy.name);
+        this.activeTab.set(`strategy:${strategy.name}`);
+      } else {
+        this.activeTab.set(params.tab ?? "configuration");
+      }
+      return;
+    }
+
+    if (params.strategy) {
+      this.runError.set(`Strategy "${params.strategy}" is not registered in Engine Lab.`);
+    }
+    this.activeTab.set(params.tab === "history" ? "history" : "configuration");
+  }
+
+  private findLaunchStrategy(key: string): StrategyInfo | null {
+    const normalizedKey = LeanEngineComponent.normalizeStrategyKey(key);
+    return this.strategies().find((strategy) =>
+      strategy.name === key ||
+      strategy.name.toLowerCase() === key.toLowerCase() ||
+      LeanEngineComponent.normalizeStrategyKey(strategy.name) === normalizedKey
+    ) ?? null;
+  }
+
+  private resolveLaunchResolution(
+    strategy: StrategyInfo | null,
+    requested: EngineResolution | undefined,
+  ): EngineResolution {
+    if (!strategy) {
+      return requested ?? this.resolution();
+    }
+
+    const supported = (strategy.supported_resolutions ?? ["minute"]).filter(isEngineResolution);
+    if (requested && supported.includes(requested)) {
+      return requested;
+    }
+    return supported[0] ?? "minute";
+  }
+
+  private applyUnsupportedResolutionWarning(
+    strategy: StrategyInfo,
+    requested: EngineResolution | undefined,
+    applied: EngineResolution,
+  ): void {
+    const supported = (strategy.supported_resolutions ?? ["minute"]).filter(isEngineResolution);
+    if (requested && !supported.includes(requested)) {
+      this.runError.set(
+        `${strategy.display_name} does not support ${requested} data. Using ${applied} instead.`,
+      );
+    }
+  }
+
+  private applyLaunchRange(params: EngineLaunchParams, resolution: EngineResolution): void {
+    const current = this.rangeState();
+    const next: TickerRange = {
+      ...current,
+      symbol: params.symbol?.toUpperCase() ?? current.symbol,
+      from: params.from ?? current.from,
+      to: params.to ?? current.to,
+      resolution,
+    };
+    this.rangeState.set(next);
+    this.startDate.set(next.from);
+    this.endDate.set(next.to);
+    this.resolution.set(resolution);
+    this.autoFetch.set(next.autoFetch ?? false);
+  }
+
+  private applyLaunchSymbolParam(symbol: string): void {
+    const schema = this.selectedStrategy()?.params_schema;
+    if (!schema?.properties || !("symbol" in schema.properties)) {
+      return;
+    }
+    this.paramValues.set({ ...this.paramValues(), symbol: symbol.toUpperCase() });
+  }
+
+  private static normalizeStrategyKey(value: string): string {
+    return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+  }
+
+  openStrategyDetail(name: string): void {
+    this.onStrategyChange(name);
+    this.strategyDetailName.set(name);
+    this.activeTab.set(`strategy:${name}`);
+  }
+
+  closeStrategyDetail(): void {
+    this.strategyDetailName.set(null);
+    this.activeTab.set("configuration");
   }
 
   onParamChange(field: string, rawValue: string, type: string | undefined): void {
@@ -755,6 +814,10 @@ export class LeanEngineComponent implements OnInit {
   private leanJobId = signal<string | null>(null);
 
   async run(): Promise<void> {
+    if (this.engine() === "both") {
+      await Promise.all([this.runPython(), this.runLean()]);
+      return;
+    }
     if (this.engine() === "lean") {
       await this.runLean();
       return;
@@ -768,7 +831,7 @@ export class LeanEngineComponent implements OnInit {
 
     this.running.set(true);
     this.runError.set(null);
-    this.result.set(null);
+    this.completedRunId.set(null);
     this.setRunStatus(
       "connecting",
       "Submitting backtest…",
@@ -807,7 +870,7 @@ export class LeanEngineComponent implements OnInit {
         typeof detail === "string" ? detail : err?.message ?? "Backtest request failed";
       this.runError.set(message);
       this.setRunStatus("failed", "Backtest request failed", message);
-      this.running.set(false);
+      this.updateRunningState();
     }
   }
 
@@ -837,7 +900,7 @@ export class LeanEngineComponent implements OnInit {
 
     this.running.set(true);
     this.runError.set(null);
-    this.result.set(null);
+    this.completedRunId.set(null);
     this.setRunStatus(
       "connecting",
       "Submitting LEAN run…",
@@ -876,8 +939,7 @@ export class LeanEngineComponent implements OnInit {
       const id = await this.jobsService.startJob("lean_engine_run", {
         request: {
           run_id: this.composeRunId(),
-          algorithm_source: this.leanAlgorithmMode() === "custom" ? this.leanSource() : null,
-          template: "ema_crossover",
+          template: this.leanTemplateForSelectedStrategy(),
           starting_cash: this.initialCash(),
           start_ms_utc: this.composeStartMs(),
           end_ms_utc: endResolution.session_open_ms_utc,
@@ -893,16 +955,14 @@ export class LeanEngineComponent implements OnInit {
         err instanceof Error ? err.message : "LEAN run request failed";
       this.runError.set(message);
       this.setRunStatus("failed", "LEAN run request failed", message);
-      this.running.set(false);
+      this.updateRunningState();
     }
   }
 
-  useCustomLeanAlgorithm(): void {
-    this.leanAlgorithmMode.set("custom");
-  }
-
-  useBuiltInLeanAlgorithm(): void {
-    this.leanAlgorithmMode.set("template");
+  private leanTemplateForSelectedStrategy(): "ema_crossover" | "deployment_validation" {
+    return this.selectedStrategyName() === "deployment_validation"
+      ? "deployment_validation"
+      : "ema_crossover";
   }
 
   /**
@@ -1065,17 +1125,15 @@ export class LeanEngineComponent implements OnInit {
         const message = job.errorMessage ?? "Backtest failed";
         this.runError.set(message);
         this.setRunStatus("failed", "Backtest failed", message);
-        this.running.set(false);
         this.engineJobId.set(null);
-        this.jobsService.dismiss(id);
+        this.updateRunningState();
         return;
       }
 
       if (job.status === "cancelled") {
         this.setRunStatus("failed", "Backtest cancelled", job.message ?? "");
-        this.running.set(false);
         this.engineJobId.set(null);
-        this.jobsService.dismiss(id);
+        this.updateRunningState();
         return;
       }
 
@@ -1086,7 +1144,7 @@ export class LeanEngineComponent implements OnInit {
         this.engineJobId.set(null);
         void this.handleEngineJobCompleted(id);
       }
-    }, { allowSignalWrites: true });
+    });
   }
 
   /**
@@ -1138,37 +1196,28 @@ export class LeanEngineComponent implements OnInit {
         const message = job.errorMessage ?? "LEAN run failed";
         this.runError.set(message);
         this.setRunStatus("failed", "LEAN run failed", message);
-        this.running.set(false);
         this.leanJobId.set(null);
-        this.jobsService.dismiss(id);
+        this.updateRunningState();
         return;
       }
 
       if (job.status === "cancelled") {
         this.setRunStatus("failed", "LEAN run cancelled", job.message ?? "");
-        this.running.set(false);
         this.leanJobId.set(null);
-        this.jobsService.dismiss(id);
+        this.updateRunningState();
         return;
       }
 
       if (job.status === "completed") {
-        // v1: announce completion and rely on History (auto-refreshed
-        // by #468) for the run summary. The LEAN result envelope
-        // ``TrustedRunResult`` is best inspected on the row itself
-        // rather than shoehorned into the Python engine's Results tab.
-        this.setRunStatus("completed", "LEAN run finished — see History for details");
-        this.running.set(false);
         this.leanJobId.set(null);
-        this.jobsService.dismiss(id);
+        void this.handleLeanJobCompleted(id);
       }
-    }, { allowSignalWrites: true });
+    });
   }
 
   private async handleEngineJobCompleted(jobId: string): Promise<void> {
     try {
       const response = await this.jobsService.fetchResult<EngineBacktestResponse>(jobId);
-      this.result.set(response);
       if (response.error) {
         this.runError.set(response.error);
         this.setRunStatus("failed", "Backtest failed", response.error);
@@ -1178,97 +1227,53 @@ export class LeanEngineComponent implements OnInit {
           `Completed — ${response.total_trades} trade${response.total_trades === 1 ? "" : "s"}, net ${this.formatCurrency(response.net_profit)}`,
         );
         if (response.study_id != null) {
-          this.selectedStudyForReplay.set(this.synthesizeStudyForReplay(response));
+          // The persisted run is the only render source — the report
+          // reads back exactly what history will show for this run.
+          this.completedRunId.set(response.study_id);
+        } else {
+          this.runError.set(
+            "Run completed but persistence failed — no report available. The run was not saved to history; check backend logs.",
+          );
         }
-        this.activeTab.set("1");
+        this.activeTab.set("configuration");
       }
     } catch (err: any) {
       const message = err?.message ?? "Failed to fetch backtest result";
       this.runError.set(message);
       this.setRunStatus("failed", "Failed to fetch backtest result", message);
     } finally {
-      this.running.set(false);
-      this.jobsService.dismiss(jobId);
+      this.updateRunningState();
     }
   }
 
-  /** Build a StudyListItem-shaped object from the just-finished backtest
-   *  response so the Replay component can drive itself off it without
-   *  refetching from /api/studies. Only the fields the replay actually
-   *  reads (id, symbol, strategyName, startDate, endDate, timespan)
-   *  carry meaningful values; everything else is filled with safe
-   *  defaults so the type lines up. */
-  private synthesizeStudyForReplay(r: EngineBacktestResponse): StudyListItem {
-    return {
-      id: r.study_id as number,
-      symbol: this.effectiveSymbol(),
-      strategyName: r.strategy_name,
-      startDate: this.startDate(),
-      endDate: this.endDate(),
-      timespan: this.resolution(),
-      fillMode: r.fill_mode,
-      source: "engine",
-      totalTrades: r.total_trades,
-      winningTrades: r.winning_trades,
-      losingTrades: r.losing_trades,
-      winRate: r.win_rate,
-      totalPnL: r.net_profit,
-      maxDrawdown: (r.statistics?.["max_drawdown_pct"] as number) ?? 0,
-      sharpeRatio: (r.statistics?.["sharpe_ratio"] as number) ?? 0,
-      sortinoRatio: (r.statistics?.["sortino_ratio"] as number) ?? 0,
-      compoundingAnnualReturn: 0,
-      probabilisticSharpeRatio: 0,
-      profitFactor: (r.statistics?.["profit_factor"] as number) ?? 0,
-      valueAtRisk95: 0,
-      alpha: 0,
-      beta: 0,
-      initialCash: r.initial_cash,
-      finalEquity: r.final_equity,
-      parameters: JSON.stringify(this.paramValues()),
-      notes: null,
-      executedAt: Date.now(),
-      durationMs: 0,
-    };
-  }
-
-  readonly pineDownloading = signal(false);
-  readonly pineError = signal<string | null>(null);
-
-  /** Fetch a Pine v6 script for the current strategy + params and
-   *  trigger a browser download. Disabled when the selected strategy
-   *  does not expose a generator (``pine_available === false``). */
-  async downloadPineScript(): Promise<void> {
-    const strategy = this.selectedStrategy();
-    if (!strategy?.pine_available) {
-      this.pineError.set("No Pine script is available for this strategy.");
-      return;
-    }
-    this.pineDownloading.set(true);
-    this.pineError.set(null);
+  private async handleLeanJobCompleted(jobId: string): Promise<void> {
     try {
-      const url = `${this.apiBase}/strategies/${strategy.name}/pine`;
-      const text = await firstValueFrom(
-        this.http.post(url, this.paramValues(), { responseType: "text" })
-      );
-      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
-      const objectUrl = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = objectUrl;
-      a.download = `${strategy.name}.pine`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(objectUrl);
-    } catch (err: any) {
-      const detail = err?.error?.detail;
-      this.pineError.set(
-        typeof detail === "string"
-          ? detail
-          : err?.message ?? "Pine download failed"
-      );
+      const response = await this.jobsService.fetchResult<TrustedRunResponse>(jobId);
+      if (response.strategy_execution_id !== null) {
+        // LEAN runs render the same persisted report as Python runs.
+        this.completedRunId.set(response.strategy_execution_id);
+        this.setRunStatus(
+          "completed",
+          "LEAN run finished",
+          `Persisted as study #${response.strategy_execution_id}.`,
+        );
+      } else {
+        this.runError.set(
+          "LEAN run completed but persistence failed — no report available. The run was not saved to history; check backend logs.",
+        );
+        this.setRunStatus("completed", "LEAN run finished", "Run completed, but no persisted study ID was returned.");
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to fetch LEAN run result";
+      this.runError.set(message);
+      this.setRunStatus("failed", "LEAN result unavailable", message);
     } finally {
-      this.pineDownloading.set(false);
+      this.updateRunningState();
     }
+  }
+
+  private updateRunningState(): void {
+    this.running.set(this.engineJobId() !== null || this.leanJobId() !== null);
   }
 
   // ------------------------------------------------------------------
@@ -1281,31 +1286,6 @@ export class LeanEngineComponent implements OnInit {
       currency: "USD",
       maximumFractionDigits: 2,
     }).format(value);
-  }
-
-  formatPercent(value: number | null | undefined): string {
-    if (value === null || value === undefined || Number.isNaN(value)) return "—";
-    return `${(value * 100).toFixed(2)}%`;
-  }
-
-  formatNumber(value: number | null | undefined, places = 2): string {
-    if (value === null || value === undefined || Number.isNaN(value)) return "—";
-    return value.toFixed(places);
-  }
-
-  /**
-   * Format a backend int64-ms UTC timestamp in the currently selected timezone,
-   * emitting ISO-8601 with a numeric offset (e.g. 2025-04-17T10:00:00-04:00).
-   * UTC is rendered with a trailing 'Z'. Returned string is what the table
-   * cell displays AND what the CSV row writes for that field, so the two
-   * stay in lockstep regardless of which zone is picked.
-   */
-  formatTradeTime(ms: number): string {
-    return formatTimestampIsoInZone(ms, this.selectedTimezone());
-  }
-
-  tradeIndicatorEntries(trade: EngineTrade): { key: string; value: number }[] {
-    return Object.entries(trade.indicators).map(([key, value]) => ({ key, value }));
   }
 
   // ------------------------------------------------------------------
@@ -1350,80 +1330,11 @@ export class LeanEngineComponent implements OnInit {
   }
 
   // ------------------------------------------------------------------
-  // CSV download
+  // History → render the persisted run through the shared report
   // ------------------------------------------------------------------
-  downloadTradesCsv(): void {
-    const r = this.result();
-    if (!r) return;
-    const header = '#,Entry Time,Entry,Exit Time,Exit,PnL (pts),PnL %,Result,Signal';
-    const rows = r.trades.map(t => [
-      t.trade_number,
-      this.formatTradeTime(t.entry_time),
-      t.entry_price.toFixed(2),
-      this.formatTradeTime(t.exit_time),
-      t.exit_price.toFixed(2),
-      t.pnl_pts.toFixed(4),
-      (t.pnl_pct * 100).toFixed(4) + '%',
-      t.result,
-      `"${t.signal_reason}"`,
-    ].join(','));
-    const csv = [header, ...rows].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${this.effectiveSymbol()}_engine_trades.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  // ------------------------------------------------------------------
-  // History → load past study into Results tab
-  // ------------------------------------------------------------------
-  async onStudySelected(studyId: number): Promise<void> {
-    const backendBase = environment.backendUrl.replace(/\/graphql$/, '');
-    try {
-      const detail = await firstValueFrom(
-        this.http.get<any>(`${backendBase}/api/studies/${studyId}`)
-      );
-      // Parse LEAN statistics from JSON blob if present
-      let leanStats = null;
-      if (detail.leanStatisticsJson) {
-        try { leanStats = JSON.parse(detail.leanStatisticsJson); } catch { /* invalid JSON, keep null */ }
-      }
-      // Construct an EngineBacktestResponse-shaped object for the results component
-      this.result.set({
-        success: true,
-        strategy_name: detail.strategyName,
-        fill_mode: detail.fillMode,
-        initial_cash: detail.initialCash,
-        final_equity: detail.finalEquity,
-        net_profit: detail.totalPnL,
-        total_fees: detail.totalFees ?? 0,
-        total_trades: detail.totalTrades,
-        winning_trades: detail.winningTrades,
-        losing_trades: detail.losingTrades,
-        win_rate: detail.winRate,
-        statistics: {
-          max_drawdown_pct: detail.maxDrawdown,
-          sharpe_ratio: detail.sharpeRatio,
-          sortino_ratio: detail.sortinoRatio,
-          profit_factor: detail.profitFactor,
-        },
-        lean_statistics: leanStats,
-        trades: (detail.trades ?? []).map((t: StudyTradeApiItem, i: number) =>
-          mapStudyTradeToEngineTrade(t, i),
-        ),
-        log_lines: [],
-        equity_curve: [],
-        chart_bars: [],
-        insights: [],
-        insight_summary: {},
-      });
-      this.activeTab.set("1"); // Switch to Results tab
-    } catch (err: any) {
-      this.runError.set(err?.message ?? 'Failed to load study');
-    }
+  onStudySelected(studyId: number): void {
+    this.completedRunId.set(studyId);
+    this.activeTab.set("configuration");
   }
 
   availabilitySourceChips(av: DataAvailability): { label: string; days: number }[] {

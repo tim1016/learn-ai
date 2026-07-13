@@ -1,0 +1,68 @@
+<section class="atlas" aria-labelledby="validation-atlas-title">
+  <header class="atlas__header">
+    <div>
+      <p class="eyebrow">Behavioral fingerprint</p>
+      <h2 id="validation-atlas-title">Performance memory</h2>
+      <p>All windows end at this run. Missing coverage stays missing.</p>
+    </div>
+    <span class="authority">Calculated by Python</span>
+  </header>
+
+  <div class="horizons" aria-label="Performance by trailing window">
+    @for (horizon of analytics().horizons; track horizon.key) {
+      <article class="horizon" [class.horizon--uncovered]="!horizon.has_full_coverage">
+        <div class="horizon__label">{{ horizon.label }}</div>
+        <strong>{{ horizon.has_full_coverage ? formatPercent(horizon.net_return) : 'Needs more data' }}</strong>
+        <div class="horizon__track" aria-hidden="true"><i [style.width.%]="(horizon.win_rate ?? 0) * 100"></i></div>
+        <div class="horizon__meta"><span>{{ horizon.win_rate === null ? '—' : formatPercent(horizon.win_rate) + ' wins' }}</span><span>{{ horizon.trade_count }} trades</span></div>
+        <div class="horizon__pf">Profit factor {{ formatRatio(horizon.profit_factor) }}</div>
+      </article>
+    }
+  </div>
+
+  <div class="atlas__grid">
+    <article class="analysis analysis--timing">
+      <header><div><h3>Entry expectancy by weekday and hour</h3><p>Average closed-trade return · ET · sample count in each cell</p></div></header>
+      @if (timingHours().length > 0) {
+        <div class="heatmap" [style.--hour-count]="timingHours().length">
+          <span></span>
+          @for (hour of timingHours(); track hour) { <span class="axis">{{ formatHour(hour) }}</span> }
+          @for (row of timingRows(); track row.weekday) {
+            <span class="axis axis--day">{{ row.label }}</span>
+            @for (cell of row.cells; track $index) {
+              <span
+                class="heat-cell"
+                [class.empty]="timingClass(cell) === 'empty'"
+                [class.positive]="timingClass(cell) === 'positive'"
+                [class.negative]="timingClass(cell) === 'negative'"
+                [class.flat]="timingClass(cell) === 'flat'"
+                [attr.aria-label]="cell ? row.label + ' ' + formatHour(cell.hour_et) + ', ' + formatPercent(cell.average_return) + ', ' + cell.trade_count + ' trades' : row.label + ', no trades'">
+                @if (cell) { <b>{{ formatPercent(cell.average_return) }}</b><small>n={{ cell.trade_count }}</small> } @else { <b>—</b> }
+              </span>
+            }
+          }
+        </div>
+      } @else { <p class="empty-state">No closed trades are available for timing analysis.</p> }
+    </article>
+
+    <article class="analysis">
+      <header><div><h3>Rolling 20-trade stability</h3><p>Average return in each trailing window</p></div></header>
+      @if (stabilityBars().length > 0) {
+        <div class="stability-chart" role="img" aria-label="Rolling 20-trade average-return chart">
+          @for (bar of stabilityBars(); track bar.tradeNumber) { <i [class.negative]="!bar.positive" [style.--bar-height]="bar.heightPct + '%'" [attr.title]="'Trade ' + bar.tradeNumber + ': ' + formatPercent(bar.averageReturn)"></i> }
+        </div>
+      } @else { <p class="empty-state">At least 20 trades are required.</p> }
+    </article>
+
+    <article class="analysis analysis--seasonality">
+      <header><div><h3>Calendar-month seasonality</h3><p>Median compounded trade return by calendar month across this run</p></div></header>
+      <div class="seasonality-chart" role="img" aria-label="Calendar month seasonality chart">
+        @for (bar of seasonalityBars(); track bar.month.month) { <div class="month"><i [class.negative]="!bar.positive" [style.--bar-height]="bar.heightPct + '%'" [attr.title]="bar.month.month_label + ': ' + formatPercent(bar.month.median_compounded_return) + ', ' + bar.month.observation_count + ' observations'"></i><span>{{ bar.month.month_label }}</span></div> }
+      </div>
+    </article>
+  </div>
+
+  @if (analytics().horizons[0]; as latest) {
+    <footer><span>Latest window ends <app-timestamp-display [value]="latest.end_ms_utc" mode="local" /></span><span>Returns include the run’s configured execution costs.</span></footer>
+  }
+</section>

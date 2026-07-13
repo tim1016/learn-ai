@@ -19,6 +19,8 @@ class StrategyValidationDiagnostics(BaseModel):
 
 
 class StrategyEvidenceSnapshot(BaseModel):
+    validator_code_ref: str | None = None
+    validator_code_sha256: str | None = None
     settings_file_ref: str | None = None
     settings_file_sha256: str | None = None
     qc_cloud_backtest_id: str | None = None
@@ -57,6 +59,7 @@ class StrategyValidationFlagRequest(BaseModel):
 
     flag: StrategyValidationFlag
     reason: str = Field(min_length=1, max_length=4000)
+    qc_cloud_backtest_id: str | None = Field(default=None, min_length=1, max_length=200)
 
     @field_validator("reason")
     @classmethod
@@ -66,6 +69,16 @@ class StrategyValidationFlagRequest(BaseModel):
             raise ValueError("reason is required")
         return stripped
 
+    @field_validator("qc_cloud_backtest_id")
+    @classmethod
+    def backtest_id_must_not_be_blank(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("qc_cloud_backtest_id cannot be blank")
+        return stripped
+
 
 class StrategyValidationEntry(BaseModel):
     strategy_key: str
@@ -73,6 +86,8 @@ class StrategyValidationEntry(BaseModel):
     description: str
     validation_state: ValidationState
     deployable: bool
+    validator_code_ref: str | None = None
+    validator_code_sha256: str | None = None
     settings_file_ref: str | None = None
     settings_file_sha256: str | None = None
     qc_cloud_backtest_id: str | None = None

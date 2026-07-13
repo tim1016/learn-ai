@@ -146,12 +146,6 @@ export class EngineLabRunHistoryComponent {
     }
   }
 
-  onCompare(event: { leftId: string; rightId: string }): void {
-    void this.router.navigate(["/runs/compare"], {
-      queryParams: { left: event.leftId, right: event.rightId },
-    });
-  }
-
   onRowSelected(id: string): void {
     void this.router.navigate(["/engine/runs", id]);
   }

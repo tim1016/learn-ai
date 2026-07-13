@@ -372,6 +372,113 @@ def test_build_persist_payload_pairs_round_trip(tmp_path: Path) -> None:
     assert stats["runtime"]["total_orders"] == 1
 
 
+def test_build_persist_payload_includes_validation_analytics_envelope(tmp_path: Path) -> None:
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    ws = _write_fixture_workspace(
+        tmp_path,
+        "ui_run_analytics",
+        order_events=[
+            {
+                "order_id": 1,
+                "order_event_id": 2,
+                "direction": "buy",
+                "status": "filled",
+                "ms_utc": 1_700_000_060_000,
+                "fill_price": 100.0,
+                "fill_quantity": 10,
+                "quantity": 10,
+                "order_fee_amount": 0.5,
+            },
+            {
+                "order_id": 2,
+                "order_event_id": 2,
+                "direction": "sell",
+                "status": "filled",
+                "ms_utc": 1_700_000_600_000,
+                "fill_price": 101.0,
+                "fill_quantity": 10,
+                "quantity": 10,
+                "order_fee_amount": 0.5,
+            },
+        ],
+        equity_curve=[
+            {"ms_utc": 1_700_000_000_000, "value": 100_000.0},
+            {"ms_utc": 1_700_000_600_000, "value": 100_009.0},
+        ],
+    )
+
+    payload = build_persist_payload(
+        workspace_path=ws,
+        run_id="ui_run_analytics",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="ema_crossover",
+        start_date_ms=1_700_000_000_000,
+        end_date_ms=1_700_000_600_000,
+    )
+
+    envelope = json.loads(payload["validation_analytics_json"])
+    assert envelope["schema_version"] == 1
+    assert envelope["engine"] == "lean"
+    assert envelope["computed_at_ms"] > 0
+    analytics = envelope["analytics"]
+    assert len(analytics["timing_cells"]) == 1
+    # pnl=9.0 on 10 shares @ $100 deployed → 0.9% fractional return.
+    assert analytics["timing_cells"][0]["average_return"] == pytest.approx(0.009)
+    assert {h["key"] for h in analytics["horizons"]} == {"2w", "1m", "3m", "6m", "1y", "2y"}
+
+
+def test_build_persist_payload_analytics_null_when_equity_curve_invalid(tmp_path: Path) -> None:
+    """A non-strictly-increasing equity curve → honest null analytics, not a crash."""
+    from app.services.lean_sidecar_persistence import build_persist_payload
+
+    ws = _write_fixture_workspace(
+        tmp_path,
+        "ui_run_bad_curve",
+        order_events=[
+            {
+                "order_id": 1,
+                "order_event_id": 2,
+                "direction": "buy",
+                "status": "filled",
+                "ms_utc": 1_700_000_060_000,
+                "fill_price": 100.0,
+                "fill_quantity": 10,
+                "quantity": 10,
+                "order_fee_amount": 0.5,
+            },
+            {
+                "order_id": 2,
+                "order_event_id": 2,
+                "direction": "sell",
+                "status": "filled",
+                "ms_utc": 1_700_000_600_000,
+                "fill_price": 101.0,
+                "fill_quantity": 10,
+                "quantity": 10,
+                "order_fee_amount": 0.5,
+            },
+        ],
+        equity_curve=[
+            {"ms_utc": 1_700_000_600_000, "value": 100_000.0},
+            {"ms_utc": 1_700_000_600_000, "value": 100_009.0},
+        ],
+    )
+
+    payload = build_persist_payload(
+        workspace_path=ws,
+        run_id="ui_run_bad_curve",
+        starting_cash=100_000.0,
+        symbol="SPY",
+        algorithm_name="ema_crossover",
+        start_date_ms=1_700_000_000_000,
+        end_date_ms=1_700_000_600_000,
+    )
+
+    assert payload["validation_analytics_json"] is None
+
+
 def test_build_persist_payload_folds_unclean_lean_run_into_verdict(tmp_path: Path) -> None:
     from app.services.lean_sidecar_persistence import build_persist_payload
 

@@ -390,7 +390,7 @@ namespace Backend.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("varchar(64)");
 
-                    b.Property<int>("RightExecutionId")
+                    b.Property<int?>("RightExecutionId")
                         .HasColumnType("integer");
 
                     b.Property<string>("Status")
@@ -410,7 +410,8 @@ namespace Backend.Migrations
                     b.HasIndex("LeftExecutionId", "RightExecutionId")
                         .IsUnique();
 
-                    b.HasIndex("ParityGroupId");
+                    b.HasIndex("ParityGroupId")
+                        .IsUnique();
 
                     b.HasIndex("RightExecutionId");
 
@@ -884,6 +885,9 @@ namespace Backend.Migrations
                     b.Property<decimal>("TreynorRatio")
                         .HasPrecision(18, 8)
                         .HasColumnType("numeric(18,8)");
+
+                    b.Property<string>("ValidationAnalyticsJson")
+                        .HasColumnType("jsonb");
 
                     b.Property<decimal>("ValueAtRisk95")
                         .HasPrecision(18, 8)
@@ -1599,8 +1603,7 @@ namespace Backend.Migrations
                     b.HasOne("Backend.Models.MarketData.StrategyExecution", "RightExecution")
                         .WithMany()
                         .HasForeignKey("RightExecutionId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Cascade);
 
                     b.Navigation("LeftExecution");
 

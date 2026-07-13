@@ -22,6 +22,8 @@ const ACCEPTED_FLAG_EVENT: StrategyValidationFlagEvent = {
     detail: 'Human validation accepted the current engine evidence for deployment.',
   },
   evidence_snapshot: {
+    validator_code_ref: 'PythonDataService/app/lean_sidecar/trusted_samples/deployment_validation.py',
+    validator_code_sha256: 'validator-sha',
     settings_file_ref: 'PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json',
     settings_file_sha256: 'spec-sha',
     qc_cloud_backtest_id: 'd2fe45a7142e88575f6fbd75229f8681',
@@ -42,6 +44,8 @@ const DEPLOYMENT_DETAIL: StrategyValidationDetail = {
   description: 'Two-green-minute deployment validation primitive.',
   validation_state: 'validated',
   deployable: true,
+  validator_code_ref: 'PythonDataService/app/lean_sidecar/trusted_samples/deployment_validation.py',
+  validator_code_sha256: 'validator-sha',
   settings_file_ref: 'PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json',
   settings_file_sha256: 'spec-sha',
   qc_cloud_backtest_id: 'd2fe45a7142e88575f6fbd75229f8681',
@@ -162,6 +166,54 @@ describe('StrategyValidationComponent', () => {
     expect(screen.queryByText(/DeploymentValidationConsecutiveGreen/)).toBeNull();
   });
 
+  it('links the selected strategy directly into Engine Lab validation mode', async () => {
+    await render(StrategyValidationComponent, {
+      providers: [
+        provideRouter([]),
+        { provide: StrategyValidationService, useClass: FakeStrategyValidationService },
+      ],
+    });
+
+    const link = await screen.findByRole('link', { name: /Validate in Engine Lab/ });
+
+    expect(link.getAttribute('href')).toContain('/engine?');
+    expect(link.getAttribute('href')).toContain('strategy=deployment_validation');
+    expect(link.getAttribute('href')).toContain('engine=both');
+    expect(link.getAttribute('href')).toContain('symbol=SPY');
+  });
+
+  it('does not treat deploy binding as a LEAN validator when validator evidence is missing', async () => {
+    const legacyDetail: StrategyValidationDetail = {
+      ...DEPLOYMENT_DETAIL,
+      validator_code_ref: null,
+      validator_code_sha256: null,
+      current_flag_event: {
+        ...ACCEPTED_FLAG_EVENT,
+        evidence_snapshot: {
+          ...ACCEPTED_FLAG_EVENT.evidence_snapshot,
+          validator_code_ref: null,
+          validator_code_sha256: null,
+        },
+      },
+    };
+    const service = new FakeStrategyValidationService();
+    service.getCatalog.mockResolvedValue({ strategies: [legacyDetail, ORB_DETAIL] });
+    service.getDetail.mockResolvedValue(legacyDetail);
+
+    await render(StrategyValidationComponent, {
+      providers: [
+        provideRouter([]),
+        { provide: StrategyValidationService, useValue: service },
+      ],
+    });
+
+    const link = await screen.findByRole('link', { name: /Validate in Engine Lab/ });
+
+    expect(screen.getByText('Not recorded')).toBeTruthy();
+    expect(link.getAttribute('href')).toContain('engine=python');
+    expect(link.getAttribute('href')).not.toContain('engine=both');
+  });
+
   it('switches to the selected strategy detail', async () => {
     await render(StrategyValidationComponent, {
       providers: [
@@ -216,6 +268,30 @@ describe('StrategyValidationComponent', () => {
       expect(service.flagValidation).toHaveBeenCalledWith('deployment_validation', {
         flag: 'invalidated',
         reason: 'Reject this evidence.',
+      });
+    });
+  });
+
+  it('attaches a backtest ID when accepting reconciled evidence', async () => {
+    const service = new FakeStrategyValidationService();
+    await render(StrategyValidationComponent, {
+      providers: [
+        provideRouter([]),
+        { provide: StrategyValidationService, useValue: service },
+      ],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Opening Range Breakout/ }));
+    await screen.findByRole('heading', { name: 'Opening Range Breakout' });
+    fireEvent.input(screen.getByLabelText('Reason'), { target: { value: 'Trades match within the accepted gate.' } });
+    fireEvent.input(screen.getByLabelText('QC Cloud backtest ID'), { target: { value: 'qc-backtest-42' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save flag' }));
+
+    await waitFor(() => {
+      expect(service.flagValidation).toHaveBeenCalledWith('spy_orb', {
+        flag: 'validated',
+        reason: 'Trades match within the accepted gate.',
+        qc_cloud_backtest_id: 'qc-backtest-42',
       });
     });
   });

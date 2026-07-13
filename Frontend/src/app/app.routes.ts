@@ -144,13 +144,6 @@ export const routes: Routes = [
       ),
   },
   {
-    path: "runs/compare",
-    loadComponent: () =>
-      import("./components/runs-compare/runs-compare.component").then(
-        (m) => m.RunsCompareComponent
-      ),
-  },
-  {
     path: "strategy-validation",
     loadComponent: () =>
       import(

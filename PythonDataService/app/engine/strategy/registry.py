@@ -339,6 +339,12 @@ class StrategyRegistration:
     # field in the run ledger but does not refuse deploys based on it
     # in Slices 1–3 — enforcement lands with consumption (Slice 4).
     instrument_surface: Literal["policy", "explicit"] = "explicit"
+    # Engine Lab parity — the LEAN trusted-sample template that implements
+    # the same rules as this strategy, if one exists. When set, every raw
+    # minute-resolution Python run auto-spawns a LEAN validating companion
+    # sharing a parity_group_id (see app/services/parity_companion.py).
+    # None → honest "parity unavailable — no LEAN counterpart".
+    lean_twin: str | None = None
 
 
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
@@ -440,6 +446,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         build=lambda p: SpyEmaCrossoverAlgorithm(
             symbol=p.symbol,  # type: ignore[attr-defined]
         ),
+        lean_twin="ema_crossover",
     ),
     "sma_crossover": StrategyRegistration(
         display_name="SMA Crossover",
@@ -804,6 +811,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "The detector resets after exit, so bars that occurred during an "
             "open position cannot contribute to the next entry pattern.",
         ],
+        lean_twin="deployment_validation",
         param_schema=DeploymentValidationParams,
         hidden_params={"trade_symbol"},
         build=lambda p: DeploymentValidationConsecutiveGreen(

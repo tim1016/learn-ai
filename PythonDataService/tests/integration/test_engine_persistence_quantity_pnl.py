@@ -119,3 +119,68 @@ def test_save_study_payload_with_zero_commission() -> None:
     trade = captured["trades"][0]
     assert trade["quantity"] == 10
     assert trade["pnL"] == pytest.approx(20.0, abs=1e-9)
+
+
+@respx.mock
+def test_save_study_payload_includes_validation_analytics_envelope() -> None:
+    """The frozen analytics envelope must survive persistence — the run
+    report renders it from the row, never from the transient response."""
+    from app.schemas.engine_validation import EngineValidationAnalyticsResponse
+
+    response = _response_with_trade(quantity=10, pnl_pts=2.0)
+    response.validation_analytics = EngineValidationAnalyticsResponse()
+    captured: dict[str, Any] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json={"id": 7})
+
+    respx.post("http://localhost:5000/api/studies").mock(side_effect=_capture)
+
+    _save_study_sync(
+        response=response,
+        symbol="SPY",
+        start_date="2025-01-06",
+        end_date="2025-01-10",
+        resolution="minute",
+        params_json="{}",
+        duration_ms=1,
+        commission_per_order=0.0,
+    )
+
+    envelope = json.loads(captured["validationAnalyticsJson"])
+    assert envelope["schema_version"] == 1
+    assert envelope["engine"] == "python"
+    assert envelope["computed_at_ms"] > 0
+    assert set(envelope["analytics"].keys()) == {
+        "horizons",
+        "timing_cells",
+        "seasonality",
+        "rolling_trade_stability",
+    }
+
+
+@respx.mock
+def test_save_study_payload_analytics_null_when_absent() -> None:
+    """No analytics on the response → honest null column, not a crash."""
+    response = _response_with_trade(quantity=10, pnl_pts=2.0)
+    captured: dict[str, Any] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json={"id": 8})
+
+    respx.post("http://localhost:5000/api/studies").mock(side_effect=_capture)
+
+    _save_study_sync(
+        response=response,
+        symbol="SPY",
+        start_date="2025-01-06",
+        end_date="2025-01-10",
+        resolution="minute",
+        params_json="{}",
+        duration_ms=1,
+        commission_per_order=0.0,
+    )
+
+    assert captured["validationAnalyticsJson"] is None

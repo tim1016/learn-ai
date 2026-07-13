@@ -526,10 +526,23 @@ async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
         algorithm_source=payload.algorithm_source,
         template=payload.template,
         data_policy=data_policy,
+        parity_group_id=payload.parity_group_id,
     )
 
     def work(emit: ProgressEmitter, cancel) -> dict | None:
         cancel.raise_if_cancelled()
+
+        def _mark_parity(status_label: str, detail: str) -> None:
+            """Surface a companion failure on the group's ParityVerdict.
+
+            Conditional server-side (pending → failed only), so a verdict
+            the .NET persist step already froze is never overwritten.
+            """
+            if trusted_request.parity_group_id is None:
+                return
+            from app.services.parity_companion import mark_parity_failed
+
+            mark_parity_failed(trusted_request.parity_group_id, status=status_label, detail=detail)
 
         async def _do() -> dict:
             result = await run_trusted_sample(
@@ -545,28 +558,41 @@ async def start_lean_engine_run_job(req: LeanEngineRunJobRequest) -> dict:
             # framework runs ``work`` in a thread, so each job gets its
             # own event loop here — no contention with the FastAPI
             # request loop.
-            return asyncio.run(_do())
+            result = asyncio.run(_do())
+            if result.get("exit_code") != 0:
+                _mark_parity("run_failed", f"LEAN exited with code {result.get('exit_code')}")
+            elif result.get("strategy_execution_id") is None:
+                _mark_parity("persist_failed", "LEAN run completed but persisted no StrategyExecution row")
+            return result
         except RunIdAlreadyUsedError as e:
             # The launcher boundary never saw this — fail with a
             # caller-friendly reason without invoking the launcher's
             # rejection vocabulary.
             emit.failed(code="run_id_already_used", message=str(e))
+            _mark_parity("run_failed", str(e))
             return None
         except LauncherRejected as e:
             emit.failed(code=e.reason, message=e.message)
+            _mark_parity("run_failed", f"{e.reason}: {e.message}")
             return None
         except LauncherUnreachable as e:
             emit.failed(code="launcher_unreachable", message=str(e))
+            _mark_parity("run_failed", f"launcher_unreachable: {e}")
             return None
         except LauncherClientError as e:
             emit.failed(code="launcher_protocol_error", message=str(e))
+            _mark_parity("run_failed", f"launcher_protocol_error: {e}")
             return None
         except LeanSidecarServiceError as e:
             emit.failed(code="lean_sidecar_service_error", message=str(e))
+            _mark_parity("run_failed", f"lean_sidecar_service_error: {e}")
             return None
-        # All other exceptions propagate; ``run_in_thread`` converts
-        # them to ``job.failed(code=<class>, message=<str>)`` via its
-        # terminal sink.
+        except Exception as e:
+            # Propagates to ``run_in_thread``'s terminal sink, which
+            # converts it to ``job.failed`` — but the parity group must
+            # not be left eternally pending on the way out.
+            _mark_parity("run_failed", f"{type(e).__name__}: {e}")
+            raise
 
     run_in_thread(req.job_id, work, thread_name=f"lean-{req.job_id[:8]}")
     return {"job_id": req.job_id, "status": "queued"}

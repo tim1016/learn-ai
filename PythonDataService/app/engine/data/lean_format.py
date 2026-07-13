@@ -23,7 +23,9 @@ Lean/Common/Util/LeanData.cs (GenerateZipFilePath / GenerateZipEntryName).
 
 from __future__ import annotations
 
+import contextlib
 import io
+import os
 import zipfile
 from collections.abc import Iterator, Sequence
 from datetime import date, datetime, timedelta
@@ -32,10 +34,24 @@ from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+from app.engine.data.path_safety import ensure_within_root
 from app.engine.data.trade_bar import TradeBar
 
 # LEAN's price scale factor: prices on disk are multiplied by 10000.
 PRICE_SCALE = Decimal(10000)
+
+
+def _safe_symbol(symbol: str) -> str:
+    """Validate a ticker before it flows into a filesystem path.
+
+    Lazy import: the canonical validator lives with the sidecar workspace
+    code; the engine layer reuses it rather than duplicating the ticker
+    alphabet (guiding-philosophy #5). Callers such as ``polygon_export`` do
+    not pre-validate, so the writers guard the symbol here.
+    """
+    from app.lean_sidecar.workspace import validate_symbol
+
+    return validate_symbol(symbol)
 
 # Phase 5f determinism gate: every staged zip must hash identically
 # across re-runs with the same inputs. ``zipfile.ZipFile.writestr``
@@ -52,6 +68,33 @@ _DETERMINISTIC_ZIP_DATE_TIME: tuple[int, int, int, int, int, int] = (
     0,
     0,
 )
+
+
+def _atomic_write_bytes(path: Path, data: bytes, *, trusted_root: Path) -> None:
+    """Write ``data`` to ``path`` via a same-directory temp file + rename.
+
+    ``os.replace`` is atomic on POSIX, so a concurrent reader of the
+    shared bar store either sees the previous complete zip or the new
+    complete zip — never a torn write. ``trusted_root`` confines the
+    operation to a service-owned directory and the repeated containment
+    check protects this final filesystem boundary from traversal and
+    symlink escapes.
+    """
+    root_real = os.path.realpath(os.fspath(trusted_root)).rstrip(os.sep) + os.sep
+    candidate = os.path.realpath(os.fspath(path))
+    if not candidate.startswith(root_real):
+        raise ValueError(f"path {candidate!r} escapes root {root_real!r}")
+    safe = Path(candidate)
+    safe.parent.mkdir(parents=True, exist_ok=True)
+    tmp = safe.with_name(safe.name + ".tmp")
+    try:
+        with open(tmp, "wb") as handle:
+            handle.write(data)
+        os.replace(tmp, safe)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            tmp.unlink()
+        raise
 
 
 def _write_deterministic_csv_zip(buf: io.BytesIO, csv_name: str, csv_body: str) -> None:
@@ -431,10 +474,12 @@ def write_lean_daily_zip(
     Returns:
         Path to the written zip file.
     """
-    out_dir = Path(output_root) / "equity" / "usa" / "daily"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = out_dir / f"{symbol.lower()}.zip"
-    csv_name = f"{symbol.lower()}.csv"
+    safe = _safe_symbol(symbol).lower()
+    zip_path = ensure_within_root(
+        output_root,
+        Path(output_root) / "equity" / "usa" / "daily" / f"{safe}.zip",
+    )
+    csv_name = f"{safe}.csv"
 
     # Merge with any existing file so partial-range fetches don't clobber
     # previously cached history.
@@ -465,7 +510,7 @@ def write_lean_daily_zip(
 
     buf = io.BytesIO()
     _write_deterministic_csv_zip(buf, csv_name, "\n".join(lines))
-    zip_path.write_bytes(buf.getvalue())
+    _atomic_write_bytes(zip_path, buf.getvalue(), trusted_root=Path(output_root))
     return zip_path
 
 
@@ -493,10 +538,12 @@ def write_lean_quote_day_zip(
     Row format (per LEAN docs):
         ms,bid_o,bid_h,bid_l,bid_c,bid_size,ask_o,ask_h,ask_l,ask_c,ask_size
     """
-    out_dir = Path(output_root) / "equity" / "usa" / "minute" / symbol.lower()
-    out_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = out_dir / f"{trading_date.strftime('%Y%m%d')}_quote.zip"
-    csv_name = f"{trading_date.strftime('%Y%m%d')}_{symbol.lower()}_minute_quote.csv"
+    safe = _safe_symbol(symbol).lower()
+    zip_path = ensure_within_root(
+        output_root,
+        Path(output_root) / "equity" / "usa" / "minute" / safe / f"{trading_date.strftime('%Y%m%d')}_quote.zip",
+    )
+    csv_name = f"{trading_date.strftime('%Y%m%d')}_{safe}_minute_quote.csv"
     midnight = datetime(
         trading_date.year,
         trading_date.month,
@@ -518,7 +565,7 @@ def write_lean_quote_day_zip(
         )
     buf = io.BytesIO()
     _write_deterministic_csv_zip(buf, csv_name, "\n".join(lines))
-    zip_path.write_bytes(buf.getvalue())
+    _atomic_write_bytes(zip_path, buf.getvalue(), trusted_root=Path(output_root))
     return zip_path
 
 
@@ -539,10 +586,12 @@ def write_lean_day_zip(
     Returns:
         Path to the written zip file.
     """
-    out_dir = Path(output_root) / "equity" / "usa" / "minute" / symbol.lower()
-    out_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = out_dir / f"{trading_date.strftime('%Y%m%d')}_trade.zip"
-    csv_name = f"{trading_date.strftime('%Y%m%d')}_{symbol.lower()}_minute_trade.csv"
+    safe = _safe_symbol(symbol).lower()
+    zip_path = ensure_within_root(
+        output_root,
+        Path(output_root) / "equity" / "usa" / "minute" / safe / f"{trading_date.strftime('%Y%m%d')}_trade.zip",
+    )
+    csv_name = f"{trading_date.strftime('%Y%m%d')}_{safe}_minute_trade.csv"
     midnight = datetime(
         trading_date.year,
         trading_date.month,
@@ -563,5 +612,5 @@ def write_lean_day_zip(
         )
     buf = io.BytesIO()
     _write_deterministic_csv_zip(buf, csv_name, "\n".join(lines))
-    zip_path.write_bytes(buf.getvalue())
+    _atomic_write_bytes(zip_path, buf.getvalue(), trusted_root=Path(output_root))
     return zip_path

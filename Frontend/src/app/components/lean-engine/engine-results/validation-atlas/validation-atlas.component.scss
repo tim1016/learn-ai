@@ -1,0 +1,52 @@
+@use '../../../../styles/tokens' as *;
+
+:host { display: block; }
+
+.atlas { margin-top: 1rem; border: 1px solid $border; border-radius: 10px; background: $bg-surface; overflow: hidden; }
+.atlas__header { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; padding: 1rem 1.1rem; border-bottom: 1px solid $border; }
+.eyebrow { margin: 0 0 .25rem; color: $bull; font-size: .68rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+h2, h3, p { margin: 0; }
+h2 { font-size: 1.05rem; }
+h3 { font-size: .82rem; }
+.atlas__header p:not(.eyebrow), .analysis header p { margin-top: .25rem; color: $text-muted; font-size: .72rem; }
+.authority { padding: .25rem .5rem; border: 1px solid rgba($bull, .35); border-radius: 999px; color: $bull; font-size: .65rem; white-space: nowrap; }
+.horizons { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: .45rem; padding: .75rem; }
+.horizon { min-width: 0; padding: .7rem; border: 1px solid $border; border-radius: 7px; background: $bg-elevated; }
+.horizon__label { color: $text-muted; font-size: .64rem; font-weight: 700; text-transform: uppercase; }
+.horizon strong { display: block; margin-top: .35rem; color: $bull; font-size: 1.05rem; white-space: nowrap; }
+.horizon--uncovered strong { color: $text-muted; font-size: .75rem; }
+.horizon__track { height: 3px; margin: .55rem 0 .4rem; overflow: hidden; border-radius: 2px; background: $border; }
+.horizon__track i { display: block; height: 100%; background: $bull; }
+.horizon__meta { display: flex; justify-content: space-between; gap: .3rem; color: $text-muted; font-size: .62rem; }
+.horizon__pf { margin-top: .35rem; color: $text-muted; font-size: .62rem; }
+.atlas__grid { display: grid; grid-template-columns: 1.35fr .65fr; gap: .55rem; padding: 0 .75rem .75rem; }
+.analysis { min-width: 0; padding: .8rem; border: 1px solid $border; border-radius: 7px; background: $bg-elevated; }
+.analysis--timing, .analysis--seasonality { grid-column: 1 / -1; }
+.heatmap { --hour-count: 1; display: grid; grid-template-columns: 2.2rem repeat(var(--hour-count), minmax(3.2rem, 1fr)); gap: 3px; margin-top: .7rem; }
+.axis { display: grid; place-items: center; color: $text-muted; font-size: .6rem; }
+.axis--day { justify-content: start; font-weight: 700; }
+.heat-cell { min-height: 40px; display: grid; place-items: center; align-content: center; border-radius: 4px; background: $bg-surface; color: $text-muted; }
+.heat-cell b { font-size: .68rem; font-weight: 650; }
+.heat-cell small { margin-top: 2px; font-size: .58rem; }
+.heat-cell.positive { color: $bull; background: rgba($bull, .14); }
+.heat-cell.negative { color: $bear; background: rgba($bear, .14); }
+.heat-cell.flat { color: $warn; background: rgba($warn, .12); }
+.stability-chart, .seasonality-chart { position: relative; height: 130px; margin-top: .8rem; border-bottom: 1px solid $border; background: linear-gradient(to bottom, transparent 49.5%, $border 50%, transparent 50.5%); }
+.stability-chart { display: flex; gap: 2px; align-items: center; }
+.stability-chart i { flex: 1; min-width: 2px; height: var(--bar-height); max-height: 46%; transform: translateY(calc(-1 * var(--bar-height) / 2)); background: $bull; border-radius: 2px 2px 0 0; }
+.stability-chart i.negative { transform: translateY(calc(var(--bar-height) / 2)); background: $bear; border-radius: 0 0 2px 2px; }
+.seasonality-chart { display: grid; grid-template-columns: repeat(12, 1fr); gap: .3rem; }
+.month { position: relative; height: 100%; }
+.month i { position: absolute; left: 18%; right: 18%; bottom: 50%; height: var(--bar-height); background: $bull; border-radius: 3px 3px 0 0; }
+.month i.negative { top: 50%; bottom: auto; background: $bear; border-radius: 0 0 3px 3px; }
+.month span { position: absolute; left: 0; right: 0; bottom: -1.05rem; color: $text-muted; text-align: center; font-size: .58rem; }
+.analysis--seasonality { padding-bottom: 1.8rem; }
+.empty-state { display: grid; place-items: center; min-height: 130px; color: $text-muted; font-size: .72rem; }
+footer { display: flex; justify-content: space-between; gap: 1rem; padding: .7rem 1rem; border-top: 1px solid $border; color: $text-muted; font-size: .65rem; }
+
+@media (max-width: 1100px) {
+  .horizons { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .atlas__grid { grid-template-columns: 1fr; }
+  .analysis--timing, .analysis--seasonality { grid-column: auto; }
+  .heatmap { overflow-x: auto; }
+}

@@ -17,7 +17,8 @@ Status: internal validation strategy, not financial advice and not an alpha clai
 
 - Python canonical: `PythonDataService/app/engine/strategy/algorithms/deployment_validation.py`
 - LEAN companion template: `PythonDataService/app/lean_sidecar/trusted_samples/deployment_validation.py`
-- Deployment settings fixture: `PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json`
+- LEAN validator template: `PythonDataService/app/lean_sidecar/trusted_samples/deployment_validation.py`
+- Legacy deploy binding fixture: `PythonDataService/app/engine/strategy/spec/fixtures/deployment_validation.spec.json` remains only because the current live-runner deploy schema still records `strategy_spec_path`; it is not the strategy validation authority.
 - QuantConnect audit copy: `references/qc-shadow/DeploymentValidationAlgorithm.py`
 
 The deployment form requires both deploy artifacts in addition to the strategy

@@ -1,0 +1,35 @@
+@let detail = strategy();
+<article class="strategy-detail-tab">
+  <header>
+    <div>
+      <p class="strategy-detail-tab__eyebrow">Strategy definition</p>
+      <h2>{{ detail.display_name }}</h2>
+      <p>{{ detail.description }}</p>
+    </div>
+    <button type="button" class="detail-btn detail-btn--ghost" (click)="closed.emit()">
+      <i class="pi pi-times" aria-hidden="true"></i> Close tab
+    </button>
+  </header>
+  <div class="strategy-detail-grid">
+    <section>
+      <h3>Validation contract</h3>
+      <dl>
+        <div><dt>Registry key</dt><dd class="mono">{{ detail.name }}</dd></div>
+        <div><dt>Resolutions</dt><dd>{{ detail.supported_resolutions.join(', ') }}</dd></div>
+      </dl>
+    </section>
+    <section>
+      <h3>Known constraints</h3>
+      @if (detail.gotchas?.length) {
+        <ul>
+          @for (gotcha of detail.gotchas; track gotcha) { <li>{{ gotcha }}</li> }
+        </ul>
+      } @else {
+        <p>No strategy-specific constraints are registered.</p>
+      }
+    </section>
+  </div>
+  <button type="button" class="detail-btn detail-btn--primary" (click)="configure.emit()">
+    Configure this strategy
+  </button>
+</article>

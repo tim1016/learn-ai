@@ -2,8 +2,6 @@ import {
   Component, input, signal, computed,
   ChangeDetectionStrategy,
 } from '@angular/core';
-import { CommonModule } from '@angular/common';
-import { FormsModule } from '@angular/forms';
 import { TooltipModule } from 'primeng/tooltip';
 import { LeanStatisticsComponent } from '../lean-statistics/lean-statistics.component';
 import { ReadinessScoreCardComponent } from '../readiness-score-card/readiness-score-card.component';
@@ -17,7 +15,10 @@ import {
   gradeSharpe, gradeSortino, gradeProfitFactor, gradeWinRate,
   gradeMaxDrawdown, gradeExpectancy, gradeNetProfit,
 } from '../metric-grade.util';
-import { formatTimestampIsoInZone } from '../../../shared/timestamp';
+import type { RunVerdict } from '../../../api/run-verdict.types';
+import type { EngineValidationAnalytics } from './engine-validation-analytics.types';
+import { TradeLedgerComponent } from './trade-ledger/trade-ledger.component';
+import { ValidationAtlasComponent } from './validation-atlas/validation-atlas.component';
 
 // ── Shared types (mirrored from lean-engine) ──────────────────
 export interface LeanPortfolioStats {
@@ -64,6 +65,7 @@ export interface EngineTrade {
   entry_price: number;
   exit_time: number;
   exit_price: number;
+  quantity?: number;
   indicators: Record<string, number>;
   pnl_pts: number;
   pnl_pct: number;
@@ -87,15 +89,16 @@ export interface EngineResultData {
   lean_statistics: LeanStatistics | null;
   trades: EngineTrade[];
   log_lines: string[];
+  validation_analytics?: EngineValidationAnalytics | null;
   error?: string;
 }
 
 @Component({
   selector: 'app-engine-results',
-  standalone: true,
   imports: [
-    CommonModule, FormsModule, TooltipModule,
+    TooltipModule,
     LeanStatisticsComponent, ReadinessScoreCardComponent, EngineChartComponent,
+    TradeLedgerComponent, ValidationAtlasComponent,
   ],
   templateUrl: './engine-results.component.html',
   styleUrls: ['./engine-results.component.scss'],
@@ -104,6 +107,10 @@ export interface EngineResultData {
 export class EngineResultsComponent {
   result = input.required<EngineResultData>();
   symbol = input<string>('SPY');
+
+  /** Backend-authored frozen run verdict — feeds the readiness card.
+   *  Null renders the card's honest empty state. */
+  readonly verdict = input<RunVerdict | null>(null);
 
   /** Bars + trade markers for the price chart panel. Optional —
    *  when not supplied, the chart panel renders empty placeholders. */
@@ -128,9 +135,6 @@ export class EngineResultsComponent {
     const f = this.fromDate(); const t = this.toDate();
     return f && t ? `${f} → ${t}` : '';
   });
-
-  showTradeLog = signal(false);
-  selectedTimezone = signal<string>('UTC');
 
   /** Drives the "Fees & analytics" drawer toggle. The fee block is
    *  decision-support, not a primary KPI — kept hidden by default to
@@ -229,25 +233,8 @@ export class EngineResultsComponent {
    *  for simplicity we emit plain text with \n — PrimeNG white-space-pre's it.
    */
   tooltipBody(label: string, target: string, subtitle: string): string {
-    // Single-line summary — PrimeNG's default tooltip is text-only. Rich
-    // multi-line bodies are handled in the Docs tab; this is just a quick
-    // hover-to-orient hint for laypeople scanning the card.
-    return `${label} · target ${target} · ${subtitle} See Docs tab for formula.`;
-  }
-
-  get timezoneOptions(): { value: string; label: string }[] {
-    const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const base = [
-      { value: 'UTC', label: 'UTC' },
-      { value: 'America/New_York', label: 'New York (ET)' },
-      { value: 'America/Los_Angeles', label: 'Los Angeles (PT)' },
-      { value: 'Europe/London', label: 'London' },
-      { value: 'Asia/Kolkata', label: 'Mumbai (IST)' },
-      { value: 'Asia/Tokyo', label: 'Tokyo (JST)' },
-    ];
-    return base.some(o => o.value === localZone)
-      ? base
-      : [...base, { value: localZone, label: `Local (${localZone})` }];
+    // Single-line summary — PrimeNG's default tooltip is text-only.
+    return `${label} · target ${target} · ${subtitle}`;
   }
 
   formatCurrency(value: number | null | undefined): string {
@@ -261,90 +248,16 @@ export class EngineResultsComponent {
     return (val * 100).toFixed(2) + '%';
   }
 
+  /** Honest display for stats that may be absent on persisted runs —
+   *  a missing value renders as an em dash, never as a fake 0.00%. */
+  formatPctOrDash(val: number | null | undefined): string {
+    if (val == null || Number.isNaN(val)) return '—';
+    return this.formatPct(val);
+  }
+
   formatNumber(value: number | null | undefined, places = 2): string {
     if (value == null || Number.isNaN(value)) return '—';
     return value.toFixed(places);
   }
 
-  formatTradeTime(ms: number): string {
-    return formatTimestampIsoInZone(ms, this.selectedTimezone());
-  }
-
-  tradeIndicatorEntries(trade: EngineTrade): { key: string; value: number }[] {
-    return Object.entries(trade.indicators).map(([key, value]) => ({ key, value }));
-  }
-
-  isOptionsIndicators(trade: EngineTrade): boolean {
-    return 'spread_type' in trade.indicators;
-  }
-
-  private static readonly SIGNAL_KEYS = new Set(['ema5', 'ema10', 'rsi']);
-  private static readonly SPREAD_KEYS = new Set([
-    'spread_type', 'expiration_dte', 'spread_width',
-    'underlying_entry', 'underlying_exit', 'pricing_mode',
-  ]);
-  private static readonly LONG_LEG_KEYS = new Set([
-    'long_strike', 'long_entry', 'long_exit', 'long_delta',
-  ]);
-  private static readonly SHORT_LEG_KEYS = new Set([
-    'short_strike', 'short_entry', 'short_exit', 'short_delta',
-  ]);
-  private static readonly PNL_KEYS = new Set([
-    'dollar_pnl', 'max_profit', 'max_loss',
-  ]);
-
-  groupedIndicators(trade: EngineTrade): {
-    signal: { key: string; value: number }[];
-    spread: { key: string; value: number }[];
-    longLeg: { key: string; value: number }[];
-    shortLeg: { key: string; value: number }[];
-    pnl: { key: string; value: number }[];
-  } {
-    const signal: { key: string; value: number }[] = [];
-    const spread: { key: string; value: number }[] = [];
-    const longLeg: { key: string; value: number }[] = [];
-    const shortLeg: { key: string; value: number }[] = [];
-    const pnl: { key: string; value: number }[] = [];
-
-    for (const [key, value] of Object.entries(trade.indicators)) {
-      const entry = { key, value };
-      if (EngineResultsComponent.SIGNAL_KEYS.has(key)) signal.push(entry);
-      else if (EngineResultsComponent.SPREAD_KEYS.has(key)) spread.push(entry);
-      else if (EngineResultsComponent.LONG_LEG_KEYS.has(key)) longLeg.push(entry);
-      else if (EngineResultsComponent.SHORT_LEG_KEYS.has(key)) shortLeg.push(entry);
-      else if (EngineResultsComponent.PNL_KEYS.has(key)) pnl.push(entry);
-      else spread.push(entry); // fallback: anything unknown goes to spread group
-    }
-
-    return { signal, spread, longLeg, shortLeg, pnl };
-  }
-
-  downloadTradesCsv(): void {
-    const r = this.result();
-    const header = '#,Entry Time,Entry Price,Exit Time,Exit Price,PnL (pts),PnL %,Result,Signal,Indicators';
-    const rows = r.trades.map(t => {
-      const indicators = Object.entries(t.indicators)
-        .map(([k, v]) => `${k}=${v.toFixed(4)}`).join('; ');
-      return [
-        t.trade_number,
-        this.formatTradeTime(t.entry_time),
-        t.entry_price.toFixed(2),
-        this.formatTradeTime(t.exit_time),
-        t.exit_price.toFixed(2),
-        t.pnl_pts.toFixed(4),
-        (t.pnl_pct * 100).toFixed(4) + '%',
-        t.result,
-        `"${t.signal_reason}"`,
-        `"${indicators}"`,
-      ].join(',');
-    });
-    const csv = [header, ...rows].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${this.symbol()}_${r.strategy_name}_trades.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
 }

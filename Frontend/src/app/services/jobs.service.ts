@@ -25,6 +25,15 @@ export interface JobEvent {
   [key: string]: unknown;
 }
 
+export interface JobEventRecord {
+  /** Redis stream id. Its millisecond prefix is the server-side event time. */
+  id: string;
+  type: JobEventType;
+  timestamp: number;
+  level: string;
+  summary: string;
+}
+
 export interface JobState {
   id: string;
   type: string;
@@ -58,6 +67,9 @@ export interface JobState {
   // Wall-clock at which the job started/finished, for elapsed display.
   startedAt?: number;
   finishedAt?: number;
+  /** Structured lifecycle feed, including phases and progress (not just logs). */
+  recentEvents?: readonly JobEventRecord[];
+  eventSeq?: number;
 }
 
 interface ServerJobState {
@@ -185,7 +197,7 @@ export class JobsService {
     const source = new EventSource(`/api/jobs/${id}/events`);
     this.sources.set(id, source);
 
-    source.onmessage = ev => this.applyEvent(id, ev.data);
+    source.onmessage = ev => this.applyEvent(id, ev.data, ev.lastEventId);
     source.onerror = () => {
       // EventSource auto-reconnects unless we close it. If the job
       // already reached terminal state, close to free the connection.
@@ -204,7 +216,7 @@ export class JobsService {
     }
   }
 
-  private applyEvent(id: string, raw: string): void {
+  private applyEvent(id: string, raw: string, lastEventId: string): void {
     let evt: JobEvent;
     try {
       evt = JSON.parse(raw) as JobEvent;
@@ -215,7 +227,7 @@ export class JobsService {
       const next = new Map(m);
       const prev = next.get(id);
       if (!prev) return m;
-      const updated = applyJobEvent(prev, evt);
+      const updated = applyJobEvent(prev, evt, lastEventId);
       next.set(id, updated);
       return next;
     });
@@ -238,10 +250,21 @@ export class JobsService {
 }
 
 // Pure reducer — exported for unit testing.
-export function applyJobEvent(prev: JobState, evt: JobEvent): JobState {
+export function applyJobEvent(
+  prev: JobState,
+  evt: JobEvent,
+  eventId = '',
+): JobState {
+  const timestamp = streamTimestamp(eventId) ?? Date.now();
+  const withEvent = (next: JobState): JobState => appendEvent(
+    next,
+    evt,
+    eventId || `local-${prev.eventSeq ?? 0}`,
+    timestamp,
+  );
   switch (evt.type) {
     case 'job.started':
-      return {
+      return withEvent({
         ...prev,
         status: 'running',
         // Preserve the original start time on a replayed event:
@@ -249,64 +272,120 @@ export function applyJobEvent(prev: JobState, evt: JobEvent): JobState {
         // and ``resumeActive()`` may have already populated this from
         // the server-derived ``started_at``. Resetting to ``Date.now()``
         // here would make the elapsed timer jump.
-        startedAt: prev.startedAt ?? Date.now(),
+        startedAt: prev.startedAt ?? timestamp,
         cached: (evt['cached'] as boolean) ?? prev.cached,
-      };
+      });
     case 'job.phase': {
       const phase = evt['phase'] as string;
-      return {
+      return withEvent({
         ...prev,
         phase,
         // Server may emit a friendly label inline; otherwise the UI
         // falls back to humanising the phase id.
         phaseLabel: (evt['friendly'] as string) ?? humanisePhase(phase),
-      };
+      });
     }
     case 'job.progress':
-      return {
+      return withEvent({
         ...prev,
         current: evt['current'] as number,
         total: evt['total'] as number,
         unit: (evt['unit'] as string) ?? prev.unit,
         message: (evt['message'] as string) ?? prev.message,
-      };
+      });
     case 'job.log': {
       const log = {
         level: (evt['level'] as string) ?? 'info',
         message: (evt['message'] as string) ?? '',
-        ts: Date.now(),
+        ts: timestamp,
         seq: prev.logSeq,
       };
       const recent = [...prev.recentLogs, log].slice(-MAX_RECENT_LOGS);
-      return { ...prev, recentLogs: recent, logSeq: prev.logSeq + 1 };
+      return withEvent({ ...prev, recentLogs: recent, logSeq: prev.logSeq + 1 });
     }
     case 'job.completed':
-      return {
+      return withEvent({
         ...prev,
         status: 'completed',
-        finishedAt: Date.now(),
+        finishedAt: timestamp,
         resultUrl: evt['result_url'] as string,
         cached: (evt['cached'] as boolean) ?? prev.cached ?? false,
         cachedAt: (evt['cached_at'] as number) ?? prev.cachedAt,
-      };
+      });
     case 'job.failed':
-      return {
+      return withEvent({
         ...prev,
         status: 'failed',
-        finishedAt: Date.now(),
+        finishedAt: timestamp,
         errorCode: evt['code'] as string,
         errorMessage: evt['message'] as string,
-      };
+      });
     case 'job.cancelled':
-      return {
+      return withEvent({
         ...prev,
         status: 'cancelled',
-        finishedAt: Date.now(),
+        finishedAt: timestamp,
         message: evt['reason'] as string,
-      };
+      });
     default:
       return prev;
   }
+}
+
+const MAX_RECENT_EVENTS = 500;
+
+function appendEvent(
+  state: JobState,
+  event: JobEvent,
+  id: string,
+  timestamp: number,
+): JobState {
+  const existing = state.recentEvents ?? [];
+  if (existing.some((item) => item.id === id)) return state;
+  const record: JobEventRecord = {
+    id,
+    type: event.type,
+    timestamp,
+    level: event.type === 'job.failed' ? 'error' : event.type === 'job.cancelled' ? 'warn' : 'info',
+    summary: describeJobEvent(event),
+  };
+  return {
+    ...state,
+    recentEvents: [...existing, record].slice(-MAX_RECENT_EVENTS),
+    eventSeq: (state.eventSeq ?? 0) + 1,
+  };
+}
+
+function describeJobEvent(event: JobEvent): string {
+  switch (event.type) {
+    case 'job.started':
+      return event['cached'] === true ? 'Run started from cached result' : 'Run started';
+    case 'job.phase':
+      return (event['friendly'] as string | undefined) ?? humanisePhase(event['phase'] as string);
+    case 'job.progress': {
+      const current = event['current'] as number;
+      const total = event['total'] as number;
+      const unit = (event['unit'] as string | undefined) ?? 'items';
+      const message = event['message'] as string | undefined;
+      return `${message ? `${message} · ` : ''}${current.toLocaleString()} / ${total.toLocaleString()} ${unit}`;
+    }
+    case 'job.log':
+      return (event['message'] as string | undefined) ?? 'Log event';
+    case 'job.completed':
+      return event['cached'] === true ? 'Run completed · cached result' : 'Run completed';
+    case 'job.failed':
+      return (event['message'] as string | undefined) ?? 'Run failed';
+    case 'job.cancelled':
+      return (event['reason'] as string | undefined) ?? 'Run cancelled';
+  }
+}
+
+/** Redis stream ids are `<server epoch ms>-<sequence>`. */
+export function streamTimestamp(eventId: string): number | null {
+  const prefix = eventId.split('-', 1)[0];
+  if (!/^\d+$/.test(prefix)) return null;
+  const value = Number(prefix);
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
 }
 
 /** ``ticker_3_AAPL`` → ``Ticker 3 AAPL``. Mirrors the Python helper in

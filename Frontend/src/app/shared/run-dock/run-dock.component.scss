@@ -224,6 +224,40 @@ $lvl-error:      #ff5570;
   scrollbar-color: $dock-border $dock-bg;
 }
 
+.run-dock__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 0;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border, #252b38);
+  background: color-mix(in srgb, var(--bg-elevated, #171c27) 86%, transparent);
+
+  div {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 6px;
+    min-width: 0;
+  }
+
+  dt {
+    color: var(--text-muted, #7f8899);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  dd {
+    max-width: 18rem;
+    margin: 0;
+    color: var(--text-secondary, #b9c0cf);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
 .run-dock__log-empty {
   color: $dock-muted;
   font-style: italic;

@@ -1,9 +1,11 @@
 using System.Text.Json;
 using Backend.Models.MarketData;
 using Backend.Services.Implementation;
+using Backend.Services.Interfaces;
 using Backend.Tests.Helpers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 
 namespace Backend.Tests.Unit.Services;
 
@@ -11,8 +13,19 @@ public class BacktestRunPersistenceServiceTests
 {
     private static BacktestRunPersistenceService CreateService(out Backend.Data.AppDbContext db)
     {
+        return CreateService(out db, out _);
+    }
+
+    private static BacktestRunPersistenceService CreateService(
+        out Backend.Data.AppDbContext db,
+        out Mock<IParityVerdictService> parityVerdicts)
+    {
         db = TestDbContextFactory.Create();
-        return new BacktestRunPersistenceService(db, NullLogger<BacktestRunPersistenceService>.Instance);
+        parityVerdicts = new Mock<IParityVerdictService>();
+        return new BacktestRunPersistenceService(
+            db,
+            parityVerdicts.Object,
+            NullLogger<BacktestRunPersistenceService>.Instance);
     }
 
     private static PersistLeanRunPayload BuildPayload(
@@ -479,5 +492,46 @@ public class BacktestRunPersistenceServiceTests
         var row = await db.StrategyExecutions.SingleAsync(s => s.Id == id);
         Assert.Equal("engine", row.Source);
         Assert.Equal("algorithm_default", row.BrokeragePolicy);
+    }
+
+    [Fact]
+    public async Task PersistAsync_LeanRunWithParityGroup_ComputesVerdict()
+    {
+        var service = CreateService(out _, out var parityVerdicts);
+        var payload = BuildPayload(leanRunId: "companion-pg-abc") with { ParityGroupId = "pg-abc" };
+
+        var id = await service.PersistAsync(payload, CancellationToken.None);
+
+        parityVerdicts.Verify(
+            p => p.ComputeForLeanRunAsync(id, "pg-abc", It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task PersistAsync_LeanRunWithoutParityGroup_SkipsVerdictComputation()
+    {
+        var service = CreateService(out _, out var parityVerdicts);
+        var payload = BuildPayload(leanRunId: "standalone-run");
+
+        await service.PersistAsync(payload, CancellationToken.None);
+
+        parityVerdicts.Verify(
+            p => p.ComputeForLeanRunAsync(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()),
+            Times.Never);
+    }
+
+    [Fact]
+    public async Task PersistAsync_VerdictComputationFailure_DoesNotFailPersist()
+    {
+        var service = CreateService(out var db, out var parityVerdicts);
+        parityVerdicts
+            .Setup(p => p.ComputeForLeanRunAsync(It.IsAny<int>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("compare endpoint down"));
+        var payload = BuildPayload(leanRunId: "companion-pg-boom") with { ParityGroupId = "pg-boom" };
+
+        var id = await service.PersistAsync(payload, CancellationToken.None);
+
+        Assert.True(id > 0);
+        Assert.NotNull(await db.StrategyExecutions.SingleAsync(s => s.Id == id));
     }
 }

@@ -1,0 +1,94 @@
+<section class="run-report">
+  @if (loading()) {
+    <div class="empty-state">Loading run…</div>
+  } @else if (run(); as r) {
+    <header class="report-header">
+      <div>
+        <p class="eyebrow">{{ r.engine }} · {{ r.source }}</p>
+        <h2>{{ r.strategyName }} / {{ r.symbol }}</h2>
+        <p class="meta">
+          {{ r.startDate }} → {{ r.endDate }} · executed
+          <app-timestamp-display [value]="r.executedAt" mode="local" />
+        </p>
+      </div>
+      <span class="run-id-chip">run #{{ r.id }}</span>
+    </header>
+
+    @if (parity(); as p) {
+      <section class="parity-panel" [attr.data-status]="p.status" aria-label="Cross-engine parity verdict">
+        <div class="parity-head">
+          <span class="parity-chip">{{ p.status | receiptLabel }}</span>
+          <span class="parity-title">LEAN validation</span>
+          <span class="parity-meta">
+            recorded <app-timestamp-display [value]="p.createdAt" mode="local" />
+          </span>
+        </div>
+        @switch (p.status) {
+          @case ("pending") {
+            <p class="parity-body">
+              LEAN validating companion is running — the frozen parity verdict lands here when it
+              finishes. If this stays pending well past a normal run, the companion likely stalled.
+            </p>
+          }
+          @case ("agree") {
+            <p class="parity-body">Both engines produced equivalent trades for this configuration.</p>
+          }
+          @case ("diverged") {
+            <p class="parity-body">The engines disagree — divergences by category:</p>
+            <ul class="parity-counts">
+              @for (entry of p.countsByCategory; track entry.category) {
+                <li><span>{{ entry.category | receiptLabel }}</span><strong>{{ entry.count }}</strong></li>
+              }
+            </ul>
+            <details class="parity-divergences">
+              <summary>Show {{ p.divergences.length }} divergence details</summary>
+              <ul>
+                @for (d of p.divergences; track $index) {
+                  <li>
+                    <span class="parity-chip">{{ d.category | receiptLabel }}</span>
+                    {{ d.message }}
+                  </li>
+                }
+              </ul>
+            </details>
+          }
+          @case ("unavailable") {
+            <p class="parity-body">{{ p.reason ?? "Parity validation is unavailable for this run." }}</p>
+          }
+          @default {
+            <p class="parity-body">
+              The LEAN companion did not produce a verdict{{ p.reason ? ": " + p.reason : "." }}
+            </p>
+          }
+        }
+      </section>
+    }
+
+    @if (barsNotice(); as notice) {
+      <p class="report-notice" role="note">{{ notice }}</p>
+    }
+    @if (equityNotice(); as notice) {
+      <p class="report-notice" role="note">{{ notice }}</p>
+    }
+    @if (analyticsNotice(); as notice) {
+      <p class="report-notice" role="note">{{ notice }}</p>
+    }
+
+    @if (engineResult(); as result) {
+      <app-engine-results
+        [result]="result"
+        [verdict]="verdict()"
+        [symbol]="r.symbol"
+        [chartBars]="chartBars()"
+        [chartTrades]="chartTrades()"
+        [equityCurve]="equityCurve()"
+        [runStamp]="r.executedAt | timestampDisplay"
+        [fromDate]="r.startDate"
+        [toDate]="r.endDate"
+        [resolution]="resolutionLabel()"
+      />
+    }
+  } @else {
+    <div class="empty-state">Run not found.</div>
+  }
+</section>

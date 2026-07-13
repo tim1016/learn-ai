@@ -305,38 +305,6 @@ export interface RelatedTickersResult {
   error: string | null;
 }
 
-// Backtest types
-export interface BacktestTrade {
-  tradeType: string;
-  entryTimestamp: number;
-  exitTimestamp: number;
-  entryPrice: number;
-  exitPrice: number;
-  pnl: number;
-  cumulativePnl: number;
-  signalReason: string;
-}
-
-export interface BacktestResult {
-  success: boolean;
-  id: number | null;
-  strategyName: string | null;
-  parameters: string | null;
-  totalTrades: number;
-  winningTrades: number;
-  losingTrades: number;
-  totalPnL: number;
-  maxDrawdown: number;
-  sharpeRatio: number;
-  durationMs: number;
-  sourceBars: number;
-  rthBars: number;
-  resampledBars: number;
-  timeframe: string;
-  trades: BacktestTrade[];
-  error: string | null;
-}
-
 // Options Strategy Analysis types
 export interface StrategyLegInput {
   legId?: string;

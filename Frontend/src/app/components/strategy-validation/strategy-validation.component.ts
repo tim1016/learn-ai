@@ -28,6 +28,7 @@ export class StrategyValidationComponent {
   private readonly selectedOverride = signal<string | null>(null);
   protected readonly flagChoice = signal<StrategyValidationFlag>('validated');
   protected readonly flagReason = signal<string>('');
+  protected readonly backtestId = signal<string>('');
   protected readonly actionBusy = signal<boolean>(false);
   protected readonly actionError = signal<string | null>(null);
   protected readonly actionMessage = signal<string | null>(null);
@@ -63,6 +64,7 @@ export class StrategyValidationComponent {
     this.selectedOverride.set(strategy.strategy_key);
     this.flagChoice.set(strategy.validation_state === 'validated' ? 'invalidated' : 'validated');
     this.flagReason.set('');
+    this.backtestId.set(strategy.qc_cloud_backtest_id ?? '');
     this.actionError.set(null);
     this.actionMessage.set(null);
   }
@@ -91,6 +93,20 @@ export class StrategyValidationComponent {
     };
   }
 
+  protected engineLabQueryParams(strategy: StrategyValidationDetail): Record<string, string> {
+    return {
+      strategy: strategy.strategy_key,
+      engine: this.engineLabEngine(strategy),
+      symbol: strategy.validation_case_symbol ?? 'SPY',
+      tab: 'configuration',
+      qc_backtest_id: strategy.qc_cloud_backtest_id ?? '',
+    };
+  }
+
+  private engineLabEngine(strategy: StrategyValidationDetail): string {
+    return strategy.validator_code_ref ? 'both' : 'python';
+  }
+
   protected isSelected(strategy: StrategyValidationSummary): boolean {
     return strategy.strategy_key === this.selectedKey();
   }
@@ -110,6 +126,12 @@ export class StrategyValidationComponent {
   protected setFlagReason(event: Event): void {
     if (event.target instanceof HTMLTextAreaElement) {
       this.flagReason.set(event.target.value);
+    }
+  }
+
+  protected setBacktestId(event: Event): void {
+    if (event.target instanceof HTMLInputElement) {
+      this.backtestId.set(event.target.value);
     }
   }
 
@@ -148,6 +170,11 @@ export class StrategyValidationComponent {
       this.actionError.set('A validation reason is required.');
       return;
     }
+    const backtestId = this.backtestId().trim() || this.detail.value()?.qc_cloud_backtest_id?.trim() || '';
+    if (this.flagChoice() === 'validated' && backtestId === '') {
+      this.actionError.set('A QC Cloud backtest ID is required to accept validation evidence.');
+      return;
+    }
     this.actionBusy.set(true);
     this.actionError.set(null);
     this.actionMessage.set(null);
@@ -155,6 +182,7 @@ export class StrategyValidationComponent {
       const detail = await this.service.flagValidation(key, {
         flag: this.flagChoice(),
         reason,
+        ...(this.flagChoice() === 'validated' ? { qc_cloud_backtest_id: backtestId } : {}),
       });
       this.actionMessage.set(`${this.flagLabel(detail.current_flag_event?.flag ?? this.flagChoice())} flag saved.`);
       this.flagReason.set('');
