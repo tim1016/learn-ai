@@ -399,6 +399,42 @@ class IbkrBrokerAdapter(BrokerAdapter):
             await self._wait_for_terminal_fills(targeted_set)
         return targeted
 
+    async def cancel_open_orders_for_namespace(self, bot_order_namespace: str) -> list[int]:
+        """Cancel only the Clerk orders belonging to one bot namespace.
+
+        Recovery flatten must never cancel a sibling's pending order on a
+        shared paper account.  The broker-echoed ``order_ref`` is the durable
+        ownership token, so this survives a Clerk restart unlike an in-memory
+        order-id set.
+        """
+
+        self._enforce_account_owner_write_fence("broker.cancel_open_orders_for_namespace")
+        expected_prefix = bot_order_namespace + ":"
+        open_orders = await list_open_orders(self._client)
+        targeted = [
+            int(order.order_id)
+            for order in open_orders
+            if order.order_ref is not None and order.order_ref.startswith(expected_prefix)
+        ]
+        if not targeted:
+            return []
+        targeted_set = set(targeted)
+        for order in open_orders:
+            if int(order.order_id) in targeted_set:
+                await cancel_paper_order(self._client, order.order_id)
+        while True:
+            remaining = {
+                int(order.order_id)
+                for order in await list_open_orders(self._client)
+                if int(order.order_id) in targeted_set
+            }
+            if not remaining:
+                break
+            await asyncio.sleep(0.05)
+        if self._event_task is not None:
+            await self._wait_for_terminal_fills(targeted_set)
+        return targeted
+
     def _enforce_account_owner_write_fence(self, boundary: str) -> None:
         if not self._require_account_owner_write_fence:
             return

@@ -19,6 +19,7 @@ from app.engine.live.account_clerk import (
     AccountClerkJournalEntry,
     AccountClerkLeaseWriter,
     AccountClerkRecordedReceipt,
+    AccountClerkRecoveryFlattenReceipt,
     AccountClerkRpcClient,
     AccountClerkRpcServer,
     read_account_clerk_inbox,
@@ -88,6 +89,12 @@ def _intent(instance_id: str, run_id: str, intent_id: str) -> AccountOwnerSubmit
     )
 
 
+def _recovery_intent(instance_id: str, run_id: str, intent_id: str) -> AccountOwnerSubmitIntent:
+    return _intent(instance_id, run_id, intent_id).model_copy(
+        update={"intent_kind": "RECOVERY_FLATTEN"}
+    )
+
+
 @pytest.mark.asyncio
 async def test_record_intent_writes_replayable_journal_and_receipt_before_broker_contact(tmp_path: Path) -> None:
     _write_active_binding(tmp_path, "bot-a", "run-a")
@@ -143,6 +150,92 @@ async def test_clerk_records_before_paper_broker_submit_and_deduplicates_ack(tmp
         "broker_acked",
     ]
     assert clerk.replay_recorded_receipts() == [recorded]
+
+
+@pytest.mark.asyncio
+async def test_fenced_bot_can_recovery_flatten_its_retired_namespace(tmp_path: Path) -> None:
+    """Regression for the 2026-07-14 fenced-flatten trap."""
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    write_account_instance_binding(
+        tmp_path,
+        AccountInstanceBinding(
+            account_id=ACCOUNT,
+            strategy_instance_id="bot-a",
+            run_id="run-a",
+            bot_order_namespace=bot_order_namespace_for_instance("bot-a"),
+            lifecycle_state="RETIRED",
+            recorded_at_ms=START_MS + 1,
+            source="test",
+        ),
+    )
+    broker = _FakeBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    normal = _intent("bot-a", "run-a", "normal")
+    recovery = _recovery_intent("bot-a", "run-a", "recovery")
+
+    with pytest.raises(AccountClerkIntentRejected, match="CLERK_INACTIVE_BINDING"):
+        await clerk.submit_intent(normal)
+    receipt = await clerk.submit_recovery_flatten(
+        recovery,
+        actor="bot",
+        actor_strategy_instance_id="bot-a",
+        actor_run_id="run-a",
+        actor_bot_order_namespace=bot_order_namespace_for_instance("bot-a"),
+    )
+
+    assert isinstance(receipt, AccountClerkRecoveryFlattenReceipt)
+    assert receipt.broker_acked.status == "broker_acked"
+    assert len(broker.calls) == 1
+    assert [entry.entry_kind for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [
+        "recorded",
+        "recovery_cancelled",
+        "broker_acked",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_recovery_flatten_rejects_bot_targeting_a_sibling_namespace(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    _write_active_binding(tmp_path, "bot-b", "run-b")
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_FakeBroker())
+
+    with pytest.raises(AccountClerkIntentRejected, match="CLERK_RECOVERY_ACTOR_MISMATCH"):
+        await clerk.submit_recovery_flatten(
+            _recovery_intent("bot-b", "run-b", "recovery-b"),
+            actor="bot",
+            actor_strategy_instance_id="bot-a",
+            actor_run_id="run-a",
+            actor_bot_order_namespace=bot_order_namespace_for_instance("bot-a"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_operator_recovery_cure_only_flattens_a_retired_namespace_and_writes_receipts(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    write_account_instance_binding(
+        tmp_path,
+        AccountInstanceBinding(
+            account_id=ACCOUNT,
+            strategy_instance_id="bot-a",
+            run_id="run-a",
+            bot_order_namespace=bot_order_namespace_for_instance("bot-a"),
+            lifecycle_state="RETIRED",
+            recorded_at_ms=START_MS + 1,
+            source="test",
+        ),
+    )
+    broker = _FakeBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+
+    receipt = await clerk.submit_recovery_flatten(
+        _recovery_intent("bot-a", "run-a", "operator-cure"),
+        actor="operator",
+    )
+
+    assert receipt.status == "recovery_flattened"
+    assert receipt.recorded.intent_id == "operator-cure"
+    assert len(broker.calls) == 1
 
 
 @pytest.mark.asyncio

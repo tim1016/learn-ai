@@ -18,7 +18,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
-import json
 import os
 import signal
 import tempfile
@@ -26,7 +25,7 @@ import time
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
-from typing import Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -44,6 +43,9 @@ from app.engine.live.account_registry import (
     read_account_instance_registry,
 )
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
+
+if TYPE_CHECKING:
+    from app.engine.live.account_clerk_rpc import AccountClerkRpcClient, AccountClerkRpcServer
 
 ACCOUNT_CLERK_INBOX_FILENAME = "clerk_inbox.jsonl"
 ACCOUNT_CLERK_JOURNAL_FILENAME = "clerk_journal.jsonl"
@@ -87,13 +89,14 @@ class AccountClerkJournalEntry(BaseModel):
 
     schema_version: int = 1
     seq: int = Field(ge=1)
-    entry_kind: Literal["recorded", "broker_acked", "broker_event"] = "recorded"
+    entry_kind: Literal["recorded", "recovery_cancelled", "broker_acked", "broker_event"] = "recorded"
     recorded_at_ms: int = Field(ge=0, le=_MAX_INT64)
     intent: AccountOwnerSubmitIntent
     order_id: int | None = Field(default=None, ge=0)
     perm_id: int | None = Field(default=None, ge=0)
     exec_id: str | None = None
     broker_event: dict[str, object] | None = None
+    cancelled_order_ids: tuple[int, ...] | None = None
 
 
 class AccountClerkRecordedReceipt(BaseModel):
@@ -149,6 +152,17 @@ class AccountClerkBrokerAckReceipt(AccountClerkRecordedReceipt):
         )
 
 
+class AccountClerkRecoveryFlattenReceipt(BaseModel):
+    """Durable outcome of one Clerk-owned recovery liquidation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status: Literal["recovery_flattened"] = "recovery_flattened"
+    recorded: AccountClerkRecordedReceipt
+    broker_acked: AccountClerkBrokerAckReceipt
+    cancelled_order_ids: tuple[int, ...]
+
+
 class AccountClerk:
     """Per-account concurrent intake backed by one serialized durable journal.
 
@@ -193,6 +207,11 @@ class AccountClerk:
 
         if self._broker is None:
             raise RuntimeError("ACCOUNT_CLERK_BROKER_UNAVAILABLE")
+        if intent.intent_kind == "RECOVERY_FLATTEN":
+            raise AccountClerkIntentRejected(
+                reason="CLERK_RECOVERY_OPERATION_REQUIRED",
+                diagnostics={"intent_id": intent.intent_id, "order_ref": intent.order_ref},
+            )
         async with self._intake_lock:
             recorded = await asyncio.to_thread(self._record_intent_locked, intent)
             existing_ack = await asyncio.to_thread(self._ack_for_intent_locked, intent)
@@ -212,6 +231,57 @@ class AccountClerk:
                     ack = await self._broker.place_order(spec)
             broker_ack = await asyncio.to_thread(self._append_broker_ack_locked, intent, ack)
             return recorded, broker_ack
+
+    async def submit_recovery_flatten(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        *,
+        actor: Literal["bot", "operator"],
+        actor_strategy_instance_id: str | None = None,
+        actor_run_id: str | None = None,
+        actor_bot_order_namespace: str | None = None,
+    ) -> AccountClerkRecoveryFlattenReceipt:
+        """Cancel this namespace's open orders then place one liquidation.
+
+        The Clerk, not a fenced bot, owns both broker writes.  A bot may only
+        name its own complete binding; the operator cure is deliberately
+        restricted to a retired binding so it cannot become another submit
+        lane for active bots.
+        """
+
+        if self._broker is None:
+            raise RuntimeError("ACCOUNT_CLERK_BROKER_UNAVAILABLE")
+        if intent.intent_kind != "RECOVERY_FLATTEN":
+            self._reject(intent, "CLERK_RECOVERY_INTENT_KIND_REQUIRED")
+        self._validate_recovery_actor(
+            intent,
+            actor=actor,
+            actor_strategy_instance_id=actor_strategy_instance_id,
+            actor_run_id=actor_run_id,
+            actor_bot_order_namespace=actor_bot_order_namespace,
+        )
+        self._validate_recovery_order(intent)
+        async with self._intake_lock:
+            recorded = await asyncio.to_thread(self._record_intent_locked, intent)
+            existing_ack = await asyncio.to_thread(self._ack_for_intent_locked, intent)
+            if existing_ack is not None:
+                cancelled = await asyncio.to_thread(self._recovery_cancelled_for_intent_locked, intent)
+                return AccountClerkRecoveryFlattenReceipt(
+                    recorded=recorded,
+                    broker_acked=existing_ack,
+                    cancelled_order_ids=cancelled,
+                )
+            self._require_paper_broker()
+            cancelled = await self._cancel_namespace_open_orders(intent.bot_order_namespace)
+            await asyncio.to_thread(self._append_recovery_cancelled_locked, intent, cancelled)
+            spec = IbkrOrderSpec.model_validate(intent.order_spec)
+            ack = await self._place_under_clerk_grant(spec)
+            broker_ack = await asyncio.to_thread(self._append_broker_ack_locked, intent, ack)
+            return AccountClerkRecoveryFlattenReceipt(
+                recorded=recorded,
+                broker_acked=broker_ack,
+                cancelled_order_ids=tuple(cancelled),
+            )
 
     def replay_recorded_receipts(self) -> list[AccountClerkRecordedReceipt]:
         """Return receipt #1 values from the journal after a clerk restart."""
@@ -310,6 +380,53 @@ class AccountClerk:
             entries.append(entry)
             return AccountClerkBrokerAckReceipt.from_journal_entry(entry)
 
+    def _append_recovery_cancelled_locked(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        cancelled_order_ids: list[int],
+    ) -> None:
+        journal_path = account_clerk_journal_path(self._artifacts_root, self._account_id)
+        with _file_lock(journal_path):
+            entries = self._load_journal_tail_locked(
+                account_clerk_inbox_path(self._artifacts_root, self._account_id),
+                journal_path,
+            )
+            if self._recovery_cancelled_for_intent_entries(entries, intent) is not None:
+                return
+            entry = AccountClerkJournalEntry(
+                seq=entries[-1].seq + 1,
+                entry_kind="recovery_cancelled",
+                recorded_at_ms=self._now_ms(),
+                intent=intent,
+                cancelled_order_ids=tuple(cancelled_order_ids),
+            )
+            _append_jsonl(journal_path, entry)
+            entries.append(entry)
+
+    def _recovery_cancelled_for_intent_locked(self, intent: AccountOwnerSubmitIntent) -> tuple[int, ...]:
+        journal_path = account_clerk_journal_path(self._artifacts_root, self._account_id)
+        with _file_lock(journal_path):
+            entries = self._load_journal_tail_locked(
+                account_clerk_inbox_path(self._artifacts_root, self._account_id),
+                journal_path,
+            )
+            entry = self._recovery_cancelled_for_intent_entries(entries, intent)
+            return entry.cancelled_order_ids if entry is not None and entry.cancelled_order_ids is not None else ()
+
+    @staticmethod
+    def _recovery_cancelled_for_intent_entries(
+        entries: list[AccountClerkJournalEntry],
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountClerkJournalEntry | None:
+        return next(
+            (
+                entry
+                for entry in entries
+                if entry.entry_kind == "recovery_cancelled" and entry.intent == intent
+            ),
+            None,
+        )
+
     def append_broker_event(self, intent: AccountOwnerSubmitIntent, event: IbkrOrderEvent) -> None:
         """Durably append a Clerk-observed broker callback before relay."""
 
@@ -394,6 +511,9 @@ class AccountClerk:
         if binding is None:
             self._reject(intent, "CLERK_UNKNOWN_INSTANCE")
         assert binding is not None
+        if intent.intent_kind == "RECOVERY_FLATTEN":
+            self._validate_recovery_binding(intent, binding)
+            return
         self._validate_binding(intent, binding)
 
     def _validate_binding(
@@ -409,6 +529,84 @@ class AccountClerk:
             self._reject(intent, "CLERK_STALE_RUN")
         if binding.bot_order_namespace != intent.bot_order_namespace:
             self._reject(intent, "CLERK_NAMESPACE_MISMATCH")
+
+    def _validate_recovery_binding(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        binding: AccountInstanceBinding,
+    ) -> None:
+        if binding.account_id != intent.account_id:
+            self._reject(intent, "CLERK_ACCOUNT_MISMATCH")
+        if binding.run_id != intent.run_id:
+            self._reject(intent, "CLERK_STALE_RUN")
+        if binding.bot_order_namespace != intent.bot_order_namespace:
+            self._reject(intent, "CLERK_NAMESPACE_MISMATCH")
+        if binding.lifecycle_state not in ("ACTIVE", "RETIRED"):
+            self._reject(intent, "CLERK_INACTIVE_BINDING")
+
+    def _validate_recovery_actor(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        *,
+        actor: Literal["bot", "operator"],
+        actor_strategy_instance_id: str | None,
+        actor_run_id: str | None,
+        actor_bot_order_namespace: str | None,
+    ) -> None:
+        bindings = read_account_instance_registry(self._artifacts_root, self._account_id)
+        binding = latest_account_instance_binding(
+            bindings,
+            account_id=self._account_id,
+            strategy_instance_id=intent.strategy_instance_id,
+        )
+        if binding is None:
+            self._reject(intent, "CLERK_UNKNOWN_INSTANCE")
+        assert binding is not None
+        self._validate_recovery_binding(intent, binding)
+        if actor == "operator":
+            if binding.lifecycle_state != "RETIRED":
+                self._reject(intent, "CLERK_OPERATOR_RECOVERY_REQUIRES_RETIRED_BINDING")
+            return
+        if (
+            actor_strategy_instance_id != intent.strategy_instance_id
+            or actor_run_id != intent.run_id
+            or actor_bot_order_namespace != intent.bot_order_namespace
+        ):
+            self._reject(intent, "CLERK_RECOVERY_ACTOR_MISMATCH")
+
+    def _validate_recovery_order(self, intent: AccountOwnerSubmitIntent) -> None:
+        try:
+            spec = IbkrOrderSpec.model_validate(intent.order_spec)
+        except ValidationError as exc:
+            self._reject(intent, f"CLERK_INVALID_RECOVERY_ORDER:{exc}")
+        if spec.order_ref != intent.order_ref or spec.order_type != "MKT" or not spec.confirm_paper:
+            self._reject(intent, "CLERK_INVALID_RECOVERY_ORDER")
+
+    async def _cancel_namespace_open_orders(self, namespace: str) -> list[int]:
+        cancel_namespace = getattr(self._broker, "cancel_open_orders_for_namespace", None)
+        if not callable(cancel_namespace):
+            return []
+        return await self._run_broker_write(
+            "account_clerk.broker.cancel_open_orders_for_namespace",
+            lambda: cancel_namespace(namespace),
+        )
+
+    async def _place_under_clerk_grant(self, spec: IbkrOrderSpec) -> Any:
+        return await self._run_broker_write(
+            "account_clerk.broker.place_order",
+            lambda: self._broker.place_order(spec),
+        )
+
+    async def _run_broker_write(self, boundary: str, write: Callable[[], Any]) -> Any:
+        if self._clerk_generation is None:
+            return await write()
+        with account_clerk_write_grant(
+            account_id=self._account_id,
+            clerk_generation=self._clerk_generation,
+            boundary=boundary,
+            clerk_generation_provider=lambda: self._clerk_generation,
+        ):
+            return await write()
 
     def _reject(self, intent: AccountOwnerSubmitIntent, reason: str) -> None:
         raise AccountClerkIntentRejected(
@@ -443,118 +641,6 @@ def account_clerk_socket_path(artifacts_root: Path, account_id: str) -> Path:
         f"{account_artifacts_root(artifacts_root, account_id)}\0{account_id}".encode()
     ).hexdigest()[:32]
     return Path(tempfile.gettempdir()) / "learn-ai-clerk" / f"{digest}.sock"
-
-
-class AccountClerkRpcClient:
-    """Bot-side client: enqueue one intent; it never holds a broker adapter."""
-
-    def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
-        self._socket_path = account_clerk_socket_path(artifacts_root, account_id)
-
-    async def submit(self, intent: AccountOwnerSubmitIntent) -> AccountClerkBrokerAckReceipt:
-        if not self._socket_path.exists():
-            raise RuntimeError("ACCOUNT_CLERK_UNAVAILABLE:SOCKET_MISSING")
-        try:
-            reader, writer = await asyncio.open_unix_connection(str(self._socket_path))
-        except OSError as exc:
-            raise RuntimeError("ACCOUNT_CLERK_UNAVAILABLE:SOCKET_CONNECT_FAILED") from exc
-        try:
-            writer.write(
-                (json.dumps({"operation": "submit", "intent": intent.model_dump(mode="json")}) + "\n").encode()
-            )
-            await writer.drain()
-            line = await reader.readline()
-        finally:
-            writer.close()
-            await writer.wait_closed()
-        if not line:
-            raise RuntimeError("ACCOUNT_CLERK_UNAVAILABLE:EMPTY_RESPONSE")
-        payload = json.loads(line)
-        if "error" in payload:
-            raise RuntimeError(f"ACCOUNT_CLERK_REJECTED:{payload['error']}")
-        return AccountClerkBrokerAckReceipt.model_validate(payload["broker_acked"])
-
-    async def drain_events(self, *, bot_order_namespace: str) -> list[IbkrOrderEvent]:
-        if not self._socket_path.exists():
-            raise RuntimeError("ACCOUNT_CLERK_UNAVAILABLE:SOCKET_MISSING")
-        reader, writer = await asyncio.open_unix_connection(str(self._socket_path))
-        try:
-            writer.write(
-                (json.dumps({"operation": "drain_events", "bot_order_namespace": bot_order_namespace}) + "\n").encode()
-            )
-            await writer.drain()
-            line = await reader.readline()
-        finally:
-            writer.close()
-            await writer.wait_closed()
-        payload = json.loads(line)
-        if "error" in payload:
-            raise RuntimeError(f"ACCOUNT_CLERK_REJECTED:{payload['error']}")
-        return [IbkrOrderEvent.model_validate(event) for event in payload["events"]]
-
-
-class AccountClerkRpcServer:
-    """Clerk-process RPC server; the broker stays exclusively behind this seam."""
-
-    def __init__(self, clerk: AccountClerk) -> None:
-        self._clerk = clerk
-        self._server: asyncio.AbstractServer | None = None
-        self._socket_path = account_clerk_socket_path(clerk._artifacts_root, clerk._account_id)
-        self._events_by_namespace: dict[str, list[IbkrOrderEvent]] = {}
-        self._intents_by_order_ref: dict[str, AccountOwnerSubmitIntent] = {}
-        set_callback = getattr(clerk._broker, "set_broker_callback_sink", None)
-        if callable(set_callback):
-            set_callback(self._record_broker_event)
-
-    async def start(self) -> None:
-        self._socket_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if self._socket_path.exists():
-            self._socket_path.unlink()
-        self._server = await asyncio.start_unix_server(self._handle, path=str(self._socket_path))
-        self._socket_path.chmod(0o600)
-
-    async def close(self) -> None:
-        if self._server is not None:
-            self._server.close()
-            await self._server.wait_closed()
-        if self._socket_path.exists():
-            self._socket_path.unlink()
-
-    async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        try:
-            line = await reader.readline()
-            request = json.loads(line)
-            if request["operation"] == "submit":
-                intent = AccountOwnerSubmitIntent.model_validate(request["intent"])
-                recorded, broker_acked = await self._clerk.submit_intent(intent)
-                self._intents_by_order_ref[intent.order_ref] = intent
-                response = {
-                    "recorded": recorded.model_dump(mode="json"),
-                    "broker_acked": broker_acked.model_dump(mode="json"),
-                }
-            elif request["operation"] == "drain_events":
-                namespace = str(request["bot_order_namespace"])
-                events = self._events_by_namespace.pop(namespace, [])
-                response = {"events": [event.model_dump(mode="json") for event in events]}
-            else:
-                response = {"error": "ACCOUNT_CLERK_UNKNOWN_OPERATION"}
-        except Exception as exc:
-            response = {"error": str(exc)}
-        writer.write((json.dumps(response) + "\n").encode())
-        await writer.drain()
-        writer.close()
-        await writer.wait_closed()
-
-    def _record_broker_event(self, event: IbkrOrderEvent) -> None:
-        order_ref = event.order_ref
-        if order_ref is None or ":" not in order_ref:
-            return
-        namespace, _intent_id = order_ref.rsplit(":", maxsplit=1)
-        intent = self._intents_by_order_ref.get(order_ref)
-        if intent is None:
-            return
-        self._clerk.append_broker_event(intent, event)
-        self._events_by_namespace.setdefault(namespace, []).append(event)
 
 
 def read_account_clerk_inbox(
@@ -720,6 +806,7 @@ async def _run_clerk_process(args: argparse.Namespace) -> int:
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
     from app.broker.ibkr.client import IbkrClient
+    from app.engine.live.account_clerk_rpc import AccountClerkRpcServer
     from app.engine.live.live_portfolio import IbkrBrokerAdapter
 
     client = IbkrClient()
@@ -762,6 +849,16 @@ def main() -> int:
     return asyncio.run(_run_clerk_process(parser.parse_args()))
 
 
+def __getattr__(name: str):
+    """Keep the #1020 RPC import surface while avoiding a transport cycle."""
+
+    if name in {"AccountClerkRpcClient", "AccountClerkRpcServer"}:
+        from app.engine.live import account_clerk_rpc
+
+        return getattr(account_clerk_rpc, name)
+    raise AttributeError(name)
+
+
 __all__ = [
     "ACCOUNT_CLERK_INBOX_FILENAME",
     "ACCOUNT_CLERK_JOURNAL_FILENAME",
@@ -773,6 +870,7 @@ __all__ = [
     "AccountClerkJournalEntry",
     "AccountClerkLeaseWriter",
     "AccountClerkRecordedReceipt",
+    "AccountClerkRecoveryFlattenReceipt",
     "AccountClerkRpcClient",
     "AccountClerkRpcServer",
     "account_clerk_inbox_path",

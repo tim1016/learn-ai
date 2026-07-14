@@ -7,6 +7,8 @@ tests verify the recovery helper in isolation.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from app.broker.ibkr.models import (
@@ -84,6 +86,42 @@ async def test_recovery_flatten_routes_broker_writes_through_account_owner_write
 
     assert liquidated == 1
     assert boundaries == ["broker.cancel_open_orders", "broker.place_order"]
+
+
+@pytest.mark.asyncio
+async def test_recovery_flatten_uses_clerk_for_the_halt_write_path() -> None:
+    """A bot may read positions, but its fenced adapter never writes recovery orders."""
+
+    broker = FakeBroker()
+    _seed_position(broker, "SPY", 100.0)
+    submitted = []
+
+    async def clerk_submitter(intent):
+        submitted.append(intent)
+        return SimpleNamespace(
+            broker_acked=SimpleNamespace(
+                order_id=701,
+                perm_id=702,
+                status="Submitted",
+                symbol="SPY",
+            )
+        )
+
+    liquidated = await _recovery_flatten(
+        broker,
+        bot_order_namespace="learn-ai/bot-a/v1",
+        account_clerk_recovery_submitter=clerk_submitter,
+        recovery_account_id="DU123",
+        recovery_strategy_instance_id="bot-a",
+        recovery_run_id="run-a",
+        recovery_owner_generation=42,
+    )
+
+    assert liquidated == 1
+    assert broker.orders == []
+    [intent] = submitted
+    assert intent.intent_kind == "RECOVERY_FLATTEN"
+    assert intent.bot_order_namespace == "learn-ai/bot-a/v1"
 
 
 @pytest.mark.asyncio
