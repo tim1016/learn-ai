@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from app.broker.ibkr.config import IbkrSettings
-from app.engine.live.account_artifacts import append_account_event
+from app.engine.live.account_artifacts import append_account_event, read_account_events
 from app.engine.live.account_clerk import read_account_clerk_journal
 from app.engine.live.fleet import compute_fleet_contamination
 from app.engine.live.live_state_sidecar import (
@@ -101,24 +101,7 @@ def collect_fleet_position_explanations(root: Path) -> dict[str, dict[str, int]]
     # No account journal has ever been created. Retain the legacy read only
     # during the shadow bootstrap; once an account has a Clerk journal its
     # stale per-run sidecars can never contribute to account truth again.
-    explained: dict[str, dict[str, int]] = {}
-    retired_by_account: dict[str, frozenset[tuple[str, str, str, str]]] = {}
-    for sid in scan_runs_by_instance(root):
-        envelope = read_instance_live_state(root, sid)
-        if envelope is not None and envelope.expected_position_by_symbol:
-            retired = _retired_claim_keys_for_run(
-                artifacts_root=root.parent,
-                run_id=envelope.run_id,
-                cache=retired_by_account,
-            )
-            positions = {
-                symbol: quantity
-                for symbol, quantity in envelope.expected_position_by_symbol.items()
-                if (sid, envelope.run_id, symbol.upper(), envelope.bot_order_namespace) not in retired
-            }
-            if positions:
-                explained[sid] = positions
-    return explained
+    return _collect_legacy_fleet_position_explanations(root)
 
 
 def _collect_journal_position_explanations(root: Path) -> dict[str, dict[str, int]] | None:
@@ -174,17 +157,41 @@ def _record_sidecar_journal_parity(
                     "sidecar": legacy,
                 },
             )
-    if not clean:
-        return False
-    return all(_account_has_clean_parity_window(root.parent, path.name) for path in accounts_root.iterdir() if path.is_dir() and (path / "clerk_journal.jsonl").exists())
+            if clean and _account_has_clean_parity_window(root.parent, account_dir.name):
+                _record_journal_authority_cutover(root.parent, account_dir.name)
+    return all(
+        _account_journal_authority_is_active(root.parent, path.name)
+        for path in accounts_root.iterdir()
+        if path.is_dir() and (path / "clerk_journal.jsonl").exists()
+    )
 
 
 def _account_has_clean_parity_window(artifacts_root: Path, account_id: str) -> bool:
-    from app.engine.live.account_artifacts import read_account_events
-
     events = [event for event in read_account_events(artifacts_root, account_id) if event.get("event_type") == "account_clerk_sidecar_journal_parity"]
     recent = events[-_JOURNAL_PARITY_WINDOW:]
     return len(recent) == _JOURNAL_PARITY_WINDOW and all(event.get("status") == "clean" for event in recent)
+
+
+def _record_journal_authority_cutover(artifacts_root: Path, account_id: str) -> None:
+    if _account_journal_authority_is_active(artifacts_root, account_id):
+        return
+    append_account_event(
+        artifacts_root,
+        account_id,
+        {
+            "event_type": "account_clerk_journal_authority_cutover",
+            "ts_ms": time.time_ns() // 1_000_000,
+            "reason": "SIDECAR_JOURNAL_PARITY_WINDOW_CLEAN",
+            "parity_observations": _JOURNAL_PARITY_WINDOW,
+        },
+    )
+
+
+def _account_journal_authority_is_active(artifacts_root: Path, account_id: str) -> bool:
+    return any(
+        event.get("event_type") == "account_clerk_journal_authority_cutover"
+        for event in read_account_events(artifacts_root, account_id)
+    )
 
 
 def _collect_legacy_fleet_position_explanations(root: Path) -> dict[str, dict[str, int]]:

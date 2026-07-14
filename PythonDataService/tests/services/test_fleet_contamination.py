@@ -55,16 +55,30 @@ def test_journal_exposure_is_canonical(tmp_path: Path, monkeypatch) -> None:
     )
     clerk = AccountClerk(artifacts_root=tmp_path, account_id=account)
     asyncio.run(clerk.record_intent(intent))
+    monkeypatch.setattr(fleet_contamination, "_collect_legacy_fleet_position_explanations", lambda _root: {})
+    assert collect_fleet_position_explanations(tmp_path / "live_runs") == {}
+
     clerk.append_broker_event(intent, IbkrOrderEvent(
         account_id=account, order_id=1, event_type="fill", order_ref=intent.order_ref,
         symbol="SPY", side="BUY", fill_quantity=2, exec_id="exec-a", ts_ms=2,
     ))
 
     expected = {sid: {"SPY": 2}}
-    monkeypatch.setattr(fleet_contamination, "_collect_legacy_fleet_position_explanations", lambda _root: expected)
+    legacy = {"positions": expected}
+    monkeypatch.setattr(
+        fleet_contamination,
+        "_collect_legacy_fleet_position_explanations",
+        lambda _root: legacy["positions"],
+    )
     for _ in range(3):
         explained = collect_fleet_position_explanations(tmp_path / "live_runs")
     assert explained == expected
+    legacy["positions"] = {sid: {"SPY": 99}}
+    assert collect_fleet_position_explanations(tmp_path / "live_runs") == expected
+    assert any(
+        event["event_type"] == "account_clerk_journal_authority_cutover"
+        for event in read_account_events(tmp_path, account)
+    )
     assert compute_fleet_contamination({"SPY": 2}, explained)["verdict"] == "clean"
     assert compute_fleet_contamination({"SPY": 1}, explained)["summary"].startswith("Managed bot artifacts overstate")
     assert compute_fleet_contamination({"SPY": 3}, explained)["summary"].startswith("Unmanaged broker position")
