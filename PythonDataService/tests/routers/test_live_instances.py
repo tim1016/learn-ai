@@ -54,7 +54,7 @@ from app.operator.notices.schema import (
 )
 from app.routers import live_instances
 from app.schemas.broker_activity import BrokerActivityRow
-from app.schemas.live_runs import LiveBinding
+from app.schemas.live_runs import FleetContamination, LiveBinding
 from app.services.live_chart_window import ChartTimeframe, ChartWindowResult
 from app.services.mutation_attempt import MutationAttemptRepo
 from tests._fixtures.daemon_transport import as_typed_get
@@ -582,7 +582,6 @@ def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         live_runner_fleet_poll_interval_seconds=1.0,
         live_runner_daemon_breaker_initial_backoff_seconds=1.0,
         live_runner_daemon_breaker_max_backoff_seconds=30.0,
-        fleet_dirty_blocks_starts=False,
         # Mirror the real default env (IBKR_MODE=paper, IBKR_READONLY=false) so
         # start_defaults resolves to place-orders; dedicated tests override.
         mode="paper",
@@ -3059,6 +3058,34 @@ async def test_roll_call_tick_persists_start_offer_and_catalog_reads_it(
     assert catalog.json()["evening_report"]["summary"].endswith("0 retired")
 
 
+async def test_roll_call_rejects_contaminated_account(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-dirty", "spy_ema_paper", 100)
+
+    async def contaminated(_root: Path) -> FleetContamination:
+        return FleetContamination(
+            net_positions={"SPY": 1},
+            explained_total={},
+            explained_by_instance=[],
+            residual={"SPY": 1},
+            verdict="contaminated",
+            policy_blocks_starts=True,
+            summary="Unmanaged broker position(s): SPY +1.",
+        )
+
+    monkeypatch.setattr(live_instances, "_compute_account_fleet_contamination", contaminated)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/roll-call")
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "FLEET_CONTAMINATED"
+    assert detail["blockers"][0]["condition"]["id"] == "fleet_contaminated"
+
+
 async def test_roll_call_uses_instance_process_when_bulk_snapshot_omits_idle_bot(
     app_with_root,
     monkeypatch: pytest.MonkeyPatch,
@@ -3304,7 +3331,6 @@ async def test_bot_catalog_trading_mode_comes_from_configured_mode(
         live_runs_root=str(root),
         live_runner_daemon_url="http://daemon",
         live_runner_host_start_command="",
-        fleet_dirty_blocks_starts=False,
         mode="live",
         readonly=False,
     )
@@ -4168,6 +4194,55 @@ async def test_deploy_and_start_rejects_backend_preflight_blocker(
     assert called is False
 
 
+async def test_deploy_and_start_rejects_fleet_contamination_preflight(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _root = app_with_root
+    _set_connected_broker_account(monkeypatch, "DU111")
+    from app.services.deploy_preflight import DeployPreflightSignals
+
+    async def contaminated_preflight(
+        _strategy_key: str,
+        _account_id: str,
+        _instance_id: str,
+    ) -> DeployPreflightSignals:
+        return DeployPreflightSignals(
+            daemon_reachable=True,
+            broker_connection_state="connected",
+            account_frozen=False,
+            account_proven=True,
+            fleet_blocks_starts=True,
+            strategy_deployable=True,
+            instance_already_running=False,
+        )
+
+    monkeypatch.setattr(
+        live_instances.deploy_preflight_service,
+        "gather_deploy_preflight_signals",
+        contaminated_preflight,
+    )
+    called = False
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        nonlocal called
+        called = True
+        return {"run_id": "run-new", "run_dir": "/runs/run-new", "created": True, "start": None}
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+    body = _deploy_body()
+    body["start"] = True
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=body)
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "DEPLOY_PREFLIGHT_BLOCKED"
+    assert detail["blockers"][0]["condition"]["id"] == "fleet_contaminated"
+    assert called is False
+
+
 def _write_identity_source_run(root: Path, sid: str, symbol: str) -> None:
     run_dir = root / f"run-{symbol.lower()}"
     run_dir.mkdir(parents=True)
@@ -4955,6 +5030,48 @@ async def test_start_run_forwards_and_returns_action(app_with_root, monkeypatch:
     assert lifecycle is not None
     assert lifecycle.phase == "ON_DUTY"
     assert lifecycle.active_run_id == "run-abc"
+
+
+async def test_start_run_rejects_contaminated_account_even_with_roll_call_offer(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-dirty", "spy_ema_paper", 100)
+    offer_id = _write_roll_call_offer(root.parent, run_id="run-dirty")
+    _set_startable_now(monkeypatch)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async def contaminated(_root: Path) -> FleetContamination:
+        return FleetContamination(
+            net_positions={"SPY": 1},
+            explained_total={},
+            explained_by_instance=[],
+            residual={"SPY": 1},
+            verdict="contaminated",
+            policy_blocks_starts=True,
+            summary="Unmanaged broker position(s): SPY +1.",
+        )
+
+    monkeypatch.setattr(live_instances, "_compute_account_fleet_contamination", contaminated)
+    called = False
+
+    async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
+        nonlocal called
+        called = True
+        return {"accepted": True, "process": _running_process("run-dirty")}
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/runs/run-dirty/start",
+            json={"roll_call_offer_id": offer_id},
+        )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "FLEET_CONTAMINATED"
+    assert detail["blockers"][0]["condition"]["id"] == "fleet_contaminated"
+    assert called is False
 
 
 async def test_start_run_rejects_when_poisoned(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -5983,7 +6100,6 @@ async def test_start_defaults_readonly_false_in_paper_mode(app_with_root, monkey
         live_runs_root=str(root),
         live_runner_daemon_url="http://daemon",
         live_runner_host_start_command="",
-        fleet_dirty_blocks_starts=False,
         mode="paper",
         readonly=False,
     )
@@ -6019,7 +6135,6 @@ async def test_start_defaults_use_deploy_captured_start_options(
         live_runs_root=str(root),
         live_runner_daemon_url="http://daemon",
         live_runner_host_start_command="",
-        fleet_dirty_blocks_starts=False,
         mode="paper",
         readonly=False,
     )
@@ -6058,7 +6173,6 @@ async def test_start_defaults_do_not_let_deploy_capture_override_live_mode_reado
         live_runs_root=str(root),
         live_runner_daemon_url="http://daemon",
         live_runner_host_start_command="",
-        fleet_dirty_blocks_starts=False,
         mode="live",
         readonly=False,
     )
@@ -6083,7 +6197,6 @@ async def test_start_defaults_readonly_true_in_live_mode(app_with_root, monkeypa
         live_runs_root=str(root),
         live_runner_daemon_url="http://daemon",
         live_runner_host_start_command="",
-        fleet_dirty_blocks_starts=False,
         mode="live",
         readonly=False,
     )
@@ -6109,7 +6222,6 @@ async def test_start_defaults_honors_ibkr_readonly_in_paper_mode(
         live_runs_root=str(root),
         live_runner_daemon_url="http://daemon",
         live_runner_host_start_command="",
-        fleet_dirty_blocks_starts=False,
         mode="paper",
         readonly=True,
     )
@@ -6133,7 +6245,6 @@ async def test_start_defaults_fail_closed_when_mode_missing(app_with_root, monke
         live_runs_root=str(root),
         live_runner_daemon_url="http://daemon",
         live_runner_host_start_command="",
-        fleet_dirty_blocks_starts=False,
         readonly=False,  # even with orders allowed, an absent mode stays shadow
     )
     monkeypatch.setattr(live_instances, "get_settings", lambda: stub)

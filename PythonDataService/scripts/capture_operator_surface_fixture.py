@@ -108,7 +108,6 @@ def _patched_status_route(root: Path, scenario: OperatorSurfaceFixtureScenario) 
         live_runs_root=str(root / "live_runs"),
         live_runner_daemon_url=scenario.daemon_url,
         live_runner_host_start_command="python -m app.engine.live.host_daemon",
-        fleet_dirty_blocks_starts=False,
         mode="paper",
         readonly=False,
     )

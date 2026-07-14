@@ -1149,6 +1149,37 @@ describe('BrokerDeployFormComponent', () => {
     expect(svc.deployInstance).not.toHaveBeenCalled();
   });
 
+  it('renders the Clerk contamination cure and disables Deploy & run', async () => {
+    const { fixture, svc, component } = setup({
+      deployPreflight: {
+        ready: false,
+        blockers: [
+          operatorBlockerFixture({
+            id: 'fleet_contaminated',
+            scope: 'fleet',
+            host: 'deploy_preflight',
+            headline: 'Fleet state blocks new deploys',
+            detail: 'Clear the account fleet state before deploying or starting a bot.',
+            primaryMove: {
+              label: 'Open account monitor',
+              action: { kind: 'navigate', route: '/broker/account-monitor', fragment: null },
+              target: null,
+            },
+          }),
+        ],
+      },
+    });
+    await flush();
+    fillRequired(component);
+    await settleResource(fixture);
+
+    expect(deployButton(fixture).disabled).toBe(true);
+    expect(fixture.nativeElement.textContent).toContain('Fleet state blocks new deploys');
+    expect(fixture.nativeElement.textContent).toContain('Open account monitor');
+    expect(component.commandStatus()).toBe("Can't deploy - Fleet state blocks new deploys.");
+    expect(svc.deployInstance).not.toHaveBeenCalled();
+  });
+
   it('keeps Deploy & run disabled while backend preflight is loading', async () => {
     const pending = deferred<DeployPreflightResponse>();
     const { fixture, svc, component } = setup({ deployPreflight: pending.promise });

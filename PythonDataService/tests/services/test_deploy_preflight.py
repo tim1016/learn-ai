@@ -89,7 +89,11 @@ def test_account_not_proven_blocks_deploy() -> None:
 def test_fleet_contamination_blocks_deploy() -> None:
     blockers = author_deploy_blockers(_healthy().model_copy(update={"fleet_blocks_starts": True}))
 
-    assert "fleet_contaminated" in {blocker.condition.id for blocker in blockers}
+    blocker = next(blocker for blocker in blockers if blocker.condition.id == "fleet_contaminated")
+
+    assert blocker.primary_move is not None
+    assert blocker.primary_move.action.route == "/broker/account-monitor"
+    assert blocker.applies_to == "both"
 
 
 def test_strategy_not_validated_blocks_deploy() -> None:

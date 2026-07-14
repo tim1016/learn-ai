@@ -8,7 +8,6 @@ import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-from app.broker.ibkr.config import IbkrSettings
 from app.engine.live.account_artifacts import append_account_event, read_account_events
 from app.engine.live.account_clerk import read_account_clerk_journal
 from app.engine.live.fleet import compute_fleet_contamination
@@ -268,7 +267,6 @@ async def fetch_net_positions() -> dict[str, int] | None:
 
 
 async def compute_account_fleet_contamination(
-    settings: IbkrSettings,
     root: Path,
     fetch_positions: NetPositionFetcher | None = None,
 ) -> FleetContamination:
@@ -276,6 +274,6 @@ async def compute_account_fleet_contamination(
     result = compute_fleet_contamination(
         await resolve_net_positions(),
         collect_fleet_position_explanations(root),
-        policy_blocks_starts=settings.fleet_dirty_blocks_starts,
+        policy_blocks_starts=True,
     )
     return FleetContamination(**result)
