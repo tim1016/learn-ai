@@ -43,7 +43,7 @@
   color: $text-primary;
 }
 .slash {
-  color: $text-muted;
+  color: $text-subtle;
   font-weight: 500;
 }
 
@@ -85,7 +85,7 @@
   right: 18px;
   transform: translateY(-50%);
   padding: 1px 5px;
-  color: $text-muted;
+  color: $text-subtle;
   border: 1px solid $border;
   border-radius: 3px;
   font-size: 10px;
@@ -120,7 +120,7 @@
   background: transparent;
   border: 0;
   border-radius: $radius-sm;
-  color: $text-muted;
+  color: $text-subtle;
   font-family: inherit;
   font-size: 10.5px;
   font-weight: 600;
@@ -156,7 +156,7 @@
 
 .chevron {
   flex-shrink: 0;
-  color: $text-muted;
+  color: $text-subtle;
   font-size: 9px;
   transition: transform $t-ui ease;
 

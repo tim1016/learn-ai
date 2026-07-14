@@ -102,7 +102,7 @@
 }
 
 .broker-banner-kicker {
-  color: $text-muted;
+  color: $text-subtle;
   font-family: $font-mono;
   font-size: 10px;
   font-weight: 700;
@@ -131,7 +131,7 @@
 .broker-banner-detail {
   min-width: 0;
   overflow: hidden;
-  color: $text-muted;
+  color: $text-subtle;
   font-size: 11px;
   line-height: 1.25;
   text-overflow: ellipsis;

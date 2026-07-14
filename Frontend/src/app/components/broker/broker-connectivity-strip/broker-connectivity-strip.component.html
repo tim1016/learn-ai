@@ -1,109 +1,143 @@
-<section class="connectivity-strip" aria-label="Broker connectivity">
-  <ul class="links">
-    @for (link of connectivity.links(); track link.key) {
-      <li class="link" [class]="'state-' + link.state">
-        @if (link.key === 'daemon') {
-          <button type="button" class="link-button" #diagnosticsTrigger (click)="openDiagnostics()">
+<details
+  class="connectivity-strip"
+  [class.connectivity-strip--ok]="summaryState() === 'ok'"
+  [class.connectivity-strip--warn]="summaryState() === 'warn'"
+  [class.connectivity-strip--down]="summaryState() === 'down'"
+  [class.connectivity-strip--unknown]="summaryState() === 'unknown'"
+>
+  <summary class="connectivity-summary">
+    <span class="summary-main">
+      <span class="summary-indicator" aria-hidden="true"></span>
+      <span class="summary-copy">
+        <span class="summary-kicker">Broker readiness</span>
+        <span class="summary-title">{{ summaryLabel() }}</span>
+      </span>
+    </span>
+    <span class="summary-pips" aria-hidden="true">
+      @for (link of connectivity.links(); track link.key) {
+        <span
+          class="summary-pip"
+          [class.state-ok]="link.state === 'ok'"
+          [class.state-down]="link.state === 'down'"
+          [class.state-warn]="link.state === 'warn'"
+          [class.state-unknown]="link.state === 'unknown'"
+        ></span>
+      }
+    </span>
+    <span class="summary-detail">{{ summaryDetail() }}</span>
+    <span class="summary-action">Details</span>
+    <span class="sr-only" aria-live="polite" aria-atomic="true">
+      {{ summaryLabel() }}. {{ summaryDetail() }}. {{ summaryAria() }}
+    </span>
+  </summary>
+
+  <div class="connectivity-panel">
+    <ul class="links">
+      @for (link of connectivity.links(); track link.key) {
+        <li class="link" [class]="'state-' + link.state">
+          @if (link.key === 'daemon') {
+            <button type="button" class="link-button" #diagnosticsTrigger (click)="openDiagnostics()">
+              <span class="dot" aria-hidden="true"></span>
+              <span class="label">{{ link.label }}</span>
+              <span class="detail">{{ link.detail }}</span>
+              <span class="sr-only">{{ link.label }}: {{ link.detail }}</span>
+            </button>
+          } @else {
             <span class="dot" aria-hidden="true"></span>
             <span class="label">{{ link.label }}</span>
             <span class="detail">{{ link.detail }}</span>
             <span class="sr-only">{{ link.label }}: {{ link.detail }}</span>
-          </button>
-        } @else {
-          <span class="dot" aria-hidden="true"></span>
-          <span class="label">{{ link.label }}</span>
-          <span class="detail">{{ link.detail }}</span>
-          <span class="sr-only">{{ link.label }}: {{ link.detail }}</span>
-        }
-      </li>
-    }
-  </ul>
-
-  @if (connectivity.rosterBlockers().length > 0) {
-    <app-operator-blocker-list
-      [blockers]="connectivity.rosterBlockers()"
-      ariaLabel="Fleet roster blockers"
-      (moveSelected)="handleRosterBlockerMove($event)"
-    />
-  }
-
-  @let fresh = connectivity.daemonFreshness();
-  @if (fresh.state === 'fresh') {
-    <div class="code-identity">
-      <span class="label">Engine code</span>
-      <span class="verdict fresh">Up to date</span>
-      <code>{{ fresh.sha }}</code>
-      <span class="sr-only">Host daemon is running commit {{ fresh.sha }}; it matches the working tree.</span>
-    </div>
-  } @else if (fresh.state === 'stale') {
-    <div class="code-identity stale">
-      <span class="label">Engine code</span>
-      <span class="verdict stale">
-        Stale —
-        @if (fresh.commitsBehind) {
-          {{ fresh.commitsBehind }} commit{{ fresh.commitsBehind === 1 ? '' : 's' }} behind;
-        }
-        restart to apply fixes
-      </span>
-      <code>{{ fresh.sha }}</code>
-      <span class="sr-only">
-        Host daemon is running commit {{ fresh.sha }}; the working tree has newer
-        code — restart the daemon to apply it.
-      </span>
-      <button type="button" class="restart-hint" (click)="copyRestartCommand()">
-        {{ copied() ? 'Copied' : 'Copy restart command' }}
-      </button>
-    </div>
-  } @else if (fresh.sha) {
-    <!-- 'unknown' WITH a sha = a legacy daemon that predates the freshness
-         contract; we can't verify it, so prompt a restart to a current build
-         rather than falsely claiming it is up to date. -->
-    <div class="code-identity stale">
-      <span class="label">Engine code</span>
-      <span class="verdict stale">Can't verify — restart to a current engine</span>
-      <code>{{ fresh.sha }}</code>
-      <span class="sr-only">
-        The host daemon predates the code-freshness check; restart it to a current
-        build so its running code can be verified.
-      </span>
-      <button type="button" class="restart-hint" (click)="copyRestartCommand()">
-        {{ copied() ? 'Copied' : 'Copy restart command' }}
-      </button>
-    </div>
-  }
-
-  @if (connectivity.blockers().length > 0) {
-    <ul class="blockers" role="alert">
-      @for (reason of connectivity.blockers(); track $index) {
-        <li>{{ reason }}</li>
+          }
+        </li>
       }
     </ul>
-  }
 
-  @if (connectivity.daemonDown()) {
-    <article class="recovery" aria-labelledby="live-engine-recovery-title">
-      <div>
-        <h2 id="live-engine-recovery-title">Live engine unavailable</h2>
-        <p>The local live-trading engine is not running on this machine.</p>
+    @if (connectivity.rosterBlockers().length > 0) {
+      <app-operator-blocker-list
+        [blockers]="connectivity.rosterBlockers()"
+        ariaLabel="Fleet roster blockers"
+        (moveSelected)="handleRosterBlockerMove($event)"
+      />
+    }
+
+    @let fresh = connectivity.daemonFreshness();
+    @if (fresh.state === 'fresh') {
+      <div class="code-identity">
+        <span class="label">Engine code</span>
+        <span class="verdict fresh">Up to date</span>
+        <code>{{ fresh.sha }}</code>
+        <span class="sr-only">Host daemon is running commit {{ fresh.sha }}; it matches the working tree.</span>
       </div>
-      <div class="recovery-actions">
-        <button type="button" (click)="recheck()">Recheck</button>
-        <button type="button" (click)="copyStartCommand()">
-          {{ copied() ? 'Copied' : 'Copy start command' }}
+    } @else if (fresh.state === 'stale') {
+      <div class="code-identity stale">
+        <span class="label">Engine code</span>
+        <span class="verdict stale">
+          Stale —
+          @if (fresh.commitsBehind) {
+            {{ fresh.commitsBehind }} commit{{ fresh.commitsBehind === 1 ? '' : 's' }} behind;
+          }
+          restart to apply fixes
+        </span>
+        <code>{{ fresh.sha }}</code>
+        <span class="sr-only">
+          Host daemon is running commit {{ fresh.sha }}; the working tree has newer
+          code — restart the daemon to apply it.
+        </span>
+        <button type="button" class="restart-hint" (click)="copyRestartCommand()">
+          {{ copied() ? 'Copied' : 'Copy restart command' }}
         </button>
       </div>
-      <details>
-        <summary>Start command and status details</summary>
-        <p>Run this from the learn-ai repo root:</p>
-        <code>{{ startCommand }}</code>
-        @for (link of connectivity.links(); track link.key) {
-          @if (link.key === 'daemon') {
-            <p>{{ link.label }}: {{ link.detail }}</p>
-          }
+    } @else if (fresh.sha) {
+      <!-- 'unknown' WITH a sha = a legacy daemon that predates the freshness
+           contract; we can't verify it, so prompt a restart to a current build
+           rather than falsely claiming it is up to date. -->
+      <div class="code-identity stale">
+        <span class="label">Engine code</span>
+        <span class="verdict stale">Can't verify — restart to a current engine</span>
+        <code>{{ fresh.sha }}</code>
+        <span class="sr-only">
+          The host daemon predates the code-freshness check; restart it to a current
+          build so its running code can be verified.
+        </span>
+        <button type="button" class="restart-hint" (click)="copyRestartCommand()">
+          {{ copied() ? 'Copied' : 'Copy restart command' }}
+        </button>
+      </div>
+    }
+
+    @if (connectivity.blockers().length > 0) {
+      <ul class="blockers" role="alert">
+        @for (reason of connectivity.blockers(); track $index) {
+          <li>{{ reason }}</li>
         }
-      </details>
-    </article>
-  }
+      </ul>
+    }
+
+    @if (connectivity.daemonDown()) {
+      <article class="recovery" aria-labelledby="live-engine-recovery-title">
+        <div>
+          <h2 id="live-engine-recovery-title">Live engine unavailable</h2>
+          <p>The local live-trading engine is not running on this machine.</p>
+        </div>
+        <div class="recovery-actions">
+          <button type="button" (click)="recheck()">Recheck</button>
+          <button type="button" (click)="copyStartCommand()">
+            {{ copied() ? 'Copied' : 'Copy start command' }}
+          </button>
+        </div>
+        <details>
+          <summary>Start command and status details</summary>
+          <p>Run this from the learn-ai repo root:</p>
+          <code>{{ startCommand }}</code>
+          @for (link of connectivity.links(); track link.key) {
+            @if (link.key === 'daemon') {
+              <p>{{ link.label }}: {{ link.detail }}</p>
+            }
+          }
+        </details>
+      </article>
+    }
+  </div>
 
   @if (diagnosticsOpen()) {
     <div class="diagnostics-backdrop">
@@ -133,4 +167,4 @@
       </aside>
     </div>
   }
-</section>
+</details>
