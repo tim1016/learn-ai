@@ -21,9 +21,9 @@
           type="button"
           icon="pi pi-play"
           [loading]="isStartingReady()"
-          (click)="startReadyBots()"
+          (click)="requestCohortStart()"
         >
-          <span class="p-button-label">Start one ready</span>
+          <span class="p-button-label">Start ready cohort</span>
         </button>
       }
       <button
@@ -63,7 +63,7 @@
   </section>
 
   @if (launchProgress().phase !== 'idle') {
-    <section class="launch-progress" aria-live="polite" aria-label="Start one ready progress">
+    <section class="launch-progress" aria-live="polite" aria-label="Cohort launch progress">
       <div class="launch-progress-header">
         <div>
           <strong>{{ launchProgress().title }}</strong>
@@ -85,6 +85,42 @@
           }
         </ol>
       }
+      @if (cohortSuccessMeter(); as meter) {
+        <div class="launch-progress-meter" aria-label="Cohort success meter">
+          <span>Target {{ meter.target }}</span>
+          <span>Accepted {{ meter.accepted }}</span>
+          <span>Blocked {{ meter.blocked }}</span>
+          <span>Live on duty {{ meter.liveOnDuty }}</span>
+          <span>Orders {{ meter.ordersUsed }}</span>
+          @if (meter.cleanExits !== null) {
+            <span>Flat clean exits {{ meter.cleanExits }}</span>
+          }
+        </div>
+      }
+    </section>
+  }
+
+  @if (cohortConfirmationOpen()) {
+    <section
+      class="delete-confirmation"
+      role="alertdialog"
+      aria-labelledby="cohort-confirm-title"
+      aria-describedby="cohort-confirm-detail"
+    >
+      <div>
+        <h2 id="cohort-confirm-title">Start ready paper-validation cohort?</h2>
+        <p id="cohort-confirm-detail">
+          {{ readyRows().length }} validated bots will receive one durable cohort receipt before any start request.
+        </p>
+      </div>
+      <div class="selection-actions">
+        <button pButton type="button" severity="secondary" [outlined]="true" (click)="cancelCohortStart()">
+          <span class="p-button-label">Cancel</span>
+        </button>
+        <button pButton type="button" icon="pi pi-play" (click)="confirmCohortStart()">
+          <span class="p-button-label">Authorize {{ readyRows().length }} bots</span>
+        </button>
+      </div>
     </section>
   }
 

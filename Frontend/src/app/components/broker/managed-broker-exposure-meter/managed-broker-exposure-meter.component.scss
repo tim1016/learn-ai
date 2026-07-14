@@ -1,0 +1,65 @@
+:host {
+  display: block;
+}
+
+.account-outcome-card {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--border-light, #2a2e39);
+  border-radius: 8px;
+  background: var(--bg-surface, #11151f);
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: var(--text-primary, #f0f3fa);
+  font-weight: 600;
+}
+
+.badge {
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--border-light, #2a2e39);
+  border-radius: 999px;
+  background: var(--bg-sunken, #070a11);
+  color: var(--text-secondary, #b2b5be);
+  font-size: 0.7rem;
+}
+
+.receipt-reason,
+.muted {
+  color: var(--text-secondary, #b2b5be);
+  font-size: 0.9rem;
+}
+
+.receipt-reason {
+  margin: 0.75rem 0 0;
+}
+
+.muted {
+  margin: 0.5rem 0;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.kv-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 1.25rem;
+  row-gap: 0.4rem;
+  margin: 0.75rem 0 0;
+}
+
+dt {
+  color: var(--text-subtle, #9598a1);
+}
+
+dd {
+  margin: 0;
+  color: var(--text-primary, #f0f3fa);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}

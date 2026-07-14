@@ -178,6 +178,8 @@ class FakeLiveRunsService {
   getBotCatalog = vi.fn<() => Promise<BotCatalogResponse>>();
   deleteBot = vi.fn<(instanceId: string, request?: unknown) => Promise<unknown>>();
   runRollCall = vi.fn<() => Promise<BotRollCallResponse>>();
+  createCohortBatchLaunch = vi.fn();
+  recordCohortBatchLaunchOutcomes = vi.fn();
   startHostRunner = vi.fn<(runId: string, request: unknown) => Promise<unknown>>();
 }
 
@@ -317,6 +319,18 @@ async function setup(options: { triage?: AccountTriageResponse } = {}) {
       bound_run_id: 'run-live-idle-spy',
       started_at_ms: NEW_RUN,
     },
+  });
+  service.createCohortBatchLaunch.mockResolvedValue({
+    schema_version: 1, account_id: 'DU1234567', cohort_id: 'paper-validation-test',
+    member_strategy_instance_ids: ['live-idle-spy', 'live-running-aapl'], window_start_ms: NEW_RUN,
+    window_end_ms: NEW_RUN + 300_000, authorized_by: 'bots-page.operator', recorded_at_ms: NEW_RUN,
+  });
+  service.recordCohortBatchLaunchOutcomes.mockResolvedValue({
+    schema_version: 1,
+    account_id: 'DU1234567',
+    cohort_id: 'paper-validation-test',
+    outcomes: [],
+    recorded_at_ms: NEW_RUN,
   });
   service.deleteBot.mockResolvedValue({
     strategy_instance_id: 'paper-msft',
@@ -461,7 +475,7 @@ describe('BotsPageComponent', () => {
     expect(navigate).not.toHaveBeenCalledWith(['/broker/bots', 'live-running-aapl']);
   });
 
-  it('runs roll call and starts one ready canary with its offer id', async () => {
+  it('authorizes and starts the ready cohort with current offer ids', async () => {
     const { fixture, service } = await setup();
     const secondReady = bot({
       strategy_instance_id: 'live-idle-qqq',
@@ -487,7 +501,15 @@ describe('BotsPageComponent', () => {
     await settle(fixture);
 
     expect(service.runRollCall).toHaveBeenCalledTimes(1);
-    expect(service.startHostRunner).toHaveBeenCalledTimes(1);
+    expect(service.createCohortBatchLaunch).toHaveBeenCalledTimes(1);
+    expect(service.recordCohortBatchLaunchOutcomes).toHaveBeenCalledWith(
+      'DU1234567',
+      expect.any(String),
+      expect.objectContaining({ outcomes: expect.arrayContaining([
+        expect.objectContaining({ state: 'accepted', strategy_instance_id: 'live-idle-spy' }),
+      ]) }),
+    );
+    expect(service.startHostRunner).toHaveBeenCalledTimes(2);
     expect(service.startHostRunner).toHaveBeenCalledWith('run-live-idle-qqq', {
       readonly: false,
       hydrate_policy: 'require',
@@ -496,10 +518,25 @@ describe('BotsPageComponent', () => {
       ibkr_host: '127.0.0.1',
       roll_call_offer_id: 'offer-live-idle-qqq',
     });
-    expect(fixture.componentInstance.launchProgress().title).toBe('Canary start accepted');
+    expect(fixture.componentInstance.launchProgress().title).toBe('Cohort start accepted');
     expect((fixture.nativeElement as HTMLElement).textContent).toContain(
-      'Waiting for the canary result before another start.',
+      'Start accepted; live status is Ready.',
     );
+  });
+
+  it('requires cohort authorization confirmation before starting ready bots', async () => {
+    const { fixture, service } = await setup();
+    const root = fixture.nativeElement as HTMLElement;
+    const start = Array.from(root.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.includes('Start ready cohort'));
+
+    start?.click();
+    await settle(fixture);
+
+    expect(root.querySelector('[role="alertdialog"]')?.textContent).toContain(
+      'Start ready paper-validation cohort?',
+    );
+    expect(service.createCohortBatchLaunch).not.toHaveBeenCalled();
   });
 
   it('blocks Start one ready before roll call when account sick bay is active', async () => {

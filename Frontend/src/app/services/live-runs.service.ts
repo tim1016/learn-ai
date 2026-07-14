@@ -47,6 +47,12 @@ import type {
   SetInstanceDesiredStateResponse,
 } from '../api/live-instances.types';
 import type { DeployPreflightResponse } from '../api/operator-blocker.types';
+import type {
+  CohortBatchLaunchCreateRequest,
+  CohortBatchLaunchOutcomesReceipt,
+  CohortBatchLaunchOutcomesRequest,
+  CohortBatchLaunchReceipt,
+} from '../api/cohort-batch-launch.types';
 
 @Injectable({ providedIn: 'root' })
 export class LiveRunsService {
@@ -238,6 +244,23 @@ export class LiveRunsService {
     return firstValueFrom(
       this.http.post<BotRollCallResponse>(`${this.instancesBase}/roll-call`, {}),
     );
+  }
+
+  createCohortBatchLaunch(accountId: string, request: CohortBatchLaunchCreateRequest): Promise<CohortBatchLaunchReceipt> {
+    return firstValueFrom(this.http.post<CohortBatchLaunchReceipt>(
+      `/api/accounts/${encodeURIComponent(accountId)}/cohort-batch-launches`, request,
+    ));
+  }
+
+  recordCohortBatchLaunchOutcomes(
+    accountId: string,
+    cohortId: string,
+    request: CohortBatchLaunchOutcomesRequest,
+  ): Promise<CohortBatchLaunchOutcomesReceipt> {
+    return firstValueFrom(this.http.post<CohortBatchLaunchOutcomesReceipt>(
+      `/api/accounts/${encodeURIComponent(accountId)}/cohort-batch-launches/${encodeURIComponent(cohortId)}/outcomes`,
+      request,
+    ));
   }
 
   deleteBot(instanceId: string, request: BotDeleteRequest = { mode: 'soft' }): Promise<BotDeleteResponse> {

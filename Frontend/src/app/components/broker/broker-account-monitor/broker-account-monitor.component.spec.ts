@@ -108,6 +108,15 @@ class FakeLiveRunsService {
     process: { state: 'idle', command: [] },
     clerks: [],
   });
+  getAccountFleet = vi.fn().mockResolvedValue({
+    net_positions: { SPY: 2 },
+    explained_total: { SPY: 2 },
+    explained_by_instance: [],
+    residual: {},
+    verdict: 'clean',
+    policy_blocks_starts: false,
+    summary: 'Broker exposure matches the managed journal.',
+  });
 }
 
 function routeFragment(fragment: string | null = null) {
@@ -115,6 +124,20 @@ function routeFragment(fragment: string | null = null) {
 }
 
 describe('BrokerAccountMonitorComponent', () => {
+  it('shows the managed-versus-broker journal by symbol', async () => {
+    await render(BrokerAccountMonitorComponent, {
+      providers: [
+        { provide: BrokerService, useValue: new FakeBrokerService() },
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useClass: FakeLiveRunsService },
+        routeFragment(),
+      ],
+    });
+
+    expect(await screen.findByText('Managed versus broker exposure')).toBeTruthy();
+    expect(screen.getByText(/Broker 2.*managed 2.*residual 0/)).toBeTruthy();
+  });
+
   it('shows the matching account clerk lease health', async () => {
     const liveRuns = new FakeLiveRunsService();
     liveRuns.getHostRunnerHealth.mockResolvedValue({
