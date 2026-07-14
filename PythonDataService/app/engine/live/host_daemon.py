@@ -71,6 +71,7 @@ from app.engine.live.run_ledger import LiveRunStartDefaults
 from app.engine.strategy.spec.schema import load_spec_from_path
 from app.schemas.broker_session import GatewaySocketsSnapshot
 from app.schemas.live_runs import (
+    AccountClerkHealth,
     AuditCopySizingLookup,
     EmergencyFlattenRequest,
     HostRunnerActionResponse,
@@ -249,6 +250,17 @@ class ManagedProcess:
     launch_failure_recorded_at_ms: int | None = None
 
 
+@dataclass
+class ManagedClerk:
+    """One daemon-supervised lease process for a broker account."""
+
+    account_id: str
+    generation: int
+    process: subprocess.Popen
+    started_at_ms: int
+    log_handle: TextIO
+
+
 class RunnerProcessManager:
     """Own host-side live-run subprocesses — one per strategy instance.
 
@@ -297,6 +309,7 @@ class RunnerProcessManager:
         self._lease_writer: object | None = None
         self._orphan_candidates: list[object] = []
         self._managed: dict[str, ManagedProcess] = {}
+        self._clerks: dict[str, ManagedClerk] = {}
         # VCR-P3-P / Phase 6D — per-instance start locks. Each key holds an
         # ``rlock`` so the (check_existing, spawn, register) sequence in
         # ``start`` runs serialised for one instance while different instances
@@ -365,6 +378,7 @@ class RunnerProcessManager:
             live_runs_root=str(self.live_runs_root),
             fetched_at_ms=self._clock_ms(),
             process=self._first_process_status(),
+            clerks=self._clerk_health(),
             git_sha=running,
             repo_head_sha=on_disk,
             code_stale=bool(running and on_disk and running != on_disk),
@@ -625,6 +639,7 @@ class RunnerProcessManager:
             env = self._build_child_env(request, ibkr_client_id=ibkr_client_id)
             log_path = run_dir / "host_daemon.log"
             log_handle = log_path.open("a", encoding="utf-8")
+            account_id: str | None = None
 
             try:
                 account_freeze = self._write_account_registry_binding(
@@ -638,6 +653,13 @@ class RunnerProcessManager:
                         status.HTTP_409_CONFLICT,
                         f"Account is frozen by {account_freeze.source}: {account_freeze.reason}",
                     )
+                account_id, _ = self._account_registry_identity(run_dir)
+                if account_id is not None:
+                    # The initial lease is synchronously persisted by
+                    # ``_ensure_account_clerk`` before the bot is allowed to
+                    # reach any submit surface.  A bot must never race ahead
+                    # of the account authority it depends on.
+                    self._ensure_account_clerk(account_id)
                 process = subprocess.Popen(
                     command,
                     cwd=str(self.repo_root),
@@ -673,6 +695,8 @@ class RunnerProcessManager:
                         "Failed to retire account registry binding after host runner spawn failure",
                         extra={"run_id": run_id, "strategy_instance_id": key},
                     )
+                if account_id is not None:
+                    self._reap_account_clerk_if_idle(account_id)
                 raise HostRunnerError(
                     status.HTTP_503_SERVICE_UNAVAILABLE, f"Could not start host runner: {exc}"
                 ) from exc
@@ -1357,6 +1381,117 @@ class RunnerProcessManager:
             raise HostRunnerError(status.HTTP_404_NOT_FOUND, f"Run {run_id!r} not found under {self.live_runs_root}")
         return run_dir
 
+    def _ensure_account_clerk(self, account_id: str) -> ManagedClerk:
+        existing = self._clerks.get(account_id)
+        if existing is not None and existing.process.poll() is None:
+            return existing
+        if existing is not None:
+            existing.log_handle.close()
+            self._clerks.pop(account_id, None)
+        from app.engine.live.account_artifacts import account_artifacts_root, advance_account_clerk_generation
+        from app.engine.live.account_clerk import AccountClerkLeaseWriter
+
+        generation = advance_account_clerk_generation(
+            self.artifacts_root,
+            account_id,
+            phase="accepting",
+            recorded_at_ms=self._clock_ms(),
+            source="host_daemon.clerk_spawn",
+        )
+        root = account_artifacts_root(self.artifacts_root, account_id)
+        log_path = root / "clerk.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_handle = log_path.open("a", encoding="utf-8")
+        env = os.environ.copy()
+        python_path = str(self.repo_root / "PythonDataService")
+        existing_python_path = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = (
+            python_path if not existing_python_path else f"{python_path}{os.pathsep}{existing_python_path}"
+        )
+        try:
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "app.engine.live.account_clerk",
+                    "--artifacts-root",
+                    str(self.artifacts_root),
+                    "--account-id",
+                    account_id,
+                    "--generation",
+                    str(generation.generation),
+                ],
+                cwd=str(self.repo_root),
+                env=env,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                creationflags=_creation_flags(),
+                start_new_session=(os.name != "nt"),
+            )
+        except OSError:
+            log_handle.close()
+            raise
+        AccountClerkLeaseWriter(
+            artifacts_root=self.artifacts_root,
+            account_id=account_id,
+            generation=generation.generation,
+            pid=process.pid,
+            now_ms=self._clock_ms,
+        ).renew()
+        managed = ManagedClerk(
+            account_id=account_id,
+            generation=generation.generation,
+            process=process,
+            started_at_ms=self._clock_ms(),
+            log_handle=log_handle,
+        )
+        self._clerks[account_id] = managed
+        return managed
+
+    def _clerk_health(self) -> list[AccountClerkHealth]:
+        from app.engine.live.account_artifacts import read_account_clerk_lease
+
+        now_ms = self._clock_ms()
+        rows: list[AccountClerkHealth] = []
+        for account_id, clerk in sorted(self._clerks.items()):
+            lease = read_account_clerk_lease(self.artifacts_root, account_id)
+            running = clerk.process.poll() is None
+            lease_valid = bool(
+                running
+                and lease is not None
+                and lease.generation == clerk.generation
+                and lease.status == "RUNNING"
+                and lease.valid_until_ms > now_ms
+            )
+            rows.append(
+                AccountClerkHealth(
+                    account_id=account_id,
+                    generation=clerk.generation,
+                    pid=lease.pid if lease is not None else clerk.process.pid,
+                    status=(lease.status if lease is not None else "UNAVAILABLE") if running else "EXITED",
+                    started_at_ms=clerk.started_at_ms,
+                    renewed_at_ms=lease.renewed_at_ms if lease is not None else None,
+                    valid_until_ms=lease.valid_until_ms if lease is not None else None,
+                    lease_valid=lease_valid,
+                )
+            )
+        return rows
+
+    def _reap_account_clerk_if_idle(self, account_id: str) -> None:
+        if any(
+            process.process.poll() is None
+            and self._account_registry_identity(process.run_dir)[0] == account_id
+            for process in self._managed.values()
+        ):
+            return
+        clerk = self._clerks.get(account_id)
+        if clerk is None:
+            return
+        if clerk.process.poll() is None:
+            clerk.process.terminate()
+        clerk.log_handle.close()
+        self._clerks.pop(account_id, None)
+
     def _refresh(self, managed: ManagedProcess) -> None:
         """Settle a managed process if it has exited: stamp ``ended_at_ms``
         and close its log handle exactly once."""
@@ -1385,6 +1520,9 @@ class RunnerProcessManager:
                     source=self._account_registry_retirement_source(managed),
                 )
                 managed.registry_retired_at_ms = self._clock_ms()
+                account_id, _ = self._account_registry_identity(managed.run_dir)
+                if account_id is not None:
+                    self._reap_account_clerk_if_idle(account_id)
             except HostRunnerError:
                 logger.exception(
                     "Failed to retire account registry binding for exited host runner",

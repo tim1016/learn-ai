@@ -10,11 +10,13 @@ import pytest
 
 import app.engine.live.account_clerk as account_clerk_module
 from app.broker.ibkr.models import IbkrOrderSpec
+from app.engine.live.account_artifacts import read_account_clerk_lease
 from app.engine.live.account_clerk import (
     AccountClerk,
     AccountClerkInboxEntry,
     AccountClerkIntentRejected,
     AccountClerkJournalEntry,
+    AccountClerkLeaseWriter,
     AccountClerkRecordedReceipt,
     read_account_clerk_inbox,
     read_account_clerk_journal,
@@ -263,3 +265,23 @@ async def test_record_intent_rejects_superseded_run_without_blocking_sibling(tmp
     assert rejected.value.reason == "CLERK_STALE_RUN"
     assert sibling_receipt.status == "recorded"
     assert [entry.intent.intent_id for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == ["live-b"]
+
+
+def test_clerk_lease_writer_renews_and_drains(tmp_path: Path) -> None:
+    clock = iter((START_MS, START_MS + 1_000, START_MS + 2_000))
+    writer = AccountClerkLeaseWriter(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        generation=2,
+        pid=123,
+        now_ms=lambda: next(clock),
+    )
+
+    running = writer.renew()
+    draining = writer.renew(draining=True)
+
+    assert running.status == "RUNNING"
+    assert running.valid_until_ms == START_MS + 6_000
+    assert draining.status == "DRAINING"
+    assert draining.valid_until_ms == START_MS + 2_000
+    assert read_account_clerk_lease(tmp_path, ACCOUNT) == draining

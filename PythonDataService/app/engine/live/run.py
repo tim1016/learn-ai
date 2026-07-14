@@ -61,7 +61,6 @@ if TYPE_CHECKING:
     from app.engine.live.account_artifacts import (
         AccountOwnerGeneration,
     )
-    from app.engine.live.account_owner import AccountOwner
     from app.engine.live.live_state_sidecar import LiveStateEnvelope
     from app.engine.strategy.spec.schema import StrategySpec
 
@@ -152,17 +151,6 @@ def _build_child_watchdog_factory(artifacts_root: Path, run_dir: Path):
         )
 
     return _factory
-
-
-def _record_account_owner_startup_generation(
-    account_owner: AccountOwner,
-    persisted_generation: AccountOwnerGeneration | None,
-    *,
-    recorded_at_ms: int,
-) -> AccountOwnerGeneration | None:
-    if persisted_generation is not None and persisted_generation.phase != "accepting":
-        return None
-    return account_owner.record_accepting_generation(recorded_at_ms=recorded_at_ms)
 
 
 # ──────────────────────────── init-ledger subcommand ─────────────────
@@ -1821,9 +1809,11 @@ def cmd_start(args: argparse.Namespace) -> int:
             list_open_orders as _owner_list_open_orders,
         )
         from app.engine.live.account_artifacts import (
-            advance_account_owner_generation,
+            AccountClerkLeaseUnavailableError,
+            AccountOwnerGeneration,
+            read_account_clerk_generation,
             read_account_events,
-            read_account_owner_generation,
+            require_active_account_clerk_generation,
         )
         from app.engine.live.account_classifier import (
             AccountBrokerEvidence,
@@ -1833,33 +1823,46 @@ def cmd_start(args: argparse.Namespace) -> int:
         from app.engine.live.account_registry import read_account_instance_registry
         from app.engine.live.fleet_reset_baseline import read_applicable_baseline
 
-        persisted_generation = read_account_owner_generation(_artifacts_root, ledger.account_id)
+        persisted_generation = read_account_clerk_generation(_artifacts_root, ledger.account_id)
         account_owner_generation = persisted_generation.generation if persisted_generation is not None else 0
         account_owner_initial_phase = persisted_generation.phase if persisted_generation is not None else "accepting"
+
+        try:
+            account_owner_generation = require_active_account_clerk_generation(
+                _artifacts_root,
+                ledger.account_id,
+                now_ms=now_ms(),
+            )
+        except AccountClerkLeaseUnavailableError as exc:
+            raise RuntimeError(f"ACCOUNT_CLERK_UNAVAILABLE:{exc.reason}") from exc
 
         def _account_owner_generation_provider() -> int:
             return account_owner_generation
 
-        def _current_account_owner_generation_provider() -> int:
-            persisted = read_account_owner_generation(_artifacts_root, ledger.account_id)
-            if persisted is not None:
-                return persisted.generation
-            return account_owner_generation
+        def _current_account_owner_generation_provider() -> int | None:
+            try:
+                return require_active_account_clerk_generation(
+                    _artifacts_root,
+                    ledger.account_id,
+                    now_ms=now_ms(),
+                )
+            except AccountClerkLeaseUnavailableError:
+                return None
 
-        def _advance_account_owner_generation(
+        def _current_clerk_generation_for_reconnect(
             phase: str,
             recorded_at_ms: int,
         ) -> AccountOwnerGeneration:
-            nonlocal account_owner_generation
-            generation = advance_account_owner_generation(
-                _artifacts_root,
-                ledger.account_id,
+            current_generation = _current_account_owner_generation_provider()
+            if current_generation is None:
+                raise RuntimeError("ACCOUNT_CLERK_UNAVAILABLE:CLERK_LEASE_UNAVAILABLE")
+            return AccountOwnerGeneration(
+                account_id=ledger.account_id,
+                generation=current_generation,
                 phase=phase,
                 recorded_at_ms=recorded_at_ms,
-                source="account_owner",
+                source="account_clerk",
             )
-            account_owner_generation = generation.generation
-            return generation
 
         require_owner_write_fence = getattr(broker, "require_account_owner_write_fence", None)
         if callable(require_owner_write_fence):
@@ -1895,16 +1898,10 @@ def cmd_start(args: argparse.Namespace) -> int:
             broker=broker,
             owner_generation_provider=_account_owner_generation_provider,
             current_owner_generation_provider=_current_account_owner_generation_provider,
-            owner_generation_advancer=_advance_account_owner_generation,
+            owner_generation_advancer=_current_clerk_generation_for_reconnect,
             classifier=_classify_account_for_submit,
             initial_phase=account_owner_initial_phase,
         )
-        _record_account_owner_startup_generation(
-            account_owner,
-            persisted_generation,
-            recorded_at_ms=now_ms(),
-        )
-
     engine = LiveEngine(
         client,
         live_config,

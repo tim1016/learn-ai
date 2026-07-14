@@ -11,17 +11,23 @@ from app.engine.live import account_artifacts, account_registry
 from app.engine.live.account_artifacts import (
     AccountArtifactError,
     AccountAuditedOverride,
+    AccountClerkLease,
     AccountFreezeEvidence,
     AccountRecoveryProof,
     CohortBatchLaunchReceipt,
     RestartIntensityPolicy,
     account_artifacts_root,
+    advance_account_clerk_generation,
     clear_account_freeze,
     evaluate_restart_intensity,
+    read_account_clerk_generation,
+    read_account_clerk_lease,
     read_account_events,
     read_account_events_tolerant,
     read_account_freeze,
     record_cohort_batch_launch_receipt,
+    require_active_account_clerk_generation,
+    write_account_clerk_lease,
     write_account_freeze,
 )
 from app.engine.live.account_registry import (
@@ -57,6 +63,51 @@ def test_account_freeze_round_trips_with_gate_result_and_audit_event(tmp_path: P
     assert event["seq"] == 1
     assert event["ts_ms"] == 1_700_000_000_000
     assert account_artifacts_root(tmp_path, "DU123456") == tmp_path / "accounts" / "DU123456"
+
+
+def test_account_clerk_generation_and_lease_are_account_rooted(tmp_path: Path) -> None:
+    generation = advance_account_clerk_generation(
+        tmp_path,
+        "DU123456",
+        phase="accepting",
+        recorded_at_ms=1_700_000_000_000,
+        source="host_daemon.clerk_spawn",
+    )
+    lease = AccountClerkLease(
+        account_id="DU123456",
+        generation=generation.generation,
+        pid=123,
+        started_at_ms=1_700_000_000_000,
+        renewed_at_ms=1_700_000_000_100,
+        valid_until_ms=1_700_000_060_100,
+    )
+
+    path = write_account_clerk_lease(tmp_path, lease)
+
+    assert generation.generation == 1
+    assert read_account_clerk_generation(tmp_path, "DU123456") == generation
+    assert path == tmp_path / "accounts" / "DU123456" / "clerk_lease.json"
+    assert read_account_clerk_lease(tmp_path, "DU123456") == lease
+    assert require_active_account_clerk_generation(
+        tmp_path,
+        "DU123456",
+        now_ms=1_700_000_000_200,
+    ) == generation.generation
+
+    stale_generation = advance_account_clerk_generation(
+        tmp_path,
+        "DU123456",
+        phase="accepting",
+        recorded_at_ms=1_700_000_000_300,
+        source="host_daemon.clerk_takeover",
+    )
+    with pytest.raises(RuntimeError, match="CLERK_LEASE_GENERATION_MISMATCH"):
+        require_active_account_clerk_generation(
+            tmp_path,
+            "DU123456",
+            now_ms=1_700_000_000_400,
+        )
+    assert stale_generation.generation == 2
 
 
 @pytest.mark.parametrize(

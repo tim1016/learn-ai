@@ -20,6 +20,8 @@ from app.schemas.live_runs import GateResult
 ACCOUNT_FREEZE_FILENAME = "unresolved_exposure.flag"
 ACCOUNT_EVENTS_FILENAME = "account_events.jsonl"
 ACCOUNT_OWNER_GENERATION_FILENAME = "owner_generation.json"
+ACCOUNT_CLERK_GENERATION_FILENAME = "clerk_generation.json"
+ACCOUNT_CLERK_LEASE_FILENAME = "clerk_lease.json"
 ACCOUNT_RECOVERY_EVIDENCE_EVENT_TYPES = frozenset(
     {
         "account_recovery_proof_recorded",
@@ -57,6 +59,15 @@ logger = logging.getLogger(__name__)
 
 class AccountArtifactError(ValueError):
     """Raised when an account artifact path or payload is invalid."""
+
+
+class AccountClerkLeaseUnavailableError(RuntimeError):
+    """Raised when no current clerk lease can authorize an account write."""
+
+    def __init__(self, *, account_id: str, reason: str) -> None:
+        super().__init__(f"account clerk lease unavailable for {account_id}: {reason}")
+        self.account_id = account_id
+        self.reason = reason
 
 
 def _safe_account_path_segment(account_id: str) -> str:
@@ -121,6 +132,34 @@ class AccountOwnerGeneration(BaseModel):
     phase: Literal["accepting", "reconnecting", "draining", "frozen"] = "accepting"
     recorded_at_ms: int = Field(ge=0)
     source: str = Field(min_length=1)
+
+
+class AccountClerkGeneration(BaseModel):
+    """Current Account Clerk fencing generation for one account."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    generation: int = Field(ge=1)
+    phase: Literal["accepting", "reconnecting", "draining", "frozen"] = "accepting"
+    recorded_at_ms: int = Field(ge=0)
+    source: str = Field(min_length=1)
+
+
+class AccountClerkLease(BaseModel):
+    """A daemon-supervised clerk's renewable account-scoped lease."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    generation: int = Field(ge=1)
+    pid: int = Field(ge=1)
+    status: Literal["RUNNING", "DRAINING"] = "RUNNING"
+    started_at_ms: int = Field(ge=0)
+    renewed_at_ms: int = Field(ge=0)
+    valid_until_ms: int = Field(ge=0)
 
 
 class AccountRecoveryProof(BaseModel):
@@ -594,6 +633,127 @@ def read_account_owner_generation(
     return AccountOwnerGeneration.model_validate_json(path.read_text(encoding="utf-8"))
 
 
+def advance_account_clerk_generation(
+    artifacts_root: Path,
+    account_id: str,
+    *,
+    phase: Literal["accepting", "reconnecting", "draining", "frozen"],
+    recorded_at_ms: int,
+    source: str,
+) -> AccountClerkGeneration:
+    """Advance the clerk fence only when clerk authority is (re)acquired."""
+
+    path = _account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        ACCOUNT_CLERK_GENERATION_FILENAME,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _file_lock(path):
+        existing = (
+            AccountClerkGeneration.model_validate_json(path.read_text(encoding="utf-8"))
+            if path.is_file()
+            else None
+        )
+        generation = AccountClerkGeneration(
+            account_id=account_id,
+            generation=(existing.generation + 1 if existing is not None else 1),
+            phase=phase,
+            recorded_at_ms=recorded_at_ms,
+            source=source,
+        )
+        _atomic_write_json_locked(path, generation.model_dump())
+    _append_account_event(
+        artifacts_root,
+        account_id,
+        {
+            "event_type": "account_clerk_generation_recorded",
+            "account_id": account_id,
+            "generation": generation.generation,
+            "phase": generation.phase,
+            "recorded_at_ms": generation.recorded_at_ms,
+            "source": generation.source,
+        },
+    )
+    return generation
+
+
+def read_account_clerk_generation(artifacts_root: Path, account_id: str) -> AccountClerkGeneration | None:
+    path = _existing_account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        ACCOUNT_CLERK_GENERATION_FILENAME,
+    )
+    if path is None:
+        return None
+    return AccountClerkGeneration.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def write_account_clerk_lease(artifacts_root: Path, lease: AccountClerkLease) -> Path:
+    path = _account_artifact_file_path(
+        artifacts_root,
+        lease.account_id,
+        ACCOUNT_CLERK_LEASE_FILENAME,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_json(path, lease.model_dump())
+    return path
+
+
+def read_account_clerk_lease(artifacts_root: Path, account_id: str) -> AccountClerkLease | None:
+    path = _existing_account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        ACCOUNT_CLERK_LEASE_FILENAME,
+    )
+    if path is None:
+        return None
+    return AccountClerkLease.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def require_active_account_clerk_generation(
+    artifacts_root: Path,
+    account_id: str,
+    *,
+    now_ms: int,
+) -> int:
+    """Return the sole write-authorizing clerk generation for ``account_id``.
+
+    A generation file alone is deliberately insufficient: a crashed or reaped
+    clerk leaves it behind.  The broker boundary therefore requires a matching,
+    unexpired RUNNING lease as well as the durable generation record.
+    """
+
+    generation = read_account_clerk_generation(artifacts_root, account_id)
+    if generation is None:
+        raise AccountClerkLeaseUnavailableError(
+            account_id=account_id,
+            reason="CLERK_GENERATION_MISSING",
+        )
+    lease = read_account_clerk_lease(artifacts_root, account_id)
+    if lease is None:
+        raise AccountClerkLeaseUnavailableError(
+            account_id=account_id,
+            reason="CLERK_LEASE_MISSING",
+        )
+    if lease.generation != generation.generation:
+        raise AccountClerkLeaseUnavailableError(
+            account_id=account_id,
+            reason="CLERK_LEASE_GENERATION_MISMATCH",
+        )
+    if lease.status != "RUNNING":
+        raise AccountClerkLeaseUnavailableError(
+            account_id=account_id,
+            reason="CLERK_LEASE_NOT_RUNNING",
+        )
+    if lease.valid_until_ms <= now_ms:
+        raise AccountClerkLeaseUnavailableError(
+            account_id=account_id,
+            reason="CLERK_LEASE_EXPIRED",
+        )
+    return generation.generation
+
+
 def evaluate_restart_intensity(
     artifacts_root: Path,
     *,
@@ -909,24 +1069,33 @@ def __getattr__(name: str) -> object:
 
 _LOCAL_EXPORTS = [
     "ACCOUNT_EVENTS_FILENAME",
+    "ACCOUNT_CLERK_GENERATION_FILENAME",
+    "ACCOUNT_CLERK_LEASE_FILENAME",
     "ACCOUNT_FREEZE_FILENAME",
     "ACCOUNT_OWNER_GENERATION_FILENAME",
     "RESTART_INTENSITY_REASON",
     "RESTART_INTENSITY_SOURCE",
     "AccountArtifactError",
+    "AccountClerkLeaseUnavailableError",
     "AccountAuditedOverride",
     "CohortBatchLaunchReceipt",
     "AccountEventRecord",
+    "AccountClerkGeneration",
+    "AccountClerkLease",
     "AccountFreezeEvidence",
     "AccountOwnerGeneration",
     "AccountRecoveryProof",
     "RestartIntensityPolicy",
     "account_artifacts_root",
     "advance_account_owner_generation",
+    "advance_account_clerk_generation",
     "append_account_event",
     "clear_account_freeze",
     "evaluate_restart_intensity",
     "read_account_events",
+    "read_account_clerk_generation",
+    "read_account_clerk_lease",
+    "require_active_account_clerk_generation",
     "read_account_events_tolerant",
     "read_account_events_tolerant_with_hash",
     "read_account_freeze",
@@ -934,6 +1103,7 @@ _LOCAL_EXPORTS = [
     "record_cohort_batch_launch_receipt",
     "resolve_account_event_ts_ms",
     "write_account_freeze",
+    "write_account_clerk_lease",
     "write_account_owner_generation",
 ]
 
