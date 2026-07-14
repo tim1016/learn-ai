@@ -487,31 +487,12 @@ def append_account_event(
     receipt_id = payload.get("receipt_id")
     if only_if_receipt_absent and (not isinstance(receipt_id, str) or not receipt_id):
         raise AccountArtifactError("idempotent account event receipt_id must not be empty")
-    path = _account_artifact_file_path(
+    return _append_account_event(
         artifacts_root,
         account_id,
-        ACCOUNT_EVENTS_FILENAME,
+        {**payload, "account_id": account_id},
+        only_if_receipt_absent=only_if_receipt_absent,
     )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with _file_lock(path):
-        if only_if_receipt_absent and path.is_file():
-            events = _parse_account_event_bytes(path, path.read_bytes(), tolerant=False)
-            if any(event.get("receipt_id") == receipt_id for event in events):
-                return False
-        enriched = {**payload, "account_id": account_id}
-        enriched["seq"] = _next_account_event_seq_locked(path)
-        enriched["ts_ms"] = _account_event_ts_ms_for_write(enriched)
-        try:
-            record = AccountEventRecord.model_validate(enriched)
-        except ValidationError as exc:
-            raise AccountArtifactError(f"invalid account event payload: {exc}") from exc
-        line = json.dumps(record.model_dump(mode="json"), separators=(",", ":"), sort_keys=True) + "\n"
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(line)
-            fh.flush()
-            os.fsync(fh.fileno())
-        _fsync_parent_dir(path)
-    return True
 
 
 def record_cohort_batch_launch_receipt(
@@ -792,8 +773,39 @@ def _atomic_write_json_locked(path: Path, payload: dict) -> None:
     _fsync_parent_dir(path)
 
 
-def _append_account_event(artifacts_root: Path, account_id: str, payload: dict) -> None:
-    append_account_event(artifacts_root, account_id, payload)
+def _append_account_event(
+    artifacts_root: Path,
+    account_id: str,
+    payload: dict,
+    *,
+    only_if_receipt_absent: bool = False,
+) -> bool:
+    path = _account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        ACCOUNT_EVENTS_FILENAME,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _file_lock(path):
+        if only_if_receipt_absent:
+            events = read_account_events(artifacts_root, account_id)
+            receipt_id = payload["receipt_id"]
+            if any(event.get("receipt_id") == receipt_id for event in events):
+                return False
+        enriched = dict(payload)
+        enriched["seq"] = _next_account_event_seq_locked(path)
+        enriched["ts_ms"] = _account_event_ts_ms_for_write(enriched)
+        try:
+            record = AccountEventRecord.model_validate(enriched)
+        except ValidationError as exc:
+            raise AccountArtifactError(f"invalid account event payload: {exc}") from exc
+        line = json.dumps(record.model_dump(mode="json"), separators=(",", ":"), sort_keys=True) + "\n"
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(line)
+            fh.flush()
+            os.fsync(fh.fileno())
+        _fsync_parent_dir(path)
+    return True
 
 
 def _next_account_event_seq_locked(path: Path) -> int:
