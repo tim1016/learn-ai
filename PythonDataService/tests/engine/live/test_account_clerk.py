@@ -11,7 +11,11 @@ import pytest
 
 import app.engine.live.account_clerk as account_clerk_module
 from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
-from app.engine.live.account_artifacts import read_account_clerk_lease
+from app.engine.live.account_artifacts import (
+    read_account_clerk_lease,
+    read_account_events,
+    read_account_freeze,
+)
 from app.engine.live.account_clerk import (
     AccountClerk,
     AccountClerkInboxEntry,
@@ -25,6 +29,7 @@ from app.engine.live.account_clerk import (
     read_account_clerk_inbox,
     read_account_clerk_journal,
 )
+from app.engine.live.account_clerk_reconciler import AccountClerkReconciler, namespace_expected_exposure
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
@@ -45,6 +50,21 @@ class _FakeBroker:
     async def place_order(self, order: object) -> object:
         self.calls.append(order)
         return SimpleNamespace(order_id=101, perm_id=201, exec_id="exec-1")
+
+
+class _ReconciliationBroker(_FakeBroker):
+    def __init__(self, probe: str) -> None:
+        super().__init__()
+        self.probe = probe
+
+    async def probe_intent_status(self, _intent_id: str, _order_ref: str) -> str:
+        return self.probe
+
+
+class _UncertainBroker(_ReconciliationBroker):
+    async def place_order(self, order: object) -> object:
+        self.calls.append(order)
+        raise TimeoutError("simulated lost acknowledgement")
 
 
 def _write_active_binding(tmp_path: Path, instance_id: str, run_id: str) -> None:
@@ -147,6 +167,7 @@ async def test_clerk_records_before_paper_broker_submit_and_deduplicates_ack(tmp
     assert len(broker.calls) == 1
     assert [entry.entry_kind for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [
         "recorded",
+        "broker_submitting",
         "broker_acked",
     ]
     assert clerk.replay_recorded_receipts() == [recorded]
@@ -239,6 +260,85 @@ async def test_operator_recovery_cure_only_flattens_a_retired_namespace_and_writ
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("probe", "expected"),
+    [
+        ("PRESENT", "RECOVER_ADOPT"),
+        ("PROVABLY_ABSENT", "RETRY_ONCE"),
+        ("NOT_PROVABLE", "HALT"),
+    ],
+)
+async def test_clerk_reconciler_resolves_uncertain_receipt_with_state_machine(
+    tmp_path: Path,
+    probe: str,
+    expected: str,
+) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _ReconciliationBroker(probe)
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    intent = _intent("bot-a", "run-a", f"uncertain-{probe}")
+    await clerk.record_intent(intent)
+
+    [resolution] = await AccountClerkReconciler(clerk, now_ms=lambda: START_MS + 2).reconcile_once()
+
+    assert resolution.verdict.value == expected
+    events = read_account_events(tmp_path, ACCOUNT)
+    assert events[-1]["event_type"] == "account_clerk_reconciliation_resolved"
+    assert events[-1]["verdict"] == expected
+    if probe == "PROVABLY_ABSENT":
+        assert len(broker.calls) == 1
+    if probe == "NOT_PROVABLE":
+        assert read_account_freeze(tmp_path, ACCOUNT) is not None
+
+
+@pytest.mark.asyncio
+async def test_uncertain_broker_ack_is_durable_and_reconciled_immediately(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _UncertainBroker("PRESENT")
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    intent = _intent("bot-a", "run-a", "lost-ack")
+
+    with pytest.raises(TimeoutError, match="lost acknowledgement"):
+        await clerk.submit_intent(intent)
+    [resolution] = await AccountClerkReconciler(clerk).reconcile_once()
+
+    assert resolution.verdict.value == "RECOVER_ADOPT"
+    assert [entry.entry_kind for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [
+        "recorded",
+        "broker_submitting",
+        "broker_uncertain",
+        "reconciliation",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_journal_exposure_survives_bot_crash_and_deduplicates_execution(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT)
+    intent = _intent("bot-a", "run-a", "fill-a")
+    await clerk.record_intent(intent)
+    fill = IbkrOrderEvent(
+        account_id=ACCOUNT,
+        order_id=101,
+        event_type="fill",
+        order_ref=intent.order_ref,
+        symbol="SPY",
+        side="BUY",
+        fill_quantity=2,
+        exec_id="exec-fill-a",
+        ts_ms=START_MS,
+    )
+    clerk.append_broker_event(intent, fill)
+    clerk.append_broker_event(intent, fill)
+
+    restarted_entries = read_account_clerk_journal(tmp_path, ACCOUNT)
+    [exposure] = namespace_expected_exposure(restarted_entries)
+    assert exposure.bot_order_namespace == intent.bot_order_namespace
+    assert exposure.symbol == "SPY"
+    assert exposure.quantity == 2
+
+
+@pytest.mark.asyncio
 async def test_bot_rpc_reaches_clerk_without_a_bot_broker_adapter(tmp_path: Path) -> None:
     _write_active_binding(tmp_path, "bot-a", "run-a")
     broker = _FakeBroker()
@@ -290,6 +390,29 @@ async def test_clerk_relays_callbacks_only_to_the_originating_namespace(tmp_path
     assert bot_b_events == []
     assert [event.order_ref for event in bot_a_events] == [intent_a.order_ref]
     assert read_account_clerk_journal(tmp_path, ACCOUNT)[-1].entry_kind == "broker_event"
+
+
+@pytest.mark.asyncio
+async def test_unexplained_broker_callback_is_an_observable_reconciliation_alarm(tmp_path: Path) -> None:
+    server = AccountClerkRpcServer(AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT))
+    await server.start()
+    try:
+        server._record_broker_event(
+            IbkrOrderEvent(
+                account_id=ACCOUNT,
+                order_id=404,
+                event_type="fill",
+                order_ref="learn-ai/unknown/v1:foreign-intent",
+                fill_quantity=1,
+                ts_ms=START_MS,
+            )
+        )
+    finally:
+        await server.close()
+
+    [alarm] = read_account_events(tmp_path, ACCOUNT)
+    assert alarm["event_type"] == "account_clerk_reconciliation_alarm"
+    assert alarm["reason"] == "BROKER_EVENT_WITHOUT_DURABLE_CLERK_INTENT"
 
 
 @pytest.mark.asyncio

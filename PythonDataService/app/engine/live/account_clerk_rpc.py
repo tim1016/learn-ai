@@ -6,6 +6,7 @@ import asyncio
 import json
 
 from app.broker.ibkr.models import IbkrOrderEvent
+from app.engine.live.account_artifacts import append_account_event
 from app.engine.live.account_clerk import (
     AccountClerk,
     AccountClerkBrokerAckReceipt,
@@ -156,6 +157,18 @@ class AccountClerkRpcServer:
         namespace, _intent_id = order_ref.rsplit(":", maxsplit=1)
         intent = self._intents_by_order_ref.get(order_ref)
         if intent is None:
+            append_account_event(
+                self._clerk._artifacts_root,
+                self._clerk._account_id,
+                {
+                    "event_type": "account_clerk_reconciliation_alarm",
+                    "ts_ms": event.ts_ms,
+                    "reason": "BROKER_EVENT_WITHOUT_DURABLE_CLERK_INTENT",
+                    "order_ref": order_ref,
+                    "order_id": event.order_id,
+                    "perm_id": event.perm_id,
+                },
+            )
             return
         self._clerk.append_broker_event(intent, event)
         self._events_by_namespace.setdefault(namespace, []).append(event)

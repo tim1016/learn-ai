@@ -1,10 +1,10 @@
 """Account Clerk durable intake and recorded-receipt journal.
 
-Issue #1016 deliberately stops at receipt #1.  The clerk accepts the existing
-``AccountOwnerSubmitIntent`` wire model, validates its *individual* account
-instance binding, and writes it through a durable inbox into the account
-journal.  It never contacts a broker; the serialized broker drain and ack
-receipt are later slices.
+The clerk accepts the existing ``AccountOwnerSubmitIntent`` wire model,
+validates its *individual* account instance binding, and writes it through a
+durable inbox into the account journal.  It is the only component that may
+then contact the paper broker; acknowledgement, callback, and reconciliation
+receipts stay in the same serial account journal.
 
 The inbox is the crash boundary.  A process can fail after the inbox fsync and
 before the journal fsync.  The next intake replays that inbox row into the
@@ -89,7 +89,15 @@ class AccountClerkJournalEntry(BaseModel):
 
     schema_version: int = 1
     seq: int = Field(ge=1)
-    entry_kind: Literal["recorded", "recovery_cancelled", "broker_acked", "broker_event"] = "recorded"
+    entry_kind: Literal[
+        "recorded",
+        "broker_submitting",
+        "broker_uncertain",
+        "recovery_cancelled",
+        "broker_acked",
+        "broker_event",
+        "reconciliation",
+    ] = "recorded"
     recorded_at_ms: int = Field(ge=0, le=_MAX_INT64)
     intent: AccountOwnerSubmitIntent
     order_id: int | None = Field(default=None, ge=0)
@@ -97,6 +105,9 @@ class AccountClerkJournalEntry(BaseModel):
     exec_id: str | None = None
     broker_event: dict[str, object] | None = None
     cancelled_order_ids: tuple[int, ...] | None = None
+    reconciliation_verdict: Literal["RECOVER_ADOPT", "RETRY_ONCE", "HALT"] | None = None
+    reconciliation_reason: str | None = None
+    broker_error: str | None = None
 
 
 class AccountClerkRecordedReceipt(BaseModel):
@@ -166,9 +177,8 @@ class AccountClerkRecoveryFlattenReceipt(BaseModel):
 class AccountClerk:
     """Per-account concurrent intake backed by one serialized durable journal.
 
-    ``broker`` is intentionally retained only as a constructor seam for this
-    first slice's no-contact characterization test.  Clerk core never calls
-    it: #1020 owns the broker-drain cutover.
+    ``broker`` is the Clerk-owned paper broker boundary.  Tests may omit it
+    when exercising only durable journal behavior.
     """
 
     def __init__(
@@ -219,16 +229,12 @@ class AccountClerk:
                 return recorded, existing_ack
             self._require_paper_broker()
             spec = IbkrOrderSpec.model_validate(intent.order_spec)
-            if self._clerk_generation is None:
-                ack = await self._broker.place_order(spec)
-            else:
-                with account_clerk_write_grant(
-                    account_id=self._account_id,
-                    clerk_generation=self._clerk_generation,
-                    boundary="account_clerk.broker.place_order",
-                    clerk_generation_provider=lambda: self._clerk_generation,
-                ):
-                    ack = await self._broker.place_order(spec)
+            await asyncio.to_thread(self._append_broker_submitting_locked, intent)
+            try:
+                ack = await self._place_under_clerk_grant(spec)
+            except Exception as exc:
+                await asyncio.to_thread(self._append_broker_uncertain_locked, intent, exc)
+                raise
             broker_ack = await asyncio.to_thread(self._append_broker_ack_locked, intent, ack)
             return recorded, broker_ack
 
@@ -380,6 +386,38 @@ class AccountClerk:
             entries.append(entry)
             return AccountClerkBrokerAckReceipt.from_journal_entry(entry)
 
+    def _append_broker_submitting_locked(self, intent: AccountOwnerSubmitIntent) -> None:
+        self._append_broker_transition_locked(intent, entry_kind="broker_submitting")
+
+    def _append_broker_uncertain_locked(self, intent: AccountOwnerSubmitIntent, error: Exception) -> None:
+        self._append_broker_transition_locked(
+            intent,
+            entry_kind="broker_uncertain",
+            broker_error=f"{type(error).__name__}: {error}",
+        )
+
+    def _append_broker_transition_locked(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        *,
+        entry_kind: Literal["broker_submitting", "broker_uncertain"],
+        broker_error: str | None = None,
+    ) -> None:
+        journal_path = account_clerk_journal_path(self._artifacts_root, self._account_id)
+        with _file_lock(journal_path):
+            entries = self._load_journal_tail_locked(
+                account_clerk_inbox_path(self._artifacts_root, self._account_id), journal_path
+            )
+            entry = AccountClerkJournalEntry(
+                seq=entries[-1].seq + 1,
+                entry_kind=entry_kind,
+                recorded_at_ms=self._now_ms(),
+                intent=intent,
+                broker_error=broker_error,
+            )
+            _append_jsonl(journal_path, entry)
+            entries.append(entry)
+
     def _append_recovery_cancelled_locked(
         self,
         intent: AccountOwnerSubmitIntent,
@@ -445,6 +483,56 @@ class AccountClerk:
             )
             _append_jsonl(journal_path, entry)
             entries.append(entry)
+
+    async def append_reconciliation_resolution(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        *,
+        verdict: Literal["RECOVER_ADOPT", "RETRY_ONCE", "HALT"],
+        reason: str,
+    ) -> None:
+        """Durably record a Clerk reconciliation decision before its effect."""
+
+        async with self._intake_lock:
+            await asyncio.to_thread(self._append_reconciliation_resolution_locked, intent, verdict, reason)
+
+    def _append_reconciliation_resolution_locked(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        verdict: Literal["RECOVER_ADOPT", "RETRY_ONCE", "HALT"],
+        reason: str,
+    ) -> None:
+        journal_path = account_clerk_journal_path(self._artifacts_root, self._account_id)
+        with _file_lock(journal_path):
+            entries = self._load_journal_tail_locked(
+                account_clerk_inbox_path(self._artifacts_root, self._account_id), journal_path
+            )
+            entry = AccountClerkJournalEntry(
+                seq=entries[-1].seq + 1,
+                entry_kind="reconciliation",
+                recorded_at_ms=self._now_ms(),
+                intent=intent,
+                reconciliation_verdict=verdict,
+                reconciliation_reason=reason,
+            )
+            _append_jsonl(journal_path, entry)
+            entries.append(entry)
+
+    async def retry_recorded_intent(self, intent: AccountOwnerSubmitIntent) -> AccountClerkBrokerAckReceipt:
+        """Re-place one Clerk-owned intent after a provably-absent probe."""
+
+        if self._broker is None:
+            raise RuntimeError("ACCOUNT_CLERK_BROKER_UNAVAILABLE")
+        self._require_paper_broker()
+        async with self._intake_lock:
+            spec = IbkrOrderSpec.model_validate(intent.order_spec)
+            await asyncio.to_thread(self._append_broker_submitting_locked, intent)
+            try:
+                ack = await self._place_under_clerk_grant(spec)
+            except Exception as exc:
+                await asyncio.to_thread(self._append_broker_uncertain_locked, intent, exc)
+                raise
+            return await asyncio.to_thread(self._append_broker_ack_locked, intent, ack)
 
     def _require_paper_broker(self) -> None:
         client = getattr(self._broker, "_client", None)
@@ -822,6 +910,9 @@ async def _run_clerk_process(args: argparse.Namespace) -> int:
         clerk_generation=args.generation,
     )
     server = AccountClerkRpcServer(clerk)
+    from app.engine.live.account_clerk_reconciler import AccountClerkReconciler
+
+    reconciler = AccountClerkReconciler(clerk)
     writer = AccountClerkLeaseWriter(
         artifacts_root=Path(args.artifacts_root),
         account_id=args.account_id,
@@ -829,6 +920,7 @@ async def _run_clerk_process(args: argparse.Namespace) -> int:
         pid=os.getpid(),
     )
     await server.start()
+    await reconciler.start()
     try:
         while not stop.is_set():
             writer.renew()
@@ -836,6 +928,7 @@ async def _run_clerk_process(args: argparse.Namespace) -> int:
                 await asyncio.wait_for(stop.wait(), timeout=1)
     finally:
         writer.renew(draining=True)
+        await reconciler.close()
         await server.close()
         await client.disconnect()
     return 0
