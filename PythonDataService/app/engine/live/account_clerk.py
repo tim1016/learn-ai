@@ -15,8 +15,10 @@ new clerk process.
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import os
+import signal
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -24,7 +26,11 @@ from typing import Literal, overload
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.engine.live.account_artifacts import account_artifacts_root
+from app.engine.live.account_artifacts import (
+    AccountClerkLease,
+    account_artifacts_root,
+    write_account_clerk_lease,
+)
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
@@ -36,6 +42,7 @@ from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
 ACCOUNT_CLERK_INBOX_FILENAME = "clerk_inbox.jsonl"
 ACCOUNT_CLERK_JOURNAL_FILENAME = "clerk_journal.jsonl"
 _MAX_INT64 = 9_223_372_036_854_775_807
+_CLERK_LEASE_TTL_MS = 5_000
 
 
 class AccountClerkJournalCorruptError(RuntimeError):
@@ -377,6 +384,70 @@ def _now_ms() -> int:
     return time.time_ns() // 1_000_000
 
 
+class AccountClerkLeaseWriter:
+    """Renew one supervised clerk lease until the daemon reaps the process."""
+
+    def __init__(
+        self,
+        *,
+        artifacts_root: Path,
+        account_id: str,
+        generation: int,
+        pid: int,
+        now_ms: Callable[[], int] = _now_ms,
+    ) -> None:
+        self._artifacts_root = artifacts_root
+        self._account_id = account_id
+        self._generation = generation
+        self._pid = pid
+        self._now_ms = now_ms
+        self._started_at_ms = now_ms()
+
+    def renew(self, *, draining: bool = False) -> AccountClerkLease:
+        now_ms = self._now_ms()
+        lease = AccountClerkLease(
+            account_id=self._account_id,
+            generation=self._generation,
+            pid=self._pid,
+            status="DRAINING" if draining else "RUNNING",
+            started_at_ms=self._started_at_ms,
+            renewed_at_ms=now_ms,
+            valid_until_ms=now_ms if draining else now_ms + _CLERK_LEASE_TTL_MS,
+        )
+        write_account_clerk_lease(self._artifacts_root, lease)
+        return lease
+
+
+def _run_lease_process(args: argparse.Namespace) -> int:
+    stop = False
+
+    def _stop(_signum: int, _frame: object) -> None:
+        nonlocal stop
+        stop = True
+
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGINT, _stop)
+    writer = AccountClerkLeaseWriter(
+        artifacts_root=Path(args.artifacts_root),
+        account_id=args.account_id,
+        generation=args.generation,
+        pid=os.getpid(),
+    )
+    while not stop:
+        writer.renew()
+        time.sleep(1)
+    writer.renew(draining=True)
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Run one account clerk lease process.")
+    parser.add_argument("--artifacts-root", required=True)
+    parser.add_argument("--account-id", required=True)
+    parser.add_argument("--generation", required=True, type=int)
+    return _run_lease_process(parser.parse_args())
+
+
 __all__ = [
     "ACCOUNT_CLERK_INBOX_FILENAME",
     "ACCOUNT_CLERK_JOURNAL_FILENAME",
@@ -385,9 +456,14 @@ __all__ = [
     "AccountClerkIntentRejected",
     "AccountClerkJournalCorruptError",
     "AccountClerkJournalEntry",
+    "AccountClerkLeaseWriter",
     "AccountClerkRecordedReceipt",
     "account_clerk_inbox_path",
     "account_clerk_journal_path",
     "read_account_clerk_inbox",
     "read_account_clerk_journal",
 ]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

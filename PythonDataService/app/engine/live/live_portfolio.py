@@ -42,8 +42,7 @@ from app.engine.execution.order_sizer import (
 from app.engine.execution.portfolio import Position
 from app.engine.execution.sizing import SimpleFloorSizing, SizingModel
 from app.engine.live.account_owner_fence import (
-    AccountOwnerWriteFenceError,
-    current_account_owner_write_grant,
+    require_account_clerk_write_grant,
 )
 from app.engine.live.intent_events import DropReason
 from app.schemas.broker_capability import SessionKind
@@ -394,36 +393,12 @@ class IbkrBrokerAdapter(BrokerAdapter):
     def _enforce_account_owner_write_fence(self, boundary: str) -> None:
         if not self._require_account_owner_write_fence:
             return
-        grant = current_account_owner_write_grant()
         account_id = getattr(self._client, "connected_account", None)
-        current_generation = (
-            self._owner_generation_provider()
-            if self._owner_generation_provider is not None
-            else None
+        require_account_clerk_write_grant(
+            account_id=account_id,
+            boundary=boundary,
+            clerk_generation_provider=self._owner_generation_provider,
         )
-        if grant is None:
-            raise AccountOwnerWriteFenceError(
-                reason="ACCOUNT_OWNER_WRITE_GRANT_MISSING",
-                boundary=boundary,
-                account_id=account_id,
-                current_owner_generation=current_generation,
-            )
-        if account_id is not None and grant.account_id != account_id:
-            raise AccountOwnerWriteFenceError(
-                reason="ACCOUNT_OWNER_WRITE_ACCOUNT_MISMATCH",
-                boundary=boundary,
-                account_id=account_id,
-                current_owner_generation=current_generation,
-                grant_owner_generation=grant.owner_generation,
-            )
-        if current_generation is None or grant.owner_generation != current_generation:
-            raise AccountOwnerWriteFenceError(
-                reason="OWNER_GENERATION_STALE_AT_BROKER_WRITE",
-                boundary=boundary,
-                account_id=account_id,
-                current_owner_generation=current_generation,
-                grant_owner_generation=grant.owner_generation,
-            )
 
     async def _wait_for_terminal_fills(self, targeted_order_ids: set[int]) -> None:
         """Wait until the event buffer contains every fill on terminal orders.

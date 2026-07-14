@@ -293,6 +293,19 @@ class HostRunnerProcessStatus(BaseModel):
     message: str | None = None
 
 
+class AccountClerkHealth(BaseModel):
+    """Daemon-observed health for the sole clerk of one paper account."""
+
+    account_id: str
+    generation: int = Field(ge=1)
+    pid: int | None = Field(default=None, ge=1)
+    status: str
+    started_at_ms: int = Field(ge=0)
+    renewed_at_ms: int | None = Field(default=None, ge=0)
+    valid_until_ms: int | None = Field(default=None, ge=0)
+    lease_valid: bool
+
+
 class HostRunnerHealth(BaseModel):
     """Health envelope returned by the host-side runner daemon."""
 
@@ -301,6 +314,7 @@ class HostRunnerHealth(BaseModel):
     live_runs_root: str
     fetched_at_ms: int
     process: HostRunnerProcessStatus
+    clerks: list[AccountClerkHealth] = Field(default_factory=list)
     # Code-freshness: the daemon does not reload on `git pull`, so an operator
     # needs to see whether the running code matches the working tree.
     # ``git_sha`` is the SHA the daemon process is actually RUNNING (captured at

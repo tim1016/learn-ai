@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,35 @@ requires_git = pytest.mark.skipif(
     shutil.which("git") is None,
     reason="git binary not available in this environment",
 )
+
+
+def _write_active_clerk(artifacts_root: Path, account_id: str) -> None:
+    from app.engine.live.account_artifacts import (
+        AccountClerkLease,
+        advance_account_clerk_generation,
+        write_account_clerk_lease,
+    )
+
+    now_ms = time.time_ns() // 1_000_000
+    generation = advance_account_clerk_generation(
+        artifacts_root,
+        account_id,
+        phase="accepting",
+        recorded_at_ms=now_ms,
+        source="test",
+    )
+    write_account_clerk_lease(
+        artifacts_root,
+        AccountClerkLease(
+            account_id=account_id,
+            generation=generation.generation,
+            pid=1,
+            status="RUNNING",
+            started_at_ms=now_ms,
+            renewed_at_ms=now_ms,
+            valid_until_ms=now_ms + 60_000,
+        ),
+    )
 
 
 def _init_repo(repo: Path) -> None:
@@ -2289,7 +2319,10 @@ def test_cmd_start_wires_account_owner_submitter_for_real_client(
     from app.engine.live import engine_runtime_publisher as publisher_mod
     from app.engine.live import live_engine as live_engine_mod
     from app.engine.live import reconciliation_orchestrator as recon_mod
-    from app.engine.live.account_artifacts import read_account_events, read_account_owner_generation
+    from app.engine.live.account_artifacts import (
+        read_account_clerk_generation,
+        read_account_events,
+    )
     from app.engine.live.reconciliation_classifier import Continue
     from app.engine.live.run import cmd_start
     from app.engine.live.run_ledger import build_ledger, write_ledger
@@ -2379,6 +2412,7 @@ def test_cmd_start_wires_account_owner_submitter_for_real_client(
     write_ledger(run_dir / "run_ledger.json", ledger)
     artifacts_root = tmp_path / "artifacts"
     artifacts_root.mkdir()
+    _write_active_clerk(artifacts_root, "DU123")
 
     rc = cmd_start(
         _argparse.Namespace(
@@ -2400,15 +2434,13 @@ def test_cmd_start_wires_account_owner_submitter_for_real_client(
     assert callable(kwargs["account_owner_submitter"])
     assert callable(kwargs["account_owner_broker_writer"])
     assert callable(kwargs["owner_generation_provider"])
-    owner_generation = read_account_owner_generation(artifacts_root, "DU123")
-    assert owner_generation is not None
-    assert owner_generation.generation == 1
-    assert owner_generation.phase == "accepting"
-    assert owner_generation.source == "account_owner"
+    clerk_generation = read_account_clerk_generation(artifacts_root, "DU123")
+    assert clerk_generation is not None
+    assert clerk_generation.generation == 1
+    assert clerk_generation.phase == "accepting"
+    assert clerk_generation.source == "test"
     events = read_account_events(artifacts_root, "DU123")
-    assert events[-1]["event_type"] == "account_owner_generation_recorded"
-    assert events[-1]["generation"] == 1
-    assert events[-1]["phase"] == "accepting"
+    assert all(event["event_type"] != "account_owner_generation_recorded" for event in events)
 
 
 def test_cmd_start_wires_child_auto_reconnect_monitor_for_real_client(
@@ -2542,6 +2574,7 @@ def test_cmd_start_wires_child_auto_reconnect_monitor_for_real_client(
     write_ledger(run_dir / "run_ledger.json", ledger)
     artifacts_root = tmp_path / "artifacts"
     artifacts_root.mkdir()
+    _write_active_clerk(artifacts_root, "DU123")
 
     rc = cmd_start(
         _argparse.Namespace(
@@ -2692,6 +2725,7 @@ def test_cmd_start_runs_account_truth_refresh_loop_for_durable_submit_child(
     write_ledger(run_dir / "run_ledger.json", ledger)
     artifacts_root = tmp_path / "artifacts"
     artifacts_root.mkdir()
+    _write_active_clerk(artifacts_root, "DU123")
 
     rc = cmd_start(
         _argparse.Namespace(

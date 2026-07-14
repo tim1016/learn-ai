@@ -38,6 +38,7 @@ import type {
   AccountReconciliationReceipt,
   AccountTriageResponse,
 } from '../../../api/account-reconciliation.types';
+import type { AccountClerkHealth, HostRunnerHealth } from '../../../api/live-runs.types';
 import {
   fmtBrokerExpiryDate,
   fmtCurrency,
@@ -141,6 +142,7 @@ export class BrokerAccountMonitorComponent {
   readonly truthLoading = signal(false);
   readonly truthError = signal<unknown>(null);
   readonly accountTruth = signal<AccountTruthResponse | null>(null);
+  readonly clerkHealth = signal<HostRunnerHealth | null>(null);
   readonly accountReconciliation = signal<AccountReconciliationReceipt | null>(null);
   readonly accountTriage = signal<AccountTriageResponse | null>(null);
   readonly accountReconciliationNowMs = signal(Date.now());
@@ -163,6 +165,12 @@ export class BrokerAccountMonitorComponent {
   readonly accountReconciliationAccountId = computed(() => {
     const truth = this.accountTruth();
     return truth === null ? null : this.reconciliationAccountIdForTruth(truth);
+  });
+  readonly accountClerk = computed<AccountClerkHealth | null>(() => {
+    const truth = this.accountTruth();
+    const accountId = truth === null ? null : this.reconciliationAccountIdForTruth(truth);
+    if (accountId === null) return null;
+    return this.clerkHealth()?.clerks?.find((clerk) => clerk.account_id === accountId) ?? null;
   });
   readonly accountConditions = computed(() => this.accountTriage()?.conditions ?? []);
   readonly accountConditionGroups = computed<AccountConditionGroups>(() => {
@@ -425,7 +433,15 @@ export class BrokerAccountMonitorComponent {
   }
 
   async refresh(): Promise<void> {
-    await Promise.all([this.loadTruth(), this.loadPositions()]);
+    await Promise.all([this.loadTruth(), this.loadPositions(), this.loadClerkHealth()]);
+  }
+
+  private async loadClerkHealth(): Promise<void> {
+    try {
+      this.clerkHealth.set(await this.liveRuns.getHostRunnerHealth());
+    } catch {
+      this.clerkHealth.set(null);
+    }
   }
 
   async loadTruth(): Promise<void> {

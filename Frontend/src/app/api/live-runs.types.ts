@@ -373,12 +373,24 @@ export interface HostRunnerProcessStatus {
   message: string | null;
 }
 
+export interface AccountClerkHealth {
+  account_id: string;
+  generation: number;
+  pid: number | null;
+  status: string;
+  started_at_ms: number;
+  renewed_at_ms: number | null;
+  valid_until_ms: number | null;
+  lease_valid: boolean;
+}
+
 export interface HostRunnerHealth {
   ok: boolean;
   repo_root: string;
   live_runs_root: string;
   fetched_at_ms: number;
   process: HostRunnerProcessStatus;
+  clerks?: AccountClerkHealth[];
   /** The SHA the daemon process is actually RUNNING (captured at launch; null if
    * git unavailable). The daemon does not reload on `git pull`. */
   git_sha?: string | null;

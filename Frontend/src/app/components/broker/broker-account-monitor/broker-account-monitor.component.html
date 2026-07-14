@@ -136,6 +136,22 @@
           }
         </article>
       }
+      @if (accountClerk(); as clerk) {
+        <article class="account-observation-card" aria-labelledby="account-clerk-title">
+          <header class="card-header">
+            <span id="account-clerk-title">Account Clerk</span>
+            <span class="badge mono">{{ clerk.status | receiptLabel }}</span>
+          </header>
+          <p class="receipt-reason">
+            Generation {{ clerk.generation }} · lease {{ clerk.lease_valid ? 'valid' : 'not valid' }}
+          </p>
+          @if (clerk.valid_until_ms !== null) {
+            <p class="muted">
+              Lease valid until <app-timestamp-display [value]="clerk.valid_until_ms" mode="local" />
+            </p>
+          }
+        </article>
+      }
       <article class="account-sick-bay-card">
         <header class="card-header">
           Account sick bay

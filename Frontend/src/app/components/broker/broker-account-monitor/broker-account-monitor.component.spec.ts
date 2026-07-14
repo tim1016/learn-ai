@@ -100,6 +100,14 @@ class FakeLiveRunsService {
     accepted: true,
     process: { state: 'idle' },
   });
+  getHostRunnerHealth = vi.fn().mockResolvedValue({
+    ok: true,
+    repo_root: '/repo',
+    live_runs_root: '/repo/artifacts/live_runs',
+    fetched_at_ms: 1_780_000_000_000,
+    process: { state: 'idle', command: [] },
+    clerks: [],
+  });
 }
 
 function routeFragment(fragment: string | null = null) {
@@ -107,6 +115,40 @@ function routeFragment(fragment: string | null = null) {
 }
 
 describe('BrokerAccountMonitorComponent', () => {
+  it('shows the matching account clerk lease health', async () => {
+    const liveRuns = new FakeLiveRunsService();
+    liveRuns.getHostRunnerHealth.mockResolvedValue({
+      ok: true,
+      repo_root: '/repo',
+      live_runs_root: '/repo/artifacts/live_runs',
+      fetched_at_ms: 1_780_000_000_000,
+      process: { state: 'idle', command: [] },
+      clerks: [
+        {
+          account_id: 'DU1234567',
+          generation: 4,
+          pid: 42,
+          status: 'RUNNING',
+          started_at_ms: 1_780_000_000_000,
+          renewed_at_ms: 1_780_000_001_000,
+          valid_until_ms: 1_780_000_006_000,
+          lease_valid: true,
+        },
+      ],
+    });
+    await render(BrokerAccountMonitorComponent, {
+      providers: [
+        { provide: BrokerService, useValue: new FakeBrokerService() },
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useValue: liveRuns },
+        routeFragment(),
+      ],
+    });
+
+    expect(await screen.findByText('Account Clerk')).toBeTruthy();
+    expect(screen.getByText(/Generation 4.*lease valid/)).toBeTruthy();
+  });
+
   it('offers only the backend-proven stale claim cure and retires the selected claim', async () => {
     const broker = new FakeBrokerService();
     broker.legacyStaleClaimCandidates

@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -17,6 +18,8 @@ from httpx import ASGITransport, AsyncClient
 
 from app.engine.live.account_artifacts import (
     append_account_event,
+    read_account_clerk_generation,
+    read_account_clerk_lease,
     read_account_freeze,
 )
 from app.engine.live.account_registry import (
@@ -92,6 +95,10 @@ class FakeProcess:
     def kill(self) -> None:
         self.killed = True
         self.returncode = -9
+
+    def terminate(self) -> None:
+        self.signals.append(signal.SIGTERM)
+        self.returncode = 0
 
 
 def _add_managed_process(
@@ -579,6 +586,8 @@ async def test_start_allocates_distinct_ibkr_client_ids_for_sibling_instances(
     _write_ledger(second_run_dir, "second-bot", second_run_id, "DU112")
 
     def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
+        if "app.engine.live.account_clerk" in command:
+            return FakeProcess()
         captured_ids.append(kwargs["env"]["IBKR_CLIENT_ID"])
         return FakeProcess()
 
@@ -590,6 +599,49 @@ async def test_start_allocates_distinct_ibkr_client_ids_for_sibling_instances(
     assert first.accepted is True
     assert second.accepted is True
     assert captured_ids == ["80", "81"]
+
+
+def test_account_clerk_starts_before_first_bot_reaps_after_last_and_takeover_advances_generation(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, run_dir = daemon_context
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": RUN_ID,
+                "strategy_instance_id": "spy_ema_paper",
+                "account_id": "DU111",
+            }
+        ),
+        encoding="utf-8",
+    )
+    clerk = FakeProcess()
+    bot = FakeProcess()
+    commands: list[list[str]] = []
+
+    def fake_popen(command: list[str], **_kwargs: Any) -> FakeProcess:
+        commands.append(command)
+        return clerk if "app.engine.live.account_clerk" in command else bot
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    manager.start(RUN_ID, request=HostRunnerStartRequest())
+
+    assert "app.engine.live.account_clerk" in commands[0]
+    generation = read_account_clerk_generation(manager.artifacts_root, "DU111")
+    lease = read_account_clerk_lease(manager.artifacts_root, "DU111")
+    assert generation is not None and generation.generation == 1
+    assert lease is not None and lease.status == "RUNNING"
+
+    bot.returncode = 0
+    manager.process_status(RUN_ID)
+    assert clerk.signals == [signal.SIGTERM]
+
+    clerk.returncode = -9
+    replacement = FakeProcess()
+    monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: replacement)
+    restarted = manager._ensure_account_clerk("DU111")
+    assert restarted.generation == 2
 
 
 def test_parse_ibkr_client_id_pool_rejects_zero_and_huge_ranges() -> None:
@@ -661,7 +713,8 @@ def test_concurrent_starts_cannot_allocate_same_ibkr_client_id(
     allow_first_popen_to_finish = threading.Event()
 
     def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
-        del command
+        if "app.engine.live.account_clerk" in command:
+            return FakeProcess()
         with captured_lock:
             captured_ids.append(kwargs["env"]["IBKR_CLIENT_ID"])
             call_number = len(captured_ids)
@@ -970,7 +1023,8 @@ async def test_start_blocks_after_crash_retire_until_later_recovery_proof(
     monkeypatch.setattr(hd, "_now_ms", lambda: fixed_ms)
     first_process = FakeProcess()
     second_process = FakeProcess()
-    popen_results = iter([first_process, second_process])
+    # Clerk is deliberately spawned and lease-initialized before its bot.
+    popen_results = iter([FakeProcess(), first_process, FakeProcess(), second_process])
     monkeypatch.setattr(subprocess, "Popen", lambda command, **kwargs: next(popen_results))
 
     manager.start(RUN_ID, request=HostRunnerStartRequest())
