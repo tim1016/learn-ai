@@ -435,6 +435,21 @@ class IbkrBrokerAdapter(BrokerAdapter):
             await self._wait_for_terminal_fills(targeted_set)
         return targeted
 
+    async def probe_intent_status(self, intent_id: str, order_ref: str) -> str:
+        """Return ``PRESENT`` only when IBKR still echoes this exact order ref.
+
+        An absent open-order row is not proof that an acknowledgement was lost:
+        it may have filled between the failed write and this probe.  The Clerk
+        therefore treats it as not provable until a broker history adapter can
+        provide a stronger absence proof.
+        """
+
+        del intent_id
+        open_orders = await list_open_orders(self._client)
+        if any(order.order_ref == order_ref for order in open_orders):
+            return "PRESENT"
+        return "NOT_PROVABLE"
+
     def _enforce_account_owner_write_fence(self, boundary: str) -> None:
         if not self._require_account_owner_write_fence:
             return
