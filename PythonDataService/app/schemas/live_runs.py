@@ -1116,8 +1116,8 @@ class InstanceStartDefaults(BaseModel):
     blank form. ``strategy`` is sourced from the run's ledger ``strategy_key``
     (the algorithm module the ledger is reconciled to) when present — empty
     string means a legacy ledger with no recorded key, so the field is
-    operator-supplied. The other four mirror ``HostRunnerStartRequest`` defaults;
-    they are not persisted in the ledger.
+    operator-supplied. New ledgers may persist these from deploy-time
+    ``start_options`` so a later cockpit start uses the same operator choices.
     """
 
     strategy: str = ""

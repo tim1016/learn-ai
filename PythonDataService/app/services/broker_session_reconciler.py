@@ -196,6 +196,15 @@ def reconcile_broker_session_roster(
                 stale_after_ms=stale_after_ms,
             )
         )
+    elif registry_snapshot is None:
+        rows.extend(
+            _runtime_only_rows_when_registry_unavailable(
+                runtime_by_dir=runtime_by_dir,
+                matched_socket_dirs=matched_socket_dirs,
+                as_of_ms=as_of_ms,
+                stale_after_ms=stale_after_ms,
+            )
+        )
 
     for registry in registry_instances:
         if _registry_id(registry) in matched_registry_ids:
@@ -450,6 +459,50 @@ def _last_known_runtime_rows(
                 as_of_ms=as_of_ms,
                 attention_codes=_append_stale_attention(
                     ["GHOST_DETECTION_UNAVAILABLE"],
+                    runtime=runtime,
+                    as_of_ms=as_of_ms,
+                    stale_after_ms=stale_after_ms,
+                ),
+            )
+        )
+    return rows
+
+
+def _runtime_only_rows_when_registry_unavailable(
+    *,
+    runtime_by_dir: dict[str, RuntimeIndexEntry],
+    matched_socket_dirs: set[str],
+    as_of_ms: int,
+    stale_after_ms: int,
+) -> list[BrokerSessionRosterRow]:
+    rows: list[BrokerSessionRosterRow] = []
+    for run_dir_key, runtime in runtime_by_dir.items():
+        if run_dir_key in matched_socket_dirs:
+            continue
+        rows.append(
+            BrokerSessionRosterRow(
+                row_id=f"runtime-only:{runtime.strategy_instance_id}:{runtime.run_id}",
+                identity_type="bot",
+                recency=(
+                    "unknown"
+                    if _runtime_signal_stale(runtime, as_of_ms, stale_after_ms)
+                    else "current"
+                ),
+                socket_present=False,
+                strategy_instance_id=runtime.strategy_instance_id,
+                run_id=runtime.run_id,
+                account_id=runtime.account_id,
+                posture=runtime.posture,
+                client_id=runtime.client_id,
+                pid=runtime.pid,
+                run_dir=runtime.run_dir,
+                connection_state=runtime.connection_state,
+                recovery_state=_runtime_recovery_state(runtime),
+                connection_epoch=runtime.connection_epoch,
+                last_event_ms=runtime.last_event_ms,
+                as_of_ms=as_of_ms,
+                attention_codes=_append_stale_attention(
+                    ["REGISTRY_SNAPSHOT_UNAVAILABLE", "SOCKET_ATTRIBUTION_UNAVAILABLE"],
                     runtime=runtime,
                     as_of_ms=as_of_ms,
                     stale_after_ms=stale_after_ms,

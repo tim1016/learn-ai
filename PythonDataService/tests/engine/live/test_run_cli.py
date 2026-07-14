@@ -2398,6 +2398,7 @@ def test_cmd_start_wires_account_owner_submitter_for_real_client(
     assert rc == 0
     kwargs = captured["kwargs"]
     assert callable(kwargs["account_owner_submitter"])
+    assert callable(kwargs["account_owner_broker_writer"])
     assert callable(kwargs["owner_generation_provider"])
     owner_generation = read_account_owner_generation(artifacts_root, "DU123")
     assert owner_generation is not None

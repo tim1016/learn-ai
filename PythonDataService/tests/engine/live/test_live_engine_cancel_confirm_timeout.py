@@ -57,6 +57,17 @@ class _AccountNetMustNotSizeInstanceFlattenBroker(FakeBroker):
         raise AssertionError("account-net positions are not an instance ownership ledger")
 
 
+class _WriterRequiredCancelBroker(FakeBroker):
+    def __init__(self) -> None:
+        super().__init__()
+        self.writer_active = False
+
+    async def cancel_open_orders(self) -> list[int]:
+        if not self.writer_active:
+            raise AssertionError("managed flatten must cancel through the account-owner writer")
+        return await super().cancel_open_orders()
+
+
 @pytest.mark.asyncio
 async def test_flatten_halts_on_cancel_confirm_timeout_vcr_0002(
     tmp_path: Path,
@@ -132,6 +143,47 @@ async def test_flatten_proceeds_when_cancel_completes_in_time(
     # One liquidation order submitted; halt.flag NOT written.
     assert len(acks) == 1
     assert not (tmp_path / "halt.flag").exists()
+
+
+@pytest.mark.asyncio
+async def test_flatten_routes_cancel_through_account_owner_broker_writer(
+    tmp_path: Path,
+) -> None:
+    broker = _WriterRequiredCancelBroker()
+    boundaries: list[str] = []
+
+    async def writer(*, boundary: str, write):
+        boundaries.append(boundary)
+        broker.writer_active = True
+        try:
+            return await write()
+        finally:
+            broker.writer_active = False
+
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        output_dir=tmp_path,
+        account_id="DU123",
+        cancel_confirm_timeout_s=0.5,
+        account_owner_broker_writer=writer,
+    )
+    from app.engine.live.live_portfolio import LivePortfolio
+
+    portfolio = LivePortfolio(broker)
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    ctx = type("ctx", (), {"log": lambda self_, msg: None})()
+
+    acks = await engine._flatten(
+        portfolio,
+        ctx,
+        bar_time=datetime(2026, 5, 4, 14, 30, tzinfo=UTC),
+        reconcile_owned_state=_no_reconcile,
+    )  # type: ignore[arg-type]
+
+    assert acks == []
+    assert boundaries == ["broker.cancel_open_orders"]
 
 
 @pytest.mark.asyncio

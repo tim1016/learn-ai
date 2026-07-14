@@ -1135,16 +1135,32 @@ def _start_defaults(
         ledger = _read_ledger(run_dir)
     except (OSError, ValueError, KeyError):
         return InstanceStartDefaults(readonly=readonly_default)
-    return InstanceStartDefaults(
-        strategy=str(ledger.get("strategy_key", "")),
-        readonly=readonly_default,
-        # Deploy identity for a one-click re-deploy (fresh run_id) of a
-        # poisoned/halted instance. Empty for legacy ledgers missing the field.
-        strategy_spec_path=str(ledger.get("strategy_spec_path", "")),
-        qc_audit_copy_path=str(ledger.get("qc_audit_copy_path", "")),
-        qc_cloud_backtest_id=str(ledger.get("qc_cloud_backtest_id", "")),
-        account_id=str(ledger.get("account_id", "")),
-    )
+    raw_start_defaults = ledger.get("start_defaults")
+    start_default_payload = {
+        "strategy": str(ledger.get("strategy_key", "")),
+        "readonly": readonly_default,
+        "strategy_spec_path": str(ledger.get("strategy_spec_path", "")),
+        "qc_audit_copy_path": str(ledger.get("qc_audit_copy_path", "")),
+        "qc_cloud_backtest_id": str(ledger.get("qc_cloud_backtest_id", "")),
+        "account_id": str(ledger.get("account_id", "")),
+    }
+    if isinstance(raw_start_defaults, dict):
+        start_default_payload.update(
+            {
+                key: raw_start_defaults[key]
+                for key in (
+                    "strategy",
+                    "hydrate_policy",
+                    "max_orders_per_day",
+                    "ibkr_host",
+                )
+                if key in raw_start_defaults
+            }
+        )
+        captured_readonly = raw_start_defaults.get("readonly")
+        if isinstance(captured_readonly, bool):
+            start_default_payload["readonly"] = readonly_default or captured_readonly
+    return InstanceStartDefaults(**start_default_payload)
 
 
 def _resolve_symbol_resolution(
@@ -2492,7 +2508,6 @@ async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -
                     "effective_stop_ms": verdict.effective_stop_ms,
                 },
             )
-        daemon_request = daemon_request.model_copy(update={"start": False})
     try:
         result = await host_daemon_client.deploy(
             settings.live_runner_daemon_url,

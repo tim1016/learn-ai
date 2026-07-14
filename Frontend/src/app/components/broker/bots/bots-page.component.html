@@ -23,7 +23,7 @@
           [loading]="isStartingReady()"
           (click)="startReadyBots()"
         >
-          <span class="p-button-label">Start ready</span>
+          <span class="p-button-label">Start one ready</span>
         </button>
       }
       <button
@@ -63,7 +63,7 @@
   </section>
 
   @if (launchProgress().phase !== 'idle') {
-    <section class="launch-progress" aria-live="polite" aria-label="Start ready progress">
+    <section class="launch-progress" aria-live="polite" aria-label="Start one ready progress">
       <div class="launch-progress-header">
         <div>
           <strong>{{ launchProgress().title }}</strong>

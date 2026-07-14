@@ -67,6 +67,7 @@ from app.engine.live.host_daemon_bot_events import (
     should_record_child_launch_failure,
 )
 from app.engine.live.host_runner_policy import load_policy_env_file, validate_ibkr_host_allowed
+from app.engine.live.run_ledger import LiveRunStartDefaults
 from app.engine.strategy.spec.schema import load_spec_from_path
 from app.schemas.broker_session import GatewaySocketsSnapshot
 from app.schemas.live_runs import (
@@ -790,6 +791,13 @@ class RunnerProcessManager:
             live_config=request.live_config,
             strategy_instance_id=request.strategy_instance_id,
             strategy_key=request.strategy_key,
+            start_defaults=LiveRunStartDefaults(
+                strategy=request.start_options.strategy,
+                readonly=request.start_options.readonly,
+                hydrate_policy=request.start_options.hydrate_policy,
+                max_orders_per_day=request.start_options.max_orders_per_day,
+                ibkr_host=request.start_options.ibkr_host,
+            ),
             parent_run_id=request.parent_run_id,
             force=request.force,
             idempotent=True,

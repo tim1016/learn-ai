@@ -502,7 +502,7 @@ describe('BotsPageComponent', () => {
     );
   });
 
-  it('blocks Start ready before roll call when account sick bay is active', async () => {
+  it('blocks Start one ready before roll call when account sick bay is active', async () => {
     const { fixture, service } = await setup({ triage: frozenTriage() });
 
     await fixture.componentInstance.startReadyBots();
