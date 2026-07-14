@@ -15,7 +15,9 @@ from app.engine.live.live_state_sidecar import (
     LiveStateSidecarRepo,
     stable_live_state_path,
 )
+from app.engine.live.run_ledger import read_ledger
 from app.schemas.live_runs import FleetContamination, InstanceBrokerView
+from app.services.legacy_stale_claim_retirement import retired_legacy_claim_keys
 
 logger = logging.getLogger(__name__)
 NetPositionFetcher = Callable[[], Awaitable[dict[str, int] | None]]
@@ -78,11 +80,56 @@ def instance_broker(root: Path, sid: str) -> InstanceBrokerView | None:
 
 def collect_fleet_position_explanations(root: Path) -> dict[str, dict[str, int]]:
     explained: dict[str, dict[str, int]] = {}
+    retired_by_account: dict[str, frozenset[tuple[str, str, str, str]]] = {}
     for sid in scan_runs_by_instance(root):
-        broker = instance_broker(root, sid)
-        if broker is not None and broker.owned_positions:
-            explained[sid] = broker.owned_positions
+        envelope = read_instance_live_state(root, sid)
+        if envelope is not None and envelope.expected_position_by_symbol:
+            retired = _retired_claim_keys_for_run(
+                artifacts_root=root.parent,
+                run_id=envelope.run_id,
+                cache=retired_by_account,
+            )
+            positions = {
+                symbol: quantity
+                for symbol, quantity in envelope.expected_position_by_symbol.items()
+                if (sid, envelope.run_id, symbol.upper(), envelope.bot_order_namespace) not in retired
+            }
+            if positions:
+                explained[sid] = positions
     return explained
+
+
+def _retired_claim_keys_for_run(
+    *,
+    artifacts_root: Path,
+    run_id: str,
+    cache: dict[str, frozenset[tuple[str, str, str, str]]],
+) -> frozenset[tuple[str, str, str, str]]:
+    """Fold retirement receipts once per account, keeping legacy sidecars read-only.
+
+    Failure keeps claims visible (fail-safe): an unreadable ledger or event log
+    must never hide managed exposure from the contamination sum.
+    """
+
+    try:
+        ledger = read_ledger(artifacts_root / "live_runs" / run_id / "run_ledger.json")
+    except (OSError, ValueError):
+        logger.debug("legacy retirement filter: no readable ledger for run %s; claims stay visible", run_id)
+        return frozenset()
+    account_id = ledger.account_id
+    if not account_id:
+        return frozenset()
+    if account_id not in cache:
+        try:
+            cache[account_id] = retired_legacy_claim_keys(artifacts_root, account_id)
+        except (OSError, ValueError) as exc:
+            logger.warning(
+                "legacy retirement filter: receipts unreadable for %s (%s); claims stay visible",
+                account_id,
+                exc,
+            )
+            cache[account_id] = frozenset()
+    return cache[account_id]
 
 
 async def fetch_net_positions() -> dict[str, int] | None:

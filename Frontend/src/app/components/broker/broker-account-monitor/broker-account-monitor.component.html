@@ -83,6 +83,9 @@
         [showOperatorBlockers]="true"
         (operatorBlockerMoveSelected)="handleAccountMonitorBlockerMove($event)"
       />
+      @if (accountReconciliationAccountId(); as accountId) {
+        <app-legacy-stale-claim-cure [accountId]="accountId" (retired)="refresh()" />
+      }
       <article class="account-outcome-card" aria-labelledby="account-outcome-title">
         <header class="card-header" id="account-outcome-title">Operator outcome projection</header>
         <div class="outcome-grid">
