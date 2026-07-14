@@ -201,6 +201,60 @@ class AccountTriageResponse(BaseModel):
     affected_bots: list[AccountTriageBotRef] = Field(default_factory=list)
 
 
+class LegacyStaleClaimCandidate(BaseModel):
+    """A legacy sidecar claim the backend has freshly proved safe to retire."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    claim_id: str = Field(min_length=1, max_length=160)
+    strategy_instance_id: str = Field(min_length=1, max_length=128)
+    run_id: str = Field(min_length=1, max_length=128)
+    bot_order_namespace: str = Field(min_length=1, max_length=256)
+    symbol: str = Field(min_length=1, max_length=32)
+    claimed_quantity: int
+    proof_summary: str = Field(min_length=1, max_length=512)
+    proved_at_ms: int = Field(ge=0)
+
+
+class LegacyStaleClaimCandidatesResponse(BaseModel):
+    """Backend-authored, currently safe legacy-retirement affordances."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    generated_at_ms: int = Field(ge=0)
+    candidates: list[LegacyStaleClaimCandidate] = Field(default_factory=list)
+
+
+class LegacyStaleClaimRetireRequest(BaseModel):
+    """Operator request to retire one specifically identified legacy claim."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    strategy_instance_id: str = Field(min_length=1, max_length=128)
+    run_id: str = Field(min_length=1, max_length=128)
+    symbol: str = Field(min_length=1, max_length=32)
+    requested_by: str = Field(default="account-monitor.operator", min_length=1, max_length=128)
+
+
+class LegacyStaleClaimRetirementReceipt(BaseModel):
+    """Durable proof that one legacy per-run claim is no longer active."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    receipt_id: str = Field(min_length=1, max_length=160)
+    account_id: str = Field(min_length=1, max_length=64)
+    strategy_instance_id: str = Field(min_length=1, max_length=128)
+    run_id: str = Field(min_length=1, max_length=128)
+    bot_order_namespace: str = Field(min_length=1, max_length=256)
+    symbol: str = Field(min_length=1, max_length=32)
+    claimed_quantity: int
+    requested_by: str = Field(min_length=1, max_length=128)
+    retired_at_ms: int = Field(ge=0)
+
+
 class AccountClearFreezeRequest(BaseModel):
     """Operator request to clear an active freeze using the latest clean receipt."""
 

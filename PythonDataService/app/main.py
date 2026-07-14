@@ -27,6 +27,7 @@ from app.routers import (
     broker_capability,
     broker_session,
     chart,
+    cohort_batch_launch,
     data_quality,
     dataset,
     edge,
@@ -386,6 +387,8 @@ app.include_router(broker_capability.router, dependencies=DATA_PLANE_CONTROL_DEP
 app.include_router(broker_account_truth.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 # Account-scoped reconciliation and recovery triage endpoints.
 app.include_router(account_reconciliation.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
+# Operator-authorized deliberate cohort batch launch receipts.
+app.include_router(cohort_batch_launch.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 # Broker session mirror — read-only roster/SSE observatory with sensitive runtime data.
 app.include_router(broker_session.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
 # Golden fixture catalog — reads manifest.json + artifacts/fixture-validation/latest.json.

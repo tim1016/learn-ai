@@ -11,9 +11,10 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
+from app.schemas.cohort_batch_launch import validate_cohort_batch_launch_window_and_members
 from app.schemas.live_runs import GateResult
 
 ACCOUNT_FREEZE_FILENAME = "unresolved_exposure.flag"
@@ -170,17 +171,47 @@ class RestartIntensityPolicy(BaseModel):
     source: str = RESTART_INTENSITY_SOURCE
 
 
+class CohortBatchLaunchReceipt(BaseModel):
+    """Operator authorization for one deliberate multi-bot launch window."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    cohort_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    member_strategy_instance_ids: tuple[str, ...] = Field(min_length=1, max_length=128)
+    window_start_ms: int = Field(ge=0)
+    window_end_ms: int = Field(ge=0)
+    authorized_by: str = Field(min_length=1, max_length=128)
+    recorded_at_ms: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_window_and_members(self) -> CohortBatchLaunchReceipt:
+        validate_cohort_batch_launch_window_and_members(
+            self.window_start_ms,
+            self.window_end_ms,
+            self.member_strategy_instance_ids,
+        )
+        return self
+
+
 def account_artifacts_root(artifacts_root: Path, account_id: str) -> Path:
     """Return the confined account artifact directory for one account id.
 
     ``account_id`` can arrive from URL path segments on operator recovery
     endpoints. Require the already-canonical account-id spelling, reconstruct
-    the path component from the regex match, collapse it to a basename-only
-    segment, then resolve and assert it remains below
+    the path component from the regex match, then resolve and assert it remains below
     ``<artifacts_root>/accounts``. The match-group reconstruction, basename
     extraction, and containment check mirror CodeQL's path-injection guidance.
     """
-    safe_account_id = _safe_account_path_segment(account_id)
+    # Keep the regex capture in this path builder rather than accepting the
+    # result of a custom validator. CodeQL recognizes Match.group() as a
+    # path-segment sanitizer, while it cannot always follow that fact across
+    # a helper return value.
+    match = _ACCOUNT_ID_RE.fullmatch(account_id)
+    if match is None or account_id != account_id.strip():
+        raise AccountArtifactError(f"invalid account_id: {account_id!r}")
+    safe_account_id = match.group(0)
     accounts_root = os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts"))
     candidate = os.path.realpath(os.path.join(accounts_root, safe_account_id))
     try:
@@ -192,6 +223,61 @@ def account_artifacts_root(artifacts_root: Path, account_id: str) -> Path:
     if common != accounts_root:
         raise AccountArtifactError(f"path traversal detected for account_id: {account_id!r}")
     return Path(candidate)
+
+
+def _account_artifact_file_path(
+    artifacts_root: Path,
+    account_id: str,
+    filename: str,
+) -> Path:
+    """Return a static artifact filename confined below an account root."""
+    if filename != os.path.basename(filename):
+        raise AccountArtifactError(f"invalid account artifact filename: {filename!r}")
+    root = account_artifacts_root(artifacts_root, account_id)
+    path = Path(os.path.realpath(os.path.join(os.fspath(root), filename)))
+    root_real = os.fspath(root)
+    root_prefix = root_real if root_real.endswith(os.sep) else f"{root_real}{os.sep}"
+    if not os.fspath(path).startswith(root_prefix):
+        raise AccountArtifactError(f"artifact path traversal detected for account_id: {account_id!r}")
+    return path
+
+
+def _existing_account_artifact_file_path(
+    artifacts_root: Path,
+    account_id: str,
+    filename: str,
+) -> Path | None:
+    """Return an existing, non-symlinked static artifact selected from disk.
+
+    The account ID is validated before comparing it with names supplied by the
+    server-owned account directory listing. It is never used to construct a
+    path for a read operation; this both prevents symlink traversal and keeps
+    the read boundary visible to CodeQL.
+    """
+    safe_account_id = _safe_account_path_segment(account_id)
+    if filename != os.path.basename(filename):
+        raise AccountArtifactError(f"invalid account artifact filename: {filename!r}")
+    accounts_root = Path(
+        os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts"))
+    )
+    try:
+        account_root = next(
+            child
+            for child in accounts_root.iterdir()
+            if child.name == safe_account_id and child.is_dir() and not child.is_symlink()
+        )
+    except FileNotFoundError:
+        return None
+    except StopIteration:
+        return None
+    for artifact_path in account_root.iterdir():
+        if artifact_path.name == filename:
+            if artifact_path.is_symlink():
+                raise AccountArtifactError(
+                    f"artifact path traversal detected for account_id: {account_id!r}"
+                )
+            return artifact_path if artifact_path.is_file() else None
+    return None
 
 
 def write_account_freeze(artifacts_root: Path, evidence: AccountFreezeEvidence) -> Path:
@@ -216,8 +302,12 @@ def write_account_freeze(artifacts_root: Path, evidence: AccountFreezeEvidence) 
 
 
 def read_account_freeze(artifacts_root: Path, account_id: str) -> AccountFreezeEvidence | None:
-    path = account_artifacts_root(artifacts_root, account_id) / ACCOUNT_FREEZE_FILENAME
-    if not path.is_file():
+    path = _existing_account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        ACCOUNT_FREEZE_FILENAME,
+    )
+    if path is None:
         return None
     evidence = AccountFreezeEvidence.model_validate_json(path.read_text(encoding="utf-8"))
     if evidence.cleared_at_ms is not None:
@@ -390,8 +480,35 @@ def append_account_event(
     artifacts_root: Path,
     account_id: str,
     payload: dict,
+    *,
+    only_if_receipt_absent: bool = False,
+) -> bool:
+    """Append an account event, optionally rejecting a duplicate receipt id atomically."""
+    receipt_id = payload.get("receipt_id")
+    if only_if_receipt_absent and (not isinstance(receipt_id, str) or not receipt_id):
+        raise AccountArtifactError("idempotent account event receipt_id must not be empty")
+    return _append_account_event(
+        artifacts_root,
+        account_id,
+        {**payload, "account_id": account_id},
+        only_if_receipt_absent=only_if_receipt_absent,
+    )
+
+
+def record_cohort_batch_launch_receipt(
+    artifacts_root: Path,
+    receipt: CohortBatchLaunchReceipt,
 ) -> None:
-    _append_account_event(artifacts_root, account_id, {**payload, "account_id": account_id})
+    """Append operator authorization for one cohort start window."""
+
+    _append_account_event(
+        artifacts_root,
+        receipt.account_id,
+        {
+            "event_type": "cohort_batch_launch_authorized",
+            **receipt.model_dump(mode="json"),
+        },
+    )
 
 
 def write_account_owner_generation(
@@ -461,8 +578,12 @@ def read_account_owner_generation(
     artifacts_root: Path,
     account_id: str,
 ) -> AccountOwnerGeneration | None:
-    path = account_artifacts_root(artifacts_root, account_id) / ACCOUNT_OWNER_GENERATION_FILENAME
-    if not path.is_file():
+    path = _existing_account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        ACCOUNT_OWNER_GENERATION_FILENAME,
+    )
+    if path is None:
         return None
     return AccountOwnerGeneration.model_validate_json(path.read_text(encoding="utf-8"))
 
@@ -485,7 +606,8 @@ def evaluate_restart_intensity(
         and event.get("lifecycle_state") == "ACTIVE"
         and window_start_ms <= int(event.get("recorded_at_ms") or -1) <= now_ms
     ]
-    observed_count = len(restart_events)
+    restart_groups = _restart_intensity_groups(events, restart_events)
+    observed_count = len(restart_groups)
     reason = _restart_intensity_reason(
         observed_count=observed_count,
         threshold=policy.threshold,
@@ -516,7 +638,8 @@ def evaluate_restart_intensity(
             sorted(
                 {
                     str(event.get("strategy_instance_id"))
-                    for event in restart_events
+                    for events_in_group in restart_groups.values()
+                    for event in events_in_group
                     if event.get("strategy_instance_id")
                 }
             )
@@ -564,6 +687,65 @@ def _restart_intensity_reason(
     )
 
 
+def _restart_intensity_groups(
+    account_events: list[dict],
+    restart_events: list[dict],
+) -> dict[str, list[dict]]:
+    """Fold authorized cohort members into one restart event each.
+
+    A cohort receipt applies only to a member binding authored after the
+    receipt and inside its window. Daemon-attributed crash restarts are never
+    eligible, even if their instance id appears in the operator's receipt.
+    """
+
+    receipts = _cohort_batch_launch_receipts(account_events)
+    groups: dict[str, list[dict]] = {}
+    for event in restart_events:
+        cohort_key = _cohort_key_for_binding(event, receipts)
+        event_key = cohort_key or f"binding:{event.get('seq')}"
+        groups.setdefault(event_key, []).append(event)
+    return groups
+
+
+def _cohort_batch_launch_receipts(events: list[dict]) -> tuple[tuple[int, CohortBatchLaunchReceipt], ...]:
+    receipts: list[tuple[int, CohortBatchLaunchReceipt]] = []
+    for event in events:
+        if event.get("event_type") != "cohort_batch_launch_authorized":
+            continue
+        try:
+            receipt = CohortBatchLaunchReceipt.model_validate(event)
+            seq = int(event["seq"])
+        except (KeyError, TypeError, ValueError, ValidationError):
+            logger.warning("Ignoring invalid cohort batch launch receipt in account events")
+            continue
+        receipts.append((seq, receipt))
+    return tuple(receipts)
+
+
+def _cohort_key_for_binding(
+    binding_event: dict,
+    receipts: tuple[tuple[int, CohortBatchLaunchReceipt], ...],
+) -> str | None:
+    source = str(binding_event.get("source") or "")
+    if source.startswith("host_daemon.") and ("crash" in source or "restart" in source):
+        return None
+    strategy_instance_id = binding_event.get("strategy_instance_id")
+    recorded_at_ms = binding_event.get("recorded_at_ms")
+    if not isinstance(strategy_instance_id, str) or not isinstance(recorded_at_ms, int):
+        return None
+    eligible = [
+        (seq, receipt)
+        for seq, receipt in receipts
+        if receipt.recorded_at_ms <= recorded_at_ms
+        and receipt.window_start_ms <= recorded_at_ms <= receipt.window_end_ms
+        and strategy_instance_id in receipt.member_strategy_instance_ids
+    ]
+    if not eligible:
+        return None
+    seq, _receipt = max(eligible, key=lambda item: item[0])
+    return f"cohort:{seq}"
+
+
 def _latest_restart_intensity_clear_ms(events: list[dict]) -> int | None:
     clears = [
         int(event["cleared_at_ms"])
@@ -591,18 +773,25 @@ def _atomic_write_json_locked(path: Path, payload: dict) -> None:
     _fsync_parent_dir(path)
 
 
-def _append_account_event(artifacts_root: Path, account_id: str, payload: dict) -> None:
-    safe_account_id = _safe_account_path_segment(account_id)
-    accounts_root = os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts"))
-    root_real = os.path.realpath(os.path.join(accounts_root, safe_account_id))
-    event_filename = os.path.basename(ACCOUNT_EVENTS_FILENAME)
-    event_path_real = os.path.realpath(os.path.join(root_real, event_filename))
-    root_prefix = root_real if root_real.endswith(os.sep) else f"{root_real}{os.sep}"
-    if not event_path_real.startswith(root_prefix):
-        raise AccountArtifactError(f"event path traversal detected for account_id: {account_id!r}")
-    path = Path(event_path_real)
+def _append_account_event(
+    artifacts_root: Path,
+    account_id: str,
+    payload: dict,
+    *,
+    only_if_receipt_absent: bool = False,
+) -> bool:
+    path = _account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        ACCOUNT_EVENTS_FILENAME,
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     with _file_lock(path):
+        if only_if_receipt_absent:
+            events = read_account_events(artifacts_root, account_id)
+            receipt_id = payload["receipt_id"]
+            if any(event.get("receipt_id") == receipt_id for event in events):
+                return False
         enriched = dict(payload)
         enriched["seq"] = _next_account_event_seq_locked(path)
         enriched["ts_ms"] = _account_event_ts_ms_for_write(enriched)
@@ -616,6 +805,7 @@ def _append_account_event(artifacts_root: Path, account_id: str, payload: dict) 
             fh.flush()
             os.fsync(fh.fileno())
         _fsync_parent_dir(path)
+    return True
 
 
 def _next_account_event_seq_locked(path: Path) -> int:
@@ -719,6 +909,7 @@ _LOCAL_EXPORTS = [
     "RESTART_INTENSITY_SOURCE",
     "AccountArtifactError",
     "AccountAuditedOverride",
+    "CohortBatchLaunchReceipt",
     "AccountEventRecord",
     "AccountFreezeEvidence",
     "AccountOwnerGeneration",
@@ -734,6 +925,7 @@ _LOCAL_EXPORTS = [
     "read_account_events_tolerant_with_hash",
     "read_account_freeze",
     "read_account_owner_generation",
+    "record_cohort_batch_launch_receipt",
     "resolve_account_event_ts_ms",
     "write_account_freeze",
     "write_account_owner_generation",

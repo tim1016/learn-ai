@@ -334,6 +334,13 @@ async def fetch_instance_process(
     )
 
 
+async def fetch_run_process(
+    base_url: str, run_id: str
+) -> tuple[DaemonResult, dict | None]:
+    """GET /runs/{id}/process for proof about one immutable run identity."""
+    return await _typed_get_json(f"{base_url.rstrip('/')}/runs/{run_id}/process")
+
+
 async def fetch_qc_audit_copies(base_url: str) -> tuple[DaemonResult, dict | None]:
     """GET /qc-audit-copies. Returns ``(DaemonResult, dict | None)``."""
     return await _typed_get_json(f"{base_url.rstrip('/')}/qc-audit-copies")

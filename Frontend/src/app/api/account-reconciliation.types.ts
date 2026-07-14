@@ -144,6 +144,44 @@ export interface AccountTriageResponse {
   affected_bots: AccountTriageBotRef[];
 }
 
+export interface LegacyStaleClaimCandidate {
+  claim_id: string;
+  strategy_instance_id: string;
+  run_id: string;
+  bot_order_namespace: string;
+  symbol: string;
+  claimed_quantity: number;
+  proof_summary: string;
+  proved_at_ms: number;
+}
+
+export interface LegacyStaleClaimCandidatesResponse {
+  schema_version: number;
+  account_id: string;
+  generated_at_ms: number;
+  candidates: LegacyStaleClaimCandidate[];
+}
+
+export interface LegacyStaleClaimRetireRequest {
+  strategy_instance_id: string;
+  run_id: string;
+  symbol: string;
+  requested_by?: string;
+}
+
+export interface LegacyStaleClaimRetirementReceipt {
+  schema_version: number;
+  receipt_id: string;
+  account_id: string;
+  strategy_instance_id: string;
+  run_id: string;
+  bot_order_namespace: string;
+  symbol: string;
+  claimed_quantity: number;
+  requested_by: string;
+  retired_at_ms: number;
+}
+
 export interface AccountClearFreezeRequest {
   requested_by?: string;
   receipt_id?: string | null;

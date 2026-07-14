@@ -21,6 +21,7 @@ import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import { AccountTruthBoardComponent } from '../account-truth-board/account-truth-board.component';
 import type { OperatorBlockerMoveEvent } from '../shared/operator-blocker-list/operator-blocker-list.component';
 import { AccountFreezeBannerComponent } from '../account-freeze-banner/account-freeze-banner.component';
+import { LegacyStaleClaimCureComponent } from '../legacy-stale-claim-cure/legacy-stale-claim-cure.component';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { brokerSse, type SseStream } from '../../../services/broker-sse';
@@ -115,6 +116,7 @@ interface ConditionOwnerFact {
     DialogModule,
     AccountTruthBoardComponent,
     AccountFreezeBannerComponent,
+    LegacyStaleClaimCureComponent,
     ReceiptLabelPipe,
     TimestampDisplayComponent,
   ],

@@ -6,6 +6,9 @@ import type {
   AccountAcceptExposureOverrideResponse,
   AccountClearFreezeRequest,
   AccountClearFreezeResponse,
+  LegacyStaleClaimCandidatesResponse,
+  LegacyStaleClaimRetireRequest,
+  LegacyStaleClaimRetirementReceipt,
   AccountReconciliationAutomationPolicy,
   AccountReconciliationAutomationPolicyUpdate,
   AccountReconciliationReceipt,
@@ -158,6 +161,26 @@ export class BrokerService {
     return firstValueFrom(
       this.http.get<AccountTriageResponse>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/triage`,
+      ),
+    );
+  }
+
+  legacyStaleClaimCandidates(accountId: string): Promise<LegacyStaleClaimCandidatesResponse> {
+    return firstValueFrom(
+      this.http.get<LegacyStaleClaimCandidatesResponse>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/legacy-stale-claims/candidates`,
+      ),
+    );
+  }
+
+  retireLegacyStaleClaim(
+    accountId: string,
+    payload: LegacyStaleClaimRetireRequest,
+  ): Promise<LegacyStaleClaimRetirementReceipt> {
+    return firstValueFrom(
+      this.http.post<LegacyStaleClaimRetirementReceipt>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/legacy-stale-claims/retire`,
+        payload,
       ),
     );
   }

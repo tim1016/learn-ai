@@ -8,6 +8,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.broker.ibkr.client import BrokerError, IbkrClient
+from app.broker.ibkr.config import get_settings
+from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import AccountArtifactError
 from app.engine.live.account_identity import normalize_account_id
 from app.engine.live.account_registry import backfill_false_crash_registry_rows
@@ -22,9 +24,16 @@ from app.schemas.account_reconciliation import (
     AccountReconciliationAutomationPolicyUpdate,
     AccountReconciliationReceipt,
     AccountTriageResponse,
+    LegacyStaleClaimCandidatesResponse,
+    LegacyStaleClaimRetirementReceipt,
+    LegacyStaleClaimRetireRequest,
 )
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.account_truth_refresh import account_truth_artifacts_root, refresh_account_truth_now
+from app.services.legacy_stale_claim_retirement import (
+    LegacyStaleClaimRetirementError,
+    LegacyStaleClaimRetirementService,
+)
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 ConnectedIbkrClient = Annotated[IbkrClient, Depends(require_connected_client)]
@@ -39,6 +48,10 @@ AccountArtifactsRoot = Annotated[Path, Depends(get_account_artifacts_root)]
 
 def get_account_reconciliation_service() -> AccountReconciliationService:
     return AccountReconciliationService(artifacts_root=get_account_artifacts_root())
+
+
+def get_legacy_stale_claim_retirement_service() -> LegacyStaleClaimRetirementService:
+    return LegacyStaleClaimRetirementService(artifacts_root=get_account_artifacts_root())
 
 
 @router.post("/{account_id}/reconciliation", response_model=AccountReconciliationReceipt)
@@ -66,6 +79,93 @@ async def reconcile_account_endpoint(
         )
     except BrokerError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    except AccountArtifactError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+
+@router.get(
+    "/{account_id}/legacy-stale-claims/candidates",
+    response_model=LegacyStaleClaimCandidatesResponse,
+)
+async def legacy_stale_claim_candidates_endpoint(
+    account_id: str,
+    client: ConnectedIbkrClient,
+    service: Annotated[
+        LegacyStaleClaimRetirementService,
+        Depends(get_legacy_stale_claim_retirement_service),
+    ],
+) -> LegacyStaleClaimCandidatesResponse:
+    """Return only legacy sidecar claims whose retirement is proven safe now."""
+
+    canonical_account_id = _canonical_account_id(account_id)
+    try:
+        account_truth = await refresh_account_truth_now(
+            client,
+            account_id=canonical_account_id,
+            context="legacy stale-claim candidate proof",
+        )
+        settings = get_settings()
+        candidates = await service.candidates(
+            account_id=canonical_account_id,
+            account_truth=account_truth,
+            fetch_run_process=lambda run_id: host_daemon_client.fetch_run_process(
+                settings.live_runner_daemon_url,
+                run_id,
+            ),
+        )
+        return LegacyStaleClaimCandidatesResponse(
+            account_id=canonical_account_id,
+            generated_at_ms=account_truth.generated_at_ms,
+            candidates=candidates,
+        )
+    except BrokerError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    except AccountArtifactError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+
+@router.post(
+    "/{account_id}/legacy-stale-claims/retire",
+    response_model=LegacyStaleClaimRetirementReceipt,
+)
+async def retire_legacy_stale_claim_endpoint(
+    account_id: str,
+    request: LegacyStaleClaimRetireRequest,
+    client: ConnectedIbkrClient,
+    service: Annotated[
+        LegacyStaleClaimRetirementService,
+        Depends(get_legacy_stale_claim_retirement_service),
+    ],
+) -> LegacyStaleClaimRetirementReceipt:
+    """Retire one pre-Clerk claim only after re-proving every safety fact."""
+
+    canonical_account_id = _canonical_account_id(account_id)
+    try:
+        account_truth = await refresh_account_truth_now(
+            client,
+            account_id=canonical_account_id,
+            context="legacy stale-claim retirement",
+        )
+        settings = get_settings()
+        return await service.retire(
+            account_id=canonical_account_id,
+            strategy_instance_id=request.strategy_instance_id,
+            run_id=request.run_id,
+            symbol=request.symbol,
+            requested_by=request.requested_by,
+            account_truth=account_truth,
+            fetch_run_process=lambda run_id: host_daemon_client.fetch_run_process(
+                settings.live_runner_daemon_url,
+                run_id,
+            ),
+        )
+    except BrokerError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    except LegacyStaleClaimRetirementError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={"reason_code": exc.reason_code, "message": exc.detail},
+        ) from exc
     except AccountArtifactError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 

@@ -75,6 +75,24 @@ class FakeBrokerService {
   });
   reconcileAccount = vi.fn().mockResolvedValue(accountReconciliationReceipt());
   positions = vi.fn().mockResolvedValue(positionsSnapshot());
+  legacyStaleClaimCandidates = vi.fn().mockResolvedValue({
+    schema_version: 1,
+    account_id: 'DU1234567',
+    generated_at_ms: 1_780_000_002_000,
+    candidates: [],
+  });
+  retireLegacyStaleClaim = vi.fn().mockResolvedValue({
+    schema_version: 1,
+    receipt_id: 'legacy-retirement-claim-1',
+    account_id: 'DU1234567',
+    strategy_instance_id: 'legacy-spy',
+    run_id: 'run-legacy',
+    bot_order_namespace: 'learn-ai/legacy-spy/v1',
+    symbol: 'SPY',
+    claimed_quantity: 1,
+    requested_by: 'account-monitor.operator',
+    retired_at_ms: 1_780_000_002_000,
+  });
 }
 
 class FakeLiveRunsService {
@@ -89,6 +107,53 @@ function routeFragment(fragment: string | null = null) {
 }
 
 describe('BrokerAccountMonitorComponent', () => {
+  it('offers only the backend-proven stale claim cure and retires the selected claim', async () => {
+    const broker = new FakeBrokerService();
+    broker.legacyStaleClaimCandidates
+      .mockResolvedValueOnce({
+        schema_version: 1,
+        account_id: 'DU1234567',
+        generated_at_ms: 1_780_000_002_000,
+        candidates: [
+          {
+            claim_id: 'legacy-claim-1',
+            strategy_instance_id: 'legacy-spy',
+            run_id: 'run-legacy',
+            bot_order_namespace: 'learn-ai/legacy-spy/v1',
+            symbol: 'SPY',
+            claimed_quantity: 1,
+            proof_summary: 'LEGACY_CLAIM_BROKER_FLAT:SPY',
+            proved_at_ms: 1_780_000_002_000,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        schema_version: 1,
+        account_id: 'DU1234567',
+        generated_at_ms: 1_780_000_002_100,
+        candidates: [],
+      });
+    await render(BrokerAccountMonitorComponent, {
+      providers: [
+        { provide: BrokerService, useValue: broker },
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useClass: FakeLiveRunsService },
+        routeFragment(),
+      ],
+    });
+
+    const retire = await screen.findByRole('button', { name: /retire stale claim/i });
+    fireEvent.click(retire);
+
+    await waitFor(() => {
+      expect(broker.retireLegacyStaleClaim).toHaveBeenCalledWith('DU1234567', {
+        strategy_instance_id: 'legacy-spy',
+        run_id: 'run-legacy',
+        symbol: 'SPY',
+      });
+    });
+  });
+
   it('runs account reconciliation from the account truth account id', async () => {
     const broker = new FakeBrokerService();
     await render(BrokerAccountMonitorComponent, {
