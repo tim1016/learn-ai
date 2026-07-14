@@ -122,6 +122,15 @@ export function fmtDurationRemaining(remainingMs: number): string {
   return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
 }
 
+/** Format elapsed observation freshness; this is display-only and owns no state. */
+export function fmtElapsedSince(observedAtMs: number, nowMs: number = Date.now()): string {
+  const totalSeconds = Math.max(0, Math.floor((nowMs - observedAtMs) / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s ago`;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  if (totalMinutes < 60) return `${totalMinutes}m ago`;
+  return `${Math.floor(totalMinutes / 60)}h ago`;
+}
+
 /**
  * Compare two scalars and return their divergence in basis points.
  * Returns ``null`` when either side is missing or the reference is zero

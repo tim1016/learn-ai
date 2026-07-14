@@ -229,6 +229,15 @@ never branch on those strings. This retires `recovery-flatten-*`,
   the connected broker session. Deploy displays this account as read-only
   evidence and fails closed when the account is unavailable or ambiguous; traders
   do not type broker account identifiers into the deploy form.
+- **Account observation proof** — a fresh, clean Account Truth assessment for
+  one broker account. It proves that current account state is attributable and
+  may include non-zero exposure owned by an active bot; it is the right proof
+  for ongoing trading permission, not a claim that the account is flat.
+- **Account recovery proof** — the stricter account reconciliation receipt used
+  for recovery actions such as freeze clearing and ADR-required flat starts.
+  It combines observation proof with accepted resolved exposure/flatness and
+  must not be used to stop a healthy bot merely because it holds an owned
+  position.
 - **Trader-readable instrument picker** — Deploy action plans use rich,
   trader-friendly stock and option selectors instead of raw symbol/contract
   entry rows. Stocks surface recognisable symbol/company/exchange context when

@@ -1375,6 +1375,17 @@ class OperatorSurfaceAccountOwner(BaseModel):
     source: str | None = None
 
 
+class OperatorSurfaceAccountObservation(BaseModel):
+    """Backend-authored freshness proof for one broker account observation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: Literal["VERIFIED", "REVOKED", "EXPIRED", "ABSENT"]
+    reason_line: str
+    observed_at_ms: int | None = Field(default=None, ge=0)
+    valid_until_ms: int | None = Field(default=None, ge=0)
+
+
 class OperatorSurfaceActionPlan(BaseModel):
     """Server-authored action-plan consumption + anomaly verdict (#608).
 
@@ -2174,6 +2185,7 @@ class OperatorSurface(BaseModel):
     daily_order_cap: OperatorSurfaceDailyOrderCap
     action_plan: OperatorSurfaceActionPlan
     account_owner: OperatorSurfaceAccountOwner | None = None
+    account_observation: OperatorSurfaceAccountObservation | None = None
     submit_readiness: OperatorSurfaceSubmitReadiness
     trader_guidance: OperatorSurfaceTraderGuidance
     # Backend-authored current blockage ladder for the lifecycle/About pane.

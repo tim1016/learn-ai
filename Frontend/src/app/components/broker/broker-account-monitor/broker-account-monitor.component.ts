@@ -152,6 +152,9 @@ export class BrokerAccountMonitorComponent {
   readonly accountReconciliationAutomationPolicy = computed(
     () => this.accountTriage()?.reconciliation_automation_policy ?? null,
   );
+  readonly accountObservation = computed(
+    () => this.accountTriage()?.account_observation ?? null,
+  );
   readonly accountReconciliationValidUntilMs = computed(() => {
     const receipt = this.accountReconciliation();
     const triage = this.accountTriage();

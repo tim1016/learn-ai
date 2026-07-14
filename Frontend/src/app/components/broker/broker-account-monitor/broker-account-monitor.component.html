@@ -102,6 +102,30 @@
       @if (accountFreezeBanner(); as banner) {
         <app-account-freeze-banner [banner]="banner" />
       }
+      @if (accountObservation(); as observation) {
+        <article class="account-observation-card" aria-labelledby="account-observation-title">
+          <header class="card-header">
+            <span id="account-observation-title">Account verification</span>
+            <span class="badge mono">{{ observation.state | receiptLabel }}</span>
+          </header>
+          <p class="receipt-reason">{{ observation.reason_line }}</p>
+          @if (observation.history.length > 0) {
+            <ol class="account-observation-history" aria-label="Account verification transitions">
+              @for (event of observation.history; track event.recorded_at_ms) {
+                <li
+                  data-testid="account-observation-transition"
+                  [class.is-verified]="event.state === 'VERIFIED'"
+                  [class.is-revoked]="event.state === 'REVOKED'"
+                  [attr.aria-label]="event.reason_line"
+                  [attr.title]="event.reason_line"
+                >
+                  <span class="account-observation-history__dot" aria-hidden="true"></span>
+                </li>
+              }
+            </ol>
+          }
+        </article>
+      }
       <article class="account-sick-bay-card">
         <header class="card-header">
           Account sick bay

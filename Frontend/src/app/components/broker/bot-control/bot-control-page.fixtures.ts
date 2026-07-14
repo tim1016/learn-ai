@@ -122,6 +122,7 @@ export function makeStatus(options: {
       daily_order_cap: { used: null, limit: null },
       action_plan: { consumption: 'UNKNOWN', anomaly_verdict: 'UNKNOWN' },
       account_owner: null,
+      account_observation: null,
       submit_readiness: {
         code: 'broker_state_unproven',
         label: 'Broker state unproven',

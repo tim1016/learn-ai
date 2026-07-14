@@ -24,6 +24,7 @@ import {
   resolveVerdictCardModel,
 } from '../lib/verdict-card-model';
 import { lifecycleConditionCureTarget } from '../../lib/condition-cure-actions';
+import { fmtDurationRemaining, fmtElapsedSince } from '../../format';
 
 /** The Verdict Card — the trader-first face of `/broker/bots/:id`
  *  (docs/superpowers/specs/2026-07-08-bot-control-verdict-card-design.md).
@@ -61,6 +62,23 @@ export class VerdictCardComponent {
   readonly model = computed(() => resolveVerdictCardModel(this.status()));
   readonly guidance = computed(() => this.status().operator_surface.trader_guidance);
   readonly gates = computed(() => this.status().operator_surface.readiness_gates);
+  readonly accountObservationProof = computed(() => {
+    const observation = this.status().operator_surface.account_observation;
+    if (
+      observation?.state !== 'VERIFIED' ||
+      observation.observed_at_ms === null
+    ) {
+      return null;
+    }
+    const nowMs = Date.now();
+    return {
+      reason: observation.reason_line,
+      observedAgo: fmtElapsedSince(observation.observed_at_ms, nowMs),
+      nextCheck: observation.valid_until_ms === null
+        ? null
+        : fmtDurationRemaining(observation.valid_until_ms - nowMs),
+    };
+  });
 
   readonly lifecycleVerb = computed<BotLifecycleAction | null>(() => {
     const verb = this.model().verb;

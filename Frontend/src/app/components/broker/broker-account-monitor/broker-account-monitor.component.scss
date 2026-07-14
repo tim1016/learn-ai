@@ -37,6 +37,49 @@
   color: var(--text-primary, #f0f3fa);
 }
 
+.account-observation-card {
+  margin-top: 1rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--border-light, #2a2e39);
+  border-radius: 8px;
+  background: var(--bg-surface, #131722);
+
+  .receipt-reason {
+    margin-bottom: 0;
+  }
+}
+
+.account-observation-history {
+  display: flex;
+  gap: 0.4rem;
+  margin: 0.8rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.account-observation-history li {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.account-observation-history__dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: var(--text-muted, #9598a1);
+}
+
+.account-observation-history .is-verified .account-observation-history__dot {
+  background: var(--bull, #2bb673);
+}
+
+.account-observation-history .is-revoked .account-observation-history__dot {
+  background: var(--bear, #e04f5f);
+}
+
 .primary-action-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) max-content;

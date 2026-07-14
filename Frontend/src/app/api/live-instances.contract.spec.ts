@@ -98,6 +98,7 @@ describe('operator surface fixture wire contract', () => {
       'daily_order_cap',
       'action_plan',
       'account_owner',
+      'account_observation',
       'submit_readiness',
       'trader_guidance',
       'blockage_ladder',

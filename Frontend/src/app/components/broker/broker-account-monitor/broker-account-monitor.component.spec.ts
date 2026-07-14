@@ -114,6 +114,45 @@ describe('BrokerAccountMonitorComponent', () => {
     expect(screen.queryByText('CLEAN')).toBeNull();
   });
 
+  it('renders account-observation transitions rather than sweep heartbeats', async () => {
+    const broker = new FakeBrokerService();
+    broker.accountTriage.mockResolvedValue(
+      makeCleanAccountTriage({
+        receipt: accountReconciliationReceipt(),
+        accountObservation: {
+          state: 'VERIFIED',
+          reason_line: 'Account verified.',
+          observed_at_ms: 1_780_000_002_000,
+          valid_until_ms: 1_780_000_062_000,
+          history: [
+            {
+              state: 'REVOKED',
+              reason_line: 'broker sweep timed out',
+              recorded_at_ms: 1_780_000_001_000,
+            },
+            {
+              state: 'VERIFIED',
+              reason_line: 'Account verified.',
+              recorded_at_ms: 1_780_000_002_000,
+            },
+          ],
+        },
+      }),
+    );
+    await render(BrokerAccountMonitorComponent, {
+      providers: [
+        { provide: BrokerService, useValue: broker },
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useClass: FakeLiveRunsService },
+        routeFragment(),
+      ],
+    });
+
+    expect(await screen.findByText('Account verification')).toBeTruthy();
+    expect(screen.getByText('Account verified.')).toBeTruthy();
+    expect(screen.getAllByTestId('account-observation-transition')).toHaveLength(2);
+  });
+
   it('marks a latest receipt stale when the monitor clock passes its expiry', async () => {
     const broker = new FakeBrokerService();
     const expiresAtMs = Date.now() + 60_000;

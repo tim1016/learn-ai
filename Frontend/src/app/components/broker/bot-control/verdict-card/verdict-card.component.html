@@ -60,6 +60,18 @@
       <button type="button" class="vc-why" (click)="openWhy()">why?</button>
     </p>
 
+    @if (accountObservationProof(); as proof) {
+      <p class="vc-account-proof" data-testid="account-observation-proof">
+        <span>{{ proof.reason }}</span>
+        <span aria-hidden="true">·</span>
+        <span>{{ proof.observedAgo }}</span>
+        @if (proof.nextCheck; as nextCheck) {
+          <span aria-hidden="true">·</span>
+          <span>next check {{ nextCheck }}</span>
+        }
+      </p>
+    }
+
     @if (m.driftDetected) {
       <p class="vc-drift" role="status">State may be stale — refreshing.</p>
     }

@@ -36,6 +36,7 @@ from app.schemas.live_runs import (
     InstanceSizing,
     InstanceStartDefaults,
     LiveBinding,
+    OperatorSurfaceAccountObservation,
     OperatorSurfaceAccountOwner,
     ReadinessGate,
     ReadinessVector,
@@ -104,6 +105,19 @@ def _account_truth_snapshot(
         source_freshness=fresh_account_truth_source_freshness(generated_at_ms),
     )
     return AccountTruthSnapshot(truth=truth, cached_at_ms=generated_at_ms)
+
+
+def test_operator_surface_carries_account_observation_proof() -> None:
+    observation = OperatorSurfaceAccountObservation(
+        state="VERIFIED",
+        reason_line="Account verified.",
+        observed_at_ms=_NOW_MS - 1_000,
+        valid_until_ms=_NOW_MS + 59_000,
+    )
+
+    surface = _surface(account_observation=observation)
+
+    assert surface.account_observation == observation
 
 
 def test_operator_surface_authors_durable_control_write_blocker() -> None:

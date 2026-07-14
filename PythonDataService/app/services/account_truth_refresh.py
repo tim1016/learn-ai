@@ -160,6 +160,7 @@ class AccountTruthRefreshLoop:
         snapshot_provider: AccountTruthSnapshotProvider | None = None,
         refresh_now: Callable[..., Awaitable[AccountTruthResponse]] = refresh_account_truth_now,
         account_truth_observer: Callable[[AccountTruthResponse], object] | None = None,
+        account_truth_failure_observer: Callable[[str | None, str, int], object] | None = None,
     ) -> None:
         self._client = client
         self._artifacts_root = artifacts_root
@@ -171,6 +172,7 @@ class AccountTruthRefreshLoop:
         )
         self._refresh_now = refresh_now
         self._account_truth_observer = account_truth_observer
+        self._account_truth_failure_observer = account_truth_failure_observer
         self._task: asyncio.Task[None] | None = None
         self._stopped = asyncio.Event()
         self._refresh_lock = asyncio.Lock()
@@ -219,12 +221,18 @@ class AccountTruthRefreshLoop:
                 if account_id is not None:
                     self._last_account_id = account_id
                 if account_truth_refresh_session_unavailable(health):
+                    detail = (
+                        "Account Truth refresh requires an available account/order broker session; "
+                        f"current broker state is {health.connection_state}."
+                    )
                     self._mark_refresh_unavailable(
                         account_id,
-                        detail=(
-                            "Account Truth refresh requires an available account/order broker session; "
-                            f"current broker state is {health.connection_state}."
-                        ),
+                        detail=detail,
+                        attempted_at_ms=attempted_at_ms,
+                    )
+                    self._notify_refresh_failure(
+                        account_id,
+                        detail=detail,
                         attempted_at_ms=attempted_at_ms,
                     )
                     self._last_refresh_result = "unavailable"
@@ -250,9 +258,15 @@ class AccountTruthRefreshLoop:
                 self._last_refresh_result = "success"
                 return result
             except BrokerError as exc:
+                detail = str(exc)
                 self._mark_refresh_unavailable(
                     account_id,
-                    detail=str(exc),
+                    detail=detail,
+                    attempted_at_ms=attempted_at_ms,
+                )
+                self._notify_refresh_failure(
+                    account_id,
+                    detail=detail,
                     attempted_at_ms=attempted_at_ms,
                 )
                 self._last_refresh_result = "failure"
@@ -262,9 +276,15 @@ class AccountTruthRefreshLoop:
                 )
                 return None
             except Exception as exc:
+                detail = f"Account Truth refresh failed unexpectedly: {exc}"
                 self._mark_refresh_unavailable(
                     account_id,
-                    detail=f"Account Truth refresh failed unexpectedly: {exc}",
+                    detail=detail,
+                    attempted_at_ms=attempted_at_ms,
+                )
+                self._notify_refresh_failure(
+                    account_id,
+                    detail=detail,
                     attempted_at_ms=attempted_at_ms,
                 )
                 self._last_refresh_result = "failure"
@@ -308,6 +328,27 @@ class AccountTruthRefreshLoop:
             detail=detail,
             attempted_at_ms=attempted_at_ms if attempted_at_ms is not None else now_ms_utc(),
         )
+
+    def _notify_refresh_failure(
+        self,
+        account_id: str | None,
+        *,
+        detail: str,
+        attempted_at_ms: int | None,
+    ) -> None:
+        if self._account_truth_failure_observer is None:
+            return
+        try:
+            self._account_truth_failure_observer(
+                account_id,
+                detail,
+                attempted_at_ms if attempted_at_ms is not None else now_ms_utc(),
+            )
+        except Exception:
+            logger.exception(
+                "account truth refresh failure observer failed",
+                extra={"account_id": account_id},
+            )
 
 
 __all__ = [

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -77,6 +78,7 @@ def _describe_policy_value(policy: object) -> str:
 
 
 logger = logging.getLogger(__name__)
+ACCOUNT_OBSERVATION_LEASE_SHADOW_DIVERGENCES: Counter[str] = Counter()
 
 
 class LiveBrokerEventStreamError(RuntimeError):
@@ -594,6 +596,16 @@ class LivePortfolio:
     # submit is refused before any broker call. The provider must read cached
     # Account Truth only; it must not sweep IBKR from the submit path.
     account_truth_gate_provider: GateResultProvider | None = None
+    # Shadow-only durable Account Observation Lease comparison. This provider
+    # never changes the submit decision until sequence parity has been proven;
+    # its outcome is logged and counted against the live Account Truth gate.
+    account_observation_lease_gate_provider: GateResultProvider | None = None
+    # Durable account-event writer owned by the engine. It records every
+    # paired shadow comparison at an actual submit boundary so parity evidence
+    # survives child-process restarts without introducing a second scheduler.
+    account_observation_lease_shadow_comparison_observer: (
+        Callable[[GateResult, GateResult], object] | None
+    ) = None
     # PRD #1005 Slice 2 — centralized session-authority submit gate. When
     # wired, pending orders are refused before any broker call unless the
     # current phase is both strategy-declared and supported by the active order
@@ -989,14 +1001,52 @@ class LivePortfolio:
                 )
                 raise AccountRegistryBlockError(gate_result=registry_gate)
 
+        account_truth_gate = None
         if self.account_truth_gate_provider is not None:
             account_truth_gate = self.account_truth_gate_provider()
-            if account_truth_gate is not None and getattr(account_truth_gate, "status", None) != "pass":
-                self.drop_pending_before_submit(
-                    drop_reason="account_truth_block",
-                    ts_ms=now_ms_utc(),
+        if self.account_observation_lease_gate_provider is not None:
+            lease_gate = self.account_observation_lease_gate_provider()
+            if (
+                account_truth_gate is not None
+                and lease_gate is not None
+                and self.pending_orders
+                and self.account_observation_lease_shadow_comparison_observer is not None
+            ):
+                try:
+                    self.account_observation_lease_shadow_comparison_observer(
+                        account_truth_gate,
+                        lease_gate,
+                    )
+                except Exception:
+                    logger.exception("account observation lease shadow comparison write failed")
+            if (
+                account_truth_gate is not None
+                and lease_gate is not None
+                and getattr(account_truth_gate, "status", None) != getattr(lease_gate, "status", None)
+            ):
+                shadow_key = (
+                    f"truth={getattr(account_truth_gate, 'status', None)}:"
+                    f"lease={getattr(lease_gate, 'status', None)}"
                 )
-                raise AccountTruthBlockError(gate_result=account_truth_gate)
+                ACCOUNT_OBSERVATION_LEASE_SHADOW_DIVERGENCES[shadow_key] += 1
+                logger.warning(
+                    "account observation lease shadow divergence",
+                    extra={
+                        "truth_status": getattr(account_truth_gate, "status", None),
+                        "truth_reason": getattr(account_truth_gate, "operator_reason", None),
+                        "lease_status": getattr(lease_gate, "status", None),
+                        "lease_reason": getattr(lease_gate, "operator_reason", None),
+                        "divergence_count": ACCOUNT_OBSERVATION_LEASE_SHADOW_DIVERGENCES[
+                            shadow_key
+                        ],
+                    },
+                )
+        if account_truth_gate is not None and getattr(account_truth_gate, "status", None) != "pass":
+            self.drop_pending_before_submit(
+                drop_reason="account_truth_block",
+                ts_ms=now_ms_utc(),
+            )
+            raise AccountTruthBlockError(gate_result=account_truth_gate)
 
         session_state_for_submit: SessionAuthorityState | None = None
         if self.pending_orders and self.session_gate_provider is not None:

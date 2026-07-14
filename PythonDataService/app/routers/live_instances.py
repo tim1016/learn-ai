@@ -39,6 +39,7 @@ from app.engine.live.account_artifacts import (
     read_account_freeze,
     read_account_owner_generation,
 )
+from app.engine.live.account_observation_lease import assess_account_observation_lease
 from app.engine.live.bot_lifecycle_state import (
     BotLifecyclePhase,
     BotLifecycleStateCorruptError,
@@ -155,6 +156,7 @@ from app.schemas.live_runs import (
     LiveInstanceSummary,
     MutationOutcomeUnknownResponse,
     MutationRungReceipt,
+    OperatorSurfaceAccountObservation,
     OperatorSurfaceAccountOwner,
     QcAuditCopyListing,
     ReadinessVector,
@@ -657,6 +659,28 @@ def _resolve_account_owner_surface(
         phase=generation.phase,
         recorded_at_ms=generation.recorded_at_ms,
         source=generation.source,
+    )
+
+
+def _resolve_account_observation_surface(
+    artifacts_root: Path,
+    account_id: str | None,
+    *,
+    now_ms: int,
+) -> OperatorSurfaceAccountObservation | None:
+    if account_id is None:
+        return None
+    assessment = assess_account_observation_lease(
+        artifacts_root,
+        account_id,
+        now_ms=now_ms,
+    )
+    lease = assessment.lease
+    return OperatorSurfaceAccountObservation(
+        state=assessment.state,
+        reason_line=assessment.reason,
+        observed_at_ms=lease.observed_at_ms if lease is not None else None,
+        valid_until_ms=lease.valid_until_ms if lease is not None else None,
     )
 
 
@@ -1795,6 +1819,7 @@ def _get_surface_assembler() -> LiveInstanceSurfaceAssembler:
             instance_ledger_account_id=_instance_ledger_account_id,
             crash_recovery_gate_for_instance=crash_recovery_gate_for_instance,
             resolve_account_owner_surface=_resolve_account_owner_surface,
+            resolve_account_observation_surface=_resolve_account_observation_surface,
             get_account_truth_snapshot_provider=get_account_truth_snapshot_provider,
             resolve_latest_mutation=_resolve_latest_mutation,
             resolve_broker_observation_consistency=(_resolve_broker_observation_consistency),

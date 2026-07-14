@@ -194,6 +194,7 @@ async def lifespan(app: FastAPI):
         account_truth_refresh_loop = AccountTruthRefreshLoop(
             client=ibkr_client,
             account_truth_observer=reconciliation_service.observe_account_truth,
+            account_truth_failure_observer=reconciliation_service.observe_account_truth_failure,
         )
         account_truth_refresh_loop.start()
     else:

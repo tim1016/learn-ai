@@ -518,6 +518,16 @@ export interface OperatorSurfaceAccountOwner {
   source: string | null;
 }
 
+export type AccountObservationState = 'VERIFIED' | 'REVOKED' | 'EXPIRED' | 'ABSENT';
+
+/** Backend-authored Account Truth observation proof. Times are int64 ms UTC. */
+export interface OperatorSurfaceAccountObservation {
+  state: AccountObservationState;
+  reason_line: string;
+  observed_at_ms: number | null;
+  valid_until_ms: number | null;
+}
+
 export interface OperatorSurfaceBroker {
   safety_verdict: BrokerSafetyVerdict;
   /** Independent of safety_verdict: whether the broker session is up.
@@ -877,6 +887,8 @@ export interface OperatorSurface {
   action_plan: OperatorSurfaceActionPlan;
   /** PRD #718 — optional AccountOwner generation/phase evidence. */
   account_owner: OperatorSurfaceAccountOwner | null;
+  /** Durable account observation proof; null when no account can be resolved. */
+  account_observation: OperatorSurfaceAccountObservation | null;
   /** PRD #718 — backend-authored submit-readiness answer. */
   submit_readiness: OperatorSurfaceSubmitReadiness;
   /** PRD #718 — backend-authored trader-language right-pane contract. */

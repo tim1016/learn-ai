@@ -20,6 +20,7 @@ from app.engine.live.account_artifacts import (
     AccountArtifactError,
     AccountFreezeEvidence,
     AccountInstanceBinding,
+    AccountOwnerGeneration,
     account_artifacts_root,
     append_account_event,
     read_account_events,
@@ -27,6 +28,7 @@ from app.engine.live.account_artifacts import (
     write_account_freeze,
     write_account_instance_binding,
 )
+from app.engine.live.account_observation_lease import assess_account_observation_lease
 from app.schemas.account_reconciliation import AccountConditionType, AccountCureAction
 from app.schemas.account_truth import (
     AccountTruthEvidenceGap,
@@ -34,6 +36,7 @@ from app.schemas.account_truth import (
     AccountTruthFactOwner,
     AccountTruthOwnerClass,
 )
+from app.services import account_reconciliation as account_reconciliation_module
 from app.services.account_reconciliation import AccountReconciliationService
 
 
@@ -213,6 +216,135 @@ def test_new_execution_invalidates_prior_receipt_until_reconciled(tmp_path: Path
     assert triage.overall_gate_result.status == "unknown"
     assert triage.conditions[0].title == "Account evidence changed"
     assert "exec-1" in triage.conditions[0].detail
+
+
+def test_account_truth_observer_renews_observation_lease(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+
+    service.observe_account_truth(_truth(), now_ms=1_780_000_002_000)
+    service.observe_account_truth(_truth(), now_ms=1_780_000_003_000)
+
+    assessment = assess_account_observation_lease(
+        tmp_path,
+        "DU1234567",
+        now_ms=1_780_000_003_001,
+    )
+    assert assessment.state == "VERIFIED"
+    lease_events = [
+        event
+        for event in read_account_events(tmp_path, "DU1234567")
+        if event["event_type"].startswith("account_observation_lease_")
+    ]
+    assert [event["event_type"] for event in lease_events] == [
+        "account_observation_lease_verified"
+    ]
+
+
+def test_account_truth_observer_revokes_observation_lease_on_unattributed_exposure(
+    tmp_path: Path,
+) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    service.observe_account_truth(_truth(), now_ms=1_780_000_002_000)
+
+    service.observe_account_truth(
+        _truth(positions=[_position(quantity=1.0)]),
+        now_ms=1_780_000_003_000,
+    )
+
+    assessment = assess_account_observation_lease(
+        tmp_path,
+        "DU1234567",
+        now_ms=1_780_000_003_001,
+    )
+    assert assessment.state == "REVOKED"
+    assert assessment.reason_code.startswith("ACCOUNT_TRUTH_")
+
+    service.observe_account_truth(_truth(), now_ms=1_780_000_004_000)
+
+    recovered = assess_account_observation_lease(
+        tmp_path,
+        "DU1234567",
+        now_ms=1_780_000_004_001,
+    )
+    assert recovered.state == "VERIFIED"
+    lease_events = [
+        event["event_type"]
+        for event in read_account_events(tmp_path, "DU1234567")
+        if event["event_type"].startswith("account_observation_lease_")
+    ]
+    assert lease_events == [
+        "account_observation_lease_verified",
+        "account_observation_lease_revoked",
+        "account_observation_lease_verified",
+    ]
+
+
+def test_account_truth_refresh_failure_revokes_observation_lease(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    service.observe_account_truth(_truth(), now_ms=1_780_000_002_000)
+
+    service.observe_account_truth_failure(
+        account_id="DU1234567",
+        detail="broker sweep timed out",
+        attempted_at_ms=1_780_000_003_000,
+    )
+
+    assessment = assess_account_observation_lease(
+        tmp_path,
+        "DU1234567",
+        now_ms=1_780_000_003_001,
+    )
+    assert assessment.state == "REVOKED"
+    assert assessment.reason_code == "ACCOUNT_TRUTH_REFRESH_FAILED"
+
+    triage = service.triage(account_id="DU1234567", now_ms=1_780_000_003_001)
+
+    assert triage.account_observation.state == "REVOKED"
+    assert triage.account_observation.reason_line == "broker sweep timed out"
+    assert [event.state for event in triage.account_observation.history] == [
+        "VERIFIED",
+        "REVOKED",
+    ]
+
+
+def test_account_truth_observer_revokes_when_owner_generation_changes_during_sweep(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owners = iter(
+        (
+            AccountOwnerGeneration(
+                account_id="DU1234567",
+                generation=3,
+                phase="accepting",
+                recorded_at_ms=1_780_000_002_000,
+                source="test",
+            ),
+            AccountOwnerGeneration(
+                account_id="DU1234567",
+                generation=4,
+                phase="accepting",
+                recorded_at_ms=1_780_000_002_001,
+                source="test",
+            ),
+        )
+    )
+    monkeypatch.setattr(
+        account_reconciliation_module,
+        "read_account_owner_generation",
+        lambda *_args: next(owners),
+    )
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+
+    service.observe_account_truth(_truth(), now_ms=1_780_000_002_000)
+
+    assessment = assess_account_observation_lease(
+        tmp_path,
+        "DU1234567",
+        now_ms=1_780_000_002_001,
+    )
+    assert assessment.state == "REVOKED"
+    assert assessment.reason_code == "ACCOUNT_OWNER_GENERATION_CHANGED"
 
 
 def test_auto_reconcile_replaces_receipt_after_new_bot_execution(tmp_path: Path) -> None:

@@ -52,6 +52,7 @@ from app.schemas.live_runs import (
     OpenRunbookAction,
     OperatorGate,
     OperatorSurface,
+    OperatorSurfaceAccountObservation,
     OperatorSurfaceAccountOwner,
     OperatorSurfaceActionPlan,
     OperatorSurfaceActions,
@@ -1296,6 +1297,7 @@ def compute_operator_surface(
     account_freeze: AccountFreezeEvidence | None = None,
     crash_recovery_gate: GateResult | None = None,
     account_owner: OperatorSurfaceAccountOwner | None = None,
+    account_observation: OperatorSurfaceAccountObservation | None = None,
     # ADR-0008 §5 / PR 1 — cold-start reconciliation projection inputs.
     # All optional: when no live binding is resolved, the router passes
     # ``reconciliation_receipt=None`` and the projection turns into
@@ -1462,6 +1464,7 @@ def compute_operator_surface(
         daily_order_cap=daily_order_cap,
         action_plan=_project_action_plan(action_plan, start_defaults),
         account_owner=account_owner,
+        account_observation=account_observation,
         submit_readiness=submit_readiness,
         trader_guidance=trader_guidance,
         blockage_ladder=blockage_ladder,

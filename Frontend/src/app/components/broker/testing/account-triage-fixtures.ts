@@ -3,6 +3,7 @@ import type {
   AccountFreezeBanner,
   AccountReconciliationAutomationPolicy,
   AccountReconciliationReceipt,
+  AccountObservationView,
   AccountTriageBotRef,
   AccountTriageResponse,
 } from '../../../api/account-reconciliation.types';
@@ -13,6 +14,7 @@ interface AccountTriageFixtureOptions {
   receipt?: AccountReconciliationReceipt | null;
   reconciliationValidUntilMs?: number | null;
   automationPolicy?: AccountReconciliationAutomationPolicy;
+  accountObservation?: AccountObservationView;
   summaryHeadline?: string;
   summaryDetail?: string;
   gate?: Partial<AccountTriageResponse['overall_gate_result']>;
@@ -73,6 +75,13 @@ export function makeCleanAccountTriage(
       enabled: false,
       updated_at_ms: 0,
       updated_by: 'system.default',
+    },
+    account_observation: options.accountObservation ?? {
+      state: 'ABSENT',
+      reason_line: 'Account verification is not available yet.',
+      observed_at_ms: null,
+      valid_until_ms: null,
+      history: [],
     },
     gate_rows: [],
     conditions: options.conditions ?? [],
