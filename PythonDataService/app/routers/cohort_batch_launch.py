@@ -13,6 +13,7 @@ from app.schemas.cohort_batch_launch import (
     CohortBatchLaunchCreateResponse,
     CohortBatchLaunchOutcomesRequest,
     CohortBatchLaunchOutcomesResponse,
+    CohortBatchLaunchStatusResponse,
 )
 from app.services.account_truth_refresh import account_truth_artifacts_root
 from app.services.cohort_batch_launch import CohortBatchLaunchService
@@ -51,6 +52,50 @@ async def create_cohort_batch_launch_receipt_endpoint(
     except (AccountArtifactError, ValueError) as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     return CohortBatchLaunchCreateResponse.from_receipt(receipt)
+
+
+@router.get(
+    "/{account_id}/cohort-batch-launches/latest",
+    response_model=CohortBatchLaunchStatusResponse | None,
+)
+async def get_latest_cohort_batch_launch_status_endpoint(
+    account_id: str,
+    service: CohortBatchLaunchDependency,
+) -> CohortBatchLaunchStatusResponse | None:
+    """Return the most recent account-rooted cohort receipt and outcomes."""
+
+    try:
+        return await service.get_status(
+            account_id=normalize_account_id(account_id),
+            cohort_id=None,
+        )
+    except (AccountArtifactError, ValueError) as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+
+@router.get(
+    "/{account_id}/cohort-batch-launches/{cohort_id}",
+    response_model=CohortBatchLaunchStatusResponse,
+)
+async def get_cohort_batch_launch_status_endpoint(
+    account_id: str,
+    cohort_id: str,
+    service: CohortBatchLaunchDependency,
+) -> CohortBatchLaunchStatusResponse:
+    """Return one durable cohort receipt and its exact persisted outcomes."""
+
+    try:
+        status_view = await service.get_status(
+            account_id=normalize_account_id(account_id),
+            cohort_id=cohort_id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except (AccountArtifactError, ValueError) as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    if status_view is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"cohort receipt not found: {cohort_id}")
+    return status_view
 
 
 @router.post(

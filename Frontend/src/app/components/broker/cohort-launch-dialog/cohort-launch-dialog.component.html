@@ -1,0 +1,55 @@
+@if (open()) {
+  <section
+    class="cohort-launch-dialog"
+    role="alertdialog"
+    aria-modal="true"
+    aria-labelledby="cohort-launch-title"
+    aria-describedby="cohort-launch-detail"
+  >
+    <header>
+      <p class="eyebrow">Paper-validation cohort</p>
+      <h2 id="cohort-launch-title">Authorize ready bots</h2>
+      <p id="cohort-launch-detail">
+        Every selected bot must pass its current hard preflight before one account-rooted cohort receipt is recorded.
+      </p>
+    </header>
+
+    @if (loading()) {
+      <p class="status" role="status">Checking every cohort member’s hard preflight blockers…</p>
+    } @else if (error(); as message) {
+      <p class="error" role="alert">{{ message }}</p>
+    } @else {
+      <p class="status" role="status">
+        {{ hardBlockerCount() }} hard blocker{{ hardBlockerCount() === 1 ? '' : 's' }} across {{ candidates().length }} bots.
+      </p>
+      <ol class="preflight-list" aria-label="Cohort preflight results">
+        @for (row of candidates(); track row.candidate.strategyInstanceId) {
+          <li>
+            <h3>{{ row.candidate.name }}</h3>
+            <p class="mono">{{ row.candidate.strategyInstanceId | receiptLabel }}</p>
+            @if (row.error; as rowError) {
+              <p class="error" role="alert">{{ rowError }}</p>
+            } @else if (row.blockers.length > 0) {
+              <app-operator-blocker-list
+                [blockers]="row.blockers"
+                [showMoves]="false"
+                [ariaLabel]="row.candidate.name + ' hard preflight blockers'"
+              />
+            } @else {
+              <p class="ready">No hard blockers.</p>
+            }
+          </li>
+        }
+      </ol>
+    }
+
+    <footer>
+      <button pButton type="button" severity="secondary" [outlined]="true" (click)="cancelled.emit()">
+        <span class="p-button-label">Cancel</span>
+      </button>
+      <button pButton type="button" icon="pi pi-play" [disabled]="isBlocked()" (click)="authorize.emit()">
+        <span class="p-button-label">Authorize {{ candidates().length }} bots</span>
+      </button>
+    </footer>
+  </section>
+}

@@ -14,6 +14,7 @@ import { TabsModule } from 'primeng/tabs';
 import { TagModule } from 'primeng/tag';
 
 import type { AccountTriageResponse } from '../../../api/account-reconciliation.types';
+import type { DeployPreflightResponse } from '../../../api/operator-blocker.types';
 import type {
   BotCatalogRow,
   BotCatalogTone,
@@ -29,6 +30,12 @@ import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { AccountFreezeBannerComponent } from '../account-freeze-banner/account-freeze-banner.component';
+import {
+  CohortLaunchDialogComponent,
+  type CohortLaunchCandidate,
+  type CohortLaunchPreflightCandidate,
+} from '../cohort-launch-dialog/cohort-launch-dialog.component';
+import { CohortLaunchMonitorComponent } from '../cohort-launch-monitor/cohort-launch-monitor.component';
 import { fmtInteger, fmtSignedCurrency, fmtTimestampLocal } from '../format';
 import { lifecycleConditionCureTarget } from '../lib/condition-cure-actions';
 
@@ -108,15 +115,6 @@ interface BotLaunchProgress {
   rows: readonly BotLaunchRowProgress[];
 }
 
-interface CohortSuccessMeter {
-  target: number;
-  accepted: number;
-  blocked: number;
-  liveOnDuty: number;
-  ordersUsed: number;
-  cleanExits: number | null;
-}
-
 @Component({
   selector: 'app-bots-page',
   imports: [
@@ -127,6 +125,8 @@ interface CohortSuccessMeter {
     TabsModule,
     TagModule,
     AccountFreezeBannerComponent,
+    CohortLaunchDialogComponent,
+    CohortLaunchMonitorComponent,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './bots-page.component.html',
@@ -157,6 +157,10 @@ export class BotsPageComponent {
   readonly activeModeTab = signal<BotModeTab>('paper');
   readonly selectedBotIds = signal<ReadonlySet<string>>(new Set<string>());
   readonly cohortConfirmationOpen = signal<boolean>(false);
+  readonly cohortPreflightLoading = signal<boolean>(false);
+  readonly cohortPreflightError = signal<string | null>(null);
+  readonly cohortPreflight = signal<readonly CohortLaunchPreflightCandidate[]>([]);
+  readonly cohortMonitorReloadVersion = signal(0);
   readonly deleteConfirmationOpen = signal<boolean>(false);
   readonly isDeleting = signal<boolean>(false);
   readonly deleteErrorMessage = signal<string | null>(null);
@@ -202,6 +206,7 @@ export class BotsPageComponent {
   });
 
   readonly activeTabCount = computed(() => this.activeRows().length);
+  readonly connectedAccountId = computed(() => this.health.health()?.account_id ?? null);
   readonly readyRows = computed<BotTableRow[]>(() =>
     this.visibleBots().filter((row) => {
       return (
@@ -212,20 +217,6 @@ export class BotsPageComponent {
       );
     }),
   );
-  readonly cohortSuccessMeter = computed<CohortSuccessMeter | null>(() => {
-    const progress = this.launchProgress();
-    if (progress.phase === 'idle' || progress.rows.length === 0) return null;
-    const startedIds = new Set(progress.rows.map((row) => row.botId));
-    const startedBots = this.bots().filter((bot) => startedIds.has(bot.strategy_instance_id));
-    return {
-      target: progress.rows.length,
-      accepted: progress.rows.filter((row) => row.status === 'accepted').length,
-      blocked: progress.rows.filter((row) => row.status === 'blocked').length,
-      liveOnDuty: startedBots.filter((bot) => bot.daily_lifecycle.display_status === 'On duty').length,
-      ordersUsed: startedBots.reduce((total, bot) => total + (bot.metrics.trade_count ?? 0), 0),
-      cleanExits: this.eveningReport()?.clean_exits ?? null,
-    };
-  });
   readonly rollCallSummaryLine = computed(() => {
     const summary = this.rollCall();
     return [
@@ -425,6 +416,7 @@ export class BotsPageComponent {
           };
         }),
       });
+      this.cohortMonitorReloadVersion.update((version) => version + 1);
       await this.refresh();
       const liveStatusById = new Map(
         this.bots().map((bot) => [bot.strategy_instance_id, bot.daily_lifecycle.display_status]),
@@ -453,9 +445,37 @@ export class BotsPageComponent {
     }
   }
 
-  requestCohortStart(): void {
-    if (this.readyRows().length > 0 && !this.isStartingReady()) {
-      this.cohortConfirmationOpen.set(true);
+  async requestCohortStart(): Promise<void> {
+    const rows = this.readyRows();
+    if (rows.length === 0 || this.isStartingReady() || this.cohortConfirmationOpen()) return;
+    this.cohortConfirmationOpen.set(true);
+    this.cohortPreflightError.set(null);
+    this.cohortPreflight.set([]);
+    const accountId = this.accountId();
+    if (accountId === null) {
+      this.cohortPreflightError.set('No paper broker account is connected for cohort preflight.');
+      return;
+    }
+    const candidates = rows.map(toCohortLaunchCandidate);
+    this.cohortPreflightLoading.set(true);
+    try {
+      const preflight = await Promise.all(
+        candidates.map(async (candidate): Promise<CohortLaunchPreflightCandidate> => {
+          try {
+            const response = await this.liveRuns.deployPreflight({
+              strategyKey: candidate.strategyKey,
+              accountId,
+              instanceId: candidate.strategyInstanceId,
+            });
+            return preflightCandidate(candidate, response);
+          } catch (error) {
+            return { candidate, blockers: [], error: this.humanError(error) };
+          }
+        }),
+      );
+      this.cohortPreflight.set(preflight);
+    } finally {
+      this.cohortPreflightLoading.set(false);
     }
   }
 
@@ -464,6 +484,9 @@ export class BotsPageComponent {
   }
 
   confirmCohortStart(): void {
+    if (this.cohortPreflightLoading() || this.cohortPreflightError() !== null || this.cohortPreflight().some((row) => row.error !== null || row.blockers.length > 0)) {
+      return;
+    }
     this.cohortConfirmationOpen.set(false);
     void this.startReadyBots();
   }
@@ -666,7 +689,7 @@ export class BotsPageComponent {
   }
 
   private accountId(): string | null {
-    return this.health.health()?.account_id ?? null;
+    return this.connectedAccountId();
   }
 
   private async reconcileAccountFromRow(row: BotTableRow): Promise<void> {
@@ -771,6 +794,28 @@ export class BotsPageComponent {
 
 function normalize(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function toCohortLaunchCandidate(row: BotTableRow): CohortLaunchCandidate {
+  return {
+    strategyInstanceId: row.id,
+    name: row.name,
+    strategyKey: row.startRequest?.strategy ?? '',
+  };
+}
+
+function preflightCandidate(
+  candidate: CohortLaunchCandidate,
+  response: DeployPreflightResponse,
+): CohortLaunchPreflightCandidate {
+  const blockers = response.blockers.filter((blocker) => blocker.condition.severity === 'blocking');
+  return {
+    candidate,
+    blockers,
+    error: response.ready || blockers.length > 0
+      ? null
+      : 'The cohort preflight did not return a launch-ready verdict.',
+  };
 }
 
 function toTableRow(bot: BotCatalogRow): BotTableRow {

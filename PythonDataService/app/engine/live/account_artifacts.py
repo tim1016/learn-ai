@@ -248,7 +248,7 @@ class CohortBatchLaunchMemberOutcome(BaseModel):
 class CohortBatchLaunchOutcomesReceipt(BaseModel):
     """One immutable account event recording all outcomes of a cohort launch."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="ignore")
 
     schema_version: int = 1
     account_id: str = Field(min_length=1, max_length=64)

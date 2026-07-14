@@ -73,6 +73,7 @@ export type InstanceProcessState =
 export interface InstanceProcessView {
   state: InstanceProcessState;
   pid?: number | null;
+  ibkr_client_id?: number | null;
   bound_run_id?: string | null;
   started_at_ms?: number | null;
 }

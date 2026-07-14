@@ -30,3 +30,18 @@ export interface CohortBatchLaunchOutcomesReceipt extends CohortBatchLaunchOutco
   cohort_id: string;
   recorded_at_ms: number;
 }
+
+export interface CohortBatchLaunchStatus {
+  schema_version: number;
+  account_id: string;
+  cohort_id: string;
+  member_strategy_instance_ids: string[];
+  window_start_ms: number;
+  window_end_ms: number;
+  authorized_by: string;
+  authorized_recorded_at_ms: number;
+  outcomes_state: 'pending' | 'recorded' | 'unreadable';
+  outcomes: CohortBatchLaunchMemberOutcome[];
+  outcomes_recorded_at_ms: number | null;
+  outcomes_error: string | null;
+}
