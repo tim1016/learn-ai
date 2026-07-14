@@ -1,0 +1,31 @@
+<article class="account-outcome-card" aria-labelledby="managed-broker-exposure-title">
+  <header class="card-header">
+    <span id="managed-broker-exposure-title">Managed versus broker exposure</span>
+    @if (fleet(); as fleet) {
+      <span class="badge mono">{{ fleet.verdict | receiptLabel }}</span>
+    }
+  </header>
+  @if (error(); as err) {
+    <app-section-error
+      [error]="err"
+      contextWhat="We couldn't load the managed-versus-broker journal."
+      (retry)="retry.emit()"
+    />
+  } @else if (fleet(); as fleet) {
+    <p class="receipt-reason">{{ fleet.summary }}</p>
+    @if (fleet.net_positions === null) {
+      <p class="muted">Broker net positions are unavailable; no managed-versus-broker comparison is inferred.</p>
+    } @else if (rows().length === 0) {
+      <p class="muted">No broker or journal exposure is currently recorded.</p>
+    } @else {
+      <dl class="kv-grid receipt-grid" aria-label="Managed versus broker exposure by symbol">
+        @for (row of rows(); track row.symbol) {
+          <dt class="mono">{{ row.symbol }}</dt>
+          <dd>Broker {{ row.broker | number: '1.0-4' }} · managed {{ row.managed | number: '1.0-4' }} · residual {{ row.residual | number: '1.0-4' }}</dd>
+        }
+      </dl>
+    }
+  } @else {
+    <p class="muted">Loading managed-versus-broker journal…</p>
+  }
+</article>

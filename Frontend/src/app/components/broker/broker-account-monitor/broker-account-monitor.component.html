@@ -83,6 +83,11 @@
         [showOperatorBlockers]="true"
         (operatorBlockerMoveSelected)="handleAccountMonitorBlockerMove($event)"
       />
+      <app-managed-broker-exposure-meter
+        [fleet]="fleetContamination()"
+        [error]="fleetContaminationError()"
+        (retry)="refresh()"
+      />
       @if (accountReconciliationAccountId(); as accountId) {
         <app-legacy-stale-claim-cure [accountId]="accountId" (retired)="refresh()" />
       }

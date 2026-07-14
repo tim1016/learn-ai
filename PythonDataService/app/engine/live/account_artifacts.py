@@ -234,6 +234,36 @@ class CohortBatchLaunchReceipt(BaseModel):
         return self
 
 
+class CohortBatchLaunchMemberOutcome(BaseModel):
+    """Durable result for one member of an authorized cohort launch."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    strategy_instance_id: str = Field(min_length=1, max_length=128)
+    state: Literal["accepted", "blocked", "skipped"]
+    reason: str = Field(min_length=1, max_length=512)
+    next_safe_action: str = Field(min_length=1, max_length=512)
+
+
+class CohortBatchLaunchOutcomesReceipt(BaseModel):
+    """One immutable account event recording all outcomes of a cohort launch."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    cohort_id: str = Field(min_length=1, max_length=128)
+    outcomes: tuple[CohortBatchLaunchMemberOutcome, ...] = Field(min_length=1, max_length=128)
+    recorded_at_ms: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_unique_members(self) -> CohortBatchLaunchOutcomesReceipt:
+        member_ids = tuple(outcome.strategy_instance_id for outcome in self.outcomes)
+        if len(set(member_ids)) != len(member_ids):
+            raise ValueError("cohort outcome strategy_instance_id values must be unique")
+        return self
+
+
 def account_artifacts_root(artifacts_root: Path, account_id: str) -> Path:
     """Return the confined account artifact directory for one account id.
 
@@ -545,6 +575,22 @@ def record_cohort_batch_launch_receipt(
         receipt.account_id,
         {
             "event_type": "cohort_batch_launch_authorized",
+            **receipt.model_dump(mode="json"),
+        },
+    )
+
+
+def record_cohort_batch_launch_outcomes(
+    artifacts_root: Path,
+    receipt: CohortBatchLaunchOutcomesReceipt,
+) -> None:
+    """Append the exact accepted, blocked, or skipped cohort-member outcomes."""
+
+    _append_account_event(
+        artifacts_root,
+        receipt.account_id,
+        {
+            "event_type": "cohort_batch_launch_outcomes_recorded",
             **receipt.model_dump(mode="json"),
         },
     )
@@ -1079,6 +1125,8 @@ _LOCAL_EXPORTS = [
     "AccountClerkLeaseUnavailableError",
     "AccountAuditedOverride",
     "CohortBatchLaunchReceipt",
+    "CohortBatchLaunchMemberOutcome",
+    "CohortBatchLaunchOutcomesReceipt",
     "AccountEventRecord",
     "AccountClerkGeneration",
     "AccountClerkLease",
@@ -1101,6 +1149,7 @@ _LOCAL_EXPORTS = [
     "read_account_freeze",
     "read_account_owner_generation",
     "record_cohort_batch_launch_receipt",
+    "record_cohort_batch_launch_outcomes",
     "resolve_account_event_ts_ms",
     "write_account_freeze",
     "write_account_clerk_lease",

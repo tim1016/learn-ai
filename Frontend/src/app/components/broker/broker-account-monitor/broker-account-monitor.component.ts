@@ -22,11 +22,12 @@ import { AccountTruthBoardComponent } from '../account-truth-board/account-truth
 import type { OperatorBlockerMoveEvent } from '../shared/operator-blocker-list/operator-blocker-list.component';
 import { AccountFreezeBannerComponent } from '../account-freeze-banner/account-freeze-banner.component';
 import { LegacyStaleClaimCureComponent } from '../legacy-stale-claim-cure/legacy-stale-claim-cure.component';
+import { ManagedBrokerExposureMeterComponent } from '../managed-broker-exposure-meter/managed-broker-exposure-meter.component';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { brokerSse, type SseStream } from '../../../services/broker-sse';
 import { LiveRunsService } from '../../../services/live-runs.service';
-import type { GateResultStatus } from '../../../api/live-instances.types';
+import type { FleetContamination, GateResultStatus } from '../../../api/live-instances.types';
 import type {
   AccountTruthResponse,
   IbkrPnLTick,
@@ -118,6 +119,7 @@ interface ConditionOwnerFact {
     AccountTruthBoardComponent,
     AccountFreezeBannerComponent,
     LegacyStaleClaimCureComponent,
+    ManagedBrokerExposureMeterComponent,
     ReceiptLabelPipe,
     TimestampDisplayComponent,
   ],
@@ -139,6 +141,8 @@ export class BrokerAccountMonitorComponent {
   readonly positionsLoading = signal(false);
   readonly positionsError = signal<unknown>(null);
   readonly positionsSnapshot = signal<IbkrPositionsSnapshot | null>(null);
+  readonly fleetContamination = signal<FleetContamination | null>(null);
+  readonly fleetContaminationError = signal<unknown>(null);
   readonly truthLoading = signal(false);
   readonly truthError = signal<unknown>(null);
   readonly accountTruth = signal<AccountTruthResponse | null>(null);
@@ -453,15 +457,26 @@ export class BrokerAccountMonitorComponent {
       this.accountTruth.set(truth);
       const accountId = this.reconciliationAccountIdForTruth(truth);
       if (accountId) {
-        await this.loadAccountTriage(accountId);
+        await Promise.all([this.loadAccountTriage(accountId), this.loadFleetContamination()]);
       } else {
         this.accountTriage.set(null);
         this.setAccountReconciliation(null);
+        this.fleetContamination.set(null);
       }
     } catch (err) {
       this.truthError.set(err);
     } finally {
       this.truthLoading.set(false);
+    }
+  }
+
+  private async loadFleetContamination(): Promise<void> {
+    this.fleetContaminationError.set(null);
+    try {
+      this.fleetContamination.set(await this.liveRuns.getAccountFleet());
+    } catch (err) {
+      this.fleetContamination.set(null);
+      this.fleetContaminationError.set(err);
     }
   }
 

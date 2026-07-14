@@ -108,6 +108,15 @@ interface BotLaunchProgress {
   rows: readonly BotLaunchRowProgress[];
 }
 
+interface CohortSuccessMeter {
+  target: number;
+  accepted: number;
+  blocked: number;
+  liveOnDuty: number;
+  ordersUsed: number;
+  cleanExits: number | null;
+}
+
 @Component({
   selector: 'app-bots-page',
   imports: [
@@ -147,6 +156,7 @@ export class BotsPageComponent {
   readonly lifecycleFilter = signal<LifecycleFilter>('all');
   readonly activeModeTab = signal<BotModeTab>('paper');
   readonly selectedBotIds = signal<ReadonlySet<string>>(new Set<string>());
+  readonly cohortConfirmationOpen = signal<boolean>(false);
   readonly deleteConfirmationOpen = signal<boolean>(false);
   readonly isDeleting = signal<boolean>(false);
   readonly deleteErrorMessage = signal<string | null>(null);
@@ -202,6 +212,20 @@ export class BotsPageComponent {
       );
     }),
   );
+  readonly cohortSuccessMeter = computed<CohortSuccessMeter | null>(() => {
+    const progress = this.launchProgress();
+    if (progress.phase === 'idle' || progress.rows.length === 0) return null;
+    const startedIds = new Set(progress.rows.map((row) => row.botId));
+    const startedBots = this.bots().filter((bot) => startedIds.has(bot.strategy_instance_id));
+    return {
+      target: progress.rows.length,
+      accepted: progress.rows.filter((row) => row.status === 'accepted').length,
+      blocked: progress.rows.filter((row) => row.status === 'blocked').length,
+      liveOnDuty: startedBots.filter((bot) => bot.daily_lifecycle.display_status === 'On duty').length,
+      ordersUsed: startedBots.reduce((total, bot) => total + (bot.metrics.trade_count ?? 0), 0),
+      cleanExits: this.eveningReport()?.clean_exits ?? null,
+    };
+  });
   readonly rollCallSummaryLine = computed(() => {
     const summary = this.rollCall();
     return [
@@ -324,7 +348,7 @@ export class BotsPageComponent {
       this.updateLaunchProgress({
         phase: 'preparing',
         title: 'Running roll call',
-        detail: 'Refreshing start offers and daemon state before starting a canary.',
+        detail: 'Refreshing start offers and daemon state before authorizing the cohort.',
       });
       const rollCall = await this.liveRuns.runRollCall();
       this.rollCall.set(rollCall.summary);
@@ -342,30 +366,83 @@ export class BotsPageComponent {
         return;
       }
 
-      const canary = refreshedRows[0];
-      const request = this.startRequestForRow(canary);
-      if (!canary.latestRunId || !request) {
+      const incomplete = refreshedRows.find((row) => !row.latestRunId || !this.startRequestForRow(row));
+      if (incomplete) {
         this.launchProgress.set({
           phase: 'blocked',
           title: 'Start offer is incomplete',
-          detail: `${canary.name} is marked ready, but its run id or offer id is missing.`,
-          activeBotId: canary.id,
-          rows: this.progressRowsForCanary(refreshedRows, canary, 'blocked', 'Missing run id or offer id.'),
+          detail: `${incomplete.name} is marked ready, but its run id or offer id is missing.`,
+          activeBotId: incomplete.id,
+          rows: refreshedRows.map((row) => ({ botId: row.id, botName: row.name, status: 'blocked', detail: 'A current offer is required for every cohort member.' })),
         });
         return;
       }
+      const accountId = this.accountId();
+      if (!accountId) {
+        this.blockLaunchProgress('No paper broker account is connected for cohort authorization.');
+        return;
+      }
+      const nowMs = Date.now();
+      const receipt = await this.liveRuns.createCohortBatchLaunch(accountId, {
+        cohort_id: `paper-validation-${nowMs}`,
+        member_strategy_instance_ids: refreshedRows.map((row) => row.id),
+        window_start_ms: nowMs,
+        window_end_ms: nowMs + 300_000,
+        authorized_by: 'bots-page.operator',
+      });
 
       this.launchProgress.set({
         phase: 'running',
-        title: 'Starting canary bot',
-        detail: `${canary.name} is starting. Remaining ready bots stay queued until this result is visible.`,
-        activeBotId: canary.id,
-        rows: this.progressRowsForCanary(refreshedRows, canary, 'starting', 'Start request is in flight.'),
+        title: 'Starting authorized cohort',
+        detail: `${receipt.member_strategy_instance_ids.length} bots are starting under one durable receipt.`,
+        activeBotId: null,
+        rows: refreshedRows.map((row) => ({ botId: row.id, botName: row.name, status: 'starting', detail: 'Start request is in flight.' })),
       });
-
-      await this.liveRuns.startHostRunner(canary.latestRunId, request);
+      const outcomes = await Promise.allSettled(refreshedRows.map((row) => {
+        const runId = row.latestRunId;
+        const request = this.startRequestForRow(row);
+        if (runId === null || request === null) {
+          return Promise.reject(new Error('Cohort member lost its current start offer.'));
+        }
+        return this.liveRuns.startHostRunner(runId, request);
+      }));
+      await this.liveRuns.recordCohortBatchLaunchOutcomes(accountId, receipt.cohort_id, {
+        outcomes: refreshedRows.map((row, index) => {
+          const outcome = outcomes[index];
+          if (outcome.status === 'fulfilled') {
+            return {
+              strategy_instance_id: row.id,
+              state: 'accepted',
+              reason: 'start.request.accepted',
+              next_safe_action: 'Monitor the bot receipt state and account exposure.',
+            };
+          }
+          return {
+            strategy_instance_id: row.id,
+            state: 'blocked',
+            reason: this.humanError(outcome.reason),
+            next_safe_action: 'Review the bot blocker, refresh roll call, then authorize a new cohort.',
+          };
+        }),
+      });
       await this.refresh();
-      this.launchProgress.set(this.progressAfterCanaryStart(refreshedRows, canary));
+      const liveStatusById = new Map(
+        this.bots().map((bot) => [bot.strategy_instance_id, bot.daily_lifecycle.display_status]),
+      );
+      this.launchProgress.update((current) => ({
+        ...current,
+        phase: outcomes.every((outcome) => outcome.status === 'fulfilled') ? 'complete' : 'blocked',
+        title: outcomes.every((outcome) => outcome.status === 'fulfilled') ? 'Cohort start accepted' : 'Cohort start needs attention',
+        detail: `Cohort receipt ${receipt.cohort_id} records this start window.`,
+        rows: refreshedRows.map((row, index) => outcomes[index].status === 'fulfilled'
+          ? {
+              botId: row.id,
+              botName: row.name,
+              status: 'accepted',
+              detail: `Start accepted; live status is ${liveStatusById.get(row.id) ?? 'unavailable'}.`,
+            }
+          : { botId: row.id, botName: row.name, status: 'blocked', detail: this.humanError((outcomes[index] as PromiseRejectedResult).reason) }),
+      }));
     } catch (err) {
       const message = this.humanError(err);
       this.startAllErrorMessage.set(message);
@@ -374,6 +451,21 @@ export class BotsPageComponent {
     } finally {
       this.isStartingReady.set(false);
     }
+  }
+
+  requestCohortStart(): void {
+    if (this.readyRows().length > 0 && !this.isStartingReady()) {
+      this.cohortConfirmationOpen.set(true);
+    }
+  }
+
+  cancelCohortStart(): void {
+    this.cohortConfirmationOpen.set(false);
+  }
+
+  confirmCohortStart(): void {
+    this.cohortConfirmationOpen.set(false);
+    void this.startReadyBots();
   }
 
   setSearchQuery(event: Event): void {

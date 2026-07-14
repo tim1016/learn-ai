@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 if TYPE_CHECKING:
-    from app.engine.live.account_artifacts import CohortBatchLaunchReceipt
+    from app.engine.live.account_artifacts import (
+        CohortBatchLaunchOutcomesReceipt,
+        CohortBatchLaunchReceipt,
+    )
 
 
 def validate_cohort_batch_launch_window_and_members(
@@ -69,5 +72,56 @@ class CohortBatchLaunchCreateResponse(BaseModel):
             window_start_ms=receipt.window_start_ms,
             window_end_ms=receipt.window_end_ms,
             authorized_by=receipt.authorized_by,
+            recorded_at_ms=receipt.recorded_at_ms,
+        )
+
+
+class CohortBatchLaunchMemberOutcomeRequest(BaseModel):
+    """One client-observed start result, retained with its safe follow-up."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    strategy_instance_id: str = Field(min_length=1, max_length=128)
+    state: Literal["accepted", "blocked", "skipped"]
+    reason: str = Field(min_length=1, max_length=512)
+    next_safe_action: str = Field(min_length=1, max_length=512)
+
+
+class CohortBatchLaunchOutcomesRequest(BaseModel):
+    """Exact outcomes for every attempted member in one cohort receipt."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    outcomes: tuple[CohortBatchLaunchMemberOutcomeRequest, ...] = Field(min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_unique_members(self) -> CohortBatchLaunchOutcomesRequest:
+        member_ids = tuple(outcome.strategy_instance_id for outcome in self.outcomes)
+        if len(set(member_ids)) != len(member_ids):
+            raise ValueError("cohort outcome strategy_instance_id values must be unique")
+        return self
+
+
+class CohortBatchLaunchOutcomesResponse(BaseModel):
+    """Immutable receipt confirming cohort outcomes reached account events."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    cohort_id: str = Field(min_length=1, max_length=128)
+    outcomes: list[CohortBatchLaunchMemberOutcomeRequest] = Field(min_length=1, max_length=128)
+    recorded_at_ms: int = Field(ge=0)
+
+    @classmethod
+    def from_receipt(cls, receipt: CohortBatchLaunchOutcomesReceipt) -> CohortBatchLaunchOutcomesResponse:
+        return cls(
+            schema_version=receipt.schema_version,
+            account_id=receipt.account_id,
+            cohort_id=receipt.cohort_id,
+            outcomes=[
+                CohortBatchLaunchMemberOutcomeRequest.model_validate(outcome.model_dump())
+                for outcome in receipt.outcomes
+            ],
             recorded_at_ms=receipt.recorded_at_ms,
         )
