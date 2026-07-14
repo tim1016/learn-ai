@@ -13,6 +13,7 @@ from app.engine.live.account_artifacts import (
     AccountAuditedOverride,
     AccountFreezeEvidence,
     AccountRecoveryProof,
+    CohortBatchLaunchReceipt,
     RestartIntensityPolicy,
     account_artifacts_root,
     clear_account_freeze,
@@ -20,6 +21,7 @@ from app.engine.live.account_artifacts import (
     read_account_events,
     read_account_events_tolerant,
     read_account_freeze,
+    record_cohort_batch_launch_receipt,
     write_account_freeze,
 )
 from app.engine.live.account_registry import (
@@ -423,6 +425,86 @@ def test_restart_intensity_passes_below_threshold_from_durable_account_events(tm
     assert "observed=2" in gate.operator_reason
     assert "threshold=3" in gate.operator_reason
     assert read_account_freeze(tmp_path, "DU123456") is None
+
+
+def test_restart_intensity_counts_authorized_cohort_bindings_once(tmp_path: Path) -> None:
+    policy = RestartIntensityPolicy(threshold=3, window_ms=60_000)
+    receipt = CohortBatchLaunchReceipt(
+        account_id="DU123456",
+        cohort_id="opening-batch-1",
+        member_strategy_instance_ids=("spy-a", "spy-b", "spy-c"),
+        window_start_ms=1_700_000_000_000,
+        window_end_ms=1_700_000_030_000,
+        authorized_by="operator.alice",
+        recorded_at_ms=1_700_000_000_000,
+    )
+    record_cohort_batch_launch_receipt(tmp_path, receipt)
+    for index, recorded_at_ms in enumerate(
+        (1_700_000_001_000, 1_700_000_002_000, 1_700_000_003_000),
+        start=1,
+    ):
+        write_account_instance_binding(
+            tmp_path,
+            _binding(
+                sid=f"spy-{chr(96 + index)}",
+                run_id=f"run-{index}",
+                namespace=f"learn-ai/spy-{chr(96 + index)}/v1",
+                recorded_at_ms=recorded_at_ms,
+            ),
+        )
+
+    gate = evaluate_restart_intensity(
+        tmp_path,
+        account_id="DU123456",
+        now_ms=1_700_000_004_000,
+        policy=policy,
+    )
+
+    assert gate.status == "pass"
+    assert "observed=1" in gate.operator_reason
+    event = next(event for event in read_account_events(tmp_path, "DU123456") if event["event_type"] == "cohort_batch_launch_authorized")
+    assert event["cohort_id"] == "opening-batch-1"
+    assert event["member_strategy_instance_ids"] == ["spy-a", "spy-b", "spy-c"]
+    assert event["window_start_ms"] == 1_700_000_000_000
+    assert event["window_end_ms"] == 1_700_000_030_000
+    assert event["authorized_by"] == "operator.alice"
+
+
+def test_restart_intensity_counts_daemon_crash_restarts_individually_during_cohort_window(tmp_path: Path) -> None:
+    policy = RestartIntensityPolicy(threshold=3, window_ms=60_000)
+    receipt = CohortBatchLaunchReceipt(
+        account_id="DU123456",
+        cohort_id="opening-batch-1",
+        member_strategy_instance_ids=("spy-a", "spy-b", "spy-c"),
+        window_start_ms=1_700_000_000_000,
+        window_end_ms=1_700_000_030_000,
+        authorized_by="operator.alice",
+        recorded_at_ms=1_700_000_000_000,
+    )
+    record_cohort_batch_launch_receipt(tmp_path, receipt)
+    for index, recorded_at_ms in enumerate(
+        (1_700_000_001_000, 1_700_000_002_000, 1_700_000_003_000),
+        start=1,
+    ):
+        write_account_instance_binding(
+            tmp_path,
+            _binding(
+                sid=f"spy-{chr(96 + index)}",
+                run_id=f"run-{index}",
+                namespace=f"learn-ai/spy-{chr(96 + index)}/v1",
+                recorded_at_ms=recorded_at_ms,
+            ).model_copy(update={"source": "host_daemon.crash_restart"}),
+        )
+
+    gate = evaluate_restart_intensity(
+        tmp_path,
+        account_id="DU123456",
+        now_ms=1_700_000_004_000,
+        policy=policy,
+    )
+
+    assert gate.status == "freeze"
+    assert "observed=3" in gate.operator_reason
 
 
 def test_restart_intensity_breach_records_account_freeze_with_threshold_details(tmp_path: Path) -> None:

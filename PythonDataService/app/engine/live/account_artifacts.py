@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
 from app.schemas.live_runs import GateResult
@@ -168,6 +168,31 @@ class RestartIntensityPolicy(BaseModel):
     window_ms: int = Field(default=300_000, ge=1)
     scope: Literal["account"] = "account"
     source: str = RESTART_INTENSITY_SOURCE
+
+
+class CohortBatchLaunchReceipt(BaseModel):
+    """Operator authorization for one deliberate multi-bot launch window."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    cohort_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    member_strategy_instance_ids: tuple[str, ...] = Field(min_length=1, max_length=128)
+    window_start_ms: int = Field(ge=0)
+    window_end_ms: int = Field(ge=0)
+    authorized_by: str = Field(min_length=1, max_length=128)
+    recorded_at_ms: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_window_and_members(self) -> CohortBatchLaunchReceipt:
+        if self.window_end_ms < self.window_start_ms:
+            raise ValueError("window_end_ms must not precede window_start_ms")
+        if any(not member.strip() for member in self.member_strategy_instance_ids):
+            raise ValueError("member_strategy_instance_ids must not contain blank values")
+        if len(set(self.member_strategy_instance_ids)) != len(self.member_strategy_instance_ids):
+            raise ValueError("member_strategy_instance_ids must be unique")
+        return self
 
 
 def account_artifacts_root(artifacts_root: Path, account_id: str) -> Path:
@@ -394,6 +419,22 @@ def append_account_event(
     _append_account_event(artifacts_root, account_id, {**payload, "account_id": account_id})
 
 
+def record_cohort_batch_launch_receipt(
+    artifacts_root: Path,
+    receipt: CohortBatchLaunchReceipt,
+) -> None:
+    """Append operator authorization for one cohort start window."""
+
+    _append_account_event(
+        artifacts_root,
+        receipt.account_id,
+        {
+            "event_type": "cohort_batch_launch_authorized",
+            **receipt.model_dump(mode="json"),
+        },
+    )
+
+
 def write_account_owner_generation(
     artifacts_root: Path,
     generation: AccountOwnerGeneration,
@@ -485,7 +526,8 @@ def evaluate_restart_intensity(
         and event.get("lifecycle_state") == "ACTIVE"
         and window_start_ms <= int(event.get("recorded_at_ms") or -1) <= now_ms
     ]
-    observed_count = len(restart_events)
+    restart_groups = _restart_intensity_groups(events, restart_events)
+    observed_count = len(restart_groups)
     reason = _restart_intensity_reason(
         observed_count=observed_count,
         threshold=policy.threshold,
@@ -516,7 +558,8 @@ def evaluate_restart_intensity(
             sorted(
                 {
                     str(event.get("strategy_instance_id"))
-                    for event in restart_events
+                    for events_in_group in restart_groups.values()
+                    for event in events_in_group
                     if event.get("strategy_instance_id")
                 }
             )
@@ -562,6 +605,65 @@ def _restart_intensity_reason(
         f"{RESTART_INTENSITY_REASON}:observed={observed_count}:threshold={threshold}:"
         f"window_ms={window_ms}:window_start_ms={window_start_ms}:window_end_ms={window_end_ms}"
     )
+
+
+def _restart_intensity_groups(
+    account_events: list[dict],
+    restart_events: list[dict],
+) -> dict[str, list[dict]]:
+    """Fold authorized cohort members into one restart event each.
+
+    A cohort receipt applies only to a member binding authored after the
+    receipt and inside its window. Daemon-attributed crash restarts are never
+    eligible, even if their instance id appears in the operator's receipt.
+    """
+
+    receipts = _cohort_batch_launch_receipts(account_events)
+    groups: dict[str, list[dict]] = {}
+    for event in restart_events:
+        cohort_key = _cohort_key_for_binding(event, receipts)
+        event_key = cohort_key or f"binding:{event.get('seq')}"
+        groups.setdefault(event_key, []).append(event)
+    return groups
+
+
+def _cohort_batch_launch_receipts(events: list[dict]) -> tuple[tuple[int, CohortBatchLaunchReceipt], ...]:
+    receipts: list[tuple[int, CohortBatchLaunchReceipt]] = []
+    for event in events:
+        if event.get("event_type") != "cohort_batch_launch_authorized":
+            continue
+        try:
+            receipt = CohortBatchLaunchReceipt.model_validate(event)
+            seq = int(event["seq"])
+        except (KeyError, TypeError, ValueError, ValidationError):
+            logger.warning("Ignoring invalid cohort batch launch receipt in account events")
+            continue
+        receipts.append((seq, receipt))
+    return tuple(receipts)
+
+
+def _cohort_key_for_binding(
+    binding_event: dict,
+    receipts: tuple[tuple[int, CohortBatchLaunchReceipt], ...],
+) -> str | None:
+    source = str(binding_event.get("source") or "")
+    if source.startswith("host_daemon.") and ("crash" in source or "restart" in source):
+        return None
+    strategy_instance_id = binding_event.get("strategy_instance_id")
+    recorded_at_ms = binding_event.get("recorded_at_ms")
+    if not isinstance(strategy_instance_id, str) or not isinstance(recorded_at_ms, int):
+        return None
+    eligible = [
+        (seq, receipt)
+        for seq, receipt in receipts
+        if receipt.recorded_at_ms <= recorded_at_ms
+        and receipt.window_start_ms <= recorded_at_ms <= receipt.window_end_ms
+        and strategy_instance_id in receipt.member_strategy_instance_ids
+    ]
+    if not eligible:
+        return None
+    seq, _receipt = max(eligible, key=lambda item: item[0])
+    return f"cohort:{seq}"
 
 
 def _latest_restart_intensity_clear_ms(events: list[dict]) -> int | None:
@@ -719,6 +821,7 @@ _LOCAL_EXPORTS = [
     "RESTART_INTENSITY_SOURCE",
     "AccountArtifactError",
     "AccountAuditedOverride",
+    "CohortBatchLaunchReceipt",
     "AccountEventRecord",
     "AccountFreezeEvidence",
     "AccountOwnerGeneration",
@@ -734,6 +837,7 @@ _LOCAL_EXPORTS = [
     "read_account_events_tolerant_with_hash",
     "read_account_freeze",
     "read_account_owner_generation",
+    "record_cohort_batch_launch_receipt",
     "resolve_account_event_ts_ms",
     "write_account_freeze",
     "write_account_owner_generation",
