@@ -25,12 +25,14 @@ from app.engine.live.account_artifacts import (
     write_account_freeze,
     write_account_owner_generation,
 )
+from app.engine.live.account_observation_lease import assess_account_observation_lease
 from app.schemas.account_truth import (
     AccountTruthMessage,
     AccountTruthResponse,
     AccountTruthSourceFreshness,
 )
 from app.services import account_truth_refresh
+from app.services.account_reconciliation import AccountReconciliationService
 from app.services.account_truth_refresh import (
     DEFAULT_ACCOUNT_TRUTH_REFRESH_INTERVAL_MS,
     AccountTruthRefreshLoop,
@@ -757,6 +759,44 @@ async def test_refresh_loop_notifies_failure_observer_when_broker_is_unavailable
             2_000,
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_refresh_loop_failure_observer_accepts_real_bound_reconciliation_method(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    service.observe_account_truth(_truth(), now_ms=1_000)
+    monkeypatch.setattr(account_truth_refresh, "get_monitor", lambda: None)
+
+    async def failing_refresh_now(
+        _client,
+        *,
+        context: str,
+        account_id: str | None = None,
+        health: IbkrConnectionHealth | None = None,
+        snapshot_provider: AccountTruthSnapshotProvider | None = None,
+    ) -> AccountTruthResponse:
+        assert context == "account truth refresh loop"
+        assert account_id == "DU123"
+        assert health is not None
+        assert snapshot_provider is provider
+        raise BrokerError("broker sweep timed out")
+
+    loop = AccountTruthRefreshLoop(
+        client=_FakeClient(_health(account_id="DU123", fetched_at_ms=2_000)),  # type: ignore[arg-type]
+        snapshot_provider=provider,
+        refresh_now=failing_refresh_now,
+        account_truth_failure_observer=service.observe_account_truth_failure,
+    )
+
+    assert await loop.refresh_once() is None
+
+    assessment = assess_account_observation_lease(tmp_path, "DU123", now_ms=2_001)
+    assert assessment.state == "REVOKED"
+    assert assessment.reason_code == "ACCOUNT_TRUTH_REFRESH_FAILED"
 
 
 @pytest.mark.asyncio

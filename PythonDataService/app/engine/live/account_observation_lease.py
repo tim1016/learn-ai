@@ -24,6 +24,7 @@ from app.services.account_truth_snapshot import DEFAULT_ACCOUNT_TRUTH_READINESS_
 ACCOUNT_OBSERVATION_LEASE_FILENAME = "account_observation_lease.json"
 ACCOUNT_OBSERVATION_LEASE_GATE_ID = "account.observation_lease"
 ACCOUNT_OBSERVATION_LEASE_GATE_SOURCE = "account_observation_lease"
+_OWNER_GENERATION_UNREADABLE = object()
 
 
 class AccountObservationLease(BaseModel):
@@ -162,6 +163,13 @@ def assess_account_observation_lease(
         )
 
     owner = _read_owner_generation(artifacts_root, canonical_account_id)
+    if owner is _OWNER_GENERATION_UNREADABLE:
+        return _assessment(
+            state="REVOKED",
+            lease=lease,
+            reason_code="ACCOUNT_OWNER_GENERATION_CHANGED",
+            reason="Account ownership evidence is unreadable after this verification.",
+        )
     if (owner is not None and (
         owner.phase != "accepting"
         or owner.generation != lease.account_owner_generation
@@ -198,8 +206,10 @@ def account_observation_lease_gate_result(
 def _read_owner_generation(artifacts_root: Path, account_id: str):
     try:
         return read_account_owner_generation(artifacts_root, account_id)
-    except (OSError, ValueError):
+    except OSError:
         return None
+    except ValueError:
+        return _OWNER_GENERATION_UNREADABLE
 
 
 def _assessment(

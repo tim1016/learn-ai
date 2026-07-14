@@ -1005,7 +1005,11 @@ class LivePortfolio:
         if self.account_truth_gate_provider is not None:
             account_truth_gate = self.account_truth_gate_provider()
         if self.account_observation_lease_gate_provider is not None:
-            lease_gate = self.account_observation_lease_gate_provider()
+            try:
+                lease_gate = self.account_observation_lease_gate_provider()
+            except Exception:
+                lease_gate = None
+                logger.exception("account observation lease shadow gate read failed")
             if (
                 account_truth_gate is not None
                 and lease_gate is not None

@@ -452,6 +452,48 @@ def test_account_truth_observer_revokes_when_freeze_evidence_is_unreadable(
     assert assessment.reason_code == "ACCOUNT_FREEZE_UNREADABLE"
 
 
+def test_account_truth_observer_revokes_when_lease_update_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    service.observe_account_truth(_truth(), now_ms=1_780_000_002_000)
+    monkeypatch.setattr(
+        account_reconciliation_module,
+        "assess_account_truth",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("assessment failed")),
+    )
+
+    service.observe_account_truth(_truth(), now_ms=1_780_000_003_000)
+
+    assessment = assess_account_observation_lease(
+        tmp_path,
+        "DU1234567",
+        now_ms=1_780_000_003_001,
+    )
+    assert assessment.state == "REVOKED"
+    assert assessment.reason_code == "ACCOUNT_OBSERVATION_LEASE_UPDATE_FAILED"
+
+
+def test_observation_lease_revoked_transition_uses_revoked_fallback_copy(
+    tmp_path: Path,
+) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    repo = account_reconciliation_module.AccountObservationLeaseRepo(tmp_path)
+    revoked = repo.revoke(
+        account_id="DU1234567",
+        reason_code="ACCOUNT_TRUTH_NOT_PROVEN",
+        detail="",
+        now_ms=1_780_000_002_000,
+    )
+
+    service._append_observation_lease_transition(before=None, after=revoked)
+
+    event = read_account_events(tmp_path, "DU1234567")[-1]
+    assert event["event_type"] == "account_observation_lease_revoked"
+    assert event["reason_line"] == "Account verification was revoked."
+
+
 def test_auto_reconcile_replaces_receipt_after_new_bot_execution(tmp_path: Path) -> None:
     service = AccountReconciliationService(artifacts_root=tmp_path)
     service.write_receipt(

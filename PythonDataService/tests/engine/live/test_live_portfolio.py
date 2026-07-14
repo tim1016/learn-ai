@@ -805,6 +805,32 @@ async def test_submit_pending_orders_logs_observation_lease_shadow_divergence_wi
 
 
 @pytest.mark.asyncio
+async def test_submit_pending_orders_ignores_observation_lease_shadow_provider_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    broker = FakeBroker()
+    truth_gate = account_truth_gate_result(_account_truth_snapshot(), now_ms=_NOW_MS)
+
+    def broken_lease_gate() -> GateResult:
+        raise OSError("lease artifact read failed")
+
+    portfolio = LivePortfolio(
+        broker,
+        account_truth_gate_provider=lambda: truth_gate,
+        account_observation_lease_gate_provider=broken_lease_gate,
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    acks = await portfolio.submit_pending_orders()
+
+    assert len(acks) == 1
+    assert broker.orders[0].symbol == "SPY"
+    assert "account observation lease shadow gate read failed" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_submit_pending_orders_routes_to_account_owner_when_enabled() -> None:
     broker = FakeBroker()
     captured: list[AccountOwnerSubmitIntent] = []

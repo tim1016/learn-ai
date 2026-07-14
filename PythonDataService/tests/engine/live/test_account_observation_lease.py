@@ -153,6 +153,27 @@ def test_observation_lease_without_owner_generation_cannot_authorize_new_owner(
     assert assessment.reason_code == "ACCOUNT_OWNER_GENERATION_CHANGED"
 
 
+def test_observation_lease_rejects_malformed_owner_generation(tmp_path: Path) -> None:
+    repo = AccountObservationLeaseRepo(tmp_path)
+    repo.renew(
+        account_id=ACCOUNT_ID,
+        observed_at_ms=OBSERVED_AT_MS,
+        now_ms=OBSERVED_AT_MS,
+        account_owner_generation=None,
+    )
+    owner_path = tmp_path / "accounts" / ACCOUNT_ID / "owner_generation.json"
+    owner_path.write_text("{not-json", encoding="utf-8")
+
+    assessment = assess_account_observation_lease(
+        tmp_path,
+        ACCOUNT_ID,
+        now_ms=OBSERVED_AT_MS + 1,
+    )
+
+    assert assessment.state == "REVOKED"
+    assert assessment.reason_code == "ACCOUNT_OWNER_GENERATION_CHANGED"
+
+
 def test_observation_lease_reader_fails_closed_for_malformed_artifact(tmp_path: Path) -> None:
     repo = AccountObservationLeaseRepo(tmp_path)
     repo.path_for(ACCOUNT_ID).parent.mkdir(parents=True)

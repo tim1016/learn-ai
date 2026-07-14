@@ -263,8 +263,9 @@ class AccountReconciliationService:
         """Renew only across a stable owner generation; otherwise revoke."""
 
         repo = AccountObservationLeaseRepo(self._artifacts_root)
-        before = repo.read(account_id)
+        before = None
         try:
+            before = repo.read(account_id)
             owner_before_fence = (
                 owner_generation_before
                 if owner_generation_captured
@@ -330,11 +331,24 @@ class AccountReconciliationService:
                             ),
                         )
             self._append_observation_lease_transition(before=before, after=after)
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "account observation lease update failed",
                 extra={"account_id": account_id},
             )
+            try:
+                after = repo.revoke(
+                    account_id=account_id,
+                    reason_code="ACCOUNT_OBSERVATION_LEASE_UPDATE_FAILED",
+                    detail="Account verification update failed; account verification is not proven.",
+                    now_ms=observed_at_ms,
+                )
+                self._append_observation_lease_transition(before=before, after=after)
+            except Exception:
+                logger.exception(
+                    "account observation lease fail-closed revocation failed",
+                    extra={"account_id": account_id, "exception": repr(exc)},
+                )
 
     def _append_observation_lease_transition(self, *, before, after) -> None:
         before_key = (
@@ -353,7 +367,12 @@ class AccountReconciliationService:
                     else "account_observation_lease_revoked"
                 ),
                 "reason_code": after.revoked_reason_code,
-                "reason_line": after.revoked_detail or "Account verified.",
+                "reason_line": after.revoked_detail
+                or (
+                    "Account verified."
+                    if after.status == "VERIFIED"
+                    else "Account verification was revoked."
+                ),
                 "recorded_at_ms": after.renewed_at_ms,
                 "observed_at_ms": after.observed_at_ms,
                 "valid_until_ms": after.valid_until_ms,
