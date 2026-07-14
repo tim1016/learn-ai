@@ -161,7 +161,13 @@ def assess_account_truth(
     *,
     now_ms: int | None = None,
 ) -> AccountTruthAssessment:
-    """Evaluate cached Account Truth once for readiness and submit gates."""
+    """Evaluate observation proof once for readiness and submit gates.
+
+    A pass means broker evidence is fresh, attributable, and clean. It permits
+    non-zero positions when the Account Truth projection attributes that
+    exposure to a known active owner; flatness belongs exclusively to recovery
+    proof in :class:`AccountReconciliationReceipt`.
+    """
 
     decided_at_ms = now_ms_utc() if now_ms is None else now_ms
     if evidence is None:

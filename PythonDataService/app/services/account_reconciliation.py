@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,8 +22,13 @@ from app.engine.live.account_artifacts import (
     clear_account_freeze,
     read_account_events,
     read_account_freeze,
+    read_account_owner_generation,
 )
 from app.engine.live.account_identity import InvalidAccountIdError, normalize_account_id
+from app.engine.live.account_observation_lease import (
+    AccountObservationLeaseRepo,
+    assess_account_observation_lease,
+)
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
     has_account_recovery_evidence_after,
@@ -40,6 +46,8 @@ from app.schemas.account_reconciliation import (
     AccountConditionRow,
     AccountExposureResolution,
     AccountFreezeBanner,
+    AccountObservationHistoryEvent,
+    AccountObservationView,
     AccountReconciliationAutomationPolicy,
     AccountReconciliationEvidenceRef,
     AccountReconciliationReceipt,
@@ -57,20 +65,36 @@ from app.schemas.artifact_io import (
     read_pydantic_artifact,
 )
 from app.schemas.live_runs import GateResult
+from app.services.account_truth_snapshot import AccountTruthSnapshot, assess_account_truth
 from app.utils.timestamps import now_ms_utc
+
+logger = logging.getLogger(__name__)
 
 ACCOUNT_RECONCILIATION_RECEIPT_FILENAME = "account_reconciliation_receipt.json"
 ACCOUNT_RECONCILIATION_POLICY_FILENAME = "account_reconciliation_policy.json"
 ACCOUNT_RECONCILIATION_INVALIDATED_EVENT = "account_reconciliation_invalidated"
 DEFAULT_ACCOUNT_RECONCILIATION_TTL_MS = 5 * 60 * 1000
 MAX_EVIDENCE_REF_DETAIL_LENGTH = 512
-CLEARABLE_EXPOSURE_RESOLUTIONS = frozenset({"flat", "intended", "accepted_override"})
+MAX_ACCOUNT_OBSERVATION_REASON_LENGTH = 512
+CLEARABLE_EXPOSURE_RESOLUTIONS = frozenset({"flat", "accepted_override"})
 
 
 @dataclass(frozen=True)
 class _ReceiptInvalidation:
     recorded_at_ms: int
     execution_ids: tuple[str, ...]
+
+
+def _owner_generation_fence(owner: object | None) -> tuple[int, str] | None:
+    """Return the owner-generation fields that must stay stable during a sweep."""
+
+    if owner is None:
+        return None
+    generation = getattr(owner, "generation", None)
+    phase = getattr(owner, "phase", None)
+    if not isinstance(generation, int) or not isinstance(phase, str):
+        return None
+    return generation, phase
 
 
 class AccountReconciliationService:
@@ -142,9 +166,11 @@ class AccountReconciliationService:
         self,
         account_truth: AccountTruthResponse,
         *,
+        owner_generation_before: tuple[int, str] | None = None,
+        owner_generation_captured: bool = False,
         now_ms: int | None = None,
     ) -> AccountReconciliationReceipt | None:
-        """Invalidate a receipt on new executions and optionally replace it safely."""
+        """Persist observation proof, then manage recovery-receipt invalidation."""
 
         canonical_account_id = _normalize_optional_account_id(
             account_truth.account_id or account_truth.health.account_id
@@ -152,6 +178,13 @@ class AccountReconciliationService:
         if canonical_account_id is None:
             return None
         observed_at_ms = now_ms_utc() if now_ms is None else now_ms
+        self._observe_observation_lease(
+            account_id=canonical_account_id,
+            account_truth=account_truth,
+            observed_at_ms=observed_at_ms,
+            owner_generation_before=owner_generation_before,
+            owner_generation_captured=owner_generation_captured,
+        )
         receipt = self.read_latest_receipt(canonical_account_id)
         receipted_execution_ids = (
             {row.exec_id for row in receipt.account_truth.executions}
@@ -196,6 +229,156 @@ class AccountReconciliationService:
             )
         return None
 
+    def observe_account_truth_failure(
+        self,
+        *,
+        account_id: str | None,
+        detail: str,
+        attempted_at_ms: int,
+    ) -> None:
+        """Immediately revoke durable observation proof after a failed sweep."""
+
+        canonical_account_id = _normalize_optional_account_id(account_id)
+        if canonical_account_id is None:
+            return
+        repo = AccountObservationLeaseRepo(self._artifacts_root)
+        before = repo.read(canonical_account_id)
+        lease = repo.revoke(
+            account_id=canonical_account_id,
+            reason_code="ACCOUNT_TRUTH_REFRESH_FAILED",
+            detail=detail,
+            now_ms=attempted_at_ms,
+        )
+        self._append_observation_lease_transition(before=before, after=lease)
+
+    def _observe_observation_lease(
+        self,
+        *,
+        account_id: str,
+        account_truth: AccountTruthResponse,
+        observed_at_ms: int,
+        owner_generation_before: tuple[int, str] | None = None,
+        owner_generation_captured: bool = False,
+    ) -> None:
+        """Renew only across a stable owner generation; otherwise revoke."""
+
+        repo = AccountObservationLeaseRepo(self._artifacts_root)
+        before = None
+        try:
+            before = repo.read(account_id)
+            owner_before_fence = (
+                owner_generation_before
+                if owner_generation_captured
+                else _owner_generation_fence(
+                    read_account_owner_generation(self._artifacts_root, account_id)
+                )
+            )
+            assessment = assess_account_truth(
+                AccountTruthSnapshot(
+                    truth=account_truth,
+                    cached_at_ms=account_truth.generated_at_ms,
+                ),
+                now_ms=observed_at_ms,
+            )
+            owner_after = read_account_owner_generation(self._artifacts_root, account_id)
+            owner_after_fence = _owner_generation_fence(owner_after)
+
+            if owner_before_fence != owner_after_fence or (
+                owner_after is not None and owner_after.phase != "accepting"
+            ):
+                after = repo.revoke(
+                    account_id=account_id,
+                    reason_code="ACCOUNT_OWNER_GENERATION_CHANGED",
+                    detail="Account ownership changed or is not accepting during account verification.",
+                    now_ms=observed_at_ms,
+                )
+            elif assessment.status != "pass":
+                after = repo.revoke(
+                    account_id=account_id,
+                    reason_code=assessment.primary_reason_code or "ACCOUNT_TRUTH_NOT_PROVEN",
+                    detail=assessment.explanation,
+                    now_ms=observed_at_ms,
+                )
+            else:
+                try:
+                    freeze = read_account_freeze(self._artifacts_root, account_id)
+                except (OSError, ValueError) as exc:
+                    logger.warning(
+                        "account freeze evidence unreadable during observation lease update",
+                        extra={"account_id": account_id, "exception": repr(exc)},
+                    )
+                    after = repo.revoke(
+                        account_id=account_id,
+                        reason_code="ACCOUNT_FREEZE_UNREADABLE",
+                        detail="Account freeze evidence is unreadable; account verification is not proven.",
+                        now_ms=observed_at_ms,
+                    )
+                else:
+                    if freeze is not None:
+                        after = repo.revoke(
+                            account_id=account_id,
+                            reason_code="ACCOUNT_FROZEN",
+                            detail=freeze.reason,
+                            now_ms=observed_at_ms,
+                        )
+                    else:
+                        after = repo.renew(
+                            account_id=account_id,
+                            observed_at_ms=account_truth.generated_at_ms,
+                            now_ms=observed_at_ms,
+                            account_owner_generation=(
+                                owner_after.generation if owner_after is not None else None
+                            ),
+                        )
+            self._append_observation_lease_transition(before=before, after=after)
+        except Exception as exc:
+            logger.exception(
+                "account observation lease update failed",
+                extra={"account_id": account_id},
+            )
+            try:
+                after = repo.revoke(
+                    account_id=account_id,
+                    reason_code="ACCOUNT_OBSERVATION_LEASE_UPDATE_FAILED",
+                    detail="Account verification update failed; account verification is not proven.",
+                    now_ms=observed_at_ms,
+                )
+                self._append_observation_lease_transition(before=before, after=after)
+            except Exception:
+                logger.exception(
+                    "account observation lease fail-closed revocation failed",
+                    extra={"account_id": account_id, "exception": repr(exc)},
+                )
+
+    def _append_observation_lease_transition(self, *, before, after) -> None:
+        before_key = (
+            (before.status, before.revoked_reason_code) if before is not None else None
+        )
+        after_key = (after.status, after.revoked_reason_code)
+        if before_key == after_key:
+            return
+        append_account_event(
+            self._artifacts_root,
+            after.account_id,
+            {
+                "event_type": (
+                    "account_observation_lease_verified"
+                    if after.status == "VERIFIED"
+                    else "account_observation_lease_revoked"
+                ),
+                "reason_code": after.revoked_reason_code,
+                "reason_line": after.revoked_detail
+                or (
+                    "Account verified."
+                    if after.status == "VERIFIED"
+                    else "Account verification was revoked."
+                ),
+                "recorded_at_ms": after.renewed_at_ms,
+                "observed_at_ms": after.observed_at_ms,
+                "valid_until_ms": after.valid_until_ms,
+            },
+        )
+
     def write_receipt(
         self,
         *,
@@ -203,6 +386,12 @@ class AccountReconciliationService:
         account_truth: AccountTruthResponse,
         now_ms: int | None = None,
     ) -> AccountReconciliationReceipt:
+        """Persist recovery proof: Account Truth plus accepted flatness.
+
+        This receipt remains the recovery/freeze-clear and flat-start proof. It
+        is deliberately not an intraday observation-renewal signal: a bot-owned
+        non-zero position is valid observation evidence but is not flat.
+        """
         generated_at_ms = now_ms_utc() if now_ms is None else now_ms
         receipt = self.compose_receipt(
             requested_account_id=requested_account_id,
@@ -233,6 +422,12 @@ class AccountReconciliationService:
         account_truth: AccountTruthResponse,
         generated_at_ms: int,
     ) -> AccountReconciliationReceipt:
+        """Compose recovery proof without re-deriving Account Truth cleanliness.
+
+        `CLEAN` adds connected-account scope, freshness, and resolved exposure
+        to the canonical Account Truth verdict. Do not use this flatness-aware
+        receipt to renew intraday account observation evidence.
+        """
         requested = normalize_account_id(requested_account_id)
         connected = _normalize_optional_account_id(account_truth.health.account_id)
         truth_account = _normalize_optional_account_id(account_truth.account_id)
@@ -524,6 +719,12 @@ class AccountReconciliationService:
                 receipt_invalidation,
             ),
             reconciliation_automation_policy=self.read_automation_policy(canonical_account_id),
+            account_observation=_account_observation_view(
+                self._artifacts_root,
+                canonical_account_id,
+                account_events=account_events,
+                now_ms=generated_at_ms,
+            ),
             gate_rows=gate_rows,
             conditions=conditions,
             freeze_banner=_freeze_banner(freeze),
@@ -552,6 +753,68 @@ def _normalize_optional_account_id(account_id: str | None) -> str | None:
         return normalize_account_id(account_id)
     except InvalidAccountIdError:
         return None
+
+
+def _account_observation_view(
+    artifacts_root: Path,
+    account_id: str,
+    *,
+    account_events: list[dict],
+    now_ms: int,
+) -> AccountObservationView:
+    assessment = assess_account_observation_lease(
+        artifacts_root,
+        account_id,
+        now_ms=now_ms,
+    )
+    lease = assessment.lease
+    return AccountObservationView(
+        state=assessment.state,
+        reason_line=_bounded_observation_reason(
+            assessment.reason,
+            fallback="Account verification is not available yet.",
+        ),
+        observed_at_ms=lease.observed_at_ms if lease is not None else None,
+        valid_until_ms=lease.valid_until_ms if lease is not None else None,
+        history=_account_observation_history(account_events),
+    )
+
+
+def _account_observation_history(account_events: list[dict]) -> list[AccountObservationHistoryEvent]:
+    history: list[AccountObservationHistoryEvent] = []
+    for event in account_events:
+        event_type = event.get("event_type")
+        if event_type not in {
+            "account_observation_lease_verified",
+            "account_observation_lease_revoked",
+        }:
+            continue
+        recorded_at_ms = event.get("recorded_at_ms")
+        if not isinstance(recorded_at_ms, int) or recorded_at_ms < 0:
+            continue
+        verified = event_type == "account_observation_lease_verified"
+        reason_line = event.get("reason_line")
+        if not isinstance(reason_line, str) or not reason_line:
+            reason_line = "Account verified." if verified else "Account verification was revoked."
+        history.append(
+            AccountObservationHistoryEvent(
+                state="VERIFIED" if verified else "REVOKED",
+                reason_line=_bounded_observation_reason(
+                    reason_line,
+                    fallback="Account verified." if verified else "Account verification was revoked.",
+                ),
+                recorded_at_ms=recorded_at_ms,
+            )
+        )
+    return history[-24:]
+
+
+def _bounded_observation_reason(value: str, *, fallback: str) -> str:
+    reason = value.strip() or fallback
+    if len(reason) <= MAX_ACCOUNT_OBSERVATION_REASON_LENGTH:
+        return reason
+    suffix = "..."
+    return reason[: MAX_ACCOUNT_OBSERVATION_REASON_LENGTH - len(suffix)] + suffix
 
 
 def _recorded_invalidated_execution_ids(account_events: list[dict]) -> set[str]:

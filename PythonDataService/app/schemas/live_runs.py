@@ -1116,8 +1116,8 @@ class InstanceStartDefaults(BaseModel):
     blank form. ``strategy`` is sourced from the run's ledger ``strategy_key``
     (the algorithm module the ledger is reconciled to) when present — empty
     string means a legacy ledger with no recorded key, so the field is
-    operator-supplied. The other four mirror ``HostRunnerStartRequest`` defaults;
-    they are not persisted in the ledger.
+    operator-supplied. New ledgers may persist these from deploy-time
+    ``start_options`` so a later cockpit start uses the same operator choices.
     """
 
     strategy: str = ""
@@ -1373,6 +1373,17 @@ class OperatorSurfaceAccountOwner(BaseModel):
     phase: AccountOwnerPhase
     recorded_at_ms: int | None = Field(default=None, ge=0)
     source: str | None = None
+
+
+class OperatorSurfaceAccountObservation(BaseModel):
+    """Backend-authored freshness proof for one broker account observation."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: Literal["VERIFIED", "REVOKED", "EXPIRED", "ABSENT"]
+    reason_line: str
+    observed_at_ms: int | None = Field(default=None, ge=0)
+    valid_until_ms: int | None = Field(default=None, ge=0)
 
 
 class OperatorSurfaceActionPlan(BaseModel):
@@ -2174,6 +2185,7 @@ class OperatorSurface(BaseModel):
     daily_order_cap: OperatorSurfaceDailyOrderCap
     action_plan: OperatorSurfaceActionPlan
     account_owner: OperatorSurfaceAccountOwner | None = None
+    account_observation: OperatorSurfaceAccountObservation | None = None
     submit_readiness: OperatorSurfaceSubmitReadiness
     trader_guidance: OperatorSurfaceTraderGuidance
     # Backend-authored current blockage ladder for the lifecycle/About pane.

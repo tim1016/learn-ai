@@ -40,6 +40,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.engine.live.live_state_sidecar import _fsync_parent_dir
 from app.research.runs.hashing import canonical_json, hash_payload
 
+HydratePolicy = Literal["require", "optional", "disabled"]
+
 
 def _file_sha256(path: Path) -> str:
     h = hashlib.sha256()
@@ -51,6 +53,18 @@ def _file_sha256(path: Path) -> str:
 
 def _now_ms_utc() -> int:
     return int(time.time() * 1000)
+
+
+class LiveRunStartDefaults(BaseModel):
+    """Non-hashed operator start defaults captured at deploy time."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    strategy: str = ""
+    readonly: bool = True
+    hydrate_policy: HydratePolicy = "require"
+    max_orders_per_day: int = Field(default=2_000, ge=0, le=100_000)
+    ibkr_host: str = "127.0.0.1"
 
 
 class LiveRunLedger(BaseModel):
@@ -67,12 +81,13 @@ class LiveRunLedger(BaseModel):
     # 1.1 adds ``strategy_instance_id`` (UI-0 identity binding). 1.2 adds
     # ``strategy_key`` (#416 — the hand-coded algorithm module the run starts
     # under). 1.3 adds ADR 0009's engine-derived sizing stamps
-    # (``governed_by`` + ``sizing_provenance``). NONE of the added fields are
+    # (``governed_by`` + ``sizing_provenance``). 1.4 adds non-hashed operator
+    # start defaults captured at deploy time. NONE of the added fields are
     # part of the ``run_id`` hash, so existing 1.0–1.2 run_ids, run directories,
     # and fixtures stay byte-identical. A legacy ledger that predates a field
     # has no key for it; the defaults below let it read cleanly as
     # "unknown / legacy".
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3"] = "1.3"
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4"] = "1.4"
 
     run_id: str
     code_sha: str
@@ -126,6 +141,8 @@ class LiveRunLedger(BaseModel):
         "live_override"
     )
 
+    start_defaults: LiveRunStartDefaults | None = None
+
     created_at_ms: int = Field(default_factory=_now_ms_utc)
 
 
@@ -168,6 +185,7 @@ def build_ledger(
     live_config: dict,
     strategy_instance_id: str = "",
     strategy_key: str = "",
+    start_defaults: LiveRunStartDefaults | None = None,
     audit_copy_allow_list_root: Path | None = None,
 ) -> LiveRunLedger:
     """Build a ``LiveRunLedger`` from on-disk inputs and resolved config.
@@ -270,6 +288,7 @@ def build_ledger(
         live_config=live_config,
         strategy_instance_id=strategy_instance_id,
         strategy_key=strategy_key,
+        start_defaults=start_defaults,
         governed_by=governed_by(resolved_policy),
         sizing_provenance=sizing_provenance,
     )

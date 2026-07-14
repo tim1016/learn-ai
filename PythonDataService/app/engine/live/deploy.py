@@ -35,6 +35,7 @@ from app.engine.live.order_identity import validate_broker_owned_instance_id
 from app.engine.live.pre_flight import check_clean_tree
 from app.engine.live.run_ledger import (
     LiveRunLedger,
+    LiveRunStartDefaults,
     build_ledger,
     read_ledger,
     write_ledger,
@@ -185,6 +186,7 @@ class DeployParams:
     # the ledger so the console defaults the Start card from it and `run start`
     # rejects a mismatched --strategy. Not hashed into run_id; "" = unrecorded.
     strategy_key: str = ""
+    start_defaults: LiveRunStartDefaults | None = None
     parent_run_id: str | None = None
     clean_tree_scope: tuple[str, ...] = DEFAULT_CLEAN_TREE_SCOPE
     force: bool = False
@@ -603,6 +605,7 @@ def deploy_run(params: DeployParams) -> DeployResult:
             live_config=canonical_live_config,
             strategy_instance_id=params.strategy_instance_id,
             strategy_key=resolved_strategy_key,
+            start_defaults=params.start_defaults,
             audit_copy_allow_list_root=repo_root,
         )
     except FileNotFoundError as exc:

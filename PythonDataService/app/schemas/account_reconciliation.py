@@ -15,7 +15,7 @@ from app.schemas.account_truth import (
 from app.schemas.live_runs import GateResult
 
 AccountReconciliationState = Literal["CLEAN", "NOT_PROVEN"]
-AccountExposureResolution = Literal["flat", "intended", "accepted_override", "unresolved"]
+AccountExposureResolution = Literal["flat", "accepted_override", "unresolved"]
 AccountConditionType = Literal[
     "exposure_freeze",
     "account_freeze",
@@ -156,6 +156,28 @@ class AccountFreezeBanner(BaseModel):
     detail: str = Field(min_length=1, max_length=512)
 
 
+class AccountObservationHistoryEvent(BaseModel):
+    """One durable account-observation transition, never a heartbeat."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: Literal["VERIFIED", "REVOKED"]
+    reason_line: str = Field(min_length=1, max_length=512)
+    recorded_at_ms: int = Field(ge=0)
+
+
+class AccountObservationView(BaseModel):
+    """Operator-facing durable observation proof and its transition history."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: Literal["VERIFIED", "REVOKED", "EXPIRED", "ABSENT"]
+    reason_line: str = Field(min_length=1, max_length=512)
+    observed_at_ms: int | None = Field(default=None, ge=0)
+    valid_until_ms: int | None = Field(default=None, ge=0)
+    history: list[AccountObservationHistoryEvent] = Field(default_factory=list)
+
+
 class AccountTriageResponse(BaseModel):
     """Thin account-scoped recovery projection over existing authorities."""
 
@@ -171,6 +193,7 @@ class AccountTriageResponse(BaseModel):
     account_reconciliation_receipt: AccountReconciliationReceipt | None = None
     account_reconciliation_valid_until_ms: int | None = Field(default=None, ge=0)
     reconciliation_automation_policy: AccountReconciliationAutomationPolicy
+    account_observation: AccountObservationView
     gate_rows: list[AccountTriageGateRow] = Field(default_factory=list)
     conditions: list[AccountConditionRow] = Field(default_factory=list)
     freeze_banner: AccountFreezeBanner | None = None

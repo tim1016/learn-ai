@@ -771,6 +771,66 @@ async def test_submit_pending_orders_allows_fresh_clean_account_truth_gate() -> 
 
 
 @pytest.mark.asyncio
+async def test_submit_pending_orders_logs_observation_lease_shadow_divergence_without_blocking(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    broker = FakeBroker()
+    comparisons: list[tuple[GateResult, GateResult]] = []
+    truth_gate = account_truth_gate_result(_account_truth_snapshot(), now_ms=_NOW_MS)
+    lease_gate = GateResult(
+        gate_id="account.observation_lease",
+        status="block",
+        source="account_observation_lease",
+        operator_reason="ACCOUNT_OBSERVATION_LEASE_ABSENT",
+        operator_next_step="RECONCILE_NOW",
+        evidence_at_ms=_NOW_MS,
+    )
+    portfolio = LivePortfolio(
+        broker,
+        account_truth_gate_provider=lambda: truth_gate,
+        account_observation_lease_gate_provider=lambda: lease_gate,
+        account_observation_lease_shadow_comparison_observer=lambda truth, lease: comparisons.append(
+            (truth, lease)
+        ),
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    acks = await portfolio.submit_pending_orders()
+
+    assert len(acks) == 1
+    assert "account observation lease shadow divergence" in caplog.text
+    assert comparisons == [(truth_gate, lease_gate)]
+
+
+@pytest.mark.asyncio
+async def test_submit_pending_orders_ignores_observation_lease_shadow_provider_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    broker = FakeBroker()
+    truth_gate = account_truth_gate_result(_account_truth_snapshot(), now_ms=_NOW_MS)
+
+    def broken_lease_gate() -> GateResult:
+        raise OSError("lease artifact read failed")
+
+    portfolio = LivePortfolio(
+        broker,
+        account_truth_gate_provider=lambda: truth_gate,
+        account_observation_lease_gate_provider=broken_lease_gate,
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    acks = await portfolio.submit_pending_orders()
+
+    assert len(acks) == 1
+    assert broker.orders[0].symbol == "SPY"
+    assert "account observation lease shadow gate read failed" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_submit_pending_orders_routes_to_account_owner_when_enabled() -> None:
     broker = FakeBroker()
     captured: list[AccountOwnerSubmitIntent] = []

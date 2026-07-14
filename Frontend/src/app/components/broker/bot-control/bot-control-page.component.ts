@@ -466,7 +466,7 @@ export class BotControlPageComponent {
       this.mutationError.set(`No operator route is registered for runbook: ${slug}`);
       return;
     }
-    void this.router.navigate(route.commands);
+    void this.router.navigate(route.commands, route.fragment ? { fragment: route.fragment } : {});
   }
 
   invokeBlockerMove(move: OperatorMove): void {

@@ -137,8 +137,33 @@ verify() {
 }
 
 if [[ "$MODE" == "background" ]]; then
-  setsid "${CMD[@]}" > "$LOG" 2>&1 < /dev/null &
-  echo "Daemon started in background (pid $!), logging to $LOG."
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "${CMD[@]}" > "$LOG" 2>&1 < /dev/null &
+    daemon_pid=$!
+  else
+    daemon_pid="$(
+      "$PY" - "$LOG" "${CMD[@]}" <<'PY'
+from __future__ import annotations
+
+import subprocess
+import sys
+
+log_path = sys.argv[1]
+cmd = sys.argv[2:]
+log = open(log_path, "ab", buffering=0)
+proc = subprocess.Popen(
+    cmd,
+    stdin=subprocess.DEVNULL,
+    stdout=log,
+    stderr=subprocess.STDOUT,
+    start_new_session=True,
+    close_fds=True,
+)
+print(proc.pid)
+PY
+    )"
+  fi
+  echo "Daemon started in background (pid $daemon_pid), logging to $LOG."
   sleep 4
   verify
 else

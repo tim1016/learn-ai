@@ -208,6 +208,7 @@ def classify_account(
         for namespace, namespace_group in binding_index.active_by_namespace.items()
         if len(namespace_group) == 1
     }
+    latest_by_namespace = binding_index.latest_by_namespace
 
     intents_by_ref = {intent.order_ref: intent for intent in durable_intents if intent.account_id == account_id}
     adopt_refs: list[str] = []
@@ -261,6 +262,13 @@ def classify_account(
 
         binding = namespace_bindings.get(namespace)
         if binding is None:
+            registered_binding = latest_by_namespace.get(namespace)
+            if (
+                registered_binding is not None
+                and registered_binding.lifecycle_state == "RETIRED"
+                and not active
+            ):
+                return None
             if not active and baseline is not None and exec_time_ms is not None and exec_time_ms <= baseline.cutoff_ms:
                 baseline_refs.append(order_ref)
                 return None

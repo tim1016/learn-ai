@@ -554,6 +554,7 @@ class LiveEngine:
         # AccountOwnerSubmitIntent objects to this callable instead of calling
         # the broker adapter directly.
         account_owner_submitter: object = None,
+        account_owner_broker_writer: Callable[..., Awaitable[object]] | None = None,
         account_registry_gate_enabled: bool = True,
         owner_generation_provider: object = None,
         current_owner_generation_provider: object = None,
@@ -703,6 +704,7 @@ class LiveEngine:
         self._artifacts_root_for_lease = artifacts_root_for_lease
         self._watchdog_factory = watchdog_factory
         self._account_owner_submitter = account_owner_submitter
+        self._account_owner_broker_writer = account_owner_broker_writer
         self._account_registry_gate_enabled = account_registry_gate_enabled
         self._owner_generation_provider = owner_generation_provider
         self._current_owner_generation_provider = (
@@ -920,6 +922,51 @@ class LiveEngine:
                 snapshot = get_account_truth_snapshot_provider().get(self._account_id)
                 return account_truth_gate_result(snapshot, now_ms=now_ms_utc())
 
+        account_observation_lease_gate_provider = None
+        account_observation_lease_shadow_comparison_observer = None
+        if (
+            self._artifacts_root is not None
+            and self._account_id
+            and getattr(self._broker, "requires_durable_submit", False)
+        ):
+            from app.engine.live.account_artifacts import append_account_event
+            from app.engine.live.account_observation_lease import (
+                account_observation_lease_gate_result,
+                assess_account_observation_lease,
+            )
+            from app.utils.timestamps import now_ms_utc
+
+            def account_observation_lease_gate_provider():
+                assessment = assess_account_observation_lease(
+                    self._artifacts_root,
+                    self._account_id,
+                    now_ms=now_ms_utc(),
+                )
+                return account_observation_lease_gate_result(assessment)
+
+            def account_observation_lease_shadow_comparison_observer(
+                truth_gate,
+                lease_gate,
+            ):
+                append_account_event(
+                    self._artifacts_root,
+                    self._account_id,
+                    {
+                        "event_type": "account_observation_lease_shadow_comparison",
+                        "recorded_at_ms": now_ms_utc(),
+                        "strategy_instance_id": self._strategy_instance_id,
+                        "run_id": self._run_id,
+                        "truth_gate_id": truth_gate.gate_id,
+                        "truth_source": truth_gate.source,
+                        "truth_status": truth_gate.status,
+                        "truth_reason_code": truth_gate.operator_reason,
+                        "lease_gate_id": lease_gate.gate_id,
+                        "lease_source": lease_gate.source,
+                        "lease_status": lease_gate.status,
+                        "lease_reason_code": lease_gate.operator_reason,
+                    },
+                )
+
         session_gate_provider = None
         if getattr(self._broker, "requires_durable_submit", False):
             from app.services.broker_capability_service import get_broker_capability_service
@@ -970,6 +1017,10 @@ class LiveEngine:
                 self._account_registry_gate_result if self._account_registry_gate_enabled else None
             ),
             account_truth_gate_provider=account_truth_gate_provider,
+            account_observation_lease_gate_provider=account_observation_lease_gate_provider,
+            account_observation_lease_shadow_comparison_observer=(
+                account_observation_lease_shadow_comparison_observer
+            ),
             session_gate_provider=session_gate_provider,
             allowed_sessions=self._config.allowed_sessions,
             order_mechanism_sessions=order_mechanism_sessions,
@@ -2567,7 +2618,7 @@ class LiveEngine:
 
         try:
             return await asyncio.wait_for(
-                self._broker.cancel_open_orders(),
+                self._cancel_open_orders_for_managed_write(),
                 timeout=self._cancel_confirm_timeout_s,
             )
         except TimeoutError as exc:
@@ -2592,6 +2643,16 @@ class LiveEngine:
                 path,
             )
             raise
+
+    async def _cancel_open_orders_for_managed_write(self) -> list[int]:
+        writer = self._account_owner_broker_writer
+        if writer is None:
+            return await self._broker.cancel_open_orders()
+        cancelled = await writer(
+            boundary="broker.cancel_open_orders",
+            write=self._broker.cancel_open_orders,
+        )
+        return list(cancelled)
 
     async def _flatten(
         self,

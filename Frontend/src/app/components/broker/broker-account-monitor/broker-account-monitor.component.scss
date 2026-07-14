@@ -37,6 +37,116 @@
   color: var(--text-primary, #f0f3fa);
 }
 
+.account-outcome-card {
+  margin-top: 1rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--border-light, #2a2e39);
+  border-radius: 8px;
+  background: var(--bg-surface, #131722);
+  color: var(--text-primary, #f0f3fa);
+}
+
+.outcome-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.85rem;
+}
+
+.outcome-row {
+  display: grid;
+  gap: 0.45rem;
+  min-height: 10.5rem;
+  padding: 0.8rem;
+  border: 1px solid var(--border-light, #2a2e39);
+  border-left: 4px solid var(--border-strong, #363a45);
+  border-radius: 6px;
+  background: var(--bg-sunken, #070a11);
+}
+
+.outcome-row.outcome-verified {
+  border-left-color: #2fb344;
+}
+
+.outcome-row.outcome-attention {
+  border-left-color: #f5c542;
+}
+
+.outcome-row.outcome-frozen {
+  border-left-color: #ff6b6b;
+}
+
+.outcome-row__head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 0.65rem;
+
+  h3 {
+    margin: 0;
+    font-size: 0.9rem;
+    line-height: 1.25;
+  }
+}
+
+.outcome-evidence,
+.outcome-effect {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.outcome-evidence {
+  color: var(--text-secondary, #b2b5be);
+}
+
+.outcome-effect {
+  color: var(--text-subtle, #9598a1);
+}
+
+.account-observation-card {
+  margin-top: 1rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--border-light, #2a2e39);
+  border-radius: 8px;
+  background: var(--bg-surface, #131722);
+
+  .receipt-reason {
+    margin-bottom: 0;
+  }
+}
+
+.account-observation-history {
+  display: flex;
+  gap: 0.4rem;
+  margin: 0.8rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.account-observation-history li {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.account-observation-history__dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: var(--text-muted, #9598a1);
+}
+
+.account-observation-history .is-verified .account-observation-history__dot {
+  background: var(--bull, #2bb673);
+}
+
+.account-observation-history .is-revoked .account-observation-history__dot {
+  background: var(--bear, #e04f5f);
+}
+
 .primary-action-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) max-content;
@@ -47,8 +157,7 @@
   border: 1px solid rgba(41, 98, 255, 0.45);
   border-left: 4px solid var(--accent, #2962ff);
   border-radius: 8px;
-  background:
-    linear-gradient(90deg, rgba(41, 98, 255, 0.16), rgba(7, 10, 17, 0.88));
+  background: linear-gradient(90deg, rgba(41, 98, 255, 0.16), rgba(7, 10, 17, 0.88));
   color: var(--text-primary, #f0f3fa);
 
   h2 {
@@ -143,6 +252,32 @@
 .condition-row .condition-meta {
   color: var(--text-subtle, #9598a1);
   font-size: 0.78rem;
+}
+
+.condition-owner-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: 0.6rem;
+  row-gap: 0.2rem;
+  margin: 0.45rem 0 0;
+  color: var(--text-subtle, #9598a1);
+  font-size: 0.78rem;
+
+  dt {
+    color: var(--text-secondary, #b2b5be);
+  }
+
+  dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+}
+
+.condition-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
 }
 
 .condition-owner {
@@ -474,5 +609,9 @@
   .primary-action-btn {
     width: 100%;
     min-width: 0;
+  }
+
+  .condition-actions {
+    justify-content: flex-start;
   }
 }

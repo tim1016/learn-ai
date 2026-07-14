@@ -1,5 +1,6 @@
 {
   "account_owner": null,
+  "account_observation": null,
   "action_plan": {
     "anomaly_verdict": "UNKNOWN",
     "consumption": "UNKNOWN"

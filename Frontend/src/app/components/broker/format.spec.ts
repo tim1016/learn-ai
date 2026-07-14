@@ -5,6 +5,7 @@ import {
   diffBps,
   fmtBrokerExpiryDate,
   fmtDurationRemaining,
+  fmtElapsedSince,
   toleranceBand,
 } from './format';
 
@@ -29,6 +30,14 @@ describe('fmtDurationRemaining', () => {
   it('renders expired when no freshness remains', () => {
     expect(fmtDurationRemaining(0)).toBe('Expired');
     expect(fmtDurationRemaining(-1)).toBe('Expired');
+  });
+});
+
+describe('fmtElapsedSince', () => {
+  it('renders concise elapsed freshness without deriving a domain state', () => {
+    expect(fmtElapsedSince(1_000, 43_000)).toBe('42s ago');
+    expect(fmtElapsedSince(1_000, 121_000)).toBe('2m ago');
+    expect(fmtElapsedSince(1_000, 3_601_000)).toBe('1h ago');
   });
 });
 

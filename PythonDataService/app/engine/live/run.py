@@ -1942,6 +1942,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         watchdog_factory=_build_child_watchdog_factory(_artifacts_root, args.run_dir),
         account_registry_gate_enabled=bool(ledger.strategy_instance_id),
         account_owner_submitter=account_owner.submit if account_owner is not None else None,
+        account_owner_broker_writer=account_owner.run_broker_write if account_owner is not None else None,
         owner_generation_provider=_account_owner_generation_provider if account_owner is not None else None,
         current_owner_generation_provider=(
             _current_account_owner_generation_provider if account_owner is not None else None

@@ -81,6 +81,25 @@ describe('VerdictCardComponent', () => {
     );
   });
 
+  it('renders the backend-authored fresh account verification proof', () => {
+    const fixture = renderCard(
+      statusWith({ display_status: 'On duty' }, (status) => {
+        status.operator_surface.account_observation = {
+          state: 'VERIFIED',
+          reason_line: 'Account verified.',
+          observed_at_ms: Date.now() - 42_000,
+          valid_until_ms: Date.now() + 18_000,
+        };
+      }),
+    );
+    const proof = (fixture.nativeElement as HTMLElement).querySelector(
+      '[data-testid="account-observation-proof"]',
+    );
+
+    expect(proof?.textContent).toContain('Account verified.');
+    expect(proof?.textContent).toContain('next check');
+  });
+
   it('opens the scoped why drawer on demand', () => {
     const fixture = renderCard(statusWith({ display_status: 'Ready' }));
     const el = fixture.nativeElement as HTMLElement;

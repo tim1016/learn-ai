@@ -169,6 +169,16 @@
   }
 }
 
+.vc-account-proof {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.35rem;
+  margin: -0.2rem 0 0;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+}
+
 .vc-drift {
   margin: 0;
   font-size: var(--fs-xs);

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import random
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+
+from pydantic import ValidationError
 
 from app.broker.ibkr.account_truth import (
     AccountTruthCollectionContext,
@@ -18,6 +21,7 @@ from app.broker.ibkr.client import BrokerError, IbkrClient
 from app.broker.ibkr.config import IbkrSettings, get_settings
 from app.broker.ibkr.health import build_broker_health
 from app.broker.ibkr.models import IbkrConnectionHealth
+from app.engine.live.account_artifacts import read_account_owner_generation
 from app.schemas.account_truth import AccountTruthResponse
 from app.services.account_truth_snapshot import (
     DEFAULT_ACCOUNT_TRUTH_READINESS_TTL_MS,
@@ -40,6 +44,7 @@ _ACCOUNT_TRUTH_REFRESH_UNAVAILABLE_STATES = frozenset(
         "soft_lost",
     }
 )
+OwnerGenerationFence = tuple[int, str] | None
 
 
 def validate_account_truth_refresh_cadence(
@@ -105,13 +110,23 @@ async def refresh_account_truth_now(
     artifacts_root: Path | None = None,
     health: IbkrConnectionHealth | None = None,
     snapshot_provider: AccountTruthSnapshotProvider | None = None,
+    account_truth_observer: Callable[..., object] | None = None,
+    account_truth_failure_observer: Callable[..., object] | None = None,
 ) -> AccountTruthResponse:
     """Build Account Truth refresh context once and update the readiness cache."""
 
     health = health if health is not None else build_broker_health(client, get_monitor())
+    resolved_artifacts_root = (
+        artifacts_root if artifacts_root is not None else account_truth_artifacts_root()
+    )
+    resolved_account_id = account_id if account_id is not None else health.account_id
+    owner_generation_before = _read_owner_generation_fence(
+        resolved_artifacts_root,
+        resolved_account_id,
+    )
     collection_context = build_account_truth_collection_context(
-        artifacts_root=artifacts_root if artifacts_root is not None else account_truth_artifacts_root(),
-        account_id=account_id if account_id is not None else health.account_id,
+        artifacts_root=resolved_artifacts_root,
+        account_id=resolved_account_id,
         context=context,
     )
     return await refresh_account_truth_and_update_cache(
@@ -119,6 +134,9 @@ async def refresh_account_truth_now(
         health=health,
         collection_context=collection_context,
         snapshot_provider=snapshot_provider,
+        owner_generation_before=owner_generation_before,
+        account_truth_observer=account_truth_observer,
+        account_truth_failure_observer=account_truth_failure_observer,
     )
 
 
@@ -128,6 +146,9 @@ async def refresh_account_truth_and_update_cache(
     health: IbkrConnectionHealth,
     collection_context: AccountTruthCollectionContext,
     snapshot_provider: AccountTruthSnapshotProvider | None = None,
+    owner_generation_before: OwnerGenerationFence = None,
+    account_truth_observer: Callable[..., object] | None = None,
+    account_truth_failure_observer: Callable[..., object] | None = None,
 ) -> AccountTruthResponse:
     """Fetch Account Truth and keep the readiness cache in sync with the attempt."""
 
@@ -139,12 +160,26 @@ async def refresh_account_truth_and_update_cache(
             collection_context=collection_context,
         )
     except BrokerError as exc:
+        attempted_at_ms = health.fetched_at_ms
         provider.mark_refresh_failed(
             health.account_id,
             detail=str(exc),
+            attempted_at_ms=attempted_at_ms,
+        )
+        _notify_refresh_failure(
+            account_truth_failure_observer,
+            account_id=health.account_id,
+            detail=str(exc),
+            attempted_at_ms=attempted_at_ms,
         )
         raise
     provider.remember(truth)
+    _notify_account_truth_observer(
+        account_truth_observer,
+        truth,
+        owner_generation_before=owner_generation_before,
+        owner_generation_captured=True,
+    )
     return truth
 
 
@@ -159,7 +194,8 @@ class AccountTruthRefreshLoop:
         interval_ms: int = DEFAULT_ACCOUNT_TRUTH_REFRESH_INTERVAL_MS,
         snapshot_provider: AccountTruthSnapshotProvider | None = None,
         refresh_now: Callable[..., Awaitable[AccountTruthResponse]] = refresh_account_truth_now,
-        account_truth_observer: Callable[[AccountTruthResponse], object] | None = None,
+        account_truth_observer: Callable[..., object] | None = None,
+        account_truth_failure_observer: Callable[..., object] | None = None,
     ) -> None:
         self._client = client
         self._artifacts_root = artifacts_root
@@ -170,7 +206,11 @@ class AccountTruthRefreshLoop:
             hard_ttl_ms=self._snapshot_provider.hard_ttl_ms,
         )
         self._refresh_now = refresh_now
+        self._refresh_now_accepts_outcome_observers = _accepts_refresh_outcome_observers(
+            refresh_now
+        )
         self._account_truth_observer = account_truth_observer
+        self._account_truth_failure_observer = account_truth_failure_observer
         self._task: asyncio.Task[None] | None = None
         self._stopped = asyncio.Event()
         self._refresh_lock = asyncio.Lock()
@@ -219,12 +259,18 @@ class AccountTruthRefreshLoop:
                 if account_id is not None:
                     self._last_account_id = account_id
                 if account_truth_refresh_session_unavailable(health):
+                    detail = (
+                        "Account Truth refresh requires an available account/order broker session; "
+                        f"current broker state is {health.connection_state}."
+                    )
                     self._mark_refresh_unavailable(
                         account_id,
-                        detail=(
-                            "Account Truth refresh requires an available account/order broker session; "
-                            f"current broker state is {health.connection_state}."
-                        ),
+                        detail=detail,
+                        attempted_at_ms=attempted_at_ms,
+                    )
+                    self._notify_refresh_failure(
+                        account_id,
+                        detail=detail,
                         attempted_at_ms=attempted_at_ms,
                     )
                     self._last_refresh_result = "unavailable"
@@ -238,23 +284,58 @@ class AccountTruthRefreshLoop:
                 }
                 if self._artifacts_root is not None:
                     refresh_kwargs["artifacts_root"] = self._artifacts_root
+                success_observer_notified = False
+                failure_observer_notified = False
+
+                def observe_success(
+                    account_truth: AccountTruthResponse,
+                    *,
+                    owner_generation_before: OwnerGenerationFence = None,
+                    owner_generation_captured: bool = False,
+                ) -> None:
+                    nonlocal success_observer_notified
+                    success_observer_notified = True
+                    self._notify_account_truth(
+                        account_truth,
+                        owner_generation_before=owner_generation_before,
+                        owner_generation_captured=owner_generation_captured,
+                    )
+
+                def observe_failure(
+                    *,
+                    account_id: str | None,
+                    detail: str,
+                    attempted_at_ms: int,
+                ) -> None:
+                    nonlocal failure_observer_notified
+                    failure_observer_notified = True
+                    self._notify_refresh_failure(
+                        account_id,
+                        detail=detail,
+                        attempted_at_ms=attempted_at_ms,
+                    )
+
+                if self._refresh_now_accepts_outcome_observers:
+                    refresh_kwargs["account_truth_observer"] = observe_success
+                    refresh_kwargs["account_truth_failure_observer"] = observe_failure
                 result = await self._refresh_now(self._client, **refresh_kwargs)
-                if self._account_truth_observer is not None:
-                    try:
-                        self._account_truth_observer(result)
-                    except Exception:
-                        logger.exception(
-                            "account truth observer failed",
-                            extra={"account_id": result.account_id},
-                        )
+                if not success_observer_notified:
+                    self._notify_account_truth(result)
                 self._last_refresh_result = "success"
                 return result
             except BrokerError as exc:
+                detail = str(exc)
                 self._mark_refresh_unavailable(
                     account_id,
-                    detail=str(exc),
+                    detail=detail,
                     attempted_at_ms=attempted_at_ms,
                 )
+                if not locals().get("failure_observer_notified", False):
+                    self._notify_refresh_failure(
+                        account_id,
+                        detail=detail,
+                        attempted_at_ms=attempted_at_ms,
+                    )
                 self._last_refresh_result = "failure"
                 logger.warning(
                     "account truth refresh failed",
@@ -262,9 +343,15 @@ class AccountTruthRefreshLoop:
                 )
                 return None
             except Exception as exc:
+                detail = f"Account Truth refresh failed unexpectedly: {exc}"
                 self._mark_refresh_unavailable(
                     account_id,
-                    detail=f"Account Truth refresh failed unexpectedly: {exc}",
+                    detail=detail,
+                    attempted_at_ms=attempted_at_ms,
+                )
+                self._notify_refresh_failure(
+                    account_id,
+                    detail=detail,
                     attempted_at_ms=attempted_at_ms,
                 )
                 self._last_refresh_result = "failure"
@@ -307,6 +394,130 @@ class AccountTruthRefreshLoop:
             account_id,
             detail=detail,
             attempted_at_ms=attempted_at_ms if attempted_at_ms is not None else now_ms_utc(),
+        )
+
+    def _notify_refresh_failure(
+        self,
+        account_id: str | None,
+        *,
+        detail: str,
+        attempted_at_ms: int | None,
+    ) -> None:
+        if self._account_truth_failure_observer is None:
+            return
+        _notify_refresh_failure(
+            self._account_truth_failure_observer,
+            account_id=account_id,
+            detail=detail,
+            attempted_at_ms=attempted_at_ms if attempted_at_ms is not None else now_ms_utc(),
+        )
+
+    def _notify_account_truth(
+        self,
+        account_truth: AccountTruthResponse,
+        *,
+        owner_generation_before: OwnerGenerationFence = None,
+        owner_generation_captured: bool = False,
+    ) -> None:
+        if self._account_truth_observer is None:
+            return
+        _notify_account_truth_observer(
+            self._account_truth_observer,
+            account_truth,
+            owner_generation_before=owner_generation_before,
+            owner_generation_captured=owner_generation_captured,
+        )
+
+
+def _read_owner_generation_fence(
+    artifacts_root: Path,
+    account_id: str | None,
+) -> OwnerGenerationFence:
+    if account_id is None:
+        return None
+    try:
+        owner = read_account_owner_generation(artifacts_root, account_id)
+    except (OSError, ValidationError, ValueError):
+        logger.warning(
+            "account owner generation could not be read before Account Truth refresh",
+            extra={"account_id": account_id},
+        )
+        return None
+    generation = getattr(owner, "generation", None)
+    phase = getattr(owner, "phase", None)
+    if not isinstance(generation, int) or not isinstance(phase, str):
+        return None
+    return generation, phase
+
+
+def _accepts_refresh_outcome_observers(refresh_now: Callable[..., object]) -> bool:
+    try:
+        parameters = inspect.signature(refresh_now).parameters
+    except (TypeError, ValueError):
+        return True
+    return (
+        "account_truth_observer" in parameters
+        or "account_truth_failure_observer" in parameters
+        or any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values())
+    )
+
+
+def _accepts_owner_generation_metadata(observer: Callable[..., object]) -> bool:
+    try:
+        parameters = inspect.signature(observer).parameters
+    except (TypeError, ValueError):
+        return True
+    return (
+        "owner_generation_before" in parameters
+        or "owner_generation_captured" in parameters
+        or any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values())
+    )
+
+
+def _notify_account_truth_observer(
+    observer: Callable[..., object] | None,
+    account_truth: AccountTruthResponse,
+    *,
+    owner_generation_before: OwnerGenerationFence = None,
+    owner_generation_captured: bool = False,
+) -> None:
+    if observer is None:
+        return
+    try:
+        if _accepts_owner_generation_metadata(observer):
+            observer(
+                account_truth,
+                owner_generation_before=owner_generation_before,
+                owner_generation_captured=owner_generation_captured,
+            )
+        else:
+            observer(account_truth)
+    except Exception:
+        logger.exception(
+            "account truth observer failed",
+            extra={"account_id": account_truth.account_id},
+        )
+
+
+def _notify_refresh_failure(
+    observer: Callable[..., object] | None,
+    *,
+    account_id: str | None,
+    detail: str,
+    attempted_at_ms: int,
+) -> None:
+    if observer is None:
+        return
+    try:
+        observer(
+            account_id=account_id,
+            detail=detail,
+            attempted_at_ms=attempted_at_ms,
+        )
+    except Exception:
+        logger.exception(
+            "account truth refresh failure observer failed",
+            extra={"account_id": account_id},
         )
 
 

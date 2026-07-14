@@ -17,6 +17,7 @@ import pytest
 from app.engine.live import run_ledger as run_ledger_module
 from app.engine.live.run_ledger import (
     LiveRunLedger,
+    LiveRunStartDefaults,
     build_ledger,
     compute_run_id,
     read_ledger,
@@ -221,7 +222,7 @@ def test_build_ledger_stores_strategy_instance_id_and_bumps_schema(tmp_path: Pat
         strategy_instance_id="spy-ema-paper-1",
     )
     assert ledger.strategy_instance_id == "spy-ema-paper-1"
-    assert ledger.schema_version == "1.3"
+    assert ledger.schema_version == "1.4"
 
 
 def test_strategy_instance_id_not_in_run_id_hash(tmp_path: Path) -> None:
@@ -290,7 +291,7 @@ def test_write_read_round_trips_strategy_instance_id(tmp_path: Path) -> None:
 
     loaded = read_ledger(out)
     assert loaded.strategy_instance_id == "spy-ema-paper-1"
-    assert loaded.schema_version == "1.3"
+    assert loaded.schema_version == "1.4"
     assert loaded.run_id == ledger.run_id
 
 
@@ -310,7 +311,7 @@ def test_default_ledger_is_latest_schema() -> None:
         start_date_ms=1_700_000_000_000,
         live_config={},
     )
-    assert ledger.schema_version == "1.3"
+    assert ledger.schema_version == "1.4"
     assert ledger.strategy_instance_id == ""
     assert ledger.strategy_key == ""
     # ADR 0009 — defaults for an empty/legacy live_config.
@@ -334,7 +335,7 @@ def test_build_ledger_stores_strategy_key(tmp_path: Path) -> None:
         strategy_key="spy_ema_crossover",
     )
     assert ledger.strategy_key == "spy_ema_crossover"
-    assert ledger.schema_version == "1.3"
+    assert ledger.schema_version == "1.4"
 
 
 def test_strategy_key_not_in_run_id_hash(tmp_path: Path) -> None:
@@ -356,6 +357,42 @@ def test_strategy_key_not_in_run_id_hash(tmp_path: Path) -> None:
     run_id_absent = build_ledger(**common).run_id
 
     assert run_id_x == run_id_y == run_id_absent
+
+
+def test_start_defaults_not_in_run_id_hash(tmp_path: Path) -> None:
+    spec, qc_copy = _make_inputs(tmp_path)
+    common = dict(
+        code_sha="abc123",
+        strategy_spec_path=spec,
+        qc_audit_copy_path=qc_copy,
+        qc_cloud_backtest_id="bt-1",
+        account_id="DU111",
+        start_date_ms=1_700_000_000_000,
+        live_config={"symbol": "SPY"},
+        strategy_key="deployment_validation",
+    )
+    paper_run = build_ledger(
+        **common,
+        start_defaults=LiveRunStartDefaults(
+            strategy="deployment_validation",
+            readonly=False,
+            hydrate_policy="optional",
+            max_orders_per_day=3,
+        ),
+    )
+    shadow_run = build_ledger(
+        **common,
+        start_defaults=LiveRunStartDefaults(
+            strategy="deployment_validation",
+            readonly=True,
+            hydrate_policy="require",
+            max_orders_per_day=2_000,
+        ),
+    )
+
+    assert paper_run.run_id == shadow_run.run_id
+    assert paper_run.start_defaults is not None
+    assert paper_run.start_defaults.max_orders_per_day == 3
 
 
 def test_read_legacy_1_1_ledger_without_strategy_key_defaults_empty(tmp_path: Path) -> None:

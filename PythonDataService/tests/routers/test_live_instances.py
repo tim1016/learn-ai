@@ -122,6 +122,7 @@ def _write_ledger(
     spec_path: Path | None = None,
     account_id: str | None = None,
     strategy_key: str | None = None,
+    start_defaults: dict | None = None,
 ) -> None:
     run_dir = root / run_id
     run_dir.mkdir(parents=True)
@@ -132,6 +133,8 @@ def _write_ledger(
         payload["strategy_spec_path"] = str(spec_path)
     if strategy_key is not None:
         payload["strategy_key"] = strategy_key
+    if start_defaults is not None:
+        payload["start_defaults"] = start_defaults
     (run_dir / "run_ledger.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -4113,7 +4116,7 @@ async def test_deploy_and_start_stages_after_legacy_stopped_latch_check(
         response = await client.post("/api/live-instances", json=body)
 
     assert response.status_code == 201
-    assert captured["start"] is False
+    assert captured["start"] is True
 
 
 async def test_deploy_and_start_rejects_backend_preflight_blocker(
@@ -4258,7 +4261,7 @@ async def test_deploy_and_start_allows_confirmed_identity_incoherence(
 
     assert response.status_code == 201
     assert captured["account_id"] == "DU111"
-    assert captured["start"] is False
+    assert captured["start"] is True
     assert "identity_coherence_confirmation" not in captured
 
 
@@ -4287,7 +4290,7 @@ async def test_deploy_and_start_ignores_soft_deleted_inherited_identity(
     assert delete_response.status_code == 200
     assert deploy_response.status_code == 201
     assert captured["strategy_instance_id"] == "spy_ema_paper"
-    assert captured["start"] is False
+    assert captured["start"] is True
 
 
 async def test_deploy_and_start_ignores_request_inherited_symbol_for_new_instance(
@@ -4313,7 +4316,7 @@ async def test_deploy_and_start_ignores_request_inherited_symbol_for_new_instanc
 
     assert response.status_code == 201
     assert captured["strategy_instance_id"] == "spy_ema_paper"
-    assert captured["start"] is False
+    assert captured["start"] is True
 
 
 async def test_deploy_and_start_rejects_unconfirmed_nonflat_exposure(
@@ -4382,7 +4385,7 @@ async def test_deploy_and_start_allows_confirmed_nonflat_exposure(
 
     assert response.status_code == 201
     assert captured["account_id"] == "DU111"
-    assert captured["start"] is False
+    assert captured["start"] is True
     assert "exposure_coherence_confirmation" not in captured
 
 
@@ -5992,6 +5995,83 @@ async def test_start_defaults_readonly_false_in_paper_mode(app_with_root, monkey
 
     assert response.status_code == 200
     assert response.json()["start_defaults"]["readonly"] is False
+
+
+async def test_start_defaults_use_deploy_captured_start_options(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(
+        root,
+        "run-captured-start",
+        "spy_ema_paper",
+        100,
+        strategy_key="deployment_validation",
+        start_defaults={
+            "strategy": "deployment_validation",
+            "readonly": False,
+            "hydrate_policy": "optional",
+            "max_orders_per_day": 3,
+            "ibkr_host": "127.0.0.1",
+        },
+    )
+    stub = SimpleNamespace(
+        live_runs_root=str(root),
+        live_runner_daemon_url="http://daemon",
+        live_runner_host_start_command="",
+        fleet_dirty_blocks_starts=False,
+        mode="paper",
+        readonly=False,
+    )
+    monkeypatch.setattr(live_instances, "get_settings", lambda: stub)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
+
+    assert response.status_code == 200
+    defaults = response.json()["start_defaults"]
+    assert defaults["strategy"] == "deployment_validation"
+    assert defaults["readonly"] is False
+    assert defaults["hydrate_policy"] == "optional"
+    assert defaults["max_orders_per_day"] == 3
+
+
+async def test_start_defaults_do_not_let_deploy_capture_override_live_mode_readonly(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(
+        root,
+        "run-captured-live-mode",
+        "spy_ema_paper",
+        100,
+        start_defaults={
+            "strategy": "deployment_validation",
+            "readonly": False,
+            "hydrate_policy": "optional",
+            "max_orders_per_day": 3,
+            "ibkr_host": "127.0.0.1",
+        },
+    )
+    stub = SimpleNamespace(
+        live_runs_root=str(root),
+        live_runner_daemon_url="http://daemon",
+        live_runner_host_start_command="",
+        fleet_dirty_blocks_starts=False,
+        mode="live",
+        readonly=False,
+    )
+    monkeypatch.setattr(live_instances, "get_settings", lambda: stub)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
+
+    assert response.status_code == 200
+    defaults = response.json()["start_defaults"]
+    assert defaults["readonly"] is True
+    assert defaults["max_orders_per_day"] == 3
 
 
 async def test_start_defaults_readonly_true_in_live_mode(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:

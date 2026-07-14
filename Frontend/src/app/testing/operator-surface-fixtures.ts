@@ -86,6 +86,12 @@ export function makeOperatorSurfaceFixture(
       recorded_at_ms: 1_800_000_000_000,
       source: 'account_owner',
     },
+    account_observation: {
+      state: 'VERIFIED',
+      reason_line: 'Account verified.',
+      observed_at_ms: 1_800_000_000_000,
+      valid_until_ms: 1_800_000_060_000,
+    },
     submit_readiness: {
       code: 'safe_to_submit',
       label: 'Safe to submit',

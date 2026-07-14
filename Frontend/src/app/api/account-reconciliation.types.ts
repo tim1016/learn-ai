@@ -89,6 +89,20 @@ export interface AccountFreezeBanner {
   detail: string;
 }
 
+export interface AccountObservationHistoryEvent {
+  state: 'VERIFIED' | 'REVOKED';
+  reason_line: string;
+  recorded_at_ms: number;
+}
+
+export interface AccountObservationView {
+  state: 'VERIFIED' | 'REVOKED' | 'EXPIRED' | 'ABSENT';
+  reason_line: string;
+  observed_at_ms: number | null;
+  valid_until_ms: number | null;
+  history: AccountObservationHistoryEvent[];
+}
+
 export interface AccountTriageBotRef {
   strategy_instance_id: string;
   run_id: string;
@@ -122,6 +136,7 @@ export interface AccountTriageResponse {
   account_reconciliation_receipt: AccountReconciliationReceipt | null;
   account_reconciliation_valid_until_ms: number | null;
   reconciliation_automation_policy: AccountReconciliationAutomationPolicy;
+  account_observation: AccountObservationView;
   gate_rows: AccountTriageGateRow[];
   conditions: AccountConditionRow[];
   freeze_banner: AccountFreezeBanner | null;

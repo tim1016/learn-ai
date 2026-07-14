@@ -305,6 +305,8 @@ async def test_running_instance_status_carries_every_operator_surface_block(
         "current_risk",
         "daily_order_cap",
         "account_owner",
+        # Durable Account Truth observation proof for account-scoped safety.
+        "account_observation",
         "submit_readiness",
         "trader_guidance",
         "blockage_ladder",

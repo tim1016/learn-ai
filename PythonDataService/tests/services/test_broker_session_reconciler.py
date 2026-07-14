@@ -157,6 +157,66 @@ def test_reconciler_surfaces_started_but_no_socket() -> None:
     assert rows[0].attention_codes == ["STARTED_BUT_NO_SOCKET"]
 
 
+def test_reconciler_surfaces_fresh_runtime_when_registry_unavailable() -> None:
+    run_dir = "/runs/run-runtime-only"
+    rows = reconcile_broker_session_roster(
+        socket_rows=[],
+        registry_snapshot=None,
+        runtime_index={
+            run_dir: RuntimeIndexEntry(
+                strategy_instance_id="runtime-only-bot",
+                run_id="run-runtime-only",
+                run_dir=run_dir,
+                account_id="DU123",
+                client_id=81,
+                pid=22332,
+                connection_state="connected",
+                last_event_ms=AS_OF_MS - 1_000,
+            )
+        },
+        as_of_ms=AS_OF_MS,
+        socket_probe_available=True,
+    )
+
+    assert len(rows) == 1
+    assert rows[0].identity_type == "bot"
+    assert rows[0].recency == "current"
+    assert rows[0].socket_present is False
+    assert rows[0].client_id == 81
+    assert rows[0].attention_codes == [
+        "REGISTRY_SNAPSHOT_UNAVAILABLE",
+        "SOCKET_ATTRIBUTION_UNAVAILABLE",
+    ]
+
+
+def test_reconciler_marks_stale_runtime_unknown_when_registry_unavailable() -> None:
+    run_dir = "/runs/run-runtime-stale"
+    rows = reconcile_broker_session_roster(
+        socket_rows=[],
+        registry_snapshot=None,
+        runtime_index={
+            run_dir: RuntimeIndexEntry(
+                strategy_instance_id="runtime-stale-bot",
+                run_id="run-runtime-stale",
+                run_dir=run_dir,
+                client_id=82,
+                connection_state="connected",
+                last_event_ms=AS_OF_MS - 30_000,
+            )
+        },
+        as_of_ms=AS_OF_MS,
+        socket_probe_available=True,
+        stale_after_ms=25_000,
+    )
+
+    assert rows[0].recency == "unknown"
+    assert rows[0].attention_codes == [
+        "REGISTRY_SNAPSHOT_UNAVAILABLE",
+        "SOCKET_ATTRIBUTION_UNAVAILABLE",
+        "CLIENT_SIGNAL_STALE",
+    ]
+
+
 def test_reconciler_classifies_known_socket_without_pid_as_orphan() -> None:
     run_dir = "/runs/run-c"
     rows = reconcile_broker_session_roster(

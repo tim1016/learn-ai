@@ -129,6 +129,83 @@ def test_account_classifier_ignores_baseline_covered_historical_execution() -> N
     assert decision.to_gate_result().status == "pass"
 
 
+def test_account_classifier_allows_known_retired_namespace_execution_without_baseline() -> None:
+    retired_sid = "spy_ema_paper_old"
+    retired_ns = bot_order_namespace_for_instance(retired_sid)
+    retired_ref = build_order_ref(retired_ns, mint_intent_id())
+    retired_binding = AccountInstanceBinding(
+        account_id=ACCOUNT,
+        strategy_instance_id=retired_sid,
+        run_id="run-retired",
+        bot_order_namespace=retired_ns,
+        lifecycle_state="RETIRED",
+        recorded_at_ms=NOW_MS - 1,
+        source="host_daemon.stop_exited",
+    )
+
+    decision = classify_account(
+        account_id=ACCOUNT,
+        broker=AccountBrokerEvidence(
+            snapshot=BrokerSnapshot(
+                executions=(
+                    BrokerExecutionView(
+                        order_ref=retired_ref,
+                        exec_time_ms=NOW_MS - 500,
+                    ),
+                )
+            )
+        ),
+        registry_bindings=(_binding(), retired_binding),
+        durable_intents=(),
+        baseline=None,
+        operator_override=None,
+        now_ms=NOW_MS,
+    )
+
+    assert decision.outcome == "continue"
+    assert decision.reason == "ACCOUNT_STATE_MATCHES_REGISTRY"
+    assert decision.strategy_instance_id == SID
+
+
+def test_account_classifier_blocks_open_order_from_known_retired_namespace() -> None:
+    retired_sid = "spy_ema_paper_old"
+    retired_ns = bot_order_namespace_for_instance(retired_sid)
+    retired_ref = build_order_ref(retired_ns, mint_intent_id())
+    retired_binding = AccountInstanceBinding(
+        account_id=ACCOUNT,
+        strategy_instance_id=retired_sid,
+        run_id="run-retired",
+        bot_order_namespace=retired_ns,
+        lifecycle_state="RETIRED",
+        recorded_at_ms=NOW_MS - 1,
+        source="host_daemon.stop_exited",
+    )
+
+    decision = classify_account(
+        account_id=ACCOUNT,
+        broker=AccountBrokerEvidence(
+            snapshot=BrokerSnapshot(
+                open_orders=(
+                    BrokerOrderView(
+                        order_ref=retired_ref,
+                        status="Submitted",
+                        remaining=1.0,
+                    ),
+                )
+            )
+        ),
+        registry_bindings=(_binding(), retired_binding),
+        durable_intents=(),
+        baseline=None,
+        operator_override=None,
+        now_ms=NOW_MS,
+    )
+
+    assert decision.outcome == "poison_run"
+    assert decision.reason == "UNKNOWN_NAMESPACE"
+    assert decision.affected_order_refs == (retired_ref,)
+
+
 def test_account_classifier_retry_records_operator_override_separately_from_baseline() -> None:
     override = AccountOperatorOverride(
         override_id="override-1",

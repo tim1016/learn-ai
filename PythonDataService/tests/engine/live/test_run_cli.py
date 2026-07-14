@@ -466,7 +466,7 @@ def test_init_ledger_writes_strategy_instance_id(repo_with_inputs: tuple[Path, P
     assert len(runs) == 1
     ledger = json.loads((runs[0] / "run_ledger.json").read_text(encoding="utf-8"))
     assert ledger["strategy_instance_id"] == "spy-ema-paper-1"
-    assert ledger["schema_version"] == "1.3"
+    assert ledger["schema_version"] == "1.4"
     assert ledger["run_id"] == runs[0].name
 
 
@@ -508,7 +508,7 @@ def test_init_ledger_writes_strategy_key(repo_with_inputs: tuple[Path, Path, Pat
     assert len(runs) == 1
     ledger = json.loads((runs[0] / "run_ledger.json").read_text(encoding="utf-8"))
     assert ledger["strategy_key"] == "spy_ema_crossover"
-    assert ledger["schema_version"] == "1.3"
+    assert ledger["schema_version"] == "1.4"
 
 
 @requires_git
@@ -2398,6 +2398,7 @@ def test_cmd_start_wires_account_owner_submitter_for_real_client(
     assert rc == 0
     kwargs = captured["kwargs"]
     assert callable(kwargs["account_owner_submitter"])
+    assert callable(kwargs["account_owner_broker_writer"])
     assert callable(kwargs["owner_generation_provider"])
     owner_generation = read_account_owner_generation(artifacts_root, "DU123")
     assert owner_generation is not None

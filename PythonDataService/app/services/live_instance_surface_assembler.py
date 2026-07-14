@@ -98,6 +98,7 @@ class LiveInstanceSurfaceDependencies:
     instance_ledger_account_id: Callable[..., Any]
     crash_recovery_gate_for_instance: Callable[..., Any]
     resolve_account_owner_surface: Callable[..., Any]
+    resolve_account_observation_surface: Callable[..., Any]
     get_account_truth_snapshot_provider: Callable[..., Any]
     resolve_latest_mutation: Callable[..., Any]
     resolve_broker_observation_consistency: Callable[..., Any]
@@ -224,6 +225,11 @@ class LiveInstanceSurfaceAssembler:
             strategy_instance_id=sid,
         )
         account_owner = d.resolve_account_owner_surface(root.parent, instance_account_id)
+        account_observation = d.resolve_account_observation_surface(
+            root.parent,
+            instance_account_id,
+            now_ms=observed_at_ms,
+        )
         account_truth_snapshot = d.get_account_truth_snapshot_provider().get(instance_account_id)
         latest_mutation = d.resolve_latest_mutation(root, sid)
         broker_observation_consistency = d.resolve_broker_observation_consistency(
@@ -284,6 +290,7 @@ class LiveInstanceSurfaceAssembler:
             account_freeze=account_freeze,
             crash_recovery_gate=crash_recovery_gate,
             account_owner=account_owner,
+            account_observation=account_observation,
             reconciliation_receipt=reconciliation_receipt,
             current_wal_seq=current_wal_seq,
             current_run_id=current_run_id,

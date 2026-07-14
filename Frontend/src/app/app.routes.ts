@@ -182,6 +182,13 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "docs/ibkr-setup-guide",
+    loadComponent: () =>
+      import("./components/docs/ibkr-setup-guide-page.component").then(
+        (m) => m.IbkrSetupGuidePageComponent
+      ),
+  },
+  {
     path: "broker",
     loadComponent: () =>
       import(

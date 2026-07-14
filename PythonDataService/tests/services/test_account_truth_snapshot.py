@@ -9,16 +9,32 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.broker.ibkr.account_recovery import AccountRecoveryState
-from app.broker.ibkr.account_truth import AccountTruthCollectionContext
+from app.broker.ibkr.account_truth import AccountTruthCollectionContext, compose_account_truth
 from app.broker.ibkr.client import BrokerError
-from app.broker.ibkr.models import IbkrConnectionHealth
-from app.engine.live.account_artifacts import AccountFreezeEvidence, write_account_freeze
+from app.broker.ibkr.models import (
+    IbkrAccountSummary,
+    IbkrConnectionHealth,
+    IbkrOrderEvent,
+    IbkrPosition,
+    IbkrPositionsSnapshot,
+)
+from app.engine.live.account_artifacts import (
+    ACCOUNT_OWNER_GENERATION_FILENAME,
+    AccountFreezeEvidence,
+    AccountInstanceBinding,
+    AccountOwnerGeneration,
+    account_artifacts_root,
+    write_account_freeze,
+    write_account_owner_generation,
+)
+from app.engine.live.account_observation_lease import assess_account_observation_lease
 from app.schemas.account_truth import (
     AccountTruthMessage,
     AccountTruthResponse,
     AccountTruthSourceFreshness,
 )
 from app.services import account_truth_refresh
+from app.services.account_reconciliation import AccountReconciliationService
 from app.services.account_truth_refresh import (
     DEFAULT_ACCOUNT_TRUTH_REFRESH_INTERVAL_MS,
     AccountTruthRefreshLoop,
@@ -28,6 +44,7 @@ from app.services.account_truth_refresh import (
     validate_account_truth_refresh_cadence,
 )
 from app.services.account_truth_snapshot import (
+    AccountTruthSnapshot,
     AccountTruthSnapshotProvider,
     account_truth_gate_result,
     assess_account_truth,
@@ -97,6 +114,88 @@ def _health(
         fetched_at_ms=fetched_at_ms,
         connection_state=connection_state,  # type: ignore[arg-type]
         last_transition_ms=fetched_at_ms,
+    )
+
+
+def _composed_truth_with_position(
+    *,
+    owned: bool,
+    account_summary_id: str = "DU123",
+) -> AccountTruthResponse:
+    account_id = "DU123"
+    position = IbkrPosition(
+        account_id=account_id,
+        con_id=42,
+        symbol="SPY",
+        sec_type="STK",
+        quantity=1.0,
+        avg_cost=500.0,
+        fetched_at_ms=1_000,
+    )
+    executions = (
+        [
+            IbkrOrderEvent(
+                account_id=account_id,
+                order_id=7,
+                perm_id=70,
+                con_id=42,
+                event_type="fill",
+                status="Filled",
+                order_ref="learn-ai/bot-a/v1:intent-a",
+                symbol="SPY",
+                side="BUY",
+                order_type="MKT",
+                exec_id="exec-a",
+                client_id=7,
+                fill_quantity=1.0,
+                avg_fill_price=500.0,
+                cumulative_filled=1.0,
+                remaining=0.0,
+                last_fill_price=500.0,
+                exec_time_ms=900,
+                ts_ms=1_000,
+            )
+        ]
+        if owned
+        else []
+    )
+    bindings = (
+        [
+            AccountInstanceBinding(
+                account_id=account_id,
+                strategy_instance_id="bot-a",
+                run_id="run-a",
+                bot_order_namespace="learn-ai/bot-a/v1",
+                lifecycle_state="ACTIVE",
+                recorded_at_ms=900,
+                source="test",
+            )
+        ]
+        if owned
+        else []
+    )
+    return compose_account_truth(
+        health=_health(account_id=account_id, fetched_at_ms=1_000),
+        account_instance_bindings=bindings,
+        account_recovery_state=AccountRecoveryState.clear(account_id),
+        account=IbkrAccountSummary(
+            account_id=account_summary_id,
+            is_paper=True,
+            base_currency="USD",
+            net_liquidation=100_000.0,
+            buying_power=50_000.0,
+            fetched_at_ms=1_000,
+        ),
+        positions_snapshot=IbkrPositionsSnapshot(
+            account_id=account_id,
+            is_paper=True,
+            positions=[position],
+            fetched_at_ms=1_000,
+        ),
+        open_orders=[],
+        completed_orders=[],
+        executions=executions,
+        generated_at_ms=1_000,
     )
 
 
@@ -181,6 +280,44 @@ async def test_refresh_service_marks_failure_for_any_account_truth_route(
 
 
 @pytest.mark.asyncio
+async def test_refresh_service_notifies_keyword_only_failure_observer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    observed: dict[str, object] = {}
+    monkeypatch.setattr(
+        account_truth_refresh,
+        "fetch_account_truth",
+        AsyncMock(side_effect=BrokerError("broker sweep timed out")),
+    )
+
+    def observe_failure(
+        *,
+        account_id: str | None,
+        detail: str,
+        attempted_at_ms: int,
+    ) -> None:
+        observed["account_id"] = account_id
+        observed["detail"] = detail
+        observed["attempted_at_ms"] = attempted_at_ms
+
+    with pytest.raises(BrokerError):
+        await refresh_account_truth_and_update_cache(
+            object(),  # type: ignore[arg-type]
+            health=_truth(generated_at_ms=2_000).health,
+            collection_context=_collection_context(),
+            snapshot_provider=provider,
+            account_truth_failure_observer=observe_failure,
+        )
+
+    assert observed == {
+        "account_id": "DU123",
+        "detail": "broker sweep timed out",
+        "attempted_at_ms": 2_000,
+    }
+
+
+@pytest.mark.asyncio
 async def test_refresh_now_builds_context_once_and_remembers_truth(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -220,6 +357,91 @@ async def test_refresh_now_builds_context_once_and_remembers_truth(
     assert result is truth
     assert captured == {"account_id": "DU123", "context": "account reconciliation"}
     assert provider.get("DU123").truth is truth  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_refresh_now_captures_owner_generation_before_collection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    truth = _truth(account_id="DU123")
+    observed: dict[str, object] = {}
+    write_account_owner_generation(
+        tmp_path,
+        AccountOwnerGeneration(
+            account_id="DU123",
+            generation=3,
+            phase="accepting",
+            recorded_at_ms=1_700_000_000_000,
+            source="test",
+        ),
+    )
+
+    def fake_collection_context(
+        *,
+        artifacts_root,
+        account_id: str | None,
+        context: str,
+    ) -> AccountTruthCollectionContext:
+        write_account_owner_generation(
+            tmp_path,
+            AccountOwnerGeneration(
+                account_id="DU123",
+                generation=4,
+                phase="accepting",
+                recorded_at_ms=1_700_000_000_001,
+                source="test",
+            ),
+        )
+        return _collection_context(account_id or "")
+
+    def observe_success(
+        account_truth: AccountTruthResponse,
+        *,
+        owner_generation_before: tuple[int, str] | None,
+        owner_generation_captured: bool,
+    ) -> None:
+        observed["truth"] = account_truth
+        observed["owner_generation_before"] = owner_generation_before
+        observed["owner_generation_captured"] = owner_generation_captured
+
+    monkeypatch.setattr(account_truth_refresh, "get_monitor", lambda: None)
+    monkeypatch.setattr(
+        account_truth_refresh,
+        "build_account_truth_collection_context",
+        fake_collection_context,
+    )
+    monkeypatch.setattr(
+        account_truth_refresh,
+        "fetch_account_truth",
+        AsyncMock(return_value=truth),
+    )
+
+    result = await refresh_account_truth_now(
+        _FakeClient(_health(account_id="DU123")),  # type: ignore[arg-type]
+        account_id="DU123",
+        artifacts_root=tmp_path,
+        context="account truth",
+        snapshot_provider=provider,
+        account_truth_observer=observe_success,
+    )
+
+    assert result is truth
+    assert observed == {
+        "truth": truth,
+        "owner_generation_before": (3, "accepting"),
+        "owner_generation_captured": True,
+    }
+
+
+def test_read_owner_generation_fence_fails_closed_for_malformed_artifact(tmp_path: Path) -> None:
+    account_id = "DU123"
+    path = account_artifacts_root(tmp_path, account_id) / ACCOUNT_OWNER_GENERATION_FILENAME
+    path.parent.mkdir(parents=True)
+    path.write_text('{"generation":"not-an-integer"}', encoding="utf-8")
+
+    assert account_truth_refresh._read_owner_generation_fence(tmp_path, account_id) is None
 
 
 @pytest.mark.asyncio
@@ -517,6 +739,78 @@ async def test_refresh_loop_marks_last_account_failed_when_broker_disconnects(
 
 
 @pytest.mark.asyncio
+async def test_refresh_loop_notifies_failure_observer_when_broker_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    observed_failures: list[tuple[str | None, str, int]] = []
+    monkeypatch.setattr(account_truth_refresh, "get_monitor", lambda: None)
+
+    loop = AccountTruthRefreshLoop(
+        client=_FakeClient(
+            _health(
+                account_id="DU123",
+                connected=False,
+                connection_state="disconnected",
+                fetched_at_ms=2_000,
+            )
+        ),  # type: ignore[arg-type]
+        snapshot_provider=provider,
+        account_truth_failure_observer=lambda account_id, detail, attempted_at_ms: observed_failures.append(
+            (account_id, detail, attempted_at_ms)
+        ),
+    )
+
+    assert await loop.refresh_once() is None
+    assert observed_failures == [
+        (
+            "DU123",
+            "Account Truth refresh requires an available account/order broker session; "
+            "current broker state is disconnected.",
+            2_000,
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_refresh_loop_failure_observer_accepts_real_bound_reconciliation_method(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    service.observe_account_truth(_truth(), now_ms=1_000)
+    monkeypatch.setattr(account_truth_refresh, "get_monitor", lambda: None)
+
+    async def failing_refresh_now(
+        _client,
+        *,
+        context: str,
+        account_id: str | None = None,
+        health: IbkrConnectionHealth | None = None,
+        snapshot_provider: AccountTruthSnapshotProvider | None = None,
+    ) -> AccountTruthResponse:
+        assert context == "account truth refresh loop"
+        assert account_id == "DU123"
+        assert health is not None
+        assert snapshot_provider is provider
+        raise BrokerError("broker sweep timed out")
+
+    loop = AccountTruthRefreshLoop(
+        client=_FakeClient(_health(account_id="DU123", fetched_at_ms=2_000)),  # type: ignore[arg-type]
+        snapshot_provider=provider,
+        refresh_now=failing_refresh_now,
+        account_truth_failure_observer=service.observe_account_truth_failure,
+    )
+
+    assert await loop.refresh_once() is None
+
+    assessment = assess_account_observation_lease(tmp_path, "DU123", now_ms=2_001)
+    assert assessment.state == "REVOKED"
+    assert assessment.reason_code == "ACCOUNT_TRUTH_REFRESH_FAILED"
+
+
+@pytest.mark.asyncio
 async def test_refresh_loop_does_not_backoff_unavailable_broker_poll(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -714,6 +1008,42 @@ def test_staleness_uses_cached_at_ms_not_broker_generated_at_ms() -> None:
 
     assert assessment.status == "pass"
     assert assessment.age_ms == 500
+
+
+def test_assessment_passes_composed_owned_nonzero_position() -> None:
+    truth = _composed_truth_with_position(owned=True)
+    snapshot = AccountTruthSnapshot(truth=truth, cached_at_ms=1_000)
+
+    assessment = assess_account_truth(snapshot, now_ms=1_500)
+
+    assert truth.final_verdict == "clean"
+    assert truth.positions[0].quantity == 1.0
+    assert truth.positions[0].owner.owner_class == "bot"
+    assert assessment.status == "pass"
+
+
+def test_assessment_blocks_composed_unattributed_nonzero_position() -> None:
+    truth = _composed_truth_with_position(owned=False)
+    snapshot = AccountTruthSnapshot(truth=truth, cached_at_ms=1_000)
+
+    assessment = assess_account_truth(snapshot, now_ms=1_500)
+
+    assert truth.final_verdict == "not_proven"
+    assert truth.positions[0].owner.owner_class == "foreign_or_unclaimed"
+    assert assessment.status == "block"
+    assert assessment.reason_codes[0] == "ACCOUNT_TRUTH_NOT_PROVEN"
+
+
+def test_assessment_blocks_composed_connected_account_mismatch() -> None:
+    truth = _composed_truth_with_position(owned=False, account_summary_id="DU999")
+    snapshot = AccountTruthSnapshot(truth=truth, cached_at_ms=1_000)
+
+    assessment = assess_account_truth(snapshot, now_ms=1_500)
+
+    assert truth.account_id is None
+    assert truth.final_verdict == "not_proven"
+    assert assessment.status == "block"
+    assert assessment.reason_codes[0] == "ACCOUNT_TRUTH_NOT_PROVEN"
 
 
 def test_missing_source_freshness_rows_fail_closed() -> None:
