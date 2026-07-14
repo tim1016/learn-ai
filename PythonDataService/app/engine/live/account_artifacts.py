@@ -242,6 +242,44 @@ def _account_artifact_file_path(
     return path
 
 
+def _existing_account_artifact_file_path(
+    artifacts_root: Path,
+    account_id: str,
+    filename: str,
+) -> Path | None:
+    """Return an existing, non-symlinked static artifact selected from disk.
+
+    The account ID is validated before comparing it with names supplied by the
+    server-owned account directory listing. It is never used to construct a
+    path for a read operation; this both prevents symlink traversal and keeps
+    the read boundary visible to CodeQL.
+    """
+    safe_account_id = _safe_account_path_segment(account_id)
+    if filename != os.path.basename(filename):
+        raise AccountArtifactError(f"invalid account artifact filename: {filename!r}")
+    accounts_root = Path(
+        os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts"))
+    )
+    try:
+        account_root = next(
+            child
+            for child in accounts_root.iterdir()
+            if child.name == safe_account_id and child.is_dir() and not child.is_symlink()
+        )
+    except FileNotFoundError:
+        return None
+    except StopIteration:
+        return None
+    for artifact_path in account_root.iterdir():
+        if artifact_path.name == filename:
+            if artifact_path.is_symlink():
+                raise AccountArtifactError(
+                    f"artifact path traversal detected for account_id: {account_id!r}"
+                )
+            return artifact_path if artifact_path.is_file() else None
+    return None
+
+
 def write_account_freeze(artifacts_root: Path, evidence: AccountFreezeEvidence) -> Path:
     root = account_artifacts_root(artifacts_root, evidence.account_id)
     root.mkdir(parents=True, exist_ok=True)
@@ -264,8 +302,12 @@ def write_account_freeze(artifacts_root: Path, evidence: AccountFreezeEvidence) 
 
 
 def read_account_freeze(artifacts_root: Path, account_id: str) -> AccountFreezeEvidence | None:
-    path = account_artifacts_root(artifacts_root, account_id) / ACCOUNT_FREEZE_FILENAME
-    if not path.is_file():
+    path = _existing_account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        ACCOUNT_FREEZE_FILENAME,
+    )
+    if path is None:
         return None
     evidence = AccountFreezeEvidence.model_validate_json(path.read_text(encoding="utf-8"))
     if evidence.cleared_at_ms is not None:
@@ -525,8 +567,12 @@ def read_account_owner_generation(
     artifacts_root: Path,
     account_id: str,
 ) -> AccountOwnerGeneration | None:
-    path = account_artifacts_root(artifacts_root, account_id) / ACCOUNT_OWNER_GENERATION_FILENAME
-    if not path.is_file():
+    path = _existing_account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        ACCOUNT_OWNER_GENERATION_FILENAME,
+    )
+    if path is None:
         return None
     return AccountOwnerGeneration.model_validate_json(path.read_text(encoding="utf-8"))
 

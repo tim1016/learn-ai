@@ -114,6 +114,31 @@ def test_append_account_event_rejects_symlinked_event_file(tmp_path: Path) -> No
     assert not outside.exists()
 
 
+@pytest.mark.parametrize(
+    "reader, filename",
+    [
+        (read_account_freeze, account_artifacts.ACCOUNT_FREEZE_FILENAME),
+        (account_artifacts.read_account_owner_generation, account_artifacts.ACCOUNT_OWNER_GENERATION_FILENAME),
+    ],
+)
+def test_account_artifact_reads_reject_symlinked_static_file(
+    tmp_path: Path,
+    reader: object,
+    filename: str,
+) -> None:
+    root = account_artifacts_root(tmp_path, "DU123456")
+    root.mkdir(parents=True)
+    outside = tmp_path / "outside-artifact.json"
+    artifact_path = root / filename
+    try:
+        artifact_path.symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable in this test environment: {exc}")
+
+    with pytest.raises(AccountArtifactError, match="artifact path traversal"):
+        reader(tmp_path, "DU123456")
+
+
 def test_account_event_seq_tolerates_malformed_legacy_rows(tmp_path: Path) -> None:
     root = account_artifacts_root(tmp_path, "DU123456")
     root.mkdir(parents=True)
