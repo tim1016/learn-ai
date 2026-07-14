@@ -65,6 +65,25 @@ interface AccountConditionGroups {
   bot: AccountConditionRow[];
 }
 
+type AccountOutcomeProjectionKey =
+  'active_bot' | 'recovery_bot' | 'manual_override' | 'unattributed' | 'unobservable';
+
+type AccountOutcomeProjectionStatus = 'verified' | 'attention' | 'frozen' | 'empty';
+
+interface AccountOutcomeProjectionRow {
+  key: AccountOutcomeProjectionKey;
+  label: string;
+  status: AccountOutcomeProjectionStatus;
+  statusLabel: string;
+  evidence: string;
+  effect: string;
+}
+
+interface ConditionOwnerFact {
+  label: string;
+  value: string;
+}
+
 /**
  * /broker/account-monitor — live account-level + per-position P&L.
  *
@@ -105,7 +124,9 @@ export class BrokerAccountMonitorComponent {
   private readonly injector = inject(Injector);
   private readonly route = inject(ActivatedRoute);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
-  private readonly fragment = toSignal(this.route.fragment, { initialValue: null });
+  private readonly fragment = toSignal(this.route.fragment, {
+    initialValue: null,
+  });
 
   readonly positionsLoading = signal(false);
   readonly positionsError = signal<unknown>(null);
@@ -153,8 +174,14 @@ export class BrokerAccountMonitorComponent {
   readonly accountReconciliationAutomationPolicy = computed(
     () => this.accountTriage()?.reconciliation_automation_policy ?? null,
   );
-  readonly accountObservation = computed(
-    () => this.accountTriage()?.account_observation ?? null,
+  readonly accountObservation = computed(() => this.accountTriage()?.account_observation ?? null);
+  readonly accountOutcomeProjectionRows = computed(() =>
+    buildAccountOutcomeProjectionRows(
+      this.accountTruth(),
+      this.accountTriage(),
+      this.accountReconciliation(),
+      this.accountReconciliationExpired(),
+    ),
   );
   readonly accountReconciliationValidUntilMs = computed(() => {
     const receipt = this.accountReconciliation();
@@ -190,29 +217,26 @@ export class BrokerAccountMonitorComponent {
       !this.accountHasOpenBrokerExposure()
     );
   });
-  readonly accountReconciliationTone = computed(
-    () => this.accountReconciliationDisplayGate(),
-  );
+  readonly accountReconciliationTone = computed(() => this.accountReconciliationDisplayGate());
   readonly accountReconciliationDisplayState = computed(() =>
     this.accountReconciliationExpired()
       ? 'NOT_PROVEN'
-      : this.accountReconciliation()?.state ?? 'NOT_PROVEN',
+      : (this.accountReconciliation()?.state ?? 'NOT_PROVEN'),
   );
   readonly accountReconciliationDisplayGate = computed<GateResultStatus>(() =>
     this.accountReconciliationExpired()
       ? 'unknown'
-      : this.accountReconciliation()?.final_gate_result.status ?? 'unknown',
+      : (this.accountReconciliation()?.final_gate_result.status ?? 'unknown'),
   );
   readonly accountReconciliationDisplayGateLabel = computed(() => {
     const status = this.accountReconciliationDisplayGate();
     return status === 'unknown' ? 'Not yet proven' : status;
   });
-  readonly accountReconciliationReason = computed(
-    () =>
-      this.accountReconciliationExpired()
-        ? 'Not yet proven: the account reconciliation receipt is stale. Run account reconcile again.'
-        : this.accountReconciliation()?.final_gate_result.operator_reason ??
-          'Not yet proven: no account-level reconciliation receipt has been recorded for this account.',
+  readonly accountReconciliationReason = computed(() =>
+    this.accountReconciliationExpired()
+      ? 'Not yet proven: the account reconciliation receipt is stale. Run account reconcile again.'
+      : (this.accountReconciliation()?.final_gate_result.operator_reason ??
+        'Not yet proven: no account-level reconciliation receipt has been recorded for this account.'),
   );
   readonly primaryExposureResolutionCondition = computed(
     () =>
@@ -300,9 +324,7 @@ export class BrokerAccountMonitorComponent {
       );
     }
     const summary = exposures
-      .map((row) => (
-        `${row.symbol} ${fmtSignedNumber(row.quantity, 0)} (${row.owner_label})`
-      ))
+      .map((row) => `${row.symbol} ${fmtSignedNumber(row.quantity, 0)} (${row.owner_label})`)
       .join(', ');
     return (
       `${summary} remains unresolved. Use Resolve exposure on this page to flatten ` +
@@ -527,7 +549,13 @@ export class BrokerAccountMonitorComponent {
     const condition = this.exposureResolutionCondition();
     const accountId = this.accountReconciliationAccountId();
     const strategyInstanceId = condition?.owner.strategy_instance_id;
-    if (!condition || !accountId || !strategyInstanceId || this.exposureResolutionLoading() !== null) return;
+    if (
+      !condition ||
+      !accountId ||
+      !strategyInstanceId ||
+      this.exposureResolutionLoading() !== null
+    )
+      return;
     this.exposureResolutionLoading.set('flatten');
     this.accountCureError.set(null);
     try {
@@ -619,15 +647,53 @@ export class BrokerAccountMonitorComponent {
     );
   }
 
+  conditionOwnerFacts(condition: AccountConditionRow): ConditionOwnerFact[] {
+    const facts: ConditionOwnerFact[] = [];
+    if (condition.owner.strategy_instance_id) {
+      facts.push({
+        label: 'Strategy instance',
+        value: condition.owner.strategy_instance_id,
+      });
+    }
+    if (condition.owner.run_id) {
+      facts.push({ label: 'Run', value: condition.owner.run_id });
+    }
+    if (condition.owner.lifecycle_state) {
+      facts.push({
+        label: 'Lifecycle',
+        value: condition.owner.lifecycle_state,
+      });
+    }
+    if (condition.affected_strategy_instance_ids.length > 0) {
+      facts.push({
+        label: 'Affected',
+        value: condition.affected_strategy_instance_ids.join(', '),
+      });
+    }
+    return facts;
+  }
+
+  reviveActionVisibleButDisabled(condition: AccountConditionRow): boolean {
+    return (
+      condition.owner.owner_type === 'bot' &&
+      condition.owner.lifecycle_state === 'RETIRED' &&
+      !!condition.owner.strategy_instance_id
+    );
+  }
+
   primaryActionDisabled(action: AccountPrimaryAction): boolean {
     if (action.kind === 'reconcile') {
       return this.accountReconciliationLoading() || !this.accountReconciliationAccountId();
     }
     if (action.kind === 'clearFreeze') {
-      return this.accountFreezeClearLoading() || this.accountTriage()?.clear_freeze_actionable !== true;
+      return (
+        this.accountFreezeClearLoading() || this.accountTriage()?.clear_freeze_actionable !== true
+      );
     }
     if (action.kind === 'resolveExposure') {
-      return this.exposureResolutionLoading() !== null || !action.condition?.owner.strategy_instance_id;
+      return (
+        this.exposureResolutionLoading() !== null || !action.condition?.owner.strategy_instance_id
+      );
     }
     return false;
   }
@@ -741,9 +807,7 @@ export class BrokerAccountMonitorComponent {
     this.accountStream.set(account);
 
     if (positions.length > 0) {
-      const conIds = positions
-        .map((p) => p.con_id)
-        .filter((c): c is number => Number.isFinite(c));
+      const conIds = positions.map((p) => p.con_id).filter((c): c is number => Number.isFinite(c));
       const query = conIds.map((c) => `con_ids=${c}`).join('&');
       const positionStream = runInInjectionContext(this.injector, () =>
         brokerSse<IbkrPnLTick>(
@@ -759,4 +823,204 @@ export class BrokerAccountMonitorComponent {
   trackRow = (_: number, row: PositionRow): number => row.position.con_id;
   trackCondition = (_: number, condition: AccountConditionRow): string =>
     `${condition.scope}:${condition.condition_type}:${condition.owner.owner_id}:${condition.evidence_at_ms}`;
+}
+
+function buildAccountOutcomeProjectionRows(
+  truth: AccountTruthResponse | null,
+  triage: AccountTriageResponse | null,
+  receipt: AccountReconciliationReceipt | null,
+  receiptExpired: boolean,
+): AccountOutcomeProjectionRow[] {
+  const ownerSummaries = truth?.owner_summaries ?? [];
+  const openExposures = truth?.symbol_exposures.filter((row) => row.quantity !== 0) ?? [];
+  const conditions = triage?.conditions ?? [];
+  const observation = triage?.account_observation ?? null;
+  const staleSources = truth?.source_freshness.filter((row) => row.status !== 'fresh') ?? [];
+
+  const activeBotOwners = ownerSummaries.filter(
+    (row) =>
+      row.owner_class === 'bot' &&
+      (row.owner_binding_state === 'ACTIVE' || row.owner_binding_state === 'DEPLOYED'),
+  );
+  const retiredBotOwners = ownerSummaries.filter(
+    (row) =>
+      (row.owner_class === 'bot' || row.owner_class === 'mixed_known') &&
+      row.owner_binding_state === 'RETIRED',
+  );
+  const retiredBotConditions = conditions.filter(
+    (condition) =>
+      condition.owner.owner_type === 'bot' && condition.owner.lifecycle_state === 'RETIRED',
+  );
+  const manualOwners = ownerSummaries.filter((row) => row.owner_class === 'manual');
+  const unattributedExposures = openExposures.filter(
+    (row) => row.owner_class === 'foreign_or_unclaimed',
+  );
+  const unattributedOwners = ownerSummaries.filter(
+    (row) => row.owner_class === 'foreign_or_unclaimed',
+  );
+
+  const unobservableEvidence =
+    observation !== null && observation.state !== 'VERIFIED'
+      ? observation.reason_line
+      : staleSources.length > 0
+        ? summarizeFreshness(staleSources)
+        : truth === null
+          ? 'Account truth has not loaded.'
+          : 'Account observation and source freshness are usable.';
+
+  return [
+    {
+      key: 'active_bot',
+      label: 'Active bot-owned',
+      status: activeBotOwners.length > 0 ? 'verified' : 'empty',
+      statusLabel: activeBotOwners.length > 0 ? 'Verified' : 'No evidence',
+      evidence:
+        activeBotOwners.length > 0
+          ? summarizeOwners(activeBotOwners)
+          : 'No active bot-owned exposure in current account truth.',
+      effect:
+        activeBotOwners.length > 0
+          ? 'Route orders and cures through the active bot owner.'
+          : 'No active bot owner needs operator action.',
+    },
+    {
+      key: 'recovery_bot',
+      label: 'Retired bot recovery',
+      status:
+        retiredBotConditions.length > 0
+          ? 'frozen'
+          : retiredBotOwners.length > 0
+            ? 'attention'
+            : 'empty',
+      statusLabel:
+        retiredBotConditions.length > 0
+          ? 'Frozen'
+          : retiredBotOwners.length > 0
+            ? 'Attention'
+            : 'No evidence',
+      evidence:
+        retiredBotConditions.length > 0
+          ? summarizeRetiredConditions(retiredBotConditions)
+          : retiredBotOwners.length > 0
+            ? summarizeOwners(retiredBotOwners)
+            : 'No retired bot-owned exposure in current account truth.',
+      effect:
+        retiredBotConditions.length > 0
+          ? 'Resolve or audit the exposure before any new start.'
+          : retiredBotOwners.length > 0
+            ? 'Do not revive automatically; wait for guarded account pin evidence.'
+            : 'No retired bot recovery path is active.',
+    },
+    {
+      key: 'manual_override',
+      label: 'Accepted manual override',
+      status:
+        receipt?.exposure_resolution === 'accepted_override'
+          ? 'verified'
+          : manualOwners.length > 0
+            ? 'attention'
+            : 'empty',
+      statusLabel:
+        receipt?.exposure_resolution === 'accepted_override'
+          ? 'Verified'
+          : manualOwners.length > 0
+            ? 'Attention'
+            : 'No evidence',
+      evidence:
+        receipt?.exposure_resolution === 'accepted_override'
+          ? receiptExpired
+            ? 'The last accepted exposure override is expired.'
+            : 'Current receipt records exposure_resolution=accepted_override.'
+          : manualOwners.length > 0
+            ? summarizeOwners(manualOwners)
+            : 'No manual override is exposed by the current receipt.',
+      effect:
+        receipt?.exposure_resolution === 'accepted_override' && !receiptExpired
+          ? 'Keep the audited acceptance visible until receipt expiry.'
+          : manualOwners.length > 0
+            ? 'Require a fresh audited acceptance or flatten before deploy.'
+            : 'No manual acceptance is active.',
+    },
+    {
+      key: 'unattributed',
+      label: 'Unattributed exposure',
+      status:
+        unattributedExposures.length > 0 || unattributedOwners.length > 0 ? 'frozen' : 'empty',
+      statusLabel:
+        unattributedExposures.length > 0 || unattributedOwners.length > 0
+          ? 'Frozen'
+          : 'No evidence',
+      evidence:
+        unattributedExposures.length > 0
+          ? summarizeExposures(unattributedExposures)
+          : unattributedOwners.length > 0
+            ? summarizeOwners(unattributedOwners)
+            : 'No foreign or unclaimed exposure is visible.',
+      effect:
+        unattributedExposures.length > 0 || unattributedOwners.length > 0
+          ? 'Keep the account frozen until the exposure is flattened or audited.'
+          : 'No unattributed exposure is blocking starts.',
+    },
+    {
+      key: 'unobservable',
+      label: 'Unobservable account',
+      status:
+        observation !== null && observation.state !== 'VERIFIED'
+          ? 'frozen'
+          : staleSources.length > 0 || truth === null
+            ? 'attention'
+            : 'verified',
+      statusLabel:
+        observation !== null && observation.state !== 'VERIFIED'
+          ? 'Frozen'
+          : staleSources.length > 0 || truth === null
+            ? 'Attention'
+            : 'Verified',
+      evidence: unobservableEvidence,
+      effect:
+        observation !== null && observation.state !== 'VERIFIED'
+          ? 'Refresh account verification before deploy.'
+          : staleSources.length > 0 || truth === null
+            ? 'Refresh reconciliation evidence before deploy.'
+            : 'Verification evidence is current enough for this view.',
+    },
+  ];
+}
+
+function summarizeOwners(rows: AccountTruthResponse['owner_summaries']): string {
+  return summarizeList(
+    rows.map(
+      (row) =>
+        `${row.owner_label}: ${row.owner_binding_state}, positions ${row.position_count}, open orders ${row.open_order_count}, executions ${row.execution_count}`,
+    ),
+  );
+}
+
+function summarizeExposures(rows: AccountTruthResponse['symbol_exposures']): string {
+  return summarizeList(
+    rows.map((row) => `${row.symbol} ${fmtSignedNumber(row.quantity, 0)} (${row.owner_label})`),
+  );
+}
+
+function summarizeFreshness(rows: AccountTruthResponse['source_freshness']): string {
+  return summarizeList(
+    rows.map(
+      (row) => `${row.label}: ${row.status}${row.reason_code ? ` (${row.reason_code})` : ''}`,
+    ),
+  );
+}
+
+function summarizeRetiredConditions(rows: AccountConditionRow[]): string {
+  return summarizeList(
+    rows.map((row) => {
+      const owner = row.owner.strategy_instance_id ?? row.owner.owner_id;
+      const run = row.owner.run_id === null ? '' : ` / ${row.owner.run_id}`;
+      return `${owner}${run}: ${row.detail}`;
+    }),
+  );
+}
+
+function summarizeList(values: string[]): string {
+  if (values.length <= 3) return values.join('; ');
+  return `${values.slice(0, 3).join('; ')}; +${values.length - 3} more`;
 }

@@ -52,51 +52,47 @@
           </summary>
           <div class="connect-help-panel">
             <p class="connect-help-lead">
-              Connect opens a socket to IB Gateway and runs the API handshake.
-              If either step fails you'll see an error above — these are the
-              usual fixes, in order.
+              Connect opens a socket to IB Gateway and runs the API handshake. If either step fails
+              you'll see an error above — these are the usual fixes, in order.
             </p>
             <ol class="connect-help-list">
               <li>
-                <strong>Is IB Gateway running?</strong> Launch it on this Mac,
-                log into a paper account, and confirm the API port (paper:
-                <code>4002</code>, live: <code>4001</code>) is listening.
+                <strong>Is IB Gateway running?</strong> Launch it on this Mac, log into a paper
+                account, and confirm the API port (paper: <code>4002</code>, live:
+                <code>4001</code>) is listening.
               </li>
               <li>
-                <strong><code>IBKR_HOST</code> in <code>.env</code> must reach this
-                Mac.</strong> A pinned LAN IP will rot when DHCP reassigns —
-                prefer <code>host.containers.internal</code> so the container
-                always finds the host gateway.
+                <strong><code>IBKR_HOST</code> in <code>.env</code> must reach this Mac.</strong>
+                A pinned LAN IP will rot when DHCP reassigns — prefer
+                <code>host.containers.internal</code> so the container always finds the host
+                gateway.
               </li>
               <li>
                 <strong>Gateway → Configure → Settings → API:</strong> turn on
                 <em>Enable ActiveX and Socket Clients</em>, then either uncheck
-                <em>Allow connections from localhost only</em> or add the
-                container's source IP under <em>Trusted IPs</em>. Save and
-                restart Gateway.
+                <em>Allow connections from localhost only</em> or add the container's source IP
+                under <em>Trusted IPs</em>. Save and restart Gateway.
               </li>
               <li>
-                <strong>Client ID conflict.</strong> If another session is
-                holding the same <code>IBKR_CLIENT_ID</code> (the compose +
-                settings default is <code>1</code>), Gateway accepts the
-                socket then drops the handshake. Pick a different ID in
+                <strong>Client ID conflict.</strong> If another session is holding the same
+                <code>IBKR_CLIENT_ID</code> (the compose + settings default is <code>1</code>),
+                Gateway accepts the socket then drops the handshake. Pick a different ID in
                 <code>.env</code> or restart Gateway to clear stale sessions.
               </li>
             </ol>
             <p class="connect-help-decoder">
               <strong>Error decoder.</strong>
               <span class="connect-help-decoder-line">
-                <em>Connection refused</em> → nothing listening (Gateway down,
-                wrong host or port).
+                <em>Connection refused</em> → nothing listening (Gateway down, wrong host or port).
               </span>
               <span class="connect-help-decoder-line">
-                <em>Connects then disconnects / TimeoutError</em> → Gateway-side
-                rejection (Trusted IPs or Client ID).
+                <em>Connects then disconnects / TimeoutError</em> → Gateway-side rejection (Trusted
+                IPs or Client ID).
               </span>
             </p>
             <p class="connect-help-runbook">
-              Still stuck? Click <strong>Diagnose</strong> above — it runs the
-              same checks server-side and reports which one fails.
+              Still stuck? Click <strong>Diagnose</strong> above — it runs the same checks
+              server-side and reports which one fails.
             </p>
           </div>
         </details>
@@ -132,13 +128,14 @@
     [steps]="[
       'Check that Mode is PAPER and Sentinel reads DU prefix matches paper.',
       'If the data-plane broker session is disconnected, start IB Gateway against the paper account and click Connect or Reconnect.',
-      'Once green, navigate to Options Chain, Account Monitor, or Orders.'
+      'Once green, navigate to Options Chain, Account Monitor, or Orders.',
     ]"
     [related]="[
       { label: 'Options Chain (live)', route: '/broker/options-chain' },
       { label: 'Options Surface (3D)', route: '/broker/options-surface' },
       { label: 'Account Monitor', route: '/broker/account-monitor' },
-      { label: 'Orders', route: '/broker/orders' }
+      { label: 'IBKR setup guide', route: '/docs/ibkr-setup-guide' },
+      { label: 'Orders', route: '/broker/orders' },
     ]"
   />
 </app-page-header>
@@ -187,7 +184,9 @@
             <span
               class="status-pill"
               [class.ok]="condition.severity === 'ok'"
-              [class.status-warn]="condition.severity === 'info' || condition.severity === 'warning'"
+              [class.status-warn]="
+                condition.severity === 'info' || condition.severity === 'warning'
+              "
               [class.bad]="condition.severity === 'critical'"
             >
               {{ condition.title }}
@@ -272,6 +271,34 @@
         <dt>Client ID</dt>
         <dd class="mono">{{ h.client_id }}</dd>
       </dl>
+    }
+  </article>
+
+  <article class="card config-card">
+    <header class="card-header config-card__header">
+      Effective IBKR configuration
+      <a routerLink="/docs/ibkr-setup-guide" class="setup-guide-link">
+        Setup guide <i class="pi pi-arrow-right" aria-hidden="true"></i>
+      </a>
+    </header>
+    @if (h === null) {
+      <p class="muted">Loading…</p>
+    } @else {
+      <dl class="kv-grid">
+        @for (row of effectiveConfigRows(); track trackConfigRow($index, row)) {
+          <dt>{{ row.label }}</dt>
+          <dd class="mono">{{ row.value }}</dd>
+        }
+      </dl>
+      @if (clientIdOverlapWarning(); as warning) {
+        <div class="client-id-warning" role="alert">
+          <strong>{{ warning.headline }}</strong>
+          <span>{{ warning.detail }}</span>
+        </div>
+      }
+      <p class="muted">
+        Read-only view. Change actions stay disabled until guarded account pin approval exists.
+      </p>
     }
   </article>
 
@@ -385,8 +412,7 @@
     <article class="card">
       <header class="card-header">Account snapshot</header>
       <p class="muted">
-        Broker is disconnected. Connect IB Gateway with a paper account
-        and refresh.
+        Broker is disconnected. Connect IB Gateway with a paper account and refresh.
       </p>
     </article>
   }
@@ -418,7 +444,9 @@
         />
       } @else if (diag.data; as report) {
         @if (report.disabled) {
-          <p class="muted">IBKR diagnostics are disabled — the host-venv runner owns this session.</p>
+          <p class="muted">
+            IBKR diagnostics are disabled — the host-venv runner owns this session.
+          </p>
         } @else if (active) {
           <ul class="diagnostics-list">
             @for (check of active.checks; track trackCheck($index, check)) {
@@ -431,9 +459,7 @@
                 </div>
                 <p class="diagnostic-detail mono">{{ check.detail }}</p>
                 @if (check.fix) {
-                  <p class="diagnostic-fix">
-                    <strong>Fix:</strong> {{ check.fix }}
-                  </p>
+                  <p class="diagnostic-fix"><strong>Fix:</strong> {{ check.fix }}</p>
                 }
               </li>
             }

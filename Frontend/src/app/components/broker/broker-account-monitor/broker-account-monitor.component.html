@@ -2,12 +2,7 @@
   title="Account Monitor"
   subtitle="Account truth, owner exposure, buying power, margin, and streaming P&L for the connected IBKR paper account."
 >
-  <button
-    slot="actions"
-    type="button"
-    class="ghost-btn"
-    (click)="refresh()"
-  >
+  <button slot="actions" type="button" class="ghost-btn" (click)="refresh()">
     <i class="pi pi-refresh" aria-hidden="true"></i>
     Refresh
   </button>
@@ -18,11 +13,11 @@
     [steps]="[
       'Confirm the broker is paper-connected on the Status page.',
       'Read the Account Truth verdict and blockers first.',
-      'Refresh positions after a new order to pick up its conId.'
+      'Refresh positions after a new order to pick up its conId.',
     ]"
     [related]="[
       { label: 'Broker Status', route: '/broker' },
-      { label: 'Orders', route: '/broker/orders' }
+      { label: 'Orders', route: '/broker/orders' },
     ]"
   />
 </app-page-header>
@@ -36,10 +31,7 @@
 }
 
 @if (!canStream()) {
-  <p class="muted">
-    Broker is disconnected. Connect IB Gateway to a paper account and
-    refresh.
-  </p>
+  <p class="muted">Broker is disconnected. Connect IB Gateway to a paper account and refresh.</p>
 } @else {
   <section class="truth-section">
     @if (truthError(); as err) {
@@ -52,10 +44,7 @@
       <p class="muted">Loading account truth…</p>
     } @else if (accountTruth(); as truth) {
       @if (accountPrimaryAction(); as action) {
-        <article
-          class="primary-action-card"
-          aria-labelledby="account-primary-action-title"
-        >
+        <article class="primary-action-card" aria-labelledby="account-primary-action-title">
           <div>
             <p class="action-kicker">Next account action</p>
             <h2 id="account-primary-action-title">{{ action.title }}</h2>
@@ -94,6 +83,21 @@
         [showOperatorBlockers]="true"
         (operatorBlockerMoveSelected)="handleAccountMonitorBlockerMove($event)"
       />
+      <article class="account-outcome-card" aria-labelledby="account-outcome-title">
+        <header class="card-header" id="account-outcome-title">Operator outcome projection</header>
+        <div class="outcome-grid">
+          @for (row of accountOutcomeProjectionRows(); track row.key) {
+            <section class="outcome-row" [class]="'outcome-' + row.status">
+              <div class="outcome-row__head">
+                <h3>{{ row.label }}</h3>
+                <span class="badge mono">{{ row.statusLabel }}</span>
+              </div>
+              <p class="outcome-evidence">{{ row.evidence | receiptLabel }}</p>
+              <p class="outcome-effect">{{ row.effect | receiptLabel }}</p>
+            </section>
+          }
+        </div>
+      </article>
       @if (accountFreezeBanner(); as banner) {
         <app-account-freeze-banner [banner]="banner" />
       }
@@ -125,7 +129,9 @@
         <header class="card-header">
           Account sick bay
           @if (accountTriage(); as triage) {
-            <span class="badge mono">{{ gateStatusLabel(triage.overall_gate_result.status) | receiptLabel }}</span>
+            <span class="badge mono">{{
+              gateStatusLabel(triage.overall_gate_result.status) | receiptLabel
+            }}</span>
           }
         </header>
 
@@ -147,7 +153,9 @@
         @if (accountTriageLoading()) {
           <p class="muted">Loading account sick bay…</p>
         } @else if (accountTriage(); as triage) {
-          <p class="receipt-reason">{{ accountSickBayDetail() | receiptLabel }}</p>
+          <p class="receipt-reason">
+            {{ accountSickBayDetail() | receiptLabel }}
+          </p>
           @let conditionGroups = accountConditionGroups();
 
           @if (conditionGroups.account.length === 0 && conditionGroups.bot.length === 0) {
@@ -155,36 +163,57 @@
           } @else {
             @if (conditionGroups.account.length > 0) {
               <div class="condition-list">
-                @for (condition of conditionGroups.account; track trackCondition($index, condition)) {
-                  <article class="condition-row" [class.critical]="condition.severity === 'critical'">
+                @for (
+                  condition of conditionGroups.account;
+                  track trackCondition($index, condition)
+                ) {
+                  <article
+                    class="condition-row"
+                    [class.critical]="condition.severity === 'critical'"
+                  >
                     <div>
                       <h3>{{ condition.title }}</h3>
                       <p>{{ condition.detail | receiptLabel }}</p>
-                      <p class="condition-owner">
-                        Owner {{ condition.owner.label }}
-                      </p>
+                      <p class="condition-owner">Owner {{ condition.owner.label }}</p>
                       <p class="condition-meta">
                         {{ condition.condition_type | receiptLabel }}
-                        · {{ condition.source | receiptLabel }}
-                        · {{ fmtDateNy(condition.evidence_at_ms) }}
+                        · {{ condition.source | receiptLabel }} ·
+                        {{ fmtDateNy(condition.evidence_at_ms) }}
                       </p>
-                      @if (condition.affected_strategy_instance_ids.length > 0) {
-                        <p class="condition-meta mono">
-                          Affects {{ condition.affected_strategy_instance_ids.join(', ') }}
-                        </p>
+                      @let ownerFacts = conditionOwnerFacts(condition);
+                      @if (ownerFacts.length > 0) {
+                        <dl class="condition-owner-facts">
+                          @for (fact of ownerFacts; track fact.label) {
+                            <dt>{{ fact.label }}</dt>
+                            <dd class="mono">{{ fact.value }}</dd>
+                          }
+                        </dl>
                       }
                     </div>
-                    @if (hasConditionAction(condition)) {
-                      <button
-                        type="button"
-                        class="ghost-btn"
-                        [disabled]="conditionActionDisabled(condition)"
-                        (click)="runConditionAction(condition)"
-                      >
-                        <i class="pi pi-wrench" aria-hidden="true"></i>
-                        {{ conditionActionLabel(condition) }}
-                      </button>
-                    }
+                    <div class="condition-actions">
+                      @if (hasConditionAction(condition)) {
+                        <button
+                          type="button"
+                          class="ghost-btn"
+                          [disabled]="conditionActionDisabled(condition)"
+                          (click)="runConditionAction(condition)"
+                        >
+                          <i class="pi pi-wrench" aria-hidden="true"></i>
+                          {{ conditionActionLabel(condition) }}
+                        </button>
+                      }
+                      @if (reviveActionVisibleButDisabled(condition)) {
+                        <button
+                          type="button"
+                          class="ghost-btn"
+                          disabled
+                          title="Requires guarded account pin approval before revive is available."
+                        >
+                          <i class="pi pi-lock" aria-hidden="true"></i>
+                          Revive same bot
+                        </button>
+                      }
+                    </div>
                   </article>
                 }
               </div>
@@ -197,35 +226,53 @@
                 </summary>
                 <div class="condition-list secondary">
                   @for (condition of conditionGroups.bot; track trackCondition($index, condition)) {
-                    <article class="condition-row" [class.critical]="condition.severity === 'critical'">
+                    <article
+                      class="condition-row"
+                      [class.critical]="condition.severity === 'critical'"
+                    >
                       <div>
                         <h3>{{ condition.title }}</h3>
                         <p>{{ condition.detail | receiptLabel }}</p>
-                        <p class="condition-owner">
-                          Owner {{ condition.owner.label }}
-                        </p>
+                        <p class="condition-owner">Owner {{ condition.owner.label }}</p>
                         <p class="condition-meta">
                           {{ condition.condition_type | receiptLabel }}
-                          · {{ condition.source | receiptLabel }}
-                          · {{ fmtDateNy(condition.evidence_at_ms) }}
+                          · {{ condition.source | receiptLabel }} ·
+                          {{ fmtDateNy(condition.evidence_at_ms) }}
                         </p>
-                        @if (condition.affected_strategy_instance_ids.length > 0) {
-                          <p class="condition-meta mono">
-                            Affects {{ condition.affected_strategy_instance_ids.join(', ') }}
-                          </p>
+                        @let ownerFacts = conditionOwnerFacts(condition);
+                        @if (ownerFacts.length > 0) {
+                          <dl class="condition-owner-facts">
+                            @for (fact of ownerFacts; track fact.label) {
+                              <dt>{{ fact.label }}</dt>
+                              <dd class="mono">{{ fact.value }}</dd>
+                            }
+                          </dl>
                         }
                       </div>
-                      @if (hasConditionAction(condition)) {
-                        <button
-                          type="button"
-                          class="ghost-btn"
-                          [disabled]="conditionActionDisabled(condition)"
-                          (click)="runConditionAction(condition)"
-                        >
-                          <i class="pi pi-wrench" aria-hidden="true"></i>
-                          {{ conditionActionLabel(condition) }}
-                        </button>
-                      }
+                      <div class="condition-actions">
+                        @if (hasConditionAction(condition)) {
+                          <button
+                            type="button"
+                            class="ghost-btn"
+                            [disabled]="conditionActionDisabled(condition)"
+                            (click)="runConditionAction(condition)"
+                          >
+                            <i class="pi pi-wrench" aria-hidden="true"></i>
+                            {{ conditionActionLabel(condition) }}
+                          </button>
+                        }
+                        @if (reviveActionVisibleButDisabled(condition)) {
+                          <button
+                            type="button"
+                            class="ghost-btn"
+                            disabled
+                            title="Requires guarded account pin approval before revive is available."
+                          >
+                            <i class="pi pi-lock" aria-hidden="true"></i>
+                            Revive same bot
+                          </button>
+                        }
+                      </div>
                     </article>
                   }
                 </div>
@@ -340,9 +387,13 @@
         } @else if (accountReconciliation(); as receipt) {
           <dl class="kv-grid receipt-grid">
             <dt>State</dt>
-            <dd class="mono">{{ accountReconciliationDisplayState() | receiptLabel }}</dd>
+            <dd class="mono">
+              {{ accountReconciliationDisplayState() | receiptLabel }}
+            </dd>
             <dt>Final gate</dt>
-            <dd class="mono">{{ accountReconciliationDisplayGateLabel() | receiptLabel }}</dd>
+            <dd class="mono">
+              {{ accountReconciliationDisplayGateLabel() | receiptLabel }}
+            </dd>
             <dt>Last reconciled</dt>
             <dd class="mono">
               <app-timestamp-display [value]="receipt.generated_at_ms" mode="local" />
@@ -357,7 +408,8 @@
           <p class="receipt-reason">{{ accountReconciliationReason() }}</p>
         } @else {
           <p class="muted">
-            Not yet proven: no account-level reconciliation receipt has been recorded for this account.
+            Not yet proven: no account-level reconciliation receipt has been recorded for this
+            account.
           </p>
         }
       </article>
@@ -457,12 +509,20 @@
                 <td class="mono">{{ p.right ?? '—' }}</td>
                 <td class="mono">{{ fmtBrokerExpiryDate(p.expiry_ms) }}</td>
                 <td class="mono num">
-                  {{ pnl?.position === null || pnl?.position === undefined ? p.quantity : fmtSignedNumber(pnl?.position, 0) }}
+                  {{
+                    pnl?.position === null || pnl?.position === undefined
+                      ? p.quantity
+                      : fmtSignedNumber(pnl?.position, 0)
+                  }}
                 </td>
                 <td class="mono num">{{ fmtCurrency(p.avg_cost) }}</td>
                 <td class="mono num">{{ fmtCurrency(pnl?.market_value) }}</td>
-                <td class="mono num">{{ fmtSignedCurrency(pnl?.daily_pnl) }}</td>
-                <td class="mono num">{{ fmtSignedCurrency(pnl?.unrealized_pnl) }}</td>
+                <td class="mono num">
+                  {{ fmtSignedCurrency(pnl?.daily_pnl) }}
+                </td>
+                <td class="mono num">
+                  {{ fmtSignedCurrency(pnl?.unrealized_pnl) }}
+                </td>
               </tr>
             }
           </tbody>

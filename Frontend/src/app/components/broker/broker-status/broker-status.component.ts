@@ -1,10 +1,4 @@
-import {
-  ChangeDetectionStrategy,
-  Component,
-  computed,
-  inject,
-  signal,
-} from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { UpperCasePipe } from '@angular/common';
 import { RouterLink } from '@angular/router';
 import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
@@ -15,18 +9,14 @@ import { BrokerService } from '../../../services/broker.service';
 import { BrokerCapabilityPanelComponent } from './broker-capability-panel.component';
 import type {
   BrokerCapabilityResponse,
+  DiagnosticCheck,
   DiagnosticReport,
   DiagnosticReportActive,
   IbkrAccountSummary,
   IbkrPosition,
   IbkrPositionsSnapshot,
 } from '../../../api/broker-models';
-import {
-  fmtBrokerExpiryDate,
-  fmtCurrency,
-  fmtInteger,
-  fmtSignedCurrency,
-} from '../format';
+import { fmtBrokerExpiryDate, fmtCurrency, fmtInteger, fmtSignedCurrency } from '../format';
 
 interface AsyncCard<T> {
   data: T | null;
@@ -34,7 +24,21 @@ interface AsyncCard<T> {
   error: unknown;
 }
 
-const EMPTY_CARD: AsyncCard<never> = { data: null, loading: false, error: null };
+interface BrokerConfigRow {
+  label: string;
+  value: string;
+}
+
+interface ClientIdOverlapWarning {
+  headline: string;
+  detail: string;
+}
+
+const EMPTY_CARD: AsyncCard<never> = {
+  data: null,
+  loading: false,
+  error: null,
+};
 
 /**
  * /broker — Phase 1 Status page.
@@ -67,9 +71,13 @@ export class BrokerStatusComponent {
   readonly bannerState = this.healthService.bannerState;
 
   readonly account = signal<AsyncCard<IbkrAccountSummary>>({ ...EMPTY_CARD });
-  readonly positions = signal<AsyncCard<IbkrPositionsSnapshot>>({ ...EMPTY_CARD });
+  readonly positions = signal<AsyncCard<IbkrPositionsSnapshot>>({
+    ...EMPTY_CARD,
+  });
   readonly diagnostics = signal<AsyncCard<DiagnosticReport>>({ ...EMPTY_CARD });
-  readonly capability = signal<AsyncCard<BrokerCapabilityResponse>>({ ...EMPTY_CARD });
+  readonly capability = signal<AsyncCard<BrokerCapabilityResponse>>({
+    ...EMPTY_CARD,
+  });
 
   /**
    * The lifecycle action signals live on ``BrokerHealthService`` so the
@@ -86,7 +94,9 @@ export class BrokerStatusComponent {
    * disconnect. Page-local because retry intent doesn't belong in the
    * shared service.
    */
-  private readonly lastLifecycleAction = signal<'connect' | 'disconnect' | 'reconnect' | null>(null);
+  private readonly lastLifecycleAction = signal<'connect' | 'disconnect' | 'reconnect' | null>(
+    null,
+  );
 
   /** Hide lifecycle controls when the broker subsystem is disabled. */
   readonly lifecycleControlsVisible = computed(() => {
@@ -97,6 +107,59 @@ export class BrokerStatusComponent {
   readonly activeDiagReport = computed<DiagnosticReportActive | null>(() => {
     const d = this.diagnostics().data;
     return d != null && d.disabled === false ? d : null;
+  });
+
+  readonly effectiveConfigRows = computed<BrokerConfigRow[]>(() => {
+    const h = this.health();
+    if (h === null) return [];
+    const safety = h.safety_verdict;
+    return [
+      { label: 'Mode', value: h.mode.toUpperCase() },
+      { label: 'Host', value: h.host },
+      { label: 'Port', value: String(h.port) },
+      { label: 'Data-plane client ID', value: String(h.client_id) },
+      { label: 'Connected account', value: h.account_id ?? '—' },
+      {
+        label: 'Paper sentinel',
+        value:
+          safety?.final_verdict === 'paper-only'
+            ? 'DU prefix matches paper'
+            : (safety?.final_verdict ?? '—'),
+      },
+      {
+        label: 'Read-only API flag',
+        value:
+          safety?.readonly_flag === true
+            ? 'Read-only'
+            : safety?.readonly_flag === false
+              ? 'Order-capable'
+              : '—',
+      },
+    ];
+  });
+
+  readonly clientIdOverlapWarning = computed<ClientIdOverlapWarning | null>(() => {
+    const h = this.health();
+    if (
+      h !== null &&
+      (h.last_ibkr_code === 326 || messageLooksLikeClientIdOverlap(h.last_ibkr_message))
+    ) {
+      return {
+        headline: 'Client ID overlap detected',
+        detail:
+          'IBKR reported that this client ID is already in use. Pick a non-overlapping data-plane ID or free the stale session before reconnecting.',
+      };
+    }
+
+    const check = this.activeDiagReport()?.checks.find(checkLooksLikeClientIdOverlap);
+    if (check) {
+      return {
+        headline: 'Client ID overlap warning',
+        detail: check.fix ?? check.detail,
+      };
+    }
+
+    return null;
   });
 
   /**
@@ -154,22 +217,38 @@ export class BrokerStatusComponent {
   }
 
   async loadCapability(): Promise<void> {
-    this.capability.set({ data: this.capability().data, loading: true, error: null });
+    this.capability.set({
+      data: this.capability().data,
+      loading: true,
+      error: null,
+    });
     try {
       const data = await this.broker.capability();
       this.capability.set({ data, loading: false, error: null });
     } catch (err) {
-      this.capability.set({ data: this.capability().data, loading: false, error: err });
+      this.capability.set({
+        data: this.capability().data,
+        loading: false,
+        error: err,
+      });
     }
   }
 
   async probeCapability(): Promise<void> {
-    this.capability.set({ data: this.capability().data, loading: true, error: null });
+    this.capability.set({
+      data: this.capability().data,
+      loading: true,
+      error: null,
+    });
     try {
       const data = await this.broker.probeCapability();
       this.capability.set({ data, loading: false, error: null });
     } catch (err) {
-      this.capability.set({ data: this.capability().data, loading: false, error: err });
+      this.capability.set({
+        data: this.capability().data,
+        loading: false,
+        error: err,
+      });
     }
   }
 
@@ -251,8 +330,21 @@ export class BrokerStatusComponent {
     await Promise.all([this.loadAccount(), this.loadPositions()]);
   }
 
-  trackPosition = (_: number, p: IbkrPosition): string =>
-    `${p.account_id}:${p.con_id}`;
+  trackPosition = (_: number, p: IbkrPosition): string => `${p.account_id}:${p.con_id}`;
 
   trackCheck = (_: number, c: { name: string }): string => c.name;
+
+  trackConfigRow = (_: number, row: BrokerConfigRow): string => row.label;
+}
+
+function checkLooksLikeClientIdOverlap(check: DiagnosticCheck): boolean {
+  if (check.status === 'pass') return false;
+  return [check.name, check.label, check.detail, check.fix ?? ''].some(
+    messageLooksLikeClientIdOverlap,
+  );
+}
+
+function messageLooksLikeClientIdOverlap(value: string | null | undefined): boolean {
+  if (!value) return false;
+  return /\bclient\s*id\b/i.test(value) && /(already|conflict|duplicate|in use)/i.test(value);
 }

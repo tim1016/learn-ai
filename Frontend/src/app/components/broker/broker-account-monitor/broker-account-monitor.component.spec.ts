@@ -153,6 +153,112 @@ describe('BrokerAccountMonitorComponent', () => {
     expect(screen.getAllByTestId('account-observation-transition')).toHaveLength(2);
   });
 
+  it('projects the five operator outcomes from account evidence', async () => {
+    const broker = new FakeBrokerService();
+    const truth = accountTruthResponse({
+      responseOverrides: {
+        owner_summaries: [
+          ownerSummary('Bot active-runner', 'bot', 'ACTIVE', {
+            openOrderCount: 1,
+            executionCount: 2,
+          }),
+          ownerSummary('Bot retired-freezer', 'bot', 'RETIRED', {
+            positionCount: 1,
+            grossPositionQuantity: 1,
+          }),
+          ownerSummary('Manual ticket T-42', 'manual', 'UNKNOWN', {
+            executionCount: 1,
+          }),
+          ownerSummary('Foreign or unclaimed', 'foreign_or_unclaimed', 'UNKNOWN', {
+            positionCount: 1,
+            grossPositionQuantity: 1,
+          }),
+        ],
+        symbol_exposures: [
+          {
+            symbol: 'SPY',
+            owner_class: 'foreign_or_unclaimed',
+            owner_key: 'foreign_or_unclaimed',
+            owner_label: 'Foreign or unclaimed',
+            quantity: 1,
+            con_id: 756733,
+          },
+        ],
+        source_freshness: [
+          {
+            source: 'executions',
+            label: 'Executions',
+            status: 'stale',
+            severity: 'warning',
+            fetched_at_ms: 1_780_000_000_000,
+            age_ms: 130_000,
+            hard_ttl_ms: 120_000,
+            reason_code: 'EXECUTIONS_STALE',
+            message: 'Execution evidence is stale.',
+          },
+        ],
+      },
+    });
+    const receipt = accountReconciliationReceipt({
+      accountTruth: truth,
+      exposureResolution: 'accepted_override',
+    });
+    broker.accountTruth.mockResolvedValue(truth);
+    broker.accountTriage.mockResolvedValue(
+      makeFrozenAccountTriage({
+        receipt,
+        conditions: [
+          makeAccountFreezeCondition({
+            conditionType: 'exposure_freeze',
+            owner: {
+              owner_type: 'bot',
+              owner_id: 'retired-freezer',
+              label: 'Bot retired-freezer',
+              strategy_instance_id: 'retired-freezer',
+              run_id: 'run-freeze',
+              lifecycle_state: 'RETIRED',
+            },
+            detail: 'watchdog.flatten_timed_out',
+            source: 'watchdog_halt_executor',
+            cureAction: 'resolve_exposure',
+          }),
+        ],
+        accountObservation: {
+          state: 'VERIFIED',
+          reason_line: 'Account verified.',
+          observed_at_ms: 1_780_000_002_000,
+          valid_until_ms: 1_780_000_062_000,
+          history: [],
+        },
+        clearFreezeActionable: false,
+      }),
+    );
+
+    await render(BrokerAccountMonitorComponent, {
+      providers: [
+        { provide: BrokerService, useValue: broker },
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useClass: FakeLiveRunsService },
+        routeFragment(),
+      ],
+    });
+
+    expect(await screen.findByText('Operator outcome projection')).toBeTruthy();
+    expect(screen.getByText('Active bot-owned')).toBeTruthy();
+    expect(
+      screen.getByText('Bot active-runner: ACTIVE, positions 0, open orders 1, executions 2'),
+    ).toBeTruthy();
+    expect(screen.getByText('Retired bot recovery')).toBeTruthy();
+    expect(
+      screen.getByText('retired-freezer / run-freeze: watchdog.flatten_timed_out'),
+    ).toBeTruthy();
+    expect(screen.getByText('Accepted manual override')).toBeTruthy();
+    expect(screen.getByText(/Current receipt records exposure/i)).toBeTruthy();
+    expect(screen.getByText('Unattributed exposure')).toBeTruthy();
+    expect(screen.getByText('SPY +1 (Foreign or unclaimed)')).toBeTruthy();
+    expect(screen.getByText('Unobservable account')).toBeTruthy();
+  });
+
   it('marks a latest receipt stale when the monitor clock passes its expiry', async () => {
     const broker = new FakeBrokerService();
     const expiresAtMs = Date.now() + 60_000;
@@ -199,7 +305,13 @@ describe('BrokerAccountMonitorComponent', () => {
     const expiresAtMs = generatedAtMs + 300_000;
     const broker = new FakeBrokerService();
     broker.accountTriage.mockResolvedValue(
-      cleanTriage(accountReconciliationReceipt({ generatedAtMs, expiresAtMs, ttlMs: 300_000 })),
+      cleanTriage(
+        accountReconciliationReceipt({
+          generatedAtMs,
+          expiresAtMs,
+          ttlMs: 300_000,
+        }),
+      ),
     );
     const view = await render(BrokerAccountMonitorComponent, {
       providers: [
@@ -214,9 +326,7 @@ describe('BrokerAccountMonitorComponent', () => {
     view.fixture.componentInstance.accountReconciliationNowMs.set(generatedAtMs + 30_000);
     view.fixture.detectChanges();
 
-    expect(
-      screen.getByText(formatTimestampDisplay(generatedAtMs, { mode: 'local' })),
-    ).toBeTruthy();
+    expect(screen.getByText(formatTimestampDisplay(generatedAtMs, { mode: 'local' }))).toBeTruthy();
     expect(screen.getByText('Time remaining')).toBeTruthy();
     expect(screen.getByText('4m 30s')).toBeTruthy();
 
@@ -277,10 +387,9 @@ describe('BrokerAccountMonitorComponent', () => {
     fireEvent.click(checkbox);
 
     await waitFor(() => {
-      expect(broker.updateAccountReconciliationAutomation).toHaveBeenCalledWith(
-        'DU1234567',
-        { enabled: true },
-      );
+      expect(broker.updateAccountReconciliationAutomation).toHaveBeenCalledWith('DU1234567', {
+        enabled: true,
+      });
       expect(checkbox.checked).toBe(true);
     });
   });
@@ -336,7 +445,9 @@ describe('BrokerAccountMonitorComponent', () => {
     });
 
     expect(
-      await screen.findByRole('heading', { name: 'Flatten unresolved exposure' }),
+      await screen.findByRole('heading', {
+        name: 'Flatten unresolved exposure',
+      }),
     ).toBeTruthy();
     expect(
       screen.getByText(
@@ -352,10 +463,10 @@ describe('BrokerAccountMonitorComponent', () => {
     broker.accountTriage.mockClear();
     fireEvent.click(screen.getByRole('button', { name: /flatten then reconcile/i }));
     await waitFor(() => {
-      expect(liveRuns.emergencyFlattenAccount).toHaveBeenCalledWith(
-        'retired-freezer',
-        { account: 'DU1234567', confirm: true },
-      );
+      expect(liveRuns.emergencyFlattenAccount).toHaveBeenCalledWith('retired-freezer', {
+        account: 'DU1234567',
+        confirm: true,
+      });
     });
     expect(screen.getByRole('button', { name: /run account reconcile/i }).id).toBe(
       'account-reconciliation-action',
@@ -400,9 +511,7 @@ describe('BrokerAccountMonitorComponent', () => {
     const expiredReceipt = accountReconciliationReceipt({
       expiresAtMs: Date.now() - 1,
     });
-    broker.accountTriage.mockResolvedValue(
-      mixedFrozenTriage(expiredReceipt),
-    );
+    broker.accountTriage.mockResolvedValue(mixedFrozenTriage(expiredReceipt));
     await render(BrokerAccountMonitorComponent, {
       providers: [
         { provide: BrokerService, useValue: broker },
@@ -440,7 +549,9 @@ describe('BrokerAccountMonitorComponent', () => {
     expect(screen.getByText('Owner Account DU1234567')).toBeTruthy();
     expect(screen.getByText(/Account sick bay is gating new starts/)).toBeTruthy();
 
-    const clearFreezeButton = screen.getByRole('button', { name: /clear freeze/i });
+    const clearFreezeButton = screen.getByRole('button', {
+      name: /clear freeze/i,
+    });
     expect(clearFreezeButton.id).toBe('account-clear-freeze-action');
     fireEvent.click(clearFreezeButton);
 
@@ -469,6 +580,16 @@ describe('BrokerAccountMonitorComponent', () => {
 
     expect(screen.getByRole('dialog', { name: /resolve exposure/i })).toBeTruthy();
     expect(screen.getAllByText('Owner Bot retired-freezer').length).toBeGreaterThan(0);
+    expect(screen.getByText('Strategy instance')).toBeTruthy();
+    expect(screen.getByText('retired-freezer')).toBeTruthy();
+    expect(screen.getByText('Run')).toBeTruthy();
+    expect(screen.getByText('run-freeze')).toBeTruthy();
+    expect(screen.getByText('Lifecycle')).toBeTruthy();
+    expect(screen.getByText('RETIRED')).toBeTruthy();
+    const reviveButton = screen.getByRole('button', {
+      name: /revive same bot/i,
+    }) as HTMLButtonElement;
+    expect(reviveButton.disabled).toBe(true);
 
     fireEvent.click(screen.getByRole('button', { name: /accept exposure/i }));
 
@@ -501,10 +622,10 @@ describe('BrokerAccountMonitorComponent', () => {
     fireEvent.click(screen.getByRole('button', { name: /flatten then reconcile/i }));
 
     await waitFor(() => {
-      expect(liveRuns.emergencyFlattenAccount).toHaveBeenCalledWith(
-        'retired-freezer',
-        { account: 'DU1234567', confirm: true },
-      );
+      expect(liveRuns.emergencyFlattenAccount).toHaveBeenCalledWith('retired-freezer', {
+        account: 'DU1234567',
+        confirm: true,
+      });
     });
     await waitFor(() => {
       expect(broker.reconcileAccount).toHaveBeenCalledWith('DU1234567');
@@ -526,7 +647,9 @@ describe('BrokerAccountMonitorComponent', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: /resolve exposure/i }));
 
-    const acceptButton = screen.getByRole('button', { name: /accept exposure/i }) as HTMLButtonElement;
+    const acceptButton = screen.getByRole('button', {
+      name: /accept exposure/i,
+    }) as HTMLButtonElement;
     expect(acceptButton.disabled).toBe(true);
     fireEvent.click(acceptButton);
     expect(broker.acceptExposureOverride).not.toHaveBeenCalled();
@@ -676,7 +799,9 @@ function frozenTriage(): AccountTriageResponse {
   });
 }
 
-function exposureFrozenTriage(receipt: AccountReconciliationReceipt = accountReconciliationReceipt()): AccountTriageResponse {
+function exposureFrozenTriage(
+  receipt: AccountReconciliationReceipt = accountReconciliationReceipt(),
+): AccountTriageResponse {
   return makeFrozenAccountTriage({
     receipt,
     conditionOptions: {
@@ -801,8 +926,42 @@ function unresolvedSpyAccountTruth(): AccountTruthResponse {
   };
 }
 
+function ownerSummary(
+  ownerLabel: string,
+  ownerClass: AccountTruthResponse['owner_summaries'][number]['owner_class'],
+  ownerBindingState: AccountTruthResponse['owner_summaries'][number]['owner_binding_state'],
+  overrides: {
+    openOrderCount?: number;
+    executionCount?: number;
+    positionCount?: number;
+    grossPositionQuantity?: number;
+  } = {},
+): AccountTruthResponse['owner_summaries'][number] {
+  return {
+    owner_class: ownerClass,
+    owner_key: ownerLabel.toLowerCase().replaceAll(' ', '-'),
+    owner_label: ownerLabel,
+    evidence_tier:
+      ownerClass === 'bot'
+        ? 'bot_order_ref'
+        : ownerClass === 'manual'
+          ? 'app_minted_manual'
+          : ownerClass,
+    evidence_label: ownerLabel,
+    owner_binding_state: ownerBindingState,
+    open_order_count: overrides.openOrderCount ?? 0,
+    execution_count: overrides.executionCount ?? 0,
+    position_count: overrides.positionCount ?? 0,
+    gross_position_quantity: overrides.grossPositionQuantity ?? 0,
+  };
+}
+
 function accountTruthResponse(
-  overrides: { accountId?: string | null; healthAccountId?: string | null } = {},
+  overrides: {
+    accountId?: string | null;
+    healthAccountId?: string | null;
+    responseOverrides?: Partial<AccountTruthResponse>;
+  } = {},
 ): AccountTruthResponse {
   const accountId = overrides.accountId === undefined ? 'DU1234567' : overrides.accountId;
   const healthAccountId =
@@ -855,6 +1014,7 @@ function accountTruthResponse(
     positions: [],
     evidence_gaps: [],
     source_freshness: [],
+    ...overrides.responseOverrides,
   };
 }
 
