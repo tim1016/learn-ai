@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
 
 import pytest
@@ -147,6 +148,38 @@ async def test_recover_inbox_replays_durable_intent_after_crash_before_journal_w
     assert receipts[0].intent_id == intent.intent_id
     assert receipts[0].recorded_at_ms == START_MS + 2
     assert broker.calls == []
+
+
+@pytest.mark.asyncio
+async def test_clerk_offloads_record_and_recovery_durable_work_to_a_worker_thread(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT)
+    worker_thread_ids: set[int] = set()
+    original_record = AccountClerk._record_intent_locked
+    original_recover = AccountClerk._recover_inbox_locked
+
+    def record_in_worker(
+        self: AccountClerk,
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountClerkRecordedReceipt:
+        worker_thread_ids.add(threading.get_ident())
+        return original_record(self, intent)
+
+    def recover_in_worker(self: AccountClerk) -> list[AccountClerkRecordedReceipt]:
+        worker_thread_ids.add(threading.get_ident())
+        return original_recover(self)
+
+    monkeypatch.setattr(AccountClerk, "_record_intent_locked", record_in_worker)
+    monkeypatch.setattr(AccountClerk, "_recover_inbox_locked", recover_in_worker)
+
+    await clerk.record_intent(_intent("bot-a", "run-a", "intent-a"))
+    await clerk.recover_inbox()
+
+    assert worker_thread_ids
+    assert threading.get_ident() not in worker_thread_ids
 
 
 @pytest.mark.asyncio

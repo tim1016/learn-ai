@@ -10,6 +10,20 @@ if TYPE_CHECKING:
     from app.engine.live.account_artifacts import CohortBatchLaunchReceipt
 
 
+def validate_cohort_batch_launch_window_and_members(
+    window_start_ms: int,
+    window_end_ms: int,
+    member_strategy_instance_ids: tuple[str, ...],
+) -> None:
+    """Validate the invariants shared by cohort request and receipt models."""
+    if window_end_ms < window_start_ms:
+        raise ValueError("window_end_ms must not precede window_start_ms")
+    if any(not member.strip() for member in member_strategy_instance_ids):
+        raise ValueError("member_strategy_instance_ids must not contain blank values")
+    if len(set(member_strategy_instance_ids)) != len(member_strategy_instance_ids):
+        raise ValueError("member_strategy_instance_ids must be unique")
+
+
 class CohortBatchLaunchCreateRequest(BaseModel):
     """Operator authorization details for a deliberate cohort launch."""
 
@@ -23,12 +37,11 @@ class CohortBatchLaunchCreateRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_window_and_members(self) -> CohortBatchLaunchCreateRequest:
-        if self.window_end_ms < self.window_start_ms:
-            raise ValueError("window_end_ms must not precede window_start_ms")
-        if any(not member.strip() for member in self.member_strategy_instance_ids):
-            raise ValueError("member_strategy_instance_ids must not contain blank values")
-        if len(set(self.member_strategy_instance_ids)) != len(self.member_strategy_instance_ids):
-            raise ValueError("member_strategy_instance_ids must be unique")
+        validate_cohort_batch_launch_window_and_members(
+            self.window_start_ms,
+            self.window_end_ms,
+            self.member_strategy_instance_ids,
+        )
         return self
 
 

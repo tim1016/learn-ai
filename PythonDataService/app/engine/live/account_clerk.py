@@ -136,7 +136,7 @@ class AccountClerk:
         """Validate, durably record, and acknowledge one intent without I/O to IBKR."""
 
         async with self._intake_lock:
-            return self._record_intent_locked(intent)
+            return await asyncio.to_thread(self._record_intent_locked, intent)
 
     def replay_recorded_receipts(self) -> list[AccountClerkRecordedReceipt]:
         """Return receipt #1 values from the journal after a clerk restart."""
@@ -150,19 +150,22 @@ class AccountClerk:
         """Replay an inbox row left durable by a crash before journal fsync."""
 
         async with self._intake_lock:
-            inbox_path = account_clerk_inbox_path(self._artifacts_root, self._account_id)
-            journal_path = account_clerk_journal_path(self._artifacts_root, self._account_id)
-            journal_path.parent.mkdir(parents=True, exist_ok=True)
-            with _file_lock(journal_path):
-                journal_entries = self._replay_inbox_locked(
-                    inbox_entries=_read_jsonl(inbox_path, AccountClerkInboxEntry),
-                    journal_entries=_read_jsonl(journal_path, AccountClerkJournalEntry),
-                    journal_path=journal_path,
-                )
-            return [
-                AccountClerkRecordedReceipt.from_journal_entry(entry)
-                for entry in journal_entries
-            ]
+            return await asyncio.to_thread(self._recover_inbox_locked)
+
+    def _recover_inbox_locked(self) -> list[AccountClerkRecordedReceipt]:
+        inbox_path = account_clerk_inbox_path(self._artifacts_root, self._account_id)
+        journal_path = account_clerk_journal_path(self._artifacts_root, self._account_id)
+        journal_path.parent.mkdir(parents=True, exist_ok=True)
+        with _file_lock(journal_path):
+            journal_entries = self._replay_inbox_locked(
+                inbox_entries=_read_jsonl(inbox_path, AccountClerkInboxEntry),
+                journal_entries=_read_jsonl(journal_path, AccountClerkJournalEntry),
+                journal_path=journal_path,
+            )
+        return [
+            AccountClerkRecordedReceipt.from_journal_entry(entry)
+            for entry in journal_entries
+        ]
 
     def _record_intent_locked(self, intent: AccountOwnerSubmitIntent) -> AccountClerkRecordedReceipt:
         if intent.account_id != self._account_id:

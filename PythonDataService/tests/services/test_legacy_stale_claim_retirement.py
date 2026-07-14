@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,7 @@ from app.engine.live.daemon_transport import DaemonResult
 from app.engine.live.fleet import compute_fleet_contamination
 from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarRepo, stable_live_state_path
 from app.engine.live.run_ledger import LiveRunLedger, write_ledger
+from app.schemas.account_reconciliation import LegacyStaleClaimRetirementReceipt
 from app.services.fleet_contamination import collect_fleet_position_explanations
 from app.services.legacy_stale_claim_retirement import (
     LEGACY_STALE_CLAIM_RETIRED_EVENT,
@@ -126,6 +128,14 @@ async def _live_process(_run_id: str) -> tuple[DaemonResult, dict]:
     return DaemonResult.connected(), {"state": "running", "run_id": _run_id}
 
 
+async def _idle_process(_run_id: str) -> tuple[DaemonResult, dict]:
+    return DaemonResult.connected(), {"state": "idle", "run_id": _run_id}
+
+
+async def _mismatched_exited_process(_run_id: str) -> tuple[DaemonResult, dict]:
+    return DaemonResult.connected(), {"state": "exited", "run_id": "another-run"}
+
+
 async def test_retire_refuses_live_process(tmp_path: Path) -> None:
     _seed_claim(tmp_path)
     service = LegacyStaleClaimRetirementService(artifacts_root=tmp_path, now_ms=lambda: _NOW_MS)
@@ -139,6 +149,33 @@ async def test_retire_refuses_live_process(tmp_path: Path) -> None:
             requested_by="test.operator",
             account_truth=_truth(),
             fetch_run_process=_live_process,
+        )
+
+
+@pytest.mark.parametrize(
+    ("fetch_run_process", "reason_code"),
+    [
+        (_idle_process, "LEGACY_CLAIM_RUN_PROCESS_LIVE"),
+        (_mismatched_exited_process, "LEGACY_CLAIM_RUN_PROCESS_UNPROVEN"),
+    ],
+)
+async def test_retire_requires_terminal_process_proof_for_the_matching_run(
+    tmp_path: Path,
+    fetch_run_process: object,
+    reason_code: str,
+) -> None:
+    _seed_claim(tmp_path)
+    service = LegacyStaleClaimRetirementService(artifacts_root=tmp_path, now_ms=lambda: _NOW_MS)
+
+    with pytest.raises(LegacyStaleClaimRetirementError, match=reason_code):
+        await service.retire(
+            account_id=_ACCOUNT_ID,
+            strategy_instance_id=_SID,
+            run_id=_RUN_ID,
+            symbol="SPY",
+            requested_by="test.operator",
+            account_truth=_truth(),
+            fetch_run_process=fetch_run_process,
         )
 
 
@@ -178,6 +215,48 @@ async def test_retire_records_receipt_and_excludes_only_retired_legacy_claim(tmp
     assert event["receipt_id"] == receipt.receipt_id
     assert event["ts_ms"] == _NOW_MS
     assert collect_fleet_position_explanations(tmp_path / "live_runs") == {}
+
+
+async def test_retire_rejects_a_concurrent_duplicate_receipt(tmp_path: Path) -> None:
+    _seed_claim(tmp_path)
+    service = LegacyStaleClaimRetirementService(artifacts_root=tmp_path, now_ms=lambda: _NOW_MS)
+    both_proofs_started = asyncio.Event()
+    release_proofs = asyncio.Event()
+    proof_calls = 0
+
+    async def simultaneous_terminal_proof(run_id: str) -> tuple[DaemonResult, dict]:
+        nonlocal proof_calls
+        proof_calls += 1
+        if proof_calls == 2:
+            both_proofs_started.set()
+        await release_proofs.wait()
+        return await _dead_process(run_id)
+
+    retire_kwargs = {
+        "account_id": _ACCOUNT_ID,
+        "strategy_instance_id": _SID,
+        "run_id": _RUN_ID,
+        "symbol": "SPY",
+        "requested_by": "test.operator",
+        "account_truth": _truth(),
+        "fetch_run_process": simultaneous_terminal_proof,
+    }
+    first = asyncio.create_task(service.retire(**retire_kwargs))
+    second = asyncio.create_task(service.retire(**retire_kwargs))
+    await both_proofs_started.wait()
+    release_proofs.set()
+    results = await asyncio.gather(first, second, return_exceptions=True)
+
+    assert sum(isinstance(result, LegacyStaleClaimRetirementReceipt) for result in results) == 1
+    assert sum(isinstance(result, LegacyStaleClaimRetirementError) for result in results) == 1
+    error = next(result for result in results if isinstance(result, LegacyStaleClaimRetirementError))
+    assert error.reason_code == "LEGACY_CLAIM_ALREADY_RETIRED"
+    receipts = [
+        event
+        for event in read_account_events(tmp_path, _ACCOUNT_ID)
+        if event["event_type"] == LEGACY_STALE_CLAIM_RETIRED_EVENT
+    ]
+    assert len(receipts) == 1
 
 
 async def test_retiring_four_dum284968_shaped_legacy_claims_clears_flat_broker_contamination(

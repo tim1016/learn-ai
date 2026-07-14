@@ -14,6 +14,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
+from app.schemas.cohort_batch_launch import validate_cohort_batch_launch_window_and_members
 from app.schemas.live_runs import GateResult
 
 ACCOUNT_FREEZE_FILENAME = "unresolved_exposure.flag"
@@ -186,12 +187,11 @@ class CohortBatchLaunchReceipt(BaseModel):
 
     @model_validator(mode="after")
     def validate_window_and_members(self) -> CohortBatchLaunchReceipt:
-        if self.window_end_ms < self.window_start_ms:
-            raise ValueError("window_end_ms must not precede window_start_ms")
-        if any(not member.strip() for member in self.member_strategy_instance_ids):
-            raise ValueError("member_strategy_instance_ids must not contain blank values")
-        if len(set(self.member_strategy_instance_ids)) != len(self.member_strategy_instance_ids):
-            raise ValueError("member_strategy_instance_ids must be unique")
+        validate_cohort_batch_launch_window_and_members(
+            self.window_start_ms,
+            self.window_end_ms,
+            self.member_strategy_instance_ids,
+        )
         return self
 
 
@@ -484,6 +484,30 @@ def append_account_event(
     _append_account_event(artifacts_root, account_id, {**payload, "account_id": account_id})
 
 
+def append_account_event_if_absent(
+    artifacts_root: Path,
+    account_id: str,
+    receipt_id: str,
+    payload: dict,
+) -> bool:
+    """Append an event once per receipt id, atomically with the event journal lock."""
+    if not receipt_id:
+        raise AccountArtifactError("account event receipt_id must not be empty")
+    path = _account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        ACCOUNT_EVENTS_FILENAME,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _file_lock(path):
+        if path.is_file():
+            events = _parse_account_event_bytes(path, path.read_bytes(), tolerant=False)
+            if any(event.get("receipt_id") == receipt_id for event in events):
+                return False
+        _append_account_event_locked(path, {**payload, "account_id": account_id})
+    return True
+
+
 def record_cohort_batch_launch_receipt(
     artifacts_root: Path,
     receipt: CohortBatchLaunchReceipt,
@@ -770,19 +794,23 @@ def _append_account_event(artifacts_root: Path, account_id: str, payload: dict) 
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     with _file_lock(path):
-        enriched = dict(payload)
-        enriched["seq"] = _next_account_event_seq_locked(path)
-        enriched["ts_ms"] = _account_event_ts_ms_for_write(enriched)
-        try:
-            record = AccountEventRecord.model_validate(enriched)
-        except ValidationError as exc:
-            raise AccountArtifactError(f"invalid account event payload: {exc}") from exc
-        line = json.dumps(record.model_dump(mode="json"), separators=(",", ":"), sort_keys=True) + "\n"
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(line)
-            fh.flush()
-            os.fsync(fh.fileno())
-        _fsync_parent_dir(path)
+        _append_account_event_locked(path, payload)
+
+
+def _append_account_event_locked(path: Path, payload: dict) -> None:
+    enriched = dict(payload)
+    enriched["seq"] = _next_account_event_seq_locked(path)
+    enriched["ts_ms"] = _account_event_ts_ms_for_write(enriched)
+    try:
+        record = AccountEventRecord.model_validate(enriched)
+    except ValidationError as exc:
+        raise AccountArtifactError(f"invalid account event payload: {exc}") from exc
+    line = json.dumps(record.model_dump(mode="json"), separators=(",", ":"), sort_keys=True) + "\n"
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(line)
+        fh.flush()
+        os.fsync(fh.fileno())
+    _fsync_parent_dir(path)
 
 
 def _next_account_event_seq_locked(path: Path) -> int:
@@ -895,6 +923,7 @@ _LOCAL_EXPORTS = [
     "account_artifacts_root",
     "advance_account_owner_generation",
     "append_account_event",
+    "append_account_event_if_absent",
     "clear_account_freeze",
     "evaluate_restart_intensity",
     "read_account_events",

@@ -7,12 +7,17 @@ projection folds those receipts until the Clerk journal becomes canonical.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.engine.live.account_artifacts import AccountArtifactError, append_account_event, read_account_events
+from app.engine.live.account_artifacts import (
+    AccountArtifactError,
+    append_account_event_if_absent,
+    read_account_events,
+)
 from app.engine.live.account_clerk import AccountClerkJournalCorruptError, read_account_clerk_journal
 from app.engine.live.account_identity import normalize_account_id
 from app.engine.live.account_registry import read_account_instance_registry
@@ -31,7 +36,7 @@ from app.schemas.account_truth import AccountTruthPositionRow, AccountTruthRespo
 from app.utils.timestamps import now_ms_utc
 
 LEGACY_STALE_CLAIM_RETIRED_EVENT = "legacy_stale_claim_retired"
-_SAFE_PROCESS_STATES = frozenset({"idle", "exited"})
+_SAFE_PROCESS_STATES = frozenset({"exited"})
 _KNOWN_ELSEWHERE_OWNER_CLASSES = frozenset({"bot", "manual"})
 RunProcessFetcher = Callable[[str], Awaitable[tuple[DaemonResult, dict | None]]]
 
@@ -134,9 +139,11 @@ class LegacyStaleClaimRetirementService:
             requested_by=requested_by,
             retired_at_ms=retired_at_ms,
         )
-        append_account_event(
+        appended = await asyncio.to_thread(
+            append_account_event_if_absent,
             self._artifacts_root,
             claim.account_id,
+            receipt.receipt_id,
             {
                 "event_type": LEGACY_STALE_CLAIM_RETIRED_EVENT,
                 "receipt_id": receipt.receipt_id,
@@ -152,6 +159,11 @@ class LegacyStaleClaimRetirementService:
                 "recorded_at_ms": retired_at_ms,
             },
         )
+        if not appended:
+            raise LegacyStaleClaimRetirementError(
+                "LEGACY_CLAIM_ALREADY_RETIRED",
+                "A retirement receipt already exists for this legacy claim.",
+            )
         return receipt
 
     def claims_for_account(self, account_id: str) -> list[LegacyStaleClaim]:
@@ -245,6 +257,11 @@ class LegacyStaleClaimRetirementService:
             raise LegacyStaleClaimRetirementError(
                 "LEGACY_CLAIM_RUN_PROCESS_UNPROVEN",
                 "The host daemon did not provide a current run-process proof.",
+            )
+        if process.get("run_id") != claim.run_id:
+            raise LegacyStaleClaimRetirementError(
+                "LEGACY_CLAIM_RUN_PROCESS_UNPROVEN",
+                "The host daemon did not return a terminal process record for this run.",
             )
         state = process.get("state")
         if state not in _SAFE_PROCESS_STATES:
