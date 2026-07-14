@@ -47,7 +47,7 @@ Codex review claims were verified against code before revising. Seven confirmed,
 
 ### Two verdict meanings — already structurally present, now named
 
-- **Observation proof** = `assess_account_truth(...) == pass`: fresh (60 s TTL), refresh succeeded, account-matched, critical sources fresh, `final_verdict == "clean"` (attribution + invariants; positions owned by known bots — including prior-crash trades that the ledger accounts for — are clean). This is what the submit gate consumes today and what the lease persists. The operator's rule verbatim: *unaccountable means a completely external trade found in no ledger at all; a prior-crash trade is accounted, reconcilable, and not a bad trade.*
+- **Observation proof** = `assess_account_truth(...) == pass`: fresh (60 s TTL), refresh succeeded, account-matched, critical sources fresh, `final_verdict == "clean"` (attribution + invariants; non-zero positions owned by an active bot are allowed, and terminal facts from retired bots remain attributable). A current position or working order whose only owner is retired is instead the distinct blocking condition `retired_owner_live_exposure`: known rather than foreign, but unmanaged. This is what the submit gate consumes today and what the lease persists.
 - **Recovery proof** = `AccountReconciliationReceipt.state == "CLEAN"`: observation proof **plus flat/accepted-override**. Stays exactly where it is: freeze clearing and flat-start requirements (ADR-0026 §5 same-day restarts start flat). It never gates intraday renewal.
 
 ### D1 — The lease is the existing verdict made durable, account-scoped, and named

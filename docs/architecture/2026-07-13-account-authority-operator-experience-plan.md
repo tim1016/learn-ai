@@ -1,262 +1,481 @@
-# Account Authority and Seamless Reconciliation — Future Plan
+# Account Authority Consolidation and Approved-Account Pin — rev 3
 
-## Decision in one sentence
+> **Status:** Future execution plan. PR #1013 ships the observation lease in
+> shadow mode; this document defines the hardening, parity-gated cutover, and
+> follow-on consolidation work. It replaces rev 2 of this document and records
+> the conclusions of the principal-architect review published on PR #1013.
 
-Every broker-reported paper or live trading account is a durable **Account
-Authority**: it owns the broker connection, account ledger, continuous account
-observation, trading permission, recovery workflow, and operator remedy
-experience for every bot bound to that account.
+## Goal
 
-The broker remains the final source of truth for live facts.  Our ledgers
-attribute and explain those facts; they never overwrite or excuse a broker
-disagreement.
+Make routine broker-account verification automatic and invisible, make every
+account-level block lead to one useful remedy surface, and close the one
+confirmed account-identity safety gap without building parallel lifecycle
+machinery.
 
-## Why this exists
+## Architectural decision
 
-Today an operator can be sent to reconcile from several different bot flows.
-That makes routine account safety feel like a manual feature, even though a
-healthy account is a precondition for most bot activity.  The normal operation
-must instead be invisible: configure and verify an account once, keep it
-observed continuously, and let a healthy bot start promptly.
+**Account Authority is the name of the existing broker-account safety seam, not
+a new service or wrapper class.** For one broker-reported paper or live account,
+the seam is already formed by:
 
-Manual reconciliation remains a recovery tool, not a normal prerequisite.
+- `accounts/<account_id>/` durable artifacts and account events;
+- the account instance registry and bot order namespaces;
+- `AccountTruthRefreshLoop`, Account Truth composition, and its snapshot cache;
+- the Account Observation Lease introduced by PR #1013;
+- account reconciliation/recovery proofs, freeze evidence, and audited
+  overrides;
+- the Account Monitor triage projection and remedy actions.
 
-## Ubiquitous language
+Do not introduce an `AccountAuthority` pass-through class, a second observer, a
+second classifier, a second account ledger, or a second remedy page. If a
+proposed abstraction can be deleted without forcing complexity back into its
+callers, do not build it.
 
-| Term | Meaning |
+The one genuinely new safety mechanism is the **Approved-Account Pin**: durable
+operator approval of the exact broker-reported account that the installation is
+allowed to operate. The current paper/live sentinel validates account *type* but
+does not reject reconnecting to a different sibling account of the same type.
+
+## Domain fence
+
+This plan applies only to broker-reported trading accounts in the Python data
+plane. The .NET/GraphQL `/portfolio` account domain is a Strategy Lab
+research/simulation model with GUID identities. It is active, intentionally
+separate, and out of scope. Do not merge, rename, or delete it while implementing
+this plan.
+
+## Existing implementation map — build nothing here
+
+| Plan term | Existing authority |
 |---|---|
-| **Broker connection profile** | The configured connection path to a broker session, including the broker-specific Gateway/TWS/API settings needed to connect. It does not claim an account identity merely because text was entered. |
-| **Broker-reported account** | The account identifier and operating environment reported by the connected broker after connection. |
-| **Account Authority** | The durable account-scoped parent service and audit boundary for one broker-reported paper or live account. |
-| **Active Account Binding** | The operator-approved relationship between a broker connection profile and the broker-reported account that this installation is allowed to operate. |
-| **Bot Account Binding** | The immutable Account Authority assigned to a bot run before it can be deployed or started. |
-| **Account observer** | The passive, continuous process that obtains broker facts, attributes them against durable evidence, and maintains or revokes current account proof. |
-| **Account proof** | The short-lived, durable evidence that the account is fresh, identity-matched, observable, and reconciled for ordinary trading. It is not a bot phase. |
-| **Account Remedy Center** | The account-scoped operator surface that explains a block and presents the action that can cure it. |
+| Account Authority | `accounts/<account_id>/` artifact tree plus existing observer, gates, and Account Monitor |
+| Account observer | `AccountTruthRefreshLoop` + `assess_account_truth()` + `AccountReconciliationService.observe_account_truth()` |
+| Account observation proof | `account_observation_lease.json`; owned exposure with an active manager is allowed |
+| Account recovery proof | `account_reconciliation_receipt.json`; observation plus resolved/flat exposure or accepted override |
+| Bot Account Binding | `run_ledger.json.account_id` plus append-only `instance_registry.jsonl` binding |
+| Broker-reported account | `managedAccounts()` single-account readback plus paper/live sentinel |
+| Attribution ledger | namespace-stamped `order_ref`, intent WAL, broker `perm_id`/`exec_id`, and Account Truth folding |
+| Recovery/override evidence | `AccountRecoveryProof`, `AccountAuditedOverride`, account freeze, and `account_events.jsonl` |
+| Remedy Center | promotion and route consolidation of `/broker/account-monitor` |
+| Revive | start the same `strategy_instance_id`; existing cold-start reconciliation adopts its own namespace evidence |
 
-## Account Authority responsibilities
+## Resolved lifecycle semantics (C1)
 
-An Account Authority is the parent scope for:
+The phrase “prior-crash trades are clean” was too broad. The code and authority
+contract already distinguish three cases:
 
-- the selected broker connection and broker-reported account identity;
-- paper/live environment verification;
-- the account-level bot and order attribution ledger;
-- the continuous account observer and its durable observation proof;
-- account-wide permission for new orders;
-- recovery records, freeze/override records, and account-local audit events;
-- the Account Remedy Center.
+1. An **active** bot's attributable non-zero position is clean observation
+   evidence and does not require flatness.
+2. Terminal orders and historical executions from a **retired** bot remain
+   attributable historical facts.
+3. A current position or open order whose only manager is **retired** is
+   `retired_owner_live_exposure`: attributable, but unmanaged and therefore
+   `not_proven` for ordinary account trading.
 
-A bot without a Bot Account Binding is invalid. It cannot be created,
-deployed, started, or submit an order. A bot run never silently moves when an
-operator changes the selected active account.
+This plan preserves case 3 as an account-wide default hold. Other bots may
+resume only after the exact bot is revived and reconciled, broker observation
+confirms operator-directed resolution, or an explicit audited and time-bounded
+override permits continued activity. The hold is not evidence of a foreign
+trade; the UI must name the known retired owner.
 
-## Configuration experience
+Per-namespace continuation is deferred. IBKR exposes net account positions, so
+allowing other bots safely—especially on the same instrument—requires a proven
+conflict-containment policy. It must not be inferred merely because the retired
+namespace is known.
 
-The existing account values become initial defaults, not permanent static UI
-text and not values typed into each bot form.
+## Non-goals
 
-The Account Configuration page will:
+- No `AccountAuthority` facade/class.
+- No multi-account IBKR session support; continue refusing `managedAccounts()`
+  lists with more than one entry until an explicit account-to-observer mapping
+  exists.
+- No operator-editable connection-profile store in v1. `.env` and deployment
+  configuration remain the connection authority.
+- No broker-neutral adapter layer. Keep vocabulary broker-neutral, implement
+  IBKR directly.
+- No automatic adoption by an unrelated bot.
+- No account-observation state machine beyond projection of connection × lease
+  × freeze/condition evidence.
+- No deletion of the Strategy Lab portfolio domain or the verified-live
+  lifecycle modules listed in the deletion ledger below.
 
-1. Configure the broker connection profile needed for IBKR Gateway/TWS/API
-   operation (for example host, port, API/client settings, and operating
-   environment).
-2. Test the connection and obtain broker-reported account identity and
-   paper/live classification.
-3. Let the operator select only from accounts returned by the broker when the
-   connected session exposes more than one account.
-4. Persist an Active Account Binding after explicit operator approval.
-5. Refuse an account-ID or paper/live mismatch rather than accepting a display
-   label as proof.
+---
 
-The application must publish its own practical IBKR setup documentation and
-troubleshooting guide. It should explain every setting needed to make the
-Gateway functional in this product, link to the relevant official IBKR pages,
-and not require an operator to infer the necessary setup solely from IBKR
-documentation.
+# Execution order
 
-Changing the active binding is a safety action, not a casual selector change.
-Existing bot runs retain their original binding. The change flow must surface
-active runs and unresolved exposure on the old authority and require them to be
-stopped or explicitly resolved before a new authority is used for new bots.
+## Slice 0 — Harden PR #1013 against current review findings
 
-## Normal operating path
+**Deliverable:** all six unresolved inline review threads are fixed, regression
+tested, replied to, and resolved before observation-lease enforcement work.
+
+### Task 0.1 — Make refresh outcome observation shared and generation-safe
+
+**Files:**
+
+- `PythonDataService/app/services/account_truth_refresh.py`
+- `PythonDataService/app/services/account_reconciliation.py`
+- `PythonDataService/app/main.py`
+- manual callers in `app/routers/broker.py`,
+  `app/routers/broker_account_truth.py`, and
+  `app/routers/account_reconciliation.py`
+- corresponding service/router tests
+
+**Required behavior:**
+
+- Capture the owner-generation fence **before** registry/freeze context and
+  broker Account Truth collection begin; carry that attempt context to the
+  success observer.
+- Compare the pre-collection fence with the post-collection fence before lease
+  renewal. A changed or non-accepting generation revokes with
+  `ACCOUNT_OWNER_GENERATION_CHANGED`.
+- Route success and failure through one shared refresh-outcome hook used by the
+  15-second loop and every manual `refresh_account_truth_now()` caller.
+- A failed manual broker sweep revokes the durable lease immediately, rather
+  than waiting for the loop.
+- Invoke keyword-only failure callbacks with keyword arguments.
+- If the second freeze read is unreadable, revoke with a bounded, explicit
+  account-proof reason. Do not leave a prior VERIFIED lease passable.
+- Keep consumer-side owner-generation validation in
+  `assess_account_observation_lease()`; it is necessary defense in depth.
+
+**Tests:**
+
+- owner changes after attempt capture but before the success observer → revoke;
+- stable accepting generation → renew;
+- loop failure and each manual refresh failure → immediate revoke;
+- keyword-only callback is actually invoked;
+- malformed/unreadable freeze evidence → revoke, never preserve VERIFIED.
+
+- [ ] Implement and verify Task 0.1.
+
+### Task 0.2 — Require real submit-boundary identity in parity evidence
+
+**Files:**
+
+- `PythonDataService/app/services/observation_lease_parity.py`
+- `PythonDataService/tests/services/test_observation_lease_parity.py`
+
+Reject comparison rows lacking non-empty `strategy_instance_id` or `run_id`, in
+addition to the existing gate-id/source/status validation. Malformed look-alike
+events must not count toward the three-session cutover.
+
+- [ ] Add failing missing/blank identity cases, implement, and verify.
+
+### Task 0.3 — Bound observation copy without losing Account Monitor triage
+
+**Files:**
+
+- `PythonDataService/app/services/account_reconciliation.py`
+- `PythonDataService/tests/services/test_account_reconciliation.py`
+
+Normalize every current/history `reason_line` before constructing the
+512-character-capped schemas. Preserve a deterministic truncation marker and
+keep raw forensic detail in durable evidence/logs; only operator presentation is
+bounded.
+
+- [ ] Add oversized broker/freeze/revocation reason tests, implement, and verify.
+
+### Task 0.4 — Review-thread closure
+
+After tests pass and the fixes are pushed:
+
+- reply to each of the six inline threads with the fix and test receipt;
+- resolve only threads actually satisfied by the pushed commit;
+- refetch thread state and leave no actionable unresolved thread silently open.
+
+- [ ] Reply, resolve, and re-audit PR #1013 threads.
+
+### Slice 0 verification
+
+- `ruff check app/ tests/`
+- focused affected service/router suites
+- the CI fast Python baseline/change-driven suite
+- existing focused Angular specs if any wire copy/schema changes
+
+---
+
+## Evidence Gate — complete the observation-lease shadow proof
+
+No start/submit cutover is permitted until the existing spine plan's parity
+gate succeeds:
+
+- at least three distinct canonical NYSE paper-market sessions;
+- real submit-boundary rows with instance/run identity;
+- no truth=`block` / lease=`pass` comparison;
+- malformed rows rejected;
+- the artifact-backed parity report archived with the work.
+
+- [ ] Collect three-session paper evidence and archive the passing report.
+
+If the lease is ever weaker, fix and restart the evidence window; do not waive
+the divergence.
+
+---
+
+## Slice 1 — Atomic observation-lease cutover and seamless Start
+
+**Prerequisite:** Evidence Gate passed.
+
+This slice is the remainder of Slices 3–4 in
+`2026-07-13-reconciliation-spine-session-lease.md`; do not create a competing
+implementation plan.
+
+**Deliverable:** Start and submit consume the durable observation proof, the
+redundant raw in-process gate retires only after parity, and healthy Start never
+requires navigation to manual reconciliation.
+
+### Tasks
+
+- Add the observation-lease gate to deploy preflight and `_assert_start_allowed`.
+- Preserve run-scoped cold-start reconciliation before the bar loop.
+- Replace the raw submit-time Account Truth provider only in the same atomic
+  cutover; retain freeze, registry, session authority, and child-local broker
+  connection gates.
+- On Start with an absent/expired lease, trigger one immediate run of the
+  existing observer rather than waiting for the next ≤15-second cadence.
+- Render **Verifying account** while that direct attempt is running; continue
+  Start immediately on success.
+- Keep ON_DUTY presence semantics separate from trading permission and update
+  ADR-0026/authority documentation as specified in the spine plan.
+
+- [ ] Complete the parity-gated atomic cutover.
+- [ ] Complete the seamless Start pass-through UX.
+
+---
+
+## Slice 2 — Approved-Account Pin (the only new safety mechanism)
+
+**Prerequisite:** Slice 1 complete. Ship as a focused follow-on PR.
+
+**Deliverable:** reconnecting IBKR to a different account of the same paper/live
+type cannot silently redirect observation or trading.
+
+### Task 2.1 — Durable pin artifact and assessment
+
+Create one installation-scoped artifact, separate from any individual account
+directory, for example:
+
+`accounts/approved_account_binding.json`
+
+Minimum immutable schema:
 
 ```text
-Configure connection profile
-  -> connect to IBKR
-  -> discover broker-reported account and environment
-  -> approve Active Account Binding
-  -> observer maintains a fresh account proof
-  -> bot start and submit consume that proof
+schema_version
+broker = "ibkr"
+account_id
+mode = "paper" | "live"
+connection_profile_fingerprint
+approved_by
+approved_at_ms
 ```
 
-The observer is the only routine account reconciler. It reads the connected
-account's identity, positions, open orders, and relevant execution/order facts;
-compares them with account, bot, and operator evidence; and renews or revokes
-the durable proof. It does not place orders, flatten positions, adopt a
-crashed bot's exposure, or change bot phase.
+The fingerprint covers canonical non-secret effective connection identity
+(broker, mode, normalized host, and port). Never persist credentials. Client-id
+diagnostics remain visible separately and need not invalidate the account pin
+unless the approved profile contract deliberately includes them.
 
-For a healthy account, bot start should be prompt:
+Use existing atomic artifact I/O and strict account-id normalization. Add a
+fail-closed read assessment for absent, malformed, mode-mismatched, and
+account-mismatched pins.
 
-- If a fresh proof already exists, start uses it without a new navigation or
-  separate reconciliation operation.
-- If a fresh observation is needed, Start shows a brief **Verifying account**
-  progress state and continues immediately after the proof succeeds.
-- Start must not wait for an arbitrary observer cadence when a direct fresh
-  observation can safely establish the proof.
-- The configured trading window and the broker's available capability define
-  whether the bot may operate; the operator should not have to fight unrelated
-  reconciliation screens during that window.
+- [ ] Implement artifact/repository/assessment with malformed and mismatch tests.
 
-The existing observation-lease work is the first implementation step toward
-this path. It is intentionally in shadow mode until paper-session parity shows
-that durable proof is never weaker than the current live submit gate.
+### Task 2.2 — Enforce broker readback against the pin
 
-## Reconciliation outcomes
+At `IbkrClient.connect()` after `managedAccounts()` returns exactly one account
+and after the existing paper/live sentinel:
 
-Every material broker fact must have one clear outcome:
+- compare the broker-reported account and effective profile with the pin;
+- on mismatch, record safe diagnostic evidence, disconnect, and raise a typed
+  approved-account mismatch error;
+- do not set `connected_account`, renew observation proof, or permit submit;
+- expose the pinned and observed account identities to broker health/diagnose
+  without exposing secrets.
 
-| Outcome | Meaning | Default effect |
+Every observation-lease consumer takes its expected account identity from the
+approved pin and still verifies expected account == lease account == run binding.
+
+Regression tests:
+
+- same pinned paper account reconnects;
+- sibling paper account is refused despite passing the DU-prefix sentinel;
+- paper/live mismatch remains refused by the existing sentinel;
+- missing/malformed pin fails closed for trading and is diagnosable;
+- mismatch cannot renew or consume a lease from either account tree.
+
+- [ ] Implement connect/readback and consumer enforcement.
+
+### Task 2.3 — Initial approval and safe pin change
+
+Initial migration is explicit and fail-closed: when no pin exists, the broker
+may be observed for configuration diagnosis, but new trading remains blocked
+until the operator approves the broker-reported account. Existing environment
+values prefill the display; they are not account-identity proof.
+
+Changing an existing pin requires durable evidence that the old authority has:
+
+- no DEPLOYED/ACTIVE bot binding;
+- no active freeze or unresolved recovery condition;
+- a fresh observation and the recovery/flatness proof required by the switch
+  policy.
+
+Record the approval/change event with evidence references, then advance the old
+account owner generation out of accepting and establish/advance the new account
+generation. This invalidates in-flight proof. Never accept a free-typed account
+identifier; the candidate must come from broker readback.
+
+- [ ] Implement initial approval and pin-change guards with race tests.
+
+---
+
+## Slice 3 — Promote Account Monitor into the Account Remedy Center
+
+**Deliverable:** every account-scope block leads to one account-specific page
+that states the failed fact and offers the applicable action in place.
+
+### Task 3.1 — Collapse account cure routing
+
+- Promote `/broker/account-monitor`; do not create a new route/component.
+- Repoint `cross-client-execution`, `live-trade-reconciliation`, and other
+  account-scope runbook/cure destinations to `/broker/account-monitor` with the
+  appropriate fragment.
+- Route account-scoped bot/deploy blockers to the same page.
+- Keep `/broker/session-mirror` for daemon/socket infrastructure.
+- Keep `/broker/reconciliation` as an operator-initiated ledger comparison view,
+  not a cure destination.
+- Replace stale “Open the Orders page…” flatten prose with the existing in-page
+  `flattenExposureFromDialog()` action.
+
+- [ ] Add route/copy regression tests and collapse the routing fan-out.
+
+### Task 3.2 — Surface the five outcomes as a projection
+
+Do not build a classifier. Project existing evidence into:
+
+| Operator outcome | Existing derivation | Default effect |
 |---|---|---|
-| Actively attributable | An active bot and durable ledger evidence explain it. | Ordinary operation continues. |
-| Recovery-required | Durable evidence identifies a crashed or retired bot as the owner, but no active manager currently exists. | Pause new trading account-wide pending recovery, resolution, or permitted override. |
-| Acknowledged manual activity | An operator durably linked direct broker activity to a broker fact and supplied a resolution policy. | Follow the recorded policy; never silently call it bot-owned. |
-| Unattributed activity | No bot evidence, recovery record, or manual acknowledgement explains the broker fact. | Pause new trading account-wide. |
-| Unobservable/invalid broker evidence | A required broker fact is unavailable, stale, contradictory, malformed, or from the wrong account. | Pause new trading account-wide. |
+| Actively attributable | bot owner + ACTIVE manager | VERIFIED; normal operation |
+| Recovery-required | bot/mixed-known owner + only RETIRED manager | account-wide hold; revive/resolve/override |
+| Acknowledged manual | manual owner + recorded decision/override | apply recorded policy and expiry |
+| Unattributed | foreign/unclaimed or unexplained mixed residue | account-wide hold |
+| Unobservable/invalid | stale, unavailable, source-stale, malformed, or account mismatch reason | account-wide hold |
 
-Unattributed and unobservable are deliberately different. The first means the
-broker returned a fact the system cannot explain. The second means the system
-cannot reliably determine the account's present facts. Both are unsafe for new
-orders, but need different explanation and remedy.
+Operator-visible top-level state remains a projection, not a new machine:
 
-## Recovery and restart behavior
+- **VERIFIED** — quiet proof line;
+- **ATTENTION** — one backend-authored reason and one action;
+- **FROZEN** — durable recovery flow.
 
-A normal application restart must not turn durable bot-owned broker exposure
-into foreign activity. Durable bot identity, account binding, namespace, order
-references, and order/execution evidence preserve attribution.
+- [ ] Implement only missing projection/copy and pin with surface tests.
 
-If a bot crashed while holding exposure:
+### Task 3.3 — Make existing recovery verbs prominent
 
-1. The Account Remedy Center names the exact bot/run and its current broker
-   facts.
-2. No unrelated bot may silently adopt or manage that exposure.
-3. The operator may explicitly revive the identified bot.
-4. The revived bot reconciles its ledger, current broker position, and open
-   orders before it resumes managing exposure.
-5. The successful recovery is written durably and auditable.
+- “Revive” means Start the same strategy instance and run existing cold-start
+  reconciliation/adoption; add no recovery daemon or handoff service.
+- Show the exact retired bot/run and affected broker facts.
+- Show active `AccountAuditedOverride` decision, scope, approver, and expiry.
+- Verify override expiry at every consuming gate read; never cache authority
+  past `valid_until_ms`.
+- Keep flatten-requested distinct from broker-confirmed flatness.
 
-The operator may instead resolve the exposure, such as by flattening. Other
-bots resume only after a fresh broker observation proves that resolution, or
-under an explicit, auditable, time-bounded account override. Requesting a
-flatten is not itself proof that the account is reconciled.
+- [ ] Add recovery/override UX and expiry characterization tests.
 
-## Account Remedy Center
+---
 
-Blocks should not scatter operators across bot-specific reconciliation pages.
-Every blocked bot surface routes to the same affected Account Authority's
-Remedy Center, which contains:
+## Slice 4 — Account Configuration v1 and IBKR setup documentation
 
-- the affected broker account and paper/live classification;
-- the last verified account state and time, clearly marked stale when needed;
-- the exact broker fact or attribution problem that prevented proof;
-- the identified bot/run when recovery-required exposure exists;
-- a single appropriate action on the same page.
+**Deliverable:** operators can see the effective IBKR configuration, diagnose
+it, approve the connected account pin, and follow product-owned setup guidance.
 
-Examples of remedy actions are reconnect/repair Gateway configuration, retry
-the observation, select/approve the correct broker-reported account,
-investigate or acknowledge manual activity, revive the named bot, resolve or
-flatten exposure, and create an audited override where policy permits it.
+### Task 4.1 — Read-only effective configuration and pin UI
 
-Healthy state remains quiet: **Account verified**. A failure must be precise,
-for example: **Trading paused — open orders unavailable from broker; account
-verification cannot complete.**
+Build on existing broker health/diagnose endpoints. The page displays only safe
+effective values:
 
-## Implementation boundaries and rollout
+- paper/live mode;
+- normalized host and port;
+- data-plane client ID and live-runner client-ID pool;
+- broker-reported account and paper/live sentinel result;
+- approved-account pin status and mismatch reason;
+- existing eight-check broker diagnosis.
 
-- Implement IBKR first, while keeping the Account Authority vocabulary
-  broker-neutral so future adapters do not force a bot/UI redesign.
-- Paper and live accounts use the same safety architecture; they never share
-  account proof, ledger ownership, or bot bindings.
-- Keep flatness-oriented recovery proof separate from ordinary observation
-  proof: owned non-zero intraday positions can be safe for normal operation,
-  while a freeze-clear or flat-start policy may need stronger recovery proof.
-- Keep current submit authority while the durable observation proof is shadowed
-  and compared against it.
-- Require successful parity evidence from real paper-market sessions before
-  making the durable proof the start/submit authority and retiring duplicated
-  routine reconciliation paths.
+Warn when the data-plane client ID overlaps the live-runner pool. Do not render
+credentials or add a mutable connection-profile database. The only write action
+is explicit approval/change of the broker-reported account pin through the
+guarded Slice 2 flow.
 
-## Prompt for Fable
+- [ ] Implement the read model, page, approval action, and overlap tests.
 
-```text
-Act as an independent principal architect reviewing a proposed broker-account
-and bot-lifecycle model for a trading application. Be critical and concrete:
-identify unsafe assumptions, missing states, race conditions, operator traps,
-and ways to simplify the design without weakening broker-account safety.
+### Task 4.2 — Product-owned IBKR setup guide
 
-The broker's account is the final authority for live facts: account identity,
-paper/live environment, positions, open orders, fills/executions, and relevant
-order status. Application ledgers explain those broker facts; they never
-override a disagreement.
+Document the concrete Gateway/TWS configuration required by this application:
 
-Each broker-reported paper or live account is a durable Account Authority. It
-is the parent scope for the broker connection, selected account binding,
-continuous observer, durable attribution ledger, account-wide order
-permission, bot recovery, audit events, and operator remedies. Every bot run
-is immutably bound to exactly one Account Authority before it can start or
-trade. There can be no unbound bot.
+- paper/live Gateway selection and matching ports;
+- enabling API/socket clients and any required active API policy;
+- read-only versus order-capable mode;
+- client-ID separation and runner pool requirements;
+- container/host addressing used by the deployment;
+- diagnosis steps for connection, sentinel, account-pin, and client-ID errors.
 
-The UI will configure an IBKR connection profile, test it, discover the actual
-account(s) and paper/live classification reported by IBKR, and require explicit
-operator approval of an Active Account Binding. Account IDs are not typed into
-bot forms. The product owns practical IBKR setup documentation and links to
-official IBKR documentation.
+Link the relevant official IBKR documentation, but keep the app guide complete
+enough to operate without reconstructing our requirements from external pages.
+Verify current official URLs during implementation.
 
-One passive account observer continuously reads required broker facts and
-matches them to bot and operator ledger evidence. It writes a short-lived,
-durable account proof only when the connected account is fresh,
-identity-matched, observable, and explainable. Bot start and submit consume
-that proof. The observer never places trades, flattens positions, adopts
-exposure, or changes bot lifecycle phase.
+- [ ] Publish and link the setup guide from Account Configuration.
 
-Required classifications are:
-- actively attributable: an active bot and durable ledger explain the fact;
-- recovery-required: a crashed/retired bot is durably identified as owner but
-  no active manager exists;
-- acknowledged manual: an operator durably linked direct broker activity to a
-  broker fact and a resolution policy;
-- unattributed: no bot, recovery record, or manual acknowledgement explains it;
-- unobservable/invalid: a required broker fact is unavailable, stale,
-  contradictory, malformed, or belongs to the wrong account.
+---
 
-Unattributed and unobservable facts both pause new orders account-wide by
-default, but have different operator explanations. An unavailable broker fact
-must name the missing fact and show the last verified state; it must not look
-like unknown trading activity.
+# Deletion and retention ledger
 
-Restarts must preserve attribution. If a crashed bot held exposure, the system
-names the exact bot/run and asks the operator to choose recovery. No unrelated
-bot may adopt it. On explicit operator request, the exact bot may revive,
-reconcile its ledger against current broker positions and open orders, then
-resume management. Alternatively, the operator may resolve/flatten exposure.
-Other bots resume only after fresh broker proof confirms resolution, or under
-an explicit, audited, time-bounded override.
+## Delete or consolidate in the owning slice
 
-The desired UX is seamless in normal operation: configure an account once;
-while its proof is fresh, a bot starts promptly without a manual reconciliation
-screen. When blocked, every bot view routes to one Account Remedy Center for
-the affected account. It states the exact cause and presents the appropriate
-action in place.
+- Remove the never-authored `"intended"` exposure-resolution value from
+  `AccountExposureResolution` and `CLEARABLE_EXPOSURE_RESOLUTIONS`; retain a
+  regression test that unsupported values cannot clear a freeze.
+- Delete stale manual-flatten prose after the in-page action is the routed cure.
+- Consolidate `_clear_freeze_blocker()` and `clear_account_freeze()` onto one
+  shared validation authority; the artifact writer remains the final guard.
+- Retire the raw in-process Account Truth submit gate only after the parity-gated
+  Slice 1 cutover.
+- Re-evaluate the auto-reconciliation policy toggle and child-run private truth
+  sweeps only in later, separate decisions after production evidence.
 
-Please answer:
-1. What is unsafe, ambiguous, over-engineered, or missing?
-2. What durable evidence is minimally sufficient to prove ownership after a
-   crash, including partial fills and multiple orders contributing to one net
-   position?
-3. What races exist between observation, submit, fill, gateway disconnect,
-   restart, account switching, and recovery?
-4. Which conditions should block the whole account versus only one bot?
-5. What should be required for a safe, bounded operator override?
-6. Propose a simpler state model and an incremental rollout plan, preserving
-   the rule that broker truth wins over application memory.
-```
+## Do not delete
+
+- `app/engine/live/reconciliation_receipt.py`;
+- `app/services/resume_guard_state.py`;
+- `app/services/operator_blockage_ladder.py`;
+- `Backend/GraphQL/PortfolioQuery.cs` and the Strategy Lab `/portfolio` domain;
+- daemon/process liveness lease, run reconciliation receipt, freeze evidence,
+  account registry, intent WAL, or consumer-side generation checks.
+
+---
+
+# Completion criteria
+
+The future program is complete only when:
+
+- all PR #1013 review threads are addressed and CI is green;
+- three-session shadow parity is archived with no lease-weaker outcome;
+- start and submit consume the observation lease without weakening existing
+  gates;
+- a healthy bot starts without manual reconciliation navigation;
+- reconnecting to a sibling paper/live account is refused by the approved pin;
+- no bot exists without an immutable broker-account binding;
+- every account-level block routes to Account Monitor/Remedy Center with a
+  precise fact and usable cure;
+- account configuration is diagnosable and documented without creating a
+  mutable secret/configuration store;
+- the deletion ledger is executed without removing verified-live machinery;
+- authority docs, CONTEXT vocabulary, backend contracts, frontend fixtures, and
+  tests agree on active-owned versus retired-unmanaged exposure.
+
+## New-session pickup
+
+1. Work on branch `codex/bot-startup-prereqs` / PR #1013.
+2. Fetch unresolved review threads with the thread-aware GitHub review script.
+3. Start at Slice 0; do not implement the approved pin or lease enforcement
+   before the stated prerequisites.
+4. Preserve unrelated `compose.yaml` work in the main workspace.
+5. After Slice 0, re-check CI and paper-session parity state before choosing the
+   next executable slice.

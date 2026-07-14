@@ -229,6 +229,12 @@ never branch on those strings. This retires `recovery-flatten-*`,
   the connected broker session. Deploy displays this account as read-only
   evidence and fails closed when the account is unavailable or ambiguous; traders
   do not type broker account identifiers into the deploy form.
+- **Broker Account Authority** — the account-scoped safety and audit boundary
+  for one broker-reported paper or live trading account. It governs every bot
+  bound to that account; it is a domain seam, not another runtime service.
+- **Approved-account pin** — durable operator approval of the exact
+  broker-reported account this installation may operate. Paper/live mode alone
+  is not sufficient account identity.
 - **Account observation proof** — a fresh, clean Account Truth assessment for
   one broker account. It proves that current account state is attributable and
   may include non-zero exposure owned by an active bot; it is the right proof
@@ -238,6 +244,13 @@ never branch on those strings. This retires `recovery-flatten-*`,
   It combines observation proof with accepted resolved exposure/flatness and
   must not be used to stop a healthy bot merely because it holds an owned
   position.
+- **Recovery-required broker exposure** — a current broker position or working
+  order attributable to a known retired bot but lacking an active manager. It
+  is known rather than foreign, yet blocks ordinary account trading until
+  revived, resolved, or explicitly overridden.
+- **Strategy Lab portfolio account** — a research/simulation account in the
+  portfolio domain, distinct from a broker-reported trading account. It is not
+  a Broker Account Authority and the two account domains are not unified.
 - **Trader-readable instrument picker** — Deploy action plans use rich,
   trader-friendly stock and option selectors instead of raw symbol/contract
   entry rows. Stocks surface recognisable symbol/company/exchange context when
