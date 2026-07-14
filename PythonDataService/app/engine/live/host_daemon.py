@@ -28,6 +28,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from subprocess import Popen as _RealPopen
 from typing import TextIO
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
@@ -256,6 +257,7 @@ class ManagedClerk:
 
     account_id: str
     generation: int
+    ibkr_client_id: int
     process: subprocess.Popen
     started_at_ms: int
     log_handle: TextIO
@@ -659,7 +661,11 @@ class RunnerProcessManager:
                     # ``_ensure_account_clerk`` before the bot is allowed to
                     # reach any submit surface.  A bot must never race ahead
                     # of the account authority it depends on.
-                    self._ensure_account_clerk(account_id)
+                    self._ensure_account_clerk(
+                        account_id,
+                        request=request,
+                        reserved_client_ids={ibkr_client_id},
+                    )
                 process = subprocess.Popen(
                     command,
                     cwd=str(self.repo_root),
@@ -1329,6 +1335,11 @@ class RunnerProcessManager:
         active: set[int] = set()
         with self._managed_lock:
             active.update(self._rejected_ibkr_client_ids)
+            active.update(
+                clerk.ibkr_client_id
+                for clerk in self._clerks.values()
+                if clerk.process.poll() is None
+            )
             for key, managed in self._managed.items():
                 if key == exclude_key:
                     continue
@@ -1381,7 +1392,13 @@ class RunnerProcessManager:
             raise HostRunnerError(status.HTTP_404_NOT_FOUND, f"Run {run_id!r} not found under {self.live_runs_root}")
         return run_dir
 
-    def _ensure_account_clerk(self, account_id: str) -> ManagedClerk:
+    def _ensure_account_clerk(
+        self,
+        account_id: str,
+        *,
+        request: HostRunnerStartRequest | None = None,
+        reserved_client_ids: set[int] | None = None,
+    ) -> ManagedClerk:
         existing = self._clerks.get(account_id)
         if existing is not None and existing.process.poll() is None:
             return existing
@@ -1390,6 +1407,19 @@ class RunnerProcessManager:
             self._clerks.pop(account_id, None)
         from app.engine.live.account_artifacts import account_artifacts_root, advance_account_clerk_generation
         from app.engine.live.account_clerk import AccountClerkLeaseWriter
+
+        active_client_ids = self._active_ibkr_client_ids(exclude_key="")
+        active_client_ids.update(reserved_client_ids or set())
+        clerk_client_id = next(
+            (
+                candidate
+                for candidate in self._ibkr_client_id_pool()
+                if candidate not in active_client_ids
+            ),
+            None,
+        )
+        if clerk_client_id is None:
+            raise OSError("No IBKR client ID is available for the account clerk")
 
         generation = advance_account_clerk_generation(
             self.artifacts_root,
@@ -1408,6 +1438,11 @@ class RunnerProcessManager:
         env["PYTHONPATH"] = (
             python_path if not existing_python_path else f"{python_path}{os.pathsep}{existing_python_path}"
         )
+        if request is not None:
+            env["IBKR_HOST"] = request.ibkr_host
+        env["IBKR_CLIENT_ID"] = str(clerk_client_id)
+        env["IBKR_MODE"] = "paper"
+        env["IBKR_READONLY"] = "false"
         try:
             process = subprocess.Popen(
                 [
@@ -1431,6 +1466,8 @@ class RunnerProcessManager:
         except OSError:
             log_handle.close()
             raise
+        if isinstance(process, _RealPopen):
+            self._wait_for_account_clerk_socket(account_artifacts_root=self.artifacts_root, account_id=account_id)
         AccountClerkLeaseWriter(
             artifacts_root=self.artifacts_root,
             account_id=account_id,
@@ -1441,12 +1478,27 @@ class RunnerProcessManager:
         managed = ManagedClerk(
             account_id=account_id,
             generation=generation.generation,
+            ibkr_client_id=clerk_client_id,
             process=process,
             started_at_ms=self._clock_ms(),
             log_handle=log_handle,
         )
         self._clerks[account_id] = managed
         return managed
+
+    @staticmethod
+    def _wait_for_account_clerk_socket(*, account_artifacts_root: Path, account_id: str) -> None:
+        """Release bots only after the real Clerk RPC endpoint is reachable."""
+
+        from app.engine.live.account_clerk import account_clerk_socket_path
+
+        socket_path = account_clerk_socket_path(account_artifacts_root, account_id)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if socket_path.exists():
+                return
+            time.sleep(0.05)
+        raise OSError(f"Account clerk RPC socket did not become ready for {account_id}")
 
     def _clerk_health(self) -> list[AccountClerkHealth]:
         from app.engine.live.account_artifacts import read_account_clerk_lease

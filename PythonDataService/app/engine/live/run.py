@@ -1800,6 +1800,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         )
 
     account_owner = None
+    account_clerk_submitter = None
     account_owner_generation = 0
     if client is not None and ledger.account_id and ledger.strategy_instance_id:
         from app.broker.ibkr.orders import (
@@ -1819,7 +1820,8 @@ def cmd_start(args: argparse.Namespace) -> int:
             AccountBrokerEvidence,
             classify_account,
         )
-        from app.engine.live.account_owner import AccountOwner
+        from app.engine.live.account_clerk import AccountClerkRpcClient
+        from app.engine.live.account_owner import AccountOwner, AccountOwnerSubmitResult
         from app.engine.live.account_registry import read_account_instance_registry
         from app.engine.live.fleet_reset_baseline import read_applicable_baseline
 
@@ -1902,6 +1904,39 @@ def cmd_start(args: argparse.Namespace) -> int:
             classifier=_classify_account_for_submit,
             initial_phase=account_owner_initial_phase,
         )
+        clerk_client = AccountClerkRpcClient(
+            artifacts_root=_artifacts_root,
+            account_id=ledger.account_id,
+        )
+        use_clerk_events = getattr(broker, "use_account_clerk_event_stream", None)
+        if callable(use_clerk_events):
+            use_clerk_events(
+                lambda: clerk_client.drain_events(
+                    bot_order_namespace=bot_order_namespace_for_instance(strategy_instance_id)
+                )
+            )
+
+        async def _submit_to_account_clerk(intent) -> AccountOwnerSubmitResult:
+            receipt = await clerk_client.submit(intent)
+            return AccountOwnerSubmitResult(
+                status="accepted",
+                trace_id=intent.trace_id,
+                account_id=intent.account_id,
+                strategy_instance_id=intent.strategy_instance_id,
+                run_id=intent.run_id,
+                intent_id=intent.intent_id,
+                order_ref=intent.order_ref,
+                owner_generation=intent.owner_generation,
+                order_id=receipt.order_id,
+                perm_id=receipt.perm_id,
+                exec_id=receipt.exec_id,
+            )
+
+        account_clerk_submitter = _submit_to_account_clerk
+
+        async def _reject_direct_broker_write(*, boundary: str, write: object) -> object:
+            del write
+            raise RuntimeError(f"ACCOUNT_CLERK_DIRECT_BROKER_WRITE_FORBIDDEN:{boundary}")
     engine = LiveEngine(
         client,
         live_config,
@@ -1938,8 +1973,10 @@ def cmd_start(args: argparse.Namespace) -> int:
         artifacts_root_for_lease=_artifacts_root,
         watchdog_factory=_build_child_watchdog_factory(_artifacts_root, args.run_dir),
         account_registry_gate_enabled=bool(ledger.strategy_instance_id),
-        account_owner_submitter=account_owner.submit if account_owner is not None else None,
-        account_owner_broker_writer=account_owner.run_broker_write if account_owner is not None else None,
+        account_owner_submitter=account_clerk_submitter,
+        account_owner_broker_writer=(
+            _reject_direct_broker_write if account_owner is not None else None
+        ),
         owner_generation_provider=_account_owner_generation_provider if account_owner is not None else None,
         current_owner_generation_provider=(
             _current_account_owner_generation_provider if account_owner is not None else None
