@@ -52,6 +52,7 @@ import type {
   CohortBatchLaunchOutcomesReceipt,
   CohortBatchLaunchOutcomesRequest,
   CohortBatchLaunchReceipt,
+  CohortBatchLaunchStatus,
 } from '../api/cohort-batch-launch.types';
 
 @Injectable({ providedIn: 'root' })
@@ -260,6 +261,21 @@ export class LiveRunsService {
     return firstValueFrom(this.http.post<CohortBatchLaunchOutcomesReceipt>(
       `/api/accounts/${encodeURIComponent(accountId)}/cohort-batch-launches/${encodeURIComponent(cohortId)}/outcomes`,
       request,
+    ));
+  }
+
+  getLatestCohortBatchLaunch(accountId: string): Promise<CohortBatchLaunchStatus | null> {
+    return firstValueFrom(this.http.get<CohortBatchLaunchStatus | null>(
+      `/api/accounts/${encodeURIComponent(accountId)}/cohort-batch-launches/latest`,
+    ));
+  }
+
+  getCohortBatchLaunch(
+    accountId: string,
+    cohortId: string,
+  ): Promise<CohortBatchLaunchStatus> {
+    return firstValueFrom(this.http.get<CohortBatchLaunchStatus>(
+      `/api/accounts/${encodeURIComponent(accountId)}/cohort-batch-launches/${encodeURIComponent(cohortId)}`,
     ));
   }
 

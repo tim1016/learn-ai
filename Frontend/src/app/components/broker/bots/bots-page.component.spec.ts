@@ -181,6 +181,10 @@ class FakeLiveRunsService {
   createCohortBatchLaunch = vi.fn();
   recordCohortBatchLaunchOutcomes = vi.fn();
   startHostRunner = vi.fn<(runId: string, request: unknown) => Promise<unknown>>();
+  deployPreflight = vi.fn();
+  getLatestCohortBatchLaunch = vi.fn();
+  getInstanceStatus = vi.fn();
+  getStatus = vi.fn();
 }
 
 class FakeBrokerService {
@@ -332,6 +336,8 @@ async function setup(options: { triage?: AccountTriageResponse } = {}) {
     outcomes: [],
     recorded_at_ms: NEW_RUN,
   });
+  service.deployPreflight.mockResolvedValue({ ready: true, blockers: [] });
+  service.getLatestCohortBatchLaunch.mockResolvedValue(null);
   service.deleteBot.mockResolvedValue({
     strategy_instance_id: 'paper-msft',
     mode: 'soft',
@@ -527,16 +533,36 @@ describe('BotsPageComponent', () => {
   it('requires cohort authorization confirmation before starting ready bots', async () => {
     const { fixture, service } = await setup();
     const root = fixture.nativeElement as HTMLElement;
-    const start = Array.from(root.querySelectorAll<HTMLButtonElement>('button'))
-      .find((button) => button.textContent?.includes('Start ready cohort'));
-
-    start?.click();
+    await fixture.componentInstance.requestCohortStart();
     await settle(fixture);
 
-    expect(root.querySelector('[role="alertdialog"]')?.textContent).toContain(
-      'Start ready paper-validation cohort?',
-    );
+    expect(root.querySelector('[role="alertdialog"]')?.textContent).toContain('Authorize ready bots');
     expect(service.createCohortBatchLaunch).not.toHaveBeenCalled();
+  });
+
+  it('lists hard cohort preflight blockers and disables authorization', async () => {
+    const { fixture, service } = await setup();
+    service.deployPreflight.mockResolvedValue({
+      ready: false,
+      blockers: [{
+        condition: { id: 'fleet_contaminated', severity: 'blocking', scope: 'fleet', evidence: {} },
+        host: 'deploy_preflight',
+        disposition: 'fix_elsewhere',
+        headline: 'Fleet contamination blocks starts',
+        detail: 'Clear the account fleet state before starting bots.',
+        primary_move: null,
+        secondary_moves: [],
+        applies_to: 'both',
+      }],
+    });
+    const root = fixture.nativeElement as HTMLElement;
+    await fixture.componentInstance.requestCohortStart();
+    await settle(fixture);
+
+    expect(root.textContent).toContain('Fleet contamination blocks starts');
+    const authorize = Array.from(root.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.includes('Authorize 1 bots'));
+    expect(authorize?.disabled).toBe(true);
   });
 
   it('blocks Start one ready before roll call when account sick bay is active', async () => {

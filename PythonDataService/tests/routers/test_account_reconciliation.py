@@ -367,6 +367,62 @@ async def test_cohort_outcomes_reject_partial_authorization_coverage(tmp_path: P
     )
 
 
+async def test_latest_cohort_status_reloads_exact_persisted_blocker(tmp_path: Path) -> None:
+    from app.main import app
+
+    service = CohortBatchLaunchService(artifacts_root=tmp_path)
+    app.dependency_overrides[
+        cohort_batch_launch.get_cohort_batch_launch_service
+    ] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            await client.post(
+                "/api/accounts/DU1234567/cohort-batch-launches",
+                json={
+                    "cohort_id": "opening-batch-1",
+                    "member_strategy_instance_ids": ["spy-a", "spy-b"],
+                    "window_start_ms": 1_780_000_000_000,
+                    "window_end_ms": 1_780_000_030_000,
+                    "authorized_by": "operator.alice",
+                },
+            )
+            await client.post(
+                "/api/accounts/DU1234567/cohort-batch-launches/opening-batch-1/outcomes",
+                json={
+                    "outcomes": [
+                        {
+                            "strategy_instance_id": "spy-a",
+                            "state": "accepted",
+                            "reason": "start.request.accepted",
+                            "next_safe_action": "Monitor receipt state.",
+                        },
+                        {
+                            "strategy_instance_id": "spy-b",
+                            "state": "blocked",
+                            "reason": "ACCOUNT_FROZEN",
+                            "next_safe_action": "Clear the account freeze.",
+                        },
+                    ],
+                },
+            )
+            response = await client.get(
+                "/api/accounts/DU1234567/cohort-batch-launches/latest",
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["cohort_id"] == "opening-batch-1"
+    assert body["outcomes_state"] == "recorded"
+    assert body["outcomes"][1] == {
+        "strategy_instance_id": "spy-b",
+        "state": "blocked",
+        "reason": "ACCOUNT_FROZEN",
+        "next_safe_action": "Clear the account freeze.",
+    }
+
+
 async def test_triage_returns_latest_receipt(tmp_path: Path) -> None:
     from app.main import app
 

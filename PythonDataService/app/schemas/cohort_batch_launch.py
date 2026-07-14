@@ -125,3 +125,59 @@ class CohortBatchLaunchOutcomesResponse(BaseModel):
             ],
             recorded_at_ms=receipt.recorded_at_ms,
         )
+
+
+class CohortBatchLaunchStatusResponse(BaseModel):
+    """Durable cohort authorization plus the latest exact member outcomes."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    cohort_id: str = Field(min_length=1, max_length=128)
+    member_strategy_instance_ids: list[str] = Field(min_length=1, max_length=128)
+    window_start_ms: int = Field(ge=0)
+    window_end_ms: int = Field(ge=0)
+    authorized_by: str = Field(min_length=1, max_length=128)
+    authorized_recorded_at_ms: int = Field(ge=0)
+    outcomes_state: Literal["pending", "recorded", "unreadable"]
+    outcomes: list[CohortBatchLaunchMemberOutcomeRequest] = Field(default_factory=list)
+    outcomes_recorded_at_ms: int | None = Field(default=None, ge=0)
+    outcomes_error: str | None = None
+
+    @classmethod
+    def from_receipts(
+        cls,
+        receipt: CohortBatchLaunchReceipt,
+        outcomes_receipt: CohortBatchLaunchOutcomesReceipt | None,
+        *,
+        outcomes_error: str | None = None,
+    ) -> CohortBatchLaunchStatusResponse:
+        return cls(
+            account_id=receipt.account_id,
+            cohort_id=receipt.cohort_id,
+            member_strategy_instance_ids=list(receipt.member_strategy_instance_ids),
+            window_start_ms=receipt.window_start_ms,
+            window_end_ms=receipt.window_end_ms,
+            authorized_by=receipt.authorized_by,
+            authorized_recorded_at_ms=receipt.recorded_at_ms,
+            outcomes_state=(
+                "unreadable"
+                if outcomes_error is not None
+                else "recorded"
+                if outcomes_receipt is not None
+                else "pending"
+            ),
+            outcomes=(
+                [
+                    CohortBatchLaunchMemberOutcomeRequest.model_validate(outcome.model_dump())
+                    for outcome in outcomes_receipt.outcomes
+                ]
+                if outcomes_receipt is not None
+                else []
+            ),
+            outcomes_recorded_at_ms=(
+                outcomes_receipt.recorded_at_ms if outcomes_receipt is not None else None
+            ),
+            outcomes_error=outcomes_error,
+        )

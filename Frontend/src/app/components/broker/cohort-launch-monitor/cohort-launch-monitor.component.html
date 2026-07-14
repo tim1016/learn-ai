@@ -1,0 +1,96 @@
+@if (loading()) {
+  <section class="cohort-monitor" aria-label="Cohort monitor" aria-busy="true">
+    <p role="status">Loading the latest durable cohort receipt and live telemetry…</p>
+  </section>
+} @else if (error(); as message) {
+  <section class="cohort-monitor" aria-label="Cohort monitor">
+    <app-section-error [error]="message" contextWhat="We couldn't load the cohort monitor." (retry)="refresh()" />
+  </section>
+} @else if (cohort(); as cohort) {
+  <section class="cohort-monitor" aria-labelledby="cohort-monitor-title">
+    <header>
+      <div>
+        <p class="eyebrow">Paper-validation cohort</p>
+        <h2 id="cohort-monitor-title">Cohort monitor</h2>
+        <p class="mono">{{ cohort.cohort_id | receiptLabel }}</p>
+      </div>
+      <button type="button" class="refresh" (click)="refresh()" aria-label="Refresh cohort monitor">
+        Refresh
+      </button>
+    </header>
+
+    <p class="receipt-meta">
+      Authorized <app-timestamp-display [value]="cohort.authorized_recorded_at_ms" mode="local" />
+      @if (cohort.outcomes_recorded_at_ms !== null) {
+        · outcomes recorded <app-timestamp-display [value]="cohort.outcomes_recorded_at_ms" mode="local" />
+      }
+    </p>
+
+    @if (cohort.outcomes_state === 'unreadable') {
+      <p class="error" role="alert">{{ cohort.outcomes_error }}</p>
+    } @else if (cohort.outcomes_state === 'pending') {
+      <p class="pending" role="status">Cohort authorization is durable; member outcomes are still pending.</p>
+    }
+
+    @if (successMeter(); as meter) {
+      <dl class="success-meter" aria-label="Cohort success meter">
+        <div><dt>Target count</dt><dd>{{ meter.targetCount }}</dd></div>
+        <div><dt>Concurrent uptime</dt><dd>{{ meter.concurrentUptimeMs / 1000 | number: '1.0-0' }} s</dd></div>
+        <div><dt>Total orders</dt><dd>{{ meter.totalOrders }}</dd></div>
+        <div><dt>Round trips</dt><dd>{{ meter.roundTrips }}</dd></div>
+        <div><dt>Flat after exit</dt><dd>{{ meter.flatAfterExitCount }}</dd></div>
+        <div><dt>Incidents</dt><dd>{{ meter.incidentCount }}</dd></div>
+      </dl>
+    }
+
+    <div class="table-wrap" tabindex="0" aria-label="Scrollable cohort monitor table">
+      <table>
+        <caption>Per-bot durable receipt state and live status</caption>
+        <thead>
+          <tr>
+            <th scope="col">Bot</th>
+            <th scope="col">Receipt</th>
+            <th scope="col">Run / client / cap</th>
+            <th scope="col">Orders / trips</th>
+            <th scope="col">Namespace exposure</th>
+            <th scope="col">Last fill</th>
+            <th scope="col">Safe next action</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of rows(); track row.strategyInstanceId) {
+            <tr [class.incident]="row.incident">
+              <th scope="row" class="mono">{{ row.strategyInstanceId | receiptLabel }}</th>
+              <td>
+                <span class="mono">{{ row.receiptState | receiptLabel }}</span>
+                @if (row.outcome; as outcome) {
+                  <p class="mono">{{ outcome.reason | receiptLabel }}</p>
+                }
+              </td>
+              <td>
+                <div class="mono">{{ row.runId ?? 'No run' }}</div>
+                <div>Client {{ row.clientId ?? 'unavailable' }} · cap {{ row.effectiveCap ?? 'unavailable' }}</div>
+                @if (row.uptimeMs !== null) { <div>Uptime {{ row.uptimeMs / 1000 | number: '1.0-0' }} s</div> }
+              </td>
+              <td>{{ row.ordersUsed ?? 'unavailable' }} / {{ row.roundTrips ?? 'unavailable' }}</td>
+              <td class="mono">{{ row.namespaceExposure ?? 'unavailable' }}</td>
+              <td>
+                <div>{{ row.lastFill.label }}</div>
+                @if (row.lastFill.atMs !== null) { <app-timestamp-display [value]="row.lastFill.atMs" mode="local" /> }
+              </td>
+              <td>
+                @if (row.outcome; as outcome) {
+                  {{ outcome.next_safe_action }}
+                } @else if (row.statusError; as statusError) {
+                  {{ statusError }}
+                } @else {
+                  Monitor the current live status.
+                }
+              </td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  </section>
+}

@@ -148,20 +148,6 @@
   text-transform: uppercase;
 }
 
-.launch-progress-meter {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-
-  span {
-    padding: 4px 7px;
-    border: 1px solid var(--border-light);
-    border-radius: 999px;
-    color: var(--text-secondary);
-    font-size: 12px;
-    font-variant-numeric: tabular-nums;
-  }
-}
 
 .eyebrow {
   margin: 0 0 4px;

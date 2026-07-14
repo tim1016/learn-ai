@@ -152,6 +152,30 @@ describe('LiveRunsService start/stop proxy', () => {
     await expect(promise).resolves.toEqual(response);
   });
 
+  it('reads the latest durable cohort receipt through the account endpoint', async () => {
+    const response = {
+      schema_version: 1,
+      account_id: 'DU123',
+      cohort_id: 'paper-validation-1',
+      member_strategy_instance_ids: ['bot-1'],
+      window_start_ms: 1,
+      window_end_ms: 2,
+      authorized_by: 'operator',
+      authorized_recorded_at_ms: 1,
+      outcomes_state: 'pending',
+      outcomes: [],
+      outcomes_recorded_at_ms: null,
+      outcomes_error: null,
+    };
+    const promise = service.getLatestCohortBatchLaunch('DU123');
+
+    const req = httpMock.expectOne('/api/accounts/DU123/cohort-batch-launches/latest');
+    expect(req.request.method).toBe('GET');
+    req.flush(response);
+
+    await expect(promise).resolves.toEqual(response);
+  });
+
   it('reads the bounded lifecycle projection timeline through the data plane', async () => {
     const response: LifecycleTimelineResponse = {
       projection_available: true,
