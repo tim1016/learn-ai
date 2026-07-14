@@ -201,8 +201,8 @@ def account_artifacts_root(artifacts_root: Path, account_id: str) -> Path:
     ``account_id`` can arrive from URL path segments on operator recovery
     endpoints. Require the already-canonical account-id spelling, reconstruct
     the path component from the regex match, then resolve and assert it remains below
-    ``<artifacts_root>/accounts``. The match-group reconstruction, basename
-    extraction, and containment check mirror CodeQL's path-injection guidance.
+    ``<artifacts_root>/accounts``. The match-group reconstruction and resolved-prefix
+    check mirror CodeQL's path-injection guidance.
     """
     # Keep the regex capture in this path builder rather than accepting the
     # result of a custom validator. CodeQL recognizes Match.group() as a
@@ -212,17 +212,11 @@ def account_artifacts_root(artifacts_root: Path, account_id: str) -> Path:
     if match is None or account_id != account_id.strip():
         raise AccountArtifactError(f"invalid account_id: {account_id!r}")
     safe_account_id = match.group(0)
-    accounts_root = os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts"))
-    candidate = os.path.realpath(os.path.join(accounts_root, safe_account_id))
-    try:
-        common = os.path.commonpath([candidate, accounts_root])
-    except ValueError as exc:
-        raise AccountArtifactError(
-            f"account artifact path {candidate} cannot share a root with {accounts_root}"
-        ) from exc
-    if common != accounts_root:
+    resolved_root = os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts"))
+    resolved = os.path.realpath(os.path.join(resolved_root, safe_account_id))
+    if not str(resolved).startswith(str(resolved_root) + os.sep):
         raise AccountArtifactError(f"path traversal detected for account_id: {account_id!r}")
-    return Path(candidate)
+    return Path(resolved)
 
 
 def _account_artifact_file_path(
@@ -281,9 +275,12 @@ def _existing_account_artifact_file_path(
 
 
 def write_account_freeze(artifacts_root: Path, evidence: AccountFreezeEvidence) -> Path:
-    root = account_artifacts_root(artifacts_root, evidence.account_id)
-    root.mkdir(parents=True, exist_ok=True)
-    path = root / ACCOUNT_FREEZE_FILENAME
+    path = _account_artifact_file_path(
+        artifacts_root,
+        evidence.account_id,
+        ACCOUNT_FREEZE_FILENAME,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write_json(path, evidence.model_dump())
     _append_account_event(
         artifacts_root,
@@ -325,8 +322,11 @@ def clear_account_freeze(
     if (recovery_proof is None) == (audited_override is None):
         raise AccountArtifactError("provide exactly one recovery_proof or audited_override")
     account_id = recovery_proof.account_id if recovery_proof is not None else audited_override.account_id
-    root = account_artifacts_root(artifacts_root, account_id)
-    path = root / ACCOUNT_FREEZE_FILENAME
+    path = _account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        ACCOUNT_FREEZE_FILENAME,
+    )
     if not path.is_file():
         raise AccountArtifactError(f"account freeze does not exist for {account_id!r}")
     evidence = AccountFreezeEvidence.model_validate_json(path.read_text(encoding="utf-8"))
@@ -408,7 +408,7 @@ def clear_account_freeze(
 def read_account_events(artifacts_root: Path, account_id: str) -> list[dict]:
     """Read account events strictly for canonical safety consumers."""
 
-    path = account_artifacts_root(artifacts_root, account_id) / ACCOUNT_EVENTS_FILENAME
+    path = _account_artifact_file_path(artifacts_root, account_id, ACCOUNT_EVENTS_FILENAME)
     if not path.is_file():
         return []
     return _parse_account_event_bytes(path, path.read_bytes(), tolerant=False)
@@ -424,7 +424,7 @@ def read_account_events_tolerant(artifacts_root: Path, account_id: str) -> list[
 def read_account_events_tolerant_with_hash(artifacts_root: Path, account_id: str) -> tuple[list[dict], str | None]:
     """Read tolerant account events and hash the same byte snapshot."""
 
-    path = account_artifacts_root(artifacts_root, account_id) / ACCOUNT_EVENTS_FILENAME
+    path = _account_artifact_file_path(artifacts_root, account_id, ACCOUNT_EVENTS_FILENAME)
     events: list[dict] = []
     if not path.is_file():
         return events, None
@@ -515,9 +515,12 @@ def write_account_owner_generation(
     artifacts_root: Path,
     generation: AccountOwnerGeneration,
 ) -> Path:
-    root = account_artifacts_root(artifacts_root, generation.account_id)
-    root.mkdir(parents=True, exist_ok=True)
-    path = root / ACCOUNT_OWNER_GENERATION_FILENAME
+    path = _account_artifact_file_path(
+        artifacts_root,
+        generation.account_id,
+        ACCOUNT_OWNER_GENERATION_FILENAME,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write_json(path, generation.model_dump())
     _append_account_event(
         artifacts_root,
@@ -542,9 +545,12 @@ def advance_account_owner_generation(
     recorded_at_ms: int,
     source: str,
 ) -> AccountOwnerGeneration:
-    root = account_artifacts_root(artifacts_root, account_id)
-    root.mkdir(parents=True, exist_ok=True)
-    path = root / ACCOUNT_OWNER_GENERATION_FILENAME
+    path = _account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        ACCOUNT_OWNER_GENERATION_FILENAME,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
     with _file_lock(path):
         existing = (
             AccountOwnerGeneration.model_validate_json(path.read_text(encoding="utf-8"))
