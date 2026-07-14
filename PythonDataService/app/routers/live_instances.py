@@ -1723,30 +1723,14 @@ async def _resolve_activity_publisher_for_status(
 async def _resolve_daemon_diagnostic_condition_for_status(
     sid: str,
 ) -> DaemonDominantCondition | None:
-    try:
-        provider = _FLEET_DAEMON_PROVIDER
-        fleet_observation = await provider.observation() if provider is not None else None
-        report = await asyncio.wait_for(
-            get_daemon_diagnostics_service().report(
-                strategy_instance_id=sid,
-                fleet_observation=fleet_observation,
-            ),
-            timeout=_STATUS_DAEMON_DIAGNOSTICS_TIMEOUT_S,
-        )
-    except Exception as exc:
-        logger.warning(
-            "status-time daemon diagnostics deferred (%s)",
-            exc,
-            extra={"strategy_instance_id": sid},
-        )
-        return None
-    instance = next(
-        (row for row in report.per_instance if row.strategy_instance_id == sid),
-        None,
-    )
-    if instance is None:
-        return None
-    return instance.dominant_condition
+    del sid
+    # The per-bot status surface is produced on a background cadence for every
+    # visible instance. Full daemon diagnostics compose health, registry, socket
+    # mirror, and per-instance checks; running that report from each status
+    # producer creates an avoidable polling fan-out. Keep the heavy report on the
+    # explicit /daemon-diagnose route and let status-time host-process and broker
+    # gates carry ordinary readiness blockers.
+    return None
 
 
 async def _resolve_fleet_blocks_starts_for_status(
