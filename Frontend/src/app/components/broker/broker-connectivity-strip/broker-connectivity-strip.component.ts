@@ -1,13 +1,17 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  computed,
   ElementRef,
   inject,
   signal,
   viewChild,
 } from '@angular/core';
 import { Router } from '@angular/router';
-import { BrokerConnectivityService } from '../../../services/broker-connectivity.service';
+import {
+  BrokerConnectivityService,
+  type LinkState,
+} from '../../../services/broker-connectivity.service';
 import { DaemonDiagnosticsStore } from '../../../services/daemon-diagnostics-store.service';
 import { DaemonDiagnosticsPanelComponent } from '../daemon-diagnostics/daemon-diagnostics-panel.component';
 import {
@@ -40,6 +44,42 @@ export class BrokerConnectivityStripComponent {
   private readonly diagnosticsDialog = viewChild<ElementRef<HTMLElement>>('diagnosticsDialog');
   protected readonly copied = signal<boolean>(false);
   protected readonly diagnosticsOpen = signal<boolean>(false);
+  protected readonly summaryState = computed<LinkState>(() => {
+    const links = this.connectivity.links();
+    if (links.some((link) => link.state === 'down')) return 'down';
+    if (
+      links.some((link) => link.state === 'warn') ||
+      this.connectivity.blockers().length > 0 ||
+      this.connectivity.rosterBlockers().length > 0
+    ) {
+      return 'warn';
+    }
+    if (links.some((link) => link.state === 'unknown')) return 'unknown';
+    return 'ok';
+  });
+  protected readonly summaryLabel = computed<string>(() => {
+    const state = this.summaryState();
+    if (state === 'down') return 'Action needed';
+    if (state === 'warn') return 'Needs review';
+    if (state === 'unknown') return 'Checking';
+    return 'Ready';
+  });
+  protected readonly summaryDetail = computed<string>(() => {
+    const issueCount =
+      this.connectivity.blockers().length +
+      this.connectivity.rosterBlockers().length;
+    if (issueCount > 0) {
+      return `${issueCount} operator action${issueCount === 1 ? '' : 's'}`;
+    }
+    if (this.summaryState() === 'unknown') return 'Live readiness in progress';
+    if (this.summaryState() === 'ok') return 'Engine, broker, and fleet clear';
+    return 'Open for status and recovery';
+  });
+  protected readonly summaryAria = computed<string>(() =>
+    this.connectivity.links()
+      .map((link) => `${link.label}: ${link.detail}`)
+      .join('; '),
+  );
   protected readonly startCommand =
     'PYTHONPATH=PythonDataService PythonDataService/.venv/bin/python -m app.engine.live.host_daemon --repo-root .';
   // Restarting a STALE daemon must first kill the running one — it still owns the

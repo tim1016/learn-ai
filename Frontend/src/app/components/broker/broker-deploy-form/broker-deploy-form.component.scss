@@ -39,7 +39,7 @@
   gap: var(--space-2);
   align-items: center;
   margin: 0 0 var(--space-1);
-  color: var(--accent);
+  color: #7aa2ff;
   font-size: var(--fs-xs);
   font-weight: var(--fw-bold);
   letter-spacing: 0;
@@ -63,7 +63,7 @@ small a,
 .goto,
 .text-button,
 .validation-link {
-  color: var(--accent);
+  color: #7aa2ff;
 }
 
 .head-actions {
@@ -83,7 +83,7 @@ small a,
 .back:hover,
 .goto:hover,
 .validation-link:hover {
-  color: var(--accent-hover);
+  color: #a9c4ff;
   text-decoration: underline;
 }
 
@@ -497,7 +497,7 @@ small code {
 }
 
 .command-panel .blocked a {
-  color: var(--accent);
+  color: #7aa2ff;
   font-weight: var(--fw-semi);
 }
 

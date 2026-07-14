@@ -85,6 +85,23 @@ describe('BrokerConnectivityStripComponent', () => {
     expect(el.textContent).toContain('Clear');
   });
 
+  it('keeps detailed connectivity banners collapsed until the summary is opened', () => {
+    const el = renderStrip([
+      { key: 'daemon', label: 'Live engine', state: 'unknown', detail: 'Checking…' },
+      { key: 'broker', label: 'Broker', state: 'ok', detail: 'Connected' },
+      { key: 'fleet', label: 'Fleet policy', state: 'ok', detail: 'Clear' },
+    ]);
+
+    const details = el.querySelector<HTMLDetailsElement>('.connectivity-strip');
+    expect(details?.open).toBe(false);
+    expect(el.querySelector('.connectivity-summary')?.textContent).toContain('Broker readiness');
+    expect(el.querySelector('.connectivity-summary')?.textContent).toContain('Checking');
+
+    el.querySelector<HTMLElement>('.connectivity-summary')?.click();
+
+    expect(details?.open).toBe(true);
+  });
+
   it('shows an "up to date" verdict when the running code matches the working tree', () => {
     const el = renderStrip(
       [
