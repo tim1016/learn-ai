@@ -1,11 +1,18 @@
 export interface OperatorRunbookRoute {
   readonly commands: readonly string[];
+  readonly fragment?: string;
 }
 
 const RUNBOOK_ROUTES: Readonly<Record<string, OperatorRunbookRoute>> = {
   'broker-reconnect': { commands: ['/broker/account-monitor'] },
-  'cross-client-execution': { commands: ['/broker/reconciliation'] },
-  'live-trade-reconciliation': { commands: ['/broker/reconciliation'] },
+  'cross-client-execution': {
+    commands: ['/broker/account-monitor'],
+    fragment: 'account-reconciliation-action',
+  },
+  'live-trade-reconciliation': {
+    commands: ['/broker/account-monitor'],
+    fragment: 'account-reconciliation-action',
+  },
   'broker-instance-operator-surface': { commands: ['/broker/reconciliation'] },
   'watchdog-halt': { commands: ['/broker/bots'] },
   'runtime-freshness': { commands: ['/broker/bots'] },

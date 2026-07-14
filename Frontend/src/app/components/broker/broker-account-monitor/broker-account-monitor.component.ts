@@ -53,10 +53,11 @@ interface PositionRow {
 }
 
 interface AccountPrimaryAction {
-  kind: 'reconcile' | 'openOrders' | 'clearFreeze';
+  kind: 'reconcile' | 'resolveExposure' | 'clearFreeze';
   title: string;
   detail: string;
   buttonLabel: string;
+  condition?: AccountConditionRow;
 }
 
 interface AccountConditionGroups {
@@ -213,11 +214,21 @@ export class BrokerAccountMonitorComponent {
         : this.accountReconciliation()?.final_gate_result.operator_reason ??
           'Not yet proven: no account-level reconciliation receipt has been recorded for this account.',
   );
+  readonly primaryExposureResolutionCondition = computed(
+    () =>
+      this.accountTriage()?.conditions.find(
+        (condition) =>
+          accountConditionActionKind(condition) === 'resolveExposure' &&
+          !!condition.owner.strategy_instance_id,
+      ) ?? null,
+  );
   readonly accountPrimaryAction = computed<AccountPrimaryAction | null>(() => {
     const receipt = this.accountReconciliation();
     const truth = this.accountTruth();
+    const exposureResolutionCondition = this.primaryExposureResolutionCondition();
 
     if (
+      exposureResolutionCondition !== null &&
       receipt !== null &&
       !this.accountReconciliationExpired() &&
       (receipt.exposure_resolution === 'unresolved' ||
@@ -225,10 +236,11 @@ export class BrokerAccountMonitorComponent {
       this.accountHasOpenBrokerExposure()
     ) {
       return {
-        kind: 'openOrders',
+        kind: 'resolveExposure',
         title: 'Flatten unresolved exposure',
         detail: this.unresolvedBrokerExposureDetail(),
-        buttonLabel: 'Open flatten ticket',
+        buttonLabel: 'Resolve exposure',
+        condition: exposureResolutionCondition,
       };
     }
 
@@ -293,9 +305,8 @@ export class BrokerAccountMonitorComponent {
       ))
       .join(', ');
     return (
-      `${summary} remains unresolved. Open the Orders page, prefill the flatten ` +
-      'order, review what-if, place the paper order, wait for the fill, then run ' +
-      'account reconcile again.'
+      `${summary} remains unresolved. Use Resolve exposure on this page to flatten ` +
+      'through the owner bot, wait for the fill, then run account reconcile again.'
     );
   });
   readonly accountSickBayDetail = computed(() => {
@@ -615,6 +626,9 @@ export class BrokerAccountMonitorComponent {
     if (action.kind === 'clearFreeze') {
       return this.accountFreezeClearLoading() || this.accountTriage()?.clear_freeze_actionable !== true;
     }
+    if (action.kind === 'resolveExposure') {
+      return this.exposureResolutionLoading() !== null || !action.condition?.owner.strategy_instance_id;
+    }
     return false;
   }
 
@@ -623,6 +637,8 @@ export class BrokerAccountMonitorComponent {
       void this.runAccountReconciliation();
     } else if (action.kind === 'clearFreeze') {
       void this.clearAccountFreeze();
+    } else if (action.kind === 'resolveExposure' && action.condition) {
+      this.openExposureResolution(action.condition);
     }
   }
 

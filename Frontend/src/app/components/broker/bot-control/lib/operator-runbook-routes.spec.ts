@@ -8,7 +8,12 @@ describe('resolveOperatorRunbookRoute', () => {
       commands: ['/broker/account-monitor'],
     });
     expect(resolveOperatorRunbookRoute('cross-client-execution')).toEqual({
-      commands: ['/broker/reconciliation'],
+      commands: ['/broker/account-monitor'],
+      fragment: 'account-reconciliation-action',
+    });
+    expect(resolveOperatorRunbookRoute('live-trade-reconciliation')).toEqual({
+      commands: ['/broker/account-monitor'],
+      fragment: 'account-reconciliation-action',
     });
     expect(resolveOperatorRunbookRoute('broker-session-orphaned-socket')).toEqual({
       commands: ['/broker/session-mirror'],

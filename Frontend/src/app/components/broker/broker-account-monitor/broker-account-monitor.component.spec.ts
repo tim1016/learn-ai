@@ -312,6 +312,7 @@ describe('BrokerAccountMonitorComponent', () => {
 
   it('promotes exposure resolution after reconciliation returns unresolved exposure', async () => {
     const broker = new FakeBrokerService();
+    const liveRuns = new FakeLiveRunsService();
     const receipt = accountReconciliationReceipt({
       accountTruth: unresolvedSpyAccountTruth(),
       exposureResolution: 'unresolved',
@@ -324,12 +325,12 @@ describe('BrokerAccountMonitorComponent', () => {
       state: 'NOT_PROVEN',
     });
     broker.accountTruth.mockResolvedValue(unresolvedSpyAccountTruth());
-    broker.accountTriage.mockResolvedValue(cleanTriage(receipt));
+    broker.accountTriage.mockResolvedValue(exposureFrozenTriage(receipt));
     await render(BrokerAccountMonitorComponent, {
       providers: [
         { provide: BrokerService, useValue: broker },
         { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
-        { provide: LiveRunsService, useClass: FakeLiveRunsService },
+        { provide: LiveRunsService, useValue: liveRuns },
         routeFragment(),
       ],
     });
@@ -339,15 +340,23 @@ describe('BrokerAccountMonitorComponent', () => {
     ).toBeTruthy();
     expect(
       screen.getByText(
-        'SPY +1 (Foreign or unclaimed) remains unresolved. Open the Orders page, prefill the flatten order, review what-if, place the paper order, wait for the fill, then run account reconcile again.',
+        'SPY +1 (Foreign or unclaimed) remains unresolved. Use Resolve exposure on this page to flatten through the owner bot, wait for the fill, then run account reconcile again.',
       ),
     ).toBeTruthy();
 
-    const flattenLink = screen.getByRole('link', {
-      name: /open flatten ticket/i,
-    }) as HTMLAnchorElement;
-    expect(flattenLink.id).toBe('account-primary-action');
-    expect(flattenLink.getAttribute('href')).toBe('/broker/orders?flatten=open-exposure');
+    const primaryButton = document.getElementById('account-primary-action') as HTMLButtonElement;
+    expect(primaryButton.textContent).toContain('Resolve exposure');
+    fireEvent.click(primaryButton);
+    expect(screen.getByRole('dialog', { name: /resolve exposure/i })).toBeTruthy();
+
+    broker.accountTriage.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /flatten then reconcile/i }));
+    await waitFor(() => {
+      expect(liveRuns.emergencyFlattenAccount).toHaveBeenCalledWith(
+        'retired-freezer',
+        { account: 'DU1234567', confirm: true },
+      );
+    });
     expect(screen.getByRole('button', { name: /run account reconcile/i }).id).toBe(
       'account-reconciliation-action',
     );
@@ -667,8 +676,7 @@ function frozenTriage(): AccountTriageResponse {
   });
 }
 
-function exposureFrozenTriage(): AccountTriageResponse {
-  const receipt = accountReconciliationReceipt();
+function exposureFrozenTriage(receipt: AccountReconciliationReceipt = accountReconciliationReceipt()): AccountTriageResponse {
   return makeFrozenAccountTriage({
     receipt,
     conditionOptions: {

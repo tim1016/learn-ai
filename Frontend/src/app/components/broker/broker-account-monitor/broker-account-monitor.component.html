@@ -61,33 +61,28 @@
             <h2 id="account-primary-action-title">{{ action.title }}</h2>
             <p>{{ action.detail }}</p>
           </div>
-          @if (action.kind === 'openOrders') {
-            <a
-              id="account-primary-action"
-              routerLink="/broker/orders"
-              [queryParams]="{ flatten: 'open-exposure' }"
-              class="primary-action-btn"
-            >
-              <i class="pi pi-arrow-right-arrow-left" aria-hidden="true"></i>
-              {{ action.buttonLabel }}
-            </a>
-          } @else {
-            <button
-              [id]="action.kind === 'clearFreeze' ? 'account-clear-freeze-action' : 'account-reconciliation-action'"
-              type="button"
-              class="primary-action-btn"
-              [disabled]="primaryActionDisabled(action)"
-              (click)="runPrimaryAccountAction(action)"
-            >
-              <i
-                class="pi"
-                [class.pi-shield]="action.kind === 'reconcile'"
-                [class.pi-lock-open]="action.kind === 'clearFreeze'"
-                aria-hidden="true"
-              ></i>
-              {{ primaryActionButtonLabel(action) }}
-            </button>
-          }
+          <button
+            [id]="
+              action.kind === 'clearFreeze'
+                ? 'account-clear-freeze-action'
+                : action.kind === 'resolveExposure'
+                  ? 'account-primary-action'
+                  : 'account-reconciliation-action'
+            "
+            type="button"
+            class="primary-action-btn"
+            [disabled]="primaryActionDisabled(action)"
+            (click)="runPrimaryAccountAction(action)"
+          >
+            <i
+              class="pi"
+              [class.pi-shield]="action.kind === 'reconcile'"
+              [class.pi-lock-open]="action.kind === 'clearFreeze'"
+              [class.pi-arrow-right-arrow-left]="action.kind === 'resolveExposure'"
+              aria-hidden="true"
+            ></i>
+            {{ primaryActionButtonLabel(action) }}
+          </button>
         </article>
       }
       <app-account-truth-board
