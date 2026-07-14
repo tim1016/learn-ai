@@ -61,7 +61,17 @@ def test_account_freeze_round_trips_with_gate_result_and_audit_event(tmp_path: P
 
 @pytest.mark.parametrize(
     "account_id",
-    ["du123456", " DU123456 ", "DU.123456", "DU-123456", "DU 123456", "DU/123456", "../DU123456"],
+    [
+        "",
+        "/tmp/DU123456",
+        "../x",
+        "du123456",
+        " DU123456 ",
+        "DU.123456",
+        "DU-123456",
+        "DU 123456",
+        "DU/123456",
+    ],
 )
 def test_account_artifacts_root_rejects_path_like_account_id(
     tmp_path: Path,
