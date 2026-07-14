@@ -15,7 +15,7 @@ from app.schemas.account_truth import (
 from app.schemas.live_runs import GateResult
 
 AccountReconciliationState = Literal["CLEAN", "NOT_PROVEN"]
-AccountExposureResolution = Literal["flat", "intended", "accepted_override", "unresolved"]
+AccountExposureResolution = Literal["flat", "accepted_override", "unresolved"]
 AccountConditionType = Literal[
     "exposure_freeze",
     "account_freeze",

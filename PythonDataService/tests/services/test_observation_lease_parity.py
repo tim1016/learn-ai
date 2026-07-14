@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from app.engine.live.account_artifacts import append_account_event
 from app.services.observation_lease_parity import (
     assess_observation_lease_shadow_parity,
@@ -20,6 +22,8 @@ def _comparison(
     return {
         "event_type": "account_observation_lease_shadow_comparison",
         "recorded_at_ms": recorded_at_ms,
+        "strategy_instance_id": "bot-a",
+        "run_id": "run-a",
         "truth_gate_id": "account.account_truth",
         "truth_source": "account_truth_snapshot",
         "truth_status": truth_status,
@@ -116,6 +120,36 @@ def test_assess_observation_lease_shadow_parity_rejects_unknown_gate_identity() 
 
     assert report.comparison_count == 0
     assert report.invalid_comparisons[0].reason == "lease gate identity is not account.observation_lease"
+
+
+@pytest.mark.parametrize("field", ["strategy_instance_id", "run_id"])
+def test_assess_observation_lease_shadow_parity_rejects_missing_submit_identity(
+    field: str,
+) -> None:
+    event = _comparison(recorded_at_ms=1_704_209_400_000)
+    event.pop(field)
+
+    report = assess_observation_lease_shadow_parity([event])
+
+    assert report.comparison_count == 0
+    assert field in report.invalid_comparisons[0].reason
+
+
+@pytest.mark.parametrize("field", ["strategy_instance_id", "run_id"])
+def test_assess_observation_lease_shadow_parity_rejects_blank_submit_identity(
+    field: str,
+) -> None:
+    report = assess_observation_lease_shadow_parity(
+        [
+            {
+                **_comparison(recorded_at_ms=1_704_209_400_000),
+                field: " ",
+            }
+        ]
+    )
+
+    assert report.comparison_count == 0
+    assert field in report.invalid_comparisons[0].reason
 
 
 def test_assess_observation_lease_shadow_parity_does_not_count_weekend_comparison() -> None:

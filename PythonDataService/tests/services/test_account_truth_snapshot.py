@@ -21,7 +21,9 @@ from app.broker.ibkr.models import (
 from app.engine.live.account_artifacts import (
     AccountFreezeEvidence,
     AccountInstanceBinding,
+    AccountOwnerGeneration,
     write_account_freeze,
+    write_account_owner_generation,
 )
 from app.schemas.account_truth import (
     AccountTruthMessage,
@@ -274,6 +276,44 @@ async def test_refresh_service_marks_failure_for_any_account_truth_route(
 
 
 @pytest.mark.asyncio
+async def test_refresh_service_notifies_keyword_only_failure_observer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    observed: dict[str, object] = {}
+    monkeypatch.setattr(
+        account_truth_refresh,
+        "fetch_account_truth",
+        AsyncMock(side_effect=BrokerError("broker sweep timed out")),
+    )
+
+    def observe_failure(
+        *,
+        account_id: str | None,
+        detail: str,
+        attempted_at_ms: int,
+    ) -> None:
+        observed["account_id"] = account_id
+        observed["detail"] = detail
+        observed["attempted_at_ms"] = attempted_at_ms
+
+    with pytest.raises(BrokerError):
+        await refresh_account_truth_and_update_cache(
+            object(),  # type: ignore[arg-type]
+            health=_truth(generated_at_ms=2_000).health,
+            collection_context=_collection_context(),
+            snapshot_provider=provider,
+            account_truth_failure_observer=observe_failure,
+        )
+
+    assert observed == {
+        "account_id": "DU123",
+        "detail": "broker sweep timed out",
+        "attempted_at_ms": 2_000,
+    }
+
+
+@pytest.mark.asyncio
 async def test_refresh_now_builds_context_once_and_remembers_truth(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -313,6 +353,82 @@ async def test_refresh_now_builds_context_once_and_remembers_truth(
     assert result is truth
     assert captured == {"account_id": "DU123", "context": "account reconciliation"}
     assert provider.get("DU123").truth is truth  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_refresh_now_captures_owner_generation_before_collection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    truth = _truth(account_id="DU123")
+    observed: dict[str, object] = {}
+    write_account_owner_generation(
+        tmp_path,
+        AccountOwnerGeneration(
+            account_id="DU123",
+            generation=3,
+            phase="accepting",
+            recorded_at_ms=1_700_000_000_000,
+            source="test",
+        ),
+    )
+
+    def fake_collection_context(
+        *,
+        artifacts_root,
+        account_id: str | None,
+        context: str,
+    ) -> AccountTruthCollectionContext:
+        write_account_owner_generation(
+            tmp_path,
+            AccountOwnerGeneration(
+                account_id="DU123",
+                generation=4,
+                phase="accepting",
+                recorded_at_ms=1_700_000_000_001,
+                source="test",
+            ),
+        )
+        return _collection_context(account_id or "")
+
+    def observe_success(
+        account_truth: AccountTruthResponse,
+        *,
+        owner_generation_before: tuple[int, str] | None,
+        owner_generation_captured: bool,
+    ) -> None:
+        observed["truth"] = account_truth
+        observed["owner_generation_before"] = owner_generation_before
+        observed["owner_generation_captured"] = owner_generation_captured
+
+    monkeypatch.setattr(account_truth_refresh, "get_monitor", lambda: None)
+    monkeypatch.setattr(
+        account_truth_refresh,
+        "build_account_truth_collection_context",
+        fake_collection_context,
+    )
+    monkeypatch.setattr(
+        account_truth_refresh,
+        "fetch_account_truth",
+        AsyncMock(return_value=truth),
+    )
+
+    result = await refresh_account_truth_now(
+        _FakeClient(_health(account_id="DU123")),  # type: ignore[arg-type]
+        account_id="DU123",
+        artifacts_root=tmp_path,
+        context="account truth",
+        snapshot_provider=provider,
+        account_truth_observer=observe_success,
+    )
+
+    assert result is truth
+    assert observed == {
+        "truth": truth,
+        "owner_generation_before": (3, "accepting"),
+        "owner_generation_captured": True,
+    }
 
 
 @pytest.mark.asyncio

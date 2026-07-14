@@ -156,6 +156,12 @@ def _parse_shadow_comparison(
     recorded_at_ms = event.get("recorded_at_ms")
     if not isinstance(recorded_at_ms, int) or isinstance(recorded_at_ms, bool) or recorded_at_ms < 0:
         return None, "recorded_at_ms must be a non-negative int64 ms UTC value"
+    strategy_instance_id = event.get("strategy_instance_id")
+    if not isinstance(strategy_instance_id, str) or not strategy_instance_id.strip():
+        return None, "strategy_instance_id must identify the submit-boundary strategy instance"
+    run_id = event.get("run_id")
+    if not isinstance(run_id, str) or not run_id.strip():
+        return None, "run_id must identify the submit-boundary run"
     truth_status = event.get("truth_status")
     if event.get("truth_gate_id") != ACCOUNT_TRUTH_GATE_ID or event.get(
         "truth_source"

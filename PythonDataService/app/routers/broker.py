@@ -383,19 +383,26 @@ async def _warm_account_evidence_after_connect(
     """
     if not health.connected or health.account_id is None:
         return
+    from app.services.account_reconciliation import AccountReconciliationService
     from app.services.account_truth_refresh import (
+        account_truth_artifacts_root,
         account_truth_refresh_session_unavailable,
         refresh_account_truth_now,
     )
 
     if account_truth_refresh_session_unavailable(health):
         return
+    reconciliation_service = AccountReconciliationService(
+        artifacts_root=account_truth_artifacts_root()
+    )
     try:
         await asyncio.wait_for(
             refresh_account_truth_now(
                 client,
                 context="broker connect initialization",
                 health=health,
+                account_truth_observer=reconciliation_service.observe_account_truth,
+                account_truth_failure_observer=reconciliation_service.observe_account_truth_failure,
             ),
             timeout=_ACCOUNT_EVIDENCE_WARMUP_TIMEOUT_S,
         )

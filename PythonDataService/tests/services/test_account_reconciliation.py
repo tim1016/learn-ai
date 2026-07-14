@@ -27,6 +27,7 @@ from app.engine.live.account_artifacts import (
     read_account_freeze,
     write_account_freeze,
     write_account_instance_binding,
+    write_account_owner_generation,
 )
 from app.engine.live.account_observation_lease import assess_account_observation_lease
 from app.schemas.account_reconciliation import AccountConditionType, AccountCureAction
@@ -307,6 +308,30 @@ def test_account_truth_refresh_failure_revokes_observation_lease(tmp_path: Path)
     ]
 
 
+def test_account_observation_triage_bounds_long_reason_lines(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    long_detail = "broker sweep timed out: " + ("x" * 700)
+    service.observe_account_truth(_truth(), now_ms=1_780_000_002_000)
+
+    service.observe_account_truth_failure(
+        account_id="DU1234567",
+        detail=long_detail,
+        attempted_at_ms=1_780_000_003_000,
+    )
+
+    triage = service.triage(account_id="DU1234567", now_ms=1_780_000_003_001)
+
+    assert len(triage.account_observation.reason_line) == 512
+    assert triage.account_observation.reason_line.endswith("...")
+    assert len(triage.account_observation.history[-1].reason_line) == 512
+    assert triage.account_observation.history[-1].reason_line.endswith("...")
+    assert assess_account_observation_lease(
+        tmp_path,
+        "DU1234567",
+        now_ms=1_780_000_003_001,
+    ).reason == long_detail
+
+
 def test_account_truth_observer_revokes_when_owner_generation_changes_during_sweep(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -345,6 +370,86 @@ def test_account_truth_observer_revokes_when_owner_generation_changes_during_swe
     )
     assert assessment.state == "REVOKED"
     assert assessment.reason_code == "ACCOUNT_OWNER_GENERATION_CHANGED"
+
+
+def test_account_truth_observer_uses_pre_collection_owner_generation_fence(
+    tmp_path: Path,
+) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    write_account_owner_generation(
+        tmp_path,
+        AccountOwnerGeneration(
+            account_id="DU1234567",
+            generation=4,
+            phase="accepting",
+            recorded_at_ms=1_780_000_002_001,
+            source="test",
+        ),
+    )
+
+    service.observe_account_truth(
+        _truth(),
+        owner_generation_before=(3, "accepting"),
+        owner_generation_captured=True,
+        now_ms=1_780_000_002_000,
+    )
+
+    assessment = assess_account_observation_lease(
+        tmp_path,
+        "DU1234567",
+        now_ms=1_780_000_002_001,
+    )
+    assert assessment.state == "REVOKED"
+    assert assessment.reason_code == "ACCOUNT_OWNER_GENERATION_CHANGED"
+
+
+def test_account_truth_observer_renews_when_captured_owner_generation_is_stable(
+    tmp_path: Path,
+) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    write_account_owner_generation(
+        tmp_path,
+        AccountOwnerGeneration(
+            account_id="DU1234567",
+            generation=3,
+            phase="accepting",
+            recorded_at_ms=1_780_000_002_000,
+            source="test",
+        ),
+    )
+
+    service.observe_account_truth(
+        _truth(),
+        owner_generation_before=(3, "accepting"),
+        owner_generation_captured=True,
+        now_ms=1_780_000_002_000,
+    )
+
+    assessment = assess_account_observation_lease(
+        tmp_path,
+        "DU1234567",
+        now_ms=1_780_000_002_001,
+    )
+    assert assessment.state == "VERIFIED"
+
+
+def test_account_truth_observer_revokes_when_freeze_evidence_is_unreadable(
+    tmp_path: Path,
+) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    service.observe_account_truth(_truth(), now_ms=1_780_000_002_000)
+    account_root = account_artifacts_root(tmp_path, "DU1234567")
+    (account_root / "unresolved_exposure.flag").write_text("{not-json", encoding="utf-8")
+
+    service.observe_account_truth(_truth(), now_ms=1_780_000_003_000)
+
+    assessment = assess_account_observation_lease(
+        tmp_path,
+        "DU1234567",
+        now_ms=1_780_000_003_001,
+    )
+    assert assessment.state == "REVOKED"
+    assert assessment.reason_code == "ACCOUNT_FREEZE_UNREADABLE"
 
 
 def test_auto_reconcile_replaces_receipt_after_new_bot_execution(tmp_path: Path) -> None:

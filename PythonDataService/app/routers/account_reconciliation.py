@@ -57,6 +57,8 @@ async def reconcile_account_endpoint(
             client,
             account_id=canonical_account_id,
             context="account reconciliation",
+            account_truth_observer=service.observe_account_truth,
+            account_truth_failure_observer=service.observe_account_truth_failure,
         )
         return service.write_receipt(
             requested_account_id=canonical_account_id,

@@ -17,7 +17,8 @@ from app.broker.ibkr.order_previews import preview_paper_order
 from app.broker.ibkr.orders import OrderRefusedError
 from app.routers.broker_dependencies import require_connected_client
 from app.schemas.account_truth import AccountTruthResponse
-from app.services.account_truth_refresh import refresh_account_truth_now
+from app.services.account_reconciliation import AccountReconciliationService
+from app.services.account_truth_refresh import account_truth_artifacts_root, refresh_account_truth_now
 
 router = APIRouter(prefix="/api/broker", tags=["broker"])
 ConnectedIbkrClient = Annotated[IbkrClient, Depends(require_connected_client)]
@@ -26,8 +27,16 @@ ConnectedIbkrClient = Annotated[IbkrClient, Depends(require_connected_client)]
 @router.get("/account-truth", response_model=AccountTruthResponse)
 async def account_truth_endpoint(client: ConnectedIbkrClient) -> AccountTruthResponse:
     """Account-wide ownership, risk, and invariant truth projection."""
+    reconciliation_service = AccountReconciliationService(
+        artifacts_root=account_truth_artifacts_root()
+    )
     try:
-        return await refresh_account_truth_now(client, context="account truth")
+        return await refresh_account_truth_now(
+            client,
+            context="account truth",
+            account_truth_observer=reconciliation_service.observe_account_truth,
+            account_truth_failure_observer=reconciliation_service.observe_account_truth_failure,
+        )
     except BrokerError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
