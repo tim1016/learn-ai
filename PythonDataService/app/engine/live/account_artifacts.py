@@ -480,19 +480,13 @@ def append_account_event(
     artifacts_root: Path,
     account_id: str,
     payload: dict,
-) -> None:
-    _append_account_event(artifacts_root, account_id, {**payload, "account_id": account_id})
-
-
-def append_account_event_if_absent(
-    artifacts_root: Path,
-    account_id: str,
-    receipt_id: str,
-    payload: dict,
+    *,
+    only_if_receipt_absent: bool = False,
 ) -> bool:
-    """Append an event once per receipt id, atomically with the event journal lock."""
-    if not receipt_id:
-        raise AccountArtifactError("account event receipt_id must not be empty")
+    """Append an account event, optionally rejecting a duplicate receipt id atomically."""
+    receipt_id = payload.get("receipt_id")
+    if only_if_receipt_absent and (not isinstance(receipt_id, str) or not receipt_id):
+        raise AccountArtifactError("idempotent account event receipt_id must not be empty")
     path = _account_artifact_file_path(
         artifacts_root,
         account_id,
@@ -500,11 +494,23 @@ def append_account_event_if_absent(
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     with _file_lock(path):
-        if path.is_file():
+        if only_if_receipt_absent and path.is_file():
             events = _parse_account_event_bytes(path, path.read_bytes(), tolerant=False)
             if any(event.get("receipt_id") == receipt_id for event in events):
                 return False
-        _append_account_event_locked(path, {**payload, "account_id": account_id})
+        enriched = {**payload, "account_id": account_id}
+        enriched["seq"] = _next_account_event_seq_locked(path)
+        enriched["ts_ms"] = _account_event_ts_ms_for_write(enriched)
+        try:
+            record = AccountEventRecord.model_validate(enriched)
+        except ValidationError as exc:
+            raise AccountArtifactError(f"invalid account event payload: {exc}") from exc
+        line = json.dumps(record.model_dump(mode="json"), separators=(",", ":"), sort_keys=True) + "\n"
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(line)
+            fh.flush()
+            os.fsync(fh.fileno())
+        _fsync_parent_dir(path)
     return True
 
 
@@ -787,30 +793,7 @@ def _atomic_write_json_locked(path: Path, payload: dict) -> None:
 
 
 def _append_account_event(artifacts_root: Path, account_id: str, payload: dict) -> None:
-    path = _account_artifact_file_path(
-        artifacts_root,
-        account_id,
-        ACCOUNT_EVENTS_FILENAME,
-    )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with _file_lock(path):
-        _append_account_event_locked(path, payload)
-
-
-def _append_account_event_locked(path: Path, payload: dict) -> None:
-    enriched = dict(payload)
-    enriched["seq"] = _next_account_event_seq_locked(path)
-    enriched["ts_ms"] = _account_event_ts_ms_for_write(enriched)
-    try:
-        record = AccountEventRecord.model_validate(enriched)
-    except ValidationError as exc:
-        raise AccountArtifactError(f"invalid account event payload: {exc}") from exc
-    line = json.dumps(record.model_dump(mode="json"), separators=(",", ":"), sort_keys=True) + "\n"
-    with open(path, "a", encoding="utf-8") as fh:
-        fh.write(line)
-        fh.flush()
-        os.fsync(fh.fileno())
-    _fsync_parent_dir(path)
+    append_account_event(artifacts_root, account_id, payload)
 
 
 def _next_account_event_seq_locked(path: Path) -> int:
@@ -923,7 +906,6 @@ _LOCAL_EXPORTS = [
     "account_artifacts_root",
     "advance_account_owner_generation",
     "append_account_event",
-    "append_account_event_if_absent",
     "clear_account_freeze",
     "evaluate_restart_intensity",
     "read_account_events",

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from app.engine.live.account_artifacts import (
     AccountArtifactError,
-    append_account_event_if_absent,
+    append_account_event,
     read_account_events,
 )
 from app.engine.live.account_clerk import AccountClerkJournalCorruptError, read_account_clerk_journal
@@ -140,10 +140,9 @@ class LegacyStaleClaimRetirementService:
             retired_at_ms=retired_at_ms,
         )
         appended = await asyncio.to_thread(
-            append_account_event_if_absent,
+            append_account_event,
             self._artifacts_root,
             claim.account_id,
-            receipt.receipt_id,
             {
                 "event_type": LEGACY_STALE_CLAIM_RETIRED_EVENT,
                 "receipt_id": receipt.receipt_id,
@@ -158,6 +157,7 @@ class LegacyStaleClaimRetirementService:
                 "broker_proof": candidate.proof_summary,
                 "recorded_at_ms": retired_at_ms,
             },
+            only_if_receipt_absent=True,
         )
         if not appended:
             raise LegacyStaleClaimRetirementError(
