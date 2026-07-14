@@ -91,6 +91,29 @@ def test_account_artifacts_root_rejects_symlink_escape(tmp_path: Path) -> None:
         account_artifacts_root(tmp_path, "DU123456")
 
 
+def test_append_account_event_rejects_symlinked_event_file(tmp_path: Path) -> None:
+    root = account_artifacts_root(tmp_path, "DU123456")
+    root.mkdir(parents=True)
+    outside = tmp_path / "outside-events.jsonl"
+    event_path = root / account_artifacts.ACCOUNT_EVENTS_FILENAME
+    try:
+        event_path.symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable in this test environment: {exc}")
+
+    with pytest.raises(AccountArtifactError, match="artifact path traversal"):
+        account_artifacts.append_account_event(
+            tmp_path,
+            "DU123456",
+            {
+                "event_type": "account_owner_generation_recorded",
+                "recorded_at_ms": 1_700_000_000_000,
+            },
+        )
+
+    assert not outside.exists()
+
+
 def test_account_event_seq_tolerates_malformed_legacy_rows(tmp_path: Path) -> None:
     root = account_artifacts_root(tmp_path, "DU123456")
     root.mkdir(parents=True)

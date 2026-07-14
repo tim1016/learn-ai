@@ -200,12 +200,18 @@ def account_artifacts_root(artifacts_root: Path, account_id: str) -> Path:
 
     ``account_id`` can arrive from URL path segments on operator recovery
     endpoints. Require the already-canonical account-id spelling, reconstruct
-    the path component from the regex match, collapse it to a basename-only
-    segment, then resolve and assert it remains below
+    the path component from the regex match, then resolve and assert it remains below
     ``<artifacts_root>/accounts``. The match-group reconstruction, basename
     extraction, and containment check mirror CodeQL's path-injection guidance.
     """
-    safe_account_id = _safe_account_path_segment(account_id)
+    # Keep the regex capture in this path builder rather than accepting the
+    # result of a custom validator. CodeQL recognizes Match.group() as a
+    # path-segment sanitizer, while it cannot always follow that fact across
+    # a helper return value.
+    match = _ACCOUNT_ID_RE.fullmatch(account_id)
+    if match is None or account_id != account_id.strip():
+        raise AccountArtifactError(f"invalid account_id: {account_id!r}")
+    safe_account_id = match.group(0)
     accounts_root = os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts"))
     candidate = os.path.realpath(os.path.join(accounts_root, safe_account_id))
     try:
@@ -217,6 +223,23 @@ def account_artifacts_root(artifacts_root: Path, account_id: str) -> Path:
     if common != accounts_root:
         raise AccountArtifactError(f"path traversal detected for account_id: {account_id!r}")
     return Path(candidate)
+
+
+def _account_artifact_file_path(
+    artifacts_root: Path,
+    account_id: str,
+    filename: str,
+) -> Path:
+    """Return a static artifact filename confined below an account root."""
+    if filename != os.path.basename(filename):
+        raise AccountArtifactError(f"invalid account artifact filename: {filename!r}")
+    root = account_artifacts_root(artifacts_root, account_id)
+    path = Path(os.path.realpath(os.path.join(os.fspath(root), filename)))
+    root_real = os.fspath(root)
+    root_prefix = root_real if root_real.endswith(os.sep) else f"{root_real}{os.sep}"
+    if not os.fspath(path).startswith(root_prefix):
+        raise AccountArtifactError(f"artifact path traversal detected for account_id: {account_id!r}")
+    return path
 
 
 def write_account_freeze(artifacts_root: Path, evidence: AccountFreezeEvidence) -> Path:
@@ -694,15 +717,11 @@ def _atomic_write_json_locked(path: Path, payload: dict) -> None:
 
 
 def _append_account_event(artifacts_root: Path, account_id: str, payload: dict) -> None:
-    safe_account_id = _safe_account_path_segment(account_id)
-    accounts_root = os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts"))
-    root_real = os.path.realpath(os.path.join(accounts_root, safe_account_id))
-    event_filename = os.path.basename(ACCOUNT_EVENTS_FILENAME)
-    event_path_real = os.path.realpath(os.path.join(root_real, event_filename))
-    root_prefix = root_real if root_real.endswith(os.sep) else f"{root_real}{os.sep}"
-    if not event_path_real.startswith(root_prefix):
-        raise AccountArtifactError(f"event path traversal detected for account_id: {account_id!r}")
-    path = Path(event_path_real)
+    path = _account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        ACCOUNT_EVENTS_FILENAME,
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     with _file_lock(path):
         enriched = dict(payload)
