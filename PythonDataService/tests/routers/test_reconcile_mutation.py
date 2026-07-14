@@ -33,7 +33,6 @@ def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         live_runs_root=str(root),
         live_runner_daemon_url="http://daemon",
         live_runner_host_start_command="",
-        fleet_dirty_blocks_starts=False,
         mode="paper",
         readonly=False,
     )

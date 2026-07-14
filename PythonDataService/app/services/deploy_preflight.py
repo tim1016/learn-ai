@@ -110,7 +110,7 @@ async def gather_deploy_preflight_signals(
     daemon_result, _health = await host_daemon_client.fetch_health(settings.live_runner_daemon_url)
     account_freeze = read_account_freeze(artifacts_root, account_id)
     account_truth = get_account_truth_snapshot_provider().get(account_id)
-    fleet = await compute_account_fleet_contamination(settings, root)
+    fleet = await compute_account_fleet_contamination(root)
 
     return DeployPreflightSignals(
         daemon_reachable=daemon_result.kind == "CONNECTED",
@@ -127,6 +127,21 @@ def _nav(label: str, route: str, fragment: str | None = None) -> OperatorMove:
     return OperatorMove(
         label=label,
         action=NavigateAction(kind="navigate", route=route, fragment=fragment),
+    )
+
+
+def author_fleet_contamination_blocker() -> OperatorBlocker:
+    """Author the one account-monitor remedy for a dirty Clerk verdict."""
+
+    return OperatorBlocker.for_host(
+        condition_id="fleet_contaminated",
+        scope="fleet",
+        host="deploy_preflight",
+        disposition="fix_elsewhere",
+        headline="Fleet state blocks new deploys",
+        detail="Clear the account fleet state before deploying or starting a bot.",
+        primary_move=_nav("Open account monitor", "/broker/account-monitor"),
+        applies_to="both",
     )
 
 
@@ -236,18 +251,7 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
         )
 
     if signals.fleet_blocks_starts:
-        blockers.append(
-            OperatorBlocker.for_host(
-                condition_id="fleet_contaminated",
-                scope="fleet",
-                host="deploy_preflight",
-                disposition="fix_elsewhere",
-                headline="Fleet state blocks new deploys",
-                detail="Clear the account fleet state before deploying.",
-                primary_move=_nav("Open account monitor", "/broker/account-monitor"),
-                applies_to="both",
-            )
-        )
+        blockers.append(author_fleet_contamination_blocker())
 
     if not signals.strategy_deployable:
         blockers.append(

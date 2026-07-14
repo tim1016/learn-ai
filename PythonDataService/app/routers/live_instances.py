@@ -1750,16 +1750,14 @@ async def _resolve_daemon_diagnostic_condition_for_status(
 
 
 async def _resolve_fleet_blocks_starts_for_status(
-    settings: IbkrSettings,
+    _settings: IbkrSettings,
     root: Path,
 ) -> bool:
-    if not settings.fleet_dirty_blocks_starts:
-        return False
     try:
-        fleet = await _compute_account_fleet_contamination(settings, root)
+        fleet = await _compute_account_fleet_contamination(root)
     except Exception as exc:
-        logger.warning("status-time fleet contamination deferred (%s)", exc)
-        return False
+        logger.warning("status-time fleet contamination unavailable (%s)", exc)
+        return True
     return fleet.policy_blocks_starts
 
 
@@ -2134,6 +2132,7 @@ async def run_roll_call() -> BotRollCallResponse:
 
     settings = get_settings()
     root = Path(settings.live_runs_root)
+    await _raise_if_fleet_contamination_blocks_start(root)
     by_instance = await asyncio.to_thread(_visible_runs_by_instance, root)
     _result, daemon = await host_daemon_client.fetch_instances(settings.live_runner_daemon_url)
     daemon_by_sid: dict[str, dict] = {}
@@ -2915,6 +2914,7 @@ async def _assert_start_allowed(run_id: str, body: HostRunnerStartRequest, setti
                 "gate_result": account_freeze.to_gate_result().model_dump(mode="json"),
             },
         )
+    await _raise_if_fleet_contamination_blocks_start(root)
     account_id = _run_dir_account_id(run_dir)
     if account_id is not None:
         _raise_if_crash_recovery_blocks_start(
@@ -3625,13 +3625,42 @@ async def _fetch_broker_connected_account(
 
 
 async def _compute_account_fleet_contamination(
-    settings: IbkrSettings,
     root: Path,
 ) -> FleetContamination:
     return await fleet_contamination_service.compute_account_fleet_contamination(
-        settings,
         root,
         fetch_positions=_fetch_net_positions,
+    )
+
+
+async def _raise_if_fleet_contamination_blocks_start(root: Path) -> None:
+    """Make the Clerk-owned account verdict an authoritative start boundary."""
+
+    try:
+        fleet = await _compute_account_fleet_contamination(root)
+    except Exception as exc:
+        logger.warning("fleet contamination gate unavailable", extra={"error": str(exc)})
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "reason_code": "FLEET_CONTAMINATION_UNAVAILABLE",
+                "message": "Account exposure evidence is unavailable. Reconcile it before starting bots.",
+                "gate_id": "account.fleet_contamination",
+            },
+        ) from exc
+    if fleet.verdict != "contaminated":
+        return
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        detail={
+            "reason_code": "FLEET_CONTAMINATED",
+            "message": "Account exposure is contaminated. Clear the account fleet state before starting bots.",
+            "gate_id": "account.fleet_contamination",
+            "blockers": [
+                deploy_preflight_service.author_fleet_contamination_blocker().model_dump(mode="json")
+            ],
+            "contamination": fleet.model_dump(mode="json"),
+        },
     )
 
 
@@ -3646,7 +3675,7 @@ async def get_account_fleet() -> FleetContamination:
     """
     settings = get_settings()
     root = Path(settings.live_runs_root)
-    return await _compute_account_fleet_contamination(settings, root)
+    return await _compute_account_fleet_contamination(root)
 
 
 @router.get("/account-summary", response_model=FleetAccountSummary)
@@ -3672,7 +3701,7 @@ async def get_account_summary() -> FleetAccountSummary:
         instance_account_ids=account_ids,
         broker_connected_account=broker_account,
         broker_account_known=broker_known,
-        policy_blocks_starts=settings.fleet_dirty_blocks_starts,
+        policy_blocks_starts=True,
     )
     payload["contamination"] = FleetContamination(**payload["contamination"])
     return FleetAccountSummary(**payload)

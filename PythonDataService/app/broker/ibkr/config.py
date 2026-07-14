@@ -184,12 +184,6 @@ class IbkrSettings(BaseSettings):
     # cockpit's STALE banner asks the operator to re-reconcile.
     reconciliation_receipt_ttl_ms: int = 24 * 3600 * 1000
 
-    # Fleet policy gate (ADR 0005, #399). When True, account-level contamination
-    # (a position no managed instance created) blocks starts across the account.
-    # Default False — contamination is surfaced as a DEGRADED banner but does not
-    # silently block an executing strategy's own readiness.
-    fleet_dirty_blocks_starts: bool = False
-
     @model_validator(mode="after")
     def _enforce_port_mode_consistency(self) -> IbkrSettings:
         """Refuse to run with a port that disagrees with ``mode``.
