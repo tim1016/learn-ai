@@ -92,7 +92,15 @@
                 <h3>{{ row.label }}</h3>
                 <span class="badge mono">{{ row.statusLabel }}</span>
               </div>
-              <p class="outcome-evidence">{{ row.evidence | receiptLabel }}</p>
+              <p class="outcome-evidence">
+                @for (part of row.evidence; track $index) {
+                  @if (part.receiptLabel) {
+                    <span class="mono">{{ part.value | receiptLabel }}</span>
+                  } @else {
+                    {{ part.value }}
+                  }
+                }
+              </p>
               <p class="outcome-effect">{{ row.effect | receiptLabel }}</p>
             </section>
           }

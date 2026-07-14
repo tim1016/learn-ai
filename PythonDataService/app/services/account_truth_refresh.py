@@ -9,6 +9,8 @@ import random
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from app.broker.ibkr.account_truth import (
     AccountTruthCollectionContext,
     build_account_truth_collection_context,
@@ -435,7 +437,7 @@ def _read_owner_generation_fence(
         return None
     try:
         owner = read_account_owner_generation(artifacts_root, account_id)
-    except (OSError, ValueError):
+    except (OSError, ValidationError, ValueError):
         logger.warning(
             "account owner generation could not be read before Account Truth refresh",
             extra={"account_id": account_id},

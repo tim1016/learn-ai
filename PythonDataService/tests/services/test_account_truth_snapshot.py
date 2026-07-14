@@ -19,9 +19,11 @@ from app.broker.ibkr.models import (
     IbkrPositionsSnapshot,
 )
 from app.engine.live.account_artifacts import (
+    ACCOUNT_OWNER_GENERATION_FILENAME,
     AccountFreezeEvidence,
     AccountInstanceBinding,
     AccountOwnerGeneration,
+    account_artifacts_root,
     write_account_freeze,
     write_account_owner_generation,
 )
@@ -431,6 +433,15 @@ async def test_refresh_now_captures_owner_generation_before_collection(
         "owner_generation_before": (3, "accepting"),
         "owner_generation_captured": True,
     }
+
+
+def test_read_owner_generation_fence_fails_closed_for_malformed_artifact(tmp_path: Path) -> None:
+    account_id = "DU123"
+    path = account_artifacts_root(tmp_path, account_id) / ACCOUNT_OWNER_GENERATION_FILENAME
+    path.parent.mkdir(parents=True)
+    path.write_text('{"generation":"not-an-integer"}', encoding="utf-8")
+
+    assert account_truth_refresh._read_owner_generation_fence(tmp_path, account_id) is None
 
 
 @pytest.mark.asyncio

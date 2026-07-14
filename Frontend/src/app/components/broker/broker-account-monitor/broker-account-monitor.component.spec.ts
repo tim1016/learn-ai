@@ -249,14 +249,41 @@ describe('BrokerAccountMonitorComponent', () => {
       screen.getByText('Bot active-runner: ACTIVE, positions 0, open orders 1, executions 2'),
     ).toBeTruthy();
     expect(screen.getByText('Retired bot recovery')).toBeTruthy();
-    expect(
-      screen.getByText('retired-freezer / run-freeze: watchdog.flatten_timed_out'),
-    ).toBeTruthy();
+    expect(screen.getAllByText('Watchdog Flatten Timed Out').length).toBeGreaterThan(0);
+    const unobservableOutcome = screen
+      .getByRole('heading', { name: 'Unobservable account' })
+      .closest('section');
+    expect(unobservableOutcome?.querySelector('.outcome-evidence .mono')?.textContent).toBe(
+      'Executions Stale',
+    );
     expect(screen.getByText('Accepted manual override')).toBeTruthy();
     expect(screen.getByText(/Current receipt records exposure/i)).toBeTruthy();
     expect(screen.getByText('Unattributed exposure')).toBeTruthy();
     expect(screen.getByText('SPY +1 (Foreign or unclaimed)')).toBeTruthy();
     expect(screen.getByText('Unobservable account')).toBeTruthy();
+  });
+
+  it('marks an expired accepted override as needing attention', async () => {
+    const broker = new FakeBrokerService();
+    const receipt = accountReconciliationReceipt({
+      exposureResolution: 'accepted_override',
+      expiresAtMs: Date.now() - 1,
+    });
+    broker.accountTriage.mockResolvedValue(cleanTriage(receipt));
+
+    await render(BrokerAccountMonitorComponent, {
+      providers: [
+        { provide: BrokerService, useValue: broker },
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useClass: FakeLiveRunsService },
+        routeFragment(),
+      ],
+    });
+
+    const heading = await screen.findByRole('heading', { name: 'Accepted manual override' });
+    const outcome = heading.closest('section');
+    expect(outcome?.textContent).toContain('Attention');
+    expect(outcome?.textContent).toContain('The last accepted exposure override is expired.');
   });
 
   it('marks a latest receipt stale when the monitor clock passes its expiry', async () => {

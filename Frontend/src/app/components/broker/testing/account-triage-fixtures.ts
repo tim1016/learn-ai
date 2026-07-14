@@ -136,6 +136,9 @@ export function makeFrozenAccountTriage(
     accountId,
     generatedAtMs,
     receipt: options.receipt,
+    reconciliationValidUntilMs: options.reconciliationValidUntilMs,
+    automationPolicy: options.automationPolicy,
+    accountObservation: options.accountObservation,
     summaryHeadline: options.summaryHeadline ?? 'Account recovery needs attention',
     summaryDetail: options.summaryDetail ?? condition.detail,
     gate: {

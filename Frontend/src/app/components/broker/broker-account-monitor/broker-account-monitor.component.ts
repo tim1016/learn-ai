@@ -75,8 +75,13 @@ interface AccountOutcomeProjectionRow {
   label: string;
   status: AccountOutcomeProjectionStatus;
   statusLabel: string;
-  evidence: string;
+  evidence: readonly AccountOutcomeEvidencePart[];
   effect: string;
+}
+
+interface AccountOutcomeEvidencePart {
+  value: string;
+  receiptLabel?: true;
 }
 
 interface ConditionOwnerFact {
@@ -861,12 +866,12 @@ function buildAccountOutcomeProjectionRows(
 
   const unobservableEvidence =
     observation !== null && observation.state !== 'VERIFIED'
-      ? observation.reason_line
+      ? plainEvidence(observation.reason_line)
       : staleSources.length > 0
         ? summarizeFreshness(staleSources)
         : truth === null
-          ? 'Account truth has not loaded.'
-          : 'Account observation and source freshness are usable.';
+          ? plainEvidence('Account truth has not loaded.')
+          : plainEvidence('Account observation and source freshness are usable.');
 
   return [
     {
@@ -877,7 +882,7 @@ function buildAccountOutcomeProjectionRows(
       evidence:
         activeBotOwners.length > 0
           ? summarizeOwners(activeBotOwners)
-          : 'No active bot-owned exposure in current account truth.',
+          : plainEvidence('No active bot-owned exposure in current account truth.'),
       effect:
         activeBotOwners.length > 0
           ? 'Route orders and cures through the active bot owner.'
@@ -903,7 +908,7 @@ function buildAccountOutcomeProjectionRows(
           ? summarizeRetiredConditions(retiredBotConditions)
           : retiredBotOwners.length > 0
             ? summarizeOwners(retiredBotOwners)
-            : 'No retired bot-owned exposure in current account truth.',
+            : plainEvidence('No retired bot-owned exposure in current account truth.'),
       effect:
         retiredBotConditions.length > 0
           ? 'Resolve or audit the exposure before any new start.'
@@ -915,25 +920,27 @@ function buildAccountOutcomeProjectionRows(
       key: 'manual_override',
       label: 'Accepted manual override',
       status:
-        receipt?.exposure_resolution === 'accepted_override'
+        receipt?.exposure_resolution === 'accepted_override' && !receiptExpired
           ? 'verified'
-          : manualOwners.length > 0
+          : manualOwners.length > 0 ||
+              (receipt?.exposure_resolution === 'accepted_override' && receiptExpired)
             ? 'attention'
             : 'empty',
       statusLabel:
-        receipt?.exposure_resolution === 'accepted_override'
+        receipt?.exposure_resolution === 'accepted_override' && !receiptExpired
           ? 'Verified'
-          : manualOwners.length > 0
+          : manualOwners.length > 0 ||
+              (receipt?.exposure_resolution === 'accepted_override' && receiptExpired)
             ? 'Attention'
             : 'No evidence',
       evidence:
         receipt?.exposure_resolution === 'accepted_override'
           ? receiptExpired
-            ? 'The last accepted exposure override is expired.'
-            : 'Current receipt records exposure_resolution=accepted_override.'
+            ? plainEvidence('The last accepted exposure override is expired.')
+            : plainEvidence('Current receipt records exposure_resolution=accepted_override.')
           : manualOwners.length > 0
             ? summarizeOwners(manualOwners)
-            : 'No manual override is exposed by the current receipt.',
+            : plainEvidence('No manual override is exposed by the current receipt.'),
       effect:
         receipt?.exposure_resolution === 'accepted_override' && !receiptExpired
           ? 'Keep the audited acceptance visible until receipt expiry.'
@@ -955,7 +962,7 @@ function buildAccountOutcomeProjectionRows(
           ? summarizeExposures(unattributedExposures)
           : unattributedOwners.length > 0
             ? summarizeOwners(unattributedOwners)
-            : 'No foreign or unclaimed exposure is visible.',
+            : plainEvidence('No foreign or unclaimed exposure is visible.'),
       effect:
         unattributedExposures.length > 0 || unattributedOwners.length > 0
           ? 'Keep the account frozen until the exposure is flattened or audited.'
@@ -987,37 +994,71 @@ function buildAccountOutcomeProjectionRows(
   ];
 }
 
-function summarizeOwners(rows: AccountTruthResponse['owner_summaries']): string {
-  return summarizeList(
-    rows.map(
-      (row) =>
-        `${row.owner_label}: ${row.owner_binding_state}, positions ${row.position_count}, open orders ${row.open_order_count}, executions ${row.execution_count}`,
+function plainEvidence(value: string): AccountOutcomeEvidencePart[] {
+  return [{ value }];
+}
+
+function receiptEvidence(value: string): AccountOutcomeEvidencePart {
+  return { value, receiptLabel: true };
+}
+
+function summarizeOwners(
+  rows: AccountTruthResponse['owner_summaries'],
+): AccountOutcomeEvidencePart[] {
+  return plainEvidence(
+    summarizeList(
+      rows.map(
+        (row) =>
+          `${row.owner_label}: ${row.owner_binding_state}, positions ${row.position_count}, open orders ${row.open_order_count}, executions ${row.execution_count}`,
+      ),
     ),
   );
 }
 
-function summarizeExposures(rows: AccountTruthResponse['symbol_exposures']): string {
-  return summarizeList(
-    rows.map((row) => `${row.symbol} ${fmtSignedNumber(row.quantity, 0)} (${row.owner_label})`),
-  );
-}
-
-function summarizeFreshness(rows: AccountTruthResponse['source_freshness']): string {
-  return summarizeList(
-    rows.map(
-      (row) => `${row.label}: ${row.status}${row.reason_code ? ` (${row.reason_code})` : ''}`,
+function summarizeExposures(
+  rows: AccountTruthResponse['symbol_exposures'],
+): AccountOutcomeEvidencePart[] {
+  return plainEvidence(
+    summarizeList(
+      rows.map((row) => `${row.symbol} ${fmtSignedNumber(row.quantity, 0)} (${row.owner_label})`),
     ),
   );
 }
 
-function summarizeRetiredConditions(rows: AccountConditionRow[]): string {
-  return summarizeList(
+function summarizeFreshness(
+  rows: AccountTruthResponse['source_freshness'],
+): AccountOutcomeEvidencePart[] {
+  return summarizeEvidenceParts(
+    rows.map((row) => [
+      { value: `${row.label}: ${row.status}` },
+      ...(row.reason_code ? [{ value: ' (' }, receiptEvidence(row.reason_code), { value: ')' }] : []),
+    ]),
+  );
+}
+
+function summarizeRetiredConditions(rows: AccountConditionRow[]): AccountOutcomeEvidencePart[] {
+  return summarizeEvidenceParts(
     rows.map((row) => {
       const owner = row.owner.strategy_instance_id ?? row.owner.owner_id;
       const run = row.owner.run_id === null ? '' : ` / ${row.owner.run_id}`;
-      return `${owner}${run}: ${row.detail}`;
+      return [{ value: `${owner}${run}: ` }, receiptEvidence(row.detail)];
     }),
   );
+}
+
+function summarizeEvidenceParts(
+  values: readonly (readonly AccountOutcomeEvidencePart[])[],
+): AccountOutcomeEvidencePart[] {
+  const visible = values.slice(0, 3);
+  const parts: AccountOutcomeEvidencePart[] = [];
+  visible.forEach((value, index) => {
+    if (index > 0) parts.push({ value: '; ' });
+    parts.push(...value);
+  });
+  if (values.length > visible.length) {
+    parts.push({ value: `; +${values.length - visible.length} more` });
+  }
+  return parts;
 }
 
 function summarizeList(values: string[]): string {

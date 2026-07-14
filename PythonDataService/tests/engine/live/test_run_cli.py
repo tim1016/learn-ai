@@ -466,7 +466,7 @@ def test_init_ledger_writes_strategy_instance_id(repo_with_inputs: tuple[Path, P
     assert len(runs) == 1
     ledger = json.loads((runs[0] / "run_ledger.json").read_text(encoding="utf-8"))
     assert ledger["strategy_instance_id"] == "spy-ema-paper-1"
-    assert ledger["schema_version"] == "1.3"
+    assert ledger["schema_version"] == "1.4"
     assert ledger["run_id"] == runs[0].name
 
 
@@ -508,7 +508,7 @@ def test_init_ledger_writes_strategy_key(repo_with_inputs: tuple[Path, Path, Pat
     assert len(runs) == 1
     ledger = json.loads((runs[0] / "run_ledger.json").read_text(encoding="utf-8"))
     assert ledger["strategy_key"] == "spy_ema_crossover"
-    assert ledger["schema_version"] == "1.3"
+    assert ledger["schema_version"] == "1.4"
 
 
 @requires_git
