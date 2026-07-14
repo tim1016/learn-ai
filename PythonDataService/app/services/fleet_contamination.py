@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from app.broker.ibkr.config import IbkrSettings
+from app.engine.live.account_artifacts import append_account_event
+from app.engine.live.account_clerk import read_account_clerk_journal
 from app.engine.live.fleet import compute_fleet_contamination
 from app.engine.live.live_state_sidecar import (
     LiveStateEnvelope,
@@ -21,6 +24,7 @@ from app.services.legacy_stale_claim_retirement import retired_legacy_claim_keys
 
 logger = logging.getLogger(__name__)
 NetPositionFetcher = Callable[[], Awaitable[dict[str, int] | None]]
+_JOURNAL_PARITY_WINDOW = 3
 
 
 def scan_runs_by_instance(root: Path) -> dict[str, list[dict]]:
@@ -79,6 +83,24 @@ def instance_broker(root: Path, sid: str) -> InstanceBrokerView | None:
 
 
 def collect_fleet_position_explanations(root: Path) -> dict[str, dict[str, int]]:
+    """Read canonical Clerk-journal exposure; sidecars are bot-local only.
+
+    Formula: residual[symbol] = broker_net[symbol] - Σ journal_namespace_exposure[symbol]
+    Reference: ADR 0030 account-rooted journal; issue #1024.
+    Canonical implementation: this function and ``compute_fleet_contamination``.
+    Validated against: tests/services/test_fleet_contamination.py::test_journal_exposure_is_canonical.
+    """
+
+    journal_explained = _collect_journal_position_explanations(root)
+    if journal_explained is not None:
+        legacy = _collect_legacy_fleet_position_explanations(root)
+        if _record_sidecar_journal_parity(root, journal_explained, legacy):
+            return journal_explained
+        return legacy
+
+    # No account journal has ever been created. Retain the legacy read only
+    # during the shadow bootstrap; once an account has a Clerk journal its
+    # stale per-run sidecars can never contribute to account truth again.
     explained: dict[str, dict[str, int]] = {}
     retired_by_account: dict[str, frozenset[tuple[str, str, str, str]]] = {}
     for sid in scan_runs_by_instance(root):
@@ -88,6 +110,93 @@ def collect_fleet_position_explanations(root: Path) -> dict[str, dict[str, int]]
                 artifacts_root=root.parent,
                 run_id=envelope.run_id,
                 cache=retired_by_account,
+            )
+            positions = {
+                symbol: quantity
+                for symbol, quantity in envelope.expected_position_by_symbol.items()
+                if (sid, envelope.run_id, symbol.upper(), envelope.bot_order_namespace) not in retired
+            }
+            if positions:
+                explained[sid] = positions
+    return explained
+
+
+def _collect_journal_position_explanations(root: Path) -> dict[str, dict[str, int]] | None:
+    artifacts_root = root.parent
+    accounts_root = artifacts_root / "accounts"
+    if not accounts_root.is_dir():
+        return None
+    explained: dict[str, dict[str, int]] = {}
+    found_journal = False
+    for account_dir in sorted(path for path in accounts_root.iterdir() if path.is_dir()):
+        journal_path = account_dir / "clerk_journal.jsonl"
+        if not journal_path.exists():
+            continue
+        found_journal = True
+        entries = read_account_clerk_journal(artifacts_root, account_dir.name)
+        for entry in entries:
+            if entry.entry_kind != "broker_event" or entry.broker_event is None:
+                continue
+            event = entry.broker_event
+            if event.get("event_type") != "fill":
+                continue
+            symbol = event.get("symbol")
+            side = event.get("side")
+            quantity = event.get("fill_quantity")
+            if not isinstance(symbol, str) or side not in {"BUY", "SELL"} or not isinstance(quantity, (int, float)):
+                continue
+            positions = explained.setdefault(entry.intent.strategy_instance_id, {})
+            signed = int(quantity) if side == "BUY" else -int(quantity)
+            positions[symbol.upper()] = positions.get(symbol.upper(), 0) + signed
+    return explained if found_journal else None
+
+
+def _record_sidecar_journal_parity(
+    root: Path,
+    journal: dict[str, dict[str, int]],
+    legacy: dict[str, dict[str, int]],
+) -> bool:
+    """Record shadow parity and cut over only after a clean durable window."""
+
+    clean = legacy == journal
+    accounts_root = root.parent / "accounts"
+    for account_dir in accounts_root.iterdir() if accounts_root.is_dir() else ():
+        if (account_dir / "clerk_journal.jsonl").exists():
+            append_account_event(
+                root.parent,
+                account_dir.name,
+                {
+                    "event_type": "account_clerk_sidecar_journal_parity",
+                    "ts_ms": time.time_ns() // 1_000_000,
+                    "status": "clean" if clean else "drift",
+                    "reason": "SIDECAR_JOURNAL_EXPOSURE_MATCH" if clean else "SIDECAR_JOURNAL_EXPOSURE_MISMATCH",
+                    "journal": journal,
+                    "sidecar": legacy,
+                },
+            )
+    if not clean:
+        return False
+    return all(_account_has_clean_parity_window(root.parent, path.name) for path in accounts_root.iterdir() if path.is_dir() and (path / "clerk_journal.jsonl").exists())
+
+
+def _account_has_clean_parity_window(artifacts_root: Path, account_id: str) -> bool:
+    from app.engine.live.account_artifacts import read_account_events
+
+    events = [event for event in read_account_events(artifacts_root, account_id) if event.get("event_type") == "account_clerk_sidecar_journal_parity"]
+    recent = events[-_JOURNAL_PARITY_WINDOW:]
+    return len(recent) == _JOURNAL_PARITY_WINDOW and all(event.get("status") == "clean" for event in recent)
+
+
+def _collect_legacy_fleet_position_explanations(root: Path) -> dict[str, dict[str, int]]:
+    """Deprecated shadow comparator; never feeds the account verdict."""
+
+    explained: dict[str, dict[str, int]] = {}
+    retired_by_account: dict[str, frozenset[tuple[str, str, str, str]]] = {}
+    for sid in scan_runs_by_instance(root):
+        envelope = read_instance_live_state(root, sid)
+        if envelope is not None and envelope.expected_position_by_symbol:
+            retired = _retired_claim_keys_for_run(
+                artifacts_root=root.parent, run_id=envelope.run_id, cache=retired_by_account
             )
             positions = {
                 symbol: quantity
