@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import app.engine.live.account_clerk as account_clerk_module
-from app.broker.ibkr.models import IbkrOrderSpec
+from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
 from app.engine.live.account_artifacts import read_account_clerk_lease
 from app.engine.live.account_clerk import (
     AccountClerk,
@@ -18,6 +19,8 @@ from app.engine.live.account_clerk import (
     AccountClerkJournalEntry,
     AccountClerkLeaseWriter,
     AccountClerkRecordedReceipt,
+    AccountClerkRpcClient,
+    AccountClerkRpcServer,
     read_account_clerk_inbox,
     read_account_clerk_journal,
 )
@@ -36,9 +39,11 @@ START_MS = 1_784_000_000_000
 class _FakeBroker:
     def __init__(self) -> None:
         self.calls: list[object] = []
+        self._client = SimpleNamespace(settings=SimpleNamespace(mode="paper"))
 
-    async def place_order(self, order: object) -> None:
+    async def place_order(self, order: object) -> object:
         self.calls.append(order)
+        return SimpleNamespace(order_id=101, perm_id=201, exec_id="exec-1")
 
 
 def _write_active_binding(tmp_path: Path, instance_id: str, run_id: str) -> None:
@@ -103,14 +108,95 @@ async def test_record_intent_writes_replayable_journal_and_receipt_before_broker
     assert receipt.order_ref == intent.order_ref
     assert receipt.recorded_at_ms == START_MS + 1
     assert broker.calls == []
-    assert read_account_clerk_inbox(tmp_path, ACCOUNT)[0].intent == intent
+    assert read_account_clerk_inbox(tmp_path, ACCOUNT) == []
     journal = read_account_clerk_journal(tmp_path, ACCOUNT)
     assert journal[0].intent == intent
     assert journal[0].seq == receipt.journal_seq
 
     restarted_clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
     assert restarted_clerk.replay_recorded_receipts() == [receipt]
-    assert broker.calls == []
+
+
+@pytest.mark.asyncio
+async def test_clerk_records_before_paper_broker_submit_and_deduplicates_ack(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _FakeBroker()
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=broker,
+        now_ms=lambda: START_MS + 1,
+    )
+    intent = _intent("bot-a", "run-a", "intent-a")
+
+    recorded, acked = await clerk.submit_intent(intent)
+    repeated_recorded, repeated_acked = await clerk.submit_intent(intent)
+
+    assert recorded.status == "recorded"
+    assert acked.status == "broker_acked"
+    assert acked.order_id == 101
+    assert repeated_recorded == recorded
+    assert repeated_acked == acked
+    assert len(broker.calls) == 1
+    assert [entry.entry_kind for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [
+        "recorded",
+        "broker_acked",
+    ]
+    assert clerk.replay_recorded_receipts() == [recorded]
+
+
+@pytest.mark.asyncio
+async def test_bot_rpc_reaches_clerk_without_a_bot_broker_adapter(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _FakeBroker()
+    server = AccountClerkRpcServer(
+        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    )
+    await server.start()
+    try:
+        receipt = await AccountClerkRpcClient(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+        ).submit(_intent("bot-a", "run-a", "intent-rpc"))
+    finally:
+        await server.close()
+
+    assert receipt.status == "broker_acked"
+    assert len(broker.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_clerk_relays_callbacks_only_to_the_originating_namespace(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    _write_active_binding(tmp_path, "bot-b", "run-b")
+    server = AccountClerkRpcServer(AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT))
+    await server.start()
+    try:
+        intent_a = _intent("bot-a", "run-a", "intent-a")
+        await server._clerk.record_intent(intent_a)
+        server._intents_by_order_ref[intent_a.order_ref] = intent_a
+        server._record_broker_event(
+            IbkrOrderEvent(
+                account_id=ACCOUNT,
+                order_id=101,
+                event_type="fill",
+                order_ref=intent_a.order_ref,
+                fill_quantity=1,
+                avg_fill_price=100,
+                ts_ms=START_MS,
+            )
+        )
+        client = AccountClerkRpcClient(artifacts_root=tmp_path, account_id=ACCOUNT)
+        bot_b_events = await client.drain_events(
+            bot_order_namespace=bot_order_namespace_for_instance("bot-b")
+        )
+        bot_a_events = await client.drain_events(bot_order_namespace=intent_a.bot_order_namespace)
+    finally:
+        await server.close()
+
+    assert bot_b_events == []
+    assert [event.order_ref for event in bot_a_events] == [intent_a.order_ref]
+    assert read_account_clerk_journal(tmp_path, ACCOUNT)[-1].entry_kind == "broker_event"
 
 
 @pytest.mark.asyncio
@@ -145,7 +231,7 @@ async def test_recover_inbox_replays_durable_intent_after_crash_before_journal_w
     restarted_clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
     receipts = await restarted_clerk.recover_inbox()
 
-    assert read_account_clerk_inbox(tmp_path, ACCOUNT)[0].intent == intent
+    assert read_account_clerk_inbox(tmp_path, ACCOUNT) == []
     assert [entry.intent for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [intent]
     assert receipts[0].intent_id == intent.intent_id
     assert receipts[0].recorded_at_ms == START_MS + 2

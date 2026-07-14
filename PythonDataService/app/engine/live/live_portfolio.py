@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import Counter
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
@@ -312,6 +312,7 @@ class IbkrBrokerAdapter(BrokerAdapter):
         self._event_task: asyncio.Task[None] | None = None
         self._stream_failure: BaseException | None = None
         self._broker_callback_sink: Callable[[IbkrOrderEvent], None] | None = None
+        self._clerk_event_reader: Callable[[], Awaitable[list[IbkrOrderEvent]]] | None = None
         self._observed_fill_count_by_order_id: dict[int, int] = {}
         self._event_buffer_changed = asyncio.Event()
         self._require_account_owner_write_fence = require_account_owner_write_fence
@@ -335,6 +336,14 @@ class IbkrBrokerAdapter(BrokerAdapter):
     def set_broker_callback_sink(self, sink: Callable[[IbkrOrderEvent], None] | None) -> None:
         """Install a synchronous receipt-time hook for durable raw callbacks."""
         self._broker_callback_sink = sink
+
+    def use_account_clerk_event_stream(
+        self,
+        reader: Callable[[], Awaitable[list[IbkrOrderEvent]]],
+    ) -> None:
+        """Consume callbacks relayed by the Clerk, never from this bot client."""
+
+        self._clerk_event_reader = reader
 
     def require_account_owner_write_fence(
         self,
@@ -460,6 +469,9 @@ class IbkrBrokerAdapter(BrokerAdapter):
 
     async def _run_event_stream(self) -> None:
         try:
+            if self._clerk_event_reader is not None:
+                await self._run_clerk_event_stream()
+                return
             async for event in stream_order_events(self._client):
                 # Per spec § 7: persist all received executions to
                 # executions.parquet whether or not Python originated
@@ -499,6 +511,25 @@ class IbkrBrokerAdapter(BrokerAdapter):
             logger.exception("IBKR order-event stream terminated unexpectedly")
             self._stream_failure = exc
             self._event_buffer_changed.set()
+
+    async def _run_clerk_event_stream(self) -> None:
+        assert self._clerk_event_reader is not None
+        while True:
+            events = await self._clerk_event_reader()
+            for event in events:
+                self._record_event(event)
+            await asyncio.sleep(0.5)
+
+    def _record_event(self, event: IbkrOrderEvent) -> None:
+        if self._broker_callback_sink is not None:
+            self._broker_callback_sink(event)
+        if event.event_type == "fill":
+            order_id = int(event.order_id)
+            self._observed_fill_count_by_order_id[order_id] = (
+                self._observed_fill_count_by_order_id.get(order_id, 0) + 1
+            )
+        self._event_buffer.append(event)
+        self._event_buffer_changed.set()
 
     def drain_broker_events(self) -> list[IbkrOrderEvent]:
         events = list(self._event_buffer)

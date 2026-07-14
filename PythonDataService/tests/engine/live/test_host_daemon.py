@@ -567,7 +567,7 @@ async def test_start_allocates_distinct_ibkr_client_ids_for_sibling_instances(
     second_run_id = "run-daemon-" + "b" * 53
     second_run_dir = manager.live_runs_root / second_run_id
     second_run_dir.mkdir(parents=True)
-    monkeypatch.setenv("LIVE_RUNNER_IBKR_CLIENT_ID_POOL", "80-81")
+    monkeypatch.setenv("LIVE_RUNNER_IBKR_CLIENT_ID_POOL", "80-83")
     captured_ids: list[str] = []
 
     def _write_ledger(path: Path, strategy_instance_id: str, run_id: str, account_id: str) -> None:
@@ -598,7 +598,7 @@ async def test_start_allocates_distinct_ibkr_client_ids_for_sibling_instances(
 
     assert first.accepted is True
     assert second.accepted is True
-    assert captured_ids == ["80", "81"]
+    assert captured_ids == ["80", "82"]
 
 
 def test_account_clerk_starts_before_first_bot_reaps_after_last_and_takeover_advances_generation(
@@ -690,7 +690,7 @@ def test_concurrent_starts_cannot_allocate_same_ibkr_client_id(
     second_run_id = "run-daemon-" + "b" * 53
     second_run_dir = manager.live_runs_root / second_run_id
     second_run_dir.mkdir(parents=True)
-    monkeypatch.setenv("LIVE_RUNNER_IBKR_CLIENT_ID_POOL", "90-91")
+    monkeypatch.setenv("LIVE_RUNNER_IBKR_CLIENT_ID_POOL", "90-92")
 
     def _write_ledger(path: Path, strategy_instance_id: str, run_id: str) -> None:
         (path / "run_ledger.json").write_text(
@@ -744,7 +744,7 @@ def test_concurrent_starts_cannot_allocate_same_ibkr_client_id(
     assert not first.is_alive()
     assert not second.is_alive()
     assert errors == []
-    assert captured_ids == ["90", "91"]
+    assert captured_ids == ["90", "92"]
 
 
 def test_retry_skips_ibkr_client_id_rejected_by_gateway(
