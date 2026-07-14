@@ -105,6 +105,10 @@ class AccountOwnerBrokerWriter(Protocol):
     async def __call__(self, *, boundary: str, write: Callable[[], object]) -> object: ...
 
 
+class AccountClerkRecoverySubmitter(Protocol):
+    async def __call__(self, intent: object) -> object: ...
+
+
 @dataclass(frozen=True)
 class StrategyParamResolution:
     """Live-start strategy parameters plus the broker-facing trade symbol."""
@@ -497,6 +501,11 @@ async def _recovery_flatten(
     live_state_seed: LiveStateEnvelope | None = None,
     bot_order_namespace: str | None = None,
     account_owner_broker_writer: AccountOwnerBrokerWriter | None = None,
+    account_clerk_recovery_submitter: AccountClerkRecoverySubmitter | None = None,
+    recovery_account_id: str | None = None,
+    recovery_strategy_instance_id: str | None = None,
+    recovery_run_id: str | None = None,
+    recovery_owner_generation: int = 0,
     failed_symbols: list[str] | None = None,
 ) -> int:
     """Best-effort cancel + flatten for the cmd_start unhandled-exception path.
@@ -579,27 +588,33 @@ async def _recovery_flatten(
     async def _cancel_open_orders():
         return await broker.cancel_open_orders()
 
-    try:
-        cancel_call = (
-            account_owner_broker_writer(
-                boundary="broker.cancel_open_orders",
-                write=_cancel_open_orders,
+    if account_clerk_recovery_submitter is None:
+        try:
+            cancel_call = (
+                account_owner_broker_writer(
+                    boundary="broker.cancel_open_orders",
+                    write=_cancel_open_orders,
+                )
+                if account_owner_broker_writer is not None
+                else _cancel_open_orders()
             )
-            if account_owner_broker_writer is not None
-            else _cancel_open_orders()
-        )
-        cancelled = await asyncio.wait_for(cancel_call, timeout=CANCEL_CONFIRM_TIMEOUT_S)
-    except TimeoutError as exc:
-        logger.error(
-            "cancel_open_orders timed out during recovery flatten; refusing to liquidate",
-            extra={"step": "8", "timeout_s": CANCEL_CONFIRM_TIMEOUT_S},
-        )
-        raise CancelConfirmTimeoutHaltError(timeout_s=CANCEL_CONFIRM_TIMEOUT_S) from exc
-    except Exception:
-        logger.exception(
-            "cancel_open_orders failed during recovery flatten",
-            extra={"step": "8"},
-        )
+            cancelled = await asyncio.wait_for(cancel_call, timeout=CANCEL_CONFIRM_TIMEOUT_S)
+        except TimeoutError as exc:
+            logger.error(
+                "cancel_open_orders timed out during recovery flatten; refusing to liquidate",
+                extra={"step": "8", "timeout_s": CANCEL_CONFIRM_TIMEOUT_S},
+            )
+            raise CancelConfirmTimeoutHaltError(timeout_s=CANCEL_CONFIRM_TIMEOUT_S) from exc
+        except Exception:
+            logger.exception(
+                "cancel_open_orders failed during recovery flatten",
+                extra={"step": "8"},
+            )
+            cancelled = []
+    else:
+        # The Clerk executes the namespace-scoped terminal-cancel barrier
+        # immediately before each recovery liquidation.  The bot must never
+        # call its fenced broker adapter on this path.
         cancelled = []
     if cancelled:
         logger.info(
@@ -657,14 +672,42 @@ async def _recovery_flatten(
             async def _place_order(order_spec=spec):
                 return await broker.place_order(order_spec, perm_id_wait_s=_RECOVERY_PERM_ID_WAIT_S)
 
-            ack = (
-                await account_owner_broker_writer(
-                    boundary="broker.place_order",
-                    write=_place_order,
+            if account_clerk_recovery_submitter is not None:
+                if (
+                    recovery_account_id is None
+                    or recovery_strategy_instance_id is None
+                    or recovery_run_id is None
+                    or resolved_namespace is None
+                    or order_ref is None
+                ):
+                    raise ValueError("Clerk recovery flatten requires complete account binding identity")
+                from app.engine.live.account_owner import AccountOwnerSubmitIntent
+
+                recovery_result = await account_clerk_recovery_submitter(
+                    AccountOwnerSubmitIntent(
+                        trace_id=f"recovery-{order_ref}",
+                        account_id=recovery_account_id,
+                        strategy_instance_id=recovery_strategy_instance_id,
+                        run_id=recovery_run_id,
+                        bot_order_namespace=resolved_namespace,
+                        intent_id=order_ref.rsplit(":", maxsplit=1)[1],
+                        order_ref=order_ref,
+                        intent_kind="RECOVERY_FLATTEN",
+                        order_spec=spec.model_dump(mode="json"),
+                        owner_generation=recovery_owner_generation,
+                        created_at_ms=int(time.time() * 1000),
+                    )
                 )
-                if account_owner_broker_writer is not None
-                else await _place_order()
-            )
+                ack = recovery_result.broker_acked
+            else:
+                ack = (
+                    await account_owner_broker_writer(
+                        boundary="broker.place_order",
+                        write=_place_order,
+                    )
+                    if account_owner_broker_writer is not None
+                    else await _place_order()
+                )
             logger.info(
                 "Recovery flatten liquidated %s qty=%s order_id=%s",
                 pos.symbol,
@@ -1932,6 +1975,9 @@ def cmd_start(args: argparse.Namespace) -> int:
                 exec_id=receipt.exec_id,
             )
 
+        async def _submit_recovery_to_account_clerk(intent):
+            return await clerk_client.submit_recovery_flatten(intent)
+
         account_clerk_submitter = _submit_to_account_clerk
 
         async def _reject_direct_broker_write(*, boundary: str, write: object) -> object:
@@ -2574,6 +2620,13 @@ def cmd_start(args: argparse.Namespace) -> int:
                             account_owner_broker_writer=(
                                 account_owner.run_broker_write if account_owner is not None else None
                             ),
+                            account_clerk_recovery_submitter=(
+                                _submit_recovery_to_account_clerk if account_owner is not None else None
+                            ),
+                            recovery_account_id=ledger.account_id,
+                            recovery_strategy_instance_id=strategy_instance_id,
+                            recovery_run_id=ledger.run_id,
+                            recovery_owner_generation=_account_owner_generation_provider(),
                             failed_symbols=failed_symbols,
                         )
                         if failed_symbols and not is_readonly:
