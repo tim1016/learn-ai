@@ -1,10 +1,14 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BrokerService } from '../../../services/broker.service';
 import { JournalClaimCureComponent } from './journal-claim-cure.component';
 
 describe('JournalClaimCureComponent', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('previews a server-owned claim and appends a bounded immutable cure', async () => {
     const broker = {
       previewJournalCure: vi.fn().mockResolvedValue({
