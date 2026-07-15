@@ -109,7 +109,7 @@ class CohortBatchLaunchService:
                     continue
             except (KeyError, TypeError, ValueError):
                 return _unreadable_evidence_summary()
-            sample = _parse_evidence_sample(event)
+            sample = parse_cohort_evidence_sample(event)
             if sample is None:
                 return _unreadable_evidence_summary()
             samples.append(sample)
@@ -184,7 +184,7 @@ class CohortBatchLaunchService:
         return None, None
 
 
-def _parse_evidence_sample(event: dict) -> CohortEvidenceSample | None:
+def parse_cohort_evidence_sample(event: dict) -> CohortEvidenceSample | None:
     expected_at_ms = event.get("expected_at_ms")
     observed_at_ms = event.get("observed_at_ms")
     account_truth = event.get("account_truth")
