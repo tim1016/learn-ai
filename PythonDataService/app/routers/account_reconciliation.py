@@ -6,11 +6,13 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from starlette.concurrency import run_in_threadpool
 
 from app.broker.ibkr.client import BrokerError, IbkrClient
 from app.broker.ibkr.config import get_settings
 from app.engine.live import host_daemon_client
-from app.engine.live.account_artifacts import AccountArtifactError
+from app.engine.live.account_artifacts import AccountArtifactError, append_account_event
+from app.engine.live.account_clerk_rpc import AccountClerkRpcClient
 from app.engine.live.account_identity import normalize_account_id
 from app.engine.live.account_registry import backfill_false_crash_registry_rows
 from app.routers.broker_dependencies import require_connected_client
@@ -28,8 +30,16 @@ from app.schemas.account_reconciliation import (
     LegacyStaleClaimRetirementReceipt,
     LegacyStaleClaimRetireRequest,
 )
+from app.schemas.journal_cures import (
+    JournalCurePreview,
+    JournalCureReceipt,
+    JournalCureRequest,
+    OperatorRecoveryFlattenRequest,
+    OperatorRecoveryFlattenResponse,
+)
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.account_truth_refresh import account_truth_artifacts_root, refresh_account_truth_now
+from app.services.journal_cures import JournalCureError, JournalCureService
 from app.services.legacy_stale_claim_retirement import (
     LegacyStaleClaimRetirementError,
     LegacyStaleClaimRetirementService,
@@ -52,6 +62,10 @@ def get_account_reconciliation_service() -> AccountReconciliationService:
 
 def get_legacy_stale_claim_retirement_service() -> LegacyStaleClaimRetirementService:
     return LegacyStaleClaimRetirementService(artifacts_root=get_account_artifacts_root())
+
+
+def get_journal_cure_service() -> JournalCureService:
+    return JournalCureService(artifacts_root=get_account_artifacts_root())
 
 
 @router.post("/{account_id}/reconciliation", response_model=AccountReconciliationReceipt)
@@ -168,6 +182,88 @@ async def retire_legacy_stale_claim_endpoint(
         ) from exc
     except AccountArtifactError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+
+@router.post("/{account_id}/journal-cures", response_model=JournalCureReceipt, status_code=status.HTTP_201_CREATED)
+async def apply_journal_cure_endpoint(
+    account_id: str,
+    request: JournalCureRequest,
+    service: Annotated[JournalCureService, Depends(get_journal_cure_service)],
+) -> JournalCureReceipt:
+    """Append a claim-reducing cure only after the account Clerk is healthy."""
+
+    canonical_account_id = _canonical_account_id(account_id)
+    try:
+        settings = get_settings()
+        await host_daemon_client.ensure_account_clerk(settings.live_runner_daemon_url, canonical_account_id)
+        return await run_in_threadpool(
+            service.apply,
+            account_id=canonical_account_id,
+            request=request,
+        )
+    except JournalCureError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={"reason_code": exc.reason_code, "message": exc.detail},
+        ) from exc
+    except host_daemon_client.HostDaemonError as exc:
+        raise HTTPException(exc.status_code, detail=exc.detail) from exc
+
+
+@router.get("/{account_id}/journal-cures/preview", response_model=JournalCurePreview)
+async def journal_cure_preview_endpoint(
+    account_id: str,
+    bot_order_namespace: str,
+    symbol: str,
+    service: Annotated[JournalCureService, Depends(get_journal_cure_service)],
+) -> JournalCurePreview:
+    """Read the server-owned claim state before an operator creates a cure."""
+
+    return await run_in_threadpool(
+        service.preview,
+        account_id=_canonical_account_id(account_id),
+        bot_order_namespace=bot_order_namespace,
+        symbol=symbol,
+    )
+
+
+@router.post("/{account_id}/operator-recovery-flatten", response_model=OperatorRecoveryFlattenResponse)
+async def operator_recovery_flatten_endpoint(
+    account_id: str,
+    request: OperatorRecoveryFlattenRequest,
+    artifacts_root: AccountArtifactsRoot,
+) -> OperatorRecoveryFlattenResponse:
+    """Run the existing retired-namespace flatten lane after Clerk readiness proof."""
+
+    canonical_account_id = _canonical_account_id(account_id)
+    if request.intent.account_id != canonical_account_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "intent account_id does not match path")
+    try:
+        settings = get_settings()
+        await host_daemon_client.ensure_account_clerk(settings.live_runner_daemon_url, canonical_account_id)
+        receipt = await AccountClerkRpcClient(
+            artifacts_root=artifacts_root,
+            account_id=canonical_account_id,
+        ).submit_operator_recovery_flatten(request.intent)
+        append_account_event(
+            artifacts_root,
+            canonical_account_id,
+            {
+                "event_type": "account_clerk_operator_recovery_flatten",
+                "intent_id": request.intent.intent_id,
+                "order_ref": request.intent.order_ref,
+                "request_provenance": request.request_provenance,
+                "recorded_at_ms": receipt.broker_acked.recorded_at_ms,
+                "receipt_id": (
+                    f"account-clerk-operator-recovery:"
+                    f"{request.intent.intent_id}:{receipt.broker_acked.journal_seq}"
+                ),
+            },
+            only_if_receipt_absent=True,
+        )
+        return OperatorRecoveryFlattenResponse(recovery_flatten=receipt)
+    except host_daemon_client.HostDaemonError as exc:
+        raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
 
 @router.get(

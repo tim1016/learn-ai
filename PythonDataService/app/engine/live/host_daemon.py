@@ -1927,6 +1927,16 @@ def create_app(
         except HostRunnerError as exc:
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
+    @app.post("/accounts/{account_id}/clerk/ensure", response_model=HostRunnerHealth, dependencies=auth)
+    async def ensure_account_clerk(account_id: str) -> HostRunnerHealth:
+        """Start and generation-handshake the sole Clerk before an operator cure."""
+
+        try:
+            await run_in_threadpool(process_manager._ensure_account_clerk, account_id)
+        except HostRunnerError as exc:
+            raise HTTPException(exc.status_code, detail=exc.detail) from exc
+        return process_manager.health()
+
     @app.get("/process", response_model=HostRunnerProcessStatus, dependencies=auth)
     async def process() -> HostRunnerProcessStatus:
         return process_manager.process_status()

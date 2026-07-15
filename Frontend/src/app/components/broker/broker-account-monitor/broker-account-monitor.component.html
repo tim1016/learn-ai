@@ -90,6 +90,7 @@
       />
       @if (accountReconciliationAccountId(); as accountId) {
         <app-legacy-stale-claim-cure [accountId]="accountId" (retired)="refresh()" />
+        <app-journal-claim-cure [accountId]="accountId" (cured)="refresh()" />
       }
       <article class="account-outcome-card" aria-labelledby="account-outcome-title">
         <header class="card-header" id="account-outcome-title">Operator outcome projection</header>

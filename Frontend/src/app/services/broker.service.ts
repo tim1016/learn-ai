@@ -6,6 +6,9 @@ import type {
   AccountAcceptExposureOverrideResponse,
   AccountClearFreezeRequest,
   AccountClearFreezeResponse,
+  JournalCurePreview,
+  JournalCureReceipt,
+  JournalCureRequest,
   LegacyStaleClaimCandidatesResponse,
   LegacyStaleClaimRetireRequest,
   LegacyStaleClaimRetirementReceipt,
@@ -180,6 +183,28 @@ export class BrokerService {
     return firstValueFrom(
       this.http.post<LegacyStaleClaimRetirementReceipt>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/legacy-stale-claims/retire`,
+        payload,
+      ),
+    );
+  }
+
+  previewJournalCure(
+    accountId: string,
+    botOrderNamespace: string,
+    symbol: string,
+  ): Promise<JournalCurePreview> {
+    return firstValueFrom(
+      this.http.get<JournalCurePreview>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/journal-cures/preview`,
+        { params: { bot_order_namespace: botOrderNamespace, symbol } },
+      ),
+    );
+  }
+
+  applyJournalCure(accountId: string, payload: JournalCureRequest): Promise<JournalCureReceipt> {
+    return firstValueFrom(
+      this.http.post<JournalCureReceipt>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/journal-cures`,
         payload,
       ),
     );

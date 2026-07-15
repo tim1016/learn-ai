@@ -1,0 +1,29 @@
+.journal-cure {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.journal-cure__fields {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+}
+
+.journal-cure label {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.journal-cure input,
+.journal-cure textarea {
+  width: 100%;
+}
+
+.journal-cure__reason {
+  grid-column: 1 / -1;
+}
+
+.journal-cure__preview,
+.journal-cure__receipt {
+  margin: 0;
+}

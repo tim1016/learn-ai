@@ -1,0 +1,35 @@
+<article class="journal-cure" aria-labelledby="journal-cure-title">
+  <header>
+    <h2 id="journal-cure-title">Correct a stale Clerk claim</h2>
+    <p>
+      This adds an immutable, local operator adjustment. It cannot change broker truth or create
+      an explanation for external exposure.
+    </p>
+  </header>
+  <div class="journal-cure__fields">
+    <label>Namespace <input [value]="namespace()" (input)="update('namespace', $event)" /></label>
+    <label>Symbol <input [value]="symbol()" (input)="update('symbol', $event)" /></label>
+    <button type="button" class="ghost-btn" [disabled]="loading()" (click)="previewCure()">Preview claim</button>
+  </div>
+  @if (preview(); as claim) {
+    <p class="journal-cure__preview">
+      Journal claim {{ claim.journal_quantity }} for {{ claim.symbol }} ·
+      <span class="mono">{{ claim.reason_code | receiptLabel }}</span>
+    </p>
+    @if (claim.can_cure) {
+      <p>Use a {{ claim.required_adjustment_sign }} signed correction; it cannot exceed the journal claim.</p>
+      <div class="journal-cure__fields">
+        <label>Signed correction <input type="number" [value]="quantity()" (input)="update('quantity', $event)" /></label>
+        <label>Evidence reference <input [value]="evidenceRef()" (input)="update('evidenceRef', $event)" /></label>
+        <label class="journal-cure__reason">Reason <textarea [value]="reason()" (input)="update('reason', $event)"></textarea></label>
+        <button type="button" class="ghost-btn" [disabled]="loading()" (click)="cure()">Append cure</button>
+      </div>
+    }
+  }
+  @if (receipt(); as receipt) {
+    <p class="journal-cure__receipt">Cure journaled at sequence {{ receipt.journal_seq }}.</p>
+  }
+  @if (error()) {
+    <p class="error" role="alert">The Clerk could not safely apply this cure. Refresh the account evidence and retry.</p>
+  }
+</article>

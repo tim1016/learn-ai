@@ -92,6 +92,16 @@ def project_journal_exposure(
     quantities: dict[tuple[str, str, str], float] = defaultdict(float)
     seen_execution_effects: set[tuple[str, str]] = set()
     for entry in entries:
+        if entry.entry_kind == "operator_adjustment" and entry.operator_adjustment is not None:
+            adjustment = entry.operator_adjustment
+            if group_by != "namespace" or (
+                account_id is not None and adjustment.account_id != account_id
+            ):
+                continue
+            quantities[
+                (adjustment.account_id, adjustment.bot_order_namespace, adjustment.symbol)
+            ] += adjustment.signed_quantity
+            continue
         event = normalize_journal_broker_event(entry)
         if event is None or entry.intent is None:
             # Namespace and strategy projections intentionally never invent an

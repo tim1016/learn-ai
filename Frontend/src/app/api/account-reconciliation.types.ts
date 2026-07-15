@@ -144,6 +144,41 @@ export interface AccountTriageResponse {
   affected_bots: AccountTriageBotRef[];
 }
 
+export interface JournalCurePreview {
+  account_id: string;
+  bot_order_namespace: string;
+  symbol: string;
+  journal_quantity: number;
+  required_adjustment_sign: 'positive' | 'negative' | null;
+  can_cure: boolean;
+  reason_code: string;
+}
+
+export interface JournalCureRequest {
+  bot_order_namespace: string;
+  symbol: string;
+  signed_quantity: number;
+  reason: string;
+  evidence_refs: string[];
+  request_provenance: string;
+  idempotency_key: string;
+}
+
+export interface JournalCureReceipt {
+  schema_version: 1;
+  account_id: string;
+  bot_order_namespace: string;
+  symbol: string;
+  signed_quantity: number;
+  operator_attribution: 'local-operator';
+  request_provenance: string;
+  reason: string;
+  evidence_refs: string[];
+  idempotency_key: string;
+  recorded_at_ms: number;
+  journal_seq: number;
+}
+
 export interface LegacyStaleClaimCandidate {
   claim_id: string;
   strategy_instance_id: string;
