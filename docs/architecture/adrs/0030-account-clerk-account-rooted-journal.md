@@ -60,3 +60,15 @@ Issue #1016 establishes only receipt #1: durable inbox, serial journal,
 identity-scoped rejection, and replay. Clerk process lifecycle and lease
 fencing follow in #1018; the broker drain and receipt #2 follow in #1020; the
 journal ledger verdict cutover follows the reconciler and shadow-parity work.
+
+## Issue #1044 callback-stream hardening traceability
+
+| Requirement | Verification |
+| --- | --- |
+| Start after broker connect; always stop in shutdown | `test_clerk_process_acquires_lock_before_broker_connect_and_releases_after_disconnect` |
+| Stream task death closes normal submit intake, writes an alarm, drains health, and exits for supervision | `test_stream_task_death_alarms_rejects_normal_submits_and_exits_unhealthy` |
+| Attribution is installed before broker await and rebuilt after restart | `test_market_fill_before_ack_is_attributed_before_broker_await`; `test_restart_rebuilds_durable_callback_attribution_index` |
+| Reconciler-adopted and retried intents retain attribution | `test_reconciler_adopt_and_retry_restore_callback_attribution` |
+| Callback is journal-fsynced before relay and duplicate callbacks have one semantic journal row | `test_clerk_relays_callbacks_only_to_the_originating_namespace`; `test_journal_exposure_survives_bot_crash_and_deduplicates_execution` |
+| Unattributed callbacks persist without a guessed namespace, create a consumed account alarm, and block starts | `test_unattributed_broker_callback_is_persisted_and_blocks_new_account_starts`; `test_account_projection_includes_unattributed_callbacks` |
+| Journal fsync does not block the callback event loop | `test_callback_fsync_is_offloaded_without_allowing_relay_before_record` |

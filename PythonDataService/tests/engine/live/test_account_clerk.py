@@ -3,33 +3,47 @@
 from __future__ import annotations
 
 import asyncio
+import multiprocessing
 import threading
+import time
+from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 import app.engine.live.account_clerk as account_clerk_module
+import app.engine.live.account_clerk_journal as account_clerk_journal_module
 from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
+    advance_account_clerk_generation,
+    read_account_clerk_generation,
     read_account_clerk_lease,
     read_account_events,
     read_account_freeze,
 )
 from app.engine.live.account_clerk import (
     AccountClerk,
+    AccountClerkGenerationFencedError,
     AccountClerkInboxEntry,
     AccountClerkIntentRejected,
+    AccountClerkJournalCorruptError,
     AccountClerkJournalEntry,
     AccountClerkLeaseWriter,
     AccountClerkRecordedReceipt,
     AccountClerkRecoveryFlattenReceipt,
     AccountClerkRpcClient,
     AccountClerkRpcServer,
+    account_clerk_authority_lock,
     read_account_clerk_inbox,
     read_account_clerk_journal,
 )
+from app.engine.live.account_clerk_cursor import (
+    AccountClerkEventConsumerIdentity,
+    AccountClerkEventCursorRepo,
+)
 from app.engine.live.account_clerk_reconciler import AccountClerkReconciler, namespace_expected_exposure
+from app.engine.live.account_clerk_rpc import AccountClerkCallbackPersistenceError
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
@@ -40,6 +54,26 @@ from app.engine.live.order_identity import build_order_ref
 
 ACCOUNT = "DU123456"
 START_MS = 1_784_000_000_000
+
+
+def _write_active_clerk_generation(tmp_path: Path) -> int:
+    return advance_account_clerk_generation(
+        tmp_path,
+        ACCOUNT,
+        phase="accepting",
+        recorded_at_ms=START_MS,
+        source="test",
+    ).generation
+
+
+def _hold_clerk_authority_lock(
+    artifacts_root: Path,
+    acquired: multiprocessing.synchronize.Event,
+    release: multiprocessing.synchronize.Event,
+) -> None:
+    with account_clerk_authority_lock(artifacts_root, ACCOUNT):
+        acquired.set()
+        release.wait(timeout=10)
 
 
 class _FakeBroker:
@@ -65,6 +99,38 @@ class _UncertainBroker(_ReconciliationBroker):
     async def place_order(self, order: object) -> object:
         self.calls.append(order)
         raise TimeoutError("simulated lost acknowledgement")
+
+
+class _MarketFillBeforeAckBroker(_FakeBroker):
+    """Emits a fill through the production callback sink before its ack returns."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._callback_sink: object | None = None
+
+    def set_broker_callback_sink(self, sink: object) -> None:
+        self._callback_sink = sink
+
+    async def place_order(self, order: object) -> object:
+        self.calls.append(order)
+        assert callable(self._callback_sink)
+        self._callback_sink(
+            IbkrOrderEvent(
+                account_id=ACCOUNT,
+                order_id=101,
+                event_type="fill",
+                order_ref=order.order_ref,
+                symbol="SPY",
+                side="BUY",
+                fill_quantity=1,
+                exec_id="fast-fill-before-ack",
+                ts_ms=START_MS + 1,
+            )
+        )
+        # Let the callback worker contend for the Clerk lock while submit is
+        # still awaiting the broker. Attribution must already be installed.
+        await asyncio.sleep(0)
+        return SimpleNamespace(order_id=101, perm_id=201, exec_id="ack-after-fill")
 
 
 def _write_active_binding(tmp_path: Path, instance_id: str, run_id: str) -> None:
@@ -174,6 +240,183 @@ async def test_clerk_records_before_paper_broker_submit_and_deduplicates_ack(tmp
 
 
 @pytest.mark.asyncio
+async def test_order_ref_collision_is_rejected_before_durable_intake(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_FakeBroker())
+    first = _intent("bot-a", "run-a", "first")
+    colliding = first.model_copy(update={"intent_id": "different-intent"})
+
+    await clerk.record_intent(first)
+    with pytest.raises(AccountClerkIntentRejected, match="CLERK_ORDER_REF_COLLISION"):
+        await clerk.record_intent(colliding)
+
+    assert [entry.intent for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [first]
+    assert read_account_clerk_inbox(tmp_path, ACCOUNT) == []
+
+
+@pytest.mark.asyncio
+async def test_bounded_broker_submit_records_uncertainty_and_releases_account_intake(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stuck broker write must not park every bot behind the Clerk lock."""
+
+    class _FirstSubmitHangsBroker(_FakeBroker):
+        async def place_order(self, order: object) -> object:
+            self.calls.append(order)
+            if len(self.calls) == 1:
+                await asyncio.Event().wait()
+            return SimpleNamespace(order_id=102, perm_id=202, exec_id="exec-2")
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _FirstSubmitHangsBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    monkeypatch.setattr(account_clerk_module, "_BROKER_SUBMIT_TIMEOUT_S", 0.01)
+
+    with pytest.raises(TimeoutError):
+        await clerk.submit_intent(_intent("bot-a", "run-a", "hung-submit"))
+    _, acked = await clerk.submit_intent(_intent("bot-a", "run-a", "next-submit"))
+
+    assert acked.order_id == 102
+    assert [entry.entry_kind for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [
+        "recorded",
+        "broker_submitting",
+        "broker_uncertain",
+        "recorded",
+        "broker_submitting",
+        "broker_acked",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_market_fill_before_ack_is_attributed_before_broker_await(tmp_path: Path) -> None:
+    """#1044: callback attribution is durable before a fast MKT ack can race it."""
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    generation = _write_active_clerk_generation(tmp_path)
+    broker = _MarketFillBeforeAckBroker()
+    server = AccountClerkRpcServer(
+        AccountClerk(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+            broker=broker,
+            clerk_generation=generation,
+        )
+    )
+    await server.start()
+    try:
+        receipt = await AccountClerkRpcClient(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+        ).submit(_intent("bot-a", "run-a", "market-fill-race"))
+        await server._flush_broker_callbacks()
+    finally:
+        await server.close()
+
+    [callback] = [
+        entry
+        for entry in read_account_clerk_journal(tmp_path, ACCOUNT)
+        if entry.entry_kind == "broker_event"
+    ]
+    assert receipt.status == "broker_acked"
+    assert callback.intent is not None
+    assert callback.intent.intent_id == "market-fill-race"
+    assert not any(
+        event["event_type"] == "account_clerk_unattributed_broker_event"
+        for event in read_account_events(tmp_path, ACCOUNT)
+    )
+
+
+@pytest.mark.asyncio
+async def test_restart_rebuilds_durable_callback_attribution_index(tmp_path: Path) -> None:
+    """#1044: callback ownership survives the process map disappearing."""
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    generation = _write_active_clerk_generation(tmp_path)
+    intent = _intent("bot-a", "run-a", "restart-attribution")
+    first_clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, clerk_generation=generation)
+    await first_clerk.record_intent(intent)
+
+    restarted_server = AccountClerkRpcServer(
+        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, clerk_generation=generation)
+    )
+    await restarted_server.start()
+    try:
+        restarted_server._record_broker_event(
+            IbkrOrderEvent(
+                account_id=ACCOUNT,
+                order_id=202,
+                event_type="fill",
+                order_ref=intent.order_ref,
+                symbol="SPY",
+                side="BUY",
+                fill_quantity=1,
+                exec_id="restart-attribution-fill",
+                ts_ms=START_MS + 1,
+            )
+        )
+        await restarted_server._flush_broker_callbacks()
+    finally:
+        await restarted_server.close()
+
+    [callback] = [
+        entry
+        for entry in read_account_clerk_journal(tmp_path, ACCOUNT)
+        if entry.entry_kind == "broker_event"
+    ]
+    assert callback.intent == intent
+
+
+@pytest.mark.asyncio
+async def test_reconciler_adopt_and_retry_restore_callback_attribution(tmp_path: Path) -> None:
+    """#1044: rescued Clerk intents remain eligible for later callbacks."""
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    intent = _intent("bot-a", "run-a", "reconciled-attribution")
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_FakeBroker())
+    await clerk.record_intent(intent)
+
+    clerk._intents_by_order_ref.clear()
+    await clerk.append_reconciliation_resolution(
+        intent,
+        verdict="RECOVER_ADOPT",
+        reason="test adoption",
+    )
+    adopted = await clerk.record_broker_event(
+        IbkrOrderEvent(
+            account_id=ACCOUNT,
+            order_id=303,
+            event_type="fill",
+            order_ref=intent.order_ref,
+            symbol="SPY",
+            side="BUY",
+            fill_quantity=1,
+            exec_id="adopted-fill",
+            ts_ms=START_MS + 1,
+        )
+    )
+
+    clerk._intents_by_order_ref.clear()
+    await clerk.retry_recorded_intent(intent)
+    retried = await clerk.record_broker_event(
+        IbkrOrderEvent(
+            account_id=ACCOUNT,
+            order_id=304,
+            event_type="fill",
+            order_ref=intent.order_ref,
+            symbol="SPY",
+            side="BUY",
+            fill_quantity=1,
+            exec_id="retried-fill",
+            ts_ms=START_MS + 2,
+        )
+    )
+
+    assert adopted.intent == intent
+    assert retried.intent == intent
+
+
+@pytest.mark.asyncio
 async def test_fenced_bot_can_recovery_flatten_its_retired_namespace(tmp_path: Path) -> None:
     """Regression for the 2026-07-14 fenced-flatten trap."""
 
@@ -211,6 +454,7 @@ async def test_fenced_bot_can_recovery_flatten_its_retired_namespace(tmp_path: P
     assert [entry.entry_kind for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [
         "recorded",
         "recovery_cancelled",
+        "broker_submitting",
         "broker_acked",
     ]
 
@@ -332,6 +576,7 @@ async def test_journal_exposure_survives_bot_crash_and_deduplicates_execution(tm
     clerk.append_broker_event(intent, fill)
 
     restarted_entries = read_account_clerk_journal(tmp_path, ACCOUNT)
+    assert len([entry for entry in restarted_entries if entry.entry_kind == "broker_event"]) == 1
     [exposure] = namespace_expected_exposure(restarted_entries)
     assert exposure.bot_order_namespace == intent.bot_order_namespace
     assert exposure.symbol == "SPY"
@@ -341,9 +586,15 @@ async def test_journal_exposure_survives_bot_crash_and_deduplicates_execution(tm
 @pytest.mark.asyncio
 async def test_bot_rpc_reaches_clerk_without_a_bot_broker_adapter(tmp_path: Path) -> None:
     _write_active_binding(tmp_path, "bot-a", "run-a")
+    generation = _write_active_clerk_generation(tmp_path)
     broker = _FakeBroker()
     server = AccountClerkRpcServer(
-        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+        AccountClerk(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+            broker=broker,
+            clerk_generation=generation,
+        )
     )
     await server.start()
     try:
@@ -358,16 +609,298 @@ async def test_bot_rpc_reaches_clerk_without_a_bot_broker_adapter(tmp_path: Path
     assert len(broker.calls) == 1
 
 
+def test_two_real_processes_cannot_acquire_account_clerk_authority_together(tmp_path: Path) -> None:
+    context = multiprocessing.get_context("spawn")
+    first_acquired = context.Event()
+    second_acquired = context.Event()
+    release = context.Event()
+    first = context.Process(
+        target=_hold_clerk_authority_lock,
+        args=(tmp_path, first_acquired, release),
+    )
+    second = context.Process(
+        target=_hold_clerk_authority_lock,
+        args=(tmp_path, second_acquired, release),
+    )
+    first.start()
+    try:
+        assert first_acquired.wait(timeout=5)
+        second.start()
+        assert not second_acquired.wait(timeout=0.25)
+        release.set()
+        assert second_acquired.wait(timeout=5)
+    finally:
+        release.set()
+        for process in (first, second):
+            process.join(timeout=5)
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=5)
+
+    assert first.exitcode == 0
+    assert second.exitcode == 0
+
+
+@pytest.mark.asyncio
+async def test_clerk_process_acquires_lock_before_broker_connect_and_releases_after_disconnect(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generation = _write_active_clerk_generation(tmp_path)
+    events: list[str] = []
+
+    class _StoppedEvent:
+        def set(self) -> None:
+            events.append("stop")
+
+        def is_set(self) -> bool:
+            return True
+
+        async def wait(self) -> None:
+            return None
+
+    class _OrderedLock:
+        def __enter__(self) -> None:
+            events.append("lock_acquired")
+
+        def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
+            events.append("lock_released")
+
+    class _Client:
+        settings = SimpleNamespace(mode="paper")
+
+        async def connect(self) -> None:
+            assert "lock_acquired" in events
+            events.append("broker_connect")
+
+        async def disconnect(self) -> None:
+            events.append("broker_disconnect")
+
+    class _BrokerAdapter:
+        def __init__(self, _client: object) -> None:
+            self._event_task: asyncio.Task[None] | None = None
+            self.stream_failure: BaseException | None = None
+
+        def require_account_owner_write_fence(self, provider: object) -> None:
+            assert callable(provider)
+
+        async def start_event_stream(self) -> None:
+            events.append("stream_started")
+            self._event_task = asyncio.create_task(asyncio.sleep(60))
+
+        async def stop_event_stream(self) -> None:
+            events.append("stream_stopped")
+            assert self._event_task is not None
+            self._event_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._event_task
+
+    class _Server:
+        def __init__(self, _clerk: AccountClerk, **_kwargs: object) -> None:
+            pass
+
+        async def start(self) -> None:
+            events.append("socket_serve")
+
+        async def close(self) -> None:
+            events.append("socket_closed")
+
+    class _Reconciler:
+        def __init__(self, _clerk: AccountClerk) -> None:
+            pass
+
+        async def start(self) -> None:
+            events.append("reconciler_start")
+
+        async def close(self) -> None:
+            events.append("reconciler_closed")
+
+    from app.broker.ibkr import client as ibkr_client_module
+    from app.engine.live import account_clerk_reconciler, account_clerk_rpc, live_portfolio
+
+    monkeypatch.setattr(account_clerk_module, "account_clerk_authority_lock", lambda *_args: _OrderedLock())
+    monkeypatch.setattr(account_clerk_module.asyncio, "Event", _StoppedEvent)
+    monkeypatch.setattr(account_clerk_module.signal, "signal", lambda *_args: None)
+    monkeypatch.setattr(ibkr_client_module, "IbkrClient", _Client)
+    monkeypatch.setattr(live_portfolio, "IbkrBrokerAdapter", _BrokerAdapter)
+    monkeypatch.setattr(account_clerk_rpc, "AccountClerkRpcServer", _Server)
+    monkeypatch.setattr(account_clerk_reconciler, "AccountClerkReconciler", _Reconciler)
+
+    await account_clerk_module._run_clerk_process(
+        SimpleNamespace(artifacts_root=str(tmp_path), account_id=ACCOUNT, generation=generation)
+    )
+
+    assert events.index("lock_acquired") < events.index("broker_connect") < events.index("socket_serve")
+    assert events.index("socket_serve") < events.index("stream_started") < events.index("stream_stopped")
+    assert events.index("broker_disconnect") < events.index("lock_released")
+
+
+@pytest.mark.asyncio
+async def test_stream_task_death_alarms_rejects_normal_submits_and_exits_unhealthy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1044: a dead callback stream never leaves the Clerk writing blind."""
+
+    generation = _write_active_clerk_generation(tmp_path)
+
+    class _Client:
+        settings = SimpleNamespace(mode="paper")
+
+        async def connect(self) -> None:
+            return None
+
+        async def disconnect(self) -> None:
+            return None
+
+    class _DyingBrokerAdapter:
+        def __init__(self, _client: object) -> None:
+            self._event_task: asyncio.Task[None] | None = None
+            self.stream_failure: BaseException | None = None
+            self._callback_sink: object | None = None
+
+        def require_account_owner_write_fence(self, _provider: object) -> None:
+            return None
+
+        def set_broker_callback_sink(self, sink: object) -> None:
+            self._callback_sink = sink
+
+        async def start_event_stream(self) -> None:
+            async def die() -> None:
+                await asyncio.sleep(0)
+                raise ConnectionError("simulated callback stream death")
+
+            self._event_task = asyncio.create_task(die())
+
+        async def stop_event_stream(self) -> None:
+            assert self._event_task is not None
+            if not self._event_task.done():
+                self._event_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self._event_task
+
+    from app.broker.ibkr import client as ibkr_client_module
+    from app.engine.live import live_portfolio
+
+    monkeypatch.setattr(ibkr_client_module, "IbkrClient", _Client)
+    monkeypatch.setattr(live_portfolio, "IbkrBrokerAdapter", _DyingBrokerAdapter)
+    monkeypatch.setattr(account_clerk_module.signal, "signal", lambda *_args: None)
+
+    exit_code = await account_clerk_module._run_clerk_process(
+        SimpleNamespace(artifacts_root=str(tmp_path), account_id=ACCOUNT, generation=generation)
+    )
+
+    [alarm] = [
+        event
+        for event in read_account_events(tmp_path, ACCOUNT)
+        if event["event_type"] == "account_clerk_event_stream_down"
+    ]
+    assert exit_code == 1
+    assert alarm["reason"] == "CLERK_EVENT_STREAM_DOWN"
+    assert alarm["failure_type"] == "ConnectionError"
+    assert read_account_clerk_lease(tmp_path, ACCOUNT).status == "DRAINING"
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    fenced_clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_FakeBroker())
+    await fenced_clerk.mark_event_stream_down(ConnectionError("already down"))
+    with pytest.raises(AccountClerkIntentRejected, match="CLERK_EVENT_STREAM_DOWN"):
+        await fenced_clerk.submit_intent(_intent("bot-a", "run-a", "rejected-after-death"))
+
+
+@pytest.mark.asyncio
+async def test_callback_persistence_failure_closes_intake_and_balances_callback_queue(tmp_path: Path) -> None:
+    """#1044 P0: a dead fsync worker neither accepts nor strands callbacks."""
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    generation = _write_active_clerk_generation(tmp_path)
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=_FakeBroker(),
+        clerk_generation=generation,
+    )
+    failures: list[BaseException] = []
+    server = AccountClerkRpcServer(clerk, on_callback_persistence_failure=failures.append)
+    await server.start()
+    try:
+        async def fail_callback_write(_event: IbkrOrderEvent) -> object:
+            raise OSError("simulated callback journal fsync failure")
+
+        clerk.record_broker_event = fail_callback_write  # type: ignore[method-assign]
+        event = IbkrOrderEvent(
+            account_id=ACCOUNT,
+            order_id=101,
+            event_type="fill",
+            order_ref=_intent("bot-a", "run-a", "callback-failure").order_ref,
+            fill_quantity=1,
+            avg_fill_price=100,
+            ts_ms=START_MS,
+        )
+        server._record_broker_event(event)
+        await asyncio.wait_for(server._callback_queue.join(), timeout=1)
+
+        assert isinstance(server._callback_failure, OSError)
+        assert len(failures) == 1 and isinstance(failures[0], OSError)
+        assert server._callback_queue.empty()
+        with pytest.raises(AccountClerkCallbackPersistenceError):
+            server._record_broker_event(event)
+        await asyncio.wait_for(server._callback_queue.join(), timeout=1)
+        with pytest.raises(AccountClerkIntentRejected, match="CLERK_EVENT_STREAM_DOWN"):
+            await clerk.submit_intent(_intent("bot-a", "run-a", "submit-after-callback-failure"))
+    finally:
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_durable_generation_change_rejects_write_and_terminates_stale_clerk(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    generation = _write_active_clerk_generation(tmp_path)
+    broker = _FakeBroker()
+    fenced = threading.Event()
+
+    def durable_generation_provider() -> int | None:
+        durable = read_account_clerk_generation(tmp_path, ACCOUNT)
+        return durable.generation if durable is not None and durable.phase == "accepting" else None
+
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=broker,
+        clerk_generation=generation,
+        durable_generation_provider=durable_generation_provider,
+        on_generation_fenced=fenced.set,
+    )
+    await clerk.submit_intent(_intent("bot-a", "run-a", "before-takeover"))
+    assert len(broker.calls) == 1
+
+    replacement = advance_account_clerk_generation(
+        tmp_path,
+        ACCOUNT,
+        phase="accepting",
+        recorded_at_ms=START_MS + 1,
+        source="test.takeover",
+    )
+    with pytest.raises(AccountClerkGenerationFencedError) as exc:
+        await clerk.submit_intent(_intent("bot-a", "run-a", "after-takeover"))
+
+    assert exc.value.expected_generation == generation
+    assert exc.value.observed_generation == replacement.generation
+    assert fenced.is_set()
+    assert len(broker.calls) == 1
+
+
 @pytest.mark.asyncio
 async def test_clerk_relays_callbacks_only_to_the_originating_namespace(tmp_path: Path) -> None:
     _write_active_binding(tmp_path, "bot-a", "run-a")
     _write_active_binding(tmp_path, "bot-b", "run-b")
-    server = AccountClerkRpcServer(AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT))
+    generation = _write_active_clerk_generation(tmp_path)
+    server = AccountClerkRpcServer(
+        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, clerk_generation=generation)
+    )
     await server.start()
     try:
         intent_a = _intent("bot-a", "run-a", "intent-a")
         await server._clerk.record_intent(intent_a)
-        server._intents_by_order_ref[intent_a.order_ref] = intent_a
         server._record_broker_event(
             IbkrOrderEvent(
                 account_id=ACCOUNT,
@@ -379,22 +912,44 @@ async def test_clerk_relays_callbacks_only_to_the_originating_namespace(tmp_path
                 ts_ms=START_MS,
             )
         )
+        await server._flush_broker_callbacks()
         client = AccountClerkRpcClient(artifacts_root=tmp_path, account_id=ACCOUNT)
-        bot_b_events = await client.drain_events(
-            bot_order_namespace=bot_order_namespace_for_instance("bot-b")
+        bot_b_consumer = AccountClerkEventConsumerIdentity(
+            account_id=ACCOUNT,
+            strategy_instance_id="bot-b",
+            run_id="run-b",
+            bot_order_namespace=bot_order_namespace_for_instance("bot-b"),
         )
-        bot_a_events = await client.drain_events(bot_order_namespace=intent_a.bot_order_namespace)
+        bot_a_consumer = AccountClerkEventConsumerIdentity(
+            account_id=ACCOUNT,
+            strategy_instance_id="bot-a",
+            run_id="run-a",
+            bot_order_namespace=intent_a.bot_order_namespace,
+        )
+        bot_b_events = await client.drain_events(
+            after_seq=0,
+            consumer=bot_b_consumer,
+            cursor=AccountClerkEventCursorRepo(tmp_path / "run-b"),
+        )
+        bot_a_events = await client.drain_events(
+            after_seq=0,
+            consumer=bot_a_consumer,
+            cursor=AccountClerkEventCursorRepo(tmp_path / "run-a"),
+        )
     finally:
         await server.close()
 
     assert bot_b_events == []
-    assert [event.order_ref for event in bot_a_events] == [intent_a.order_ref]
+    assert [delivery.event.order_ref for delivery in bot_a_events] == [intent_a.order_ref]
     assert read_account_clerk_journal(tmp_path, ACCOUNT)[-1].entry_kind == "broker_event"
 
 
 @pytest.mark.asyncio
-async def test_unexplained_broker_callback_is_an_observable_reconciliation_alarm(tmp_path: Path) -> None:
-    server = AccountClerkRpcServer(AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT))
+async def test_unattributed_broker_callback_is_persisted_and_blocks_new_account_starts(tmp_path: Path) -> None:
+    generation = _write_active_clerk_generation(tmp_path)
+    server = AccountClerkRpcServer(
+        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, clerk_generation=generation)
+    )
     await server.start()
     try:
         server._record_broker_event(
@@ -410,15 +965,142 @@ async def test_unexplained_broker_callback_is_an_observable_reconciliation_alarm
     finally:
         await server.close()
 
-    [alarm] = read_account_events(tmp_path, ACCOUNT)
-    assert alarm["event_type"] == "account_clerk_reconciliation_alarm"
+    [alarm] = [
+        event
+        for event in read_account_events(tmp_path, ACCOUNT)
+        if event["event_type"] == "account_clerk_unattributed_broker_event"
+    ]
+    [broker_event] = [
+        entry
+        for entry in read_account_clerk_journal(tmp_path, ACCOUNT)
+        if entry.entry_kind == "broker_event"
+    ]
+    assert broker_event.intent is None
+    assert broker_event.event_account_id == ACCOUNT
     assert alarm["reason"] == "BROKER_EVENT_WITHOUT_DURABLE_CLERK_INTENT"
+    assert read_account_freeze(tmp_path, ACCOUNT) is not None
 
 
 @pytest.mark.asyncio
+async def test_reconciler_skips_unattributed_callback_rows(tmp_path: Path) -> None:
+    """#1044 regression: unknown account flow is not an intent to reconcile."""
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=_UncertainBroker("PRESENT"),
+    )
+    intent = _intent("bot-a", "run-a", "uncertain-with-foreign-callback")
+    with pytest.raises(TimeoutError, match="lost acknowledgement"):
+        await clerk.submit_intent(intent)
+    await clerk.record_broker_event(
+        IbkrOrderEvent(
+            account_id=ACCOUNT,
+            order_id=808,
+            event_type="fill",
+            order_ref="learn-ai/unknown/v1:foreign-intent",
+            fill_quantity=1,
+            ts_ms=START_MS + 1,
+        )
+    )
+
+    [resolution] = await AccountClerkReconciler(clerk).reconcile_once()
+
+    assert resolution.intent_id == intent.intent_id
+    assert resolution.verdict.value == "RECOVER_ADOPT"
+
+
+@pytest.mark.asyncio
+async def test_unattributed_callback_reasserts_guardrail_after_alarm_crash_window(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1044 regression: journal truth repairs a lost derived alarm after restart."""
+
+    event = IbkrOrderEvent(
+        account_id=ACCOUNT,
+        order_id=809,
+        event_type="fill",
+        order_ref="learn-ai/unknown/v1:foreign-intent",
+        fill_quantity=1,
+        ts_ms=START_MS,
+    )
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT)
+
+    def crash_after_journal_fsync(*_args: object) -> None:
+        raise OSError("simulated alarm crash")
+
+    monkeypatch.setattr(
+        clerk,
+        "_assert_unattributed_broker_event_guardrail",
+        crash_after_journal_fsync,
+    )
+    with pytest.raises(OSError, match="simulated alarm crash"):
+        await clerk.record_broker_event(event)
+
+    restarted = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT)
+    await restarted.rebuild_attribution()
+    duplicate = await restarted.record_broker_event(event)
+
+    assert duplicate.newly_recorded is False
+    assert read_account_freeze(tmp_path, ACCOUNT) is not None
+    alarms = [
+        account_event
+        for account_event in read_account_events(tmp_path, ACCOUNT)
+        if account_event["event_type"] == "account_clerk_unattributed_broker_event"
+    ]
+    assert len(alarms) == 1
+
+
+@pytest.mark.asyncio
+async def test_callback_fsync_is_offloaded_without_allowing_relay_before_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1044: slow journal fsync yields the loop and relay waits for it."""
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT)
+    intent = _intent("bot-a", "run-a", "off-loop-fsync")
+    await clerk.record_intent(intent)
+    original_append = account_clerk_journal_module._append_jsonl
+
+    def slow_append(path: Path, entry: AccountClerkInboxEntry | AccountClerkJournalEntry) -> None:
+        if isinstance(entry, AccountClerkJournalEntry) and entry.entry_kind == "broker_event":
+            time.sleep(0.1)
+        original_append(path, entry)
+
+    monkeypatch.setattr(account_clerk_journal_module, "_append_jsonl", slow_append)
+    task = asyncio.create_task(
+        clerk.record_broker_event(
+            IbkrOrderEvent(
+                account_id=ACCOUNT,
+                order_id=505,
+                event_type="fill",
+                order_ref=intent.order_ref,
+                symbol="SPY",
+                side="BUY",
+                fill_quantity=1,
+                exec_id="off-loop-fsync-fill",
+                ts_ms=START_MS,
+            )
+        )
+    )
+
+    started_at = time.monotonic()
+    await asyncio.sleep(0)
+    assert time.monotonic() - started_at < 0.05
+    assert not task.done()
+    await task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("crash_seq", [1, 2, 4])
 async def test_recover_inbox_replays_durable_intent_after_crash_before_journal_write(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    crash_seq: int,
 ) -> None:
     _write_active_binding(tmp_path, "bot-a", "run-a")
     broker = _FakeBroker()
@@ -428,30 +1110,200 @@ async def test_recover_inbox_replays_durable_intent_after_crash_before_journal_w
         broker=broker,
         now_ms=lambda: START_MS + 2,
     )
-    original_append = account_clerk_module._append_jsonl
+    original_append = account_clerk_journal_module._append_jsonl
+    inbox_path = account_clerk_module.account_clerk_inbox_path(tmp_path, ACCOUNT)
 
     def crash_between_inbox_and_journal(
         path: Path,
         entry: AccountClerkInboxEntry | AccountClerkJournalEntry,
     ) -> None:
-        if isinstance(entry, AccountClerkJournalEntry):
+        if isinstance(entry, AccountClerkJournalEntry) and entry.seq == crash_seq:
             raise OSError("simulated process crash before journal fsync")
         original_append(path, entry)
 
-    monkeypatch.setattr(account_clerk_module, "_append_jsonl", crash_between_inbox_and_journal)
-    intent = _intent("bot-a", "run-a", "crash-intent")
+    for sequence in range(1, crash_seq):
+        await clerk.record_intent(_intent("bot-a", "run-a", f"durable-{sequence}"))
+
+    monkeypatch.setattr(account_clerk_journal_module, "_append_jsonl", crash_between_inbox_and_journal)
+    intent = _intent("bot-a", "run-a", f"crash-intent-{crash_seq}")
     with pytest.raises(OSError, match="simulated process crash"):
         await clerk.record_intent(intent)
-    monkeypatch.setattr(account_clerk_module, "_append_jsonl", original_append)
+    monkeypatch.setattr(account_clerk_journal_module, "_append_jsonl", original_append)
+
+    assert inbox_path.read_text(encoding="utf-8").endswith("\n")
+    assert [entry.seq for entry in read_account_clerk_inbox(tmp_path, ACCOUNT)] == [crash_seq]
+    assert [entry.seq for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == list(
+        range(1, crash_seq)
+    )
+
+    restarted_clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    first_replay = await restarted_clerk.recover_inbox()
+    second_replay = await restarted_clerk.recover_inbox()
+
+    assert read_account_clerk_inbox(tmp_path, ACCOUNT) == []
+    assert inbox_path.read_text(encoding="utf-8") == ""
+    assert [entry.intent.intent_id for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [
+        *(f"durable-{sequence}" for sequence in range(1, crash_seq)),
+        intent.intent_id,
+    ]
+    assert [entry.seq for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == list(
+        range(1, crash_seq + 1)
+    )
+    assert first_replay == second_replay
+    assert first_replay[-1].intent_id == intent.intent_id
+    assert first_replay[-1].recorded_at_ms == START_MS + 2
+    assert broker.calls == []
+
+
+@pytest.mark.asyncio
+async def test_recover_inbox_discards_already_journaled_matching_row_idempotently(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _FakeBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    inbox_path = account_clerk_module.account_clerk_inbox_path(tmp_path, ACCOUNT)
+    journal_path = account_clerk_module.account_clerk_journal_path(tmp_path, ACCOUNT)
+    original_rewrite = account_clerk_journal_module._rewrite_jsonl
+
+    def crash_after_journal_fsync(path: Path, entries: list[AccountClerkInboxEntry]) -> None:
+        if path == inbox_path and journal_path.exists():
+            raise OSError("simulated process crash before inbox compaction")
+        original_rewrite(path, entries)
+
+    monkeypatch.setattr(account_clerk_journal_module, "_rewrite_jsonl", crash_after_journal_fsync)
+    intent = _intent("bot-a", "run-a", "already-journaled")
+    with pytest.raises(OSError, match="simulated process crash"):
+        await clerk.record_intent(intent)
+    monkeypatch.setattr(account_clerk_journal_module, "_rewrite_jsonl", original_rewrite)
+
+    assert [entry.seq for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [1]
+    assert [entry.seq for entry in read_account_clerk_inbox(tmp_path, ACCOUNT)] == [1]
 
     restarted_clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
     receipts = await restarted_clerk.recover_inbox()
 
+    assert [receipt.intent_id for receipt in receipts] == [intent.intent_id]
     assert read_account_clerk_inbox(tmp_path, ACCOUNT) == []
-    assert [entry.intent for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [intent]
-    assert receipts[0].intent_id == intent.intent_id
-    assert receipts[0].recorded_at_ms == START_MS + 2
+    assert [entry.seq for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [1]
     assert broker.calls == []
+
+
+@pytest.mark.asyncio
+async def test_recover_inbox_rejects_conflicting_journal_row_without_broker_contact(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _FakeBroker()
+    journal_path = account_clerk_module.account_clerk_journal_path(tmp_path, ACCOUNT)
+    inbox_path = account_clerk_module.account_clerk_inbox_path(tmp_path, ACCOUNT)
+    journal_intent = _intent("bot-a", "run-a", "journal-intent")
+    conflicting_intent = _intent("bot-a", "run-a", "conflicting-intent")
+    account_clerk_journal_module._append_jsonl(
+        journal_path,
+        AccountClerkJournalEntry(
+            seq=1,
+            recorded_at_ms=START_MS,
+            intent=journal_intent,
+        ),
+    )
+    account_clerk_journal_module._append_jsonl(
+        inbox_path,
+        AccountClerkInboxEntry(
+            seq=1,
+            received_at_ms=START_MS,
+            intent=conflicting_intent,
+        ),
+    )
+
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    with pytest.raises(AccountClerkJournalCorruptError, match="inbox and journal intent differ"):
+        await clerk.recover_inbox()
+
+    assert [entry.intent.intent_id for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [
+        journal_intent.intent_id
+    ]
+    assert [entry.intent.intent_id for entry in read_account_clerk_inbox(tmp_path, ACCOUNT)] == [
+        conflicting_intent.intent_id
+    ]
+    assert broker.calls == []
+
+
+@pytest.mark.asyncio
+async def test_recover_inbox_rejects_incompatible_duplicate_rows(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    journal_path = account_clerk_module.account_clerk_journal_path(tmp_path, ACCOUNT)
+    inbox_path = account_clerk_module.account_clerk_inbox_path(tmp_path, ACCOUNT)
+    first_intent = _intent("bot-a", "run-a", "first-duplicate")
+    second_intent = _intent("bot-a", "run-a", "second-duplicate")
+    account_clerk_journal_module._append_jsonl(
+        journal_path,
+        AccountClerkJournalEntry(seq=1, recorded_at_ms=START_MS, intent=_intent("bot-a", "run-a", "base")),
+    )
+    for intent in (first_intent, second_intent):
+        account_clerk_journal_module._append_jsonl(
+            inbox_path,
+            AccountClerkInboxEntry(seq=2, received_at_ms=START_MS, intent=intent),
+        )
+
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT)
+    with pytest.raises(AccountClerkJournalCorruptError, match="duplicate incompatible inbox rows"):
+        await clerk.recover_inbox()
+
+    assert [entry.seq for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [1]
+    assert [entry.seq for entry in read_account_clerk_inbox(tmp_path, ACCOUNT)] == [2, 2]
+
+
+@pytest.mark.asyncio
+async def test_recover_inbox_rejects_genuine_journal_gap(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    journal_path = account_clerk_module.account_clerk_journal_path(tmp_path, ACCOUNT)
+    inbox_path = account_clerk_module.account_clerk_inbox_path(tmp_path, ACCOUNT)
+    account_clerk_journal_module._append_jsonl(
+        journal_path,
+        AccountClerkJournalEntry(seq=1, recorded_at_ms=START_MS, intent=_intent("bot-a", "run-a", "base")),
+    )
+    account_clerk_journal_module._append_jsonl(
+        inbox_path,
+        AccountClerkInboxEntry(
+            seq=3,
+            received_at_ms=START_MS,
+            intent=_intent("bot-a", "run-a", "gap"),
+        ),
+    )
+
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT)
+    with pytest.raises(AccountClerkJournalCorruptError, match="cannot follow journal seq 1"):
+        await clerk.recover_inbox()
+
+    assert [entry.seq for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [1]
+    assert [entry.seq for entry in read_account_clerk_inbox(tmp_path, ACCOUNT)] == [3]
+
+
+@pytest.mark.parametrize(
+    ("sequences", "error"),
+    [
+        ([2], "expected seq 1"),
+        ([1, 3], "expected seq 2"),
+    ],
+)
+def test_read_account_clerk_journal_rejects_non_contiguous_sequence(
+    tmp_path: Path,
+    sequences: list[int],
+    error: str,
+) -> None:
+    journal_path = account_clerk_module.account_clerk_journal_path(tmp_path, ACCOUNT)
+    for sequence in sequences:
+        account_clerk_journal_module._append_jsonl(
+            journal_path,
+            AccountClerkJournalEntry(
+                seq=sequence,
+                recorded_at_ms=START_MS,
+                intent=_intent("bot-a", "run-a", f"journal-{sequence}"),
+            ),
+        )
+
+    with pytest.raises(AccountClerkJournalCorruptError, match=error):
+        read_account_clerk_journal(tmp_path, ACCOUNT)
 
 
 @pytest.mark.asyncio

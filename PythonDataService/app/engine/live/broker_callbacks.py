@@ -28,6 +28,9 @@ class BrokerCallbackRecord(BaseModel):
     observed_at_ms: int = Field(gt=0)
     idempotency_key: str
     event: IbkrOrderEvent
+    # Clerk journal delivery identity. ``None`` preserves direct-IBKR records
+    # written before Account Clerk callback relaying existed.
+    account_clerk_journal_seq: int | None = Field(default=None, ge=1)
 
 
 class BrokerCallbackWalCorruptError(RuntimeError):
@@ -56,6 +59,38 @@ class BrokerCallbackWal:
         return self._path
 
     def append_event(self, event: IbkrOrderEvent) -> BrokerCallbackRecord:
+        """Append a direct broker callback without Clerk delivery semantics."""
+
+        return self._append_event(event, account_clerk_journal_seq=None)
+
+    def append_account_clerk_event(self, event: IbkrOrderEvent, *, journal_seq: int) -> bool:
+        """Fsync a Clerk delivery once, keyed by its immutable journal sequence.
+
+        ``False`` means a prior process already durably captured this exact
+        delivery.  The caller can then safely acknowledge its Clerk cursor
+        without reapplying a duplicate fill to portfolio state.
+        """
+
+        if journal_seq < 1:
+            raise ValueError("journal_seq must be >= 1")
+        for existing in self.read_all():
+            if existing.account_clerk_journal_seq != journal_seq:
+                continue
+            if existing.event != event:
+                raise BrokerCallbackWalCorruptError(
+                    self._path,
+                    f"journal_seq {journal_seq} maps to incompatible broker callbacks",
+                )
+            return False
+        self._append_event(event, account_clerk_journal_seq=journal_seq)
+        return True
+
+    def _append_event(
+        self,
+        event: IbkrOrderEvent,
+        *,
+        account_clerk_journal_seq: int | None,
+    ) -> BrokerCallbackRecord:
         seq = self._allocate_seq()
         record = BrokerCallbackRecord(
             seq=seq,
@@ -63,6 +98,7 @@ class BrokerCallbackWal:
             observed_at_ms=event.ts_ms,
             idempotency_key=broker_callback_idempotency_key(event),
             event=event,
+            account_clerk_journal_seq=account_clerk_journal_seq,
         )
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._truncate_tolerated_tail()

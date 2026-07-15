@@ -35,6 +35,17 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.engine.live.account_clerk_supervisor import (
+    AccountClerkProcessEvidence,
+    AccountClerkSupervisor,
+    ManagedClerk,
+)
+from app.engine.live.account_clerk_supervisor import (
+    AdoptedAccountClerkProcess as _AdoptedAccountClerkProcess,
+)
+from app.engine.live.account_clerk_supervisor import (
+    inspect_account_clerk_process as _inspect_account_clerk_process,
+)
 from app.engine.live.broker_socket_probe import BrokerSocketProbeError, LsofSocketEnumerator
 from app.engine.live.daemon_auth import TOKEN_HEADER, ensure_daemon_token, token_file_path
 from app.engine.live.deploy import (
@@ -90,6 +101,10 @@ from app.schemas.live_runs import (
 
 logger = logging.getLogger(__name__)
 
+# Existing focused host tests import this private evidence type. Keep that
+# import-level compatibility while the real owner is the Clerk supervisor.
+_AccountClerkProcessEvidence = AccountClerkProcessEvidence
+
 _RUN_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{1,127}$")
 # Fixed subdirectory holding committed QC audit copies (ADR 0006).
 _QC_SHADOW_SUBDIR = Path("references") / "qc-shadow"
@@ -103,6 +118,9 @@ _IBKR_CLIENT_ID_MIN = 1
 _IBKR_CLIENT_ID_MAX = 2**31 - 1
 _IBKR_CLIENT_ID_POOL_MAX_SPAN = 1_000
 _IBKR_CLIENT_ID_IN_USE = "IBKR_CLIENT_ID_IN_USE"
+_ACCOUNT_CLERK_HANDSHAKE_TIMEOUT_SECONDS = 5.0
+_ACCOUNT_CLERK_TERMINATE_WAIT_SECONDS = 2.0
+_ACCOUNT_CLERK_KILL_WAIT_SECONDS = 2.0
 
 
 def _parse_ibkr_client_id_pool(raw: str) -> tuple[int, ...]:
@@ -251,18 +269,6 @@ class ManagedProcess:
     launch_failure_recorded_at_ms: int | None = None
 
 
-@dataclass
-class ManagedClerk:
-    """One daemon-supervised lease process for a broker account."""
-
-    account_id: str
-    generation: int
-    ibkr_client_id: int
-    process: subprocess.Popen
-    started_at_ms: int
-    log_handle: TextIO
-
-
 class RunnerProcessManager:
     """Own host-side live-run subprocesses — one per strategy instance.
 
@@ -311,7 +317,11 @@ class RunnerProcessManager:
         self._lease_writer: object | None = None
         self._orphan_candidates: list[object] = []
         self._managed: dict[str, ManagedProcess] = {}
-        self._clerks: dict[str, ManagedClerk] = {}
+        # IDs are reserved while a subprocess is being started outside the
+        # registry lock.  A reservation closes the gap between allocation and
+        # registration without making a socket readiness wait block every
+        # health/status/start operation.
+        self._reserved_ibkr_client_ids: set[int] = set()
         # VCR-P3-P / Phase 6D — per-instance start locks. Each key holds an
         # ``rlock`` so the (check_existing, spawn, register) sequence in
         # ``start`` runs serialised for one instance while different instances
@@ -327,6 +337,29 @@ class RunnerProcessManager:
         # critical section; otherwise sibling starts can pick the same free id.
         self._managed_lock = _threading.RLock()
         self._rejected_ibkr_client_ids: set[int] = set()
+        self._clerk_supervisor = AccountClerkSupervisor(
+            repo_root=self.repo_root,
+            artifacts_root=self.artifacts_root,
+            now_ms=self._clock_ms,
+            client_id_pool=self._ibkr_client_id_pool,
+            external_client_ids=self._external_bot_client_ids,
+            verify_generation=lambda artifacts_root, account_id: self._verify_account_clerk_generation(
+                account_artifacts_root=artifacts_root,
+                account_id=account_id,
+            ),
+            wait_for_readiness=lambda artifacts_root, account_id, generation: self._wait_for_account_clerk_socket(
+                account_artifacts_root=artifacts_root,
+                account_id=account_id,
+                expected_generation=generation,
+            ),
+            # Resolve through this module's aliases at invocation time so the
+            # host's process-observation seam remains patchable in focused tests.
+            inspect_process=lambda pid: _inspect_account_clerk_process(pid),
+            is_real_popen=lambda process: isinstance(process, _RealPopen),
+            creation_flags=_creation_flags,
+            terminate_wait_seconds=lambda: _ACCOUNT_CLERK_TERMINATE_WAIT_SECONDS,
+            kill_wait_seconds=lambda: _ACCOUNT_CLERK_KILL_WAIT_SECONDS,
+        )
         # The git SHA of the code THIS process is running, captured ONCE at
         # launch. The daemon does not reload on `git pull`, so the running code
         # is frozen at startup even as the working tree advances — comparing this
@@ -341,6 +374,24 @@ class RunnerProcessManager:
         # could both act on the same pre-fill snapshot and double-liquidate.
         self._flatten_lock = threading.Lock()
         self._flatten_in_flight: set[str] = set()
+
+    @property
+    def _clerks(self) -> dict[str, ManagedClerk]:
+        """Compatibility view of Clerk state owned by the dedicated supervisor."""
+
+        return self._clerk_supervisor.clerks
+
+    @property
+    def _quarantined_account_clerk_client_ids(self) -> set[int]:
+        """Compatibility view of Clerk IDs withheld pending confirmed exit."""
+
+        return self._clerk_supervisor.quarantined_client_ids
+
+    @property
+    def _account_clerk_start_blockers(self) -> dict[str, str]:
+        """Compatibility view of durable Clerk replacement blockers."""
+
+        return self._clerk_supervisor.start_blockers
 
     def health(self) -> HostRunnerHealth:
         """Return daemon health plus a representative active subprocess.
@@ -503,6 +554,7 @@ class RunnerProcessManager:
             for managed in self._managed.values():
                 self._refresh(managed)
             self._prune_exited_records_locked()
+        self._supervise_account_clerks()
 
     def instance_status(self, strategy_instance_id: str) -> HostRunnerProcessStatus:
         """Live process status for one strategy instance (idle if untracked)."""
@@ -526,14 +578,22 @@ class RunnerProcessManager:
         """
         with self._managed_lock:
             if run_id is None:
-                return self._first_process_status()
-            managed = self._by_run_id(run_id)
-            if managed is None:
-                return HostRunnerProcessStatus(
-                    state=HostRunnerProcessState.idle,
-                    message=f"No host runner process for {run_id}.",
+                process_status = self._first_process_status()
+            else:
+                managed = self._by_run_id(run_id)
+                process_status = (
+                    HostRunnerProcessStatus(
+                        state=HostRunnerProcessState.idle,
+                        message=f"No host runner process for {run_id}.",
+                    )
+                    if managed is None
+                    else self._status_of(managed)
                 )
-            return self._status_of(managed)
+        # The compatibility status endpoint historically performed the idle
+        # Clerk reap after observing a bot exit.  Keep that behavior, but do
+        # the bounded process work after releasing the registry lock.
+        self._supervise_account_clerks()
+        return process_status
 
     def _status_of(self, managed: ManagedProcess) -> HostRunnerProcessStatus:
         """Build a process-status snapshot from a managed process."""
@@ -597,6 +657,11 @@ class RunnerProcessManager:
                 self._start_lock_per_instance[key] = lock
             return lock
 
+    def _account_clerk_lock(self, account_id: str):
+        """Return the supervisor-owned lifecycle lock for one Clerk account."""
+
+        return self._clerk_supervisor.account_lock(account_id)
+
     def start(self, run_id: str, request: HostRunnerStartRequest) -> HostRunnerActionResponse:
         """Start ``app.engine.live.run start`` for an existing run directory.
 
@@ -618,30 +683,45 @@ class RunnerProcessManager:
         sid = self._resolve_strategy_instance_id(run_dir)
         key = sid or run_id
 
-        with self._instance_start_lock(key), self._managed_lock:
-            existing = self._managed.get(key)
-            if existing is not None:
-                self._refresh(existing)
-                if existing.process.poll() is None:
-                    raise HostRunnerError(
-                        status.HTTP_409_CONFLICT,
-                        f"Host runner already active for {existing.run_id} (instance {key!r}). "
-                        "Stop it before starting another run for this instance.",
-                    )
+        with self._instance_start_lock(key):
+            clerk_client_ids = self._clerk_supervisor.in_use_client_ids()
+            # Reserve the bot's client ID under the registry lock, then release
+            # it before any filesystem/broker readiness work.  The reservation
+            # prevents a concurrent start from allocating the same ID.
+            with self._managed_lock:
+                existing = self._managed.get(key)
+                if existing is not None:
+                    self._refresh(existing)
+                    if existing.process.poll() is None:
+                        raise HostRunnerError(
+                            status.HTTP_409_CONFLICT,
+                            f"Host runner already active for {existing.run_id} (instance {key!r}). "
+                            "Stop it before starting another run for this instance.",
+                        )
 
-            self._enforce_desired_state_allows_start(sid)
-            self._enforce_crash_retired_recovery(run_dir)
-            command = self._build_start_command(
-                run_dir,
-                request,
-                self._sibling_symbols(key),
-                self._sibling_all_in_symbols(key),
-            )
-            ibkr_client_id = self._allocate_ibkr_client_id(exclude_key=key)
+                self._enforce_desired_state_allows_start(sid)
+                self._enforce_crash_retired_recovery(run_dir)
+                command = self._build_start_command(
+                    run_dir,
+                    request,
+                    self._sibling_symbols(key),
+                    self._sibling_all_in_symbols(key),
+                )
+                ibkr_client_id = self._allocate_ibkr_client_id(
+                    exclude_key=key,
+                    clerk_client_ids=clerk_client_ids,
+                )
+                self._reserved_ibkr_client_ids.add(ibkr_client_id)
+
             env = self._build_child_env(request, ibkr_client_id=ibkr_client_id)
             log_path = run_dir / "host_daemon.log"
-            log_handle = log_path.open("a", encoding="utf-8")
             account_id: str | None = None
+            try:
+                log_handle = log_path.open("a", encoding="utf-8")
+            except OSError:
+                with self._managed_lock:
+                    self._reserved_ibkr_client_ids.discard(ibkr_client_id)
+                raise
 
             try:
                 account_freeze = self._write_account_registry_binding(
@@ -661,11 +741,7 @@ class RunnerProcessManager:
                     # ``_ensure_account_clerk`` before the bot is allowed to
                     # reach any submit surface.  A bot must never race ahead
                     # of the account authority it depends on.
-                    self._ensure_account_clerk(
-                        account_id,
-                        request=request,
-                        reserved_client_ids={ibkr_client_id},
-                    )
+                    self._ensure_account_clerk(account_id, request=request)
                 process = subprocess.Popen(
                     command,
                     cwd=str(self.repo_root),
@@ -677,9 +753,13 @@ class RunnerProcessManager:
                 )
             except HostRunnerError:
                 log_handle.close()
+                with self._managed_lock:
+                    self._reserved_ibkr_client_ids.discard(ibkr_client_id)
                 raise
             except OSError as exc:
                 log_handle.close()
+                with self._managed_lock:
+                    self._reserved_ibkr_client_ids.discard(ibkr_client_id)
                 record_spawn_launch_failure(
                     run_dir,
                     run_id=run_id,
@@ -707,17 +787,19 @@ class RunnerProcessManager:
                     status.HTTP_503_SERVICE_UNAVAILABLE, f"Could not start host runner: {exc}"
                 ) from exc
 
-            self._managed[key] = ManagedProcess(
-                strategy_instance_id=sid,
-                run_id=run_id,
-                run_dir=run_dir,
-                process=process,
-                command=command,
-                started_at_ms=_now_ms(),
-                log_path=log_path,
-                log_handle=log_handle,
-                ibkr_client_id=ibkr_client_id,
-            )
+            with self._managed_lock:
+                self._managed[key] = ManagedProcess(
+                    strategy_instance_id=sid,
+                    run_id=run_id,
+                    run_dir=run_dir,
+                    process=process,
+                    command=command,
+                    started_at_ms=_now_ms(),
+                    log_path=log_path,
+                    log_handle=log_handle,
+                    ibkr_client_id=ibkr_client_id,
+                )
+                self._reserved_ibkr_client_ids.discard(ibkr_client_id)
             logger.info(
                 "Started host live runner for run=%s instance=%s with pid=%s ibkr_client_id=%s",
                 run_id,
@@ -1331,15 +1413,13 @@ class RunnerProcessManager:
                 f"Invalid LIVE_RUNNER_IBKR_CLIENT_ID_POOL: {exc}",
             ) from exc
 
-    def _active_ibkr_client_ids(self, *, exclude_key: str) -> set[int]:
+    def _external_bot_client_ids(self, *, exclude_key: str = "") -> set[int]:
+        """Snapshot bot-side identities without reaching into Clerk state."""
+
         active: set[int] = set()
         with self._managed_lock:
             active.update(self._rejected_ibkr_client_ids)
-            active.update(
-                clerk.ibkr_client_id
-                for clerk in self._clerks.values()
-                if clerk.process.poll() is None
-            )
+            active.update(self._reserved_ibkr_client_ids)
             for key, managed in self._managed.items():
                 if key == exclude_key:
                     continue
@@ -1348,8 +1428,18 @@ class RunnerProcessManager:
                     active.add(managed.ibkr_client_id)
         return active
 
-    def _allocate_ibkr_client_id(self, *, exclude_key: str) -> int:
-        active = self._active_ibkr_client_ids(exclude_key=exclude_key)
+    def _active_ibkr_client_ids(self, *, exclude_key: str) -> set[int]:
+        """All broker identities unavailable to a bot allocation."""
+
+        return self._external_bot_client_ids(exclude_key=exclude_key) | self._clerk_supervisor.in_use_client_ids()
+
+    def _allocate_ibkr_client_id(self, *, exclude_key: str, clerk_client_ids: set[int] | None = None) -> int:
+        active = self._external_bot_client_ids(exclude_key=exclude_key)
+        active.update(
+            self._clerk_supervisor.in_use_client_ids()
+            if clerk_client_ids is None
+            else clerk_client_ids
+        )
         for client_id in self._ibkr_client_id_pool():
             if client_id not in active:
                 return client_id
@@ -1369,6 +1459,9 @@ class RunnerProcessManager:
         env["PYTHONPATH"] = python_path if not existing else f"{python_path}{os.pathsep}{existing}"
         env["IBKR_HOST"] = request.ibkr_host
         env["IBKR_CLIENT_ID"] = str(ibkr_client_id)
+        # A bot submits only through the Account Clerk RPC boundary.  Override
+        # any write-capable value inherited from the daemon environment.
+        env["IBKR_READONLY"] = "true"
         # PRD #619-B — propagate this daemon's boot_id so the spawned
         # child captures it as ``expected_daemon_boot_id`` and the
         # watchdog can detect daemon restart.
@@ -1392,157 +1485,137 @@ class RunnerProcessManager:
             raise HostRunnerError(status.HTTP_404_NOT_FOUND, f"Run {run_id!r} not found under {self.live_runs_root}")
         return run_dir
 
+    def reconcile_account_clerks_on_boot(self) -> None:
+        """Resolve durable Clerk evidence before a bot can request a writer."""
+
+        self._clerk_supervisor.reconcile_on_boot()
+
+    def _account_ids_with_clerk_evidence(self) -> tuple[str, ...]:
+        """Compatibility delegate for Clerk evidence discovery."""
+
+        return self._clerk_supervisor.account_ids_with_evidence()
+
+    def _resolve_orphan_account_clerk(self, account_id: str) -> ManagedClerk | None:
+        """Compatibility delegate for orphan Clerk adoption."""
+
+        return self._clerk_supervisor.resolve_orphan(account_id)
+
+    def _terminate_account_clerk_process(
+        self,
+        process: subprocess.Popen | _AdoptedAccountClerkProcess,
+        *,
+        account_id: str,
+    ) -> bool:
+        """Compatibility delegate for Clerk TERM/KILL escalation."""
+
+        return self._clerk_supervisor.terminate(process, account_id=account_id)
+
     def _ensure_account_clerk(
         self,
         account_id: str,
         *,
         request: HostRunnerStartRequest | None = None,
-        reserved_client_ids: set[int] | None = None,
     ) -> ManagedClerk:
-        existing = self._clerks.get(account_id)
-        if existing is not None and existing.process.poll() is None:
-            return existing
-        if existing is not None:
-            existing.log_handle.close()
-            self._clerks.pop(account_id, None)
-        from app.engine.live.account_artifacts import account_artifacts_root, advance_account_clerk_generation
-        from app.engine.live.account_clerk import AccountClerkLeaseWriter
+        """Ensure account authority through the dedicated Clerk supervisor."""
 
-        active_client_ids = self._active_ibkr_client_ids(exclude_key="")
-        active_client_ids.update(reserved_client_ids or set())
-        clerk_client_id = next(
-            (
-                candidate
-                for candidate in self._ibkr_client_id_pool()
-                if candidate not in active_client_ids
-            ),
-            None,
-        )
-        if clerk_client_id is None:
-            raise OSError("No IBKR client ID is available for the account clerk")
-
-        generation = advance_account_clerk_generation(
-            self.artifacts_root,
+        return self._clerk_supervisor.ensure(
             account_id,
-            phase="accepting",
-            recorded_at_ms=self._clock_ms(),
-            source="host_daemon.clerk_spawn",
+            ibkr_host=request.ibkr_host if request is not None else None,
         )
-        root = account_artifacts_root(self.artifacts_root, account_id)
-        log_path = root / "clerk.log"
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_handle = log_path.open("a", encoding="utf-8")
-        env = os.environ.copy()
-        python_path = str(self.repo_root / "PythonDataService")
-        existing_python_path = env.get("PYTHONPATH")
-        env["PYTHONPATH"] = (
-            python_path if not existing_python_path else f"{python_path}{os.pathsep}{existing_python_path}"
-        )
-        if request is not None:
-            env["IBKR_HOST"] = request.ibkr_host
-        env["IBKR_CLIENT_ID"] = str(clerk_client_id)
-        env["IBKR_MODE"] = "paper"
-        env["IBKR_READONLY"] = "false"
-        try:
-            process = subprocess.Popen(
-                [
-                    sys.executable,
-                    "-m",
-                    "app.engine.live.account_clerk",
-                    "--artifacts-root",
-                    str(self.artifacts_root),
-                    "--account-id",
-                    account_id,
-                    "--generation",
-                    str(generation.generation),
-                ],
-                cwd=str(self.repo_root),
-                env=env,
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,
-                creationflags=_creation_flags(),
-                start_new_session=(os.name != "nt"),
-            )
-        except OSError:
-            log_handle.close()
-            raise
-        if isinstance(process, _RealPopen):
-            self._wait_for_account_clerk_socket(account_artifacts_root=self.artifacts_root, account_id=account_id)
-        AccountClerkLeaseWriter(
-            artifacts_root=self.artifacts_root,
-            account_id=account_id,
-            generation=generation.generation,
-            pid=process.pid,
-            now_ms=self._clock_ms,
-        ).renew()
-        managed = ManagedClerk(
-            account_id=account_id,
-            generation=generation.generation,
-            ibkr_client_id=clerk_client_id,
-            process=process,
-            started_at_ms=self._clock_ms(),
-            log_handle=log_handle,
-        )
-        self._clerks[account_id] = managed
-        return managed
 
     @staticmethod
-    def _wait_for_account_clerk_socket(*, account_artifacts_root: Path, account_id: str) -> None:
-        """Release bots only after the real Clerk RPC endpoint is reachable."""
+    def _verify_account_clerk_generation(
+        *,
+        account_artifacts_root: Path,
+        account_id: str,
+    ) -> int:
+        """Complete one RPC handshake; socket presence is never readiness."""
 
-        from app.engine.live.account_clerk import account_clerk_socket_path
+        from app.engine.live.account_clerk_rpc import AccountClerkRpcClient
 
-        socket_path = account_clerk_socket_path(account_artifacts_root, account_id)
-        deadline = time.monotonic() + 5
+        return asyncio.run(
+            AccountClerkRpcClient(
+                artifacts_root=account_artifacts_root,
+                account_id=account_id,
+            ).verify_generation()
+        )
+
+    @staticmethod
+    def _wait_for_account_clerk_socket(
+        *,
+        account_artifacts_root: Path,
+        account_id: str,
+        expected_generation: int,
+    ) -> None:
+        """Release bots only after a matching-generation Clerk proves readiness."""
+
+        from app.engine.live.account_clerk_rpc import AccountClerkRpcError
+
+        deadline = time.monotonic() + _ACCOUNT_CLERK_HANDSHAKE_TIMEOUT_SECONDS
         while time.monotonic() < deadline:
-            if socket_path.exists():
+            try:
+                served_generation = RunnerProcessManager._verify_account_clerk_generation(
+                    account_artifacts_root=account_artifacts_root,
+                    account_id=account_id,
+                )
+            except AccountClerkRpcError:
+                time.sleep(0.05)
+                continue
+            if served_generation == expected_generation:
                 return
             time.sleep(0.05)
-        raise OSError(f"Account clerk RPC socket did not become ready for {account_id}")
+        raise OSError(
+            f"Account clerk RPC generation {expected_generation} did not become ready for {account_id}"
+        )
 
     def _clerk_health(self) -> list[AccountClerkHealth]:
-        from app.engine.live.account_artifacts import read_account_clerk_lease
+        """Return the dedicated supervisor health snapshot."""
 
-        now_ms = self._clock_ms()
-        rows: list[AccountClerkHealth] = []
-        for account_id, clerk in sorted(self._clerks.items()):
-            lease = read_account_clerk_lease(self.artifacts_root, account_id)
-            running = clerk.process.poll() is None
-            lease_valid = bool(
-                running
-                and lease is not None
-                and lease.generation == clerk.generation
-                and lease.status == "RUNNING"
-                and lease.valid_until_ms > now_ms
-            )
-            rows.append(
-                AccountClerkHealth(
-                    account_id=account_id,
-                    generation=clerk.generation,
-                    pid=lease.pid if lease is not None else clerk.process.pid,
-                    status=(lease.status if lease is not None else "UNAVAILABLE") if running else "EXITED",
-                    started_at_ms=clerk.started_at_ms,
-                    renewed_at_ms=lease.renewed_at_ms if lease is not None else None,
-                    valid_until_ms=lease.valid_until_ms if lease is not None else None,
-                    lease_valid=lease_valid,
-                )
-            )
-        return rows
+        return self._clerk_supervisor.health()
 
     def _reap_account_clerk_if_idle(self, account_id: str) -> None:
-        if any(
-            process.process.poll() is None
-            and self._account_registry_identity(process.run_dir)[0] == account_id
-            for process in self._managed.values()
-        ):
-            return
-        clerk = self._clerks.get(account_id)
-        if clerk is None:
-            return
-        if clerk.process.poll() is None:
-            clerk.process.terminate()
-        clerk.log_handle.close()
-        self._clerks.pop(account_id, None)
+        """Reap one now-idle Clerk through the verified supervisor path."""
+
+        self._supervise_account_clerks(account_ids={account_id})
+
+    def _active_bot_accounts(self) -> set[str]:
+        """Return accounts with a currently live managed bot process."""
+
+        with self._managed_lock:
+            managed_processes = tuple(
+                managed for managed in self._managed.values() if managed.process.poll() is None
+            )
+        accounts: set[str] = set()
+        for managed in managed_processes:
+            try:
+                account_id, _ = self._account_registry_identity(managed.run_dir)
+            except HostRunnerError:
+                logger.exception(
+                    "could not read account identity while supervising Clerk",
+                    extra={"run_id": managed.run_id, "strategy_instance_id": managed.strategy_instance_id},
+                )
+                continue
+            if account_id is not None:
+                accounts.add(account_id)
+        return accounts
+
+    def _retire_account_clerk(self, account_id: str, clerk: ManagedClerk) -> None:
+        """Compatibility delegate for a confirmed-dead Clerk."""
+
+        self._clerk_supervisor.retire(account_id, clerk)
+
+    def _reap_account_clerk(self, account_id: str, clerk: ManagedClerk) -> bool:
+        """Compatibility delegate for graceful Clerk retirement."""
+
+        return self._clerk_supervisor.reap(account_id, clerk)
+
+    def _supervise_account_clerks(self, *, account_ids: set[str] | None = None) -> None:
+        """Keep Clerk authority aligned with the active bot-account set."""
+
+        self._clerk_supervisor.supervise(
+            self._active_bot_accounts(),
+            account_ids=account_ids,
+        )
 
     def _refresh(self, managed: ManagedProcess) -> None:
         """Settle a managed process if it has exited: stamp ``ended_at_ms``
@@ -1572,9 +1645,6 @@ class RunnerProcessManager:
                     source=self._account_registry_retirement_source(managed),
                 )
                 managed.registry_retired_at_ms = self._clock_ms()
-                account_id, _ = self._account_registry_identity(managed.run_dir)
-                if account_id is not None:
-                    self._reap_account_clerk_if_idle(account_id)
             except HostRunnerError:
                 logger.exception(
                     "Failed to retire account registry binding for exited host runner",
@@ -1741,6 +1811,13 @@ def create_app(
             )
         except Exception:
             logger.exception("orphan classification on boot failed")
+        try:
+            # RPC handshakes and bounded process waits are synchronous host
+            # operations.  Keep them off the FastAPI loop while ensuring this
+            # happens before the daemon accepts a start request.
+            await asyncio.to_thread(process_manager.reconcile_account_clerks_on_boot)
+        except Exception:
+            logger.exception("account Clerk reconciliation on boot failed")
         boot_reconcile = retire_unmanaged_active_bindings_on_daemon_boot(
             process_manager.artifacts_root,
             managed_run_ids=process_manager.running_managed_run_ids(),

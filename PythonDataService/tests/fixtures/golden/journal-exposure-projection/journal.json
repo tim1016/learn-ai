@@ -1,0 +1,238 @@
+{
+  "entries": [
+    {
+      "seq": 1,
+      "entry_kind": "broker_event",
+      "recorded_at_ms": 1,
+      "intent": {
+        "trace_id": "trace-a-alpha-buy",
+        "account_id": "DUA",
+        "strategy_instance_id": "bot-alpha",
+        "run_id": "run-a-alpha",
+        "bot_order_namespace": "learn-ai/bot-alpha/v1",
+        "intent_id": "a-alpha-buy",
+        "order_ref": "learn-ai/bot-alpha/v1:a-alpha-buy",
+        "intent_kind": "STRATEGY",
+        "order_spec": {},
+        "owner_generation": 1,
+        "created_at_ms": 1
+      },
+      "broker_event": {
+        "account_id": "DUA",
+        "order_id": 101,
+        "event_type": "fill",
+        "order_ref": "learn-ai/bot-alpha/v1:a-alpha-buy",
+        "symbol": "SPY",
+        "side": "BUY",
+        "exec_id": "exec-a-alpha-buy",
+        "fill_quantity": 5.0,
+        "ts_ms": 1
+      }
+    },
+    {
+      "seq": 2,
+      "entry_kind": "broker_event",
+      "recorded_at_ms": 2,
+      "intent": {
+        "trace_id": "trace-a-alpha-sell",
+        "account_id": "DUA",
+        "strategy_instance_id": "bot-alpha",
+        "run_id": "run-a-alpha",
+        "bot_order_namespace": "learn-ai/bot-alpha/v1",
+        "intent_id": "a-alpha-sell",
+        "order_ref": "learn-ai/bot-alpha/v1:a-alpha-sell",
+        "intent_kind": "STRATEGY",
+        "order_spec": {},
+        "owner_generation": 1,
+        "created_at_ms": 2
+      },
+      "broker_event": {
+        "account_id": "DUA",
+        "order_id": 102,
+        "event_type": "fill",
+        "order_ref": "learn-ai/bot-alpha/v1:a-alpha-sell",
+        "symbol": "SPY",
+        "side": "SELL",
+        "exec_id": "exec-a-alpha-sell",
+        "fill_quantity": 2.0,
+        "ts_ms": 2
+      }
+    },
+    {
+      "seq": 3,
+      "entry_kind": "broker_event",
+      "recorded_at_ms": 3,
+      "intent": {
+        "trace_id": "trace-a-alpha-sell",
+        "account_id": "DUA",
+        "strategy_instance_id": "bot-alpha",
+        "run_id": "run-a-alpha",
+        "bot_order_namespace": "learn-ai/bot-alpha/v1",
+        "intent_id": "a-alpha-sell",
+        "order_ref": "learn-ai/bot-alpha/v1:a-alpha-sell",
+        "intent_kind": "STRATEGY",
+        "order_spec": {},
+        "owner_generation": 1,
+        "created_at_ms": 2
+      },
+      "broker_event": {
+        "account_id": "DUA",
+        "order_id": 102,
+        "event_type": "fill",
+        "order_ref": "learn-ai/bot-alpha/v1:a-alpha-sell",
+        "symbol": "SPY",
+        "side": "SELL",
+        "exec_id": "exec-a-alpha-sell",
+        "fill_quantity": 2.0,
+        "ts_ms": 3
+      }
+    },
+    {
+      "seq": 4,
+      "entry_kind": "broker_event",
+      "recorded_at_ms": 4,
+      "intent": {
+        "trace_id": "trace-a-beta-buy",
+        "account_id": "DUA",
+        "strategy_instance_id": "bot-beta",
+        "run_id": "run-a-beta",
+        "bot_order_namespace": "learn-ai/bot-beta/v1",
+        "intent_id": "a-beta-buy",
+        "order_ref": "learn-ai/bot-beta/v1:a-beta-buy",
+        "intent_kind": "STRATEGY",
+        "order_spec": {},
+        "owner_generation": 1,
+        "created_at_ms": 4
+      },
+      "broker_event": {
+        "account_id": "DUA",
+        "order_id": 103,
+        "event_type": "fill",
+        "order_ref": "learn-ai/bot-beta/v1:a-beta-buy",
+        "symbol": "QQQ",
+        "side": "BUY",
+        "exec_id": "exec-a-beta-buy",
+        "fill_quantity": 2.0,
+        "ts_ms": 4
+      }
+    },
+    {
+      "seq": 5,
+      "entry_kind": "broker_event",
+      "recorded_at_ms": 5,
+      "intent": {
+        "trace_id": "trace-a-beta-sell",
+        "account_id": "DUA",
+        "strategy_instance_id": "bot-beta",
+        "run_id": "run-a-beta",
+        "bot_order_namespace": "learn-ai/bot-beta/v1",
+        "intent_id": "a-beta-sell",
+        "order_ref": "learn-ai/bot-beta/v1:a-beta-sell",
+        "intent_kind": "STRATEGY",
+        "order_spec": {},
+        "owner_generation": 1,
+        "created_at_ms": 5
+      },
+      "broker_event": {
+        "account_id": "DUA",
+        "order_id": 104,
+        "event_type": "fill",
+        "order_ref": "learn-ai/bot-beta/v1:a-beta-sell",
+        "symbol": "QQQ",
+        "side": "SELL",
+        "exec_id": "exec-a-beta-sell",
+        "fill_quantity": 2.0,
+        "ts_ms": 5
+      }
+    },
+    {
+      "seq": 6,
+      "entry_kind": "broker_event",
+      "recorded_at_ms": 6,
+      "intent": {
+        "trace_id": "trace-a-alpha-status",
+        "account_id": "DUA",
+        "strategy_instance_id": "bot-alpha",
+        "run_id": "run-a-alpha",
+        "bot_order_namespace": "learn-ai/bot-alpha/v1",
+        "intent_id": "a-alpha-status",
+        "order_ref": "learn-ai/bot-alpha/v1:a-alpha-status",
+        "intent_kind": "STRATEGY",
+        "order_spec": {},
+        "owner_generation": 1,
+        "created_at_ms": 6
+      },
+      "broker_event": {
+        "account_id": "DUA",
+        "order_id": 105,
+        "event_type": "status",
+        "order_ref": "learn-ai/bot-alpha/v1:a-alpha-status",
+        "status": "Submitted",
+        "ts_ms": 6
+      }
+    },
+    {
+      "seq": 1,
+      "entry_kind": "broker_event",
+      "recorded_at_ms": 7,
+      "intent": {
+        "trace_id": "trace-b-alpha-buy",
+        "account_id": "DUB",
+        "strategy_instance_id": "bot-alpha",
+        "run_id": "run-b-alpha",
+        "bot_order_namespace": "learn-ai/bot-alpha/v1",
+        "intent_id": "b-alpha-buy",
+        "order_ref": "learn-ai/bot-alpha/v1:b-alpha-buy",
+        "intent_kind": "STRATEGY",
+        "order_spec": {},
+        "owner_generation": 1,
+        "created_at_ms": 7
+      },
+      "broker_event": {
+        "account_id": "DUB",
+        "order_id": 201,
+        "event_type": "fill",
+        "order_ref": "learn-ai/bot-alpha/v1:b-alpha-buy",
+        "symbol": "SPY",
+        "side": "BUY",
+        "exec_id": "exec-a-alpha-buy",
+        "fill_quantity": 2.0,
+        "ts_ms": 7
+      }
+    }
+  ],
+  "expected": {
+    "namespace": [
+      {
+        "account_id": "DUA",
+        "group_by": "namespace",
+        "group_id": "learn-ai/bot-alpha/v1",
+        "symbol": "SPY",
+        "quantity": 3.0
+      },
+      {
+        "account_id": "DUB",
+        "group_by": "namespace",
+        "group_id": "learn-ai/bot-alpha/v1",
+        "symbol": "SPY",
+        "quantity": 2.0
+      }
+    ],
+    "strategy_instance": [
+      {
+        "account_id": "DUA",
+        "group_by": "strategy_instance",
+        "group_id": "bot-alpha",
+        "symbol": "SPY",
+        "quantity": 3.0
+      },
+      {
+        "account_id": "DUB",
+        "group_by": "strategy_instance",
+        "group_id": "bot-alpha",
+        "symbol": "SPY",
+        "quantity": 2.0
+      }
+    ]
+  }
+}

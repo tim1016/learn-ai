@@ -84,6 +84,32 @@ def test_journal_exposure_is_canonical(tmp_path: Path, monkeypatch) -> None:
     assert compute_fleet_contamination({"SPY": 3}, explained)["summary"].startswith("Unmanaged broker position")
 
 
+def test_account_fleet_computation_scopes_journal_reads_to_requested_account(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    seen: list[str | None] = []
+
+    async def positions() -> dict[str, int]:
+        return {}
+
+    def explanations(_root: Path, *, account_id: str | None = None) -> dict[str, dict[str, int]]:
+        seen.append(account_id)
+        return {}
+
+    monkeypatch.setattr(fleet_contamination, "collect_fleet_position_explanations", explanations)
+
+    asyncio.run(
+        fleet_contamination.compute_account_fleet_contamination(
+            tmp_path / "live_runs",
+            positions,
+            account_id="DU-A",
+        )
+    )
+
+    assert seen == ["DU-A"]
+
+
 def test_shadow_drift_keeps_legacy_authoritative_and_emits_alarm(tmp_path: Path, monkeypatch) -> None:
     account = "DU123456"
     (tmp_path / "accounts" / account).mkdir(parents=True)
