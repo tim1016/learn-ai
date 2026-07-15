@@ -514,6 +514,76 @@ async def test_health_reports_idle_process(daemon_context: tuple[RunnerProcessMa
     assert body["commits_behind"] is None
 
 
+def test_run_process_recovers_terminal_status_after_daemon_restart(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A restarted daemon must retain a safe terminal proof for stale-claim retirement."""
+
+    from app.engine.live import host_daemon
+
+    manager, run_dir = daemon_context
+    (run_dir / "run_status.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "run_id": RUN_ID,
+                "started_at_ms": 1_000,
+                "last_update_ms": 2_000,
+                "ended_at_ms": 2_000,
+                "exit_code": 3,
+                "exit_reason": "exception",
+                "host_pid": 9_999,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def pid_is_absent(_pid: int, _signal: int) -> None:
+        raise ProcessLookupError
+
+    monkeypatch.setattr(host_daemon.os, "kill", pid_is_absent)
+
+    status = manager.process_status(RUN_ID)
+
+    assert status.state is HostRunnerProcessState.exited
+    assert status.run_id == RUN_ID
+    assert status.pid == 9_999
+    assert status.exit_code == 3
+    assert status.exit_reason == "exception"
+
+
+def test_run_process_fails_closed_when_persisted_terminal_pid_is_still_live(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stale status file cannot hide a PID the host still observes alive."""
+
+    from app.engine.live import host_daemon
+
+    manager, run_dir = daemon_context
+    (run_dir / "run_status.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "run_id": RUN_ID,
+                "started_at_ms": 1_000,
+                "last_update_ms": 2_000,
+                "ended_at_ms": 2_000,
+                "exit_code": 3,
+                "exit_reason": "exception",
+                "host_pid": 9_999,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(host_daemon.os, "kill", lambda _pid, _signal: None)
+
+    status = manager.process_status(RUN_ID)
+
+    assert status.state is HostRunnerProcessState.idle
+
+
 async def test_ensure_clerk_endpoint_runs_generation_handshake(
     daemon_context: tuple[RunnerProcessManager, Path],
     monkeypatch: pytest.MonkeyPatch,
