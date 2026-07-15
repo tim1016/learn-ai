@@ -16,14 +16,13 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import ValidationError
-
 from app.broker.ibkr.models import IbkrOrderEvent
 from app.engine.live.account_clerk import AccountClerkJournalEntry
+from app.engine.live.account_clerk_journal import normalize_broker_event
 
 JournalExposureGroup = Literal["namespace", "strategy_instance"]
 
@@ -73,17 +72,6 @@ def normalize_journal_broker_event(entry: AccountClerkJournalEntry) -> IbkrOrder
     if entry.intent is not None and event.order_ref != entry.intent.order_ref:
         return None
     return event
-
-
-def normalize_broker_event(
-    event: IbkrOrderEvent | Mapping[str, object],
-) -> IbkrOrderEvent | None:
-    """Validate the one broker-event model consumed by journal and drain paths."""
-
-    try:
-        return IbkrOrderEvent.model_validate(event)
-    except (TypeError, ValidationError, ValueError):
-        return None
 
 
 def project_journal_exposure(

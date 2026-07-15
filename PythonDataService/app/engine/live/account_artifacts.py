@@ -148,7 +148,14 @@ class AccountClerkGeneration(BaseModel):
 
 
 class AccountClerkLease(BaseModel):
-    """A daemon-supervised clerk's renewable account-scoped lease."""
+    """A daemon-supervised clerk's renewable account-scoped lease.
+
+    ``ibkr_client_id`` is written by the Clerk that owns the broker session.
+    It lets a restarted daemon reserve the real session identity while it
+    adopts the Clerk instead of guessing from its current configured pool.
+    ``None`` is retained only to parse pre-field leases; callers must not
+    adopt a live Clerk without the durable identity.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -156,6 +163,7 @@ class AccountClerkLease(BaseModel):
     account_id: str = Field(min_length=1, max_length=64)
     generation: int = Field(ge=1)
     pid: int = Field(ge=1)
+    ibkr_client_id: int | None = Field(default=None, ge=1)
     status: Literal["RUNNING", "DRAINING"] = "RUNNING"
     started_at_ms: int = Field(ge=0)
     renewed_at_ms: int = Field(ge=0)
@@ -477,24 +485,7 @@ def clear_account_freeze(
 def read_account_events(artifacts_root: Path, account_id: str) -> list[dict]:
     """Read account events strictly for canonical safety consumers."""
 
-    # Keep this resolved-path containment check at the read sink.  CodeQL must
-    # be able to see the user-provided account id constrained at the same
-    # boundary that opens the durable event ledger.
-    match = _ACCOUNT_ID_RE.fullmatch(account_id)
-    if match is None or account_id != account_id.strip():
-        raise AccountArtifactError(f"invalid account_id: {account_id!r}")
-    safe_account_id = match.group(0)
-    accounts_root = os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts"))
-    account_root = os.path.realpath(os.path.join(accounts_root, safe_account_id))
-    accounts_prefix = accounts_root if accounts_root.endswith(os.sep) else f"{accounts_root}{os.sep}"
-    if not account_root.startswith(accounts_prefix):
-        raise AccountArtifactError(f"path traversal detected for account_id: {account_id!r}")
-    event_filename = os.path.basename(ACCOUNT_EVENTS_FILENAME)
-    event_path = os.path.realpath(os.path.join(account_root, event_filename))
-    account_prefix = account_root if account_root.endswith(os.sep) else f"{account_root}{os.sep}"
-    if event_filename != ACCOUNT_EVENTS_FILENAME or not event_path.startswith(account_prefix):
-        raise AccountArtifactError(f"artifact path traversal detected for account_id: {account_id!r}")
-    path = Path(event_path)
+    path = _account_event_ledger_path(artifacts_root, account_id)
     if not path.is_file():
         return []
     return _parse_account_event_bytes(path, path.read_bytes(), tolerant=False)
@@ -1009,24 +1000,7 @@ def _append_account_event(
     *,
     only_if_receipt_absent: bool = False,
 ) -> bool:
-    # Keep the sanitizer and resolved containment check adjacent to every
-    # write-side sink.  This protects the append-only ledger from traversal,
-    # symlink escape, and sibling-prefix confusion and is visible to CodeQL.
-    match = _ACCOUNT_ID_RE.fullmatch(account_id)
-    if match is None or account_id != account_id.strip():
-        raise AccountArtifactError(f"invalid account_id: {account_id!r}")
-    safe_account_id = match.group(0)
-    accounts_root = os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts"))
-    account_root = os.path.realpath(os.path.join(accounts_root, safe_account_id))
-    accounts_prefix = accounts_root if accounts_root.endswith(os.sep) else f"{accounts_root}{os.sep}"
-    if not account_root.startswith(accounts_prefix):
-        raise AccountArtifactError(f"path traversal detected for account_id: {account_id!r}")
-    event_filename = os.path.basename(ACCOUNT_EVENTS_FILENAME)
-    event_path = os.path.realpath(os.path.join(account_root, event_filename))
-    account_prefix = account_root if account_root.endswith(os.sep) else f"{account_root}{os.sep}"
-    if event_filename != ACCOUNT_EVENTS_FILENAME or not event_path.startswith(account_prefix):
-        raise AccountArtifactError(f"artifact path traversal detected for account_id: {account_id!r}")
-    path = Path(event_path)
+    path = _account_event_ledger_path(artifacts_root, account_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     with _file_lock(path):
         if only_if_receipt_absent:
@@ -1048,6 +1022,32 @@ def _append_account_event(
             os.fsync(fh.fileno())
         _fsync_parent_dir(path)
     return True
+
+
+def _account_event_ledger_path(artifacts_root: Path, account_id: str) -> Path:
+    """Return the one contained account-event ledger path for both sinks.
+
+    The validator and realpath checks stay together because this helper is the
+    sole CodeQL-auditable boundary between a caller supplied account id and an
+    on-disk ledger. Callers must use its returned path rather than composing a
+    second account-event filename.
+    """
+
+    match = _ACCOUNT_ID_RE.fullmatch(account_id)
+    if match is None or account_id != account_id.strip():
+        raise AccountArtifactError(f"invalid account_id: {account_id!r}")
+    safe_account_id = match.group(0)
+    accounts_root = os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts"))
+    account_root = os.path.realpath(os.path.join(accounts_root, safe_account_id))
+    accounts_prefix = accounts_root if accounts_root.endswith(os.sep) else f"{accounts_root}{os.sep}"
+    if not account_root.startswith(accounts_prefix):
+        raise AccountArtifactError(f"path traversal detected for account_id: {account_id!r}")
+    event_filename = os.path.basename(ACCOUNT_EVENTS_FILENAME)
+    event_path = os.path.realpath(os.path.join(account_root, event_filename))
+    account_prefix = account_root if account_root.endswith(os.sep) else f"{account_root}{os.sep}"
+    if event_filename != ACCOUNT_EVENTS_FILENAME or not event_path.startswith(account_prefix):
+        raise AccountArtifactError(f"artifact path traversal detected for account_id: {account_id!r}")
+    return Path(event_path)
 
 
 def _next_account_event_seq_locked(path: Path) -> int:
