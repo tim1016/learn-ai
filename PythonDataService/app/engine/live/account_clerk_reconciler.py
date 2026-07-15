@@ -227,7 +227,7 @@ def _unresolved_intents(
             submitting.add(intent_id)
         elif entry.entry_kind in {"broker_uncertain", "cancel_uncertain"}:
             uncertain.add(intent_id)
-        elif entry.entry_kind == "broker_acked":
+        elif entry.entry_kind in {"broker_acked", "cancel_confirmed"}:
             terminal.add(intent_id)
         elif entry.entry_kind == "reconciliation":
             if entry.reconciliation_verdict in {"RECOVER_ADOPT", "HALT"}:

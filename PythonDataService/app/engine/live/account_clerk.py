@@ -289,9 +289,14 @@ class AccountClerk:
                         )
                     self._require_paper_broker()
                     self._cancel_namespace_in_progress = True
-                    await asyncio.to_thread(self._journal.append_cancel_submitting, intent)
                 async with asyncio.timeout(_CANCEL_NAMESPACE_TIMEOUT_S):
-                    cancelled = await self._cancel_namespace_open_orders(intent.bot_order_namespace)
+                    cancelled = await self._cancel_namespace_open_orders(
+                        intent.bot_order_namespace,
+                        before_broker_write=lambda: asyncio.to_thread(
+                            self._journal.append_cancel_submitting,
+                            intent,
+                        ),
+                    )
                 # The broker's terminal cancel may have emitted final fills.
                 # Do not acknowledge cancellation until the RPC callback
                 # worker has fsynced all callbacks already queued by it.
@@ -640,13 +645,19 @@ class AccountClerk:
         if spec.order_ref != intent.order_ref or spec.order_type != "MKT" or not spec.confirm_paper:
             self._reject(intent, "CLERK_INVALID_RECOVERY_ORDER")
 
-    async def _cancel_namespace_open_orders(self, namespace: str) -> list[int]:
+    async def _cancel_namespace_open_orders(
+        self,
+        namespace: str,
+        *,
+        before_broker_write: Callable[[], Awaitable[None]] | None = None,
+    ) -> list[int]:
         cancel_namespace = getattr(self._broker, "cancel_open_orders_for_namespace", None)
         if not callable(cancel_namespace):
             return []
         return await self._run_broker_write(
             "account_clerk.broker.cancel_open_orders_for_namespace",
             lambda: cancel_namespace(namespace),
+            before_broker_write=before_broker_write,
         )
 
     async def _place_under_clerk_grant(self, spec: IbkrOrderSpec) -> Any:
@@ -658,8 +669,16 @@ class AccountClerk:
             timeout=_BROKER_SUBMIT_TIMEOUT_S,
         )
 
-    async def _run_broker_write(self, boundary: str, write: Callable[[], Any]) -> Any:
+    async def _run_broker_write(
+        self,
+        boundary: str,
+        write: Callable[[], Any],
+        *,
+        before_broker_write: Callable[[], Awaitable[None]] | None = None,
+    ) -> Any:
         if self._clerk_generation is None:
+            if before_broker_write is not None:
+                await before_broker_write()
             return await write()
         try:
             observed_generation = self._read_active_generation()
@@ -686,6 +705,8 @@ class AccountClerk:
                 boundary=boundary,
                 clerk_generation_provider=self._read_active_generation,
             ):
+                if before_broker_write is not None:
+                    await before_broker_write()
                 return await write()
         except AccountClerkWriteFenceError as exc:
             if exc.reason not in {

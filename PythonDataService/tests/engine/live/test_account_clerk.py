@@ -359,10 +359,9 @@ async def test_fenced_cancel_preserves_generation_stale_error_without_uncertaint
     with pytest.raises(AccountClerkGenerationFencedError):
         await clerk.cancel_namespace(_cancel_intent("bot-a", "run-a", "cancel-fenced"))
 
-    assert [entry.entry_kind for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [
-        "recorded",
-        "cancel_submitting",
-    ]
+    # Fencing happens before the durable pre-write boundary, so a stale Clerk
+    # does not leave an ambiguous cancellation marker behind.
+    assert [entry.entry_kind for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == ["recorded"]
     assert clerk._broker.cancelled_namespaces == []
 
 
