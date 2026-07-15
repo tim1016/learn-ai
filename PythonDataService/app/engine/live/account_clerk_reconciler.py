@@ -237,6 +237,10 @@ def _unresolved_intents(
         # Skip it before dereferencing the optional attribution payload.
         if entry.intent is None:
             continue
+        if entry.intent.intent_kind == "RECOVERY_FLATTEN":
+            # Recovery has its own terminal state machine and must not be
+            # retried as an ordinary Clerk submit.
+            continue
         intent_id = entry.intent.intent_id
         if entry.entry_kind == "recorded":
             recorded[intent_id] = entry.intent

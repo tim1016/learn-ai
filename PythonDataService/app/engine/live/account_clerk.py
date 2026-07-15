@@ -69,6 +69,7 @@ from app.engine.live.account_registry import (
     read_account_instance_registry,
 )
 from app.engine.live.broker_callbacks import broker_callback_idempotency_key
+from app.engine.live.journal_exposure import project_journal_exposure
 from app.utils.advisory_lock import advisory_file_lock
 
 if TYPE_CHECKING:
@@ -142,12 +143,20 @@ class AccountClerk:
         self._normal_submit_intake_reason: str | None = None
         self._cancel_operation_lock = asyncio.Lock()
         self._cancel_namespace_in_progress = False
+        self._recovery_operation_lock = asyncio.Lock()
+        self._recovery_flatten_namespace: str | None = None
         self._callback_drain: Callable[[], Awaitable[None]] | None = None
 
     def set_callback_drain(self, drain: Callable[[], Awaitable[None]]) -> None:
         """Install the sole RPC callback relay drain for terminal cancellation."""
 
         self._callback_drain = drain
+
+    @property
+    def recovery_flatten_in_progress(self) -> bool:
+        """Whether a recovery liquidation currently owns the submit lane."""
+
+        return self._recovery_flatten_namespace is not None
 
     async def record_intent(self, intent: AccountOwnerSubmitIntent) -> AccountClerkRecordedReceipt:
         """Validate, durably record, and acknowledge one intent without I/O to IBKR."""
@@ -227,33 +236,42 @@ class AccountClerk:
             actor_run_id=actor_run_id,
             actor_bot_order_namespace=actor_bot_order_namespace,
         )
-        self._validate_recovery_order(intent)
-        async with self._cancel_operation_lock, self._intake_lock:
-            recorded = await asyncio.to_thread(self._record_intent_locked, intent)
-            existing_ack = await asyncio.to_thread(self._journal.ack_for_intent, intent)
-            if existing_ack is not None:
-                cancelled = await asyncio.to_thread(self._journal.recovery_cancelled_for_intent, intent)
-                return AccountClerkRecoveryFlattenReceipt(
-                    recorded=recorded,
-                    broker_acked=existing_ack,
-                    cancelled_order_ids=cancelled,
-                )
-            self._require_paper_broker()
-            cancelled = await self._cancel_namespace_open_orders(intent.bot_order_namespace)
-            await asyncio.to_thread(self._journal.append_recovery_cancelled, intent, cancelled)
-            spec = IbkrOrderSpec.model_validate(intent.order_spec)
-            await asyncio.to_thread(self._journal.append_broker_submitting, intent)
+        proposed_spec = self._validate_recovery_order(intent)
+        async with self._cancel_operation_lock, self._recovery_operation_lock:
+            async with self._intake_lock:
+                recorded = await asyncio.to_thread(self._record_intent_locked, intent)
+                existing_ack = await asyncio.to_thread(self._journal.ack_for_intent, intent)
+                if existing_ack is not None:
+                    cancelled = await asyncio.to_thread(self._journal.recovery_cancelled_for_intent, intent)
+                    return AccountClerkRecoveryFlattenReceipt(
+                        recorded=recorded,
+                        broker_acked=existing_ack,
+                        cancelled_order_ids=cancelled,
+                    )
+                self._require_paper_broker()
+                self._recovery_flatten_namespace = intent.bot_order_namespace
+                await asyncio.to_thread(self._journal.append_broker_submitting, intent)
+                await asyncio.to_thread(self._journal.append_recovery_cancelling, intent)
             try:
-                ack = await self._place_under_clerk_grant(spec)
+                cancelled = await self._cancel_namespace_open_orders(intent.bot_order_namespace)
+                if self._callback_drain is not None:
+                    await self._callback_drain()
+                async with self._intake_lock:
+                    await asyncio.to_thread(self._journal.append_recovery_cancelled, intent, cancelled)
+                    self._validate_recovery_exposure(intent, proposed_spec)
+                    ack = await self._place_under_clerk_grant(proposed_spec)
+                    broker_ack = await asyncio.to_thread(self._journal.append_broker_ack, intent, ack)
+                    return AccountClerkRecoveryFlattenReceipt(
+                        recorded=recorded,
+                        broker_acked=broker_ack,
+                        cancelled_order_ids=tuple(cancelled),
+                    )
             except Exception as exc:
-                await asyncio.to_thread(self._journal.append_broker_uncertain, intent, exc)
+                async with self._intake_lock:
+                    await asyncio.to_thread(self._journal.append_broker_uncertain, intent, exc)
                 raise
-            broker_ack = await asyncio.to_thread(self._journal.append_broker_ack, intent, ack)
-            return AccountClerkRecoveryFlattenReceipt(
-                recorded=recorded,
-                broker_acked=broker_ack,
-                cancelled_order_ids=tuple(cancelled),
-            )
+            finally:
+                self._recovery_flatten_namespace = None
 
     async def cancel_namespace(
         self,
@@ -587,6 +605,8 @@ class AccountClerk:
             self._reject(intent, self._normal_submit_intake_reason)
         if self._cancel_namespace_in_progress:
             self._reject(intent, "CLERK_CANCEL_NAMESPACE_IN_PROGRESS")
+        if self.recovery_flatten_in_progress:
+            self._reject(intent, "CLERK_RECOVERY_FLATTEN_IN_PROGRESS")
         unresolved = await asyncio.to_thread(
             self._journal.has_unresolved_namespace_cancellation,
             intent.bot_order_namespace,
@@ -666,13 +686,38 @@ class AccountClerk:
         ):
             self._reject(intent, "CLERK_RECOVERY_ACTOR_MISMATCH")
 
-    def _validate_recovery_order(self, intent: AccountOwnerSubmitIntent) -> None:
+    def _validate_recovery_order(self, intent: AccountOwnerSubmitIntent) -> IbkrOrderSpec:
         try:
             spec = IbkrOrderSpec.model_validate(intent.order_spec)
         except ValidationError as exc:
             self._reject(intent, f"CLERK_INVALID_RECOVERY_ORDER:{exc}")
         if spec.order_ref != intent.order_ref or spec.order_type != "MKT" or not spec.confirm_paper:
             self._reject(intent, "CLERK_INVALID_RECOVERY_ORDER")
+        return spec
+
+    def _validate_recovery_exposure(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        spec: IbkrOrderSpec,
+    ) -> None:
+        """Require the proposed liquidation to exactly match the journal fold."""
+
+        entries = read_account_clerk_journal(self._artifacts_root, self._account_id)
+        exposure = next(
+            (
+                item
+                for item in project_journal_exposure(entries, group_by="namespace")
+                if item.group_id == intent.bot_order_namespace and item.symbol == spec.symbol
+            ),
+            None,
+        )
+        if exposure is None or exposure.quantity == 0:
+            self._reject(intent, "CLERK_RECOVERY_NAMESPACE_EXPOSURE_ZERO")
+        expected_action = "SELL" if exposure.quantity > 0 else "BUY"
+        if spec.action != expected_action:
+            self._reject(intent, "CLERK_RECOVERY_DIRECTION_MISMATCH")
+        if spec.quantity != abs(exposure.quantity):
+            self._reject(intent, "CLERK_RECOVERY_QUANTITY_MISMATCH")
 
     async def _cancel_namespace_open_orders(
         self,

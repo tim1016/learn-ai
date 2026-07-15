@@ -72,6 +72,7 @@ class AccountClerkJournalEntry(BaseModel):
         "recorded",
         "broker_submitting",
         "broker_uncertain",
+        "recovery_cancelling",
         "recovery_cancelled",
         "cancel_submitting",
         "cancel_confirmed",
@@ -347,6 +348,23 @@ class AccountClerkJournal:
                 recorded_at_ms=self._now_ms(),
                 intent=intent,
                 cancelled_order_ids=tuple(cancelled_order_ids),
+            )
+            _append_jsonl(journal_path, entry)
+            entries.append(entry)
+
+    def append_recovery_cancelling(self, intent: AccountOwnerSubmitIntent) -> None:
+        """Persist the recovery cancel boundary before broker contact."""
+
+        inbox_path, journal_path = self._paths()
+        with _file_lock(journal_path):
+            entries = self._load_tail_locked(inbox_path, journal_path)
+            if any(entry.entry_kind == "recovery_cancelling" and entry.intent == intent for entry in entries):
+                return
+            entry = AccountClerkJournalEntry(
+                seq=_next_seq(entries),
+                entry_kind="recovery_cancelling",
+                recorded_at_ms=self._now_ms(),
+                intent=intent,
             )
             _append_jsonl(journal_path, entry)
             entries.append(entry)
