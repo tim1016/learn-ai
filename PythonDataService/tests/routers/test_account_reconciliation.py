@@ -22,6 +22,7 @@ from app.engine.live.account_artifacts import (
     CohortBatchLaunchReceipt,
     account_artifacts_root,
     append_account_event,
+    read_account_events,
     read_account_freeze,
     record_cohort_batch_launch_outcomes,
     record_cohort_batch_launch_receipt,
@@ -358,9 +359,11 @@ async def test_latest_cohort_status_projects_durable_server_evidence(tmp_path: P
         sample=CohortEvidenceSample(
             expected_at_ms=now_ms,
             observed_at_ms=now_ms,
-            account_truth="healthy",
-            fleet="healthy",
-            members=(CohortMemberSample("spy-a", "run-spy-a", "healthy", orders_used=0, orders_cap=4),),
+                account_truth="healthy",
+                fleet="healthy",
+                members=(CohortMemberSample("spy-a", "run-spy-a", "healthy", orders_used=0, orders_cap=4),),
+                broker_net_positions={},
+                broker_residual={},
         ),
     )
 
@@ -385,6 +388,12 @@ async def test_latest_cohort_status_projects_durable_server_evidence(tmp_path: P
             }
         ],
     }
+    evidence_event = next(
+        event for event in read_account_events(tmp_path, receipt.account_id)
+        if event["event_type"] == "cohort_evidence_sample"
+    )
+    assert evidence_event["broker_net_positions"] == {}
+    assert evidence_event["broker_residual"] == {}
 
 
 async def test_malformed_cohort_evidence_fails_closed(tmp_path: Path) -> None:

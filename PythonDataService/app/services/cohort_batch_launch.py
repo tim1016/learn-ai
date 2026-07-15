@@ -78,6 +78,8 @@ class CohortBatchLaunchService:
                 "observed_at_ms": sample.observed_at_ms,
                 "account_truth": sample.account_truth,
                 "fleet": sample.fleet,
+                "broker_net_positions": sample.broker_net_positions,
+                "broker_residual": sample.broker_residual,
                 "members": [
                     {
                         "strategy_instance_id": member.strategy_instance_id,
@@ -188,12 +190,16 @@ def _parse_evidence_sample(event: dict) -> CohortEvidenceSample | None:
     account_truth = event.get("account_truth")
     fleet = event.get("fleet")
     members = event.get("members")
+    broker_net_positions = _position_map(event.get("broker_net_positions"))
+    broker_residual = _position_map(event.get("broker_residual"))
     if (
         not isinstance(expected_at_ms, int)
         or (observed_at_ms is not None and not isinstance(observed_at_ms, int))
         or account_truth not in {"healthy", "failed", "unknown"}
         or fleet not in {"healthy", "failed", "unknown"}
         or not isinstance(members, list)
+        or (event.get("broker_net_positions") is not None and broker_net_positions is None)
+        or (event.get("broker_residual") is not None and broker_residual is None)
     ):
         return None
     parsed_members: list[CohortMemberSample] = []
@@ -225,7 +231,23 @@ def _parse_evidence_sample(event: dict) -> CohortEvidenceSample | None:
                 orders_cap,
             )
         )
-    return CohortEvidenceSample(expected_at_ms, observed_at_ms, account_truth, fleet, tuple(parsed_members))
+    return CohortEvidenceSample(
+        expected_at_ms,
+        observed_at_ms,
+        account_truth,
+        fleet,
+        tuple(parsed_members),
+        broker_net_positions,
+        broker_residual,
+    )
+
+
+def _position_map(value: object) -> dict[str, int] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or any(not isinstance(symbol, str) or not isinstance(quantity, int) for symbol, quantity in value.items()):
+        return None
+    return {symbol: quantity for symbol, quantity in value.items()}
 
 
 def _unreadable_evidence_summary() -> CohortEvidenceSummaryResponse:

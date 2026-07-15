@@ -31,6 +31,8 @@ class CohortEvidenceSample:
     account_truth: SampleVerdict
     fleet: SampleVerdict
     members: tuple[CohortMemberSample, ...]
+    broker_net_positions: dict[str, int] | None = None
+    broker_residual: dict[str, int] | None = None
 
 
 @dataclass(frozen=True)

@@ -57,8 +57,12 @@ class CohortEvidenceRuntimeObserver:
                 if fleet.verdict == "unknown"
                 else "failed"
             )
+            broker_net_positions = fleet.net_positions
+            broker_residual = fleet.residual
         except Exception:
             fleet_state = "unknown"
+            broker_net_positions = None
+            broker_residual = None
         runs = await asyncio.to_thread(self._visible_runs_by_instance, self._live_runs_root)
         return CohortEvidenceSample(
             expected_at_ms=expected_at_ms,
@@ -66,6 +70,8 @@ class CohortEvidenceRuntimeObserver:
             account_truth=truth_state,
             fleet=fleet_state,
             members=tuple(self._member(pin, runs) for pin in receipt.member_pins),
+            broker_net_positions=broker_net_positions,
+            broker_residual=broker_residual,
         )
 
     def _member(
