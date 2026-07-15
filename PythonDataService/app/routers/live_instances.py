@@ -39,6 +39,7 @@ from app.engine.live.account_artifacts import (
     read_account_freeze,
     read_account_owner_generation,
 )
+from app.engine.live.account_identity import InvalidAccountIdError, normalize_account_id
 from app.engine.live.account_observation_lease import assess_account_observation_lease
 from app.engine.live.bot_lifecycle_state import (
     BotLifecyclePhase,
@@ -601,7 +602,11 @@ def _resolve_account_freeze(
         account_id = ledger.get("account_id")
         if not isinstance(account_id, str) or not account_id:
             continue
-        account_freeze = read_account_freeze(artifacts_root, account_id)
+        try:
+            canonical_account_id = normalize_account_id(account_id)
+        except InvalidAccountIdError:
+            continue
+        account_freeze = read_account_freeze(artifacts_root, canonical_account_id)
         if account_freeze is not None:
             return account_freeze
     return None
@@ -615,7 +620,10 @@ def _run_dir_account_id(run_dir: Path) -> str | None:
     value = ledger.get("account_id")
     if not isinstance(value, str) or not value.strip():
         return None
-    return value
+    try:
+        return normalize_account_id(value)
+    except InvalidAccountIdError:
+        return None
 
 
 def _raise_if_crash_recovery_blocks_start(
@@ -2135,8 +2143,12 @@ async def run_roll_call() -> BotRollCallResponse:
     by_instance = await asyncio.to_thread(_visible_runs_by_instance, root)
     account_ids = {
         account_id
-        for runs in by_instance.values()
+        for sid, runs in by_instance.items()
         if runs
+        and not (
+            (lifecycle_state := _resolve_bot_lifecycle_state(root, sid)) is not None
+            and lifecycle_state.phase == BotLifecyclePhase.RETIRED
+        )
         for account_id in [_run_dir_account_id(Path(runs[0]["run_dir"]))]
         if account_id is not None
     }
@@ -2184,6 +2196,11 @@ async def run_roll_call() -> BotRollCallResponse:
         if not runs:
             continue
         run_dir = Path(runs[0]["run_dir"])
+        # A legacy ledger without an account identity cannot pass the same
+        # broker-truth gate enforced by the start endpoint.  Do not mint an
+        # offer that is guaranteed to be rejected at dispatch time.
+        if _run_dir_account_id(run_dir) is None:
+            continue
         boundary = start_boundary_verdict(now_ms, _live_config_for_run_dir(run_dir))
         if not boundary.allowed or boundary.effective_stop_ms is None or boundary.session_date is None:
             continue
@@ -3617,7 +3634,10 @@ def _instance_ledger_account_id(
     value = ledger.get("account_id")
     if not isinstance(value, str) or not value.strip():
         return None
-    return value
+    try:
+        return normalize_account_id(value)
+    except InvalidAccountIdError:
+        return None
 
 
 async def _fetch_broker_connected_account(
@@ -3676,7 +3696,16 @@ async def _raise_if_fleet_contamination_blocks_start(
                     "operator_next_step": "WAIT_FOR_BROKER_TRUTH",
                 },
             )
-        if broker_account != account_id:
+        try:
+            normalized_broker_account = normalize_account_id(broker_account)
+            normalized_account_id = normalize_account_id(account_id)
+        except InvalidAccountIdError:
+            # An unreadable identity is no safer than a mismatch.  Preserve
+            # the raw values for the operator rather than silently comparing
+            # a hand-normalized subset of the account identity contract.
+            normalized_broker_account = None
+            normalized_account_id = None
+        if normalized_broker_account != normalized_account_id:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
                 detail={
@@ -3689,7 +3718,10 @@ async def _raise_if_fleet_contamination_blocks_start(
                 },
             )
     try:
-        fleet = await _compute_account_fleet_contamination(root, account_id=account_id)
+        fleet = await _compute_account_fleet_contamination(
+            root,
+            account_id=normalized_account_id if account_id is not None else None,
+        )
     except Exception as exc:
         logger.warning("fleet contamination gate unavailable", extra={"error": str(exc)})
         raise HTTPException(
@@ -4736,7 +4768,13 @@ def _run_account_id(run_dir: Path) -> str | None:
         ledger = _read_ledger(run_dir)
     except (OSError, json.JSONDecodeError):
         return None
-    return _nonempty_str(ledger.get("account_id"))
+    value = _nonempty_str(ledger.get("account_id"))
+    if value is None:
+        return None
+    try:
+        return normalize_account_id(value)
+    except InvalidAccountIdError:
+        return None
 
 
 def _ts_in_window(ts_ms: int | None, start_ms: int, end_ms: int) -> bool:

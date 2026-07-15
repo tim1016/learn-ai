@@ -146,6 +146,8 @@ class AccountTruthSubmitGrace:
     def __init__(self, *, grace_ms: int = BROKER_TRUTH_SUBMIT_GRACE_MS) -> None:
         self._grace_ms = grace_ms
         self._outage_started_at_ms: int | None = None
+        self._has_passing_truth = False
+        self._last_decided_at_ms: int | None = None
 
     def gate(
         self,
@@ -154,10 +156,19 @@ class AccountTruthSubmitGrace:
         now_ms: int,
     ) -> GateResult:
         assessment = assess_account_truth(evidence, now_ms=now_ms)
+        if self._last_decided_at_ms is not None and now_ms < self._last_decided_at_ms:
+            return _broker_truth_stale_gate(assessment)
+        self._last_decided_at_ms = now_ms
         if assessment.status == "pass":
+            self._has_passing_truth = True
             self._outage_started_at_ms = None
             return assessment.to_gate_result()
         if not _is_broker_truth_outage(assessment):
+            return assessment.to_gate_result()
+        # Grace protects a running strategy through a *continuous* outage;
+        # it must never bootstrap a submit lane before Account Truth was
+        # actually proven clean at least once in this engine lifetime.
+        if not self._has_passing_truth:
             return assessment.to_gate_result()
         if self._outage_started_at_ms is None:
             self._outage_started_at_ms = _broker_truth_outage_started_at_ms(
@@ -326,10 +337,33 @@ def _broker_truth_outage_started_at_ms(
         if assessment.primary_reason_code == "ACCOUNT_TRUTH_STALE":
             return evidence.cached_at_ms + evidence.hard_ttl_ms
         if any(code.startswith("ACCOUNT_TRUTH_SOURCE_") for code in assessment.reason_codes):
-            if any("_STALE_" in code for code in assessment.reason_codes):
-                return assessment.evidence_at_ms + assessment.hard_ttl_ms
-            return assessment.evidence_at_ms
+            return _critical_source_outage_started_at_ms(evidence, detected_at_ms=detected_at_ms)
     return detected_at_ms
+
+
+def _critical_source_outage_started_at_ms(
+    evidence: AccountTruthSnapshot,
+    *,
+    detected_at_ms: int,
+) -> int:
+    """Return the first time any critical source ceased to be fresh.
+
+    A missing source is unavailable immediately.  A stale source becomes
+    unavailable at its own freshness deadline.  Selecting the earliest row
+    avoids granting an extra TTL when a mixed missing/stale projection happens
+    to list the stale row after the missing one.
+    """
+
+    outage_times = []
+    for row in critical_source_freshness_blocks(
+        evidence.truth.source_freshness,
+        checked_at_ms=detected_at_ms,
+    ):
+        if row.status == "missing":
+            outage_times.append(row.fetched_at_ms or evidence.truth.generated_at_ms)
+        else:
+            outage_times.append((row.fetched_at_ms or detected_at_ms) + row.hard_ttl_ms)
+    return min(outage_times, default=detected_at_ms)
 
 
 def _broker_truth_stale_gate(assessment: AccountTruthAssessment) -> GateResult:

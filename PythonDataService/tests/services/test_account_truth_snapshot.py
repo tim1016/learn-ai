@@ -1005,16 +1005,17 @@ def test_refresh_failure_replaces_prior_clean_snapshot() -> None:
 def test_submit_grace_blocks_only_at_120_seconds_and_resets_after_fresh_truth() -> None:
     grace = AccountTruthSubmitGrace()
 
-    assert grace.gate(None, now_ms=1_000).operator_reason == "BROKER_TRUTH_GRACE"
-    assert grace.gate(None, now_ms=120_999).status == "pass"
-    expired = grace.gate(None, now_ms=121_000)
-    assert expired.status == "block"
-    assert expired.operator_reason == "BROKER_TRUTH_STALE"
+    assert grace.gate(None, now_ms=1_000).operator_reason == "ACCOUNT_TRUTH_NOT_AVAILABLE"
+    assert grace.gate(None, now_ms=120_999).status == "block"
 
     recovered = grace.gate(AccountTruthSnapshot(_truth(generated_at_ms=122_000), cached_at_ms=122_000), now_ms=122_000)
     assert recovered.status == "pass"
     assert recovered.operator_reason == "ACCOUNT_TRUTH_CLEAN"
     assert grace.gate(None, now_ms=122_001).operator_reason == "BROKER_TRUTH_GRACE"
+    assert grace.gate(None, now_ms=241_999).status == "pass"
+    expired = grace.gate(None, now_ms=242_001)
+    assert expired.status == "block"
+    assert expired.operator_reason == "BROKER_TRUTH_STALE"
 
 
 def test_submit_grace_does_not_bypass_unproven_account_truth() -> None:
@@ -1032,6 +1033,7 @@ def test_submit_grace_does_not_bypass_unproven_account_truth() -> None:
 
 def test_submit_grace_uses_the_persisted_refresh_failure_time() -> None:
     grace = AccountTruthSubmitGrace()
+    grace.gate(AccountTruthSnapshot(_truth(generated_at_ms=500), cached_at_ms=500), now_ms=500)
     unavailable = AccountTruthUnavailable(
         account_id="DU123",
         attempted_at_ms=1_000,
@@ -1044,10 +1046,26 @@ def test_submit_grace_uses_the_persisted_refresh_failure_time() -> None:
     assert gate.operator_reason == "BROKER_TRUTH_STALE"
 
 
+def test_submit_grace_never_bootstraps_from_refresh_failure_without_prior_truth() -> None:
+    grace = AccountTruthSubmitGrace()
+
+    gate = grace.gate(
+        AccountTruthUnavailable(
+            account_id="DU123",
+            attempted_at_ms=1_000,
+            detail="broker sweep timed out",
+        ),
+        now_ms=1_001,
+    )
+
+    assert gate.status == "block"
+    assert gate.operator_reason == "ACCOUNT_TRUTH_REFRESH_FAILED"
+
+
 def test_submit_grace_fails_closed_on_clock_rollback() -> None:
     grace = AccountTruthSubmitGrace()
 
-    assert grace.gate(None, now_ms=10_000).status == "pass"
+    assert grace.gate(AccountTruthSnapshot(_truth(generated_at_ms=10_000), cached_at_ms=10_000), now_ms=10_000).status == "pass"
     gate = grace.gate(None, now_ms=9_999)
 
     assert gate.status == "block"
@@ -1169,6 +1187,52 @@ def test_critical_source_freshness_block_is_shared_with_gate_projection() -> Non
     assert assessment.explanation.startswith("Positions evidence is")
     assert assessment.evidence_at_ms == 1_000
     assert gate.operator_reason == "ACCOUNT_TRUTH_SOURCE_STALE_POSITIONS"
+
+
+def test_submit_grace_starts_mixed_source_outage_at_missing_evidence_time() -> None:
+    grace = AccountTruthSubmitGrace()
+    grace.gate(AccountTruthSnapshot(_truth(generated_at_ms=1_000), cached_at_ms=1_000), now_ms=1_000)
+    source_freshness = [
+        row
+        for row in fresh_account_truth_source_freshness(1_000)
+        if row.source not in {"account_summary", "positions"}
+    ]
+    source_freshness.extend(
+        [
+            AccountTruthSourceFreshness(
+                source="account_summary",
+                label="Account summary",
+                status="missing",
+                severity="critical",
+                fetched_at_ms=None,
+                age_ms=None,
+                hard_ttl_ms=60_000,
+                reason_code="ACCOUNT_TRUTH_SOURCE_MISSING_ACCOUNT_SUMMARY",
+                message="Account summary evidence is unavailable.",
+            ),
+            AccountTruthSourceFreshness(
+                source="positions",
+                label="Positions",
+                status="stale",
+                severity="critical",
+                fetched_at_ms=1_000,
+                age_ms=60_001,
+                hard_ttl_ms=60_000,
+                reason_code="ACCOUNT_TRUTH_SOURCE_STALE_POSITIONS",
+                message="Positions evidence is stale.",
+            ),
+        ]
+    )
+    evidence = AccountTruthSnapshot(
+        _truth(generated_at_ms=1_000, source_freshness=source_freshness),
+        cached_at_ms=1_000,
+        hard_ttl_ms=600_000,
+    )
+
+    gate = grace.gate(evidence, now_ms=121_000)
+
+    assert gate.status == "block"
+    assert gate.operator_reason == "BROKER_TRUTH_STALE"
 
 
 def test_fresh_critical_source_is_rechecked_at_gate_read_time() -> None:
