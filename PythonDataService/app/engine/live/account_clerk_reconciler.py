@@ -21,7 +21,6 @@ from app.engine.live.account_clerk import (
     AccountClerk,
     AccountClerkGenerationFencedError,
     AccountClerkJournalEntry,
-    read_account_clerk_journal,
 )
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.journal_exposure import project_journal_exposure
