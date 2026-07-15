@@ -13,6 +13,7 @@ from app.engine.live.account_artifacts import (
     record_cohort_batch_launch_receipt,
 )
 from app.engine.live.journal_exposure import JournalExposure
+from app.services import cohort_batch_launch as cohort_batch_launch_module
 from app.services import cohort_validation_certificate as certificate_module
 from app.services.cohort_batch_launch import CohortBatchLaunchService
 from app.services.cohort_evidence import CohortEvidenceSample, CohortMemberSample
@@ -110,10 +111,70 @@ async def test_certificate_is_deterministic_and_refuses_overwrite(tmp_path: Path
     assert first.model_dump_json() == second.model_dump_json()
     assert first.verdict == "passed"
     assert first.round_trips[0].exec_ids == ["exec-entry", "exec-exit"]
-    service.write_once(first)
+    fsynced_paths: list[Path] = []
+    monkeypatch.setattr(certificate_module, "_fsync_parent_dir", fsynced_paths.append)
+    path = service.write_once(first)
+    assert fsynced_paths == [path]
     assert service.read(account_id=receipt.account_id, cohort_id=receipt.cohort_id) == first
     with pytest.raises(FileExistsError):
         service.write_once(second)
+
+
+async def test_certificate_passes_for_a_complete_window_at_production_clock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The exclusive window endpoint does not invent a missing final sample."""
+
+    start_ms = 1_780_000_000_000
+    end_ms = start_ms + 30_000
+    receipt = CohortBatchLaunchReceipt(
+        account_id="DU1234567",
+        cohort_id="completed-certificate-cohort",
+        member_strategy_instance_ids=("spy-a",),
+        window_start_ms=start_ms,
+        window_end_ms=end_ms,
+        authorized_by="operator.alice",
+        recorded_at_ms=start_ms,
+        member_pins=(
+            CohortBatchLaunchMemberPin(
+                strategy_instance_id="spy-a",
+                run_id="run-a",
+                roll_call_offer_id="offer-a",
+            ),
+        ),
+    )
+    record_cohort_batch_launch_receipt(tmp_path, receipt)
+    launch_service = CohortBatchLaunchService(artifacts_root=tmp_path)
+    for expected_at_ms in range(start_ms, end_ms, 5_000):
+        await launch_service.record_evidence_sample(
+            account_id=receipt.account_id,
+            cohort_id=receipt.cohort_id,
+            sample=CohortEvidenceSample(
+                expected_at_ms=expected_at_ms,
+                observed_at_ms=expected_at_ms,
+                account_truth="healthy",
+                fleet="healthy",
+                members=(CohortMemberSample("spy-a", "run-a", "healthy", orders_used=1, orders_cap=4),),
+                broker_net_positions={},
+                broker_residual={},
+            ),
+        )
+    monkeypatch.setattr(cohort_batch_launch_module, "now_ms_utc", lambda: end_ms + 1)
+    monkeypatch.setattr(
+        certificate_module,
+        "read_account_clerk_journal",
+        lambda *_args: [_journal_entry("exec-entry"), _journal_entry("exec-exit")],
+    )
+    monkeypatch.setattr(certificate_module, "project_journal_exposure", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(certificate_module, "normalize_journal_broker_event", _fill_event)
+    certificate = await CohortValidationCertificateService(
+        artifacts_root=tmp_path,
+        now_ms=lambda: end_ms + 1,
+    ).generate(account_id=receipt.account_id, cohort_id=receipt.cohort_id)
+
+    assert certificate.verdict == "passed"
+    assert certificate.evidence_reason is None
 
 
 async def test_certificate_is_incomplete_without_linked_round_trip_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

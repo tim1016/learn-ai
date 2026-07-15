@@ -117,7 +117,13 @@ class CohortBatchLaunchService:
             tuple(samples),
             member_strategy_instance_ids=receipt.member_strategy_instance_ids,
             cadence_ms=_COHORT_EVIDENCE_CADENCE_MS,
-            evaluated_at_ms=min(now_ms_utc(), receipt.window_end_ms),
+            # The launch window is end-exclusive: the sampler's final valid
+            # expected tick is one cadence before the boundary.  Evaluating
+            # at the exclusive endpoint would manufacture a missing tick.
+            evaluated_at_ms=min(
+                now_ms_utc(),
+                receipt.window_end_ms - _COHORT_EVIDENCE_CADENCE_MS,
+            ),
         )
         return CohortEvidenceSummaryResponse(
             sample_count=len(samples),

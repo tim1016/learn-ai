@@ -7,6 +7,7 @@ import { LiveRunsService } from './live-runs.service';
 import { operatorBlockerFixture } from '../testing/operator-blocker-fixtures';
 import type { DaemonDiagnosticReport } from '../api/daemon-diagnostics.types';
 import type { HostRunnerActionResponse, HostRunnerHealth } from '../api/live-runs.types';
+import type { CohortBatchLaunchStatus } from '../api/cohort-batch-launch.types';
 import type {
   CrashRecoveryOverrideResponse,
   LifecycleSafetyTriageResponse,
@@ -153,7 +154,7 @@ describe('LiveRunsService start/stop proxy', () => {
   });
 
   it('reads the latest durable cohort receipt through the account endpoint', async () => {
-    const response = {
+    const response: CohortBatchLaunchStatus = {
       schema_version: 1,
       account_id: 'DU123',
       cohort_id: 'paper-validation-1',
@@ -166,6 +167,15 @@ describe('LiveRunsService start/stop proxy', () => {
       outcomes: [],
       outcomes_recorded_at_ms: null,
       outcomes_error: null,
+      evidence: {
+        sample_count: 0,
+        cadence_ms: 5_000,
+        healthy_overlap_ms: 0,
+        verdict: 'unknown',
+        reason: 'COHORT_EVIDENCE_MISSING',
+        source: 'account_event.cohort_evidence_sample',
+        members: [],
+      },
     };
     const promise = service.getLatestCohortBatchLaunch('DU123');
 
@@ -177,7 +187,7 @@ describe('LiveRunsService start/stop proxy', () => {
   });
 
   it('submits only displayed member IDs to the server-owned cohort command', async () => {
-    const response = {
+    const response: CohortBatchLaunchStatus = {
       schema_version: 1,
       account_id: 'DU123',
       cohort_id: 'paper-validation-server-authored',
@@ -195,6 +205,15 @@ describe('LiveRunsService start/stop proxy', () => {
       }],
       outcomes_recorded_at_ms: 2,
       outcomes_error: null,
+      evidence: {
+        sample_count: 1,
+        cadence_ms: 5_000,
+        healthy_overlap_ms: 5_000,
+        verdict: 'healthy',
+        reason: null,
+        source: 'account_event.cohort_evidence_sample',
+        members: [],
+      },
     };
     const promise = service.launchCohort('DU123', { member_strategy_instance_ids: ['bot-1'] });
 

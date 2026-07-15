@@ -388,6 +388,8 @@ class AccountClerkCancellationRecoveryCoordinator:
                     deps.require_rpc_write_intake(intent)
                     deps.require_paper_broker()
                     await deps.retry_recorded_intent_locked(intent)
+                except AccountClerkGenerationFencedError:
+                    raise
                 except Exception as exc:
                     reason = f"{reason}; retry raised {type(exc).__name__}: {exc}"
             return AccountClerkReconciliationOutcome(

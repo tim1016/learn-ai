@@ -12,7 +12,7 @@ from typing import TypedDict
 from app.engine.live.account_artifacts import CohortBatchLaunchReceipt, account_artifacts_root, read_account_events
 from app.engine.live.account_clerk_journal import read_account_clerk_journal
 from app.engine.live.journal_exposure import normalize_journal_broker_event, project_journal_exposure
-from app.engine.live.live_state_sidecar import _file_lock
+from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
 from app.schemas.artifact_io import atomic_write_pydantic_artifact, read_pydantic_artifact
 from app.schemas.cohort_batch_launch import CohortEvidenceMemberResponse
 from app.schemas.cohort_validation_certificate import (
@@ -118,6 +118,7 @@ class CohortValidationCertificateService:
             if path.exists():
                 raise FileExistsError(f"cohort validation certificate already exists: {certificate.cohort_id}")
             atomic_write_pydantic_artifact(path, certificate)
+            _fsync_parent_dir(path)
         return path
 
     def read(self, *, account_id: str, cohort_id: str) -> CohortValidationCertificate | None:

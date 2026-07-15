@@ -1500,6 +1500,29 @@ async def test_reconciler_preserves_the_paper_mode_guard_before_a_retry(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_reconciliation_retry_propagates_a_generation_fence(tmp_path: Path) -> None:
+    """A stale Clerk cannot report a fenced retry as a normal resolution."""
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    generation = _write_active_clerk_generation(tmp_path)
+    broker = _ReconciliationBroker("PROVABLY_ABSENT")
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=broker,
+        clerk_generation=generation,
+        durable_generation_provider=lambda: generation + 1,
+    )
+    intent = _intent("bot-a", "run-a", "fenced-reconciliation-retry")
+    await clerk.record_intent(intent)
+
+    with pytest.raises(AccountClerkGenerationFencedError):
+        await clerk.reconcile_uncertain_intent(intent, retry_count=0)
+
+    assert broker.calls == []
+
+
+@pytest.mark.asyncio
 async def test_stale_recovery_is_halted_without_automatic_broker_retry(tmp_path: Path) -> None:
     """#1052: stale recovery is probed, but ambiguity cannot create a second flatten."""
 

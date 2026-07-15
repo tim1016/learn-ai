@@ -3273,6 +3273,42 @@ async def test_roll_call_tick_persists_start_offer(
     assert [offer.offer_id for offer in offers] == [body["offers"][0]["offer_id"]]
 
 
+async def test_roll_call_rejects_unreadable_connected_account_identity(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Roll call shares the start boundary and must not mint unsafe offers."""
+
+    app, root = app_with_root
+    _write_ledger(root, "run-unreadable-account", "spy_ema_paper", 100, strategy_key="spy_ema")
+    _set_connected_broker_account(monkeypatch, "12345")
+    _set_startable_now(monkeypatch)
+    _set_daemon(
+        monkeypatch,
+        instances={
+            "instances": [
+                {
+                    "strategy_instance_id": "spy_ema_paper",
+                    "run_id": "run-unreadable-account",
+                    "run_dir": str(root / "run-unreadable-account"),
+                    "process": {"state": "idle", "run_id": "run-unreadable-account"},
+                }
+            ],
+            "fetched_at_ms": 1,
+        },
+        process={"state": "idle"},
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/roll-call")
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "BROKER_TRUTH_UNAVAILABLE"
+    assert detail["connected_account_id"] == "12345"
+    assert not (root.parent / "bot_roll_call_offers").exists()
+
+
 async def test_roll_call_does_not_offer_legacy_run_without_account_identity_when_catalog_is_not_loaded(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -5498,6 +5534,40 @@ async def test_start_run_rejects_connected_account_mismatch(
     assert detail["reason_code"] == "BROKER_ACCOUNT_MISMATCH"
     assert detail["expected_account_id"] == "DU111"
     assert detail["connected_account_id"] == "DU999"
+    assert called is False
+
+
+async def test_start_run_rejects_unreadable_connected_account_identity(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """External broker identity that cannot be normalized is not safe to start against."""
+
+    app, root = app_with_root
+    _write_ledger(root, "run-unreadable-account", "spy_ema_paper", 100)
+    offer_id = _write_roll_call_offer(root.parent, run_id="run-unreadable-account")
+    _set_connected_broker_account(monkeypatch, "12345")
+    _set_startable_now(monkeypatch)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+    called = False
+
+    async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
+        nonlocal called
+        called = True
+        return {"accepted": True, "process": _running_process("run-unreadable-account")}
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/runs/run-unreadable-account/start",
+            json={"roll_call_offer_id": offer_id},
+        )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "BROKER_TRUTH_UNAVAILABLE"
+    assert detail["expected_account_id"] == "DU111"
+    assert detail["connected_account_id"] == "12345"
     assert called is False
 
 

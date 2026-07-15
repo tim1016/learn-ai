@@ -29,7 +29,6 @@ export class JournalClaimCureComponent {
   update(field: 'namespace' | 'symbol' | 'quantity' | 'reason' | 'evidenceRef', event: Event): void {
     if (!(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)) return;
     this[field].set(event.target.value);
-    this.cureAttemptKey.set(null);
   }
 
   async previewCure(): Promise<void> {
@@ -55,7 +54,14 @@ export class JournalClaimCureComponent {
     const signedQuantity = Number(this.quantity());
     const reason = this.reason().trim();
     const evidenceRef = this.evidenceRef().trim();
-    if (!preview?.can_cure || !Number.isFinite(signedQuantity) || signedQuantity === 0 || !reason || !evidenceRef) {
+    if (
+      this.loading()
+      || !preview?.can_cure
+      || !Number.isFinite(signedQuantity)
+      || signedQuantity === 0
+      || !reason
+      || !evidenceRef
+    ) {
       return;
     }
     this.loading.set(true);

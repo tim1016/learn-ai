@@ -3786,10 +3786,19 @@ async def _raise_if_fleet_contamination_blocks_start(
             normalized_account_id = normalize_account_id(account_id)
         except InvalidAccountIdError:
             # An unreadable identity is no safer than a mismatch.  Preserve
-            # the raw values for the operator rather than silently comparing
-            # a hand-normalized subset of the account identity contract.
-            normalized_broker_account = None
-            normalized_account_id = None
+            # the raw values for the operator, but never collapse two failed
+            # normalizations into an apparent match.
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": "BROKER_TRUTH_UNAVAILABLE",
+                    "message": "Connected broker account identity is unreadable. Wait for a fresh broker observation before starting bots.",
+                    "gate_id": "account.broker_truth",
+                    "operator_next_step": "WAIT_FOR_BROKER_TRUTH",
+                    "expected_account_id": account_id,
+                    "connected_account_id": broker_account,
+                },
+            ) from None
         if normalized_broker_account != normalized_account_id:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
@@ -3830,16 +3839,6 @@ async def _raise_if_fleet_contamination_blocks_start(
         )
     if fleet.verdict != "contaminated":
         return
-    if fleet.verdict == "unknown":
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "reason_code": "FLEET_CONTAMINATION_UNKNOWN",
-                "message": "Account exposure is not provable. Reconcile it before starting bots.",
-                "gate_id": "account.fleet_contamination",
-                "contamination": fleet.model_dump(mode="json"),
-            },
-        )
     raise HTTPException(
         status.HTTP_409_CONFLICT,
         detail={
