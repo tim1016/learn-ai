@@ -17,7 +17,10 @@ from app.engine.live.account_registry import (
 )
 from app.engine.live.fleet import compute_fleet_contamination
 from app.engine.live.order_identity import build_order_ref
-from app.services.fleet_contamination import collect_fleet_position_explanations
+from app.services.fleet_contamination import (
+    collect_fleet_position_explanations,
+    record_account_journal_parity_observation,
+)
 
 
 def test_journal_exposure_is_canonical(tmp_path: Path, monkeypatch) -> None:
@@ -143,3 +146,15 @@ def test_shadow_drift_does_not_make_status_reads_write_or_replace_journal(tmp_pa
 
     assert collect_fleet_position_explanations(tmp_path / "live_runs") == {"bot-a": {"SPY": 1}}
     assert read_account_events(tmp_path, account) == []
+
+
+def test_explicit_parity_observer_writes_only_for_requested_account(tmp_path: Path, monkeypatch) -> None:
+    account = "DU123456"
+    (tmp_path / "accounts" / account).mkdir(parents=True)
+    (tmp_path / "accounts" / account / "clerk_journal.jsonl").write_text("", encoding="utf-8")
+    monkeypatch.setattr(fleet_contamination, "_collect_journal_position_explanations", lambda _root, **_kw: {})
+    monkeypatch.setattr(fleet_contamination, "_collect_legacy_fleet_position_explanations", lambda _root, **_kw: {})
+
+    assert record_account_journal_parity_observation(tmp_path / "live_runs", account_id=account) is False
+    [event] = read_account_events(tmp_path, account)
+    assert event["event_type"] == "account_clerk_sidecar_journal_parity"

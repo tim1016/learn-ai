@@ -192,6 +192,25 @@ def _record_sidecar_journal_parity(
     )
 
 
+def record_account_journal_parity_observation(
+    root: Path,
+    *,
+    account_id: str,
+) -> bool:
+    """Write one bounded parity observation outside the contamination read path."""
+
+    journal = _collect_journal_position_explanations(root, account_id=account_id)
+    if journal is None:
+        return False
+    legacy = _collect_legacy_fleet_position_explanations(root, account_id=account_id)
+    return _record_sidecar_journal_parity(
+        root,
+        journal,
+        legacy,
+        account_id=account_id,
+    )
+
+
 def _account_has_clean_parity_window(artifacts_root: Path, account_id: str) -> bool:
     events = [event for event in read_account_events(artifacts_root, account_id) if event.get("event_type") == "account_clerk_sidecar_journal_parity"]
     recent = events[-_JOURNAL_PARITY_WINDOW:]
