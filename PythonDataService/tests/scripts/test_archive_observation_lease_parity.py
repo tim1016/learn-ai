@@ -65,3 +65,24 @@ def test_archive_observation_lease_parity_returns_nonzero_for_incomplete_evidenc
 
     assert exit_code == 2
     assert json.loads(output.read_text(encoding="utf-8"))["cutover_ready"] is False
+
+
+def test_archive_observation_lease_parity_archives_missing_journal_as_not_ready(tmp_path) -> None:
+    output = tmp_path / "parity.json"
+
+    exit_code = main(
+        [
+            "--artifacts-root",
+            str(tmp_path),
+            "--account-id",
+            "DU123",
+            "--output",
+            str(output),
+            "--require-ready",
+        ]
+    )
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert exit_code == 2
+    assert payload["source"]["account_event_count"] == 0
+    assert payload["cutover_ready"] is False

@@ -16,8 +16,8 @@ from zoneinfo import ZoneInfo
 
 from app.engine.live.account_artifacts import (
     ACCOUNT_EVENTS_FILENAME,
-    account_artifacts_root,
     read_account_events,
+    read_account_events_with_snapshot,
 )
 from app.engine.live.account_observation_lease import (
     ACCOUNT_OBSERVATION_LEASE_GATE_ID,
@@ -162,24 +162,19 @@ def observation_lease_shadow_parity_archive_payload(
 ) -> dict[str, object]:
     """Build an immutable-input report payload suitable for cutover evidence.
 
-    The event journal is read between two byte-identical snapshots.  A writer
-    racing the replay produces no archive rather than a report whose digest
-    names different evidence from the rows that were assessed.
+    The event journal is read once under its writer lock.  The resulting
+    source bytes are parsed directly, so the reported digest names precisely
+    the rows assessed for the promotion decision.
     """
 
-    events_path = account_artifacts_root(artifacts_root, account_id) / ACCOUNT_EVENTS_FILENAME
-    before = events_path.read_bytes()
-    events = read_account_events(artifacts_root, account_id)
-    after = events_path.read_bytes()
-    if before != after:
-        raise RuntimeError("ACCOUNT_OBSERVATION_LEASE_PARITY_EVIDENCE_CHANGED_DURING_REPLAY")
+    events, source_bytes = read_account_events_with_snapshot(artifacts_root, account_id)
     report = assess_observation_lease_shadow_parity(events, minimum_sessions=minimum_sessions)
     return {
         "schema_version": OBSERVATION_LEASE_PARITY_ARCHIVE_SCHEMA_VERSION,
         "account_id": account_id,
         "source": {
             "account_events_filename": ACCOUNT_EVENTS_FILENAME,
-            "account_events_sha256": hashlib.sha256(before).hexdigest(),
+            "account_events_sha256": hashlib.sha256(source_bytes).hexdigest(),
             "account_event_count": len(events),
         },
         "minimum_sessions": report.minimum_sessions,
