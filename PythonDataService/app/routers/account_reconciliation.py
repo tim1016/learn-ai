@@ -113,6 +113,11 @@ async def reconcile_account_endpoint(
     """Create a durable account reconciliation receipt from Account Truth."""
     canonical_account_id = _canonical_account_id(account_id)
     try:
+        settings = get_settings()
+        await host_daemon_client.ensure_account_clerk(
+            settings.live_runner_daemon_url,
+            canonical_account_id,
+        )
         account_truth = await refresh_account_truth_now(
             client,
             account_id=canonical_account_id,
@@ -124,6 +129,10 @@ async def reconcile_account_endpoint(
             requested_account_id=canonical_account_id,
             account_truth=account_truth,
         )
+    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
+        raise _outcome_unknown_http_error(exc) from exc
+    except host_daemon_client.HostDaemonError as exc:
+        raise HTTPException(exc.status_code, detail=exc.detail) from exc
     except BrokerError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
     except AccountArtifactError as exc:

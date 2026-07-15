@@ -178,6 +178,49 @@ async def test_latest_reconciliation_returns_404_when_missing(tmp_path: Path) ->
     assert response.status_code == 404
 
 
+async def test_reconciliation_bootstraps_clerk_before_refreshing_account_truth(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.main import app
+
+    service = AccountReconciliationService(artifacts_root=tmp_path, ttl_ms=10_000_000_000)
+    calls: list[str] = []
+
+    async def fake_ensure(_base_url: str, account_id: str) -> dict:
+        assert account_id == "DU1234567"
+        calls.append("ensure")
+        return {}
+
+    async def fake_refresh(*_args, account_id: str, **kwargs):
+        assert account_id == "DU1234567"
+        assert kwargs["account_truth_observer"] == service.observe_account_truth
+        assert kwargs["account_truth_failure_observer"] == service.observe_account_truth_failure
+        calls.append("refresh")
+        return _truth()
+
+    monkeypatch.setattr(account_reconciliation.host_daemon_client, "ensure_account_clerk", fake_ensure)
+    monkeypatch.setattr(account_reconciliation, "refresh_account_truth_now", fake_refresh)
+    monkeypatch.setattr(
+        account_reconciliation,
+        "get_settings",
+        lambda: SimpleNamespace(live_runner_daemon_url="http://daemon"),
+    )
+    app.dependency_overrides[account_reconciliation.require_connected_client] = lambda: object()
+    app.dependency_overrides[
+        account_reconciliation.get_account_reconciliation_service
+    ] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post("/api/accounts/DU1234567/reconciliation")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["account_id"] == "DU1234567"
+    assert calls == ["ensure", "refresh"]
+
+
 async def test_legacy_stale_claim_route_returns_only_proven_candidates_and_receipts_retirement(
     tmp_path: Path,
     monkeypatch,

@@ -27,6 +27,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
 from app.broker.ibkr.api_evidence import get_ibkr_api_evidence_recorder
+from app.broker.ibkr.client import BrokerError
 from app.broker.ibkr.config import IbkrSettings, get_settings
 from app.broker.runtime_snapshot import BrokerRuntimeSnapshot, snapshot_data_plane_broker
 from app.config import settings as app_settings
@@ -94,6 +95,7 @@ from app.engine.strategy.spec.schema import load_spec_from_path
 from app.lean_sidecar.trading_calendar import session_state_at_ms
 from app.operator.incidents.store import IncidentStore
 from app.operator.notices.schema import OperatorNotice
+from app.routers.broker_dependencies import require_connected_client
 from app.routers.live_runs import (
     _ACTION_TO_STATE,
     COMMAND_POLL_INTERVAL_MS,
@@ -182,6 +184,8 @@ from app.services.account_crash_recovery import (
     crash_recovery_gate_for_instance,
     record_crash_recovery_override_evidence,
 )
+from app.services.account_reconciliation import AccountReconciliationService
+from app.services.account_truth_refresh import refresh_account_truth_now
 from app.services.account_truth_snapshot import get_account_truth_snapshot_provider
 from app.services.activity_evidence_matching import (
     activity_evidence_ref_from_event,
@@ -2719,14 +2723,14 @@ def _raise_if_start_boundary_blocks(root: Path, sid: str, *, now_ms: int) -> Non
     )
 
 
-def _raise_if_account_observation_lease_blocks_start(
+async def _ensure_account_observation_lease_allows_start(
     artifacts_root: Path,
     account_id: str,
     settings: IbkrSettings,
     *,
     now_ms: int,
 ) -> None:
-    """Apply the durable proof at Start only after the atomic authority switch."""
+    """Prepare and apply durable account proof at the Start mutation boundary."""
 
     if settings.account_gate_authority != "observation_lease":
         return
@@ -2734,6 +2738,48 @@ def _raise_if_account_observation_lease_blocks_start(
         artifacts_root,
         account_id,
         now_ms=now_ms,
+    )
+    if assessment.state == "VERIFIED":
+        return
+
+    try:
+        await host_daemon_client.ensure_account_clerk(
+            settings.live_runner_daemon_url,
+            account_id,
+        )
+    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "OUTCOME_UNKNOWN",
+                "message": exc.detail
+                or "The Clerk readiness request may have completed; refresh before retrying.",
+            },
+        ) from exc
+    except host_daemon_client.HostDaemonError as exc:
+        raise HTTPException(exc.status_code, detail=exc.detail) from exc
+
+    service = AccountReconciliationService(artifacts_root=artifacts_root)
+    try:
+        await refresh_account_truth_now(
+            require_connected_client(),
+            account_id=account_id,
+            artifacts_root=artifacts_root,
+            context="start account verification",
+            account_truth_observer=service.observe_account_truth,
+            account_truth_failure_observer=service.observe_account_truth_failure,
+        )
+    except BrokerError:
+        logger.warning(
+            "start account verification refresh failed",
+            extra={"account_id": account_id},
+            exc_info=True,
+        )
+
+    assessment = assess_account_observation_lease(
+        artifacts_root,
+        account_id,
+        now_ms=_now_ms(),
     )
     if assessment.state == "VERIFIED":
         return
@@ -3002,7 +3048,7 @@ async def _assert_start_allowed(run_id: str, body: HostRunnerStartRequest, setti
             },
         )
     now_ms = _now_ms()
-    _raise_if_account_observation_lease_blocks_start(
+    await _ensure_account_observation_lease_allows_start(
         root.parent,
         account_id,
         settings,
