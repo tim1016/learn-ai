@@ -610,6 +610,11 @@ def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "gather_deploy_preflight_signals",
         healthy_deploy_preflight,
     )
+
+    async def clean_fleet_positions() -> dict[str, int]:
+        return {}
+
+    monkeypatch.setattr(live_instances, "_fetch_net_positions", clean_fleet_positions)
     from app.main import app
 
     return app, root
@@ -5071,6 +5076,50 @@ async def test_start_run_rejects_contaminated_account_even_with_roll_call_offer(
     detail = response.json()["detail"]
     assert detail["reason_code"] == "FLEET_CONTAMINATED"
     assert detail["blockers"][0]["condition"]["id"] == "fleet_contaminated"
+    assert called is False
+
+
+async def test_start_run_rejects_unknown_account_truth_even_with_roll_call_offer(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1067: no broker position proof means no new start admission."""
+
+    app, root = app_with_root
+    _write_ledger(root, "run-unknown", "spy_ema_paper", 100)
+    offer_id = _write_roll_call_offer(root.parent, run_id="run-unknown")
+    _set_startable_now(monkeypatch)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async def unknown(_root: Path) -> FleetContamination:
+        return FleetContamination(
+            net_positions=None,
+            explained_total={},
+            explained_by_instance=[],
+            residual={},
+            verdict="unknown",
+            policy_blocks_starts=True,
+            summary="Net account position unavailable — contamination unknown.",
+        )
+
+    monkeypatch.setattr(live_instances, "_compute_account_fleet_contamination", unknown)
+    called = False
+
+    async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
+        nonlocal called
+        called = True
+        return {"accepted": True, "process": _running_process("run-unknown")}
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/runs/run-unknown/start",
+            json={"roll_call_offer_id": offer_id},
+        )
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "FLEET_CONTAMINATION_UNKNOWN"
+    assert detail["gate_id"] == "account.fleet_contamination"
     assert called is False
 
 

@@ -3648,8 +3648,18 @@ async def _raise_if_fleet_contamination_blocks_start(root: Path) -> None:
                 "gate_id": "account.fleet_contamination",
             },
         ) from exc
-    if fleet.verdict != "contaminated":
+    if fleet.verdict == "clean":
         return
+    if fleet.verdict == "unknown":
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "reason_code": "FLEET_CONTAMINATION_UNKNOWN",
+                "message": "Account exposure is not provable. Reconcile it before starting bots.",
+                "gate_id": "account.fleet_contamination",
+                "contamination": fleet.model_dump(mode="json"),
+            },
+        )
     raise HTTPException(
         status.HTTP_409_CONFLICT,
         detail={

@@ -31,6 +31,10 @@ class AccountJournalScopeRequiredError(ValueError):
     """Raised rather than allowing two account journals to net in one verdict."""
 
 
+class BrokerAccountMismatchError(ValueError):
+    """The connected broker proved it is serving a different account."""
+
+
 def scan_runs_by_instance(root: Path) -> dict[str, list[dict]]:
     """Group run dirs by ``strategy_instance_id`` from their ledgers, newest first."""
 
@@ -286,8 +290,8 @@ def _retired_claim_keys_for_run(
     return cache[account_id]
 
 
-async def fetch_net_positions() -> dict[str, int] | None:
-    """Best-effort net account position by symbol from the broker."""
+async def fetch_net_positions(account_id: str | None = None) -> dict[str, int] | None:
+    """Best-effort net position only when the broker proves the account id."""
 
     try:
         from app.broker.ibkr import account as ibkr_account
@@ -298,6 +302,14 @@ async def fetch_net_positions() -> dict[str, int] | None:
     except Exception as exc:
         logger.info("fleet net-position fetch unavailable: %s", exc)
         return None
+    if account_id is not None and snapshot.account_id.upper() != account_id.upper():
+        logger.warning(
+            "fleet net-position account mismatch",
+            extra={"requested_account_id": account_id, "broker_account_id": snapshot.account_id},
+        )
+        raise BrokerAccountMismatchError(
+            f"BROKER_ACCOUNT_MISMATCH:{account_id}:{snapshot.account_id}"
+        )
     net: dict[str, int] = {}
     for pos in snapshot.positions:
         symbol = str(pos.symbol).upper()
@@ -311,10 +323,18 @@ async def compute_account_fleet_contamination(
     *,
     account_id: str | None = None,
 ) -> FleetContamination:
-    resolve_net_positions = fetch_positions or fetch_net_positions
-    result = compute_fleet_contamination(
-        await resolve_net_positions(),
-        collect_fleet_position_explanations(root, account_id=account_id),
-        policy_blocks_starts=True,
-    )
+    resolve_net_positions = fetch_positions or (lambda: fetch_net_positions(account_id))
+    explanations = collect_fleet_position_explanations(root, account_id=account_id)
+    try:
+        net_positions = await resolve_net_positions()
+    except BrokerAccountMismatchError:
+        result = compute_fleet_contamination(None, explanations, policy_blocks_starts=True)
+        result["policy_blocks_starts"] = True
+        result["summary"] = "Connected broker account mismatches the requested account; starts are blocked."
+    else:
+        result = compute_fleet_contamination(
+            net_positions,
+            explanations,
+            policy_blocks_starts=True,
+        )
     return FleetContamination(**result)
