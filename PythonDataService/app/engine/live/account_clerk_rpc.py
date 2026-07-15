@@ -551,6 +551,10 @@ class AccountClerkRpcServer:
         self._socket_path.chmod(0o600)
 
     async def close(self) -> None:
+        # Fence before awaiting the callback drain: otherwise a request already
+        # accepted by the Unix server can place an order after its callback
+        # writer has been stopped.
+        self._clerk.close_normal_submit_intake()
         await self._flush_broker_callbacks()
         if self._callback_worker is not None:
             self._callback_worker.cancel()

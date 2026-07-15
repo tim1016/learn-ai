@@ -289,6 +289,12 @@ class AccountClerk:
         self._normal_submit_intake_reason = "CLERK_EVENT_STREAM_DOWN"
         await asyncio.to_thread(self._record_event_stream_down_locked, failure)
 
+    def close_normal_submit_intake(self) -> None:
+        """Fence normal writes before this Clerk's RPC transport shuts down."""
+
+        if self._normal_submit_intake_reason is None:
+            self._normal_submit_intake_reason = "CLERK_RPC_CLOSED"
+
     async def recover_inbox(self) -> list[AccountClerkRecordedReceipt]:
         """Replay an inbox row left durable by a crash before journal fsync."""
 

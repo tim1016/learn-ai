@@ -1306,6 +1306,29 @@ def test_read_account_clerk_journal_rejects_non_contiguous_sequence(
         read_account_clerk_journal(tmp_path, ACCOUNT)
 
 
+def test_clerk_journal_entries_reject_future_schema_versions() -> None:
+    """Durable Clerk artifacts must not silently accept unknown wire formats."""
+
+    with pytest.raises(ValueError, match="schema_version"):
+        AccountClerkJournalEntry.model_validate(
+            {
+                "schema_version": 2,
+                "seq": 1,
+                "recorded_at_ms": START_MS,
+                "intent": _intent("bot-a", "run-a", "future-journal"),
+            }
+        )
+    with pytest.raises(ValueError, match="schema_version"):
+        AccountClerkInboxEntry.model_validate(
+            {
+                "schema_version": 2,
+                "seq": 1,
+                "received_at_ms": START_MS,
+                "intent": _intent("bot-a", "run-a", "future-inbox"),
+            }
+        )
+
+
 @pytest.mark.asyncio
 async def test_clerk_offloads_record_and_recovery_durable_work_to_a_worker_thread(
     tmp_path: Path,

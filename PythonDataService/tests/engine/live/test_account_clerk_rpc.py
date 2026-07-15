@@ -17,7 +17,7 @@ import app.engine.live.account_clerk_rpc as account_clerk_rpc
 from app.broker.ibkr.models import IbkrOrderSpec
 from app.engine.execution.order_sizer import FixedShares, OrderSizer
 from app.engine.live.account_artifacts import advance_account_clerk_generation
-from app.engine.live.account_clerk import AccountClerk, account_clerk_socket_path
+from app.engine.live.account_clerk import AccountClerk, AccountClerkIntentRejected, account_clerk_socket_path
 from app.engine.live.account_clerk_cursor import (
     AccountClerkEventConsumerIdentity,
     AccountClerkEventCursorRepo,
@@ -249,6 +249,23 @@ async def test_success_envelope_round_trips_over_real_unix_socket(tmp_path: Path
     assert envelope.schema_version == ACCOUNT_CLERK_RPC_SCHEMA_VERSION
     assert envelope.outcome == "success"
     assert envelope.payload["broker_acked"]["order_id"] == 101
+
+
+@pytest.mark.asyncio
+async def test_close_fences_normal_submit_intake_before_callback_drain(tmp_path: Path) -> None:
+    """Shutdown cannot admit a write while its callback worker is draining."""
+
+    _write_active_binding(tmp_path)
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_Broker(), clerk_generation=1)
+    server = AccountClerkRpcServer(clerk)
+    await server.start()
+
+    async def assert_intake_is_fenced() -> None:
+        with pytest.raises(AccountClerkIntentRejected, match="CLERK_RPC_CLOSED"):
+            await clerk.submit_intent(_intent())
+
+    server._flush_broker_callbacks = assert_intake_is_fenced  # type: ignore[method-assign]
+    await server.close()
 
 
 @pytest.mark.asyncio
