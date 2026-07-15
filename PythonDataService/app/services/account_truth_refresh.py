@@ -166,7 +166,8 @@ async def refresh_account_truth_and_update_cache(
             detail=str(exc),
             attempted_at_ms=attempted_at_ms,
         )
-        _notify_refresh_failure(
+        await asyncio.to_thread(
+            _notify_refresh_failure,
             account_truth_failure_observer,
             account_id=health.account_id,
             detail=str(exc),
@@ -174,7 +175,8 @@ async def refresh_account_truth_and_update_cache(
         )
         raise
     provider.remember(truth)
-    _notify_account_truth_observer(
+    await asyncio.to_thread(
+        _notify_account_truth_observer,
         account_truth_observer,
         truth,
         owner_generation_before=owner_generation_before,
@@ -196,6 +198,7 @@ class AccountTruthRefreshLoop:
         refresh_now: Callable[..., Awaitable[AccountTruthResponse]] = refresh_account_truth_now,
         account_truth_observer: Callable[..., object] | None = None,
         account_truth_failure_observer: Callable[..., object] | None = None,
+        account_journal_observer: Callable[[str], object] | None = None,
     ) -> None:
         self._client = client
         self._artifacts_root = artifacts_root
@@ -211,6 +214,7 @@ class AccountTruthRefreshLoop:
         )
         self._account_truth_observer = account_truth_observer
         self._account_truth_failure_observer = account_truth_failure_observer
+        self._account_journal_observer = account_journal_observer
         self._task: asyncio.Task[None] | None = None
         self._stopped = asyncio.Event()
         self._refresh_lock = asyncio.Lock()
@@ -268,7 +272,7 @@ class AccountTruthRefreshLoop:
                         detail=detail,
                         attempted_at_ms=attempted_at_ms,
                     )
-                    self._notify_refresh_failure(
+                    await self._notify_refresh_failure(
                         account_id,
                         detail=detail,
                         attempted_at_ms=attempted_at_ms,
@@ -295,7 +299,7 @@ class AccountTruthRefreshLoop:
                 ) -> None:
                     nonlocal success_observer_notified
                     success_observer_notified = True
-                    self._notify_account_truth(
+                    self._observe_account_truth(
                         account_truth,
                         owner_generation_before=owner_generation_before,
                         owner_generation_captured=owner_generation_captured,
@@ -309,7 +313,7 @@ class AccountTruthRefreshLoop:
                 ) -> None:
                     nonlocal failure_observer_notified
                     failure_observer_notified = True
-                    self._notify_refresh_failure(
+                    self._observe_refresh_failure(
                         account_id,
                         detail=detail,
                         attempted_at_ms=attempted_at_ms,
@@ -320,7 +324,12 @@ class AccountTruthRefreshLoop:
                     refresh_kwargs["account_truth_failure_observer"] = observe_failure
                 result = await self._refresh_now(self._client, **refresh_kwargs)
                 if not success_observer_notified:
-                    self._notify_account_truth(result)
+                    await self._notify_account_truth(result)
+                # A refresh that cannot prove one account is explicitly not
+                # account-scoped evidence.  Do not let it advance a local
+                # Clerk-journal qualification window.
+                if result.account_id is not None:
+                    await self._notify_account_journal_observer(result.account_id)
                 self._last_refresh_result = "success"
                 return result
             except BrokerError as exc:
@@ -331,7 +340,7 @@ class AccountTruthRefreshLoop:
                     attempted_at_ms=attempted_at_ms,
                 )
                 if not locals().get("failure_observer_notified", False):
-                    self._notify_refresh_failure(
+                    await self._notify_refresh_failure(
                         account_id,
                         detail=detail,
                         attempted_at_ms=attempted_at_ms,
@@ -349,7 +358,7 @@ class AccountTruthRefreshLoop:
                     detail=detail,
                     attempted_at_ms=attempted_at_ms,
                 )
-                self._notify_refresh_failure(
+                await self._notify_refresh_failure(
                     account_id,
                     detail=detail,
                     attempted_at_ms=attempted_at_ms,
@@ -396,7 +405,21 @@ class AccountTruthRefreshLoop:
             attempted_at_ms=attempted_at_ms if attempted_at_ms is not None else now_ms_utc(),
         )
 
-    def _notify_refresh_failure(
+    async def _notify_refresh_failure(
+        self,
+        account_id: str | None,
+        *,
+        detail: str,
+        attempted_at_ms: int | None,
+    ) -> None:
+        await asyncio.to_thread(
+            self._observe_refresh_failure,
+            account_id,
+            detail=detail,
+            attempted_at_ms=attempted_at_ms,
+        )
+
+    def _observe_refresh_failure(
         self,
         account_id: str | None,
         *,
@@ -412,7 +435,21 @@ class AccountTruthRefreshLoop:
             attempted_at_ms=attempted_at_ms if attempted_at_ms is not None else now_ms_utc(),
         )
 
-    def _notify_account_truth(
+    async def _notify_account_truth(
+        self,
+        account_truth: AccountTruthResponse,
+        *,
+        owner_generation_before: OwnerGenerationFence = None,
+        owner_generation_captured: bool = False,
+    ) -> None:
+        await asyncio.to_thread(
+            self._observe_account_truth,
+            account_truth,
+            owner_generation_before=owner_generation_before,
+            owner_generation_captured=owner_generation_captured,
+        )
+
+    def _observe_account_truth(
         self,
         account_truth: AccountTruthResponse,
         *,
@@ -427,6 +464,22 @@ class AccountTruthRefreshLoop:
             owner_generation_before=owner_generation_before,
             owner_generation_captured=owner_generation_captured,
         )
+
+    async def _notify_account_journal_observer(self, account_id: str) -> None:
+        """Run bounded Clerk parity observation after a successful refresh."""
+
+        if self._account_journal_observer is None:
+            return
+        await asyncio.to_thread(self._observe_account_journal, account_id)
+
+    def _observe_account_journal(self, account_id: str) -> None:
+        try:
+            self._account_journal_observer(account_id)
+        except Exception:
+            logger.exception(
+                "account journal parity observer failed",
+                extra={"account_id": account_id},
+            )
 
 
 def _read_owner_generation_fence(

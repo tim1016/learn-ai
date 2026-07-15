@@ -6,10 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from app.engine.live.account_artifacts import append_account_event
+from app.engine.live.account_artifacts import AccountArtifactError, append_account_event
 from app.services.observation_lease_parity import (
     assess_observation_lease_shadow_parity,
     assess_observation_lease_shadow_parity_from_artifacts,
+    observation_lease_shadow_parity_archive_payload,
 )
 
 
@@ -176,3 +177,26 @@ def test_assess_observation_lease_shadow_parity_from_artifacts_replays_canonical
     report = assess_observation_lease_shadow_parity_from_artifacts(tmp_path, "DU123")
 
     assert report.cutover_ready is True
+
+
+def test_observation_lease_parity_archive_uses_empty_snapshot_for_missing_journal(
+    tmp_path: Path,
+) -> None:
+    payload = observation_lease_shadow_parity_archive_payload(tmp_path, "DU123")
+
+    assert payload["source"]["account_event_count"] == 0
+    assert payload["source"]["account_events_sha256"] == (
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    )
+    assert payload["cutover_ready"] is False
+
+
+def test_observation_lease_parity_archive_rejects_symlinked_journal(tmp_path: Path) -> None:
+    account_dir = tmp_path / "accounts" / "DU123"
+    account_dir.mkdir(parents=True)
+    outside_journal = tmp_path / "outside-account-events.jsonl"
+    outside_journal.write_text("{}\n", encoding="utf-8")
+    (account_dir / "account_events.jsonl").symlink_to(outside_journal)
+
+    with pytest.raises(AccountArtifactError, match="path traversal"):
+        observation_lease_shadow_parity_archive_payload(tmp_path, "DU123")

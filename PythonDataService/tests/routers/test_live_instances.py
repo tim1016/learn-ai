@@ -24,6 +24,7 @@ from app.engine.live.account_artifacts import (
     AccountFreezeEvidence,
     append_account_event,
     read_account_events,
+    read_account_freeze,
     write_account_freeze,
 )
 from app.engine.live.account_registry import (
@@ -54,7 +55,13 @@ from app.operator.notices.schema import (
 )
 from app.routers import live_instances
 from app.schemas.broker_activity import BrokerActivityRow
-from app.schemas.live_runs import FleetContamination, LiveBinding
+from app.schemas.live_runs import (
+    BotRollCallOffer,
+    BotRollCallResponse,
+    BotRollCallSummary,
+    FleetContamination,
+    LiveBinding,
+)
 from app.services.live_chart_window import ChartTimeframe, ChartWindowResult
 from app.services.mutation_attempt import MutationAttemptRepo
 from tests._fixtures.daemon_transport import as_typed_get
@@ -120,7 +127,7 @@ def _write_ledger(
     sid: str,
     created_at_ms: int,
     spec_path: Path | None = None,
-    account_id: str | None = None,
+    account_id: str | None = "DU111",
     strategy_key: str | None = None,
     start_defaults: dict | None = None,
 ) -> None:
@@ -588,6 +595,11 @@ def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         readonly=False,
     )
     monkeypatch.setattr(live_instances, "get_settings", lambda: stub)
+
+    async def connected_broker_account() -> tuple[str | None, bool]:
+        return "DU111", True
+
+    monkeypatch.setattr(live_instances, "_fetch_broker_connected_account", connected_broker_account)
     from app.services.deploy_preflight import DeployPreflightSignals
 
     async def healthy_deploy_preflight(
@@ -610,6 +622,20 @@ def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "gather_deploy_preflight_signals",
         healthy_deploy_preflight,
     )
+
+    async def clean_fleet(_root: Path, *, account_id: str | None = None) -> FleetContamination:
+        del account_id
+        return FleetContamination(
+            net_positions={},
+            explained_total={},
+            explained_by_instance=[],
+            residual={},
+            verdict="clean",
+            policy_blocks_starts=False,
+            summary="Account clean — every position is explained by a managed instance.",
+        )
+
+    monkeypatch.setattr(live_instances, "_compute_account_fleet_contamination", clean_fleet)
     from app.main import app
 
     return app, root
@@ -632,6 +658,244 @@ def _set_daemon(monkeypatch: pytest.MonkeyPatch, *, instances: dict | None = Non
 
     monkeypatch.setattr(host_daemon_client, "fetch_instances", fake_instances)
     monkeypatch.setattr(host_daemon_client, "fetch_instance_process", fake_process)
+
+
+@pytest.mark.asyncio
+async def test_server_cohort_launch_persists_receipt_before_partial_start_outcomes(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    account_id = "DU123"
+    _write_ledger(root, "run-a", "bot-a", 1, account_id=account_id, strategy_key="spy_ema_crossover")
+    _write_ledger(root, "run-b", "bot-b", 2, account_id=account_id, strategy_key="spy_ema_crossover")
+    offers = [
+        BotRollCallOffer(offer_id="offer-a", strategy_instance_id="bot-a", run_id="run-a", session_date="2026-07-14", issued_at_ms=10, expires_at_ms=20),
+        BotRollCallOffer(offer_id="offer-b", strategy_instance_id="bot-b", run_id="run-b", session_date="2026-07-14", issued_at_ms=10, expires_at_ms=20),
+    ]
+
+    async def fake_roll_call() -> BotRollCallResponse:
+        return BotRollCallResponse(summary=BotRollCallSummary(ready=2), offers=offers)
+
+    calls: list[tuple[str, str | None]] = []
+
+    async def fake_start(run_id: str, body):
+        assert any(event["event_type"] == "cohort_batch_launch_authorized" for event in read_account_events(root.parent, account_id))
+        calls.append((run_id, body.cohort_id))
+        if run_id == "run-b":
+            raise live_instances.HTTPException(409, detail={"reason_code": "START_REJECTED"})
+        return SimpleNamespace(accepted=True)
+
+    monkeypatch.setattr(live_instances, "run_roll_call", fake_roll_call)
+    monkeypatch.setattr(live_instances, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/live-instances/accounts/{account_id}/cohort-launch",
+            json={"member_strategy_instance_ids": ["bot-a", "bot-b"]},
+            headers={"X-Operator-Identity": "operator.alice"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [run_id for run_id, _cohort_id in calls] == ["run-a", "run-b"]
+    assert all(cohort_id == payload["cohort_id"] for _run_id, cohort_id in calls)
+    assert payload["authorized_by"] == "operator.alice"
+    assert payload["outcomes_state"] == "recorded"
+    assert {outcome["strategy_instance_id"]: outcome["state"] for outcome in payload["outcomes"]} == {
+        "bot-a": "accepted",
+        "bot-b": "blocked",
+    }
+
+
+@pytest.mark.asyncio
+async def test_server_cohort_launch_rejects_changed_displayed_candidates_before_receipt(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-a", "bot-a", 1, account_id="DU123", strategy_key="spy_ema_crossover")
+
+    async def fake_roll_call() -> BotRollCallResponse:
+        return BotRollCallResponse(
+            summary=BotRollCallSummary(ready=1),
+            offers=[BotRollCallOffer(offer_id="offer-a", strategy_instance_id="bot-a", run_id="run-a", session_date="2026-07-14", issued_at_ms=10, expires_at_ms=20)],
+        )
+
+    monkeypatch.setattr(live_instances, "run_roll_call", fake_roll_call)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/accounts/DU123/cohort-launch",
+            json={"member_strategy_instance_ids": ["bot-a", "bot-b"]},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "COHORT_CANDIDATES_CHANGED"
+    assert read_account_events(root.parent, "DU123") == []
+
+
+@pytest.mark.asyncio
+async def test_server_cohort_launch_allows_displayed_subset_and_forwards_persisted_defaults(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    account_id = "DU123"
+    start_defaults = {
+        "readonly": True,
+        "hydrate_policy": "optional",
+        "strategy": "qqq_ema_crossover",
+        "max_orders_per_day": 7,
+        "ibkr_host": "paper-gateway.internal",
+    }
+    _write_ledger(
+        root,
+        "run-a",
+        "bot-a",
+        1,
+        account_id=account_id,
+        strategy_key="spy_ema_crossover",
+        start_defaults=start_defaults,
+    )
+    _write_ledger(
+        root,
+        "run-b",
+        "bot-b",
+        2,
+        account_id=account_id,
+        strategy_key="spy_ema_crossover",
+        start_defaults=start_defaults,
+    )
+    _write_ledger(
+        root,
+        "run-c",
+        "bot-c",
+        3,
+        account_id=account_id,
+        strategy_key="spy_ema_crossover",
+        start_defaults=start_defaults,
+    )
+    offers = [
+        BotRollCallOffer(offer_id="offer-a", strategy_instance_id="bot-a", run_id="run-a", session_date="2026-07-14", issued_at_ms=10, expires_at_ms=20),
+        BotRollCallOffer(offer_id="offer-b", strategy_instance_id="bot-b", run_id="run-b", session_date="2026-07-14", issued_at_ms=10, expires_at_ms=20),
+        BotRollCallOffer(offer_id="offer-c", strategy_instance_id="bot-c", run_id="run-c", session_date="2026-07-14", issued_at_ms=10, expires_at_ms=20),
+    ]
+
+    async def fake_roll_call() -> BotRollCallResponse:
+        return BotRollCallResponse(summary=BotRollCallSummary(ready=3), offers=offers)
+
+    received: dict[str, object] = {}
+
+    async def fake_start(run_id: str, body):
+        received[run_id] = body
+        return SimpleNamespace(accepted=True)
+
+    monkeypatch.setattr(live_instances, "run_roll_call", fake_roll_call)
+    monkeypatch.setattr(live_instances, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/live-instances/accounts/{account_id}/cohort-launch",
+            json={"member_strategy_instance_ids": ["bot-a", "bot-b"]},
+        )
+
+    assert response.status_code == 200
+    assert set(received) == {"run-a", "run-b"}
+    for request in received.values():
+        assert request.readonly is True
+        assert request.hydrate_policy == "optional"
+        assert request.strategy == "qqq_ema_crossover"
+        assert request.max_orders_per_day == 7
+        assert request.ibkr_host == "paper-gateway.internal"
+
+
+@pytest.mark.asyncio
+async def test_server_cohort_launch_records_blocked_outcome_for_unexpected_start_error(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    account_id = "DU123"
+    _write_ledger(root, "run-a", "bot-a", 1, account_id=account_id, strategy_key="spy_ema_crossover")
+    _write_ledger(root, "run-b", "bot-b", 2, account_id=account_id, strategy_key="spy_ema_crossover")
+    offers = [
+        BotRollCallOffer(offer_id="offer-a", strategy_instance_id="bot-a", run_id="run-a", session_date="2026-07-14", issued_at_ms=10, expires_at_ms=20),
+        BotRollCallOffer(offer_id="offer-b", strategy_instance_id="bot-b", run_id="run-b", session_date="2026-07-14", issued_at_ms=10, expires_at_ms=20),
+    ]
+
+    async def fake_roll_call() -> BotRollCallResponse:
+        return BotRollCallResponse(summary=BotRollCallSummary(ready=2), offers=offers)
+
+    async def fake_start(run_id: str, _body):
+        if run_id == "run-b":
+            raise RuntimeError("durable start persistence failed")
+        return SimpleNamespace(accepted=True)
+
+    monkeypatch.setattr(live_instances, "run_roll_call", fake_roll_call)
+    monkeypatch.setattr(live_instances, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/live-instances/accounts/{account_id}/cohort-launch",
+            json={"member_strategy_instance_ids": ["bot-a", "bot-b"]},
+        )
+
+    assert response.status_code == 200
+    outcomes = {outcome["strategy_instance_id"]: outcome for outcome in response.json()["outcomes"]}
+    assert outcomes["bot-a"]["state"] == "accepted"
+    assert outcomes["bot-b"]["state"] == "blocked"
+    assert outcomes["bot-b"]["reason"] == "COHORT_START_FAILED"
+    assert any(
+        event["event_type"] == "cohort_batch_launch_outcomes_recorded"
+        for event in read_account_events(root.parent, account_id)
+    )
+
+
+@pytest.mark.asyncio
+async def test_server_cohort_launch_returns_recorded_outcomes_when_sampler_start_fails(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Evidence startup is post-launch observation, not launch rollback."""
+
+    app, root = app_with_root
+    account_id = "DU123"
+    _write_ledger(root, "run-a", "bot-a", 1, account_id=account_id, strategy_key="spy_ema_crossover")
+
+    async def fake_roll_call() -> BotRollCallResponse:
+        return BotRollCallResponse(
+            summary=BotRollCallSummary(ready=1),
+            offers=[
+                BotRollCallOffer(
+                    offer_id="offer-a",
+                    strategy_instance_id="bot-a",
+                    run_id="run-a",
+                    session_date="2026-07-14",
+                    issued_at_ms=10,
+                    expires_at_ms=20,
+                )
+            ],
+        )
+
+    async def fake_start(_run_id: str, _body):
+        return SimpleNamespace(accepted=True)
+
+    async def failing_sampler_start(_self, _receipt) -> None:
+        raise OSError("evidence artifact unavailable")
+
+    monkeypatch.setattr(live_instances, "run_roll_call", fake_roll_call)
+    monkeypatch.setattr(live_instances, "start_run", fake_start)
+    monkeypatch.setattr(live_instances.CohortLaunchCoordinator, "_start_evidence_sampler", failing_sampler_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/live-instances/accounts/{account_id}/cohort-launch",
+            json={"member_strategy_instance_ids": ["bot-a"]},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["outcomes_state"] == "recorded"
+    assert response.json()["outcomes"][0]["state"] == "accepted"
 
 
 @pytest.mark.parametrize(
@@ -2828,7 +3092,7 @@ async def test_status_start_defaults_redeploy_fields_empty_for_legacy_ledger(
     """Legacy ledgers missing the deploy fields yield empty strings (the deploy
     form then asks for them) rather than erroring."""
     app, root = app_with_root
-    _write_ledger(root, "run-legacy-redeploy", "spy_ema_paper", 50)
+    _write_ledger(root, "run-legacy-redeploy", "spy_ema_paper", 50, account_id=None)
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -3020,7 +3284,7 @@ async def test_bot_catalog_composes_status_rows_concurrently(
     assert max_active == 2
 
 
-async def test_roll_call_tick_persists_start_offer_and_catalog_reads_it(
+async def test_roll_call_tick_persists_start_offer(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app, root = app_with_root
@@ -3041,21 +3305,138 @@ async def test_roll_call_tick_persists_start_offer_and_catalog_reads_it(
         },
         process={"state": "idle"},
     )
+    monkeypatch.setattr(live_instances, "status_is_roll_call_eligible", lambda _status: True)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         roll_call = await client.post("/api/live-instances/roll-call")
-        catalog = await client.get("/api/live-instances/catalog")
 
     assert roll_call.status_code == 200
     body = roll_call.json()
     assert body["summary"]["ready"] == 1
     assert body["offers"][0]["strategy_instance_id"] == "spy_ema_paper"
-    row = catalog.json()["bots"][0]
-    assert row["daily_lifecycle"]["display_status"] == "Ready"
-    assert row["daily_lifecycle"]["primary_action"]["offer_id"] == body["offers"][0]["offer_id"]
-    assert row["start_request"]["roll_call_offer_id"] is None
-    assert catalog.json()["roll_call"]["ready"] == 1
-    assert catalog.json()["evening_report"]["summary"].endswith("0 retired")
+    offers = BotRollCallOfferRepo(
+        stable_bot_roll_call_offers_path(root.parent, "spy_ema_paper")
+    ).read().offers
+    assert [offer.offer_id for offer in offers] == [body["offers"][0]["offer_id"]]
+
+
+async def test_roll_call_rejects_unreadable_connected_account_identity(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Roll call shares the start boundary and must not mint unsafe offers."""
+
+    app, root = app_with_root
+    _write_ledger(root, "run-unreadable-account", "spy_ema_paper", 100, strategy_key="spy_ema")
+    _set_connected_broker_account(monkeypatch, "12345")
+    _set_startable_now(monkeypatch)
+    _set_daemon(
+        monkeypatch,
+        instances={
+            "instances": [
+                {
+                    "strategy_instance_id": "spy_ema_paper",
+                    "run_id": "run-unreadable-account",
+                    "run_dir": str(root / "run-unreadable-account"),
+                    "process": {"state": "idle", "run_id": "run-unreadable-account"},
+                }
+            ],
+            "fetched_at_ms": 1,
+        },
+        process={"state": "idle"},
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/roll-call")
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "BROKER_TRUTH_UNAVAILABLE"
+    assert detail["connected_account_id"] == "12345"
+    assert not (root.parent / "bot_roll_call_offers").exists()
+
+
+async def test_roll_call_does_not_offer_legacy_run_without_account_identity_when_catalog_is_not_loaded(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-legacy", "legacy-bot", 100, account_id=None)
+    _set_startable_now(monkeypatch)
+    _set_daemon(
+        monkeypatch,
+        instances={
+            "instances": [
+                {
+                    "strategy_instance_id": "legacy-bot",
+                    "run_id": "run-legacy",
+                    "run_dir": str(root / "run-legacy"),
+                    "process": {"state": "idle", "run_id": "run-legacy"},
+                }
+            ],
+            "fetched_at_ms": 1,
+        },
+        process={"state": "idle"},
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/roll-call")
+
+    assert response.status_code == 200
+    assert response.json()["summary"]["ready"] == 0
+    assert response.json()["offers"] == []
+
+
+async def test_roll_call_ignores_retired_account_during_broker_truth_preflight(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-active", "active-bot", 100, account_id="DU111")
+    _write_ledger(root, "run-retired", "retired-bot", 100, account_id="DU999")
+    BotLifecycleStateRepo(stable_bot_lifecycle_state_path(root.parent, "retired-bot")).retire(
+        now_ms=101,
+        updated_by="operator",
+        reason="retired before roll call",
+    )
+    _set_startable_now(monkeypatch)
+    _set_daemon(
+        monkeypatch,
+        instances={
+            "instances": [
+                {
+                    "strategy_instance_id": "active-bot",
+                    "run_id": "run-active",
+                    "run_dir": str(root / "run-active"),
+                    "process": {"state": "idle", "run_id": "run-active"},
+                }
+            ],
+            "fetched_at_ms": 1,
+        },
+        process={"state": "idle"},
+    )
+    checked_accounts: list[str | None] = []
+
+    async def clean_fleet(_root: Path, *, account_id: str | None = None) -> FleetContamination:
+        checked_accounts.append(account_id)
+        return FleetContamination(
+            net_positions={},
+            explained_total={},
+            explained_by_instance=[],
+            residual={},
+            verdict="clean",
+            policy_blocks_starts=False,
+            summary="Account clean.",
+        )
+
+    monkeypatch.setattr(live_instances, "_compute_account_fleet_contamination", clean_fleet)
+    monkeypatch.setattr(live_instances, "status_is_roll_call_eligible", lambda _status: True)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances/roll-call")
+
+    assert response.status_code == 200
+    assert [offer["strategy_instance_id"] for offer in response.json()["offers"]] == ["active-bot"]
+    assert "DU111" in checked_accounts
+    assert "DU999" not in checked_accounts
 
 
 async def test_roll_call_rejects_contaminated_account(
@@ -3064,7 +3445,8 @@ async def test_roll_call_rejects_contaminated_account(
     app, root = app_with_root
     _write_ledger(root, "run-dirty", "spy_ema_paper", 100)
 
-    async def contaminated(_root: Path) -> FleetContamination:
+    async def contaminated(_root: Path, *, account_id: str | None = None) -> FleetContamination:
+        del account_id
         return FleetContamination(
             net_positions={"SPY": 1},
             explained_total={},
@@ -3098,18 +3480,15 @@ async def test_roll_call_uses_instance_process_when_bulk_snapshot_omits_idle_bot
         instances={"instances": [], "fetched_at_ms": 1},
         process={"state": "idle", "run_id": "run-offer"},
     )
+    monkeypatch.setattr(live_instances, "status_is_roll_call_eligible", lambda _status: True)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         roll_call = await client.post("/api/live-instances/roll-call")
-        catalog = await client.get("/api/live-instances/catalog")
 
     assert roll_call.status_code == 200
     body = roll_call.json()
     assert body["summary"]["ready"] == 1
     assert body["offers"][0]["strategy_instance_id"] == "spy_ema_paper"
-    row = catalog.json()["bots"][0]
-    assert row["daily_lifecycle"]["display_status"] == "Ready"
-    assert row["daily_lifecycle"]["primary_action"]["offer_id"] == body["offers"][0]["offer_id"]
 
 
 async def test_status_marks_bot_sick_bay_for_terminal_account_condition(
@@ -3571,6 +3950,14 @@ async def test_account_fleet_flags_residual_contamination(app_with_root, monkeyp
         return {"SPY": 137}  # 37 unexplained
 
     monkeypatch.setattr(live_instances, "_fetch_net_positions", fake_net)
+    async def real_fleet(run_root: Path, *, account_id: str | None = None) -> FleetContamination:
+        return await live_instances.fleet_contamination_service.compute_account_fleet_contamination(
+            run_root,
+            fetch_positions=live_instances._fetch_net_positions,
+            account_id=account_id,
+        )
+
+    monkeypatch.setattr(live_instances, "_compute_account_fleet_contamination", real_fleet)
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -3592,6 +3979,14 @@ async def test_account_fleet_unknown_without_broker(app_with_root, monkeypatch: 
         return None
 
     monkeypatch.setattr(live_instances, "_fetch_net_positions", fake_net)
+    async def real_fleet(run_root: Path, *, account_id: str | None = None) -> FleetContamination:
+        return await live_instances.fleet_contamination_service.compute_account_fleet_contamination(
+            run_root,
+            fetch_positions=live_instances._fetch_net_positions,
+            account_id=account_id,
+        )
+
+    monkeypatch.setattr(live_instances, "_compute_account_fleet_contamination", real_fleet)
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -4113,6 +4508,46 @@ async def test_deploy_instance_rejects_when_account_is_frozen(app_with_root, mon
 
     assert response.status_code == 409
     assert response.json()["detail"]["reason_code"] == "ACCOUNT_FROZEN"
+    assert called is False
+
+
+async def test_deploy_only_rejects_unknown_broker_truth(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _root = app_with_root
+    _set_connected_broker_account(monkeypatch, "DU111")
+
+    async def unknown(_root: Path, *, account_id: str | None = None) -> FleetContamination:
+        assert account_id == "DU111"
+        return FleetContamination(
+            net_positions=None,
+            explained_total={},
+            explained_by_instance=[],
+            residual={},
+            verdict="unknown",
+            policy_blocks_starts=True,
+            summary="Net account position unavailable — contamination unknown.",
+        )
+
+    monkeypatch.setattr(live_instances, "_compute_account_fleet_contamination", unknown)
+    called = False
+
+    async def fake_deploy(_base_url: str, _payload: dict) -> dict:
+        nonlocal called
+        called = True
+        return {"run_id": "run-new", "run_dir": "/runs/run-new", "created": True, "start": None}
+
+    monkeypatch.setattr(host_daemon_client, "deploy", fake_deploy)
+    body = _deploy_body()
+    body["start"] = False
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/live-instances", json=body)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "BROKER_TRUTH_UNAVAILABLE"
+    assert response.json()["detail"]["operator_next_step"] == "WAIT_FOR_BROKER_TRUTH"
     assert called is False
 
 
@@ -5041,7 +5476,8 @@ async def test_start_run_rejects_contaminated_account_even_with_roll_call_offer(
     _set_startable_now(monkeypatch)
     _set_daemon(monkeypatch, process={"state": "idle"})
 
-    async def contaminated(_root: Path) -> FleetContamination:
+    async def contaminated(_root: Path, *, account_id: str | None = None) -> FleetContamination:
+        del account_id
         return FleetContamination(
             net_positions={"SPY": 1},
             explained_total={},
@@ -5072,6 +5508,167 @@ async def test_start_run_rejects_contaminated_account_even_with_roll_call_offer(
     assert detail["reason_code"] == "FLEET_CONTAMINATED"
     assert detail["blockers"][0]["condition"]["id"] == "fleet_contaminated"
     assert called is False
+
+
+async def test_start_run_rejects_unknown_broker_truth_even_with_roll_call_offer(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-unknown", "spy_ema_paper", 100)
+    offer_id = _write_roll_call_offer(root.parent, run_id="run-unknown")
+    _set_startable_now(monkeypatch)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+
+    async def unknown(_root: Path, *, account_id: str | None = None) -> FleetContamination:
+        del account_id
+        return FleetContamination(
+            net_positions=None,
+            explained_total={},
+            explained_by_instance=[],
+            residual={},
+            verdict="unknown",
+            policy_blocks_starts=True,
+            summary="Net account position unavailable — contamination unknown.",
+        )
+
+    monkeypatch.setattr(live_instances, "_compute_account_fleet_contamination", unknown)
+    called = False
+
+    async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
+        nonlocal called
+        called = True
+        return {"accepted": True, "process": _running_process("run-unknown")}
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/runs/run-unknown/start",
+            json={"roll_call_offer_id": offer_id},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "BROKER_TRUTH_UNAVAILABLE"
+    assert called is False
+    assert read_account_freeze(root.parent, "DU111") is None
+
+
+async def test_start_gate_allows_advisory_unknown_fleet_verdict(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the server-owned policy flag turns an unknown verdict into a start gate."""
+
+    _app, root = app_with_root
+
+    async def advisory_unknown(_root: Path, *, account_id: str | None = None) -> FleetContamination:
+        assert account_id is None
+        return FleetContamination(
+            net_positions=None,
+            explained_total={},
+            explained_by_instance=[],
+            residual={},
+            verdict="unknown",
+            policy_blocks_starts=False,
+            summary="Broker observation is advisory for this caller.",
+        )
+
+    monkeypatch.setattr(live_instances, "_compute_account_fleet_contamination", advisory_unknown)
+
+    await live_instances._raise_if_fleet_contamination_blocks_start(root)
+
+
+async def test_start_run_rejects_connected_account_mismatch(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-account-mismatch", "spy_ema_paper", 100)
+    offer_id = _write_roll_call_offer(root.parent, run_id="run-account-mismatch")
+    _set_connected_broker_account(monkeypatch, "DU999")
+    _set_startable_now(monkeypatch)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+    called = False
+
+    async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
+        nonlocal called
+        called = True
+        return {"accepted": True, "process": _running_process("run-account-mismatch")}
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/runs/run-account-mismatch/start",
+            json={"roll_call_offer_id": offer_id},
+        )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "BROKER_ACCOUNT_MISMATCH"
+    assert detail["expected_account_id"] == "DU111"
+    assert detail["connected_account_id"] == "DU999"
+    assert called is False
+
+
+async def test_start_run_rejects_unreadable_connected_account_identity(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """External broker identity that cannot be normalized is not safe to start against."""
+
+    app, root = app_with_root
+    _write_ledger(root, "run-unreadable-account", "spy_ema_paper", 100)
+    offer_id = _write_roll_call_offer(root.parent, run_id="run-unreadable-account")
+    _set_connected_broker_account(monkeypatch, "12345")
+    _set_startable_now(monkeypatch)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+    called = False
+
+    async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
+        nonlocal called
+        called = True
+        return {"accepted": True, "process": _running_process("run-unreadable-account")}
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/runs/run-unreadable-account/start",
+            json={"roll_call_offer_id": offer_id},
+        )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "BROKER_TRUTH_UNAVAILABLE"
+    assert detail["expected_account_id"] == "DU111"
+    assert detail["connected_account_id"] == "12345"
+    assert called is False
+
+
+async def test_start_run_normalizes_ledger_and_connected_account_identity(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-normalized-account", "spy_ema_paper", 100, account_id=" du111 ")
+    offer_id = _write_roll_call_offer(root.parent, run_id="run-normalized-account")
+    _set_connected_broker_account(monkeypatch, "du111")
+    _set_startable_now(monkeypatch)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+    called = False
+
+    async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
+        nonlocal called
+        called = True
+        return {"accepted": True, "process": _running_process("run-normalized-account")}
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/runs/run-normalized-account/start",
+            json={"roll_call_offer_id": offer_id},
+        )
+
+    assert response.status_code == 200
+    assert called is True
 
 
 async def test_start_run_rejects_when_poisoned(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -5257,6 +5854,7 @@ async def test_start_run_rejects_when_crash_recovery_required(
         run_id=run_id,
         recorded_at_ms=1_700_000_000_000,
     )
+    _set_connected_broker_account(monkeypatch, account_id)
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     called = False
@@ -5607,7 +6205,7 @@ async def test_lifecycle_roster_updates_daily_projection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app, root = app_with_root
-    _write_ledger(root, "run-idle", "spy_ema_paper", 100)
+    _write_ledger(root, "run-idle", "spy_ema_paper", 100, account_id=None)
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

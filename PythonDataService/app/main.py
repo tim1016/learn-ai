@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -72,6 +73,7 @@ from app.security.data_plane_control import (
 )
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.account_truth_refresh import AccountTruthRefreshLoop, account_truth_artifacts_root
+from app.services.fleet_contamination import record_account_journal_parity_observation
 from app.utils.error_handlers import polygon_exception_handler
 
 # Configure logging
@@ -189,13 +191,18 @@ async def lifespan(app: FastAPI):
         monitor.start()
         set_monitor(monitor)
 
-        reconciliation_service = AccountReconciliationService(
-            artifacts_root=account_truth_artifacts_root(ibkr_settings)
-        )
+        artifacts_root = account_truth_artifacts_root(ibkr_settings)
+        live_runs_root = Path(ibkr_settings.live_runs_root)
+        reconciliation_service = AccountReconciliationService(artifacts_root=artifacts_root)
         account_truth_refresh_loop = AccountTruthRefreshLoop(
             client=ibkr_client,
+            artifacts_root=artifacts_root,
             account_truth_observer=reconciliation_service.observe_account_truth,
             account_truth_failure_observer=reconciliation_service.observe_account_truth_failure,
+            account_journal_observer=lambda account_id: record_account_journal_parity_observation(
+                live_runs_root,
+                account_id=account_id,
+            ),
         )
         account_truth_refresh_loop.start()
     else:
@@ -246,9 +253,21 @@ async def lifespan(app: FastAPI):
     # its stored document.
     await live_instances_router.start_surface_hubs()
 
+    from app.services.cohort_evidence import get_cohort_evidence_sampler_registry
+    from app.services.cohort_launch import resume_open_cohort_evidence_samplers
+
+    await resume_open_cohort_evidence_samplers(
+        artifacts_root=account_truth_artifacts_root(ibkr_settings),
+        live_runs_root=Path(ibkr_settings.live_runs_root),
+        visible_runs_by_instance=live_instances_router._visible_runs_by_instance,
+        now_ms=lambda: int(time.time() * 1_000),
+        evidence_samplers=get_cohort_evidence_sampler_registry(),
+    )
+
     try:
         yield
     finally:
+        await get_cohort_evidence_sampler_registry().stop_all()
         await live_instances_router.stop_surface_hubs()
         await bot_events.get_bot_event_stream_service().stop_all()
         # Stop the daemon monitor first — its probe traffic stops cleanly

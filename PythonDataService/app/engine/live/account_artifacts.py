@@ -19,6 +19,7 @@ from app.schemas.live_runs import GateResult
 
 ACCOUNT_FREEZE_FILENAME = "unresolved_exposure.flag"
 ACCOUNT_EVENTS_FILENAME = "account_events.jsonl"
+ACCOUNT_EVENTS_SEQUENCE_FILENAME = "account_events.seq"
 ACCOUNT_OWNER_GENERATION_FILENAME = "owner_generation.json"
 ACCOUNT_CLERK_GENERATION_FILENAME = "clerk_generation.json"
 ACCOUNT_CLERK_LEASE_FILENAME = "clerk_lease.json"
@@ -231,6 +232,8 @@ class CohortBatchLaunchReceipt(BaseModel):
     window_end_ms: int = Field(ge=0)
     authorized_by: str = Field(min_length=1, max_length=128)
     recorded_at_ms: int = Field(ge=0)
+    member_pins: tuple[CohortBatchLaunchMemberPin, ...] = ()
+    request_provenance: CohortBatchLaunchRequestProvenance | None = None
 
     @model_validator(mode="after")
     def validate_window_and_members(self) -> CohortBatchLaunchReceipt:
@@ -239,7 +242,30 @@ class CohortBatchLaunchReceipt(BaseModel):
             self.window_end_ms,
             self.member_strategy_instance_ids,
         )
+        if self.member_pins and {
+            pin.strategy_instance_id for pin in self.member_pins
+        } != set(self.member_strategy_instance_ids):
+            raise ValueError("member_pins must cover exactly the authorized cohort members")
         return self
+
+
+class CohortBatchLaunchMemberPin(BaseModel):
+    """Server-observed identity/version pin before a cohort receipt is durable."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    strategy_instance_id: str = Field(min_length=1, max_length=128)
+    run_id: str = Field(min_length=1, max_length=128)
+    roll_call_offer_id: str = Field(min_length=1, max_length=128)
+
+
+class CohortBatchLaunchRequestProvenance(BaseModel):
+    """Non-authoritative request context retained for operator audit."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    operator_identity_header_present: bool
+    client_host: str | None = Field(default=None, max_length=255)
 
 
 class CohortBatchLaunchMemberOutcome(BaseModel):
@@ -489,6 +515,30 @@ def read_account_events(artifacts_root: Path, account_id: str) -> list[dict]:
     if not path.is_file():
         return []
     return _parse_account_event_bytes(path, path.read_bytes(), tolerant=False)
+
+
+def read_account_events_with_snapshot(
+    artifacts_root: Path,
+    account_id: str,
+) -> tuple[list[dict], bytes]:
+    """Read strict journal rows and their exact, locked source bytes.
+
+    Cutover evidence must name the same journal image it replays.  Select the
+    existing ledger through the non-symlinked artifact boundary, then keep the
+    writer lock while taking its one byte snapshot.  A missing ledger is the
+    canonical empty journal and therefore has the stable empty-byte snapshot.
+    """
+
+    path = _existing_account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        ACCOUNT_EVENTS_FILENAME,
+    )
+    if path is None:
+        return [], b""
+    with _file_lock(path):
+        raw = path.read_bytes()
+    return _parse_account_event_bytes(path, raw, tolerant=False), raw
 
 
 def read_account_events_tolerant(artifacts_root: Path, account_id: str) -> list[dict]:
@@ -953,6 +1003,18 @@ def _cohort_key_for_binding(
     recorded_at_ms = binding_event.get("recorded_at_ms")
     if not isinstance(strategy_instance_id, str) or not isinstance(recorded_at_ms, int):
         return None
+    cohort_id = binding_event.get("cohort_id")
+    if isinstance(cohort_id, str):
+        eligible = [
+            (seq, receipt)
+            for seq, receipt in receipts
+            if receipt.cohort_id == cohort_id
+            and strategy_instance_id in receipt.member_strategy_instance_ids
+        ]
+        if not eligible:
+            return None
+        seq, _receipt = max(eligible, key=lambda item: item[0])
+        return f"cohort:{seq}"
     eligible = [
         (seq, receipt)
         for seq, receipt in receipts
@@ -1020,6 +1082,7 @@ def _append_account_event(
             fh.write(line)
             fh.flush()
             os.fsync(fh.fileno())
+        _write_account_event_sequence_locked(path, enriched["seq"])
         _fsync_parent_dir(path)
     return True
 
@@ -1051,24 +1114,83 @@ def _account_event_ledger_path(artifacts_root: Path, account_id: str) -> Path:
 
 
 def _next_account_event_seq_locked(path: Path) -> int:
-    if not path.exists():
+    """Allocate from a durable counter, repairing it from the ledger tail.
+
+    The event line is fsynced before its counter is advanced.  A crash in that
+    narrow interval leaves a counter behind the tail, while a stale/ahead
+    counter can only have been written before its corresponding event became
+    durable.  In both cases the tail wins, so recovery neither duplicates nor
+    skips a durable sequence identity.  Reading one tail row is constant work
+    and replaces the former full-ledger rescan on every append.
+    """
+
+    counter_path = _account_event_sequence_path(path)
+    counter = _read_account_event_sequence_counter(counter_path)
+    tail_seq = _read_account_event_tail_seq(path)
+    if tail_seq is None:
         return 1
-    max_seq = 0
-    row_count = 0
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        row_count += 1
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(row, dict):
-            continue
-        seq = row.get("seq")
-        if isinstance(seq, int) and not isinstance(seq, bool) and seq > max_seq:
-            max_seq = seq
-    return max(max_seq, row_count) + 1
+    if counter is None or counter != tail_seq:
+        return tail_seq + 1
+    return counter + 1
+
+
+def _account_event_sequence_path(event_path: Path) -> Path:
+    """Return the static counter companion to a validated event-ledger path."""
+
+    return event_path.with_name(ACCOUNT_EVENTS_SEQUENCE_FILENAME)
+
+
+def _read_account_event_sequence_counter(path: Path) -> int | None:
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    value = payload.get("last_seq") if isinstance(payload, dict) else None
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _read_account_event_tail_seq(path: Path) -> int | None:
+    """Read only the final complete ledger row for crash-counter recovery."""
+
+    if not path.is_file() or path.stat().st_size == 0:
+        return None
+    with open(path, "rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        end = fh.tell()
+        chunk_size = 4096
+        data = b""
+        while end > 0:
+            size = min(chunk_size, end)
+            end -= size
+            fh.seek(end)
+            data = fh.read(size) + data
+            lines = data.splitlines()
+            if len(lines) < 2 and end > 0:
+                continue
+            for line in reversed(lines):
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    # Old ledgers may contain tolerated projection rows.  The
+                    # last valid sequence is enough to migrate them without a
+                    # full rescan; strict readers still fail closed later.
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                seq = row.get("seq")
+                if not isinstance(seq, int) or isinstance(seq, bool) or seq < 1:
+                    continue
+                return seq
+    return None
+
+
+def _write_account_event_sequence_locked(event_path: Path, last_seq: int) -> None:
+    counter_path = _account_event_sequence_path(event_path)
+    _atomic_write_json_locked(counter_path, {"last_seq": last_seq})
 
 
 def _account_event_ts_ms_for_write(payload: dict) -> int:
@@ -1171,6 +1293,7 @@ _LOCAL_EXPORTS = [
     "clear_account_freeze",
     "evaluate_restart_intensity",
     "read_account_events",
+    "read_account_events_with_snapshot",
     "read_account_clerk_generation",
     "read_account_clerk_lease",
     "require_active_account_clerk_generation",

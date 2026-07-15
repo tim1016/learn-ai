@@ -7,6 +7,7 @@ import { LiveRunsService } from './live-runs.service';
 import { operatorBlockerFixture } from '../testing/operator-blocker-fixtures';
 import type { DaemonDiagnosticReport } from '../api/daemon-diagnostics.types';
 import type { HostRunnerActionResponse, HostRunnerHealth } from '../api/live-runs.types';
+import type { CohortBatchLaunchStatus } from '../api/cohort-batch-launch.types';
 import type {
   CrashRecoveryOverrideResponse,
   LifecycleSafetyTriageResponse,
@@ -153,7 +154,7 @@ describe('LiveRunsService start/stop proxy', () => {
   });
 
   it('reads the latest durable cohort receipt through the account endpoint', async () => {
-    const response = {
+    const response: CohortBatchLaunchStatus = {
       schema_version: 1,
       account_id: 'DU123',
       cohort_id: 'paper-validation-1',
@@ -166,11 +167,59 @@ describe('LiveRunsService start/stop proxy', () => {
       outcomes: [],
       outcomes_recorded_at_ms: null,
       outcomes_error: null,
+      evidence: {
+        sample_count: 0,
+        cadence_ms: 5_000,
+        healthy_overlap_ms: 0,
+        verdict: 'unknown',
+        reason: 'COHORT_EVIDENCE_MISSING',
+        source: 'account_event.cohort_evidence_sample',
+        members: [],
+      },
     };
     const promise = service.getLatestCohortBatchLaunch('DU123');
 
     const req = httpMock.expectOne('/api/accounts/DU123/cohort-batch-launches/latest');
     expect(req.request.method).toBe('GET');
+    req.flush(response);
+
+    await expect(promise).resolves.toEqual(response);
+  });
+
+  it('submits only displayed member IDs to the server-owned cohort command', async () => {
+    const response: CohortBatchLaunchStatus = {
+      schema_version: 1,
+      account_id: 'DU123',
+      cohort_id: 'paper-validation-server-authored',
+      member_strategy_instance_ids: ['bot-1'],
+      window_start_ms: 1,
+      window_end_ms: 2,
+      authorized_by: 'local-operator',
+      authorized_recorded_at_ms: 1,
+      outcomes_state: 'recorded',
+      outcomes: [{
+        strategy_instance_id: 'bot-1',
+        state: 'accepted',
+        reason: 'COHORT_START_ACCEPTED',
+        next_safe_action: 'Monitor the bot receipt state and account exposure.',
+      }],
+      outcomes_recorded_at_ms: 2,
+      outcomes_error: null,
+      evidence: {
+        sample_count: 1,
+        cadence_ms: 5_000,
+        healthy_overlap_ms: 5_000,
+        verdict: 'healthy',
+        reason: null,
+        source: 'account_event.cohort_evidence_sample',
+        members: [],
+      },
+    };
+    const promise = service.launchCohort('DU123', { member_strategy_instance_ids: ['bot-1'] });
+
+    const req = httpMock.expectOne('/api/live-instances/accounts/DU123/cohort-launch');
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual({ member_strategy_instance_ids: ['bot-1'] });
     req.flush(response);
 
     await expect(promise).resolves.toEqual(response);

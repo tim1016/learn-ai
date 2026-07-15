@@ -22,7 +22,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal, NoReturn, TypedDict
 
-from fastapi import APIRouter, Body, Header, HTTPException, Query, Response, status
+from fastapi import APIRouter, Body, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
@@ -39,6 +39,7 @@ from app.engine.live.account_artifacts import (
     read_account_freeze,
     read_account_owner_generation,
 )
+from app.engine.live.account_identity import InvalidAccountIdError, normalize_account_id
 from app.engine.live.account_observation_lease import assess_account_observation_lease
 from app.engine.live.bot_lifecycle_state import (
     BotLifecyclePhase,
@@ -104,6 +105,7 @@ from app.routers.live_runs import (
 )
 from app.schemas.account_recovery import CrashRecoveryOverrideRequest, CrashRecoveryOverrideResponse
 from app.schemas.action_plan import ActionPlan, ActionPlanPreviewResponse
+from app.schemas.cohort_batch_launch import CohortBatchLaunchCommandRequest, CohortBatchLaunchStatusResponse
 from app.schemas.daemon_diagnostics import DaemonDiagnosticReport, DaemonDominantCondition
 from app.schemas.live_runs import (
     ActiveDateEntry,
@@ -232,6 +234,8 @@ from app.services.bot_roll_call import (
 from app.services.broker_activity_publisher_registry import get_publisher_registry
 from app.services.broker_activity_wal import BrokerActivityWal, instance_broker_activity_wal_path
 from app.services.broker_capability_service import get_broker_capability_service
+from app.services.cohort_evidence import get_cohort_evidence_sampler_registry
+from app.services.cohort_launch import CohortLaunchCoordinator
 from app.services.daemon_diagnostics import (
     get_daemon_diagnostics_service,
     project_daemon_diagnostic_report,
@@ -327,6 +331,17 @@ _STATUS_DAEMON_DIAGNOSTICS_TIMEOUT_S = 1.5
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["live-instances"])
+_cohort_launch_locks: dict[str, asyncio.Lock] = {}
+
+
+def _cohort_launch_lock(account_id: str) -> asyncio.Lock:
+    """Return the one in-process admission lock for an account cohort."""
+
+    lock = _cohort_launch_locks.get(account_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _cohort_launch_locks[account_id] = lock
+    return lock
 _SURFACE_HUBS = SurfaceHubRegistry[LiveInstanceStatus]()
 _SURFACE_RUNS_CACHE = VisibleRunsSnapshotCache()
 _FLEET_DAEMON_PROVIDER: FleetDaemonSnapshotProvider | None = None
@@ -601,7 +616,11 @@ def _resolve_account_freeze(
         account_id = ledger.get("account_id")
         if not isinstance(account_id, str) or not account_id:
             continue
-        account_freeze = read_account_freeze(artifacts_root, account_id)
+        try:
+            canonical_account_id = normalize_account_id(account_id)
+        except InvalidAccountIdError:
+            continue
+        account_freeze = read_account_freeze(artifacts_root, canonical_account_id)
         if account_freeze is not None:
             return account_freeze
     return None
@@ -615,7 +634,10 @@ def _run_dir_account_id(run_dir: Path) -> str | None:
     value = ledger.get("account_id")
     if not isinstance(value, str) or not value.strip():
         return None
-    return value
+    try:
+        return normalize_account_id(value)
+    except InvalidAccountIdError:
+        return None
 
 
 def _raise_if_crash_recovery_blocks_start(
@@ -2132,8 +2154,20 @@ async def run_roll_call() -> BotRollCallResponse:
 
     settings = get_settings()
     root = Path(settings.live_runs_root)
-    await _raise_if_fleet_contamination_blocks_start(root)
     by_instance = await asyncio.to_thread(_visible_runs_by_instance, root)
+    account_ids = {
+        account_id
+        for sid, runs in by_instance.items()
+        if runs
+        and not (
+            (lifecycle_state := _resolve_bot_lifecycle_state(root, sid)) is not None
+            and lifecycle_state.phase == BotLifecyclePhase.RETIRED
+        )
+        for account_id in [_run_dir_account_id(Path(runs[0]["run_dir"]))]
+        if account_id is not None
+    }
+    for account_id in sorted(account_ids):
+        await _raise_if_fleet_contamination_blocks_start(root, account_id=account_id)
     _result, daemon = await host_daemon_client.fetch_instances(settings.live_runner_daemon_url)
     daemon_by_sid: dict[str, dict] = {}
     if daemon:
@@ -2176,6 +2210,11 @@ async def run_roll_call() -> BotRollCallResponse:
         if not runs:
             continue
         run_dir = Path(runs[0]["run_dir"])
+        # A legacy ledger without an account identity cannot pass the same
+        # broker-truth gate enforced by the start endpoint.  Do not mint an
+        # offer that is guaranteed to be rejected at dispatch time.
+        if _run_dir_account_id(run_dir) is None:
+            continue
         boundary = start_boundary_verdict(now_ms, _live_config_for_run_dir(run_dir))
         if not boundary.allowed or boundary.effective_stop_ms is None or boundary.session_date is None:
             continue
@@ -2482,6 +2521,10 @@ async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -
                 "gate_result": account_freeze.to_gate_result().model_dump(mode="json"),
             },
         )
+    await _raise_if_fleet_contamination_blocks_start(
+        root,
+        account_id=daemon_request.account_id,
+    )
     if daemon_request.start and daemon_request.strategy_instance_id:
         _raise_if_crash_recovery_blocks_start(
             root.parent,
@@ -2914,14 +2957,23 @@ async def _assert_start_allowed(run_id: str, body: HostRunnerStartRequest, setti
                 "gate_result": account_freeze.to_gate_result().model_dump(mode="json"),
             },
         )
-    await _raise_if_fleet_contamination_blocks_start(root)
     account_id = _run_dir_account_id(run_dir)
-    if account_id is not None:
-        _raise_if_crash_recovery_blocks_start(
-            root.parent,
-            account_id=account_id,
-            strategy_instance_id=sid,
+    if account_id is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "ACCOUNT_ID_UNAVAILABLE",
+                "message": "The run ledger has no account identity; broker truth cannot be verified.",
+                "gate_id": "account.broker_truth",
+                "operator_next_step": "WAIT_FOR_BROKER_TRUTH",
+            },
         )
+    await _raise_if_fleet_contamination_blocks_start(root, account_id=account_id)
+    _raise_if_crash_recovery_blocks_start(
+        root.parent,
+        account_id=account_id,
+        strategy_instance_id=sid,
+    )
 
     if (run_dir / "poisoned.flag").exists():
         raise HTTPException(
@@ -3062,6 +3114,77 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
         )
     await _ensure_surface_hub_started(sid)
     return response
+
+
+@router.post(
+    "/accounts/{account_id}/cohort-launch",
+    response_model=CohortBatchLaunchStatusResponse,
+)
+async def launch_cohort(
+    account_id: str,
+    body: CohortBatchLaunchCommandRequest,
+    request: Request,
+) -> CohortBatchLaunchStatusResponse:
+    """Atomically admit then start one exact, server-pinned cohort.
+
+    The browser provides only the member IDs it displayed.  The server refreshes
+    roll call under an account admission lock, rejects any changed candidate
+    set, persists the authorization before side effects, and derives every
+    outcome from its own ``start_run`` calls.  Starts are intentionally not
+    rolled back: an accepted sibling remains managed after a partial launch.
+    """
+
+    try:
+        normalized_account_id = normalize_account_id(account_id)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    async with _cohort_launch_lock(normalized_account_id):
+        identity_header = request.headers.get("X-Operator-Identity")
+        settings = get_settings()
+        readonly_default = _resolve_readonly_default(settings)
+
+        def start_request_for_run(run_dir: Path) -> HostRunnerStartRequest | None:
+            try:
+                defaults = _start_defaults(
+                    run_dir.parent,
+                    None,
+                    [{"run_dir": str(run_dir)}],
+                    readonly_default=readonly_default,
+                )
+            except ValidationError:
+                return None
+            if defaults is None or not defaults.strategy:
+                return None
+            try:
+                return HostRunnerStartRequest(
+                    readonly=defaults.readonly,
+                    hydrate_policy=defaults.hydrate_policy,
+                    strategy=defaults.strategy,
+                    max_orders_per_day=defaults.max_orders_per_day,
+                    ibkr_host=defaults.ibkr_host,
+                )
+            except ValidationError:
+                return None
+
+        coordinator = CohortLaunchCoordinator(
+            artifacts_root=Path(settings.live_runs_root).parent,
+            live_runs_root=Path(settings.live_runs_root),
+            run_roll_call=run_roll_call,
+            start_run=start_run,
+            visible_runs_by_instance=_visible_runs_by_instance,
+            run_account_id=_run_dir_account_id,
+            start_request_for_run=start_request_for_run,
+            now_ms=_now_ms,
+            evidence_samplers=get_cohort_evidence_sampler_registry(),
+        )
+        return await coordinator.launch(
+            account_id=normalized_account_id,
+            requested_members=body.member_strategy_instance_ids,
+            operator_identity=(identity_header.strip() if identity_header and identity_header.strip() else "local-operator"),
+            identity_header_present=bool(identity_header),
+            client_host=request.client.host if request.client is not None else None,
+        )
 
 
 async def _maybe_start_broker_activity_publisher(
@@ -3596,7 +3719,10 @@ def _instance_ledger_account_id(
     value = ledger.get("account_id")
     if not isinstance(value, str) or not value.strip():
         return None
-    return value
+    try:
+        return normalize_account_id(value)
+    except InvalidAccountIdError:
+        return None
 
 
 async def _fetch_broker_connected_account(
@@ -3626,18 +3752,70 @@ async def _fetch_broker_connected_account(
 
 async def _compute_account_fleet_contamination(
     root: Path,
+    *,
+    account_id: str | None = None,
 ) -> FleetContamination:
     return await fleet_contamination_service.compute_account_fleet_contamination(
         root,
         fetch_positions=_fetch_net_positions,
+        account_id=account_id,
     )
 
 
-async def _raise_if_fleet_contamination_blocks_start(root: Path) -> None:
+async def _raise_if_fleet_contamination_blocks_start(
+    root: Path,
+    *,
+    account_id: str | None = None,
+) -> None:
     """Make the Clerk-owned account verdict an authoritative start boundary."""
 
+    if account_id is not None:
+        broker_account, broker_known = await _fetch_broker_connected_account()
+        if not broker_known or broker_account is None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": "BROKER_TRUTH_UNAVAILABLE",
+                    "message": "Connected broker account identity is unavailable. Wait for a fresh broker observation before starting bots.",
+                    "gate_id": "account.broker_truth",
+                    "operator_next_step": "WAIT_FOR_BROKER_TRUTH",
+                },
+            )
+        try:
+            normalized_broker_account = normalize_account_id(broker_account)
+            normalized_account_id = normalize_account_id(account_id)
+        except InvalidAccountIdError:
+            # An unreadable identity is no safer than a mismatch.  Preserve
+            # the raw values for the operator, but never collapse two failed
+            # normalizations into an apparent match.
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": "BROKER_TRUTH_UNAVAILABLE",
+                    "message": "Connected broker account identity is unreadable. Wait for a fresh broker observation before starting bots.",
+                    "gate_id": "account.broker_truth",
+                    "operator_next_step": "WAIT_FOR_BROKER_TRUTH",
+                    "expected_account_id": account_id,
+                    "connected_account_id": broker_account,
+                },
+            ) from None
+        if normalized_broker_account != normalized_account_id:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": "BROKER_ACCOUNT_MISMATCH",
+                    "message": "Connected broker account does not match this run's account identity.",
+                    "gate_id": "account.broker_truth",
+                    "operator_next_step": "WAIT_FOR_BROKER_TRUTH",
+                    "expected_account_id": account_id,
+                    "connected_account_id": broker_account,
+                },
+            )
     try:
-        fleet = await _compute_account_fleet_contamination(root)
+        fleet = await _compute_account_fleet_contamination(
+            root,
+            account_id=normalized_account_id if account_id is not None else None,
+        )
     except Exception as exc:
         logger.warning("fleet contamination gate unavailable", extra={"error": str(exc)})
         raise HTTPException(
@@ -3648,6 +3826,21 @@ async def _raise_if_fleet_contamination_blocks_start(root: Path) -> None:
                 "gate_id": "account.fleet_contamination",
             },
         ) from exc
+    if fleet.verdict == "unknown" and fleet.policy_blocks_starts:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "BROKER_TRUTH_UNAVAILABLE",
+                "message": "Broker account position truth is unavailable. Wait for a fresh account sweep before starting bots.",
+                "gate_id": "account.broker_truth",
+                "operator_next_step": "WAIT_FOR_BROKER_TRUTH",
+                "contamination": fleet.model_dump(mode="json"),
+            },
+        )
+    # ``policy_blocks_starts`` is the server-owned admission policy for an
+    # otherwise non-contaminated verdict.  An ``unknown`` observation with
+    # that flag unset is intentionally advisory, not an implicit replacement
+    # start gate; the actual fleet service sets it for this route.
     if fleet.verdict != "contaminated":
         return
     raise HTTPException(
@@ -4673,7 +4866,13 @@ def _run_account_id(run_dir: Path) -> str | None:
         ledger = _read_ledger(run_dir)
     except (OSError, json.JSONDecodeError):
         return None
-    return _nonempty_str(ledger.get("account_id"))
+    value = _nonempty_str(ledger.get("account_id"))
+    if value is None:
+        return None
+    try:
+        return normalize_account_id(value)
+    except InvalidAccountIdError:
+        return None
 
 
 def _ts_in_window(ts_ms: int | None, start_ms: int, end_ms: int) -> bool:

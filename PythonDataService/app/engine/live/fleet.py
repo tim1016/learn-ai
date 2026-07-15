@@ -23,8 +23,9 @@ def compute_fleet_contamination(
     """Difference the net account snapshot against the sum of instance expecteds.
 
     ``net_positions`` is ``None`` when the broker is unavailable -> the verdict
-    is ``unknown`` (never guessed). ``policy_blocks_starts`` reflects the fleet
-    policy gate: only when enabled *and* contaminated does it block starts.
+    is ``unknown`` (never guessed). When the policy gate is enabled, both an
+    unknown broker view and contamination block starts: neither is safe proof
+    for admitting a new account writer.
     """
     explained_total: dict[str, int] = {}
     buckets: list[dict] = []
@@ -41,7 +42,7 @@ def compute_fleet_contamination(
             "explained_by_instance": buckets,
             "residual": {},
             "verdict": "unknown",
-            "policy_blocks_starts": False,
+            "policy_blocks_starts": policy_blocks_starts,
             "summary": "Net account position unavailable — contamination unknown.",
         }
 

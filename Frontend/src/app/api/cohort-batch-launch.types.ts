@@ -1,16 +1,6 @@
-/** Account-rooted receipt for a deliberate paper-validation cohort launch. */
-export interface CohortBatchLaunchCreateRequest {
-  cohort_id: string;
+/** Browser compare token for the server-owned cohort launch command. */
+export interface CohortBatchLaunchCommandRequest {
   member_strategy_instance_ids: string[];
-  window_start_ms: number;
-  window_end_ms: number;
-  authorized_by: string;
-}
-
-export interface CohortBatchLaunchReceipt extends CohortBatchLaunchCreateRequest {
-  schema_version: number;
-  account_id: string;
-  recorded_at_ms: number;
 }
 
 export interface CohortBatchLaunchMemberOutcome {
@@ -20,15 +10,64 @@ export interface CohortBatchLaunchMemberOutcome {
   next_safe_action: string;
 }
 
-export interface CohortBatchLaunchOutcomesRequest {
-  outcomes: CohortBatchLaunchMemberOutcome[];
+export interface CohortEvidenceMember {
+  strategy_instance_id: string;
+  run_id: string | null;
+  verdict: 'healthy' | 'failed' | 'unknown';
+  reason: string | null;
+  orders_used: number | null;
+  orders_cap: number | null;
 }
 
-export interface CohortBatchLaunchOutcomesReceipt extends CohortBatchLaunchOutcomesRequest {
-  schema_version: number;
+export interface CohortEvidenceSummary {
+  sample_count: number;
+  cadence_ms: number;
+  healthy_overlap_ms: number;
+  verdict: 'healthy' | 'failed' | 'unknown';
+  reason: string | null;
+  source: 'account_event.cohort_evidence_sample';
+  members: CohortEvidenceMember[];
+}
+
+export interface CohortValidationCertificate {
+  schema_version: 1;
   account_id: string;
   cohort_id: string;
-  recorded_at_ms: number;
+  member_strategy_instance_ids: string[];
+  member_run_ids: Record<string, string>;
+  window_start_ms: number;
+  window_end_ms: number;
+  healthy_overlap_ms: number;
+  evidence_verdict: 'healthy' | 'failed' | 'unknown';
+  evidence_reason: string | null;
+  samples: CohortValidationCertificateSample[];
+  round_trips: CohortValidationCertificateRoundTrip[];
+  incidents: string[];
+  final_broker_net_positions: Record<string, number> | null;
+  final_broker_residual: Record<string, number> | null;
+  final_journal_exposure: Record<string, Record<string, number>>;
+  verdict: 'passed' | 'failed' | 'incomplete';
+  reasons: string[];
+}
+
+export interface CohortValidationCertificateSample {
+  expected_at_ms: number;
+  observed_at_ms: number | null;
+  account_truth: 'healthy' | 'failed' | 'unknown';
+  fleet: 'healthy' | 'failed' | 'unknown';
+  members: CohortEvidenceMember[];
+  broker_net_positions: Record<string, number> | null;
+  broker_residual: Record<string, number> | null;
+}
+
+export interface CohortValidationCertificateRoundTrip {
+  bot_order_namespace: string;
+  order_refs: string[];
+  order_ids: number[];
+  perm_ids: number[];
+  exec_ids: string[];
+  saw_nonzero_exposure: boolean;
+  closed: boolean;
 }
 
 export interface CohortBatchLaunchStatus {
@@ -44,4 +83,5 @@ export interface CohortBatchLaunchStatus {
   outcomes: CohortBatchLaunchMemberOutcome[];
   outcomes_recorded_at_ms: number | null;
   outcomes_error: string | null;
+  evidence: CohortEvidenceSummary;
 }

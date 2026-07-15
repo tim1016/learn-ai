@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -46,6 +47,8 @@ from app.services.account_truth_refresh import (
 from app.services.account_truth_snapshot import (
     AccountTruthSnapshot,
     AccountTruthSnapshotProvider,
+    AccountTruthSubmitGrace,
+    AccountTruthUnavailable,
     account_truth_gate_result,
     assess_account_truth,
 )
@@ -254,6 +257,35 @@ async def test_refresh_service_remembers_successful_account_truth(monkeypatch: p
 
 
 @pytest.mark.asyncio
+async def test_refresh_service_runs_durable_observer_off_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    truth = _truth()
+    observer_thread_ids: list[int] = []
+    monkeypatch.setattr(
+        account_truth_refresh,
+        "fetch_account_truth",
+        AsyncMock(return_value=truth),
+    )
+
+    def observe_truth(_truth: AccountTruthResponse, **_metadata: object) -> None:
+        observer_thread_ids.append(threading.get_ident())
+
+    event_loop_thread_id = threading.get_ident()
+    await refresh_account_truth_and_update_cache(
+        object(),  # type: ignore[arg-type]
+        health=truth.health,
+        collection_context=_collection_context(),
+        snapshot_provider=provider,
+        account_truth_observer=observe_truth,
+    )
+
+    assert observer_thread_ids
+    assert all(thread_id != event_loop_thread_id for thread_id in observer_thread_ids)
+
+
+@pytest.mark.asyncio
 async def test_refresh_service_marks_failure_for_any_account_truth_route(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -300,7 +332,9 @@ async def test_refresh_service_notifies_keyword_only_failure_observer(
         observed["account_id"] = account_id
         observed["detail"] = detail
         observed["attempted_at_ms"] = attempted_at_ms
+        observed["thread_id"] = threading.get_ident()
 
+    event_loop_thread_id = threading.get_ident()
     with pytest.raises(BrokerError):
         await refresh_account_truth_and_update_cache(
             object(),  # type: ignore[arg-type]
@@ -310,11 +344,15 @@ async def test_refresh_service_notifies_keyword_only_failure_observer(
             account_truth_failure_observer=observe_failure,
         )
 
-    assert observed == {
+    assert {
+        key: observed[key]
+        for key in ("account_id", "detail", "attempted_at_ms")
+    } == {
         "account_id": "DU123",
         "detail": "broker sweep timed out",
         "attempted_at_ms": 2_000,
     }
+    assert observed["thread_id"] != event_loop_thread_id
 
 
 @pytest.mark.asyncio
@@ -696,6 +734,51 @@ async def test_refresh_loop_notifies_account_truth_observer(
 
 
 @pytest.mark.asyncio
+async def test_refresh_loop_runs_account_journal_observer_after_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    observed: list[tuple[str, int]] = []
+    monkeypatch.setattr(account_truth_refresh, "get_monitor", lambda: None)
+
+    async def fake_refresh_now(_client, **_kwargs) -> AccountTruthResponse:
+        return _truth(generated_at_ms=2_000)
+
+    loop = AccountTruthRefreshLoop(
+        client=_FakeClient(_health(account_id="DU123", fetched_at_ms=2_000)),  # type: ignore[arg-type]
+        snapshot_provider=provider,
+        refresh_now=fake_refresh_now,
+        account_journal_observer=lambda account_id: observed.append((account_id, threading.get_ident())),
+    )
+
+    assert await loop.refresh_once() is not None
+    assert [account_id for account_id, _thread_id in observed] == ["DU123"]
+    assert observed[0][1] != threading.get_ident()
+
+
+@pytest.mark.asyncio
+async def test_refresh_loop_skips_journal_observer_when_refresh_cannot_prove_account_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    observed: list[str] = []
+    monkeypatch.setattr(account_truth_refresh, "get_monitor", lambda: None)
+
+    async def fake_refresh_now(_client, **_kwargs) -> AccountTruthResponse:
+        return _truth(generated_at_ms=2_000).model_copy(update={"account_id": None})
+
+    loop = AccountTruthRefreshLoop(
+        client=_FakeClient(_health(account_id="DU123", fetched_at_ms=2_000)),  # type: ignore[arg-type]
+        snapshot_provider=provider,
+        refresh_now=fake_refresh_now,
+        account_journal_observer=observed.append,
+    )
+
+    assert await loop.refresh_once() is not None
+    assert observed == []
+
+
+@pytest.mark.asyncio
 async def test_refresh_loop_marks_last_account_failed_when_broker_disconnects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1000,6 +1083,76 @@ def test_refresh_failure_replaces_prior_clean_snapshot() -> None:
     assert gate.operator_reason == "ACCOUNT_TRUTH_REFRESH_FAILED"
 
 
+def test_submit_grace_blocks_only_at_120_seconds_and_resets_after_fresh_truth() -> None:
+    grace = AccountTruthSubmitGrace()
+
+    assert grace.gate(None, now_ms=1_000).operator_reason == "ACCOUNT_TRUTH_NOT_AVAILABLE"
+    assert grace.gate(None, now_ms=120_999).status == "block"
+
+    recovered = grace.gate(AccountTruthSnapshot(_truth(generated_at_ms=122_000), cached_at_ms=122_000), now_ms=122_000)
+    assert recovered.status == "pass"
+    assert recovered.operator_reason == "ACCOUNT_TRUTH_CLEAN"
+    assert grace.gate(None, now_ms=122_001).operator_reason == "BROKER_TRUTH_GRACE"
+    assert grace.gate(None, now_ms=241_999).status == "pass"
+    expired = grace.gate(None, now_ms=242_001)
+    assert expired.status == "block"
+    assert expired.operator_reason == "BROKER_TRUTH_STALE"
+
+
+def test_submit_grace_does_not_bypass_unproven_account_truth() -> None:
+    grace = AccountTruthSubmitGrace()
+    evidence = AccountTruthSnapshot(
+        _truth(final_verdict="not_proven"),
+        cached_at_ms=1_000,
+    )
+
+    gate = grace.gate(evidence, now_ms=1_001)
+
+    assert gate.status == "block"
+    assert gate.operator_reason == "ACCOUNT_TRUTH_NOT_PROVEN"
+
+
+def test_submit_grace_uses_the_persisted_refresh_failure_time() -> None:
+    grace = AccountTruthSubmitGrace()
+    grace.gate(AccountTruthSnapshot(_truth(generated_at_ms=500), cached_at_ms=500), now_ms=500)
+    unavailable = AccountTruthUnavailable(
+        account_id="DU123",
+        attempted_at_ms=1_000,
+        detail="broker sweep timed out",
+    )
+
+    gate = grace.gate(unavailable, now_ms=121_000)
+
+    assert gate.status == "block"
+    assert gate.operator_reason == "BROKER_TRUTH_STALE"
+
+
+def test_submit_grace_never_bootstraps_from_refresh_failure_without_prior_truth() -> None:
+    grace = AccountTruthSubmitGrace()
+
+    gate = grace.gate(
+        AccountTruthUnavailable(
+            account_id="DU123",
+            attempted_at_ms=1_000,
+            detail="broker sweep timed out",
+        ),
+        now_ms=1_001,
+    )
+
+    assert gate.status == "block"
+    assert gate.operator_reason == "ACCOUNT_TRUTH_REFRESH_FAILED"
+
+
+def test_submit_grace_fails_closed_on_clock_rollback() -> None:
+    grace = AccountTruthSubmitGrace()
+
+    assert grace.gate(AccountTruthSnapshot(_truth(generated_at_ms=10_000), cached_at_ms=10_000), now_ms=10_000).status == "pass"
+    gate = grace.gate(None, now_ms=9_999)
+
+    assert gate.status == "block"
+    assert gate.operator_reason == "BROKER_TRUTH_STALE"
+
+
 def test_staleness_uses_cached_at_ms_not_broker_generated_at_ms() -> None:
     provider = AccountTruthSnapshotProvider(hard_ttl_ms=600)
     snapshot = provider.remember(_truth(generated_at_ms=0), cached_at_ms=1_000)
@@ -1115,6 +1268,52 @@ def test_critical_source_freshness_block_is_shared_with_gate_projection() -> Non
     assert assessment.explanation.startswith("Positions evidence is")
     assert assessment.evidence_at_ms == 1_000
     assert gate.operator_reason == "ACCOUNT_TRUTH_SOURCE_STALE_POSITIONS"
+
+
+def test_submit_grace_starts_mixed_source_outage_at_missing_evidence_time() -> None:
+    grace = AccountTruthSubmitGrace()
+    grace.gate(AccountTruthSnapshot(_truth(generated_at_ms=1_000), cached_at_ms=1_000), now_ms=1_000)
+    source_freshness = [
+        row
+        for row in fresh_account_truth_source_freshness(1_000)
+        if row.source not in {"account_summary", "positions"}
+    ]
+    source_freshness.extend(
+        [
+            AccountTruthSourceFreshness(
+                source="account_summary",
+                label="Account summary",
+                status="missing",
+                severity="critical",
+                fetched_at_ms=None,
+                age_ms=None,
+                hard_ttl_ms=60_000,
+                reason_code="ACCOUNT_TRUTH_SOURCE_MISSING_ACCOUNT_SUMMARY",
+                message="Account summary evidence is unavailable.",
+            ),
+            AccountTruthSourceFreshness(
+                source="positions",
+                label="Positions",
+                status="stale",
+                severity="critical",
+                fetched_at_ms=1_000,
+                age_ms=60_001,
+                hard_ttl_ms=60_000,
+                reason_code="ACCOUNT_TRUTH_SOURCE_STALE_POSITIONS",
+                message="Positions evidence is stale.",
+            ),
+        ]
+    )
+    evidence = AccountTruthSnapshot(
+        _truth(generated_at_ms=1_000, source_freshness=source_freshness),
+        cached_at_ms=1_000,
+        hard_ttl_ms=600_000,
+    )
+
+    gate = grace.gate(evidence, now_ms=121_000)
+
+    assert gate.status == "block"
+    assert gate.operator_reason == "BROKER_TRUTH_STALE"
 
 
 def test_fresh_critical_source_is_rechecked_at_gate_read_time() -> None:

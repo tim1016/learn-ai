@@ -23,6 +23,7 @@ from app.engine.live.account_artifacts import (
     append_account_event,
     read_account_clerk_generation,
     read_account_clerk_lease,
+    read_account_events,
     read_account_freeze,
     write_account_clerk_lease,
 )
@@ -511,6 +512,26 @@ async def test_health_reports_idle_process(daemon_context: tuple[RunnerProcessMa
     assert body["repo_head_sha"] is None
     assert body["code_stale"] is False
     assert body["commits_behind"] is None
+
+
+async def test_ensure_clerk_endpoint_runs_generation_handshake(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, _ = daemon_context
+    ensured: list[str] = []
+
+    def ensure(account_id: str) -> None:
+        ensured.append(account_id)
+
+    monkeypatch.setattr(manager, "_ensure_account_clerk", ensure)
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
+        response = await client.post("/accounts/DU123/clerk/ensure", json={})
+
+    assert response.status_code == 200
+    assert ensured == ["DU123"]
 
 
 def test_instances_prunes_exited_records_by_ttl_and_count(tmp_path: Path) -> None:
@@ -1386,6 +1407,7 @@ async def test_start_writes_account_registry_before_spawn(
         assert bindings[-1].strategy_instance_id == "spy_ema_paper"
         assert bindings[-1].run_id == RUN_ID
         assert bindings[-1].bot_order_namespace == "learn-ai/spy_ema_paper/v1"
+        assert bindings[-1].cohort_id == "cohort-restart-test"
         assert bindings[-1].lifecycle_state == "ACTIVE"
         return FakeProcess()
 
@@ -1393,9 +1415,18 @@ async def test_start_writes_account_registry_before_spawn(
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
-        response = await client.post(f"/runs/{RUN_ID}/start", json={})
+        response = await client.post(
+            f"/runs/{RUN_ID}/start",
+            json={"cohort_id": "cohort-restart-test"},
+        )
 
     assert response.status_code == 200
+    [event] = [
+        event
+        for event in read_account_events(manager.artifacts_root, "DU111")
+        if event.get("event_type") == "account_instance_binding_recorded"
+    ]
+    assert event["cohort_id"] == "cohort-restart-test"
 
 
 async def test_start_retires_account_registry_binding_when_spawn_fails(

@@ -1,18 +1,67 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { provideZonelessChangeDetection } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
 
 import { LiveRunsService } from '../../../services/live-runs.service';
+import type {
+  CohortBatchLaunchStatus,
+  CohortValidationCertificate,
+} from '../../../api/cohort-batch-launch.types';
 import { CohortLaunchMonitorComponent } from './cohort-launch-monitor.component';
 
 class FakeLiveRunsService {
   getLatestCohortBatchLaunch = vi.fn();
-  getInstanceStatus = vi.fn();
-  getStatus = vi.fn();
+  getCohortValidationCertificate = vi.fn();
 }
 
 describe('CohortLaunchMonitorComponent', () => {
-  it('renders the durable blocker and live per-bot success evidence', async () => {
+  const cohort = (cohortId: string): CohortBatchLaunchStatus => ({
+    schema_version: 1,
+    account_id: 'DU1234567',
+    cohort_id: cohortId,
+    member_strategy_instance_ids: [],
+    window_start_ms: 1_780_000_000_000,
+    window_end_ms: 1_780_000_030_000,
+    authorized_by: 'operator.alice',
+    authorized_recorded_at_ms: 1_780_000_000_000,
+    outcomes_state: 'recorded',
+    outcomes: [],
+    outcomes_recorded_at_ms: 1_780_000_001_000,
+    outcomes_error: null,
+    evidence: {
+      sample_count: 1,
+      cadence_ms: 5_000,
+      healthy_overlap_ms: 5_000,
+      verdict: 'healthy',
+      reason: null,
+      source: 'account_event.cohort_evidence_sample',
+      members: [],
+    },
+  });
+
+  const certificate = (reason: string): CohortValidationCertificate => ({
+    schema_version: 1,
+    account_id: 'DU1234567',
+    cohort_id: 'paper-validation-1',
+    member_strategy_instance_ids: [],
+    member_run_ids: {},
+    window_start_ms: 1_780_000_000_000,
+    window_end_ms: 1_780_000_030_000,
+    healthy_overlap_ms: 5_000,
+    evidence_verdict: 'healthy',
+    evidence_reason: null,
+    samples: [],
+    round_trips: [],
+    incidents: [],
+    final_broker_net_positions: null,
+    final_broker_residual: null,
+    final_journal_exposure: {},
+    verdict: 'passed',
+    reasons: [reason],
+  });
+
+  it('renders only the durable server-authored cohort evidence', async () => {
     const liveRuns = new FakeLiveRunsService();
     liveRuns.getLatestCohortBatchLaunch.mockResolvedValue({
       schema_version: 1,
@@ -40,24 +89,54 @@ describe('CohortLaunchMonitorComponent', () => {
       ],
       outcomes_recorded_at_ms: 1_780_000_001_000,
       outcomes_error: null,
-    });
-    liveRuns.getInstanceStatus.mockImplementation(async (instanceId: string) => ({
-      strategy_instance_id: instanceId,
-      process: {
-        state: instanceId === 'spy-a' ? 'running' : 'idle',
-        ibkr_client_id: 17,
-        started_at_ms: 1_779_999_990_000,
+      evidence: {
+        sample_count: 2,
+        cadence_ms: 5_000,
+        healthy_overlap_ms: 10_000,
+        verdict: 'failed',
+        reason: 'COHORT_MEMBER_HALTED',
+        source: 'account_event.cohort_evidence_sample',
+        members: [
+          {
+            strategy_instance_id: 'spy-a',
+            run_id: 'run-spy-a',
+            verdict: 'healthy',
+            reason: null,
+            orders_used: 2,
+            orders_cap: 4,
+          },
+          {
+            strategy_instance_id: 'spy-b',
+            run_id: 'run-spy-b',
+            verdict: 'failed',
+            reason: 'COHORT_MEMBER_HALTED',
+            orders_used: 1,
+            orders_cap: 4,
+          },
+        ],
       },
-      live_binding: instanceId === 'spy-a' ? { run_id: 'run-spy-a' } : null,
-      evidence_binding: instanceId === 'spy-b' ? { run_id: 'run-spy-b' } : null,
-      readiness: { orders_cap: 4, orders_used: 2 },
-      start_defaults: { max_orders_per_day: 4 },
-      broker: { bot_order_namespace: `learn-ai/${instanceId}/v1`, owned_positions: { SPY: 0 } },
-    }));
-    liveRuns.getStatus.mockResolvedValue({
-      executions: { row_count: 2, last_fills: [{ symbol: 'SPY', fill_quantity: 1, fill_price: 500, ts_ms: 1_780_000_001_000 }] },
-      trades: { row_count: 1 },
     });
+    const fullCertificate: CohortValidationCertificate = {
+      schema_version: 1,
+      account_id: 'DU1234567',
+      cohort_id: 'paper-validation-1',
+      member_strategy_instance_ids: ['spy-a', 'spy-b'],
+      member_run_ids: { 'spy-a': 'run-spy-a', 'spy-b': 'run-spy-b' },
+      window_start_ms: 1_780_000_000_000,
+      window_end_ms: 1_780_000_030_000,
+      healthy_overlap_ms: 10_000,
+      evidence_verdict: 'failed',
+      evidence_reason: 'COHORT_MEMBER_HALTED',
+      samples: [],
+      round_trips: [],
+      incidents: [],
+      final_broker_net_positions: null,
+      final_broker_residual: null,
+      final_journal_exposure: {},
+      verdict: 'failed',
+      reasons: ['FAILED_NAMESPACE_EXPOSURE_NONZERO'],
+    };
+    liveRuns.getCohortValidationCertificate.mockResolvedValue(fullCertificate);
     await TestBed.configureTestingModule({
       imports: [CohortLaunchMonitorComponent],
       providers: [provideZonelessChangeDetection(), { provide: LiveRunsService, useValue: liveRuns }],
@@ -69,13 +148,67 @@ describe('CohortLaunchMonitorComponent', () => {
     fixture.detectChanges();
 
     const root = fixture.nativeElement as HTMLElement;
-    expect(root.textContent).toContain('Target count');
+    expect(root.textContent).toContain('Evidence verdict');
     expect(root.textContent).toContain('Account Frozen');
     expect(root.textContent).toContain('Clear the account freeze.');
     expect(root.textContent).toContain('run-spy-a');
-    expect(root.textContent).toContain('learn-ai/spy-a/v1: SPY 0');
-    expect(root.querySelector('table caption')?.textContent).toContain('Per-bot durable receipt state');
-    expect(root.querySelectorAll('th[scope="col"]').length).toBe(7);
+    expect(root.textContent).toContain('Cohort Member Halted');
+    expect(root.textContent).toContain('Certificate overlap');
+    expect(root.textContent).toContain('Failed Namespace Exposure Nonzero');
+    expect(root.querySelector('table caption')?.textContent).toContain('latest server observation');
+    expect(root.querySelectorAll('th[scope="col"]').length).toBe(5);
     expect(root.querySelector<HTMLButtonElement>('[aria-label="Refresh cohort monitor"]')).toBeTruthy();
+  });
+
+  it('surfaces certificate retrieval failures instead of presenting absence', async () => {
+    const liveRuns = new FakeLiveRunsService();
+    liveRuns.getLatestCohortBatchLaunch.mockResolvedValue(cohort('paper-validation-1'));
+    liveRuns.getCohortValidationCertificate.mockRejectedValue(
+      new HttpErrorResponse({ status: 500, error: { detail: 'certificate store unreadable' } }),
+    );
+    await TestBed.configureTestingModule({
+      imports: [CohortLaunchMonitorComponent],
+      providers: [provideZonelessChangeDetection(), { provide: LiveRunsService, useValue: liveRuns }],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(CohortLaunchMonitorComponent);
+    fixture.componentRef.setInput('accountId', 'DU1234567');
+    fixture.detectChanges();
+    await fixture.componentInstance.refresh();
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.textContent).toContain('Certificate retrieval failed');
+  });
+
+  it('clears a previous certificate while a newer cohort certificate is loading', async () => {
+    const liveRuns = new FakeLiveRunsService();
+    let resolveSecondCertificate: ((value: ReturnType<typeof certificate>) => void) | undefined;
+    const secondCertificate = new Promise<ReturnType<typeof certificate>>((resolve) => {
+      resolveSecondCertificate = resolve;
+    });
+    liveRuns.getLatestCohortBatchLaunch.mockResolvedValue(cohort('paper-validation-1'));
+    liveRuns.getCohortValidationCertificate.mockResolvedValue(certificate('FIRST_CERTIFICATE_REASON'));
+    await TestBed.configureTestingModule({
+      imports: [CohortLaunchMonitorComponent],
+      providers: [provideZonelessChangeDetection(), { provide: LiveRunsService, useValue: liveRuns }],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(CohortLaunchMonitorComponent);
+    fixture.componentRef.setInput('accountId', 'DU1234567');
+    fixture.detectChanges();
+    await fixture.componentInstance.refresh();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).toContain('First Certificate Reason');
+
+    liveRuns.getLatestCohortBatchLaunch.mockResolvedValue(cohort('paper-validation-2'));
+    liveRuns.getCohortValidationCertificate.mockReturnValue(secondCertificate);
+    const refresh = fixture.componentInstance.refresh();
+    await vi.waitFor(() =>
+      expect(liveRuns.getCohortValidationCertificate).toHaveBeenCalledWith('DU1234567', 'paper-validation-2'),
+    );
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).not.toContain('First Certificate Reason');
+
+    if (resolveSecondCertificate === undefined) throw new Error('expected certificate request to be pending');
+    resolveSecondCertificate(certificate('SECOND_CERTIFICATE_REASON'));
+    await refresh;
   });
 });

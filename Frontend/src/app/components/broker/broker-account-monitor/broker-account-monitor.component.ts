@@ -22,6 +22,7 @@ import { AccountTruthBoardComponent } from '../account-truth-board/account-truth
 import type { OperatorBlockerMoveEvent } from '../shared/operator-blocker-list/operator-blocker-list.component';
 import { AccountFreezeBannerComponent } from '../account-freeze-banner/account-freeze-banner.component';
 import { LegacyStaleClaimCureComponent } from '../legacy-stale-claim-cure/legacy-stale-claim-cure.component';
+import { JournalClaimCureComponent } from '../journal-claim-cure/journal-claim-cure.component';
 import { ManagedBrokerExposureMeterComponent } from '../managed-broker-exposure-meter/managed-broker-exposure-meter.component';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
@@ -119,6 +120,7 @@ interface ConditionOwnerFact {
     AccountTruthBoardComponent,
     AccountFreezeBannerComponent,
     LegacyStaleClaimCureComponent,
+    JournalClaimCureComponent,
     ManagedBrokerExposureMeterComponent,
     ReceiptLabelPipe,
     TimestampDisplayComponent,

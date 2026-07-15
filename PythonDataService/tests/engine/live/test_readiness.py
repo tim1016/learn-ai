@@ -121,6 +121,24 @@ def test_live_readiness_account_registry_gate_blocks_with_canonical_result() -> 
     assert registry_gate["gate_result"] == gate_result
 
 
+def test_live_readiness_marks_broker_truth_grace_degraded_without_blocking() -> None:
+    gate_result = {
+        "gate_id": "account.account_truth",
+        "status": "pass",
+        "source": "account_truth_snapshot",
+        "operator_reason": "BROKER_TRUTH_GRACE",
+        "operator_next_step": "WAIT_FOR_BROKER_TRUTH",
+        "evidence_at_ms": 1_700_000_000_000,
+    }
+
+    v = _live(account_truth_gate_result=gate_result)
+
+    assert v["verdict"] == "DEGRADED"
+    truth_gate = next(g for g in v["gates"] if g["name"] == "account_broker_truth")
+    assert truth_gate["status"] == "unknown"
+    assert truth_gate["gate_result"] == gate_result
+
+
 def test_live_readiness_force_flat_blocks() -> None:
     assert _live(force_flat_active=True)["verdict"] == "BLOCKED"
 

@@ -14,10 +14,15 @@ from types import SimpleNamespace
 import pytest
 
 import app.engine.live.account_clerk_rpc as account_clerk_rpc
-from app.broker.ibkr.models import IbkrOrderSpec
+from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
 from app.engine.execution.order_sizer import FixedShares, OrderSizer
-from app.engine.live.account_artifacts import advance_account_clerk_generation
-from app.engine.live.account_clerk import AccountClerk, account_clerk_socket_path
+from app.engine.live.account_artifacts import advance_account_clerk_generation, read_account_events
+from app.engine.live.account_clerk import (
+    AccountClerk,
+    AccountClerkIntentRejected,
+    account_clerk_socket_path,
+    read_account_clerk_journal,
+)
 from app.engine.live.account_clerk_cursor import (
     AccountClerkEventConsumerIdentity,
     AccountClerkEventCursorRepo,
@@ -26,6 +31,7 @@ from app.engine.live.account_clerk_rpc import (
     ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S,
     ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S,
     ACCOUNT_CLERK_RPC_SCHEMA_VERSION,
+    AccountClerkRpcCancelNamespaceUncertainError,
     AccountClerkRpcClient,
     AccountClerkRpcGenerationHandshake,
     AccountClerkRpcGenerationMismatchError,
@@ -46,6 +52,8 @@ from app.engine.live.account_registry import (
 )
 from app.engine.live.live_portfolio import LivePortfolio, SubmitUncertainHaltError
 from app.engine.live.order_identity import build_order_ref
+from app.schemas.journal_cures import JournalCureRequest
+from app.services.journal_cures import JournalCureService
 from tests.engine.live.fixtures.fake_broker import FakeBroker
 
 ACCOUNT = "DU1040"
@@ -59,10 +67,49 @@ class _Broker:
     async def place_order(self, _order: object) -> object:
         return SimpleNamespace(order_id=101, perm_id=201, exec_id="exec-1040")
 
+    async def cancel_open_orders_for_namespace(self, _namespace: str) -> list[int]:
+        return [1046]
+
 
 class _FailingBroker(_Broker):
     async def place_order(self, _order: object) -> object:
         raise ValueError("broker secret must not reach the socket response")
+
+
+class _UncertainCancelBroker(_Broker):
+    async def cancel_open_orders_for_namespace(self, _namespace: str) -> list[int]:
+        raise TimeoutError("cancel confirmation lost")
+class _BlockingCallbackBroker(_Broker):
+    """Emit one broker callback, then hold the accepted write at the boundary."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self._callback_sink: Callable[[IbkrOrderEvent], None] | None = None
+
+    def set_broker_callback_sink(self, sink: Callable[[IbkrOrderEvent], None]) -> None:
+        self._callback_sink = sink
+
+    async def place_order(self, order: object) -> object:
+        assert isinstance(order, IbkrOrderSpec)
+        assert self._callback_sink is not None
+        self._callback_sink(
+            IbkrOrderEvent(
+                account_id=ACCOUNT,
+                order_id=101,
+                event_type="fill",
+                order_ref=order.order_ref,
+                symbol="SPY",
+                side="BUY",
+                fill_quantity=1,
+                exec_id="shutdown-race-fill",
+                ts_ms=START_MS + 1,
+            )
+        )
+        self.started.set()
+        await self.release.wait()
+        return await super().place_order(order)
 
 
 class _BarrierTimeoutController:
@@ -249,6 +296,324 @@ async def test_success_envelope_round_trips_over_real_unix_socket(tmp_path: Path
     assert envelope.schema_version == ACCOUNT_CLERK_RPC_SCHEMA_VERSION
     assert envelope.outcome == "success"
     assert envelope.payload["broker_acked"]["order_id"] == 101
+
+
+@pytest.mark.asyncio
+async def test_cancel_namespace_round_trips_as_a_durable_terminal_receipt(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path)
+    server = AccountClerkRpcServer(
+        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_Broker(), clerk_generation=1)
+    )
+    await server.start()
+    try:
+        intent = _intent("cancel-1046").model_copy(
+            update={"intent_kind": "CANCEL_NAMESPACE", "order_spec": {}}
+        )
+        receipt = await AccountClerkRpcClient(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+        ).cancel_namespace(intent)
+    finally:
+        await server.close()
+
+    assert receipt.status == "cancel_confirmed"
+    assert receipt.cancelled_order_ids == (1046,)
+
+
+@pytest.mark.asyncio
+async def test_operator_adjustment_round_trips_through_the_live_clerk_journal(tmp_path: Path) -> None:
+    """A cure must share the Clerk's serialized journal tail, never append behind it."""
+
+    _write_active_binding(tmp_path)
+    intent = _intent("cure-1059")
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_Broker(), clerk_generation=1)
+    await clerk.submit_intent(intent)
+    clerk.append_broker_event(
+        intent,
+        IbkrOrderEvent(
+            account_id=ACCOUNT,
+            order_id=1,
+            event_type="fill",
+            order_ref=intent.order_ref,
+            symbol="SPY",
+            side="BUY",
+            fill_quantity=1,
+            exec_id="cure-rpc-fill",
+            ts_ms=START_MS,
+        ),
+    )
+    write_account_instance_binding(
+        tmp_path,
+        AccountInstanceBinding(
+            account_id=ACCOUNT,
+            strategy_instance_id=intent.strategy_instance_id,
+            run_id=intent.run_id,
+            bot_order_namespace=intent.bot_order_namespace,
+            lifecycle_state="RETIRED",
+            recorded_at_ms=START_MS + 1,
+            source="test.retired",
+        ),
+    )
+    server = AccountClerkRpcServer(
+        clerk,
+        operator_adjustment_handler=JournalCureService(artifacts_root=tmp_path).handler_for_clerk(
+            account_id=ACCOUNT,
+            append_operator_adjustment=clerk.append_operator_adjustment,
+        ),
+    )
+    await server.start()
+    cure_request = JournalCureRequest(
+        bot_order_namespace=intent.bot_order_namespace,
+        symbol="SPY",
+        signed_quantity=-1,
+        reason="retired namespace fill was already reconciled",
+        evidence_refs=("account-reconciliation:test",),
+        request_provenance="test",
+        idempotency_key="cure-rpc-1059",
+    )
+    try:
+        client = AccountClerkRpcClient(artifacts_root=tmp_path, account_id=ACCOUNT)
+        receipt = await client.apply_operator_adjustment(cure_request)
+        with pytest.raises(AccountClerkRpcRejectedError) as conflict:
+            await client.apply_operator_adjustment(
+                cure_request.model_copy(update={"reason": "different operator conclusion"})
+            )
+    finally:
+        await server.close()
+
+    assert receipt.journal_seq > 0
+    assert conflict.value.reason == "JOURNAL_CURE_IDEMPOTENCY_CONFLICT"
+
+
+@pytest.mark.asyncio
+async def test_operator_adjustment_requires_an_injected_cure_handler(tmp_path: Path) -> None:
+    """The RPC transport must not reach into Clerk storage to construct a cure service."""
+
+    server = AccountClerkRpcServer(
+        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_Broker(), clerk_generation=1)
+    )
+    await server.start()
+    try:
+        with pytest.raises(AccountClerkRpcRejectedError) as exc_info:
+            await AccountClerkRpcClient(artifacts_root=tmp_path, account_id=ACCOUNT).apply_operator_adjustment(
+                JournalCureRequest(
+                    bot_order_namespace="learn-ai/retired/v1",
+                    symbol="SPY",
+                    signed_quantity=-1,
+                    reason="operator review",
+                    evidence_refs=("account-reconciliation:test",),
+                    request_provenance="test",
+                    idempotency_key="requires-injected-handler",
+                )
+            )
+    finally:
+        await server.close()
+
+    assert exc_info.value.reason == "OPERATOR_ADJUSTMENT_UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_cancel_namespace_uncertainty_is_typed_over_rpc(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path)
+    server = AccountClerkRpcServer(
+        AccountClerk(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+            broker=_UncertainCancelBroker(),
+            clerk_generation=1,
+        )
+    )
+    await server.start()
+    try:
+        intent = _intent("cancel-uncertain").model_copy(
+            update={"intent_kind": "CANCEL_NAMESPACE", "order_spec": {}}
+        )
+        with pytest.raises(AccountClerkRpcCancelNamespaceUncertainError) as exc:
+            await AccountClerkRpcClient(artifacts_root=tmp_path, account_id=ACCOUNT).cancel_namespace(intent)
+    finally:
+        await server.close()
+
+    assert exc.value.intent_id == intent.intent_id
+async def test_close_fences_normal_submit_intake_before_callback_drain(tmp_path: Path) -> None:
+    """Shutdown cannot admit a write while its callback worker is draining."""
+
+    _write_active_binding(tmp_path)
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_Broker(), clerk_generation=1)
+    server = AccountClerkRpcServer(clerk)
+    await server.start()
+
+    async def assert_intake_is_fenced() -> None:
+        with pytest.raises(AccountClerkIntentRejected, match="CLERK_RPC_CLOSED"):
+            await clerk.submit_intent(_intent())
+
+    server._flush_broker_callbacks = assert_intake_is_fenced  # type: ignore[method-assign]
+    await server.close()
+
+
+@pytest.mark.asyncio
+async def test_closing_rejects_cancel_before_any_broker_write(tmp_path: Path) -> None:
+    """A shutdown-window cancel cannot outlive the callback persistence worker."""
+
+    class _CountingBroker(_Broker):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cancel_count = 0
+
+        async def cancel_open_orders_for_namespace(self, namespace: str) -> list[int]:
+            self.cancel_count += 1
+            return await super().cancel_open_orders_for_namespace(namespace)
+
+    _write_active_binding(tmp_path)
+    broker = _CountingBroker()
+    server = AccountClerkRpcServer(
+        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker, clerk_generation=1)
+    )
+    server._closing = True
+    intent = _intent("closing-cancel").model_copy(
+        update={"intent_kind": "CANCEL_NAMESPACE", "order_spec": {}}
+    )
+
+    with pytest.raises(account_clerk_rpc._AccountClerkRpcRequestRejected, match="CLERK_RPC_CLOSED"):
+        await server._dispatch({"operation": "cancel_namespace", "intent": intent.model_dump(mode="json")})
+
+    assert broker.cancel_count == 0
+
+
+@pytest.mark.asyncio
+async def test_close_waits_for_active_submit_and_persists_its_callback(tmp_path: Path) -> None:
+    """A broker write accepted before shutdown drains its callback before exit."""
+
+    _write_active_binding(tmp_path)
+    broker = _BlockingCallbackBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker, clerk_generation=1)
+    server = AccountClerkRpcServer(clerk)
+    await server.start()
+    try:
+        submit = asyncio.create_task(
+            server._dispatch({"operation": "submit", "intent": _intent().model_dump(mode="json")})
+        )
+        await asyncio.wait_for(broker.started.wait(), timeout=1)
+
+        closing = asyncio.create_task(server.close())
+        await asyncio.sleep(0)
+        assert not closing.done()
+
+        broker.release.set()
+        await submit
+        await closing
+    finally:
+        if not broker.release.is_set():
+            broker.release.set()
+        if not server._closing:
+            await server.close()
+
+    assert any(entry.entry_kind == "broker_event" for entry in read_account_clerk_journal(tmp_path, ACCOUNT))
+
+
+@pytest.mark.asyncio
+async def test_close_waits_for_an_admitted_namespace_cancel(tmp_path: Path) -> None:
+    """RPC shutdown retains its fence until an admitted cancel reaches a terminal journal state."""
+
+    class _BlockingCancelBroker(_Broker):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def cancel_open_orders_for_namespace(self, namespace: str) -> list[int]:
+            self.started.set()
+            await self.release.wait()
+            return await super().cancel_open_orders_for_namespace(namespace)
+
+    _write_active_binding(tmp_path)
+    broker = _BlockingCancelBroker()
+    server = AccountClerkRpcServer(
+        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker, clerk_generation=1)
+    )
+    await server.start()
+    try:
+        cancel = asyncio.create_task(
+            server._dispatch(
+                {
+                    "operation": "cancel_namespace",
+                    "intent": _intent("shutdown-cancel")
+                    .model_copy(update={"intent_kind": "CANCEL_NAMESPACE", "order_spec": {}})
+                    .model_dump(mode="json"),
+                }
+            )
+        )
+        await asyncio.wait_for(broker.started.wait(), timeout=1)
+
+        closing = asyncio.create_task(server.close())
+        await asyncio.sleep(0)
+        assert not closing.done()
+
+        broker.release.set()
+        await cancel
+        await closing
+    finally:
+        if not broker.release.is_set():
+            broker.release.set()
+        if not server._closing:
+            await server.close()
+
+
+@pytest.mark.asyncio
+async def test_close_rejects_queued_submit_before_it_records_receipt(tmp_path: Path) -> None:
+    """A request queued behind shutdown is rejected without a replayable row."""
+
+    _write_active_binding(tmp_path)
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_Broker(), clerk_generation=1)
+    server = AccountClerkRpcServer(clerk)
+    await server.start()
+    try:
+        async with clerk._intake_lock:
+            queued_submit = asyncio.create_task(clerk.submit_intent(_intent()))
+            await asyncio.sleep(0)
+            closing = asyncio.create_task(server.close())
+            await asyncio.sleep(0)
+
+        with pytest.raises(AccountClerkIntentRejected, match="CLERK_RPC_CLOSED"):
+            await queued_submit
+        await closing
+    finally:
+        if not server._closing:
+            await server.close()
+
+    assert read_account_clerk_journal(tmp_path, ACCOUNT) == []
+
+
+@pytest.mark.asyncio
+async def test_close_persists_stream_alarm_when_callback_drain_fails(tmp_path: Path) -> None:
+    """Shutdown must not mask a callback durability failure behind its fence."""
+
+    _write_active_binding(tmp_path)
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_Broker(), clerk_generation=1)
+    server = AccountClerkRpcServer(clerk)
+    await server.start()
+
+    async def fail_callback_write(_event: IbkrOrderEvent) -> object:
+        raise OSError("simulated shutdown callback fsync failure")
+
+    clerk.record_broker_event = fail_callback_write  # type: ignore[method-assign]
+    server._record_broker_event(
+        IbkrOrderEvent(
+            account_id=ACCOUNT,
+            order_id=101,
+            event_type="fill",
+            order_ref=_intent().order_ref,
+            fill_quantity=1,
+            ts_ms=START_MS,
+        )
+    )
+    await server.close()
+
+    [stream_down] = [
+        event
+        for event in read_account_events(tmp_path, ACCOUNT)
+        if event["event_type"] == "account_clerk_event_stream_down"
+    ]
+    assert stream_down["failure_type"] == "OSError"
 
 
 @pytest.mark.asyncio

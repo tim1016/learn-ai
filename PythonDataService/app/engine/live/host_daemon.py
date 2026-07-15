@@ -729,6 +729,7 @@ class RunnerProcessManager:
                     run_id=run_id,
                     lifecycle_state="ACTIVE",
                     source="host_daemon.start",
+                    cohort_id=request.cohort_id,
                 )
                 if account_freeze is not None:
                     raise HostRunnerError(
@@ -999,6 +1000,7 @@ class RunnerProcessManager:
         run_id: str,
         lifecycle_state: str,
         source: str,
+        cohort_id: str | None = None,
     ):
         account_id, strategy_instance_id = self._account_registry_identity(run_dir)
         if account_id is None or strategy_instance_id is None:
@@ -1022,6 +1024,7 @@ class RunnerProcessManager:
                     strategy_instance_id=strategy_instance_id,
                     run_id=run_id,
                     bot_order_namespace=bot_order_namespace_for_instance(strategy_instance_id),
+                    cohort_id=cohort_id,
                     lifecycle_state=lifecycle_state,
                     recorded_at_ms=recorded_at_ms,
                     source=source,
@@ -1923,6 +1926,24 @@ def create_app(
             return await run_in_threadpool(process_manager.renew_control_plane_lease)
         except HostRunnerError as exc:
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
+
+    @app.post("/accounts/{account_id}/clerk/ensure", response_model=HostRunnerHealth, dependencies=auth)
+    async def ensure_account_clerk(account_id: str) -> HostRunnerHealth:
+        """Start and generation-handshake the sole Clerk before an operator cure."""
+
+        try:
+            await run_in_threadpool(process_manager._ensure_account_clerk, account_id)
+        except HostRunnerError as exc:
+            raise HTTPException(exc.status_code, detail=exc.detail) from exc
+        except OSError as exc:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "reason_code": "ACCOUNT_CLERK_START_FAILED",
+                    "message": str(exc),
+                },
+            ) from exc
+        return process_manager.health()
 
     @app.get("/process", response_model=HostRunnerProcessStatus, dependencies=auth)
     async def process() -> HostRunnerProcessStatus:

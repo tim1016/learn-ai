@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.broker.ibkr.account_recovery import AccountRecoveryState
@@ -13,15 +14,30 @@ from app.broker.ibkr.account_truth import compose_account_truth
 from app.broker.ibkr.models import (
     IbkrAccountSummary,
     IbkrConnectionHealth,
+    IbkrOrderEvent,
     IbkrPositionsSnapshot,
 )
 from app.engine.live.account_artifacts import (
     AccountFreezeEvidence,
+    CohortBatchLaunchMemberOutcome,
+    CohortBatchLaunchOutcomesReceipt,
+    CohortBatchLaunchReceipt,
     account_artifacts_root,
+    append_account_event,
     read_account_events,
     read_account_freeze,
+    record_cohort_batch_launch_outcomes,
+    record_cohort_batch_launch_receipt,
     write_account_freeze,
 )
+from app.engine.live.account_clerk_journal import (
+    AccountClerkBrokerAckReceipt,
+    AccountClerkJournal,
+    AccountClerkRecordedReceipt,
+    AccountClerkRecoveryFlattenReceipt,
+)
+from app.engine.live.account_clerk_rpc import AccountClerkRpcRejectedError, AccountClerkRpcRequestIdentity
+from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
     latest_account_instance_binding,
@@ -32,9 +48,13 @@ from app.engine.live.daemon_transport import DaemonResult
 from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarRepo, stable_live_state_path
 from app.engine.live.run_ledger import LiveRunLedger, write_ledger
 from app.routers import account_reconciliation, cohort_batch_launch
+from app.schemas.journal_cures import JournalCureReceipt, JournalCureRequest
+from app.services import cohort_batch_launch as cohort_batch_launch_service
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.cohort_batch_launch import CohortBatchLaunchService
+from app.services.cohort_evidence import CohortEvidenceSample, CohortMemberSample
 from app.services.legacy_stale_claim_retirement import LegacyStaleClaimRetirementService
+from app.utils.timestamps import now_ms_utc
 
 
 def _health() -> IbkrConnectionHealth:
@@ -237,174 +257,47 @@ async def _async_truth():
     return _truth()
 
 
-async def test_create_cohort_batch_launch_receipt_records_operator_authorization(tmp_path: Path) -> None:
-    from app.main import app
-
-    service = CohortBatchLaunchService(artifacts_root=tmp_path)
-    app.dependency_overrides[
-        cohort_batch_launch.get_cohort_batch_launch_service
-    ] = lambda: service
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(
-                "/api/accounts/du1234567/cohort-batch-launches",
-                json={
-                    "cohort_id": "opening-batch-1",
-                    "member_strategy_instance_ids": ["spy-a", "spy-b", "spy-c"],
-                    "window_start_ms": 1_780_000_000_000,
-                    "window_end_ms": 1_780_000_030_000,
-                    "authorized_by": "operator.alice",
-                },
-            )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["account_id"] == "DU1234567"
-    assert body["cohort_id"] == "opening-batch-1"
-    assert body["member_strategy_instance_ids"] == ["spy-a", "spy-b", "spy-c"]
-    assert body["window_start_ms"] == 1_780_000_000_000
-    assert body["window_end_ms"] == 1_780_000_030_000
-    assert body["authorized_by"] == "operator.alice"
-    assert body["recorded_at_ms"] >= 1_780_000_000_000
-
-
-async def test_record_cohort_batch_launch_outcomes_persists_blocked_safe_action(tmp_path: Path) -> None:
-    from app.main import app
-
-    service = CohortBatchLaunchService(artifacts_root=tmp_path)
-    app.dependency_overrides[
-        cohort_batch_launch.get_cohort_batch_launch_service
-    ] = lambda: service
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            authorized = await client.post(
-                "/api/accounts/DU1234567/cohort-batch-launches",
-                json={
-                    "cohort_id": "opening-batch-1",
-                    "member_strategy_instance_ids": ["spy-a", "spy-b"],
-                    "window_start_ms": 1_780_000_000_000,
-                    "window_end_ms": 1_780_000_030_000,
-                    "authorized_by": "operator.alice",
-                },
-            )
-            response = await client.post(
-                "/api/accounts/DU1234567/cohort-batch-launches/opening-batch-1/outcomes",
-                json={
-                    "outcomes": [
-                        {
-                            "strategy_instance_id": "spy-a",
-                            "state": "accepted",
-                            "reason": "start.request.accepted",
-                            "next_safe_action": "Monitor receipt state.",
-                        },
-                        {
-                            "strategy_instance_id": "spy-b",
-                            "state": "blocked",
-                            "reason": "ACCOUNT_FROZEN",
-                            "next_safe_action": "Clear the account freeze.",
-                        },
-                    ],
-                },
-            )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert authorized.status_code == 200
-    assert response.status_code == 200
-    assert response.json()["outcomes"][1] == {
-        "strategy_instance_id": "spy-b",
-        "state": "blocked",
-        "reason": "ACCOUNT_FROZEN",
-        "next_safe_action": "Clear the account freeze.",
-    }
-    event = next(
-        event
-        for event in read_account_events(tmp_path, "DU1234567")
-        if event["event_type"] == "cohort_batch_launch_outcomes_recorded"
-    )
-    assert event["cohort_id"] == "opening-batch-1"
-    assert event["outcomes"][1]["next_safe_action"] == "Clear the account freeze."
-
-
-async def test_cohort_outcomes_reject_partial_authorization_coverage(tmp_path: Path) -> None:
-    from app.main import app
-
-    service = CohortBatchLaunchService(artifacts_root=tmp_path)
-    app.dependency_overrides[
-        cohort_batch_launch.get_cohort_batch_launch_service
-    ] = lambda: service
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            await client.post(
-                "/api/accounts/DU1234567/cohort-batch-launches",
-                json={
-                    "cohort_id": "opening-batch-1",
-                    "member_strategy_instance_ids": ["spy-a", "spy-b"],
-                    "window_start_ms": 1_780_000_000_000,
-                    "window_end_ms": 1_780_000_030_000,
-                    "authorized_by": "operator.alice",
-                },
-            )
-            response = await client.post(
-                "/api/accounts/DU1234567/cohort-batch-launches/opening-batch-1/outcomes",
-                json={
-                    "outcomes": [{
-                        "strategy_instance_id": "spy-a",
-                        "state": "accepted",
-                        "reason": "start.request.accepted",
-                        "next_safe_action": "Monitor receipt state.",
-                    }],
-                },
-            )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 400
-    assert response.json()["detail"] == (
-        "cohort outcomes must cover exactly the authorization receipt members"
-    )
-
-
 async def test_latest_cohort_status_reloads_exact_persisted_blocker(tmp_path: Path) -> None:
     from app.main import app
 
+    receipt = CohortBatchLaunchReceipt(
+        account_id="DU1234567",
+        cohort_id="opening-batch-1",
+        member_strategy_instance_ids=("spy-a", "spy-b"),
+        window_start_ms=1_780_000_000_000,
+        window_end_ms=1_780_000_030_000,
+        authorized_by="local-operator",
+        recorded_at_ms=1_780_000_000_000,
+    )
+    record_cohort_batch_launch_receipt(tmp_path, receipt)
+    record_cohort_batch_launch_outcomes(
+        tmp_path,
+        CohortBatchLaunchOutcomesReceipt(
+            account_id="DU1234567",
+            cohort_id="opening-batch-1",
+            outcomes=(
+                CohortBatchLaunchMemberOutcome(
+                    strategy_instance_id="spy-a",
+                    state="accepted",
+                    reason="COHORT_START_ACCEPTED",
+                    next_safe_action="Monitor receipt state.",
+                ),
+                CohortBatchLaunchMemberOutcome(
+                    strategy_instance_id="spy-b",
+                    state="blocked",
+                    reason="ACCOUNT_FROZEN",
+                    next_safe_action="Clear the account freeze.",
+                ),
+            ),
+            recorded_at_ms=1_780_000_000_001,
+        ),
+    )
     service = CohortBatchLaunchService(artifacts_root=tmp_path)
     app.dependency_overrides[
         cohort_batch_launch.get_cohort_batch_launch_service
     ] = lambda: service
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            await client.post(
-                "/api/accounts/DU1234567/cohort-batch-launches",
-                json={
-                    "cohort_id": "opening-batch-1",
-                    "member_strategy_instance_ids": ["spy-a", "spy-b"],
-                    "window_start_ms": 1_780_000_000_000,
-                    "window_end_ms": 1_780_000_030_000,
-                    "authorized_by": "operator.alice",
-                },
-            )
-            await client.post(
-                "/api/accounts/DU1234567/cohort-batch-launches/opening-batch-1/outcomes",
-                json={
-                    "outcomes": [
-                        {
-                            "strategy_instance_id": "spy-a",
-                            "state": "accepted",
-                            "reason": "start.request.accepted",
-                            "next_safe_action": "Monitor receipt state.",
-                        },
-                        {
-                            "strategy_instance_id": "spy-b",
-                            "state": "blocked",
-                            "reason": "ACCOUNT_FROZEN",
-                            "next_safe_action": "Clear the account freeze.",
-                        },
-                    ],
-                },
-            )
             response = await client.get(
                 "/api/accounts/DU1234567/cohort-batch-launches/latest",
             )
@@ -421,6 +314,133 @@ async def test_latest_cohort_status_reloads_exact_persisted_blocker(tmp_path: Pa
         "reason": "ACCOUNT_FROZEN",
         "next_safe_action": "Clear the account freeze.",
     }
+
+
+async def test_latest_cohort_status_fails_closed_for_unreadable_newest_authorization(
+    monkeypatch,
+) -> None:
+    receipt = CohortBatchLaunchReceipt(
+        account_id="DU1234567",
+        cohort_id="valid-earlier-cohort",
+        member_strategy_instance_ids=("spy-a",),
+        window_start_ms=1_780_000_000_000,
+        window_end_ms=1_780_000_030_000,
+        authorized_by="local-operator",
+        recorded_at_ms=1_780_000_000_000,
+    )
+    events = [
+        {
+            "event_type": "cohort_batch_launch_authorized",
+            "seq": 1,
+            **receipt.model_dump(mode="json"),
+        },
+        {
+            "event_type": "cohort_batch_launch_authorized",
+            "cohort_id": "unreadable-newest-cohort",
+            "seq": 2,
+        },
+    ]
+    monkeypatch.setattr(cohort_batch_launch_service, "read_account_events", lambda *_args: events)
+    service = CohortBatchLaunchService(artifacts_root=Path("/unused"))
+
+    try:
+        await service.get_status(account_id="DU1234567", cohort_id=None)
+    except ValueError as exc:
+        assert str(exc) == "cohort authorization is unreadable: unreadable-newest-cohort"
+    else:
+        raise AssertionError("latest cohort retrieval must not skip unreadable authorization")
+
+
+async def test_latest_cohort_status_projects_durable_server_evidence(tmp_path: Path) -> None:
+    now_ms = now_ms_utc()
+    receipt = CohortBatchLaunchReceipt(
+        account_id="DU1234567",
+        cohort_id="evidence-cohort",
+        member_strategy_instance_ids=("spy-a",),
+        window_start_ms=now_ms,
+        window_end_ms=now_ms + 30_000,
+        authorized_by="local-operator",
+        recorded_at_ms=now_ms,
+    )
+    record_cohort_batch_launch_receipt(tmp_path, receipt)
+    service = CohortBatchLaunchService(artifacts_root=tmp_path)
+    await service.record_evidence_sample(
+        account_id=receipt.account_id,
+        cohort_id=receipt.cohort_id,
+        sample=CohortEvidenceSample(
+            expected_at_ms=now_ms,
+            observed_at_ms=now_ms,
+                account_truth="healthy",
+                fleet="healthy",
+                members=(CohortMemberSample("spy-a", "run-spy-a", "healthy", orders_used=0, orders_cap=4),),
+                broker_net_positions={},
+                broker_residual={},
+        ),
+    )
+
+    status = await service.get_status(account_id=receipt.account_id, cohort_id=receipt.cohort_id)
+
+    assert status is not None
+    assert status.evidence.model_dump() == {
+        "sample_count": 1,
+        "cadence_ms": 5_000,
+        "healthy_overlap_ms": 5_000,
+        "verdict": "healthy",
+        "reason": None,
+        "source": "account_event.cohort_evidence_sample",
+        "members": [
+            {
+                "strategy_instance_id": "spy-a",
+                "run_id": "run-spy-a",
+                "verdict": "healthy",
+                "reason": None,
+                "orders_used": 0,
+                "orders_cap": 4,
+            }
+        ],
+    }
+    evidence_event = next(
+        event for event in read_account_events(tmp_path, receipt.account_id)
+        if event["event_type"] == "cohort_evidence_sample"
+    )
+    assert evidence_event["broker_net_positions"] == {}
+    assert evidence_event["broker_residual"] == {}
+
+
+async def test_malformed_cohort_evidence_fails_closed(tmp_path: Path) -> None:
+    now_ms = now_ms_utc()
+    receipt = CohortBatchLaunchReceipt(
+        account_id="DU1234567",
+        cohort_id="malformed-evidence-cohort",
+        member_strategy_instance_ids=("spy-a",),
+        window_start_ms=now_ms,
+        window_end_ms=now_ms + 30_000,
+        authorized_by="local-operator",
+        recorded_at_ms=now_ms,
+    )
+    record_cohort_batch_launch_receipt(tmp_path, receipt)
+    append_account_event(
+        tmp_path,
+        receipt.account_id,
+        {
+            "event_type": "cohort_evidence_sample",
+            "cohort_id": receipt.cohort_id,
+            "expected_at_ms": now_ms,
+            "observed_at_ms": now_ms,
+            "account_truth": "healthy",
+            "fleet": "healthy",
+            "members": "not-a-list",
+        },
+    )
+
+    status = await CohortBatchLaunchService(artifacts_root=tmp_path).get_status(
+        account_id=receipt.account_id,
+        cohort_id=receipt.cohort_id,
+    )
+
+    assert status is not None
+    assert status.evidence.verdict == "failed"
+    assert status.evidence.reason == "COHORT_EVIDENCE_UNREADABLE"
 
 
 async def test_triage_returns_latest_receipt(tmp_path: Path) -> None:
@@ -530,6 +550,27 @@ async def test_latest_reconciliation_normalizes_account_id(tmp_path: Path) -> No
     body = response.json()
     assert body["account_id"] == "DU1234567"
     assert body["receipt_id"] == receipt.receipt_id
+
+
+async def test_reconciliation_service_honors_artifact_root_dependency_override(tmp_path: Path) -> None:
+    """Default service construction must use the route's injected artifact root."""
+
+    from app.main import app
+
+    receipt = AccountReconciliationService(artifacts_root=tmp_path, ttl_ms=10_000_000_000).write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(),
+        now_ms=1_780_000_002_000,
+    )
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/accounts/DU1234567/reconciliation/latest")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["receipt_id"] == receipt.receipt_id
 
 
 async def test_triage_contract_returns_condition_rows_for_active_freeze(tmp_path: Path) -> None:
@@ -772,3 +813,281 @@ async def test_false_crash_backfill_endpoint_repairs_disproven_registry_row(
     )
     assert repaired is not None
     assert repaired.source == "host_daemon.process_halted"
+
+
+async def test_journal_cure_endpoint_ensures_clerk_before_appending_adjustment(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from app.main import app
+
+    namespace = "learn-ai/bot-a/v1"
+    intent = AccountOwnerSubmitIntent(
+        trace_id="trace-cure-route",
+        account_id="DU1234567",
+        strategy_instance_id="bot-a",
+        run_id="run-a",
+        bot_order_namespace=namespace,
+        intent_id="intent-cure-route",
+        order_ref=f"{namespace}:intent-cure-route",
+        intent_kind="ORDER",
+        order_spec={},
+        owner_generation=1,
+        created_at_ms=100,
+    )
+    journal = AccountClerkJournal(artifacts_root=tmp_path, account_id="DU1234567", now_ms=lambda: 100)
+    journal.record_intent(intent, validate_intent=lambda _: None)
+    journal.record_broker_event(
+        IbkrOrderEvent(
+            account_id="DU1234567",
+            order_id=1,
+            event_type="fill",
+            order_ref=intent.order_ref,
+            symbol="SPY",
+            side="BUY",
+            fill_quantity=1,
+            exec_id="cure-route-fill",
+            ts_ms=100,
+        )
+    )
+    ensured: list[str] = []
+
+    async def _ensure_clerk(_base_url: str, account_id: str) -> dict:
+        ensured.append(account_id)
+        return {}
+
+    class FakeRpcClient:
+        def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
+            assert artifacts_root == tmp_path
+            assert account_id == "DU1234567"
+
+        async def apply_operator_adjustment(self, request: JournalCureRequest) -> JournalCureReceipt:
+            assert request.idempotency_key == "cure-route-1"
+            return JournalCureReceipt(
+                account_id="DU1234567",
+                bot_order_namespace=namespace,
+                symbol="SPY",
+                signed_quantity=-1,
+                request_provenance=request.request_provenance,
+                reason=request.reason,
+                evidence_refs=request.evidence_refs,
+                idempotency_key=request.idempotency_key,
+                recorded_at_ms=101,
+                journal_seq=3,
+            )
+
+    monkeypatch.setattr(account_reconciliation.host_daemon_client, "ensure_account_clerk", _ensure_clerk)
+    monkeypatch.setattr(account_reconciliation, "AccountClerkRpcClient", FakeRpcClient)
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/accounts/DU1234567/journal-cures",
+                json={
+                    "bot_order_namespace": namespace,
+                    "symbol": "SPY",
+                    "signed_quantity": -1,
+                    "reason": "operator verified stale claim",
+                    "evidence_refs": ["account-reconciliation:receipt-1"],
+                    "request_provenance": "account-monitor/cure",
+                    "idempotency_key": "cure-route-1",
+                },
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    assert ensured == ["DU1234567"]
+    assert response.json()["signed_quantity"] == -1
+
+
+async def test_journal_cure_endpoint_preserves_clerk_rejection_reason(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """An operator needs the Clerk's actionable cure rejection, not a generic code."""
+
+    from app.main import app
+
+    async def _ensure_clerk(_base_url: str, _account_id: str) -> dict:
+        return {}
+
+    class FakeRpcClient:
+        def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
+            assert artifacts_root == tmp_path
+            assert account_id == "DU1234567"
+
+        async def apply_operator_adjustment(self, _request: JournalCureRequest) -> JournalCureReceipt:
+            raise AccountClerkRpcRejectedError(
+                reason="JOURNAL_CURE_IDEMPOTENCY_CONFLICT",
+                operation="operator_adjustment",
+                request_identity=AccountClerkRpcRequestIdentity(intent_id=None, order_ref=None),
+            )
+
+    monkeypatch.setattr(account_reconciliation.host_daemon_client, "ensure_account_clerk", _ensure_clerk)
+    monkeypatch.setattr(account_reconciliation, "AccountClerkRpcClient", FakeRpcClient)
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/accounts/DU1234567/journal-cures",
+                json={
+                    "bot_order_namespace": "learn-ai/bot-a/v1",
+                    "symbol": "SPY",
+                    "signed_quantity": -1,
+                    "reason": "operator verified stale claim",
+                    "evidence_refs": ["account-reconciliation:receipt-1"],
+                    "request_provenance": "account-monitor/cure",
+                    "idempotency_key": "cure-route-1",
+                },
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "JOURNAL_CURE_IDEMPOTENCY_CONFLICT"
+
+
+async def test_journal_cure_preview_honors_artifact_root_dependency_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preview must read the test/app-provided artifact root, never global settings."""
+
+    from app.main import app
+
+    observed_roots: list[Path] = []
+
+    class FakeJournalCureService:
+        def __init__(self, *, artifacts_root: Path) -> None:
+            observed_roots.append(artifacts_root)
+
+        def preview(
+            self,
+            *,
+            account_id: str,
+            bot_order_namespace: str,
+            symbol: str,
+        ) -> account_reconciliation.JournalCurePreview:
+            return account_reconciliation.JournalCurePreview(
+                account_id=account_id,
+                bot_order_namespace=bot_order_namespace,
+                symbol=symbol,
+                journal_quantity=0.0,
+                can_cure=False,
+                reason_code="JOURNAL_CURE_NO_STALE_CLAIM",
+            )
+
+    monkeypatch.setattr(account_reconciliation, "JournalCureService", FakeJournalCureService)
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get(
+                "/api/accounts/DU1234567/journal-cures/preview",
+                params={"bot_order_namespace": "learn-ai/retired-bot/v1", "symbol": "SPY"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert observed_roots == [tmp_path]
+
+
+async def test_operator_recovery_flatten_endpoint_ensures_clerk_and_appends_audit_event(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from app.main import app
+
+    namespace = "learn-ai/retired-bot/v1"
+    intent = AccountOwnerSubmitIntent(
+        trace_id="trace-operator-recovery",
+        account_id="DU1234567",
+        strategy_instance_id="retired-bot",
+        run_id="run-retired",
+        bot_order_namespace=namespace,
+        intent_id="intent-operator-recovery",
+        order_ref=f"{namespace}:intent-operator-recovery",
+        intent_kind="ORDER",
+        order_spec={},
+        owner_generation=2,
+        created_at_ms=100,
+    )
+    recorded = AccountClerkRecordedReceipt(
+        trace_id=intent.trace_id,
+        account_id=intent.account_id,
+        strategy_instance_id=intent.strategy_instance_id,
+        run_id=intent.run_id,
+        bot_order_namespace=intent.bot_order_namespace,
+        intent_id=intent.intent_id,
+        order_ref=intent.order_ref,
+        journal_seq=1,
+        recorded_at_ms=100,
+    )
+    receipt = AccountClerkRecoveryFlattenReceipt(
+        recorded=recorded,
+        broker_acked=AccountClerkBrokerAckReceipt(
+            **recorded.model_dump(exclude={"status", "recorded_at_ms"}),
+            order_id=12,
+            recorded_at_ms=101,
+        ),
+        cancelled_order_ids=(11,),
+    )
+    ensured: list[str] = []
+
+    async def _ensure_clerk(_base_url: str, account_id: str) -> dict:
+        ensured.append(account_id)
+        return {}
+
+    class FakeRpcClient:
+        def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
+            assert artifacts_root == tmp_path
+            assert account_id == "DU1234567"
+
+        async def submit_operator_recovery_flatten(
+            self,
+            submitted_intent: AccountOwnerSubmitIntent,
+        ) -> AccountClerkRecoveryFlattenReceipt:
+            assert submitted_intent == intent
+            return receipt
+
+    monkeypatch.setattr(account_reconciliation.host_daemon_client, "ensure_account_clerk", _ensure_clerk)
+    monkeypatch.setattr(account_reconciliation, "AccountClerkRpcClient", FakeRpcClient)
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/accounts/DU1234567/operator-recovery-flatten",
+                json={"intent": intent.model_dump(mode="json"), "request_provenance": "account-monitor/recovery"},
+            )
+            replay = await client.post(
+                "/api/accounts/DU1234567/operator-recovery-flatten",
+                json={"intent": intent.model_dump(mode="json"), "request_provenance": "account-monitor/recovery"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert replay.status_code == 200
+    assert ensured == ["DU1234567", "DU1234567"]
+    [event] = read_account_events(tmp_path, "DU1234567")
+    assert {
+        key: event[key]
+        for key in (
+            "account_id",
+            "event_type",
+            "intent_id",
+            "order_ref",
+            "request_provenance",
+            "recorded_at_ms",
+            "receipt_id",
+        )
+    } == {
+        "account_id": "DU1234567",
+        "event_type": "account_clerk_operator_recovery_flatten",
+        "intent_id": intent.intent_id,
+        "order_ref": intent.order_ref,
+        "request_provenance": "account-monitor/recovery",
+        "recorded_at_ms": 101,
+        "receipt_id": "account-clerk-operator-recovery:intent-operator-recovery:1",
+    }
