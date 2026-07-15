@@ -289,13 +289,14 @@ class AccountClerk:
     async def mark_event_stream_down(self, failure: BaseException | None = None) -> None:
         """Close normal submit intake and durably alarm a dead broker stream."""
 
-        if self._event_stream_down_recorded:
-            return
         # Set before the fsync so concurrent submit callers fail closed
         # immediately, rather than racing an alarm write.
         self._normal_submit_intake_reason = "CLERK_EVENT_STREAM_DOWN"
-        await asyncio.to_thread(self._record_event_stream_down_locked, failure)
-        self._event_stream_down_recorded = True
+        async with self._intake_lock:
+            if self._event_stream_down_recorded:
+                return
+            await asyncio.to_thread(self._record_event_stream_down_locked, failure)
+            self._event_stream_down_recorded = True
 
     def close_normal_submit_intake(self) -> None:
         """Fence all broker writes before this Clerk's RPC transport shuts down."""
@@ -423,8 +424,10 @@ class AccountClerk:
 
         if self._broker is None:
             raise RuntimeError("ACCOUNT_CLERK_BROKER_UNAVAILABLE")
+        self._require_normal_submit_intake(intent)
         self._require_paper_broker()
         async with self._intake_lock:
+            self._require_normal_submit_intake(intent)
             await asyncio.to_thread(self._journal.register_attribution, intent)
             spec = IbkrOrderSpec.model_validate(intent.order_spec)
             await asyncio.to_thread(self._journal.append_broker_submitting, intent)
