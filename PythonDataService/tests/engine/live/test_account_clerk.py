@@ -1030,6 +1030,49 @@ async def test_reconciler_releases_stale_submitting_rows_at_derived_ttl_boundari
 
 
 @pytest.mark.asyncio
+async def test_reconciler_handles_uncertain_recovery_and_respects_a_newer_submit_boundary(
+    tmp_path: Path,
+) -> None:
+    """#1066: uncertainty is actionable unless a newer broker write is still fresh."""
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=_FakeBroker(),
+        now_ms=lambda: 100,
+    )
+    recovery = _recovery_intent("bot-a", "run-a", "uncertain-recovery")
+    retried = _intent("bot-a", "run-a", "fresh-retry")
+    await clerk.record_intent(recovery)
+    await clerk.record_intent(retried)
+    await asyncio.to_thread(clerk._journal.append_broker_uncertain, recovery, TimeoutError("lost"))
+    await asyncio.to_thread(clerk._journal.append_broker_uncertain, retried, TimeoutError("lost"))
+    await asyncio.to_thread(clerk._journal.append_broker_submitting, retried)
+
+    unresolved = _unresolved_intents(await clerk.reconciliation_snapshot(), now_ms=100)
+
+    assert set(unresolved) == {recovery.intent_id}
+
+
+@pytest.mark.asyncio
+async def test_reconciler_preserves_the_paper_mode_guard_before_a_retry(tmp_path: Path) -> None:
+    """#1066: reconciliation cannot turn an absent probe into a live write."""
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _ReconciliationBroker("PROVABLY_ABSENT")
+    broker._client.settings.mode = "live"
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    intent = _intent("bot-a", "run-a", "live-mode-retry")
+    await clerk.record_intent(intent)
+
+    [resolution] = await AccountClerkReconciler(clerk).reconcile_once()
+
+    assert resolution.verdict.value == "RETRY_ONCE"
+    assert broker.calls == []
+
+
+@pytest.mark.asyncio
 async def test_stale_recovery_is_halted_without_automatic_broker_retry(tmp_path: Path) -> None:
     """#1052: stale recovery is probed, but ambiguity cannot create a second flatten."""
 

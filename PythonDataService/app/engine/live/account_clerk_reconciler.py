@@ -266,8 +266,8 @@ def _unresolved_intents(
     recorded: dict[str, AccountOwnerSubmitIntent] = {}
     terminal: set[str] = set()
     retries: dict[str, int] = defaultdict(int)
-    submitting_at_ms: dict[str, int] = {}
-    uncertain_at_ms: dict[str, int] = {}
+    submitting_at: dict[str, tuple[int, int]] = {}
+    uncertainty_at: dict[str, tuple[int, int]] = {}
     for entry in entries:
         # A callback with no durable Clerk intent is deliberately retained as
         # account truth, but it is never an intent-reconciliation candidate.
@@ -278,9 +278,9 @@ def _unresolved_intents(
         if entry.entry_kind == "recorded":
             recorded[intent_id] = entry.intent
         elif entry.entry_kind == "broker_submitting":
-            submitting_at_ms[intent_id] = entry.recorded_at_ms
+            submitting_at[intent_id] = (entry.recorded_at_ms, entry.seq)
         elif entry.entry_kind in {"broker_uncertain", "cancel_uncertain"}:
-            uncertain_at_ms[intent_id] = entry.recorded_at_ms
+            uncertainty_at[intent_id] = (entry.recorded_at_ms, entry.seq)
         elif entry.entry_kind in {"broker_acked", "cancel_confirmed"}:
             terminal.add(intent_id)
         elif entry.entry_kind == "reconciliation":
@@ -292,17 +292,15 @@ def _unresolved_intents(
     for intent_id, intent in recorded.items():
         if intent_id in terminal:
             continue
-        submitted_at_ms = submitting_at_ms.get(intent_id)
-        uncertainty_at_ms = uncertain_at_ms.get(intent_id)
+        submitted_at = submitting_at.get(intent_id)
+        uncertainty_marker = uncertainty_at.get(intent_id)
         if intent.intent_kind == "CANCEL_NAMESPACE":
-            if uncertainty_at_ms is not None or submitted_at_ms is not None:
+            if uncertainty_marker is not None or submitted_at is not None:
                 candidates[intent_id] = (intent, retries[intent_id])
             continue
-        if intent.intent_kind == "RECOVERY_FLATTEN" and submitted_at_ms is None and uncertainty_at_ms is None:
+        if intent.intent_kind == "RECOVERY_FLATTEN" and submitted_at is None and uncertainty_marker is None:
             continue
-        if submitted_at_ms is None or (
-            uncertainty_at_ms is not None and uncertainty_at_ms > submitted_at_ms
-        ):
+        if submitted_at is None or (uncertainty_marker is not None and uncertainty_marker > submitted_at):
             candidates[intent_id] = (intent, retries[intent_id])
             continue
         ttl_ms = (
@@ -310,7 +308,7 @@ def _unresolved_intents(
             if intent.intent_kind == "RECOVERY_FLATTEN"
             else _SUBMIT_IN_FLIGHT_TTL_MS
         )
-        if now_ms - submitted_at_ms >= ttl_ms:
+        if now_ms - submitted_at[0] >= ttl_ms:
             candidates[intent_id] = (intent, retries[intent_id])
     return candidates
 

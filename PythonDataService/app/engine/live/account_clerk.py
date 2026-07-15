@@ -656,6 +656,7 @@ class AccountClerk:
             )
             if verdict is SubmitVerdict.RETRY_ONCE:
                 try:
+                    self._require_paper_broker()
                     await self._retry_recorded_intent_locked(intent)
                 except Exception as exc:
                     reason = f"{reason}; retry raised {type(exc).__name__}: {exc}"
