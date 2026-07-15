@@ -23,7 +23,7 @@ from app.engine.live.account_registry import (
 )
 from app.engine.live.fleet import compute_fleet_contamination
 from app.engine.live.order_identity import build_order_ref
-from app.services.account_journal_authority import _has_requalification_window
+from app.services.account_journal_authority import _has_requalification_window, _qualification_alarm_is_active
 from app.services.fleet_contamination import (
     collect_fleet_position_explanations,
     record_account_journal_parity_observation,
@@ -302,3 +302,22 @@ def test_cleared_alarm_still_restarts_the_requalification_window() -> None:
         }
     )
     assert _has_requalification_window(events) is True
+
+
+def test_recovered_event_stream_no_longer_blocks_requalification(tmp_path: Path) -> None:
+    account = "DU123456"
+    append_account_event(
+        tmp_path,
+        account,
+        {"event_type": "account_clerk_event_stream_down", "ts_ms": 1},
+    )
+    down_events = read_account_events(tmp_path, account)
+    assert _qualification_alarm_is_active(tmp_path, account, down_events) is True
+
+    append_account_event(
+        tmp_path,
+        account,
+        {"event_type": "account_clerk_event_stream_recovered", "ts_ms": 2},
+    )
+
+    assert _qualification_alarm_is_active(tmp_path, account, read_account_events(tmp_path, account)) is False

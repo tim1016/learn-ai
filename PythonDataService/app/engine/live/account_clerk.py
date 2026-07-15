@@ -1106,6 +1106,18 @@ async def _run_clerk_process(args: argparse.Namespace) -> int:
             await server.start()
             await broker.start_event_stream()
             event_stream_started = True
+            await asyncio.to_thread(
+                append_account_event,
+                artifacts_root,
+                args.account_id,
+                {
+                    "event_type": "account_clerk_event_stream_recovered",
+                    "ts_ms": _now_ms(),
+                    "reason": "CLERK_EVENT_STREAM_STARTED",
+                    "source": "account_clerk",
+                    "generation": args.generation,
+                },
+            )
             event_stream_supervisor = asyncio.create_task(
                 _supervise_broker_event_stream(
                     broker=broker,

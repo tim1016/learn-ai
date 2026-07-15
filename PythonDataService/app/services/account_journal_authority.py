@@ -25,6 +25,8 @@ LEGACY_CUTOVER_EVENT_TYPE = "account_clerk_journal_authority_cutover"
 REQUALIFICATION_REQUIRED_EVENT_TYPE = "account_clerk_journal_authority_requalification_required"
 REQUALIFIED_EVENT_TYPE = "account_clerk_journal_authority_requalified"
 DRIFT_EVENT_TYPE = "account_clerk_journal_authority_drift_detected"
+EVENT_STREAM_DOWN_EVENT_TYPE = "account_clerk_event_stream_down"
+EVENT_STREAM_RECOVERED_EVENT_TYPE = "account_clerk_event_stream_recovered"
 
 
 def account_journal_authority_is_active(artifacts_root: Path, account_id: str) -> bool:
@@ -164,9 +166,19 @@ def _has_nonzero_exposure(explained: dict[str, dict[str, int]]) -> bool:
 def _qualification_alarm_is_active(artifacts_root: Path, account_id: str, events: list[dict]) -> bool:
     if read_account_freeze(artifacts_root, account_id) is not None:
         return True
-    # Event-stream loss has no durable recovery receipt yet; qualifying past it
-    # would turn a missing callback stream into a silent authority grant.
-    return any(event.get("event_type") == "account_clerk_event_stream_down" for event in events)
+    # A new Clerk must durably report that its callback stream started before
+    # parity observations can earn authority after a prior stream death.
+    return _latest_event_seq(events, EVENT_STREAM_DOWN_EVENT_TYPE) > _latest_event_seq(
+        events,
+        EVENT_STREAM_RECOVERED_EVENT_TYPE,
+    )
+
+
+def _latest_event_seq(events: list[dict], event_type: str) -> int:
+    return max(
+        (_event_seq(event) for event in events if event.get("event_type") == event_type),
+        default=0,
+    )
 
 
 def _has_requalification_window(events: list[dict]) -> bool:
@@ -181,7 +193,7 @@ def _has_requalification_window(events: list[dict]) -> bool:
                 REQUALIFICATION_REQUIRED_EVENT_TYPE,
                 REQUALIFIED_EVENT_TYPE,
                 "account_freeze_recorded",
-                "account_clerk_event_stream_down",
+                EVENT_STREAM_DOWN_EVENT_TYPE,
             }
         ),
         default=0,
