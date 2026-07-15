@@ -10,6 +10,25 @@ export interface CohortBatchLaunchMemberOutcome {
   next_safe_action: string;
 }
 
+export interface CohortEvidenceMember {
+  strategy_instance_id: string;
+  run_id: string | null;
+  verdict: 'healthy' | 'failed' | 'unknown';
+  reason: string | null;
+  orders_used: number | null;
+  orders_cap: number | null;
+}
+
+export interface CohortEvidenceSummary {
+  sample_count: number;
+  cadence_ms: number;
+  healthy_overlap_ms: number;
+  verdict: 'healthy' | 'failed' | 'unknown';
+  reason: string | null;
+  source: 'account_event.cohort_evidence_sample';
+  members: CohortEvidenceMember[];
+}
+
 export interface CohortBatchLaunchStatus {
   schema_version: number;
   account_id: string;
@@ -23,4 +42,5 @@ export interface CohortBatchLaunchStatus {
   outcomes: CohortBatchLaunchMemberOutcome[];
   outcomes_recorded_at_ms: number | null;
   outcomes_error: string | null;
+  evidence: CohortEvidenceSummary;
 }

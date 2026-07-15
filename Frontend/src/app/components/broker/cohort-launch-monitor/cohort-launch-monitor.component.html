@@ -1,6 +1,6 @@
 @if (loading()) {
   <section class="cohort-monitor" aria-label="Cohort monitor" aria-busy="true">
-    <p role="status">Loading the latest durable cohort receipt and live telemetry…</p>
+    <p role="status">Loading durable cohort evidence…</p>
   </section>
 } @else if (error(); as message) {
   <section class="cohort-monitor" aria-label="Cohort monitor">
@@ -32,34 +32,31 @@
       <p class="pending" role="status">Cohort authorization is durable; member outcomes are still pending.</p>
     }
 
-    @if (successMeter(); as meter) {
-      <dl class="success-meter" aria-label="Cohort success meter">
-        <div><dt>Target count</dt><dd>{{ meter.targetCount }}</dd></div>
-        <div><dt>Concurrent uptime</dt><dd>{{ meter.concurrentUptimeMs / 1000 | number: '1.0-0' }} s</dd></div>
-        <div><dt>Total orders</dt><dd>{{ meter.totalOrders }}</dd></div>
-        <div><dt>Round trips</dt><dd>{{ meter.roundTrips }}</dd></div>
-        <div><dt>Flat after exit</dt><dd>{{ meter.flatAfterExitCount }}</dd></div>
-        <div><dt>Incidents</dt><dd>{{ meter.incidentCount }}</dd></div>
-      </dl>
+    <dl class="success-meter" aria-label="Server-authored cohort evidence">
+      <div><dt>Evidence verdict</dt><dd class="mono">{{ cohort.evidence.verdict | receiptLabel }}</dd></div>
+      <div><dt>Healthy overlap</dt><dd>{{ cohort.evidence.healthy_overlap_ms / 1000 | number: '1.0-0' }} s</dd></div>
+      <div><dt>Samples</dt><dd>{{ cohort.evidence.sample_count }}</dd></div>
+      <div><dt>Cadence</dt><dd>{{ cohort.evidence.cadence_ms / 1000 | number: '1.0-0' }} s</dd></div>
+    </dl>
+    @if (cohort.evidence.reason; as reason) {
+      <p class="pending mono">{{ reason | receiptLabel }}</p>
     }
 
     <div class="table-wrap" tabindex="0" aria-label="Scrollable cohort monitor table">
       <table>
-        <caption>Per-bot durable receipt state and live status</caption>
+        <caption>Receipt-pinned members and their latest server observation</caption>
         <thead>
           <tr>
             <th scope="col">Bot</th>
             <th scope="col">Receipt</th>
-            <th scope="col">Run / client / cap</th>
-            <th scope="col">Orders / trips</th>
-            <th scope="col">Namespace exposure</th>
-            <th scope="col">Last fill</th>
+            <th scope="col">Runtime counters</th>
+            <th scope="col">Evidence</th>
             <th scope="col">Safe next action</th>
           </tr>
         </thead>
         <tbody>
           @for (row of rows(); track row.strategyInstanceId) {
-            <tr [class.incident]="row.incident">
+            <tr [class.incident]="row.evidence?.verdict === 'failed' || row.outcome?.state === 'blocked'">
               <th scope="row" class="mono">{{ row.strategyInstanceId | receiptLabel }}</th>
               <td>
                 <span class="mono">{{ row.receiptState | receiptLabel }}</span>
@@ -68,23 +65,26 @@
                 }
               </td>
               <td>
-                <div class="mono">{{ row.runId ?? 'No run' }}</div>
-                <div>Client {{ row.clientId ?? 'unavailable' }} · cap {{ row.effectiveCap ?? 'unavailable' }}</div>
-                @if (row.uptimeMs !== null) { <div>Uptime {{ row.uptimeMs / 1000 | number: '1.0-0' }} s</div> }
+                @if (row.evidence; as evidence) {
+                  <div class="mono">{{ evidence.orders_used ?? 'unavailable' }} / {{ evidence.orders_cap ?? 'unavailable' }}</div>
+                  <div class="mono">{{ evidence.run_id ?? 'run unavailable' }}</div>
+                } @else {
+                  unavailable
+                }
               </td>
-              <td>{{ row.ordersUsed ?? 'unavailable' }} / {{ row.roundTrips ?? 'unavailable' }}</td>
-              <td class="mono">{{ row.namespaceExposure ?? 'unavailable' }}</td>
               <td>
-                <div>{{ row.lastFill.label }}</div>
-                @if (row.lastFill.atMs !== null) { <app-timestamp-display [value]="row.lastFill.atMs" mode="local" /> }
+                @if (row.evidence; as evidence) {
+                  <span class="mono">{{ evidence.verdict | receiptLabel }}</span>
+                  @if (evidence.reason; as reason) { <p class="mono">{{ reason | receiptLabel }}</p> }
+                } @else {
+                  <span class="mono">Evidence Missing</span>
+                }
               </td>
               <td>
                 @if (row.outcome; as outcome) {
                   {{ outcome.next_safe_action }}
-                } @else if (row.statusError; as statusError) {
-                  {{ statusError }}
                 } @else {
-                  Monitor the current live status.
+                  Refresh the server-authored cohort evidence.
                 }
               </td>
             </tr>

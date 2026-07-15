@@ -27,6 +27,12 @@ from app.schemas.live_runs import (
     HostRunnerActionResponse,
     HostRunnerStartRequest,
 )
+from app.services.cohort_batch_launch import CohortBatchLaunchService
+from app.services.cohort_evidence import (
+    CohortEvidenceSampler,
+    CohortEvidenceSamplerRegistry,
+)
+from app.services.cohort_evidence_runtime import CohortEvidenceRuntimeObserver
 
 RollCall = Callable[[], Awaitable[BotRollCallResponse]]
 StartRun = Callable[[str, HostRunnerStartRequest], Awaitable[HostRunnerActionResponse]]
@@ -44,6 +50,9 @@ class _PinnedCohortMember:
     pin: CohortBatchLaunchMemberPin
     start_request: HostRunnerStartRequest
 
+_COHORT_EVIDENCE_CADENCE_MS = 5_000
+_COHORT_VALIDATION_WINDOW_MS = 60 * 60 * 1_000
+
 
 class CohortLaunchCoordinator:
     """Admits a displayed cohort and records server-derived start outcomes."""
@@ -59,6 +68,7 @@ class CohortLaunchCoordinator:
         run_account_id: RunAccountId,
         start_request_for_run: StartRequestForRun,
         now_ms: NowMs,
+        evidence_samplers: CohortEvidenceSamplerRegistry,
     ) -> None:
         self._artifacts_root = artifacts_root
         self._live_runs_root = live_runs_root
@@ -68,6 +78,7 @@ class CohortLaunchCoordinator:
         self._run_account_id = run_account_id
         self._start_request_for_run = start_request_for_run
         self._now_ms = now_ms
+        self._evidence_samplers = evidence_samplers
 
     async def launch(
         self,
@@ -93,7 +104,7 @@ class CohortLaunchCoordinator:
             cohort_id=f"paper-validation-{now_ms}-{uuid4().hex[:12]}",
             member_strategy_instance_ids=tuple(member.pin.strategy_instance_id for member in members),
             window_start_ms=now_ms,
-            window_end_ms=now_ms + 300_000,
+            window_end_ms=now_ms + _COHORT_VALIDATION_WINDOW_MS,
             authorized_by=operator_identity,
             recorded_at_ms=now_ms,
             member_pins=tuple(member.pin for member in members),
@@ -117,7 +128,41 @@ class CohortLaunchCoordinator:
             self._artifacts_root,
             outcomes_receipt,
         )
-        return CohortBatchLaunchStatusResponse.from_receipts(receipt, outcomes_receipt)
+        await self._start_evidence_sampler(receipt)
+        status_view = await CohortBatchLaunchService(artifacts_root=self._artifacts_root).get_status(
+            account_id=account_id,
+            cohort_id=receipt.cohort_id,
+        )
+        if status_view is None:
+            raise RuntimeError("newly persisted cohort receipt could not be read")
+        return status_view
+
+    async def _start_evidence_sampler(self, receipt: CohortBatchLaunchReceipt) -> None:
+        """Persist the first observation and retain a server-owned five-second task."""
+
+        service = CohortBatchLaunchService(artifacts_root=self._artifacts_root)
+        observer = CohortEvidenceRuntimeObserver(
+            live_runs_root=self._live_runs_root,
+            visible_runs_by_instance=self._visible_runs_by_instance,
+            now_ms=self._now_ms,
+        )
+        sampler = CohortEvidenceSampler(
+            cadence_ms=_COHORT_EVIDENCE_CADENCE_MS,
+            now_ms=self._now_ms,
+            first_expected_at_ms=receipt.window_start_ms,
+            # ``window_end_ms`` is an exclusive boundary.  Each tick credits
+            # one cadence, so sampling exactly at the boundary would credit
+            # evidence outside the receipt's authorization window.
+            last_expected_at_ms=receipt.window_end_ms - _COHORT_EVIDENCE_CADENCE_MS,
+            observe=lambda expected_at_ms: observer.observe(receipt, expected_at_ms),
+            persist=lambda sample: service.record_evidence_sample(
+                account_id=receipt.account_id,
+                cohort_id=receipt.cohort_id,
+                sample=sample,
+            ),
+        )
+        await sampler.sample_once()
+        self._evidence_samplers.start(receipt.cohort_id, sampler)
 
     def _pins(
         self,

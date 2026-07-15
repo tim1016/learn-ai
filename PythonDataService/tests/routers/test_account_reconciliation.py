@@ -21,6 +21,8 @@ from app.engine.live.account_artifacts import (
     CohortBatchLaunchOutcomesReceipt,
     CohortBatchLaunchReceipt,
     account_artifacts_root,
+    append_account_event,
+    read_account_events,
     read_account_freeze,
     record_cohort_batch_launch_outcomes,
     record_cohort_batch_launch_receipt,
@@ -39,7 +41,9 @@ from app.routers import account_reconciliation, cohort_batch_launch
 from app.services import cohort_batch_launch as cohort_batch_launch_service
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.cohort_batch_launch import CohortBatchLaunchService
+from app.services.cohort_evidence import CohortEvidenceSample, CohortMemberSample
 from app.services.legacy_stale_claim_retirement import LegacyStaleClaimRetirementService
+from app.utils.timestamps import now_ms_utc
 
 
 def _health() -> IbkrConnectionHealth:
@@ -334,6 +338,98 @@ async def test_latest_cohort_status_fails_closed_for_unreadable_newest_authoriza
         assert str(exc) == "cohort authorization is unreadable: unreadable-newest-cohort"
     else:
         raise AssertionError("latest cohort retrieval must not skip unreadable authorization")
+
+
+async def test_latest_cohort_status_projects_durable_server_evidence(tmp_path: Path) -> None:
+    now_ms = now_ms_utc()
+    receipt = CohortBatchLaunchReceipt(
+        account_id="DU1234567",
+        cohort_id="evidence-cohort",
+        member_strategy_instance_ids=("spy-a",),
+        window_start_ms=now_ms,
+        window_end_ms=now_ms + 30_000,
+        authorized_by="local-operator",
+        recorded_at_ms=now_ms,
+    )
+    record_cohort_batch_launch_receipt(tmp_path, receipt)
+    service = CohortBatchLaunchService(artifacts_root=tmp_path)
+    await service.record_evidence_sample(
+        account_id=receipt.account_id,
+        cohort_id=receipt.cohort_id,
+        sample=CohortEvidenceSample(
+            expected_at_ms=now_ms,
+            observed_at_ms=now_ms,
+                account_truth="healthy",
+                fleet="healthy",
+                members=(CohortMemberSample("spy-a", "run-spy-a", "healthy", orders_used=0, orders_cap=4),),
+                broker_net_positions={},
+                broker_residual={},
+        ),
+    )
+
+    status = await service.get_status(account_id=receipt.account_id, cohort_id=receipt.cohort_id)
+
+    assert status is not None
+    assert status.evidence.model_dump() == {
+        "sample_count": 1,
+        "cadence_ms": 5_000,
+        "healthy_overlap_ms": 5_000,
+        "verdict": "healthy",
+        "reason": None,
+        "source": "account_event.cohort_evidence_sample",
+        "members": [
+            {
+                "strategy_instance_id": "spy-a",
+                "run_id": "run-spy-a",
+                "verdict": "healthy",
+                "reason": None,
+                "orders_used": 0,
+                "orders_cap": 4,
+            }
+        ],
+    }
+    evidence_event = next(
+        event for event in read_account_events(tmp_path, receipt.account_id)
+        if event["event_type"] == "cohort_evidence_sample"
+    )
+    assert evidence_event["broker_net_positions"] == {}
+    assert evidence_event["broker_residual"] == {}
+
+
+async def test_malformed_cohort_evidence_fails_closed(tmp_path: Path) -> None:
+    now_ms = now_ms_utc()
+    receipt = CohortBatchLaunchReceipt(
+        account_id="DU1234567",
+        cohort_id="malformed-evidence-cohort",
+        member_strategy_instance_ids=("spy-a",),
+        window_start_ms=now_ms,
+        window_end_ms=now_ms + 30_000,
+        authorized_by="local-operator",
+        recorded_at_ms=now_ms,
+    )
+    record_cohort_batch_launch_receipt(tmp_path, receipt)
+    append_account_event(
+        tmp_path,
+        receipt.account_id,
+        {
+            "event_type": "cohort_evidence_sample",
+            "cohort_id": receipt.cohort_id,
+            "expected_at_ms": now_ms,
+            "observed_at_ms": now_ms,
+            "account_truth": "healthy",
+            "fleet": "healthy",
+            "members": "not-a-list",
+        },
+    )
+
+    status = await CohortBatchLaunchService(artifacts_root=tmp_path).get_status(
+        account_id=receipt.account_id,
+        cohort_id=receipt.cohort_id,
+    )
+
+    assert status is not None
+    assert status.evidence.verdict == "failed"
+    assert status.evidence.reason == "COHORT_EVIDENCE_UNREADABLE"
 
 
 async def test_triage_returns_latest_receipt(tmp_path: Path) -> None:
