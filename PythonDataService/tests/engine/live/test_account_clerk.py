@@ -240,6 +240,21 @@ async def test_clerk_records_before_paper_broker_submit_and_deduplicates_ack(tmp
 
 
 @pytest.mark.asyncio
+async def test_order_ref_collision_is_rejected_before_durable_intake(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_FakeBroker())
+    first = _intent("bot-a", "run-a", "first")
+    colliding = first.model_copy(update={"intent_id": "different-intent"})
+
+    await clerk.record_intent(first)
+    with pytest.raises(AccountClerkIntentRejected, match="CLERK_ORDER_REF_COLLISION"):
+        await clerk.record_intent(colliding)
+
+    assert [entry.intent for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [first]
+    assert read_account_clerk_inbox(tmp_path, ACCOUNT) == []
+
+
+@pytest.mark.asyncio
 async def test_bounded_broker_submit_records_uncertainty_and_releases_account_intake(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

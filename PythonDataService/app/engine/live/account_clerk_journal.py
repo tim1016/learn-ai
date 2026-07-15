@@ -243,6 +243,7 @@ class AccountClerkJournal:
                 return AccountClerkRecordedReceipt.from_journal_entry(existing)
 
             validate_intent(intent)
+            _require_unique_order_ref(entries, intent)
             next_seq = entries[-1].seq + 1 if entries else 1
             inbox_entry = AccountClerkInboxEntry(
                 seq=next_seq,
@@ -638,6 +639,33 @@ def _journal_entry_for_intent(
             },
         )
     return existing
+
+
+def _require_unique_order_ref(
+    journal_entries: list[AccountClerkJournalEntry],
+    intent: AccountOwnerSubmitIntent,
+) -> None:
+    """Reject an attribution collision before it can enter durable state."""
+
+    existing = next(
+        (
+            entry.intent
+            for entry in journal_entries
+            if entry.entry_kind == "recorded"
+            and entry.intent is not None
+            and entry.intent.order_ref == intent.order_ref
+        ),
+        None,
+    )
+    if existing is None or existing == intent:
+        return
+    raise AccountClerkIntentRejected(
+        reason="CLERK_ORDER_REF_COLLISION",
+        diagnostics={
+            "existing_intent": existing.model_dump(mode="json"),
+            "received_intent": intent.model_dump(mode="json"),
+        },
+    )
 
 
 def _broker_callback_entry_for_key(
