@@ -449,6 +449,40 @@ class AccountClerkJournal:
             entries = self._load_tail_locked(inbox_path, journal_path)
             return self._cancel_submitting_for_intent_entries(entries, intent) is not None
 
+    def has_unresolved_namespace_cancellation(self, bot_order_namespace: str) -> bool:
+        """Return whether a prior cancellation still fences this namespace.
+
+        A terminal confirmation or a reconciliation adoption is the only
+        durable clearing path.  In particular, a crash after
+        ``cancel_submitting`` must not let a later strategy submit bypass an
+        unknown broker-side cancellation.
+        """
+
+        inbox_path, journal_path = self._paths()
+        with _file_lock(journal_path):
+            entries = self._load_tail_locked(inbox_path, journal_path)
+            terminal_intent_ids = {
+                entry.intent.intent_id
+                for entry in entries
+                if entry.intent is not None
+                and entry.intent.intent_kind == "CANCEL_NAMESPACE"
+                and (
+                    entry.entry_kind == "cancel_confirmed"
+                    or (
+                        entry.entry_kind == "reconciliation"
+                        and entry.reconciliation_verdict == "RECOVER_ADOPT"
+                    )
+                )
+            }
+            return any(
+                entry.intent is not None
+                and entry.intent.intent_kind == "CANCEL_NAMESPACE"
+                and entry.intent.bot_order_namespace == bot_order_namespace
+                and entry.intent.intent_id not in terminal_intent_ids
+                and entry.entry_kind in {"cancel_submitting", "cancel_uncertain"}
+                for entry in entries
+            )
+
     @staticmethod
     def _cancel_submitting_for_intent_entries(
         entries: list[AccountClerkJournalEntry],

@@ -178,16 +178,16 @@ class AccountClerk:
                 reason="CLERK_CANCEL_NAMESPACE_OPERATION_REQUIRED",
                 diagnostics={"intent_id": intent.intent_id, "order_ref": intent.order_ref},
             )
-        self._require_normal_submit_intake(intent)
+        await self._require_normal_submit_intake(intent)
         async with self._intake_lock:
-            self._require_normal_submit_intake(intent)
+            await self._require_normal_submit_intake(intent)
             recorded = await asyncio.to_thread(self._record_intent_locked, intent)
             existing_ack = await asyncio.to_thread(self._journal.ack_for_intent, intent)
             if existing_ack is not None:
                 return recorded, existing_ack
             # A stream can die while the inbox/journal fsync is in flight.
             # Never start the broker write after that closed the submit lane.
-            self._require_normal_submit_intake(intent)
+            await self._require_normal_submit_intake(intent)
             self._require_paper_broker()
             spec = IbkrOrderSpec.model_validate(intent.order_spec)
             await asyncio.to_thread(self._journal.append_broker_submitting, intent)
@@ -318,6 +318,46 @@ class AccountClerk:
                     if receipt.recorded != recorded:
                         raise RuntimeError("cancel receipt recorded identity mismatch")
                     return receipt
+            finally:
+                self._cancel_namespace_in_progress = False
+
+    @property
+    def cancel_namespace_in_progress(self) -> bool:
+        return self._cancel_namespace_in_progress
+
+    async def resolve_uncertain_cancel_namespace(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountClerkCancelNamespaceReceipt:
+        """Retry a fenced cancel after reconciliation observes surviving orders."""
+
+        if self._broker is None:
+            raise RuntimeError("ACCOUNT_CLERK_BROKER_UNAVAILABLE")
+        if intent.intent_kind != "CANCEL_NAMESPACE":
+            self._reject(intent, "CLERK_CANCEL_NAMESPACE_INTENT_KIND_REQUIRED")
+        async with self._cancel_operation_lock:
+            async with self._intake_lock:
+                existing = await asyncio.to_thread(self._journal.cancel_confirmed_for_intent, intent)
+                if existing is not None:
+                    return existing
+                self._require_paper_broker()
+                self._cancel_namespace_in_progress = True
+            try:
+                async with asyncio.timeout(_CANCEL_NAMESPACE_TIMEOUT_S):
+                    cancelled = await self._cancel_namespace_open_orders(intent.bot_order_namespace)
+                if self._callback_drain is not None:
+                    await self._callback_drain()
+            except Exception as exc:
+                async with self._intake_lock:
+                    await asyncio.to_thread(self._journal.append_cancel_uncertain, intent, exc)
+                raise
+            else:
+                async with self._intake_lock:
+                    return await asyncio.to_thread(
+                        self._journal.append_cancel_confirmed,
+                        intent,
+                        cancelled,
+                    )
             finally:
                 self._cancel_namespace_in_progress = False
 
@@ -488,8 +528,10 @@ class AccountClerk:
 
         if self._broker is None:
             raise RuntimeError("ACCOUNT_CLERK_BROKER_UNAVAILABLE")
+        await self._require_normal_submit_intake(intent)
         self._require_paper_broker()
         async with self._intake_lock:
+            await self._require_normal_submit_intake(intent)
             await asyncio.to_thread(self._journal.register_attribution, intent)
             spec = IbkrOrderSpec.model_validate(intent.order_spec)
             await asyncio.to_thread(self._journal.append_broker_submitting, intent)
@@ -506,12 +548,17 @@ class AccountClerk:
         if getattr(settings, "mode", None) != "paper":
             raise RuntimeError("ACCOUNT_CLERK_PAPER_MODE_REQUIRED")
 
-    def _require_normal_submit_intake(self, intent: AccountOwnerSubmitIntent) -> None:
-        if self._normal_submit_intake_reason is None:
-            if self._cancel_namespace_in_progress:
-                self._reject(intent, "CLERK_CANCEL_NAMESPACE_IN_PROGRESS")
-            return
-        self._reject(intent, self._normal_submit_intake_reason)
+    async def _require_normal_submit_intake(self, intent: AccountOwnerSubmitIntent) -> None:
+        if self._normal_submit_intake_reason is not None:
+            self._reject(intent, self._normal_submit_intake_reason)
+        if self._cancel_namespace_in_progress:
+            self._reject(intent, "CLERK_CANCEL_NAMESPACE_IN_PROGRESS")
+        unresolved = await asyncio.to_thread(
+            self._journal.has_unresolved_namespace_cancellation,
+            intent.bot_order_namespace,
+        )
+        if unresolved:
+            self._reject(intent, "CLERK_CANCEL_NAMESPACE_UNRESOLVED")
 
     def _validate_intent_identity(self, intent: AccountOwnerSubmitIntent) -> None:
         binding = latest_account_instance_binding(

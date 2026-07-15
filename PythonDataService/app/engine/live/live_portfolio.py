@@ -473,6 +473,22 @@ class IbkrBrokerAdapter(BrokerAdapter):
             return "PRESENT"
         return "NOT_PROVABLE"
 
+    async def probe_namespace_cancel_status(self, bot_order_namespace: str) -> str:
+        """Prove whether a fenced namespace still has broker open orders.
+
+        After a durable ambiguous cancellation, the Account Clerk blocks all
+        new submits for this namespace.  Therefore an empty namespaced
+        open-order view proves the cancellation reached a terminal result
+        (cancelled or filled); any surviving order requires an idempotent
+        retry through the Clerk.
+        """
+
+        expected_prefix = bot_order_namespace + ":"
+        open_orders = await list_open_orders(self._client)
+        if any(order.order_ref is not None and order.order_ref.startswith(expected_prefix) for order in open_orders):
+            return "PRESENT"
+        return "PROVABLY_ABSENT"
+
     def _enforce_account_owner_write_fence(self, boundary: str) -> None:
         if not self._require_account_owner_write_fence:
             return

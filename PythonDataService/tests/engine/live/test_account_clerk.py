@@ -107,6 +107,23 @@ class _UncertainBroker(_ReconciliationBroker):
         raise TimeoutError("simulated lost acknowledgement")
 
 
+class _UncertainCancelBroker(_FakeBroker):
+    def __init__(self, cancel_probe: str) -> None:
+        super().__init__()
+        self.cancel_probe = cancel_probe
+        self.cancel_attempts = 0
+
+    async def cancel_open_orders_for_namespace(self, namespace: str) -> list[int]:
+        self.cancel_attempts += 1
+        self.cancelled_namespaces.append(namespace)
+        if self.cancel_attempts == 1:
+            raise TimeoutError("simulated lost cancellation acknowledgement")
+        return [41]
+
+    async def probe_namespace_cancel_status(self, _namespace: str) -> str:
+        return self.cancel_probe
+
+
 class _MarketFillBeforeAckBroker(_FakeBroker):
     """Emits a fill through the production callback sink before its ack returns."""
 
@@ -253,6 +270,40 @@ async def test_submit_reconciler_ignores_terminal_cancel_receipts(tmp_path: Path
 
     assert await AccountClerkReconciler(clerk).reconcile_once() == ()
     assert read_account_freeze(tmp_path, ACCOUNT) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cancel_probe", "expected_cancel_attempts"),
+    [
+        ("PROVABLY_ABSENT", 1),
+        ("PRESENT", 2),
+    ],
+)
+async def test_uncertain_cancel_blocks_namespace_submit_until_reconciled(
+    tmp_path: Path,
+    cancel_probe: str,
+    expected_cancel_attempts: int,
+) -> None:
+    """#1064: a lost cancel acknowledgement fences later namespace submits."""
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _UncertainCancelBroker(cancel_probe)
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    cancel = _cancel_intent("bot-a", "run-a", "cancel-uncertain")
+
+    with pytest.raises(AccountClerkCancelNamespaceUncertainError):
+        await clerk.cancel_namespace(cancel)
+    with pytest.raises(AccountClerkIntentRejected, match="CLERK_CANCEL_NAMESPACE_UNRESOLVED"):
+        await clerk.submit_intent(_intent("bot-a", "run-a", "submit-after-uncertain-cancel"))
+
+    [resolution] = await AccountClerkReconciler(clerk, now_ms=lambda: START_MS + 2).reconcile_once()
+
+    assert resolution.intent_id == cancel.intent_id
+    assert resolution.verdict.value == "RECOVER_ADOPT"
+    assert broker.cancel_attempts == expected_cancel_attempts
+    await clerk.submit_intent(_intent("bot-a", "run-a", "submit-after-cancel-resolution"))
+    assert len(broker.calls) == 1
 
 
 @pytest.mark.asyncio
