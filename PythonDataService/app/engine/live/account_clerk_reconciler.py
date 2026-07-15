@@ -190,6 +190,11 @@ class AccountClerkReconciler:
         if self._unhealthy:
             return
         self._unhealthy = True
+        # The supervisor stops renewing the Clerk lease through this hook.
+        # Invoke it before best-effort observability writes: a full disk or a
+        # corrupt artifact must not leave a dead reconciler holding authority.
+        if self._on_unhealthy is not None:
+            self._on_unhealthy()
         now_ms = self._now_ms()
         append_account_event(
             self._clerk._artifacts_root,
@@ -213,8 +218,6 @@ class AccountClerkReconciler:
                     operator_next_step="RESTART_ACCOUNT_CLERK_AND_RECONCILE",
                 ),
             )
-        if self._on_unhealthy is not None:
-            self._on_unhealthy()
 
     def _record_unexpected_task_completion(self, task: asyncio.Task[None]) -> None:
         if self._closing or self._unhealthy:

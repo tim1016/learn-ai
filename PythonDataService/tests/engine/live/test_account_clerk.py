@@ -14,6 +14,7 @@ import pytest
 
 import app.engine.live.account_clerk as account_clerk_module
 import app.engine.live.account_clerk_journal as account_clerk_journal_module
+import app.engine.live.account_clerk_reconciler as account_clerk_reconciler_module
 from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
     AccountAuditedOverride,
@@ -2167,3 +2168,28 @@ async def test_reconciler_unexpected_task_cancellation_records_terminal_alarm(tm
         if event["event_type"] == "account_clerk_reconciliation_unhealthy"
     ]
     assert alarm["reason"] == "ACCOUNT_CLERK_RECONCILIATION_TASK_CANCELLED"
+
+
+def test_reconciler_unhealthy_stop_hook_runs_before_terminal_artifact_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed alarm fsync cannot leave a dead reconciler renewing its lease."""
+
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_FakeBroker())
+    stopped = threading.Event()
+    reconciler = AccountClerkReconciler(
+        clerk,
+        now_ms=lambda: START_MS,
+        on_unhealthy=stopped.set,
+    )
+
+    def fail_terminal_event(*_args: object, **_kwargs: object) -> None:
+        raise OSError("simulated full artifact volume")
+
+    monkeypatch.setattr(account_clerk_reconciler_module, "append_account_event", fail_terminal_event)
+
+    with pytest.raises(OSError, match="simulated full artifact volume"):
+        reconciler._mark_unhealthy("CONSECUTIVE_RECONCILIATION_FAILURES")
+
+    assert stopped.is_set()
