@@ -2594,10 +2594,15 @@ def cmd_start(args: argparse.Namespace) -> int:
                 # a final snapshot is flushed.
                 if client is not None and getattr(broker, "requires_durable_submit", False):
                     from app.services.account_truth_refresh import AccountTruthRefreshLoop
+                    from app.services.fleet_contamination import record_account_journal_parity_observation
 
                     account_truth_refresh_loop = AccountTruthRefreshLoop(
                         client=client,
                         artifacts_root=_artifacts_root,
+                        account_journal_observer=lambda account_id: record_account_journal_parity_observation(
+                            _artifacts_root / "live_runs",
+                            account_id=account_id,
+                        ),
                     )
                     await account_truth_refresh_loop.refresh_once()
                     account_truth_refresh_loop.start()

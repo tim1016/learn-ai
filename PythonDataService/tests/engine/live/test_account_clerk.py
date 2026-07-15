@@ -1564,6 +1564,10 @@ async def test_stream_task_death_alarms_rejects_normal_submits_and_exits_unhealt
         for event in read_account_events(tmp_path, ACCOUNT)
         if event["event_type"] == "account_clerk_event_stream_down"
     ]
+    assert any(
+        event["event_type"] == "account_clerk_event_stream_recovered"
+        for event in read_account_events(tmp_path, ACCOUNT)
+    )
     assert exit_code == 1
     assert alarm["reason"] == "CLERK_EVENT_STREAM_DOWN"
     assert alarm["failure_type"] == "ConnectionError"

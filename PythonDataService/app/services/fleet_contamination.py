@@ -8,7 +8,6 @@ import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-from app.engine.live.account_artifacts import append_account_event, read_account_events
 from app.engine.live.account_clerk import read_account_clerk_journal
 from app.engine.live.fleet import compute_fleet_contamination
 from app.engine.live.journal_exposure import project_journal_exposure
@@ -20,11 +19,14 @@ from app.engine.live.live_state_sidecar import (
 )
 from app.engine.live.run_ledger import read_ledger
 from app.schemas.live_runs import FleetContamination, InstanceBrokerView
+from app.services.account_journal_authority import (
+    account_journal_authority_is_active,
+    observe_account_journal_parity,
+)
 from app.services.legacy_stale_claim_retirement import retired_legacy_claim_keys
 
 logger = logging.getLogger(__name__)
 NetPositionFetcher = Callable[[], Awaitable[dict[str, int] | None]]
-_JOURNAL_PARITY_WINDOW = 3
 
 
 class AccountJournalScopeRequiredError(ValueError):
@@ -109,14 +111,9 @@ def collect_fleet_position_explanations(
         else _collect_journal_position_explanations(root, account_id=account_id)
     )
     if journal_explained is not None:
-        legacy = (
-            _collect_legacy_fleet_position_explanations(root)
-            if account_id is None
-            else _collect_legacy_fleet_position_explanations(root, account_id=account_id)
-        )
-        if _record_sidecar_journal_parity(root, journal_explained, legacy, account_id=account_id):
-            return journal_explained
-        return legacy
+        # Contamination/status reads are pure projections.  Parity evidence
+        # belongs to a bounded background/state-change observer, never here.
+        return journal_explained
 
     # No account journal has ever been created. Retain the legacy read only
     # during the shadow bootstrap; once an account has a Clerk journal its
@@ -166,30 +163,23 @@ def _record_sidecar_journal_parity(
     *,
     account_id: str | None,
 ) -> bool:
-    """Record shadow parity and cut over only after a clean durable window."""
+    """Record one account-scoped shadow observation and evaluate authority."""
 
-    clean = legacy == journal
+    now_ms = time.time_ns() // 1_000_000
     accounts_root = root.parent / "accounts"
     for account_dir in accounts_root.iterdir() if accounts_root.is_dir() else ():
         if account_id is not None and account_dir.name != account_id:
             continue
         if (account_dir / "clerk_journal.jsonl").exists():
-            append_account_event(
+            observe_account_journal_parity(
                 root.parent,
                 account_dir.name,
-                {
-                    "event_type": "account_clerk_sidecar_journal_parity",
-                    "ts_ms": time.time_ns() // 1_000_000,
-                    "status": "clean" if clean else "drift",
-                    "reason": "SIDECAR_JOURNAL_EXPOSURE_MATCH" if clean else "SIDECAR_JOURNAL_EXPOSURE_MISMATCH",
-                    "journal": journal,
-                    "sidecar": legacy,
-                },
+                journal=journal,
+                legacy=legacy,
+                now_ms=now_ms,
             )
-            if clean and _account_has_clean_parity_window(root.parent, account_dir.name):
-                _record_journal_authority_cutover(root.parent, account_dir.name)
     return all(
-        _account_journal_authority_is_active(root.parent, path.name)
+        account_journal_authority_is_active(root.parent, path.name)
         for path in accounts_root.iterdir()
         if path.is_dir()
         and (account_id is None or path.name == account_id)
@@ -197,31 +187,22 @@ def _record_sidecar_journal_parity(
     )
 
 
-def _account_has_clean_parity_window(artifacts_root: Path, account_id: str) -> bool:
-    events = [event for event in read_account_events(artifacts_root, account_id) if event.get("event_type") == "account_clerk_sidecar_journal_parity"]
-    recent = events[-_JOURNAL_PARITY_WINDOW:]
-    return len(recent) == _JOURNAL_PARITY_WINDOW and all(event.get("status") == "clean" for event in recent)
+def record_account_journal_parity_observation(
+    root: Path,
+    *,
+    account_id: str,
+) -> bool:
+    """Observe one account outside read APIs, with durable cadence fencing."""
 
-
-def _record_journal_authority_cutover(artifacts_root: Path, account_id: str) -> None:
-    if _account_journal_authority_is_active(artifacts_root, account_id):
-        return
-    append_account_event(
-        artifacts_root,
-        account_id,
-        {
-            "event_type": "account_clerk_journal_authority_cutover",
-            "ts_ms": time.time_ns() // 1_000_000,
-            "reason": "SIDECAR_JOURNAL_PARITY_WINDOW_CLEAN",
-            "parity_observations": _JOURNAL_PARITY_WINDOW,
-        },
-    )
-
-
-def _account_journal_authority_is_active(artifacts_root: Path, account_id: str) -> bool:
-    return any(
-        event.get("event_type") == "account_clerk_journal_authority_cutover"
-        for event in read_account_events(artifacts_root, account_id)
+    journal = _collect_journal_position_explanations(root, account_id=account_id)
+    if journal is None:
+        return False
+    legacy = _collect_legacy_fleet_position_explanations(root, account_id=account_id)
+    return _record_sidecar_journal_parity(
+        root,
+        journal,
+        legacy,
+        account_id=account_id,
     )
 
 

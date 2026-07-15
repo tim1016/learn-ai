@@ -252,6 +252,40 @@ def test_account_event_seq_tolerates_malformed_legacy_rows(tmp_path: Path) -> No
     assert appended["ts_ms"] == 1_700_000_020_000
 
 
+def test_account_event_counter_recovers_missing_behind_and_ahead_without_skipping(tmp_path: Path) -> None:
+    account_id = "DU123456"
+    payload = {"event_type": "account_owner_generation_recorded", "recorded_at_ms": 1_700_000_020_000}
+    account_artifacts.append_account_event(tmp_path, account_id, payload)
+    root = account_artifacts_root(tmp_path, account_id)
+    counter = root / account_artifacts.ACCOUNT_EVENTS_SEQUENCE_FILENAME
+
+    counter.unlink()  # Crash after ledger fsync, before counter write.
+    account_artifacts.append_account_event(tmp_path, account_id, payload)
+    counter.write_text('{"last_seq":0}', encoding="utf-8")  # Counter behind durable tail.
+    account_artifacts.append_account_event(tmp_path, account_id, payload)
+    counter.write_text('{"last_seq":999}', encoding="utf-8")  # Counter ahead of durable tail.
+    account_artifacts.append_account_event(tmp_path, account_id, payload)
+
+    assert [event["seq"] for event in read_account_events(tmp_path, account_id)] == [1, 2, 3, 4]
+    assert json.loads(counter.read_text(encoding="utf-8")) == {"last_seq": 4}
+
+
+def test_account_event_steady_state_append_does_not_rescan_ledger(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    account_id = "DU123456"
+    payload = {"event_type": "account_owner_generation_recorded", "recorded_at_ms": 1_700_000_020_000}
+    account_artifacts.append_account_event(tmp_path, account_id, payload)
+    monkeypatch.setattr(
+        account_artifacts,
+        "read_account_events",
+        lambda *_args, **_kwargs: pytest.fail("steady-state append must not rescan the ledger"),
+    )
+
+    account_artifacts.append_account_event(tmp_path, account_id, payload)
+
+
 def test_append_account_event_authors_typed_int64_ms_record(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

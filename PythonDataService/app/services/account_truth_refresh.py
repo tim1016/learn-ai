@@ -196,6 +196,7 @@ class AccountTruthRefreshLoop:
         refresh_now: Callable[..., Awaitable[AccountTruthResponse]] = refresh_account_truth_now,
         account_truth_observer: Callable[..., object] | None = None,
         account_truth_failure_observer: Callable[..., object] | None = None,
+        account_journal_observer: Callable[[str], object] | None = None,
     ) -> None:
         self._client = client
         self._artifacts_root = artifacts_root
@@ -211,6 +212,7 @@ class AccountTruthRefreshLoop:
         )
         self._account_truth_observer = account_truth_observer
         self._account_truth_failure_observer = account_truth_failure_observer
+        self._account_journal_observer = account_journal_observer
         self._task: asyncio.Task[None] | None = None
         self._stopped = asyncio.Event()
         self._refresh_lock = asyncio.Lock()
@@ -321,6 +323,11 @@ class AccountTruthRefreshLoop:
                 result = await self._refresh_now(self._client, **refresh_kwargs)
                 if not success_observer_notified:
                     self._notify_account_truth(result)
+                # A refresh that cannot prove one account is explicitly not
+                # account-scoped evidence.  Do not let it advance a local
+                # Clerk-journal qualification window.
+                if result.account_id is not None:
+                    self._notify_account_journal_observer(result.account_id)
                 self._last_refresh_result = "success"
                 return result
             except BrokerError as exc:
@@ -427,6 +434,19 @@ class AccountTruthRefreshLoop:
             owner_generation_before=owner_generation_before,
             owner_generation_captured=owner_generation_captured,
         )
+
+    def _notify_account_journal_observer(self, account_id: str) -> None:
+        """Run bounded Clerk parity observation after a successful refresh."""
+
+        if self._account_journal_observer is None:
+            return
+        try:
+            self._account_journal_observer(account_id)
+        except Exception:
+            logger.exception(
+                "account journal parity observer failed",
+                extra={"account_id": account_id},
+            )
 
 
 def _read_owner_generation_fence(
