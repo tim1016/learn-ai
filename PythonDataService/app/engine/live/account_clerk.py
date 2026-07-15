@@ -134,6 +134,8 @@ class AccountClerk:
         # process restart by clearing only volatile callback attribution.
         self._intents_by_order_ref = self._journal.intents_by_order_ref
         self._normal_submit_intake_reason: str | None = None
+        self._rpc_write_intake_closed = False
+        self._event_stream_down_recorded = False
 
     async def record_intent(self, intent: AccountOwnerSubmitIntent) -> AccountClerkRecordedReceipt:
         """Validate, durably record, and acknowledge one intent without I/O to IBKR."""
@@ -161,6 +163,10 @@ class AccountClerk:
             )
         self._require_normal_submit_intake(intent)
         async with self._intake_lock:
+            # A server shutdown can begin while this caller is queued on the
+            # Clerk lock. Recheck before receipt #1 so a rejected RPC cannot
+            # leave a replayable write candidate behind.
+            self._require_normal_submit_intake(intent)
             recorded = await asyncio.to_thread(self._record_intent_locked, intent)
             existing_ack = await asyncio.to_thread(self._journal.ack_for_intent, intent)
             if existing_ack is not None:
@@ -209,6 +215,7 @@ class AccountClerk:
         )
         self._validate_recovery_order(intent)
         async with self._intake_lock:
+            self._require_recovery_submit_intake(intent)
             recorded = await asyncio.to_thread(self._record_intent_locked, intent)
             existing_ack = await asyncio.to_thread(self._journal.ack_for_intent, intent)
             if existing_ack is not None:
@@ -282,18 +289,26 @@ class AccountClerk:
     async def mark_event_stream_down(self, failure: BaseException | None = None) -> None:
         """Close normal submit intake and durably alarm a dead broker stream."""
 
-        if self._normal_submit_intake_reason is not None:
+        if self._event_stream_down_recorded:
             return
         # Set before the fsync so concurrent submit callers fail closed
         # immediately, rather than racing an alarm write.
         self._normal_submit_intake_reason = "CLERK_EVENT_STREAM_DOWN"
         await asyncio.to_thread(self._record_event_stream_down_locked, failure)
+        self._event_stream_down_recorded = True
 
     def close_normal_submit_intake(self) -> None:
-        """Fence normal writes before this Clerk's RPC transport shuts down."""
+        """Fence all broker writes before this Clerk's RPC transport shuts down."""
 
+        self._rpc_write_intake_closed = True
         if self._normal_submit_intake_reason is None:
             self._normal_submit_intake_reason = "CLERK_RPC_CLOSED"
+
+    async def wait_for_broker_writes_quiesced(self) -> None:
+        """Wait until every broker-write handler accepted before shutdown exits."""
+
+        async with self._intake_lock:
+            return
 
     async def recover_inbox(self) -> list[AccountClerkRecordedReceipt]:
         """Replay an inbox row left durable by a crash before journal fsync."""
@@ -430,6 +445,11 @@ class AccountClerk:
         if self._normal_submit_intake_reason is None:
             return
         self._reject(intent, self._normal_submit_intake_reason)
+
+    def _require_recovery_submit_intake(self, intent: AccountOwnerSubmitIntent) -> None:
+        if not self._rpc_write_intake_closed:
+            return
+        self._reject(intent, "CLERK_RPC_CLOSED")
 
     def _validate_intent_identity(self, intent: AccountOwnerSubmitIntent) -> None:
         binding = latest_account_instance_binding(

@@ -14,10 +14,15 @@ from types import SimpleNamespace
 import pytest
 
 import app.engine.live.account_clerk_rpc as account_clerk_rpc
-from app.broker.ibkr.models import IbkrOrderSpec
+from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
 from app.engine.execution.order_sizer import FixedShares, OrderSizer
-from app.engine.live.account_artifacts import advance_account_clerk_generation
-from app.engine.live.account_clerk import AccountClerk, AccountClerkIntentRejected, account_clerk_socket_path
+from app.engine.live.account_artifacts import advance_account_clerk_generation, read_account_events
+from app.engine.live.account_clerk import (
+    AccountClerk,
+    AccountClerkIntentRejected,
+    account_clerk_socket_path,
+    read_account_clerk_journal,
+)
 from app.engine.live.account_clerk_cursor import (
     AccountClerkEventConsumerIdentity,
     AccountClerkEventCursorRepo,
@@ -63,6 +68,39 @@ class _Broker:
 class _FailingBroker(_Broker):
     async def place_order(self, _order: object) -> object:
         raise ValueError("broker secret must not reach the socket response")
+
+
+class _BlockingCallbackBroker(_Broker):
+    """Emit one broker callback, then hold the accepted write at the boundary."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self._callback_sink: Callable[[IbkrOrderEvent], None] | None = None
+
+    def set_broker_callback_sink(self, sink: Callable[[IbkrOrderEvent], None]) -> None:
+        self._callback_sink = sink
+
+    async def place_order(self, order: object) -> object:
+        assert isinstance(order, IbkrOrderSpec)
+        assert self._callback_sink is not None
+        self._callback_sink(
+            IbkrOrderEvent(
+                account_id=ACCOUNT,
+                order_id=101,
+                event_type="fill",
+                order_ref=order.order_ref,
+                symbol="SPY",
+                side="BUY",
+                fill_quantity=1,
+                exec_id="shutdown-race-fill",
+                ts_ms=START_MS + 1,
+            )
+        )
+        self.started.set()
+        await self.release.wait()
+        return await super().place_order(order)
 
 
 class _BarrierTimeoutController:
@@ -266,6 +304,95 @@ async def test_close_fences_normal_submit_intake_before_callback_drain(tmp_path:
 
     server._flush_broker_callbacks = assert_intake_is_fenced  # type: ignore[method-assign]
     await server.close()
+
+
+@pytest.mark.asyncio
+async def test_close_waits_for_active_submit_and_persists_its_callback(tmp_path: Path) -> None:
+    """A broker write accepted before shutdown drains its callback before exit."""
+
+    _write_active_binding(tmp_path)
+    broker = _BlockingCallbackBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker, clerk_generation=1)
+    server = AccountClerkRpcServer(clerk)
+    await server.start()
+    try:
+        submit = asyncio.create_task(
+            server._dispatch({"operation": "submit", "intent": _intent().model_dump(mode="json")})
+        )
+        await asyncio.wait_for(broker.started.wait(), timeout=1)
+
+        closing = asyncio.create_task(server.close())
+        await asyncio.sleep(0)
+        assert not closing.done()
+
+        broker.release.set()
+        await submit
+        await closing
+    finally:
+        if not broker.release.is_set():
+            broker.release.set()
+        if not server._closing:
+            await server.close()
+
+    assert any(entry.entry_kind == "broker_event" for entry in read_account_clerk_journal(tmp_path, ACCOUNT))
+
+
+@pytest.mark.asyncio
+async def test_close_rejects_queued_submit_before_it_records_receipt(tmp_path: Path) -> None:
+    """A request queued behind shutdown is rejected without a replayable row."""
+
+    _write_active_binding(tmp_path)
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_Broker(), clerk_generation=1)
+    server = AccountClerkRpcServer(clerk)
+    await server.start()
+    try:
+        async with clerk._intake_lock:
+            queued_submit = asyncio.create_task(clerk.submit_intent(_intent()))
+            await asyncio.sleep(0)
+            closing = asyncio.create_task(server.close())
+            await asyncio.sleep(0)
+
+        with pytest.raises(AccountClerkIntentRejected, match="CLERK_RPC_CLOSED"):
+            await queued_submit
+        await closing
+    finally:
+        if not server._closing:
+            await server.close()
+
+    assert read_account_clerk_journal(tmp_path, ACCOUNT) == []
+
+
+@pytest.mark.asyncio
+async def test_close_persists_stream_alarm_when_callback_drain_fails(tmp_path: Path) -> None:
+    """Shutdown must not mask a callback durability failure behind its fence."""
+
+    _write_active_binding(tmp_path)
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_Broker(), clerk_generation=1)
+    server = AccountClerkRpcServer(clerk)
+    await server.start()
+
+    async def fail_callback_write(_event: IbkrOrderEvent) -> object:
+        raise OSError("simulated shutdown callback fsync failure")
+
+    clerk.record_broker_event = fail_callback_write  # type: ignore[method-assign]
+    server._record_broker_event(
+        IbkrOrderEvent(
+            account_id=ACCOUNT,
+            order_id=101,
+            event_type="fill",
+            order_ref=_intent().order_ref,
+            fill_quantity=1,
+            ts_ms=START_MS,
+        )
+    )
+    await server.close()
+
+    [stream_down] = [
+        event
+        for event in read_account_events(tmp_path, ACCOUNT)
+        if event["event_type"] == "account_clerk_event_stream_down"
+    ]
+    assert stream_down["failure_type"] == "OSError"
 
 
 @pytest.mark.asyncio
