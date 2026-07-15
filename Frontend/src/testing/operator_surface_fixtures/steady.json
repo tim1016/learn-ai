@@ -1,6 +1,6 @@
 {
-  "account_owner": null,
   "account_observation": null,
+  "account_owner": null,
   "action_plan": {
     "anomaly_verdict": "UNKNOWN",
     "consumption": "UNKNOWN"
@@ -214,6 +214,30 @@
     "summary": "Safety verdict is UNKNOWN."
   },
   "blockers": [
+    {
+      "applies_to": "both",
+      "condition": {
+        "evidence": {},
+        "id": "fleet_contaminated",
+        "scope": "fleet",
+        "severity": "blocking"
+      },
+      "detail": "Clear the account fleet state before starting another bot.",
+      "disposition": "fix_elsewhere",
+      "headline": "Fleet state blocks starts",
+      "host": "bot_cockpit",
+      "primary_move": {
+        "action": {
+          "fragment": "account-reconciliation-action",
+          "kind": "navigate",
+          "route": "/broker/account-monitor"
+        },
+        "confirmation": null,
+        "label": "Clear fleet state",
+        "target": null
+      },
+      "secondary_moves": []
+    },
     {
       "applies_to": "both",
       "condition": {
