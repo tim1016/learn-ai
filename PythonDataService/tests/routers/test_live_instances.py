@@ -851,6 +851,53 @@ async def test_server_cohort_launch_records_blocked_outcome_for_unexpected_start
     )
 
 
+@pytest.mark.asyncio
+async def test_server_cohort_launch_returns_recorded_outcomes_when_sampler_start_fails(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Evidence startup is post-launch observation, not launch rollback."""
+
+    app, root = app_with_root
+    account_id = "DU123"
+    _write_ledger(root, "run-a", "bot-a", 1, account_id=account_id, strategy_key="spy_ema_crossover")
+
+    async def fake_roll_call() -> BotRollCallResponse:
+        return BotRollCallResponse(
+            summary=BotRollCallSummary(ready=1),
+            offers=[
+                BotRollCallOffer(
+                    offer_id="offer-a",
+                    strategy_instance_id="bot-a",
+                    run_id="run-a",
+                    session_date="2026-07-14",
+                    issued_at_ms=10,
+                    expires_at_ms=20,
+                )
+            ],
+        )
+
+    async def fake_start(_run_id: str, _body):
+        return SimpleNamespace(accepted=True)
+
+    async def failing_sampler_start(_self, _receipt) -> None:
+        raise OSError("evidence artifact unavailable")
+
+    monkeypatch.setattr(live_instances, "run_roll_call", fake_roll_call)
+    monkeypatch.setattr(live_instances, "start_run", fake_start)
+    monkeypatch.setattr(live_instances.CohortLaunchCoordinator, "_start_evidence_sampler", failing_sampler_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/live-instances/accounts/{account_id}/cohort-launch",
+            json={"member_strategy_instance_ids": ["bot-a"]},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["outcomes_state"] == "recorded"
+    assert response.json()["outcomes"][0]["state"] == "accepted"
+
+
 @pytest.mark.parametrize(
     ("case_name", "sid", "run_id", "process"),
     [
@@ -5503,6 +5550,31 @@ async def test_start_run_rejects_unknown_broker_truth_even_with_roll_call_offer(
     assert response.json()["detail"]["reason_code"] == "BROKER_TRUTH_UNAVAILABLE"
     assert called is False
     assert read_account_freeze(root.parent, "DU111") is None
+
+
+async def test_start_gate_allows_advisory_unknown_fleet_verdict(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the server-owned policy flag turns an unknown verdict into a start gate."""
+
+    _app, root = app_with_root
+
+    async def advisory_unknown(_root: Path, *, account_id: str | None = None) -> FleetContamination:
+        assert account_id is None
+        return FleetContamination(
+            net_positions=None,
+            explained_total={},
+            explained_by_instance=[],
+            residual={},
+            verdict="unknown",
+            policy_blocks_starts=False,
+            summary="Broker observation is advisory for this caller.",
+        )
+
+    monkeypatch.setattr(live_instances, "_compute_account_fleet_contamination", advisory_unknown)
+
+    await live_instances._raise_if_fleet_contamination_blocks_start(root)
 
 
 async def test_start_run_rejects_connected_account_mismatch(

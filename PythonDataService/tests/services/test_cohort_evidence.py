@@ -4,15 +4,22 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.engine.live.account_artifacts import CohortBatchLaunchMemberPin
+from app.engine.live.account_artifacts import (
+    CohortBatchLaunchMemberPin,
+    CohortBatchLaunchReceipt,
+    record_cohort_batch_launch_receipt,
+)
 from app.engine.live.live_state_sidecar import LiveStateEnvelope
+from app.services.cohort_batch_launch import CohortBatchLaunchService, parse_cohort_evidence_sample
 from app.services.cohort_evidence import (
     CohortEvidenceSample,
     CohortEvidenceSampler,
+    CohortEvidenceSamplerRegistry,
     CohortMemberSample,
     evaluate_healthy_overlap,
 )
 from app.services.cohort_evidence_runtime import CohortEvidenceRuntimeObserver
+from app.services.cohort_launch import resume_open_cohort_evidence_samplers
 
 
 def _sample(at_ms: int, *members: str) -> CohortEvidenceSample:
@@ -111,6 +118,117 @@ def test_healthy_overlap_refuses_missing_runtime_counters() -> None:
 
     assert evidence.verdict == "failed"
     assert evidence.reason == "RUNTIME_COUNTERS_MISSING"
+
+
+def test_sampler_registry_releases_crashed_task_and_logs_failure(caplog) -> None:
+    """A failed sampler is visible and a later restart can replace it."""
+
+    class FailingSampler:
+        async def run(self, _stop: asyncio.Event) -> None:
+            raise RuntimeError("evidence persistence failed")
+
+    class CompletingSampler:
+        def __init__(self, runs: list[str]) -> None:
+            self._runs = runs
+
+        async def run(self, _stop: asyncio.Event) -> None:
+            self._runs.append("replacement")
+
+    async def exercise() -> None:
+        registry = CohortEvidenceSamplerRegistry()
+        registry.start("cohort-a", FailingSampler())  # type: ignore[arg-type]
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        runs: list[str] = []
+        registry.start("cohort-a", CompletingSampler(runs))  # type: ignore[arg-type]
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert runs == ["replacement"]
+
+    asyncio.run(exercise())
+
+    assert "cohort evidence sampler task died" in caplog.text
+    assert "evidence persistence failed" in caplog.text
+
+
+def test_resume_open_cohort_sampling_uses_next_durable_cadence(tmp_path: Path, monkeypatch) -> None:
+    """Restart resumes an open receipt without manufacturing backdated ticks."""
+
+    receipt = CohortBatchLaunchReceipt(
+        account_id="DU123456",
+        cohort_id="resume-cohort",
+        member_strategy_instance_ids=("bot-a",),
+        window_start_ms=10_000,
+        window_end_ms=40_000,
+        authorized_by="operator.alice",
+        recorded_at_ms=10_000,
+        member_pins=(
+            CohortBatchLaunchMemberPin(
+                strategy_instance_id="bot-a",
+                run_id="run-a",
+                roll_call_offer_id="offer-a",
+            ),
+        ),
+    )
+    record_cohort_batch_launch_receipt(tmp_path, receipt)
+    asyncio.run(
+        CohortBatchLaunchService(artifacts_root=tmp_path).record_evidence_sample(
+            account_id=receipt.account_id,
+            cohort_id=receipt.cohort_id,
+            sample=_sample(10_000, "bot-a"),
+        )
+    )
+    first_expected: list[int] = []
+
+    def fake_sampler(**kwargs):
+        first_expected.append(kwargs["first_expected_at_ms"])
+        return object()
+
+    class RecordingRegistry:
+        def start(self, cohort_id: str, _sampler: object) -> None:
+            assert cohort_id == receipt.cohort_id
+
+    monkeypatch.setattr("app.services.cohort_launch._evidence_sampler", fake_sampler)
+    asyncio.run(
+        resume_open_cohort_evidence_samplers(
+            artifacts_root=tmp_path,
+            live_runs_root=tmp_path / "runs",
+            visible_runs_by_instance=lambda _root: {},
+            now_ms=lambda: 12_500,
+            evidence_samplers=RecordingRegistry(),  # type: ignore[arg-type]
+        )
+    )
+
+    assert first_expected == [15_000]
+
+
+def test_cohort_evidence_parser_rejects_booleans_for_integral_fields() -> None:
+    event = {
+        "expected_at_ms": 10_000,
+        "observed_at_ms": 10_000,
+        "account_truth": "healthy",
+        "fleet": "healthy",
+        "broker_net_positions": {"SPY": 1},
+        "broker_residual": {"SPY": 0},
+        "members": [
+            {
+                "strategy_instance_id": "bot-a",
+                "run_id": "run-a",
+                "state": "healthy",
+                "orders_used": 0,
+                "orders_cap": 4,
+            }
+        ],
+    }
+
+    assert parse_cohort_evidence_sample(event) is not None
+    for field, value in (("expected_at_ms", True), ("observed_at_ms", False)):
+        malformed = dict(event, **{field: value})
+        assert parse_cohort_evidence_sample(malformed) is None
+    malformed_member = dict(event)
+    malformed_member["members"] = [dict(event["members"][0], orders_used=True)]
+    assert parse_cohort_evidence_sample(malformed_member) is None
+    assert parse_cohort_evidence_sample(dict(event, broker_net_positions={"SPY": True})) is None
 
 
 def test_runtime_observer_fails_member_when_poisoned_flag_precedes_sidecar_update(

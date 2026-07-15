@@ -168,6 +168,31 @@ def test_apply_refuses_a_claim_from_an_active_namespace(tmp_path: Path) -> None:
         )
 
 
+def test_preview_refuses_a_claim_from_an_active_namespace(tmp_path: Path) -> None:
+    _journal_with_fill(tmp_path)
+    write_account_instance_binding(
+        tmp_path,
+        AccountInstanceBinding(
+            account_id=ACCOUNT,
+            strategy_instance_id="bot-a",
+            run_id="run-active",
+            bot_order_namespace=NAMESPACE,
+            lifecycle_state="ACTIVE",
+            recorded_at_ms=200,
+            source="test.active",
+        ),
+    )
+
+    preview = JournalCureService(artifacts_root=tmp_path).preview(
+        account_id=ACCOUNT,
+        bot_order_namespace=NAMESPACE,
+        symbol="SPY",
+    )
+
+    assert preview.can_cure is False
+    assert preview.reason_code == "JOURNAL_CURE_NAMESPACE_NOT_PROVEN_RETIRED"
+
+
 def test_request_rejects_blank_evidence_reference() -> None:
     with pytest.raises(ValueError, match="evidence_refs must not contain blank references"):
         _request(evidence_refs=(" ",))

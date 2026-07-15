@@ -564,6 +564,9 @@ async def _recovery_flatten_through_clerk(
     from app.broker.ibkr.models import IbkrOrderSpec
     from app.engine.live.account_owner import AccountOwnerSubmitIntent
 
+    if not order_specs:
+        return 0
+
     intents: list[AccountOwnerSubmitIntent] = []
     for spec in order_specs:
         if spec.order_ref is None:

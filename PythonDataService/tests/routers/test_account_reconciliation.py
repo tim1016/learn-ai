@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.broker.ibkr.account_recovery import AccountRecoveryState
@@ -35,6 +36,7 @@ from app.engine.live.account_clerk_journal import (
     AccountClerkRecordedReceipt,
     AccountClerkRecoveryFlattenReceipt,
 )
+from app.engine.live.account_clerk_rpc import AccountClerkRpcRejectedError, AccountClerkRpcRequestIdentity
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
@@ -550,6 +552,27 @@ async def test_latest_reconciliation_normalizes_account_id(tmp_path: Path) -> No
     assert body["receipt_id"] == receipt.receipt_id
 
 
+async def test_reconciliation_service_honors_artifact_root_dependency_override(tmp_path: Path) -> None:
+    """Default service construction must use the route's injected artifact root."""
+
+    from app.main import app
+
+    receipt = AccountReconciliationService(artifacts_root=tmp_path, ttl_ms=10_000_000_000).write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(),
+        now_ms=1_780_000_002_000,
+    )
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/accounts/DU1234567/reconciliation/latest")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["receipt_id"] == receipt.receipt_id
+
+
 async def test_triage_contract_returns_condition_rows_for_active_freeze(tmp_path: Path) -> None:
     from app.main import app
 
@@ -876,6 +899,98 @@ async def test_journal_cure_endpoint_ensures_clerk_before_appending_adjustment(
     assert response.status_code == 201
     assert ensured == ["DU1234567"]
     assert response.json()["signed_quantity"] == -1
+
+
+async def test_journal_cure_endpoint_preserves_clerk_rejection_reason(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """An operator needs the Clerk's actionable cure rejection, not a generic code."""
+
+    from app.main import app
+
+    async def _ensure_clerk(_base_url: str, _account_id: str) -> dict:
+        return {}
+
+    class FakeRpcClient:
+        def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
+            assert artifacts_root == tmp_path
+            assert account_id == "DU1234567"
+
+        async def apply_operator_adjustment(self, _request: JournalCureRequest) -> JournalCureReceipt:
+            raise AccountClerkRpcRejectedError(
+                reason="JOURNAL_CURE_IDEMPOTENCY_CONFLICT",
+                operation="operator_adjustment",
+                request_identity=AccountClerkRpcRequestIdentity(intent_id=None, order_ref=None),
+            )
+
+    monkeypatch.setattr(account_reconciliation.host_daemon_client, "ensure_account_clerk", _ensure_clerk)
+    monkeypatch.setattr(account_reconciliation, "AccountClerkRpcClient", FakeRpcClient)
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/accounts/DU1234567/journal-cures",
+                json={
+                    "bot_order_namespace": "learn-ai/bot-a/v1",
+                    "symbol": "SPY",
+                    "signed_quantity": -1,
+                    "reason": "operator verified stale claim",
+                    "evidence_refs": ["account-reconciliation:receipt-1"],
+                    "request_provenance": "account-monitor/cure",
+                    "idempotency_key": "cure-route-1",
+                },
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "JOURNAL_CURE_IDEMPOTENCY_CONFLICT"
+
+
+async def test_journal_cure_preview_honors_artifact_root_dependency_override(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preview must read the test/app-provided artifact root, never global settings."""
+
+    from app.main import app
+
+    observed_roots: list[Path] = []
+
+    class FakeJournalCureService:
+        def __init__(self, *, artifacts_root: Path) -> None:
+            observed_roots.append(artifacts_root)
+
+        def preview(
+            self,
+            *,
+            account_id: str,
+            bot_order_namespace: str,
+            symbol: str,
+        ) -> account_reconciliation.JournalCurePreview:
+            return account_reconciliation.JournalCurePreview(
+                account_id=account_id,
+                bot_order_namespace=bot_order_namespace,
+                symbol=symbol,
+                journal_quantity=0.0,
+                can_cure=False,
+                reason_code="JOURNAL_CURE_NO_STALE_CLAIM",
+            )
+
+    monkeypatch.setattr(account_reconciliation, "JournalCureService", FakeJournalCureService)
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get(
+                "/api/accounts/DU1234567/journal-cures/preview",
+                params={"bot_order_namespace": "learn-ai/retired-bot/v1", "symbol": "SPY"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert observed_roots == [tmp_path]
 
 
 async def test_operator_recovery_flatten_endpoint_ensures_clerk_and_appends_audit_event(

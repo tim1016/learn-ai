@@ -4,6 +4,10 @@ import { TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
 
 import { LiveRunsService } from '../../../services/live-runs.service';
+import type {
+  CohortBatchLaunchStatus,
+  CohortValidationCertificate,
+} from '../../../api/cohort-batch-launch.types';
 import { CohortLaunchMonitorComponent } from './cohort-launch-monitor.component';
 
 class FakeLiveRunsService {
@@ -12,7 +16,7 @@ class FakeLiveRunsService {
 }
 
 describe('CohortLaunchMonitorComponent', () => {
-  const cohort = (cohortId: string) => ({
+  const cohort = (cohortId: string): CohortBatchLaunchStatus => ({
     schema_version: 1,
     account_id: 'DU1234567',
     cohort_id: cohortId,
@@ -36,14 +40,23 @@ describe('CohortLaunchMonitorComponent', () => {
     },
   });
 
-  const certificate = (reason: string) => ({
+  const certificate = (reason: string): CohortValidationCertificate => ({
     schema_version: 1,
     account_id: 'DU1234567',
     cohort_id: 'paper-validation-1',
+    member_strategy_instance_ids: [],
+    member_run_ids: {},
+    window_start_ms: 1_780_000_000_000,
+    window_end_ms: 1_780_000_030_000,
     healthy_overlap_ms: 5_000,
     evidence_verdict: 'healthy',
     evidence_reason: null,
+    samples: [],
+    round_trips: [],
     incidents: [],
+    final_broker_net_positions: null,
+    final_broker_residual: null,
+    final_journal_exposure: {},
     verdict: 'passed',
     reasons: [reason],
   });
@@ -103,17 +116,27 @@ describe('CohortLaunchMonitorComponent', () => {
         ],
       },
     });
-    liveRuns.getCohortValidationCertificate.mockResolvedValue({
+    const fullCertificate: CohortValidationCertificate = {
       schema_version: 1,
       account_id: 'DU1234567',
       cohort_id: 'paper-validation-1',
+      member_strategy_instance_ids: ['spy-a', 'spy-b'],
+      member_run_ids: { 'spy-a': 'run-spy-a', 'spy-b': 'run-spy-b' },
+      window_start_ms: 1_780_000_000_000,
+      window_end_ms: 1_780_000_030_000,
       healthy_overlap_ms: 10_000,
       evidence_verdict: 'failed',
       evidence_reason: 'COHORT_MEMBER_HALTED',
+      samples: [],
+      round_trips: [],
       incidents: [],
+      final_broker_net_positions: null,
+      final_broker_residual: null,
+      final_journal_exposure: {},
       verdict: 'failed',
       reasons: ['FAILED_NAMESPACE_EXPOSURE_NONZERO'],
-    });
+    };
+    liveRuns.getCohortValidationCertificate.mockResolvedValue(fullCertificate);
     await TestBed.configureTestingModule({
       imports: [CohortLaunchMonitorComponent],
       providers: [provideZonelessChangeDetection(), { provide: LiveRunsService, useValue: liveRuns }],

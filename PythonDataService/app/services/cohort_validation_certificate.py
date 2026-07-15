@@ -54,6 +54,7 @@ class CohortValidationCertificateService:
         status = await CohortBatchLaunchService(artifacts_root=self._artifacts_root).get_status(
             account_id=account_id,
             cohort_id=cohort_id,
+            events=events,
         )
         if status is None:
             raise RuntimeError("newly found cohort receipt could not be projected")

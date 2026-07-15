@@ -136,14 +136,20 @@ class JournalCureService:
 
         async def apply(request: JournalCureRequest) -> JournalCureReceipt:
             adjustment = self.adjustment_for(account_id=account_id, request=request)
-            entry = await append_operator_adjustment(
-                adjustment,
-                validate_adjustment=lambda entries: self.validate_adjustment(
-                    entries,
-                    account_id=account_id,
-                    request=request,
-                ),
-            )
+            try:
+                entry = await append_operator_adjustment(
+                    adjustment,
+                    validate_adjustment=lambda entries: self.validate_adjustment(
+                        entries,
+                        account_id=account_id,
+                        request=request,
+                    ),
+                )
+            except AccountClerkOperatorAdjustmentConflict as exc:
+                raise JournalCureError(
+                    "JOURNAL_CURE_IDEMPOTENCY_CONFLICT",
+                    "idempotency key was already used with a different cure payload",
+                ) from exc
             return self.receipt_for(entry)
 
         return apply
@@ -178,6 +184,18 @@ class JournalCureService:
                 journal_quantity=0.0,
                 can_cure=False,
                 reason_code="JOURNAL_CURE_NO_STALE_CLAIM",
+            )
+        binding = index_account_instance_bindings(
+            read_account_instance_registry(self._artifacts_root, account_id), account_id=account_id
+        ).latest_by_namespace.get(bot_order_namespace)
+        if binding is None or binding.lifecycle_state != "RETIRED":
+            return JournalCurePreview(
+                account_id=account_id,
+                bot_order_namespace=bot_order_namespace,
+                symbol=normalized_symbol,
+                journal_quantity=quantity,
+                can_cure=False,
+                reason_code="JOURNAL_CURE_NAMESPACE_NOT_PROVEN_RETIRED",
             )
         return JournalCurePreview(
             account_id=account_id,

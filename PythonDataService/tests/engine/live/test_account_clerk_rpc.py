@@ -362,22 +362,27 @@ async def test_operator_adjustment_round_trips_through_the_live_clerk_journal(tm
         ),
     )
     await server.start()
+    cure_request = JournalCureRequest(
+        bot_order_namespace=intent.bot_order_namespace,
+        symbol="SPY",
+        signed_quantity=-1,
+        reason="retired namespace fill was already reconciled",
+        evidence_refs=("account-reconciliation:test",),
+        request_provenance="test",
+        idempotency_key="cure-rpc-1059",
+    )
     try:
-        receipt = await AccountClerkRpcClient(artifacts_root=tmp_path, account_id=ACCOUNT).apply_operator_adjustment(
-            JournalCureRequest(
-                bot_order_namespace=intent.bot_order_namespace,
-                symbol="SPY",
-                signed_quantity=-1,
-                reason="retired namespace fill was already reconciled",
-                evidence_refs=("account-reconciliation:test",),
-                request_provenance="test",
-                idempotency_key="cure-rpc-1059",
+        client = AccountClerkRpcClient(artifacts_root=tmp_path, account_id=ACCOUNT)
+        receipt = await client.apply_operator_adjustment(cure_request)
+        with pytest.raises(AccountClerkRpcRejectedError) as conflict:
+            await client.apply_operator_adjustment(
+                cure_request.model_copy(update={"reason": "different operator conclusion"})
             )
-        )
     finally:
         await server.close()
 
     assert receipt.journal_seq > 0
+    assert conflict.value.reason == "JOURNAL_CURE_IDEMPOTENCY_CONFLICT"
 
 
 @pytest.mark.asyncio

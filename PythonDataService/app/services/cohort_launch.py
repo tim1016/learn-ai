@@ -17,6 +17,7 @@ from app.engine.live.account_artifacts import (
     CohortBatchLaunchOutcomesReceipt,
     CohortBatchLaunchReceipt,
     CohortBatchLaunchRequestProvenance,
+    read_account_events,
     record_cohort_batch_launch_outcomes,
     record_cohort_batch_launch_receipt,
 )
@@ -27,7 +28,7 @@ from app.schemas.live_runs import (
     HostRunnerActionResponse,
     HostRunnerStartRequest,
 )
-from app.services.cohort_batch_launch import CohortBatchLaunchService
+from app.services.cohort_batch_launch import CohortBatchLaunchService, parse_cohort_evidence_sample
 from app.services.cohort_evidence import (
     CohortEvidenceSampler,
     CohortEvidenceSamplerRegistry,
@@ -128,7 +129,13 @@ class CohortLaunchCoordinator:
             self._artifacts_root,
             outcomes_receipt,
         )
-        await self._start_evidence_sampler(receipt)
+        try:
+            await self._start_evidence_sampler(receipt)
+        except Exception:
+            logger.exception(
+                "cohort launch completed but evidence sampler did not start",
+                extra={"account_id": account_id, "cohort_id": receipt.cohort_id},
+            )
         status_view = await CohortBatchLaunchService(artifacts_root=self._artifacts_root).get_status(
             account_id=account_id,
             cohort_id=receipt.cohort_id,
@@ -140,26 +147,13 @@ class CohortLaunchCoordinator:
     async def _start_evidence_sampler(self, receipt: CohortBatchLaunchReceipt) -> None:
         """Persist the first observation and retain a server-owned five-second task."""
 
-        service = CohortBatchLaunchService(artifacts_root=self._artifacts_root)
-        observer = CohortEvidenceRuntimeObserver(
+        sampler = _evidence_sampler(
+            receipt=receipt,
+            artifacts_root=self._artifacts_root,
             live_runs_root=self._live_runs_root,
             visible_runs_by_instance=self._visible_runs_by_instance,
             now_ms=self._now_ms,
-        )
-        sampler = CohortEvidenceSampler(
-            cadence_ms=_COHORT_EVIDENCE_CADENCE_MS,
-            now_ms=self._now_ms,
             first_expected_at_ms=receipt.window_start_ms,
-            # ``window_end_ms`` is an exclusive boundary.  Each tick credits
-            # one cadence, so sampling exactly at the boundary would credit
-            # evidence outside the receipt's authorization window.
-            last_expected_at_ms=receipt.window_end_ms - _COHORT_EVIDENCE_CADENCE_MS,
-            observe=lambda expected_at_ms: observer.observe(receipt, expected_at_ms),
-            persist=lambda sample: service.record_evidence_sample(
-                account_id=receipt.account_id,
-                cohort_id=receipt.cohort_id,
-                sample=sample,
-            ),
         )
         await sampler.sample_once()
         self._evidence_samplers.start(receipt.cohort_id, sampler)
@@ -264,3 +258,134 @@ class CohortLaunchCoordinator:
             reason="COHORT_START_NOT_ACCEPTED",
             next_safe_action="Review the backend start response before authorizing a new cohort.",
         )
+
+
+async def resume_open_cohort_evidence_samplers(
+    *,
+    artifacts_root: Path,
+    live_runs_root: Path,
+    visible_runs_by_instance: VisibleRuns,
+    now_ms: NowMs,
+    evidence_samplers: CohortEvidenceSamplerRegistry,
+) -> None:
+    """Restart server-owned evidence collection for still-open durable receipts.
+
+    A process restart must not silently turn an otherwise active validation
+    window into an unobserved one. Any elapsed cadence slots stay absent so the
+    certificate's gap detection remains fail-closed; collection resumes at the
+    next scheduled slot rather than backdating observations.
+    """
+
+    current_ms = now_ms()
+    for account_id in await asyncio.to_thread(_artifact_account_ids, artifacts_root):
+        try:
+            events = await asyncio.to_thread(read_account_events, artifacts_root, account_id)
+        except (OSError, ValueError):
+            logger.exception(
+                "could not read account events while resuming cohort evidence",
+                extra={"account_id": account_id},
+            )
+            continue
+        for receipt in _open_cohort_receipts(events, account_id=account_id, now_ms=current_ms):
+            first_expected_at_ms = _resume_expected_at_ms(receipt, events, current_ms=current_ms)
+            if first_expected_at_ms >= receipt.window_end_ms:
+                continue
+            evidence_samplers.start(
+                receipt.cohort_id,
+                _evidence_sampler(
+                    receipt=receipt,
+                    artifacts_root=artifacts_root,
+                    live_runs_root=live_runs_root,
+                    visible_runs_by_instance=visible_runs_by_instance,
+                    now_ms=now_ms,
+                    first_expected_at_ms=first_expected_at_ms,
+                ),
+            )
+
+
+def _evidence_sampler(
+    *,
+    receipt: CohortBatchLaunchReceipt,
+    artifacts_root: Path,
+    live_runs_root: Path,
+    visible_runs_by_instance: VisibleRuns,
+    now_ms: NowMs,
+    first_expected_at_ms: int,
+) -> CohortEvidenceSampler:
+    service = CohortBatchLaunchService(artifacts_root=artifacts_root)
+    observer = CohortEvidenceRuntimeObserver(
+        live_runs_root=live_runs_root,
+        visible_runs_by_instance=visible_runs_by_instance,
+        now_ms=now_ms,
+    )
+    return CohortEvidenceSampler(
+        cadence_ms=_COHORT_EVIDENCE_CADENCE_MS,
+        now_ms=now_ms,
+        first_expected_at_ms=first_expected_at_ms,
+        # ``window_end_ms`` is an exclusive boundary. Each tick credits one
+        # cadence, so sampling exactly at the boundary would credit evidence
+        # outside the receipt's authorization window.
+        last_expected_at_ms=receipt.window_end_ms - _COHORT_EVIDENCE_CADENCE_MS,
+        observe=lambda expected_at_ms: observer.observe(receipt, expected_at_ms),
+        persist=lambda sample: service.record_evidence_sample(
+            account_id=receipt.account_id,
+            cohort_id=receipt.cohort_id,
+            sample=sample,
+        ),
+    )
+
+
+def _artifact_account_ids(artifacts_root: Path) -> tuple[str, ...]:
+    accounts_root = artifacts_root / "accounts"
+    try:
+        return tuple(
+            child.name
+            for child in accounts_root.iterdir()
+            if child.is_dir() and not child.is_symlink()
+        )
+    except OSError:
+        return ()
+
+
+def _open_cohort_receipts(
+    events: list[dict],
+    *,
+    account_id: str,
+    now_ms: int,
+) -> tuple[CohortBatchLaunchReceipt, ...]:
+    receipts: dict[str, CohortBatchLaunchReceipt] = {}
+    for event in events:
+        if event.get("event_type") != "cohort_batch_launch_authorized":
+            continue
+        try:
+            receipt = CohortBatchLaunchReceipt.model_validate(event)
+        except ValueError:
+            continue
+        if receipt.account_id == account_id and receipt.window_start_ms <= now_ms < receipt.window_end_ms:
+            receipts[receipt.cohort_id] = receipt
+    return tuple(receipts.values())
+
+
+def _resume_expected_at_ms(
+    receipt: CohortBatchLaunchReceipt,
+    events: list[dict],
+    *,
+    current_ms: int,
+) -> int:
+    observed_ticks = [
+        sample.expected_at_ms
+        for event in events
+        if event.get("event_type") == "cohort_evidence_sample"
+        and event.get("cohort_id") == receipt.cohort_id
+        and (sample := parse_cohort_evidence_sample(event)) is not None
+        and receipt.window_start_ms <= sample.expected_at_ms < receipt.window_end_ms
+    ]
+    elapsed_ms = max(0, current_ms - receipt.window_start_ms)
+    next_after_now = receipt.window_start_ms + (
+        (elapsed_ms + _COHORT_EVIDENCE_CADENCE_MS - 1) // _COHORT_EVIDENCE_CADENCE_MS
+    ) * _COHORT_EVIDENCE_CADENCE_MS
+    next_after_observation = max(
+        observed_ticks,
+        default=receipt.window_start_ms - _COHORT_EVIDENCE_CADENCE_MS,
+    ) + _COHORT_EVIDENCE_CADENCE_MS
+    return max(next_after_observation, next_after_now)

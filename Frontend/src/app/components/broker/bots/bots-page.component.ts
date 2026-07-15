@@ -391,6 +391,28 @@ export class BotsPageComponent {
       const outcomesById = new Map(
         cohort.outcomes.map((outcome) => [outcome.strategy_instance_id, outcome]),
       );
+      if (cohort.outcomes_state !== 'recorded') {
+        const outcomesArePending = cohort.outcomes_state === 'pending';
+        this.launchProgress.update((current) => ({
+          ...current,
+          phase: outcomesArePending ? 'running' : 'blocked',
+          title: outcomesArePending ? 'Cohort start pending' : 'Cohort outcome receipt unreadable',
+          detail: outcomesArePending
+            ? `Cohort receipt ${cohort.cohort_id} is durable; wait for the server to record member outcomes.`
+            : cohort.outcomes_error
+              ?? `Cohort receipt ${cohort.cohort_id} could not be read. Refresh before retrying any start.`,
+          rows: refreshedRows.map((row) => ({
+            botId: row.id,
+            botName: row.name,
+            status: outcomesArePending ? 'starting' : 'blocked',
+            detail: outcomesArePending
+              ? 'Cohort authorization is durable; the server has not yet recorded this member outcome.'
+              : 'The server could not read the cohort outcome receipt. Refresh before retrying.',
+            reasonCode: null,
+          })),
+        }));
+        return;
+      }
       const accepted = refreshedRows.every(
         (row) => outcomesById.get(row.id)?.state === 'accepted',
       );

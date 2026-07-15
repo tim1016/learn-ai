@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal
 
 SampleVerdict = Literal["healthy", "failed", "unknown"]
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -126,7 +128,24 @@ class CohortEvidenceSamplerRegistry:
         if cohort_id in self._samplers:
             return
         stop = asyncio.Event()
-        self._samplers[cohort_id] = (stop, asyncio.create_task(sampler.run(stop)))
+        task = asyncio.create_task(sampler.run(stop))
+
+        def _on_done(finished: asyncio.Task[None]) -> None:
+            current = self._samplers.get(cohort_id)
+            if current is not None and current[1] is finished:
+                self._samplers.pop(cohort_id, None)
+            if finished.cancelled():
+                return
+            exception = finished.exception()
+            if exception is not None:
+                logger.error(
+                    "cohort evidence sampler task died",
+                    exc_info=(type(exception), exception, exception.__traceback__),
+                    extra={"cohort_id": cohort_id},
+                )
+
+        task.add_done_callback(_on_done)
+        self._samplers[cohort_id] = (stop, task)
 
     async def stop_all(self) -> None:
         """Fence every task before application shutdown tears down dependencies."""

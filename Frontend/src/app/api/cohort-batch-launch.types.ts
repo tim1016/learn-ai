@@ -33,12 +33,41 @@ export interface CohortValidationCertificate {
   schema_version: 1;
   account_id: string;
   cohort_id: string;
+  member_strategy_instance_ids: string[];
+  member_run_ids: Record<string, string>;
+  window_start_ms: number;
+  window_end_ms: number;
   healthy_overlap_ms: number;
   evidence_verdict: 'healthy' | 'failed' | 'unknown';
   evidence_reason: string | null;
+  samples: CohortValidationCertificateSample[];
+  round_trips: CohortValidationCertificateRoundTrip[];
   incidents: string[];
+  final_broker_net_positions: Record<string, number> | null;
+  final_broker_residual: Record<string, number> | null;
+  final_journal_exposure: Record<string, Record<string, number>>;
   verdict: 'passed' | 'failed' | 'incomplete';
   reasons: string[];
+}
+
+export interface CohortValidationCertificateSample {
+  expected_at_ms: number;
+  observed_at_ms: number | null;
+  account_truth: 'healthy' | 'failed' | 'unknown';
+  fleet: 'healthy' | 'failed' | 'unknown';
+  members: CohortEvidenceMember[];
+  broker_net_positions: Record<string, number> | null;
+  broker_residual: Record<string, number> | null;
+}
+
+export interface CohortValidationCertificateRoundTrip {
+  bot_order_namespace: string;
+  order_refs: string[];
+  order_ids: number[];
+  perm_ids: number[];
+  exec_ids: string[];
+  saw_nonzero_exposure: boolean;
+  closed: boolean;
 }
 
 export interface CohortBatchLaunchStatus {

@@ -12,7 +12,11 @@ from app.broker.ibkr.client import BrokerError, IbkrClient
 from app.broker.ibkr.config import get_settings
 from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import AccountArtifactError, append_account_event
-from app.engine.live.account_clerk_rpc import AccountClerkRpcClient, AccountClerkRpcError
+from app.engine.live.account_clerk_rpc import (
+    AccountClerkRpcClient,
+    AccountClerkRpcError,
+    AccountClerkRpcRejectedError,
+)
 from app.engine.live.account_identity import normalize_account_id
 from app.engine.live.account_registry import backfill_false_crash_registry_rows
 from app.routers.broker_dependencies import require_connected_client
@@ -56,16 +60,22 @@ def get_account_artifacts_root() -> Path:
 AccountArtifactsRoot = Annotated[Path, Depends(get_account_artifacts_root)]
 
 
-def get_account_reconciliation_service() -> AccountReconciliationService:
-    return AccountReconciliationService(artifacts_root=get_account_artifacts_root())
+def get_account_reconciliation_service(
+    artifacts_root: AccountArtifactsRoot,
+) -> AccountReconciliationService:
+    """Build reconciliation service from the overridable artifact-root dependency."""
+
+    return AccountReconciliationService(artifacts_root=artifacts_root)
 
 
 def get_legacy_stale_claim_retirement_service() -> LegacyStaleClaimRetirementService:
     return LegacyStaleClaimRetirementService(artifacts_root=get_account_artifacts_root())
 
 
-def get_journal_cure_service() -> JournalCureService:
-    return JournalCureService(artifacts_root=get_account_artifacts_root())
+def get_journal_cure_service(artifacts_root: AccountArtifactsRoot) -> JournalCureService:
+    """Build cure projection from the overridable account-artifact root."""
+
+    return JournalCureService(artifacts_root=artifacts_root)
 
 
 def _outcome_unknown_http_error(exc: host_daemon_client.HostDaemonOutcomeUnknownError) -> HTTPException:
@@ -84,9 +94,10 @@ def _clerk_rpc_http_error(exc: AccountClerkRpcError) -> HTTPException:
     """Expose normal Clerk rejections without collapsing them into a server error."""
 
     unavailable = exc.reason_code.startswith("ACCOUNT_CLERK_UNAVAILABLE:")
+    reason_code = exc.reason if isinstance(exc, AccountClerkRpcRejectedError) else exc.reason_code
     return HTTPException(
         status.HTTP_503_SERVICE_UNAVAILABLE if unavailable else status.HTTP_409_CONFLICT,
-        detail={"reason_code": exc.reason_code, "message": "Clerk rejected or could not complete the request."},
+        detail={"reason_code": reason_code, "message": "Clerk rejected or could not complete the request."},
     )
 
 

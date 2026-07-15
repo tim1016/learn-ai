@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -256,6 +257,35 @@ async def test_refresh_service_remembers_successful_account_truth(monkeypatch: p
 
 
 @pytest.mark.asyncio
+async def test_refresh_service_runs_durable_observer_off_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    truth = _truth()
+    observer_thread_ids: list[int] = []
+    monkeypatch.setattr(
+        account_truth_refresh,
+        "fetch_account_truth",
+        AsyncMock(return_value=truth),
+    )
+
+    def observe_truth(_truth: AccountTruthResponse, **_metadata: object) -> None:
+        observer_thread_ids.append(threading.get_ident())
+
+    event_loop_thread_id = threading.get_ident()
+    await refresh_account_truth_and_update_cache(
+        object(),  # type: ignore[arg-type]
+        health=truth.health,
+        collection_context=_collection_context(),
+        snapshot_provider=provider,
+        account_truth_observer=observe_truth,
+    )
+
+    assert observer_thread_ids
+    assert all(thread_id != event_loop_thread_id for thread_id in observer_thread_ids)
+
+
+@pytest.mark.asyncio
 async def test_refresh_service_marks_failure_for_any_account_truth_route(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -302,7 +332,9 @@ async def test_refresh_service_notifies_keyword_only_failure_observer(
         observed["account_id"] = account_id
         observed["detail"] = detail
         observed["attempted_at_ms"] = attempted_at_ms
+        observed["thread_id"] = threading.get_ident()
 
+    event_loop_thread_id = threading.get_ident()
     with pytest.raises(BrokerError):
         await refresh_account_truth_and_update_cache(
             object(),  # type: ignore[arg-type]
@@ -312,11 +344,15 @@ async def test_refresh_service_notifies_keyword_only_failure_observer(
             account_truth_failure_observer=observe_failure,
         )
 
-    assert observed == {
+    assert {
+        key: observed[key]
+        for key in ("account_id", "detail", "attempted_at_ms")
+    } == {
         "account_id": "DU123",
         "detail": "broker sweep timed out",
         "attempted_at_ms": 2_000,
     }
+    assert observed["thread_id"] != event_loop_thread_id
 
 
 @pytest.mark.asyncio
@@ -702,7 +738,7 @@ async def test_refresh_loop_runs_account_journal_observer_after_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
-    observed: list[str] = []
+    observed: list[tuple[str, int]] = []
     monkeypatch.setattr(account_truth_refresh, "get_monitor", lambda: None)
 
     async def fake_refresh_now(_client, **_kwargs) -> AccountTruthResponse:
@@ -712,11 +748,12 @@ async def test_refresh_loop_runs_account_journal_observer_after_success(
         client=_FakeClient(_health(account_id="DU123", fetched_at_ms=2_000)),  # type: ignore[arg-type]
         snapshot_provider=provider,
         refresh_now=fake_refresh_now,
-        account_journal_observer=observed.append,
+        account_journal_observer=lambda account_id: observed.append((account_id, threading.get_ident())),
     )
 
     assert await loop.refresh_once() is not None
-    assert observed == ["DU123"]
+    assert [account_id for account_id, _thread_id in observed] == ["DU123"]
+    assert observed[0][1] != threading.get_ident()
 
 
 @pytest.mark.asyncio

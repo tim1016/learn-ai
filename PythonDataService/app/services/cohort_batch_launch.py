@@ -36,10 +36,12 @@ class CohortBatchLaunchService:
         *,
         account_id: str,
         cohort_id: str | None,
+        events: list[dict] | None = None,
     ) -> CohortBatchLaunchStatusResponse | None:
         """Read the latest durable cohort state without inferring missing outcomes."""
 
-        events = await asyncio.to_thread(read_account_events, self._artifacts_root, account_id)
+        if events is None:
+            events = await asyncio.to_thread(read_account_events, self._artifacts_root, account_id)
         authorization = self.authorization_event(events, cohort_id)
         if authorization is None:
             if cohort_id is None:
@@ -199,8 +201,8 @@ def parse_cohort_evidence_sample(event: dict) -> CohortEvidenceSample | None:
     broker_net_positions = _position_map(event.get("broker_net_positions"))
     broker_residual = _position_map(event.get("broker_residual"))
     if (
-        not isinstance(expected_at_ms, int)
-        or (observed_at_ms is not None and not isinstance(observed_at_ms, int))
+        not _is_int_not_bool(expected_at_ms)
+        or (observed_at_ms is not None and not _is_int_not_bool(observed_at_ms))
         or account_truth not in {"healthy", "failed", "unknown"}
         or fleet not in {"healthy", "failed", "unknown"}
         or not isinstance(members, list)
@@ -223,8 +225,8 @@ def parse_cohort_evidence_sample(event: dict) -> CohortEvidenceSample | None:
             or (run_id is not None and not isinstance(run_id, str))
             or state not in {"healthy", "failed", "unknown"}
             or (reason is not None and not isinstance(reason, str))
-            or (orders_used is not None and (not isinstance(orders_used, int) or orders_used < 0))
-            or (orders_cap is not None and (not isinstance(orders_cap, int) or orders_cap <= 0))
+            or (orders_used is not None and (not _is_int_not_bool(orders_used) or orders_used < 0))
+            or (orders_cap is not None and (not _is_int_not_bool(orders_cap) or orders_cap <= 0))
         ):
             return None
         parsed_members.append(
@@ -251,9 +253,15 @@ def parse_cohort_evidence_sample(event: dict) -> CohortEvidenceSample | None:
 def _position_map(value: object) -> dict[str, int] | None:
     if value is None:
         return None
-    if not isinstance(value, dict) or any(not isinstance(symbol, str) or not isinstance(quantity, int) for symbol, quantity in value.items()):
+    if not isinstance(value, dict) or any(
+        not isinstance(symbol, str) or not _is_int_not_bool(quantity) for symbol, quantity in value.items()
+    ):
         return None
     return {symbol: quantity for symbol, quantity in value.items()}
+
+
+def _is_int_not_bool(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _unreadable_evidence_summary() -> CohortEvidenceSummaryResponse:

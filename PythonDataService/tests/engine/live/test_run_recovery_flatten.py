@@ -230,6 +230,33 @@ async def test_recovery_flatten_uses_clerk_for_the_halt_write_path(
 
 
 @pytest.mark.asyncio
+async def test_clerk_recovery_flatten_empty_journal_plan_returns_zero_without_rpc(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An already-flat Clerk namespace must not submit an invalid empty batch."""
+
+    broker = FakeBroker()
+    monkeypatch.setattr("app.engine.live.run._journal_recovery_order_specs", lambda **_kwargs: ())
+
+    async def empty_batch_must_not_be_submitted(_intents: tuple[AccountOwnerSubmitIntent, ...]) -> object:
+        raise AssertionError("empty Clerk recovery batch must not make an RPC call")
+
+    liquidated = await _recovery_flatten(
+        broker,
+        bot_order_namespace="learn-ai/bot-a/v1",
+        account_clerk_recovery_submitter=empty_batch_must_not_be_submitted,
+        recovery_account_id="DU123",
+        recovery_strategy_instance_id="bot-a",
+        recovery_run_id="run-a",
+        recovery_owner_generation=42,
+        recovery_artifacts_root=tmp_path,
+    )
+
+    assert liquidated == 0
+
+
+@pytest.mark.asyncio
 async def test_clerk_recovery_batch_persists_each_acknowledgement_for_relaunch(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,

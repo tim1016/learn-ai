@@ -123,6 +123,7 @@ def write_account_instance_binding(
             "strategy_instance_id": binding.strategy_instance_id,
             "run_id": binding.run_id,
             "bot_order_namespace": binding.bot_order_namespace,
+            "cohort_id": binding.cohort_id,
             "lifecycle_state": binding.lifecycle_state,
             "recorded_at_ms": binding.recorded_at_ms,
             "source": binding.source,

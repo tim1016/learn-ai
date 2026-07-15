@@ -12,6 +12,10 @@ import type {
   BotLifecycleCondition,
   BotRollCallResponse,
 } from '../../../api/live-instances.types';
+import type {
+  CohortBatchLaunchStatus,
+  CohortEvidenceSummary,
+} from '../../../api/cohort-batch-launch.types';
 import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
@@ -24,6 +28,15 @@ import { BotsPageComponent } from './bots-page.component';
 const OLD_RUN = 1_700_000_000_000;
 const NEW_RUN = 1_800_000_000_000;
 const OFFER_EXPIRES_AT = 1_800_000_300_000;
+const COHORT_EVIDENCE: CohortEvidenceSummary = {
+  sample_count: 0,
+  cadence_ms: 5_000,
+  healthy_overlap_ms: 0,
+  verdict: 'unknown',
+  reason: 'COHORT_EVIDENCE_MISSING',
+  source: 'account_event.cohort_evidence_sample',
+  members: [],
+};
 
 function action(
   overrides: Partial<BotLifecycleAction> & Pick<BotLifecycleAction, 'id' | 'label'>,
@@ -323,7 +336,7 @@ async function setup(options: { triage?: AccountTriageResponse } = {}) {
       started_at_ms: NEW_RUN,
     },
   });
-  service.launchCohort.mockResolvedValue({
+  const cohortLaunchResponse: CohortBatchLaunchStatus = {
     schema_version: 1,
     account_id: 'DU1234567',
     cohort_id: 'paper-validation-test',
@@ -349,7 +362,9 @@ async function setup(options: { triage?: AccountTriageResponse } = {}) {
     ],
     outcomes_recorded_at_ms: NEW_RUN,
     outcomes_error: null,
-  });
+    evidence: COHORT_EVIDENCE,
+  };
+  service.launchCohort.mockResolvedValue(cohortLaunchResponse);
   service.deployPreflight.mockResolvedValue({ ready: true, blockers: [] });
   service.getLatestCohortBatchLaunch.mockResolvedValue(null);
   service.deleteBot.mockResolvedValue({
@@ -533,7 +548,7 @@ describe('BotsPageComponent', () => {
 
   it('blocks an incomplete cohort receipt and labels its server reason code', async () => {
     const { fixture, service } = await setup();
-    service.launchCohort.mockResolvedValue({
+    const incompleteCohort: CohortBatchLaunchStatus = {
       schema_version: 1,
       account_id: 'DU1234567',
       cohort_id: 'paper-validation-incomplete',
@@ -553,7 +568,9 @@ describe('BotsPageComponent', () => {
       ],
       outcomes_recorded_at_ms: NEW_RUN,
       outcomes_error: null,
-    });
+      evidence: COHORT_EVIDENCE,
+    };
+    service.launchCohort.mockResolvedValue(incompleteCohort);
 
     await fixture.componentInstance.startReadyBots();
     await settle(fixture);
@@ -563,6 +580,64 @@ describe('BotsPageComponent', () => {
     expect(rendered).toContain('The server did not accept this cohort member.');
     expect(rendered).toContain('Account Frozen');
     expect(rendered).not.toContain('ACCOUNT_FROZEN');
+  });
+
+  it('keeps the launch at batch-level pending until durable member outcomes arrive', async () => {
+    const { fixture, service } = await setup();
+    const pendingCohort: CohortBatchLaunchStatus = {
+      schema_version: 1,
+      account_id: 'DU1234567',
+      cohort_id: 'paper-validation-pending',
+      member_strategy_instance_ids: ['live-idle-spy'],
+      window_start_ms: NEW_RUN,
+      window_end_ms: NEW_RUN + 300_000,
+      authorized_by: 'local-operator',
+      authorized_recorded_at_ms: NEW_RUN,
+      outcomes_state: 'pending',
+      outcomes: [],
+      outcomes_recorded_at_ms: null,
+      outcomes_error: null,
+      evidence: COHORT_EVIDENCE,
+    };
+    service.launchCohort.mockResolvedValue(pendingCohort);
+
+    await fixture.componentInstance.startReadyBots();
+    await settle(fixture);
+
+    const rendered = fixture.nativeElement.textContent ?? '';
+    expect(fixture.componentInstance.launchProgress().phase).toBe('running');
+    expect(fixture.componentInstance.launchProgress().title).toBe('Cohort start pending');
+    expect(rendered).toContain('server has not yet recorded this member outcome');
+    expect(rendered).not.toContain('server did not record a cohort outcome');
+  });
+
+  it('blocks the batch when its durable outcome receipt is unreadable', async () => {
+    const { fixture, service } = await setup();
+    const unreadableCohort: CohortBatchLaunchStatus = {
+      schema_version: 1,
+      account_id: 'DU1234567',
+      cohort_id: 'paper-validation-unreadable',
+      member_strategy_instance_ids: ['live-idle-spy'],
+      window_start_ms: NEW_RUN,
+      window_end_ms: NEW_RUN + 300_000,
+      authorized_by: 'local-operator',
+      authorized_recorded_at_ms: NEW_RUN,
+      outcomes_state: 'unreadable',
+      outcomes: [],
+      outcomes_recorded_at_ms: null,
+      outcomes_error: 'Outcome receipt has an invalid durable schema.',
+      evidence: COHORT_EVIDENCE,
+    };
+    service.launchCohort.mockResolvedValue(unreadableCohort);
+
+    await fixture.componentInstance.startReadyBots();
+    await settle(fixture);
+
+    const rendered = fixture.nativeElement.textContent ?? '';
+    expect(fixture.componentInstance.launchProgress().phase).toBe('blocked');
+    expect(fixture.componentInstance.launchProgress().title).toBe('Cohort outcome receipt unreadable');
+    expect(rendered).toContain('Outcome receipt has an invalid durable schema.');
+    expect(rendered).toContain('Refresh before retrying.');
   });
 
   it('requires cohort authorization confirmation before starting ready bots', async () => {

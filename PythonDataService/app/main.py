@@ -253,11 +253,20 @@ async def lifespan(app: FastAPI):
     # its stored document.
     await live_instances_router.start_surface_hubs()
 
+    from app.services.cohort_evidence import get_cohort_evidence_sampler_registry
+    from app.services.cohort_launch import resume_open_cohort_evidence_samplers
+
+    await resume_open_cohort_evidence_samplers(
+        artifacts_root=account_truth_artifacts_root(ibkr_settings),
+        live_runs_root=Path(ibkr_settings.live_runs_root),
+        visible_runs_by_instance=live_instances_router._visible_runs_by_instance,
+        now_ms=lambda: int(time.time() * 1_000),
+        evidence_samplers=get_cohort_evidence_sampler_registry(),
+    )
+
     try:
         yield
     finally:
-        from app.services.cohort_evidence import get_cohort_evidence_sampler_registry
-
         await get_cohort_evidence_sampler_registry().stop_all()
         await live_instances_router.stop_surface_hubs()
         await bot_events.get_bot_event_stream_service().stop_all()

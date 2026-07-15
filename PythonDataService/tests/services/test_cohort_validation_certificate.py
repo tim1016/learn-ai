@@ -120,6 +120,29 @@ async def test_certificate_is_deterministic_and_refuses_overwrite(tmp_path: Path
         service.write_once(second)
 
 
+async def test_certificate_projects_status_from_its_loaded_events_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, receipt = await _seed_evidence(tmp_path)
+    monkeypatch.setattr(
+        certificate_module,
+        "read_account_clerk_journal",
+        lambda *_args: [_journal_entry("exec-entry"), _journal_entry("exec-exit")],
+    )
+    monkeypatch.setattr(certificate_module, "project_journal_exposure", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(certificate_module, "normalize_journal_broker_event", _fill_event)
+
+    def unexpected_second_event_read(*_args: object) -> list[dict]:
+        raise AssertionError("certificate status must reuse its original account-events snapshot")
+
+    monkeypatch.setattr(cohort_batch_launch_module, "read_account_events", unexpected_second_event_read)
+
+    certificate = await service.generate(account_id=receipt.account_id, cohort_id=receipt.cohort_id)
+
+    assert certificate.cohort_id == receipt.cohort_id
+
+
 async def test_certificate_passes_for_a_complete_window_at_production_clock(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

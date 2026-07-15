@@ -3837,6 +3837,10 @@ async def _raise_if_fleet_contamination_blocks_start(
                 "contamination": fleet.model_dump(mode="json"),
             },
         )
+    # ``policy_blocks_starts`` is the server-owned admission policy for an
+    # otherwise non-contaminated verdict.  An ``unknown`` observation with
+    # that flag unset is intentionally advisory, not an implicit replacement
+    # start gate; the actual fleet service sets it for this route.
     if fleet.verdict != "contaminated":
         return
     raise HTTPException(
