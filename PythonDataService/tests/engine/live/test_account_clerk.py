@@ -302,6 +302,9 @@ async def test_uncertain_cancel_blocks_namespace_submit_until_reconciled(
     assert resolution.intent_id == cancel.intent_id
     assert resolution.verdict.value == "RECOVER_ADOPT"
     assert broker.cancel_attempts == expected_cancel_attempts
+    assert [entry.entry_kind for entry in read_account_clerk_journal(tmp_path, ACCOUNT)].count(
+        "cancel_confirmed"
+    ) == 1
     await clerk.submit_intent(_intent("bot-a", "run-a", "submit-after-cancel-resolution"))
     assert len(broker.calls) == 1
 
@@ -443,6 +446,79 @@ async def test_cancel_namespace_records_uncertainty_before_failing_closed(tmp_pa
         "cancel_submitting",
         "cancel_uncertain",
     ]
+
+
+@pytest.mark.asyncio
+async def test_cancel_namespace_rejects_unsupported_broker_capability(tmp_path: Path) -> None:
+    class _BrokerWithoutNamespaceCancel:
+        _client = SimpleNamespace(settings=SimpleNamespace(mode="paper"))
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=_BrokerWithoutNamespaceCancel(),
+    )
+
+    with pytest.raises(AccountClerkCancelNamespaceUncertainError):
+        await clerk.cancel_namespace(_cancel_intent("bot-a", "run-a", "cancel-unsupported"))
+
+    [uncertain] = [
+        entry
+        for entry in read_account_clerk_journal(tmp_path, ACCOUNT)
+        if entry.entry_kind == "cancel_uncertain"
+    ]
+    assert uncertain.broker_error is not None
+    assert "ACCOUNT_CLERK_CANCEL_NAMESPACE_UNSUPPORTED" in uncertain.broker_error
+
+
+@pytest.mark.asyncio
+async def test_cancel_namespace_bounds_callback_drain_with_broker_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_FakeBroker())
+    never_drained = asyncio.Event()
+
+    async def drain() -> None:
+        await never_drained.wait()
+
+    clerk.set_callback_drain(drain)
+    monkeypatch.setattr(account_clerk_module, "ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S", 0.01)
+
+    with pytest.raises(AccountClerkCancelNamespaceUncertainError):
+        await clerk.cancel_namespace(_cancel_intent("bot-a", "run-a", "cancel-drain-timeout"))
+
+
+@pytest.mark.asyncio
+async def test_cancel_reconciler_bounds_a_hung_namespace_probe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _HangingProbeBroker(_UncertainCancelBroker):
+        async def probe_namespace_cancel_status(self, _namespace: str) -> str:
+            await asyncio.Event().wait()
+            return "PROVABLY_ABSENT"
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _HangingProbeBroker("NOT_PROVABLE")
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    with pytest.raises(AccountClerkCancelNamespaceUncertainError):
+        await clerk.cancel_namespace(_cancel_intent("bot-a", "run-a", "cancel-hung-probe"))
+
+    monkeypatch.setattr(
+        account_clerk_module,
+        "ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S",
+        0.01,
+    )
+    # The reconciler imports the public timeout once, so patch its own reference too.
+    import app.engine.live.account_clerk_reconciler as reconciler_module
+
+    monkeypatch.setattr(reconciler_module, "ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S", 0.01)
+    [resolution] = await AccountClerkReconciler(clerk).reconcile_once()
+
+    assert resolution.verdict.value == "HALT"
 
 
 @pytest.mark.asyncio

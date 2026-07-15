@@ -10,7 +10,13 @@ from contextlib import suppress
 from dataclasses import dataclass
 
 from app.engine.live.account_artifacts import AccountFreezeEvidence, append_account_event, write_account_freeze
-from app.engine.live.account_clerk import AccountClerk, AccountClerkJournalEntry, read_account_clerk_journal
+from app.engine.live.account_clerk import (
+    ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S,
+    AccountClerk,
+    AccountClerkGenerationFencedError,
+    AccountClerkJournalEntry,
+    read_account_clerk_journal,
+)
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.journal_exposure import project_journal_exposure
 from app.engine.live.submit_state_machine import BrokerProbe, SubmitVerdict, next_action
@@ -113,8 +119,8 @@ class AccountClerkReconciler:
             retry_count=retry_count,
         )
         reason = f"probe={probe.value}; retry_count={retry_count}"
-        await self._clerk.append_reconciliation_resolution(intent, verdict=verdict.value, reason=reason)
         if verdict is SubmitVerdict.RETRY_ONCE:
+            await self._clerk.append_reconciliation_resolution(intent, verdict=verdict.value, reason=reason)
             try:
                 await self._clerk.retry_recorded_intent(intent)
             except Exception as exc:
@@ -131,6 +137,9 @@ class AccountClerkReconciler:
                     operator_next_step="CHECK_IBKR",
                 ),
             )
+            await self._clerk.append_reconciliation_resolution(intent, verdict=verdict.value, reason=reason)
+        else:
+            await self._clerk.append_reconciliation_resolution(intent, verdict=verdict.value, reason=reason)
         return ReconciliationResolution(intent.intent_id, intent.order_ref, verdict, reason)
 
     async def _resolve_uncertain_cancel_namespace(
@@ -149,23 +158,26 @@ class AccountClerkReconciler:
         reason = f"cancel_probe={probe.value}"
         if probe is BrokerProbe.PROVABLY_ABSENT:
             verdict = SubmitVerdict.RECOVER_ADOPT
+            await self._clerk.finalize_adopted_cancel_namespace(intent)
             await self._clerk.append_reconciliation_resolution(intent, verdict=verdict.value, reason=reason)
         elif probe is BrokerProbe.PRESENT:
             try:
                 await self._clerk.resolve_uncertain_cancel_namespace(intent)
+            except AccountClerkGenerationFencedError:
+                raise
             except Exception as exc:
                 verdict = SubmitVerdict.HALT
                 reason = f"{reason}; cancel retry raised {type(exc).__name__}: {exc}"
-                await self._clerk.append_reconciliation_resolution(intent, verdict=verdict.value, reason=reason)
                 self._freeze_unprovable_namespace_cancel()
+                await self._clerk.append_reconciliation_resolution(intent, verdict=verdict.value, reason=reason)
             else:
                 verdict = SubmitVerdict.RECOVER_ADOPT
                 reason = f"{reason}; cancel retry confirmed"
                 await self._clerk.append_reconciliation_resolution(intent, verdict=verdict.value, reason=reason)
         else:
             verdict = SubmitVerdict.HALT
-            await self._clerk.append_reconciliation_resolution(intent, verdict=verdict.value, reason=reason)
             self._freeze_unprovable_namespace_cancel()
+            await self._clerk.append_reconciliation_resolution(intent, verdict=verdict.value, reason=reason)
         return ReconciliationResolution(intent.intent_id, intent.order_ref, verdict, reason)
 
     async def _probe(self, intent_id: str, order_ref: str) -> BrokerProbe:
@@ -182,7 +194,12 @@ class AccountClerkReconciler:
         if not callable(probe_fn):
             return BrokerProbe.NOT_PROVABLE
         try:
-            return BrokerProbe(await probe_fn(namespace))
+            return BrokerProbe(
+                await asyncio.wait_for(
+                    probe_fn(namespace),
+                    timeout=ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S,
+                )
+            )
         except Exception:
             return BrokerProbe.NOT_PROVABLE
 
