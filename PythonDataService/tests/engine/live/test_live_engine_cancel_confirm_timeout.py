@@ -187,6 +187,44 @@ async def test_flatten_routes_cancel_through_account_owner_broker_writer(
 
 
 @pytest.mark.asyncio
+async def test_flatten_routes_clerk_mode_cancellation_through_namespace_receipt(
+    tmp_path: Path,
+) -> None:
+    broker = _WriterRequiredCancelBroker()
+    received = []
+
+    async def cancel_through_clerk(intent):
+        received.append(intent)
+        return type("Receipt", (), {"cancelled_order_ids": (1046,)})()
+
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        output_dir=tmp_path,
+        account_id="DU123",
+        strategy_instance_id="bot-a",
+        run_id="run-a",
+        account_clerk_namespace_canceller=cancel_through_clerk,
+    )
+    from app.engine.live.live_portfolio import LivePortfolio
+
+    ctx = type("ctx", (), {"log": lambda self_, msg: None})()
+    acks = await engine._flatten(
+        LivePortfolio(broker),
+        ctx,
+        bar_time=datetime(2026, 5, 4, 14, 30, tzinfo=UTC),
+        reconcile_owned_state=_no_reconcile,
+    )  # type: ignore[arg-type]
+
+    assert acks == []
+    assert broker.writer_active is False
+    assert len(received) == 1
+    assert received[0].intent_kind == "CANCEL_NAMESPACE"
+    assert received[0].bot_order_namespace == "learn-ai/bot-a/v1"
+
+
+@pytest.mark.asyncio
 async def test_flatten_reconciles_terminal_owned_fill_before_sizing(
     tmp_path: Path,
 ) -> None:

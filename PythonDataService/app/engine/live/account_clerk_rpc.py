@@ -18,6 +18,8 @@ from app.engine.live.account_artifacts import read_account_clerk_generation
 from app.engine.live.account_clerk import (
     AccountClerk,
     AccountClerkBrokerAckReceipt,
+    AccountClerkCancelNamespaceReceipt,
+    AccountClerkCancelNamespaceUncertainError,
     AccountClerkGenerationFencedError,
     AccountClerkIntentRejected,
     AccountClerkRecoveryFlattenReceipt,
@@ -42,9 +44,10 @@ ACCOUNT_CLERK_RPC_SCHEMA_VERSION: Final = 1
 ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S: Final = 30.0
 ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S: Final = 120.0
 
-AccountClerkRpcOperation = Literal["submit", "recovery_flatten", "drain_events"]
+AccountClerkRpcOperation = Literal["submit", "cancel_namespace", "recovery_flatten", "drain_events"]
 AccountClerkRpcServerErrorCode = Literal[
     "ACCOUNT_CLERK_REJECTED",
+    "ACCOUNT_CLERK_CANCEL_NAMESPACE_UNCERTAIN",
     "ACCOUNT_CLERK_INTERNAL_ERROR",
 ]
 
@@ -237,6 +240,22 @@ class AccountClerkRpcInternalError(AccountClerkRpcError):
         )
 
 
+class AccountClerkRpcCancelNamespaceUncertainError(AccountClerkRpcError):
+    """The Clerk recorded cancellation uncertainty rather than a terminal receipt."""
+
+    def __init__(
+        self,
+        *,
+        operation: str,
+        request_identity: AccountClerkRpcRequestIdentity,
+    ) -> None:
+        super().__init__(
+            reason_code="ACCOUNT_CLERK_CANCEL_NAMESPACE_UNCERTAIN",
+            operation=operation,
+            request_identity=request_identity,
+        )
+
+
 class _AccountClerkRpcRequestRejected(ValueError):
     """Safe server-side rejection for malformed or unsupported requests."""
 
@@ -326,6 +345,22 @@ class AccountClerkRpcClient:
         except (KeyError, ValidationError, TypeError) as exc:
             raise AccountClerkRpcMalformedResponseError(
                 operation="recovery_flatten",
+                request_identity=_request_identity(request),
+            ) from exc
+
+    async def cancel_namespace(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountClerkCancelNamespaceReceipt:
+        """Request one durable, terminal namespace cancellation."""
+
+        request = {"operation": "cancel_namespace", "intent": intent.model_dump(mode="json")}
+        payload = await self._request(request)
+        try:
+            return AccountClerkCancelNamespaceReceipt.model_validate(payload["cancel_confirmed"])
+        except (KeyError, ValidationError, TypeError) as exc:
+            raise AccountClerkRpcMalformedResponseError(
+                operation="cancel_namespace",
                 request_identity=_request_identity(request),
             ) from exc
 
@@ -585,6 +620,10 @@ class AccountClerkRpcServer:
             response = _rejected_envelope(exc.reason)
         except AccountClerkGenerationFencedError:
             response = _rejected_envelope("CLERK_GENERATION_STALE")
+        except AccountClerkCancelNamespaceUncertainError:
+            response = AccountClerkRpcErrorEnvelope(
+                reason_code="ACCOUNT_CLERK_CANCEL_NAMESPACE_UNCERTAIN"
+            )
         except (json.JSONDecodeError, ValidationError):
             response = _rejected_envelope("INVALID_REQUEST")
         except asyncio.CancelledError:
@@ -647,6 +686,12 @@ class AccountClerkRpcServer:
             )
             return AccountClerkRpcSuccessEnvelope(
                 payload={"recovery_flatten": recovery.model_dump(mode="json")}
+            )
+        if operation == "cancel_namespace":
+            intent = AccountOwnerSubmitIntent.model_validate(_request_object(request, "intent"))
+            receipt = await self._clerk.cancel_namespace(intent)
+            return AccountClerkRpcSuccessEnvelope(
+                payload={"cancel_confirmed": receipt.model_dump(mode="json")}
             )
         consumer = self._validated_event_consumer(request)
         after_seq = _required_nonnegative_int(request, "after_seq")
@@ -780,7 +825,7 @@ class AccountClerkRpcServer:
 
 def _request_operation(request: Mapping[str, object]) -> AccountClerkRpcOperation:
     operation = request.get("operation")
-    if operation not in ("submit", "recovery_flatten", "drain_events"):
+    if operation not in ("submit", "cancel_namespace", "recovery_flatten", "drain_events"):
         raise _AccountClerkRpcRequestRejected("UNKNOWN_OPERATION")
     return cast(AccountClerkRpcOperation, operation)
 
@@ -859,6 +904,11 @@ def _decode_response(
     if error.reason_code == "ACCOUNT_CLERK_REJECTED":
         raise AccountClerkRpcRejectedError(
             reason=error.reason or "REJECTION_REASON_MISSING",
+            operation=operation,
+            request_identity=request_identity,
+        )
+    if error.reason_code == "ACCOUNT_CLERK_CANCEL_NAMESPACE_UNCERTAIN":
+        raise AccountClerkRpcCancelNamespaceUncertainError(
             operation=operation,
             request_identity=request_identity,
         )

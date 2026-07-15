@@ -24,6 +24,7 @@ from app.engine.live.account_artifacts import (
 )
 from app.engine.live.account_clerk import (
     AccountClerk,
+    AccountClerkCancelNamespaceUncertainError,
     AccountClerkGenerationFencedError,
     AccountClerkInboxEntry,
     AccountClerkIntentRejected,
@@ -79,11 +80,16 @@ def _hold_clerk_authority_lock(
 class _FakeBroker:
     def __init__(self) -> None:
         self.calls: list[object] = []
+        self.cancelled_namespaces: list[str] = []
         self._client = SimpleNamespace(settings=SimpleNamespace(mode="paper"))
 
     async def place_order(self, order: object) -> object:
         self.calls.append(order)
         return SimpleNamespace(order_id=101, perm_id=201, exec_id="exec-1")
+
+    async def cancel_open_orders_for_namespace(self, namespace: str) -> list[int]:
+        self.cancelled_namespaces.append(namespace)
+        return [41]
 
 
 class _ReconciliationBroker(_FakeBroker):
@@ -181,6 +187,12 @@ def _recovery_intent(instance_id: str, run_id: str, intent_id: str) -> AccountOw
     )
 
 
+def _cancel_intent(instance_id: str, run_id: str, intent_id: str) -> AccountOwnerSubmitIntent:
+    return _intent(instance_id, run_id, intent_id).model_copy(
+        update={"intent_kind": "CANCEL_NAMESPACE", "order_spec": {}}
+    )
+
+
 @pytest.mark.asyncio
 async def test_record_intent_writes_replayable_journal_and_receipt_before_broker_contact(tmp_path: Path) -> None:
     _write_active_binding(tmp_path, "bot-a", "run-a")
@@ -208,6 +220,50 @@ async def test_record_intent_writes_replayable_journal_and_receipt_before_broker
 
     restarted_clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
     assert restarted_clerk.replay_recorded_receipts() == [receipt]
+
+
+@pytest.mark.asyncio
+async def test_cancel_namespace_is_durable_idempotent_and_scoped_to_its_binding(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    _write_active_binding(tmp_path, "bot-b", "run-b")
+    broker = _FakeBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    intent = _cancel_intent("bot-a", "run-a", "cancel-a")
+
+    first = await clerk.cancel_namespace(intent)
+    second = await clerk.cancel_namespace(intent)
+
+    assert first == second
+    assert first.cancelled_order_ids == (41,)
+    assert broker.cancelled_namespaces == [bot_order_namespace_for_instance("bot-a")]
+    assert [entry.entry_kind for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [
+        "recorded",
+        "cancel_confirmed",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cancel_namespace_records_uncertainty_before_failing_closed(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+
+    class _UncertainCancelBroker(_FakeBroker):
+        async def cancel_open_orders_for_namespace(self, namespace: str) -> list[int]:
+            self.cancelled_namespaces.append(namespace)
+            raise TimeoutError("cancel confirmation lost")
+
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=_UncertainCancelBroker(),
+    )
+
+    with pytest.raises(AccountClerkCancelNamespaceUncertainError):
+        await clerk.cancel_namespace(_cancel_intent("bot-a", "run-a", "cancel-uncertain"))
+
+    assert [entry.entry_kind for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [
+        "recorded",
+        "cancel_uncertain",
+    ]
 
 
 @pytest.mark.asyncio

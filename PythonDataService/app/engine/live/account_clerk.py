@@ -44,6 +44,7 @@ from app.engine.live.account_clerk_journal import (
     ACCOUNT_CLERK_JOURNAL_FILENAME,
     AccountClerkBrokerAckReceipt,
     AccountClerkBrokerEventReceipt,
+    AccountClerkCancelNamespaceReceipt,
     AccountClerkInboxEntry,
     AccountClerkIntentRejected,
     AccountClerkJournal,
@@ -79,6 +80,7 @@ _CLERK_LEASE_TTL_MS = 5_000
 # budget expires.  A timed-out broker write is ambiguous, so its durable
 # ``broker_uncertain`` row is deliberately left for reconciliation.
 _BROKER_SUBMIT_TIMEOUT_S = 25.0
+_CANCEL_NAMESPACE_TIMEOUT_S = 25.0
 
 
 class AccountClerkGenerationFencedError(RuntimeError):
@@ -97,6 +99,10 @@ class AccountClerkGenerationFencedError(RuntimeError):
         self.expected_generation = expected_generation
         self.observed_generation = observed_generation
         self.boundary = boundary
+
+
+class AccountClerkCancelNamespaceUncertainError(RuntimeError):
+    """The Clerk cannot prove that a namespace cancellation reached terminal state."""
 
 
 class AccountClerk:
@@ -157,6 +163,11 @@ class AccountClerk:
         if intent.intent_kind == "RECOVERY_FLATTEN":
             raise AccountClerkIntentRejected(
                 reason="CLERK_RECOVERY_OPERATION_REQUIRED",
+                diagnostics={"intent_id": intent.intent_id, "order_ref": intent.order_ref},
+            )
+        if intent.intent_kind == "CANCEL_NAMESPACE":
+            raise AccountClerkIntentRejected(
+                reason="CLERK_CANCEL_NAMESPACE_OPERATION_REQUIRED",
                 diagnostics={"intent_id": intent.intent_id, "order_ref": intent.order_ref},
             )
         self._require_normal_submit_intake(intent)
@@ -234,6 +245,45 @@ class AccountClerk:
                 broker_acked=broker_ack,
                 cancelled_order_ids=tuple(cancelled),
             )
+
+    async def cancel_namespace(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountClerkCancelNamespaceReceipt:
+        """Durably cancel one active run's namespace through the Clerk.
+
+        ``intent`` is a cancellation receipt identity, never an order to
+        submit.  The journaled receipt precedes the broker call and the same
+        identity returns the prior terminal confirmation without reissuing a
+        broker cancellation.
+        """
+
+        if self._broker is None:
+            raise RuntimeError("ACCOUNT_CLERK_BROKER_UNAVAILABLE")
+        if intent.intent_kind != "CANCEL_NAMESPACE":
+            self._reject(intent, "CLERK_CANCEL_NAMESPACE_INTENT_KIND_REQUIRED")
+        async with self._intake_lock:
+            recorded = await asyncio.to_thread(self._record_intent_locked, intent)
+            existing = await asyncio.to_thread(self._journal.cancel_confirmed_for_intent, intent)
+            if existing is not None:
+                return existing
+            self._require_paper_broker()
+            try:
+                async with asyncio.timeout(_CANCEL_NAMESPACE_TIMEOUT_S):
+                    cancelled = await self._cancel_namespace_open_orders(intent.bot_order_namespace)
+            except Exception as exc:
+                await asyncio.to_thread(self._journal.append_cancel_uncertain, intent, exc)
+                raise AccountClerkCancelNamespaceUncertainError(
+                    "ACCOUNT_CLERK_CANCEL_NAMESPACE_UNCERTAIN"
+                ) from exc
+            receipt = await asyncio.to_thread(
+                self._journal.append_cancel_confirmed,
+                intent,
+                cancelled,
+            )
+            if receipt.recorded != recorded:
+                raise RuntimeError("cancel receipt recorded identity mismatch")
+            return receipt
 
     def replay_recorded_receipts(self) -> list[AccountClerkRecordedReceipt]:
         """Return receipt #1 values from the journal after a clerk restart."""

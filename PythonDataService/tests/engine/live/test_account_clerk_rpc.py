@@ -26,6 +26,7 @@ from app.engine.live.account_clerk_rpc import (
     ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S,
     ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S,
     ACCOUNT_CLERK_RPC_SCHEMA_VERSION,
+    AccountClerkRpcCancelNamespaceUncertainError,
     AccountClerkRpcClient,
     AccountClerkRpcGenerationHandshake,
     AccountClerkRpcGenerationMismatchError,
@@ -59,10 +60,18 @@ class _Broker:
     async def place_order(self, _order: object) -> object:
         return SimpleNamespace(order_id=101, perm_id=201, exec_id="exec-1040")
 
+    async def cancel_open_orders_for_namespace(self, _namespace: str) -> list[int]:
+        return [1046]
+
 
 class _FailingBroker(_Broker):
     async def place_order(self, _order: object) -> object:
         raise ValueError("broker secret must not reach the socket response")
+
+
+class _UncertainCancelBroker(_Broker):
+    async def cancel_open_orders_for_namespace(self, _namespace: str) -> list[int]:
+        raise TimeoutError("cancel confirmation lost")
 
 
 class _BarrierTimeoutController:
@@ -249,6 +258,52 @@ async def test_success_envelope_round_trips_over_real_unix_socket(tmp_path: Path
     assert envelope.schema_version == ACCOUNT_CLERK_RPC_SCHEMA_VERSION
     assert envelope.outcome == "success"
     assert envelope.payload["broker_acked"]["order_id"] == 101
+
+
+@pytest.mark.asyncio
+async def test_cancel_namespace_round_trips_as_a_durable_terminal_receipt(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path)
+    server = AccountClerkRpcServer(
+        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_Broker(), clerk_generation=1)
+    )
+    await server.start()
+    try:
+        intent = _intent("cancel-1046").model_copy(
+            update={"intent_kind": "CANCEL_NAMESPACE", "order_spec": {}}
+        )
+        receipt = await AccountClerkRpcClient(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+        ).cancel_namespace(intent)
+    finally:
+        await server.close()
+
+    assert receipt.status == "cancel_confirmed"
+    assert receipt.cancelled_order_ids == (1046,)
+
+
+@pytest.mark.asyncio
+async def test_cancel_namespace_uncertainty_is_typed_over_rpc(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path)
+    server = AccountClerkRpcServer(
+        AccountClerk(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+            broker=_UncertainCancelBroker(),
+            clerk_generation=1,
+        )
+    )
+    await server.start()
+    try:
+        intent = _intent("cancel-uncertain").model_copy(
+            update={"intent_kind": "CANCEL_NAMESPACE", "order_spec": {}}
+        )
+        with pytest.raises(AccountClerkRpcCancelNamespaceUncertainError) as exc:
+            await AccountClerkRpcClient(artifacts_root=tmp_path, account_id=ACCOUNT).cancel_namespace(intent)
+    finally:
+        await server.close()
+
+    assert exc.value.intent_id == intent.intent_id
 
 
 @pytest.mark.asyncio

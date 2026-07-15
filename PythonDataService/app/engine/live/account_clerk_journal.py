@@ -73,6 +73,8 @@ class AccountClerkJournalEntry(BaseModel):
         "broker_submitting",
         "broker_uncertain",
         "recovery_cancelled",
+        "cancel_confirmed",
+        "cancel_uncertain",
         "broker_acked",
         "broker_event",
         "reconciliation",
@@ -177,6 +179,16 @@ class AccountClerkRecoveryFlattenReceipt(BaseModel):
     status: Literal["recovery_flattened"] = "recovery_flattened"
     recorded: AccountClerkRecordedReceipt
     broker_acked: AccountClerkBrokerAckReceipt
+    cancelled_order_ids: tuple[int, ...]
+
+
+class AccountClerkCancelNamespaceReceipt(BaseModel):
+    """Durable terminal-cancel receipt for one bot namespace."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status: Literal["cancel_confirmed"] = "cancel_confirmed"
+    recorded: AccountClerkRecordedReceipt
     cancelled_order_ids: tuple[int, ...]
 
 
@@ -357,6 +369,85 @@ class AccountClerkJournal:
                 if entry.entry_kind == "recovery_cancelled" and entry.intent == intent
             ),
             None,
+        )
+
+    def append_cancel_confirmed(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        cancelled_order_ids: list[int],
+    ) -> AccountClerkCancelNamespaceReceipt:
+        """Persist terminal broker confirmation after a namespace cancellation."""
+
+        inbox_path, journal_path = self._paths()
+        with _file_lock(journal_path):
+            entries = self._load_tail_locked(inbox_path, journal_path)
+            existing = self._cancel_confirmed_for_intent_entries(entries, intent)
+            if existing is not None:
+                return self._cancel_namespace_receipt(entries, intent, existing)
+            entry = AccountClerkJournalEntry(
+                seq=_next_seq(entries),
+                entry_kind="cancel_confirmed",
+                recorded_at_ms=self._now_ms(),
+                intent=intent,
+                cancelled_order_ids=tuple(cancelled_order_ids),
+            )
+            _append_jsonl(journal_path, entry)
+            entries.append(entry)
+            return self._cancel_namespace_receipt(entries, intent, entry)
+
+    def cancel_confirmed_for_intent(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountClerkCancelNamespaceReceipt | None:
+        inbox_path, journal_path = self._paths()
+        with _file_lock(journal_path):
+            entries = self._load_tail_locked(inbox_path, journal_path)
+            existing = self._cancel_confirmed_for_intent_entries(entries, intent)
+            if existing is None:
+                return None
+            return self._cancel_namespace_receipt(entries, intent, existing)
+
+    def append_cancel_uncertain(self, intent: AccountOwnerSubmitIntent, error: Exception) -> None:
+        """Record an ambiguous cancellation before surfacing it to the caller."""
+
+        inbox_path, journal_path = self._paths()
+        with _file_lock(journal_path):
+            entries = self._load_tail_locked(inbox_path, journal_path)
+            entry = AccountClerkJournalEntry(
+                seq=_next_seq(entries),
+                entry_kind="cancel_uncertain",
+                recorded_at_ms=self._now_ms(),
+                intent=intent,
+                broker_error=f"{type(error).__name__}: {error}",
+            )
+            _append_jsonl(journal_path, entry)
+            entries.append(entry)
+
+    @staticmethod
+    def _cancel_confirmed_for_intent_entries(
+        entries: list[AccountClerkJournalEntry],
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountClerkJournalEntry | None:
+        return next(
+            (
+                entry
+                for entry in entries
+                if entry.entry_kind == "cancel_confirmed" and entry.intent == intent
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _cancel_namespace_receipt(
+        entries: list[AccountClerkJournalEntry],
+        intent: AccountOwnerSubmitIntent,
+        confirmation: AccountClerkJournalEntry,
+    ) -> AccountClerkCancelNamespaceReceipt:
+        return AccountClerkCancelNamespaceReceipt(
+            recorded=AccountClerkRecordedReceipt.from_journal_entry(
+                _require_recorded_intent_entry(entries, intent)
+            ),
+            cancelled_order_ids=confirmation.cancelled_order_ids or (),
         )
 
     def record_broker_event(self, event: IbkrOrderEvent) -> AccountClerkBrokerEventReceipt:
@@ -666,6 +757,23 @@ def _require_unique_order_ref(
             "received_intent": intent.model_dump(mode="json"),
         },
     )
+
+
+def _require_recorded_intent_entry(
+    entries: list[AccountClerkJournalEntry],
+    intent: AccountOwnerSubmitIntent,
+) -> AccountClerkJournalEntry:
+    entry = next(
+        (
+            candidate
+            for candidate in entries
+            if candidate.entry_kind == "recorded" and candidate.intent == intent
+        ),
+        None,
+    )
+    if entry is None:
+        raise RuntimeError("cancel confirmation has no durable recorded receipt")
+    return entry
 
 
 def _broker_callback_entry_for_key(
