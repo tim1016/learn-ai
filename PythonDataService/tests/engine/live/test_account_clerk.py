@@ -892,6 +892,122 @@ async def test_recovery_flatten_rejects_any_order_not_matching_journal_exposure(
 
 
 @pytest.mark.asyncio
+async def test_recovery_flatten_batch_cancels_once_before_submitting_each_symbol(tmp_path: Path) -> None:
+    """A multi-symbol recovery cannot cancel the first liquidation with the second."""
+
+    class _PermWaitBroker(_FakeBroker):
+        def __init__(self) -> None:
+            super().__init__()
+            self.perm_id_waits: list[float] = []
+
+        async def place_order(self, order: object, *, perm_id_wait_s: float = 0.0) -> object:
+            self.perm_id_waits.append(perm_id_wait_s)
+            return await super().place_order(order)
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _PermWaitBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    spy_owned = _intent("bot-a", "run-a", "owned-spy")
+    qqq_owned = _intent("bot-a", "run-a", "owned-qqq").model_copy(
+        update={"order_spec": {**_intent("bot-a", "run-a", "owned-qqq").order_spec, "symbol": "QQQ"}}
+    )
+    await clerk.record_intent(spy_owned)
+    await clerk.record_intent(qqq_owned)
+    for intent, symbol, exec_id in (
+        (spy_owned, "SPY", "owned-spy-fill"),
+        (qqq_owned, "QQQ", "owned-qqq-fill"),
+    ):
+        await clerk.record_broker_event(
+            IbkrOrderEvent(
+                account_id=ACCOUNT,
+                order_id=101,
+                event_type="fill",
+                order_ref=intent.order_ref,
+                symbol=symbol,
+                side="BUY",
+                fill_quantity=1,
+                exec_id=exec_id,
+                ts_ms=START_MS,
+            )
+        )
+    recovery_spy = _recovery_intent("bot-a", "run-a", "recovery-spy")
+    recovery_qqq = _recovery_intent("bot-a", "run-a", "recovery-qqq").model_copy(
+        update={
+            "order_spec": {
+                **_recovery_intent("bot-a", "run-a", "recovery-qqq").order_spec,
+                "symbol": "QQQ",
+            }
+        }
+    )
+
+    receipts = await clerk.submit_recovery_flatten_batch(
+        (recovery_spy, recovery_qqq),
+        actor="bot",
+        actor_strategy_instance_id="bot-a",
+        actor_run_id="run-a",
+        actor_bot_order_namespace=bot_order_namespace_for_instance("bot-a"),
+    )
+
+    assert len(receipts) == 2
+    assert broker.cancelled_namespaces == [bot_order_namespace_for_instance("bot-a")]
+    assert [order.symbol for order in broker.calls] == ["SPY", "QQQ"]
+    assert broker.perm_id_waits == [2.0, 2.0]
+
+
+@pytest.mark.asyncio
+async def test_recovery_flatten_batch_rejects_a_fill_persisted_during_cancel_drain(
+    tmp_path: Path,
+) -> None:
+    """A stale pre-cancel plan is rejected before any recovery broker write."""
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _FakeBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    owned = _intent("bot-a", "run-a", "owned-before-cancel")
+    await clerk.record_intent(owned)
+    await clerk.record_broker_event(
+        IbkrOrderEvent(
+            account_id=ACCOUNT,
+            order_id=101,
+            event_type="fill",
+            order_ref=owned.order_ref,
+            symbol="SPY",
+            side="BUY",
+            fill_quantity=1,
+            exec_id="owned-before-cancel-fill",
+            ts_ms=START_MS,
+        )
+    )
+
+    async def persist_terminal_fill() -> None:
+        await clerk.record_broker_event(
+            IbkrOrderEvent(
+                account_id=ACCOUNT,
+                order_id=102,
+                event_type="fill",
+                order_ref=owned.order_ref,
+                symbol="SPY",
+                side="BUY",
+                fill_quantity=1,
+                exec_id="terminal-cancel-fill",
+                ts_ms=START_MS + 1,
+            )
+        )
+
+    clerk.set_callback_drain(persist_terminal_fill)
+    with pytest.raises(AccountClerkIntentRejected, match="CLERK_RECOVERY_QUANTITY_MISMATCH"):
+        await clerk.submit_recovery_flatten_batch(
+            (_recovery_intent("bot-a", "run-a", "stale-recovery-plan"),),
+            actor="bot",
+            actor_strategy_instance_id="bot-a",
+            actor_run_id="run-a",
+            actor_bot_order_namespace=bot_order_namespace_for_instance("bot-a"),
+        )
+
+    assert broker.calls == []
+
+
+@pytest.mark.asyncio
 async def test_recovery_flatten_drains_cancel_fill_before_validating_exact_exposure(tmp_path: Path) -> None:
     """A fill delivered by terminal cancellation changes the exact recovery size."""
 

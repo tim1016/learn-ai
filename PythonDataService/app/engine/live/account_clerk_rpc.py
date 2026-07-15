@@ -44,7 +44,13 @@ ACCOUNT_CLERK_RPC_SCHEMA_VERSION: Final = 1
 ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S: Final = 30.0
 ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S: Final = 120.0
 
-AccountClerkRpcOperation = Literal["submit", "cancel_namespace", "recovery_flatten", "drain_events"]
+AccountClerkRpcOperation = Literal[
+    "submit",
+    "cancel_namespace",
+    "recovery_flatten",
+    "recovery_flatten_batch",
+    "drain_events",
+]
 AccountClerkRpcServerErrorCode = Literal[
     "ACCOUNT_CLERK_REJECTED",
     "ACCOUNT_CLERK_CANCEL_NAMESPACE_UNCERTAIN",
@@ -345,6 +351,35 @@ class AccountClerkRpcClient:
         except (KeyError, ValidationError, TypeError) as exc:
             raise AccountClerkRpcMalformedResponseError(
                 operation="recovery_flatten",
+                request_identity=_request_identity(request),
+            ) from exc
+
+    async def submit_recovery_flatten_batch(
+        self,
+        intents: tuple[AccountOwnerSubmitIntent, ...],
+    ) -> tuple[AccountClerkRecoveryFlattenReceipt, ...]:
+        """Ask the Clerk to cancel once and flatten every exposed symbol."""
+
+        if not intents:
+            raise ValueError("recovery batch must include at least one intent")
+        first = intents[0]
+        request = {
+            "operation": "recovery_flatten_batch",
+            "actor": "bot",
+            "actor_strategy_instance_id": first.strategy_instance_id,
+            "actor_run_id": first.run_id,
+            "actor_bot_order_namespace": first.bot_order_namespace,
+            "intents": [intent.model_dump(mode="json") for intent in intents],
+        }
+        payload = await self._request(request)
+        try:
+            values = payload["recovery_flattened"]
+            if not isinstance(values, list):
+                raise TypeError("recovery batch payload must be a list")
+            return tuple(AccountClerkRecoveryFlattenReceipt.model_validate(value) for value in values)
+        except (KeyError, ValidationError, TypeError) as exc:
+            raise AccountClerkRpcMalformedResponseError(
+                operation="recovery_flatten_batch",
                 request_identity=_request_identity(request),
             ) from exc
 
@@ -688,6 +723,24 @@ class AccountClerkRpcServer:
             return AccountClerkRpcSuccessEnvelope(
                 payload={"recovery_flatten": recovery.model_dump(mode="json")}
             )
+        if operation == "recovery_flatten_batch":
+            intents_data = request.get("intents")
+            if not isinstance(intents_data, list):
+                raise _AccountClerkRpcRequestRejected("INVALID_REQUEST")
+            intents = tuple(AccountOwnerSubmitIntent.model_validate(value) for value in intents_data)
+            actor = request.get("actor")
+            if actor not in ("bot", "operator"):
+                raise _AccountClerkRpcRequestRejected("INVALID_RECOVERY_ACTOR")
+            recovery = await self._clerk.submit_recovery_flatten_batch(
+                intents,
+                actor=actor,
+                actor_strategy_instance_id=_optional_string(request, "actor_strategy_instance_id"),
+                actor_run_id=_optional_string(request, "actor_run_id"),
+                actor_bot_order_namespace=_optional_string(request, "actor_bot_order_namespace"),
+            )
+            return AccountClerkRpcSuccessEnvelope(
+                payload={"recovery_flattened": [item.model_dump(mode="json") for item in recovery]}
+            )
         if operation == "cancel_namespace":
             intent = AccountOwnerSubmitIntent.model_validate(_request_object(request, "intent"))
             receipt = await self._clerk.cancel_namespace(intent)
@@ -828,7 +881,13 @@ class AccountClerkRpcServer:
 
 def _request_operation(request: Mapping[str, object]) -> AccountClerkRpcOperation:
     operation = request.get("operation")
-    if operation not in ("submit", "cancel_namespace", "recovery_flatten", "drain_events"):
+    if operation not in (
+        "submit",
+        "cancel_namespace",
+        "recovery_flatten",
+        "recovery_flatten_batch",
+        "drain_events",
+    ):
         raise _AccountClerkRpcRequestRejected("UNKNOWN_OPERATION")
     return cast(AccountClerkRpcOperation, operation)
 
@@ -836,7 +895,7 @@ def _request_operation(request: Mapping[str, object]) -> AccountClerkRpcOperatio
 def _request_timeout_s(operation: AccountClerkRpcOperation) -> float:
     return (
         ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S
-        if operation == "recovery_flatten"
+        if operation in ("recovery_flatten", "recovery_flatten_batch")
         else ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S
     )
 

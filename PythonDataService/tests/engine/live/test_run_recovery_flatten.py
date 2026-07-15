@@ -197,15 +197,18 @@ async def test_recovery_flatten_uses_clerk_for_the_halt_write_path(
         ),
     )
 
-    async def clerk_submitter(intent):
-        submitted.append(intent)
-        return SimpleNamespace(
-            broker_acked=SimpleNamespace(
-                order_id=701,
-                perm_id=702,
-                status="Submitted",
-                symbol="SPY",
+    async def clerk_submitter(intents):
+        submitted.extend(intents)
+        return tuple(
+            SimpleNamespace(
+                broker_acked=SimpleNamespace(
+                    order_id=701,
+                    perm_id=702,
+                    status="Submitted",
+                    symbol="SPY",
+                )
             )
+            for _intent in intents
         )
 
     liquidated = await _recovery_flatten(
@@ -224,6 +227,84 @@ async def test_recovery_flatten_uses_clerk_for_the_halt_write_path(
     [intent] = submitted
     assert intent.intent_kind == "RECOVERY_FLATTEN"
     assert intent.bot_order_namespace == "learn-ai/bot-a/v1"
+
+
+@pytest.mark.asyncio
+async def test_clerk_recovery_batch_persists_each_acknowledgement_for_relaunch(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Clerk-owned recovery keeps every order/permId ownership fingerprint."""
+
+    broker = FakeBroker()
+    sidecar_path = tmp_path / "live_state.json"
+    seed = LiveStateEnvelope(
+        strategy_instance_id="bot-a",
+        run_id="run-a",
+        bot_order_namespace="learn-ai/bot-a/v1",
+        ib_client_id=42,
+        last_processed_bar_ms=1,
+        last_artifact_flush_ms=1,
+    )
+    monkeypatch.setattr(
+        "app.engine.live.run._journal_recovery_order_specs",
+        lambda **_kwargs: (
+            IbkrOrderSpec(
+                symbol="SPY",
+                sec_type="STK",
+                action="SELL",
+                quantity=1,
+                order_type="MKT",
+                time_in_force="DAY",
+                confirm_paper=True,
+                client_order_id="recovery-spy",
+                order_ref="learn-ai/bot-a/v1:recovery-spy",
+            ),
+            IbkrOrderSpec(
+                symbol="QQQ",
+                sec_type="STK",
+                action="BUY",
+                quantity=2,
+                order_type="MKT",
+                time_in_force="DAY",
+                confirm_paper=True,
+                client_order_id="recovery-qqq",
+                order_ref="learn-ai/bot-a/v1:recovery-qqq",
+            ),
+        ),
+    )
+
+    async def clerk_submitter(intents):
+        return tuple(
+            SimpleNamespace(
+                broker_acked=SimpleNamespace(
+                    order_id=700 + index,
+                    perm_id=800 + index,
+                    status="PreSubmitted",
+                )
+            )
+            for index, _intent in enumerate(intents)
+        )
+
+    liquidated = await _recovery_flatten(
+        broker,
+        bot_order_namespace="learn-ai/bot-a/v1",
+        account_clerk_recovery_submitter=clerk_submitter,
+        recovery_account_id="DU123",
+        recovery_strategy_instance_id="bot-a",
+        recovery_run_id="run-a",
+        recovery_owner_generation=42,
+        recovery_artifacts_root=tmp_path,
+        live_state_path=sidecar_path,
+        live_state_seed=seed,
+    )
+
+    saved = LiveStateSidecarRepo(sidecar_path).read()
+    assert liquidated == 2
+    assert saved is not None
+    assert saved.known_perm_ids == [800, 801]
+    assert saved.submitted_orders["recovery-spy"]["symbol"] == "SPY"
+    assert saved.submitted_orders["recovery-qqq"]["symbol"] == "QQQ"
 
 
 @pytest.mark.asyncio

@@ -107,7 +107,7 @@ class AccountOwnerBrokerWriter(Protocol):
 
 
 class AccountClerkRecoverySubmitter(Protocol):
-    async def __call__(self, intent: object) -> object: ...
+    async def __call__(self, intents: tuple[object, ...]) -> tuple[object, ...]: ...
 
 
 @dataclass(frozen=True)
@@ -555,16 +555,20 @@ async def _recovery_flatten_through_clerk(
     run_id: str,
     bot_order_namespace: str,
     owner_generation: int,
+    live_state_path: Path | None,
+    live_state_trusted_root: Path | None,
+    live_state_seed: LiveStateEnvelope | None,
 ) -> int:
-    """Submit only journal-derived recovery liquidations to the Clerk."""
+    """Submit one Clerk-owned, namespace-atomic recovery batch."""
 
+    from app.broker.ibkr.models import IbkrOrderSpec
     from app.engine.live.account_owner import AccountOwnerSubmitIntent
 
-    liquidated = 0
+    intents: list[AccountOwnerSubmitIntent] = []
     for spec in order_specs:
         if spec.order_ref is None:
             raise RuntimeError("CLERK_RECOVERY_ORDER_REF_REQUIRED")
-        await submitter(
+        intents.append(
             AccountOwnerSubmitIntent(
                 trace_id=f"recovery-{spec.order_ref}",
                 account_id=account_id,
@@ -579,8 +583,33 @@ async def _recovery_flatten_through_clerk(
                 created_at_ms=int(time.time() * 1000),
             )
         )
-        liquidated += 1
-    return liquidated
+    receipts = await submitter(tuple(intents))
+    if len(receipts) != len(intents):
+        raise RuntimeError("CLERK_RECOVERY_BATCH_RECEIPT_COUNT_MISMATCH")
+    for intent, receipt in zip(intents, receipts, strict=True):
+        spec = IbkrOrderSpec.model_validate(intent.order_spec)
+        broker_acked = getattr(receipt, "broker_acked", None)
+        if broker_acked is None:
+            raise RuntimeError("CLERK_RECOVERY_BATCH_RECEIPT_INVALID")
+        if live_state_path is None or spec.client_order_id is None:
+            continue
+        try:
+            _append_live_state_submitted_order(
+                live_state_path,
+                trusted_root=live_state_trusted_root,
+                client_order_id=spec.client_order_id,
+                perm_id=broker_acked.perm_id,
+                order_id=broker_acked.order_id,
+                status=broker_acked.status,
+                symbol=spec.symbol,
+                seed_envelope=live_state_seed,
+            )
+        except Exception:
+            logger.exception(
+                "Clerk recovery flatten could not record submitted order fingerprint",
+                extra={"step": "8"},
+            )
+    return len(receipts)
 
 
 async def _recovery_flatten(
@@ -687,6 +716,9 @@ async def _recovery_flatten(
             run_id=recovery_run_id,
             bot_order_namespace=resolved_namespace,
             owner_generation=recovery_owner_generation,
+            live_state_path=live_state_path,
+            live_state_trusted_root=live_state_trusted_root,
+            live_state_seed=live_state_seed,
         )
 
     snapshot = await broker.fetch_positions()
@@ -2070,8 +2102,8 @@ def cmd_start(args: argparse.Namespace) -> int:
                 exec_id=receipt.exec_id,
             )
 
-        async def _submit_recovery_to_account_clerk(intent):
-            return await clerk_client.submit_recovery_flatten(intent)
+        async def _submit_recovery_to_account_clerk(intents):
+            return await clerk_client.submit_recovery_flatten_batch(intents)
 
         async def _cancel_namespace_through_account_clerk(intent):
             return await clerk_client.cancel_namespace(intent)
