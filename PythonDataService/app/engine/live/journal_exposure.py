@@ -39,6 +39,15 @@ class JournalExposure:
     quantity: float
 
 
+@dataclass(frozen=True)
+class AccountJournalExposure:
+    """One non-zero account-level bucket, including unattributed callbacks."""
+
+    account_id: str
+    symbol: str
+    quantity: float
+
+
 def normalize_journal_broker_event(entry: AccountClerkJournalEntry) -> IbkrOrderEvent | None:
     """Return a trusted Clerk callback, or ``None`` when it cannot affect exposure.
 
@@ -54,7 +63,14 @@ def normalize_journal_broker_event(entry: AccountClerkJournalEntry) -> IbkrOrder
     event = normalize_broker_event(entry.broker_event)
     if event is None:
         return None
-    if event.account_id != entry.intent.account_id or event.order_ref != entry.intent.order_ref:
+    expected_account_id = entry.event_account_id
+    if expected_account_id is None and entry.intent is not None:
+        # Pre-#1044 attributed rows did not carry explicit callback-account
+        # metadata. Their durable intent remains the compatibility source.
+        expected_account_id = entry.intent.account_id
+    if event.account_id != expected_account_id:
+        return None
+    if entry.intent is not None and event.order_ref != entry.intent.order_ref:
         return None
     return event
 
@@ -89,10 +105,14 @@ def project_journal_exposure(
     quantities: dict[tuple[str, str, str], float] = defaultdict(float)
     seen_execution_effects: set[tuple[str, str]] = set()
     for entry in entries:
+        event = normalize_journal_broker_event(entry)
+        if event is None or entry.intent is None:
+            # Namespace and strategy projections intentionally never invent an
+            # owner for unknown broker flow. Account truth is folded below.
+            continue
         if account_id is not None and entry.intent.account_id != account_id:
             continue
-        event = normalize_journal_broker_event(entry)
-        if event is None or event.event_type != "fill" or not event.exec_id:
+        if event.event_type != "fill" or not event.exec_id:
             continue
         if event.symbol is None or event.side is None or event.fill_quantity is None:
             continue
@@ -124,10 +144,60 @@ def project_journal_exposure(
     )
 
 
+def project_journal_account_exposure(
+    entries: Iterable[AccountClerkJournalEntry],
+    *,
+    account_id: str | None = None,
+) -> tuple[AccountJournalExposure, ...]:
+    """Project all journaled fill effects into account truth.
+
+    Formula: exposure[account, symbol] = Σ (+fill_quantity for BUY,
+      -fill_quantity for SELL), once per (account, non-empty exec_id).
+    Reference: learn-ai issue #1038, locked decision 22 and 30; issue #1044.
+    Canonical implementation: this file.
+    Validated against: tests/engine/live/test_journal_exposure.py::test_account_projection_includes_unattributed_callbacks.
+
+    Unlike ``project_journal_exposure``, this fold includes a callback with no
+    Clerk intent. That makes manual/foreign account flow observable without
+    assigning a fabricated namespace or strategy owner.
+    """
+
+    quantities: dict[tuple[str, str], float] = defaultdict(float)
+    seen_execution_effects: set[tuple[str, str]] = set()
+    for entry in entries:
+        event = normalize_journal_broker_event(entry)
+        if event is None or event.event_type != "fill" or not event.exec_id:
+            continue
+        if event.symbol is None or event.side is None or event.fill_quantity is None:
+            continue
+        event_account_id = entry.event_account_id
+        if event_account_id is None and entry.intent is not None:
+            event_account_id = entry.intent.account_id
+        if event_account_id is None or (account_id is not None and event_account_id != account_id):
+            continue
+        quantity = float(event.fill_quantity)
+        if not math.isfinite(quantity):
+            continue
+        execution_key = (event_account_id, event.exec_id)
+        if execution_key in seen_execution_effects:
+            continue
+        seen_execution_effects.add(execution_key)
+        signed_quantity = quantity if event.side == "BUY" else -quantity
+        quantities[(event_account_id, event.symbol.upper())] += signed_quantity
+
+    return tuple(
+        AccountJournalExposure(account_id=projected_account_id, symbol=symbol, quantity=quantity)
+        for (projected_account_id, symbol), quantity in sorted(quantities.items())
+        if quantity != 0.0
+    )
+
+
 __all__ = [
+    "AccountJournalExposure",
     "JournalExposure",
     "JournalExposureGroup",
     "normalize_broker_event",
     "normalize_journal_broker_event",
+    "project_journal_account_exposure",
     "project_journal_exposure",
 ]

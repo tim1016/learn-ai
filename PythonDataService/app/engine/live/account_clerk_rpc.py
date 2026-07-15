@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Literal, cast
@@ -13,7 +14,7 @@ from typing import Final, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.broker.ibkr.models import IbkrOrderEvent
-from app.engine.live.account_artifacts import append_account_event, read_account_clerk_generation
+from app.engine.live.account_artifacts import read_account_clerk_generation
 from app.engine.live.account_clerk import (
     AccountClerk,
     AccountClerkBrokerAckReceipt,
@@ -440,7 +441,8 @@ class AccountClerkRpcServer:
             raise RuntimeError("ACCOUNT_CLERK_GENERATION_REQUIRED_FOR_RPC")
         self._served_generation = clerk._clerk_generation
         self._events_by_namespace: dict[str, list[IbkrOrderEvent]] = {}
-        self._intents_by_order_ref: dict[str, AccountOwnerSubmitIntent] = {}
+        self._callback_queue: asyncio.Queue[IbkrOrderEvent] = asyncio.Queue()
+        self._callback_worker: asyncio.Task[None] | None = None
         set_callback = getattr(clerk._broker, "set_broker_callback_sink", None)
         if callable(set_callback):
             set_callback(self._record_broker_event)
@@ -449,10 +451,22 @@ class AccountClerkRpcServer:
         self._socket_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         if self._socket_path.exists():
             self._socket_path.unlink()
+        # Restore durable attribution before the Clerk starts broker streaming.
+        await self._clerk.rebuild_attribution()
+        self._callback_worker = asyncio.create_task(
+            self._persist_broker_callbacks(),
+            name="account-clerk-broker-callback-writer",
+        )
         self._server = await asyncio.start_unix_server(self._handle, path=str(self._socket_path))
         self._socket_path.chmod(0o600)
 
     async def close(self) -> None:
+        await self._flush_broker_callbacks()
+        if self._callback_worker is not None:
+            self._callback_worker.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._callback_worker
+            self._callback_worker = None
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
@@ -523,7 +537,6 @@ class AccountClerkRpcServer:
         if operation == "submit":
             intent = AccountOwnerSubmitIntent.model_validate(_request_object(request, "intent"))
             recorded, broker_acked = await self._clerk.submit_intent(intent)
-            self._intents_by_order_ref[intent.order_ref] = intent
             return AccountClerkRpcSuccessEnvelope(
                 payload={
                     "recorded": recorded.model_dump(mode="json"),
@@ -542,7 +555,6 @@ class AccountClerkRpcServer:
                 actor_run_id=_optional_string(request, "actor_run_id"),
                 actor_bot_order_namespace=_optional_string(request, "actor_bot_order_namespace"),
             )
-            self._intents_by_order_ref[intent.order_ref] = intent
             return AccountClerkRpcSuccessEnvelope(
                 payload={"recovery_flatten": recovery.model_dump(mode="json")}
             )
@@ -553,27 +565,28 @@ class AccountClerkRpcServer:
         )
 
     def _record_broker_event(self, event: IbkrOrderEvent) -> None:
-        order_ref = event.order_ref
-        if order_ref is None or ":" not in order_ref:
-            return
-        namespace, _intent_id = order_ref.rsplit(":", maxsplit=1)
-        intent = self._intents_by_order_ref.get(order_ref)
-        if intent is None:
-            append_account_event(
-                self._clerk._artifacts_root,
-                self._clerk._account_id,
-                {
-                    "event_type": "account_clerk_reconciliation_alarm",
-                    "ts_ms": event.ts_ms,
-                    "reason": "BROKER_EVENT_WITHOUT_DURABLE_CLERK_INTENT",
-                    "order_ref": order_ref,
-                    "order_id": event.order_id,
-                    "perm_id": event.perm_id,
-                },
-            )
-            return
-        self._clerk.append_broker_event(intent, event)
-        self._events_by_namespace.setdefault(namespace, []).append(event)
+        """Queue broker callbacks; disk work is serialized off the event loop."""
+
+        self._callback_queue.put_nowait(event)
+
+    async def _persist_broker_callbacks(self) -> None:
+        """Fsync callbacks before they enter the non-authoritative relay cache."""
+
+        while True:
+            event = await self._callback_queue.get()
+            try:
+                receipt = await self._clerk.record_broker_event(event)
+                if receipt.newly_recorded and receipt.intent is not None:
+                    namespace = receipt.intent.bot_order_namespace
+                    self._events_by_namespace.setdefault(namespace, []).append(event)
+            finally:
+                self._callback_queue.task_done()
+
+    async def _flush_broker_callbacks(self) -> None:
+        """Complete callbacks received before normal Clerk shutdown."""
+
+        if self._callback_worker is not None:
+            await self._callback_queue.join()
 
 
 def _request_operation(request: Mapping[str, object]) -> AccountClerkRpcOperation:

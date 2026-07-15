@@ -24,17 +24,22 @@ import tempfile
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
     AccountClerkLease,
+    AccountFreezeEvidence,
     account_artifacts_root,
+    append_account_event,
     read_account_clerk_generation,
+    read_account_freeze,
     write_account_clerk_lease,
+    write_account_freeze,
 )
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_owner_fence import (
@@ -46,6 +51,7 @@ from app.engine.live.account_registry import (
     latest_account_instance_binding,
     read_account_instance_registry,
 )
+from app.engine.live.broker_callbacks import broker_callback_idempotency_key
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
 from app.utils.advisory_lock import advisory_file_lock
 
@@ -123,7 +129,10 @@ class AccountClerkJournalEntry(BaseModel):
         "reconciliation",
     ] = "recorded"
     recorded_at_ms: int = Field(ge=0, le=_MAX_INT64)
-    intent: AccountOwnerSubmitIntent
+    # The original attributed shape always has an intent.  A broker callback
+    # with no durable Clerk intent is a real account fact too, but must not be
+    # fabricated into a namespace; only those broker-event rows may omit it.
+    intent: AccountOwnerSubmitIntent | None = None
     order_id: int | None = Field(default=None, ge=0)
     perm_id: int | None = Field(default=None, ge=0)
     exec_id: str | None = None
@@ -132,6 +141,31 @@ class AccountClerkJournalEntry(BaseModel):
     reconciliation_verdict: Literal["RECOVER_ADOPT", "RETRY_ONCE", "HALT"] | None = None
     reconciliation_reason: str | None = None
     broker_error: str | None = None
+    event_account_id: str | None = Field(default=None, min_length=1)
+    broker_callback_idempotency_key: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def validate_attribution_shape(self) -> AccountClerkJournalEntry:
+        """Keep existing attributed rows readable while forbidding guessed ownership."""
+
+        if self.entry_kind != "broker_event":
+            if self.intent is None:
+                raise ValueError("non-broker-event journal rows require an intent")
+            if self.event_account_id is not None or self.broker_callback_idempotency_key is not None:
+                raise ValueError("callback metadata is only valid on broker_event rows")
+            return self
+
+        if self.broker_event is None:
+            raise ValueError("broker_event journal rows require broker_event")
+        if (
+            self.intent is not None
+            and self.event_account_id is not None
+            and self.event_account_id != self.intent.account_id
+        ):
+            raise ValueError("event_account_id must match the attributed intent account")
+        if self.intent is None and self.event_account_id is None:
+            raise ValueError("unattributed broker_event rows require event_account_id")
+        return self
 
 
 class AccountClerkRecordedReceipt(BaseModel):
@@ -198,6 +232,21 @@ class AccountClerkRecoveryFlattenReceipt(BaseModel):
     cancelled_order_ids: tuple[int, ...]
 
 
+@dataclass(frozen=True)
+class AccountClerkBrokerEventReceipt:
+    """Durable callback result used to gate relay after persistence.
+
+    ``journal_seq`` is the delivery identity. ``broker_callback_idempotency_key``
+    prevents duplicate callback records; it deliberately does not change fill
+    exposure semantics, which remain deduplicated by ``exec_id`` downstream.
+    """
+
+    journal_seq: int
+    event: IbkrOrderEvent
+    intent: AccountOwnerSubmitIntent | None
+    newly_recorded: bool
+
+
 class AccountClerk:
     """Per-account concurrent intake backed by one serialized durable journal.
 
@@ -225,6 +274,8 @@ class AccountClerk:
         self._now_ms = now_ms if now_ms is not None else _now_ms
         self._intake_lock = asyncio.Lock()
         self._journal_entries: list[AccountClerkJournalEntry] | None = None
+        self._intents_by_order_ref: dict[str, AccountOwnerSubmitIntent] = {}
+        self._normal_submit_intake_reason: str | None = None
 
     async def record_intent(self, intent: AccountOwnerSubmitIntent) -> AccountClerkRecordedReceipt:
         """Validate, durably record, and acknowledge one intent without I/O to IBKR."""
@@ -250,11 +301,15 @@ class AccountClerk:
                 reason="CLERK_RECOVERY_OPERATION_REQUIRED",
                 diagnostics={"intent_id": intent.intent_id, "order_ref": intent.order_ref},
             )
+        self._require_normal_submit_intake(intent)
         async with self._intake_lock:
             recorded = await asyncio.to_thread(self._record_intent_locked, intent)
             existing_ack = await asyncio.to_thread(self._ack_for_intent_locked, intent)
             if existing_ack is not None:
                 return recorded, existing_ack
+            # A stream can die while the inbox/journal fsync is in flight.
+            # Never start the broker write after that closed the submit lane.
+            self._require_normal_submit_intake(intent)
             self._require_paper_broker()
             spec = IbkrOrderSpec.model_validate(intent.order_spec)
             await asyncio.to_thread(self._append_broker_submitting_locked, intent)
@@ -321,10 +376,42 @@ class AccountClerk:
         """Return receipt #1 values from the journal after a clerk restart."""
 
         return [
-            AccountClerkRecordedReceipt.from_journal_entry(entry)
+            AccountClerkRecordedReceipt.from_journal_entry(_require_entry_intent(entry))
             for entry in read_account_clerk_journal(self._artifacts_root, self._account_id)
             if entry.entry_kind == "recorded"
         ]
+
+    async def rebuild_attribution(self) -> None:
+        """Rebuild order-ref attribution from durable receipt-#1 rows.
+
+        This must complete before the production broker stream starts. A Clerk
+        restart otherwise sees a real callback but has only an empty process
+        map and would wrongly classify it as foreign.
+        """
+
+        async with self._intake_lock:
+            await asyncio.to_thread(self._rebuild_attribution_locked)
+
+    async def record_broker_event(self, event: IbkrOrderEvent) -> AccountClerkBrokerEventReceipt:
+        """Persist one callback off-loop before any downstream relay.
+
+        The serial intake lock preserves journal order with submitting/ack
+        markers. Disk fsync stays in the worker thread, so receipt-time broker
+        handling cannot stall the event loop.
+        """
+
+        async with self._intake_lock:
+            return await asyncio.to_thread(self._record_broker_event_locked, event)
+
+    async def mark_event_stream_down(self, failure: BaseException | None = None) -> None:
+        """Close normal submit intake and durably alarm a dead broker stream."""
+
+        if self._normal_submit_intake_reason is not None:
+            return
+        # Set before the fsync so concurrent submit callers fail closed
+        # immediately, rather than racing an alarm write.
+        self._normal_submit_intake_reason = "CLERK_EVENT_STREAM_DOWN"
+        await asyncio.to_thread(self._record_event_stream_down_locked, failure)
 
     async def recover_inbox(self) -> list[AccountClerkRecordedReceipt]:
         """Replay an inbox row left durable by a crash before journal fsync."""
@@ -339,8 +426,9 @@ class AccountClerk:
         with _file_lock(journal_path):
             journal_entries = self._load_journal_tail_locked(inbox_path, journal_path)
         return [
-            AccountClerkRecordedReceipt.from_journal_entry(entry)
+            AccountClerkRecordedReceipt.from_journal_entry(_require_entry_intent(entry))
             for entry in journal_entries
+            if entry.entry_kind == "recorded"
         ]
 
     def _record_intent_locked(self, intent: AccountOwnerSubmitIntent) -> AccountClerkRecordedReceipt:
@@ -372,6 +460,7 @@ class AccountClerk:
             )
             _append_jsonl(journal_path, journal_entry)
             self._journal_entries.append(journal_entry)
+            self._register_attribution_locked(intent)
             _rewrite_jsonl(inbox_path, [])
             return AccountClerkRecordedReceipt.from_journal_entry(journal_entry)
 
@@ -494,23 +583,113 @@ class AccountClerk:
         )
 
     def append_broker_event(self, intent: AccountOwnerSubmitIntent, event: IbkrOrderEvent) -> None:
-        """Durably append a Clerk-observed broker callback before relay."""
+        """Compatibility helper for synchronous test-only callback injection.
+
+        Production callback delivery goes through :meth:`record_broker_event`,
+        which offloads this fsync path. Keeping this small legacy seam avoids
+        changing older focused journal tests while making the Clerk's durable
+        attribution map the sole callback owner.
+        """
+
+        self._register_attribution_locked(intent)
+        self._record_broker_event_locked(event)
+
+    def _record_broker_event_locked(self, event: IbkrOrderEvent) -> AccountClerkBrokerEventReceipt:
+        """Append one deduplicated callback, then alarm if it is unattributed."""
 
         journal_path = account_clerk_journal_path(self._artifacts_root, self._account_id)
+        callback_key = broker_callback_idempotency_key(event)
         with _file_lock(journal_path):
             entries = self._load_journal_tail_locked(
                 account_clerk_inbox_path(self._artifacts_root, self._account_id),
                 journal_path,
             )
+            existing = _broker_callback_entry_for_key(entries, callback_key)
+            if existing is not None:
+                return AccountClerkBrokerEventReceipt(
+                    journal_seq=existing.seq,
+                    event=event,
+                    intent=existing.intent,
+                    newly_recorded=False,
+                )
+
+            intent = self._intents_by_order_ref.get(event.order_ref or "")
             entry = AccountClerkJournalEntry(
-                seq=entries[-1].seq + 1,
+                seq=entries[-1].seq + 1 if entries else 1,
                 entry_kind="broker_event",
                 recorded_at_ms=self._now_ms(),
                 intent=intent,
                 broker_event=event.model_dump(mode="json"),
+                event_account_id=event.account_id,
+                broker_callback_idempotency_key=callback_key,
             )
             _append_jsonl(journal_path, entry)
             entries.append(entry)
+
+        if intent is None:
+            self._record_unattributed_broker_event_locked(event, callback_key)
+        return AccountClerkBrokerEventReceipt(
+            journal_seq=entry.seq,
+            event=event,
+            intent=intent,
+            newly_recorded=True,
+        )
+
+    def _record_unattributed_broker_event_locked(
+        self,
+        event: IbkrOrderEvent,
+        callback_key: str,
+    ) -> None:
+        """Make unknown broker flow visible and block further account starts.
+
+        This happens only after the callback itself is journal-fsynced. The
+        opaque broker event retains its own account/symbol/side data, while no
+        fake bot namespace or strategy id is invented for it.
+        """
+
+        append_account_event(
+            self._artifacts_root,
+            self._account_id,
+            {
+                "event_type": "account_clerk_unattributed_broker_event",
+                "ts_ms": event.ts_ms,
+                "reason": "BROKER_EVENT_WITHOUT_DURABLE_CLERK_INTENT",
+                "status": "consumed",
+                "source": "account_clerk",
+                "receipt_id": f"account-clerk-callback:{callback_key}",
+                "order_ref": event.order_ref,
+                "order_id": event.order_id,
+                "perm_id": event.perm_id,
+                "exec_id": event.exec_id,
+                "event_account_id": event.account_id,
+            },
+            only_if_receipt_absent=True,
+        )
+        if read_account_freeze(self._artifacts_root, self._account_id) is None:
+            write_account_freeze(
+                self._artifacts_root,
+                AccountFreezeEvidence(
+                    account_id=self._account_id,
+                    freeze_kind="exposure",
+                    reason="ACCOUNT_CLERK_UNATTRIBUTED_BROKER_EVENT",
+                    source="account_clerk",
+                    recorded_at_ms=self._now_ms(),
+                    operator_next_step="RECONCILE_UNATTRIBUTED_BROKER_EVENT",
+                ),
+            )
+
+    def _record_event_stream_down_locked(self, failure: BaseException | None) -> None:
+        append_account_event(
+            self._artifacts_root,
+            self._account_id,
+            {
+                "event_type": "account_clerk_event_stream_down",
+                "ts_ms": self._now_ms(),
+                "reason": "CLERK_EVENT_STREAM_DOWN",
+                "source": "account_clerk",
+                "failure_type": type(failure).__name__ if failure is not None else "STREAM_EXITED",
+            },
+        )
 
     async def append_reconciliation_resolution(
         self,
@@ -535,6 +714,9 @@ class AccountClerk:
             entries = self._load_journal_tail_locked(
                 account_clerk_inbox_path(self._artifacts_root, self._account_id), journal_path
             )
+            # A reconciler may adopt a broker order after a Clerk restart. Its
+            # durable recorded receipt is still the only attribution source.
+            self._register_attribution_locked(intent)
             entry = AccountClerkJournalEntry(
                 seq=entries[-1].seq + 1,
                 entry_kind="reconciliation",
@@ -553,6 +735,7 @@ class AccountClerk:
             raise RuntimeError("ACCOUNT_CLERK_BROKER_UNAVAILABLE")
         self._require_paper_broker()
         async with self._intake_lock:
+            await asyncio.to_thread(self._register_attribution_locked, intent)
             spec = IbkrOrderSpec.model_validate(intent.order_spec)
             await asyncio.to_thread(self._append_broker_submitting_locked, intent)
             try:
@@ -583,7 +766,40 @@ class AccountClerk:
                 journal_path=journal_path,
             )
             _rewrite_jsonl(inbox_path, [])
+            self._rebuild_attribution_from_entries(self._journal_entries)
         return self._journal_entries
+
+    def _rebuild_attribution_locked(self) -> None:
+        journal_path = account_clerk_journal_path(self._artifacts_root, self._account_id)
+        with _file_lock(journal_path):
+            entries = self._load_journal_tail_locked(
+                account_clerk_inbox_path(self._artifacts_root, self._account_id),
+                journal_path,
+            )
+            self._rebuild_attribution_from_entries(entries)
+
+    def _rebuild_attribution_from_entries(self, entries: list[AccountClerkJournalEntry]) -> None:
+        self._intents_by_order_ref.clear()
+        for entry in entries:
+            if entry.entry_kind == "recorded" and entry.intent is not None:
+                self._register_attribution_locked(entry.intent)
+
+    def _register_attribution_locked(self, intent: AccountOwnerSubmitIntent) -> None:
+        existing = self._intents_by_order_ref.get(intent.order_ref)
+        if existing is not None and existing != intent:
+            raise AccountClerkIntentRejected(
+                reason="CLERK_ORDER_REF_COLLISION",
+                diagnostics={
+                    "existing_intent": existing.model_dump(mode="json"),
+                    "received_intent": intent.model_dump(mode="json"),
+                },
+            )
+        self._intents_by_order_ref[intent.order_ref] = intent
+
+    def _require_normal_submit_intake(self, intent: AccountOwnerSubmitIntent) -> None:
+        if self._normal_submit_intake_reason is None:
+            return
+        self._reject(intent, self._normal_submit_intake_reason)
 
     def _replay_inbox_locked(
         self,
@@ -931,7 +1147,11 @@ def _journal_entry_for_intent(
     journal_entries: list[AccountClerkJournalEntry],
     intent: AccountOwnerSubmitIntent,
 ) -> AccountClerkJournalEntry | None:
-    matching = [entry for entry in journal_entries if entry.intent.intent_id == intent.intent_id]
+    matching = [
+        entry
+        for entry in journal_entries
+        if entry.intent is not None and entry.intent.intent_id == intent.intent_id
+    ]
     if not matching:
         return None
     existing = matching[0]
@@ -944,6 +1164,38 @@ def _journal_entry_for_intent(
             },
         )
     return existing
+
+
+def _broker_callback_entry_for_key(
+    entries: list[AccountClerkJournalEntry],
+    callback_key: str,
+) -> AccountClerkJournalEntry | None:
+    """Find a callback row by the ADR 0014 idempotency identity.
+
+    Pre-#1044 rows did not serialize the key. Derive it from their normalized
+    payload so a restart still refuses a duplicate redelivery.
+    """
+
+    for entry in entries:
+        if entry.entry_kind != "broker_event" or entry.broker_event is None:
+            continue
+        if entry.broker_callback_idempotency_key == callback_key:
+            return entry
+        try:
+            existing_event = IbkrOrderEvent.model_validate(entry.broker_event)
+        except (TypeError, ValidationError, ValueError):
+            continue
+        if broker_callback_idempotency_key(existing_event) == callback_key:
+            return entry
+    return None
+
+
+def _require_entry_intent(entry: AccountClerkJournalEntry) -> AccountClerkJournalEntry:
+    """Narrow a validated non-callback journal row for receipt conversion."""
+
+    if entry.intent is None:
+        raise ValueError("receipt entry unexpectedly lacks an intent")
+    return entry
 
 
 def _now_ms() -> int:
@@ -1003,6 +1255,7 @@ def _active_durable_clerk_generation(artifacts_root: Path, account_id: str) -> i
 async def _run_clerk_process(args: argparse.Namespace) -> int:
     artifacts_root = Path(args.artifacts_root)
     stop = asyncio.Event()
+    stream_failed = asyncio.Event()
 
     def _stop(_signum: int, _frame: object) -> None:
         stop.set()
@@ -1050,19 +1303,90 @@ async def _run_clerk_process(args: argparse.Namespace) -> int:
             generation=args.generation,
             pid=os.getpid(),
         )
+        event_stream_started = False
+        event_stream_supervisor: asyncio.Task[None] | None = None
         try:
             await server.start()
+            await broker.start_event_stream()
+            event_stream_started = True
+            event_stream_supervisor = asyncio.create_task(
+                _supervise_broker_event_stream(
+                    broker=broker,
+                    clerk=clerk,
+                    stop=stop,
+                    stream_failed=stream_failed,
+                ),
+                name="account-clerk-broker-event-stream-supervisor",
+            )
             await reconciler.start()
             while not stop.is_set():
-                writer.renew()
+                await asyncio.to_thread(writer.renew)
                 with suppress(TimeoutError):
                     await asyncio.wait_for(stop.wait(), timeout=1)
         finally:
-            writer.renew(draining=True)
+            if event_stream_supervisor is not None:
+                event_stream_supervisor.cancel()
+                with suppress(asyncio.CancelledError):
+                    await event_stream_supervisor
+            if event_stream_started:
+                await broker.stop_event_stream()
+            await asyncio.to_thread(writer.renew, draining=True)
             await reconciler.close()
             await server.close()
             await client.disconnect()
-    return 0
+    return 1 if stream_failed.is_set() else 0
+
+
+async def _supervise_broker_event_stream(
+    *,
+    broker: object,
+    clerk: AccountClerk,
+    stop: asyncio.Event,
+    stream_failed: asyncio.Event,
+) -> None:
+    """Terminate the Clerk when its callback stream stops unexpectedly.
+
+    ``IbkrBrokerAdapter`` records a thrown stream exception and lets its task
+    return, so both an exception and an otherwise clean task exit are failure
+    while the Clerk is not stopping. The adapter task is intentionally read
+    through its adapter-owned task here: the Clerk owns this adapter for its
+    full process lifetime and needs a supervision handle, not a polling guess.
+    """
+
+    stream_task = getattr(broker, "_event_task", None)
+    if isinstance(stream_task, asyncio.Task):
+        try:
+            await asyncio.shield(stream_task)
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:
+            failure = exc
+        else:
+            observed = getattr(broker, "stream_failure", None)
+            failure = observed if isinstance(observed, BaseException) else RuntimeError(
+                "CLERK_EVENT_STREAM_EXITED"
+            )
+    else:
+        # The production IbkrBrokerAdapter exposes its task above. Keep the
+        # Clerk testable against a narrower event-adapter seam too: a custom
+        # adapter that cannot expose a task must still surface a recorded
+        # ``stream_failure`` rather than leaving normal submits blind.
+        while not stop.is_set():
+            observed = getattr(broker, "stream_failure", None)
+            if isinstance(observed, BaseException):
+                failure = observed
+                break
+            await asyncio.sleep(0.05)
+        else:  # pragma: no cover - retained for type-checker exhaustiveness.
+            return
+        if stop.is_set():
+            return
+
+    if stop.is_set():
+        return
+    await clerk.mark_event_stream_down(failure)
+    stream_failed.set()
+    stop.set()
 
 
 def main() -> int:

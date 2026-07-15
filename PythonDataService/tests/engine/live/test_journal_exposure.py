@@ -12,7 +12,10 @@ import pytest
 import app.services.fleet_contamination as fleet_contamination
 from app.engine.live.account_clerk import AccountClerkJournalEntry
 from app.engine.live.account_clerk_reconciler import namespace_expected_exposure
-from app.engine.live.journal_exposure import project_journal_exposure
+from app.engine.live.journal_exposure import (
+    project_journal_account_exposure,
+    project_journal_exposure,
+)
 from app.services.fleet_contamination import (
     AccountJournalScopeRequiredError,
     collect_fleet_position_explanations,
@@ -78,6 +81,37 @@ def test_project_journal_exposure_does_not_deduplicate_matching_exec_ids_across_
         ("DUA", "SPY", 3.0),
         ("DUB", "SPY", 2.0),
     ]
+
+
+def test_account_projection_includes_unattributed_callbacks() -> None:
+    entries = _fixture_entries()
+    source = next(entry for entry in entries if entry.entry_kind == "broker_event")
+    assert source.broker_event is not None
+    foreign_event = {
+        **source.broker_event,
+        "account_id": "DUA",
+        "order_ref": "manual-tws-order",
+        "exec_id": "foreign-exec-1044",
+        "fill_quantity": 4.0,
+        "side": "BUY",
+    }
+    unattributed = AccountClerkJournalEntry(
+        seq=999,
+        entry_kind="broker_event",
+        recorded_at_ms=999,
+        broker_event=foreign_event,
+        event_account_id="DUA",
+        broker_callback_idempotency_key="fill|foreign-exec-1044|manual",
+    )
+
+    namespace_before = project_journal_exposure(entries, group_by="namespace")
+    namespace_after = project_journal_exposure([*entries, unattributed], group_by="namespace")
+    account_exposure = project_journal_account_exposure([*entries, unattributed], account_id="DUA")
+
+    assert namespace_after == namespace_before
+    assert ("DUA", "SPY", 7.0) in {
+        (exposure.account_id, exposure.symbol, exposure.quantity) for exposure in account_exposure
+    }
 
 
 def test_reconciler_and_contamination_share_the_journal_projection(
