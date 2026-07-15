@@ -67,7 +67,7 @@ class CohortLaunchCoordinator:
         """Refresh, pin, record, then start without rolling back siblings."""
 
         roll_call = await self._run_roll_call()
-        pins = self._pins(account_id, requested_members, roll_call.offers)
+        pins = await asyncio.to_thread(self._pins, account_id, requested_members, roll_call.offers)
         now_ms = self._now_ms()
         receipt = CohortBatchLaunchReceipt(
             account_id=account_id,
@@ -129,7 +129,7 @@ class CohortLaunchCoordinator:
                 run_id=pinned[member_id][0].run_id,
                 roll_call_offer_id=pinned[member_id][0].offer_id,
             )
-            for member_id in sorted(requested_members)
+            for member_id in sorted(set(requested_members))
         )
 
     async def _start_member(

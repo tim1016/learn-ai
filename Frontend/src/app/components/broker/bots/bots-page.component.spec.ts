@@ -522,13 +522,47 @@ describe('BotsPageComponent', () => {
     expect(service.runRollCall).toHaveBeenCalledTimes(1);
     expect(service.launchCohort).toHaveBeenCalledWith(
       'DU1234567',
-      { member_strategy_instance_ids: expect.arrayContaining(['live-idle-spy', 'live-idle-qqq']) },
+      { member_strategy_instance_ids: ['live-idle-qqq', 'live-idle-spy'] },
     );
     expect(service.startHostRunner).not.toHaveBeenCalled();
     expect(fixture.componentInstance.launchProgress().title).toBe('Cohort start accepted');
     expect((fixture.nativeElement as HTMLElement).textContent).toContain(
       'Start accepted; live status is Ready.',
     );
+  });
+
+  it('blocks an incomplete cohort receipt and labels its server reason code', async () => {
+    const { fixture, service } = await setup();
+    service.launchCohort.mockResolvedValue({
+      schema_version: 1,
+      account_id: 'DU1234567',
+      cohort_id: 'paper-validation-incomplete',
+      member_strategy_instance_ids: ['live-idle-spy'],
+      window_start_ms: NEW_RUN,
+      window_end_ms: NEW_RUN + 300_000,
+      authorized_by: 'local-operator',
+      authorized_recorded_at_ms: NEW_RUN,
+      outcomes_state: 'recorded',
+      outcomes: [
+        {
+          strategy_instance_id: 'live-idle-spy',
+          state: 'blocked',
+          reason: 'ACCOUNT_FROZEN',
+          next_safe_action: 'Clear the account freeze.',
+        },
+      ],
+      outcomes_recorded_at_ms: NEW_RUN,
+      outcomes_error: null,
+    });
+
+    await fixture.componentInstance.startReadyBots();
+    await settle(fixture);
+
+    const rendered = (fixture.nativeElement as HTMLElement).textContent ?? '';
+    expect(fixture.componentInstance.launchProgress().title).toBe('Cohort start needs attention');
+    expect(rendered).toContain('The server did not accept this cohort member.');
+    expect(rendered).toContain('Account Frozen');
+    expect(rendered).not.toContain('ACCOUNT_FROZEN');
   });
 
   it('requires cohort authorization confirmation before starting ready bots', async () => {

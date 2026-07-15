@@ -36,6 +36,7 @@ from app.engine.live.daemon_transport import DaemonResult
 from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarRepo, stable_live_state_path
 from app.engine.live.run_ledger import LiveRunLedger, write_ledger
 from app.routers import account_reconciliation, cohort_batch_launch
+from app.services import cohort_batch_launch as cohort_batch_launch_service
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.cohort_batch_launch import CohortBatchLaunchService
 from app.services.legacy_stale_claim_retirement import LegacyStaleClaimRetirementService
@@ -298,6 +299,41 @@ async def test_latest_cohort_status_reloads_exact_persisted_blocker(tmp_path: Pa
         "reason": "ACCOUNT_FROZEN",
         "next_safe_action": "Clear the account freeze.",
     }
+
+
+async def test_latest_cohort_status_fails_closed_for_unreadable_newest_authorization(
+    monkeypatch,
+) -> None:
+    receipt = CohortBatchLaunchReceipt(
+        account_id="DU1234567",
+        cohort_id="valid-earlier-cohort",
+        member_strategy_instance_ids=("spy-a",),
+        window_start_ms=1_780_000_000_000,
+        window_end_ms=1_780_000_030_000,
+        authorized_by="local-operator",
+        recorded_at_ms=1_780_000_000_000,
+    )
+    events = [
+        {
+            "event_type": "cohort_batch_launch_authorized",
+            "seq": 1,
+            **receipt.model_dump(mode="json"),
+        },
+        {
+            "event_type": "cohort_batch_launch_authorized",
+            "cohort_id": "unreadable-newest-cohort",
+            "seq": 2,
+        },
+    ]
+    monkeypatch.setattr(cohort_batch_launch_service, "read_account_events", lambda *_args: events)
+    service = CohortBatchLaunchService(artifacts_root=Path("/unused"))
+
+    try:
+        await service.get_status(account_id="DU1234567", cohort_id=None)
+    except ValueError as exc:
+        assert str(exc) == "cohort authorization is unreadable: unreadable-newest-cohort"
+    else:
+        raise AssertionError("latest cohort retrieval must not skip unreadable authorization")
 
 
 async def test_triage_returns_latest_receipt(tmp_path: Path) -> None:

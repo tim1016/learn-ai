@@ -60,8 +60,8 @@ class CohortBatchLaunchService:
             try:
                 return int(event["seq"]), CohortBatchLaunchReceipt.model_validate(event)
             except (KeyError, TypeError, ValueError, ValidationError):
-                if cohort_id is not None:
-                    raise ValueError(f"cohort authorization is unreadable: {cohort_id}") from None
+                identifier = cohort_id or event.get("cohort_id") or "latest"
+                raise ValueError(f"cohort authorization is unreadable: {identifier}") from None
         return None
 
     @staticmethod

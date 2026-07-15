@@ -81,6 +81,9 @@
               <span class="launch-row-status">{{ row.status }}</span>
               <strong>{{ row.botName }}</strong>
               <span>{{ row.detail }}</span>
+              @if (row.reasonCode; as reasonCode) {
+                <span class="mono">{{ reasonCode | receiptLabel }}</span>
+              }
             </li>
           }
         </ol>

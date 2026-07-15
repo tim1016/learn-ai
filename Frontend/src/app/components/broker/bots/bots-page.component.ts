@@ -38,6 +38,7 @@ import {
 import { CohortLaunchMonitorComponent } from '../cohort-launch-monitor/cohort-launch-monitor.component';
 import { fmtInteger, fmtSignedCurrency, fmtTimestampLocal } from '../format';
 import { lifecycleConditionCureTarget } from '../lib/condition-cure-actions';
+import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 
 type AttentionFilter = 'all' | 'needs-attention' | 'healthy';
 type BotModeTab = BotCatalogTradingMode;
@@ -105,6 +106,7 @@ interface BotLaunchRowProgress {
   botName: string;
   status: BotLaunchRowStatus;
   detail: string;
+  reasonCode: string | null;
 }
 
 interface BotLaunchProgress {
@@ -127,6 +129,7 @@ interface BotLaunchProgress {
     AccountFreezeBannerComponent,
     CohortLaunchDialogComponent,
     CohortLaunchMonitorComponent,
+    ReceiptLabelPipe,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './bots-page.component.html',
@@ -327,6 +330,7 @@ export class BotsPageComponent {
         botName: row.name,
         status: 'queued',
         detail: 'Queued after preflight.',
+        reasonCode: null,
       })),
     });
     try {
@@ -368,7 +372,13 @@ export class BotsPageComponent {
         title: 'Starting authorized cohort',
         detail: `${refreshedRows.length} bots are starting under one server-authorized receipt.`,
         activeBotId: null,
-        rows: refreshedRows.map((row) => ({ botId: row.id, botName: row.name, status: 'starting', detail: 'Start request is in flight.' })),
+        rows: refreshedRows.map((row) => ({
+          botId: row.id,
+          botName: row.name,
+          status: 'starting',
+          detail: 'Start request is in flight.',
+          reasonCode: null,
+        })),
       });
       const cohort = await this.liveRuns.launchCohort(accountId, {
         member_strategy_instance_ids: refreshedRows.map((row) => row.id),
@@ -381,7 +391,9 @@ export class BotsPageComponent {
       const outcomesById = new Map(
         cohort.outcomes.map((outcome) => [outcome.strategy_instance_id, outcome]),
       );
-      const accepted = cohort.outcomes.every((outcome) => outcome.state === 'accepted');
+      const accepted = refreshedRows.every(
+        (row) => outcomesById.get(row.id)?.state === 'accepted',
+      );
       this.launchProgress.update((current) => ({
         ...current,
         phase: accepted ? 'complete' : 'blocked',
@@ -395,12 +407,16 @@ export class BotsPageComponent {
               botName: row.name,
               status: 'accepted',
               detail: `Start accepted; live status is ${liveStatusById.get(row.id) ?? 'unavailable'}.`,
+              reasonCode: outcome.reason,
             }
             : {
               botId: row.id,
               botName: row.name,
               status: 'blocked',
-              detail: outcome?.reason ?? 'The server did not record a cohort outcome for this bot.',
+              detail: outcome
+                ? 'The server did not accept this cohort member.'
+                : 'The server did not record a cohort outcome for this bot.',
+              reasonCode: outcome?.reason ?? null,
             };
         }),
       }));
@@ -707,6 +723,7 @@ export class BotsPageComponent {
           botName: row.name,
           status,
           detail,
+          reasonCode: null,
         };
       }
       return {
@@ -714,6 +731,7 @@ export class BotsPageComponent {
         botName: row.name,
         status: 'queued',
         detail: 'Waiting for the canary result before another start.',
+        reasonCode: null,
       };
     });
   }
