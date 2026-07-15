@@ -9,9 +9,8 @@ from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import ValidationError
 
 from app.broker.ibkr.models import IbkrOrderEvent
 from app.engine.live.account_artifacts import read_account_clerk_generation
@@ -31,6 +30,40 @@ from app.engine.live.account_clerk_cursor import (
     AccountClerkEventCursorRepo,
 )
 from app.engine.live.account_clerk_journal import normalize_broker_event
+from app.engine.live.account_clerk_rpc_protocol import (
+    ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S,
+    ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S,
+    ACCOUNT_CLERK_RPC_SCHEMA_VERSION,
+    AccountClerkRpcCancelNamespaceUncertainError,  # noqa: F401 - public compatibility re-export
+    AccountClerkRpcError,
+    AccountClerkRpcErrorEnvelope,
+    AccountClerkRpcGenerationHandshake,
+    AccountClerkRpcGenerationMismatchError,
+    AccountClerkRpcInternalError,
+    AccountClerkRpcMalformedResponseError,
+    AccountClerkRpcOperation,  # noqa: F401 - public compatibility re-export
+    AccountClerkRpcRejectedError,
+    AccountClerkRpcRequestIdentity,
+    AccountClerkRpcServerErrorCode,  # noqa: F401 - public compatibility re-export
+    AccountClerkRpcSuccessEnvelope,
+    AccountClerkRpcTimeoutError,
+    AccountClerkRpcUnavailableError,
+    _AccountClerkRpcRequestRejected,
+    decode_generation_handshake,
+    decode_request,
+    decode_response,
+    optional_string,
+    rejected_envelope,
+    request_identity,
+    request_object,
+    request_operation,
+    request_timeout_s,
+    required_nonnegative_int,
+    required_string,
+)
+from app.engine.live.account_clerk_rpc_protocol import (
+    WRITE_OPERATIONS as _WRITE_OPERATIONS,
+)
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import (
     ACTIVE_INSTANCE_BINDING_STATES,
@@ -42,76 +75,9 @@ from app.services.journal_cures import JournalCureError, JournalCureHandler
 
 logger = logging.getLogger(__name__)
 
-ACCOUNT_CLERK_RPC_SCHEMA_VERSION: Final = 1
-ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S: Final = 30.0
-ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S: Final = 120.0
-
-AccountClerkRpcOperation = Literal[
-    "submit",
-    "cancel_namespace",
-    "recovery_flatten",
-    "recovery_flatten_batch",
-    "operator_adjustment",
-    "drain_events",
-]
-_WRITE_OPERATIONS = frozenset(
-    {
-        "submit",
-        "cancel_namespace",
-        "recovery_flatten",
-        "recovery_flatten_batch",
-        "operator_adjustment",
-    }
-)
-AccountClerkRpcServerErrorCode = Literal[
-    "ACCOUNT_CLERK_REJECTED",
-    "ACCOUNT_CLERK_CANCEL_NAMESPACE_UNCERTAIN",
-    "ACCOUNT_CLERK_INTERNAL_ERROR",
-]
-
 # Deliberately a module seam: timeout tests replace it with a barrier-controlled
 # context manager, while production always uses asyncio.timeout.
 _request_timeout = asyncio.timeout
-
-
-class AccountClerkRpcSuccessEnvelope(BaseModel):
-    """Versioned success response. ``payload`` stays operation-specific."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    schema_version: Literal[1] = ACCOUNT_CLERK_RPC_SCHEMA_VERSION
-    outcome: Literal["success"] = "success"
-    payload: dict[str, object]
-
-
-class AccountClerkRpcErrorEnvelope(BaseModel):
-    """Versioned failure response with a stable category and safe reason."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    schema_version: Literal[1] = ACCOUNT_CLERK_RPC_SCHEMA_VERSION
-    outcome: Literal["error"] = "error"
-    reason_code: AccountClerkRpcServerErrorCode
-    reason: str | None = Field(default=None, min_length=1, max_length=128)
-
-
-class AccountClerkRpcGenerationHandshake(BaseModel):
-    """First frame on every Clerk socket connection before a request is read."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    schema_version: Literal[1] = ACCOUNT_CLERK_RPC_SCHEMA_VERSION
-    frame_type: Literal["generation_handshake"] = "generation_handshake"
-    account_id: str = Field(min_length=1)
-    served_generation: int = Field(ge=1)
-
-
-@dataclass(frozen=True)
-class AccountClerkRpcRequestIdentity:
-    """Identity retained by ambiguous failures for an idempotent retry."""
-
-    intent_id: str | None
-    order_ref: str | None
 
 
 @dataclass(frozen=True)
@@ -135,151 +101,6 @@ class AccountClerkDeliveredEvent:
             self._consumer,
             journal_seq=self.journal_seq,
         )
-
-
-class AccountClerkRpcError(RuntimeError):
-    """Base error for all typed Account Clerk RPC outcomes."""
-
-    def __init__(
-        self,
-        *,
-        reason_code: str,
-        operation: str,
-        request_identity: AccountClerkRpcRequestIdentity,
-    ) -> None:
-        super().__init__(reason_code)
-        self.reason_code = reason_code
-        self.operation = operation
-        self.intent_id = request_identity.intent_id
-        self.order_ref = request_identity.order_ref
-
-
-class AccountClerkRpcUnavailableError(AccountClerkRpcError):
-    """The Clerk socket could not complete a transport exchange."""
-
-    def __init__(
-        self,
-        *,
-        reason: str,
-        operation: str,
-        request_identity: AccountClerkRpcRequestIdentity,
-    ) -> None:
-        self.reason = reason
-        super().__init__(
-            reason_code=f"ACCOUNT_CLERK_UNAVAILABLE:{reason}",
-            operation=operation,
-            request_identity=request_identity,
-        )
-
-
-class AccountClerkRpcTimeoutError(AccountClerkRpcUnavailableError):
-    """The bounded Clerk request expired; its intent identity remains available."""
-
-    def __init__(
-        self,
-        *,
-        operation: str,
-        request_identity: AccountClerkRpcRequestIdentity,
-    ) -> None:
-        super().__init__(
-            reason="TIMEOUT",
-            operation=operation,
-            request_identity=request_identity,
-        )
-
-
-class AccountClerkRpcGenerationMismatchError(AccountClerkRpcUnavailableError):
-    """The socket belongs to a Clerk fenced by a newer durable generation."""
-
-    def __init__(
-        self,
-        *,
-        expected_generation: int,
-        served_generation: int,
-        operation: str,
-        request_identity: AccountClerkRpcRequestIdentity,
-    ) -> None:
-        self.expected_generation = expected_generation
-        self.served_generation = served_generation
-        super().__init__(
-            reason="GENERATION_MISMATCH",
-            operation=operation,
-            request_identity=request_identity,
-        )
-
-
-class AccountClerkRpcMalformedResponseError(AccountClerkRpcError):
-    """The Clerk answered, but not with a supported versioned envelope."""
-
-    def __init__(
-        self,
-        *,
-        operation: str,
-        request_identity: AccountClerkRpcRequestIdentity,
-    ) -> None:
-        super().__init__(
-            reason_code="ACCOUNT_CLERK_PROTOCOL_ERROR:MALFORMED_RESPONSE",
-            operation=operation,
-            request_identity=request_identity,
-        )
-
-
-class AccountClerkRpcRejectedError(AccountClerkRpcError):
-    """The Clerk deliberately rejected a request before accepting its outcome."""
-
-    def __init__(
-        self,
-        *,
-        reason: str,
-        operation: str,
-        request_identity: AccountClerkRpcRequestIdentity,
-    ) -> None:
-        self.reason = reason
-        super().__init__(
-            reason_code="ACCOUNT_CLERK_REJECTED",
-            operation=operation,
-            request_identity=request_identity,
-        )
-
-
-class AccountClerkRpcInternalError(AccountClerkRpcError):
-    """The Clerk had an unexpected server-side failure without exposing details."""
-
-    def __init__(
-        self,
-        *,
-        operation: str,
-        request_identity: AccountClerkRpcRequestIdentity,
-    ) -> None:
-        super().__init__(
-            reason_code="ACCOUNT_CLERK_INTERNAL_ERROR",
-            operation=operation,
-            request_identity=request_identity,
-        )
-
-
-class AccountClerkRpcCancelNamespaceUncertainError(AccountClerkRpcError):
-    """The Clerk recorded cancellation uncertainty rather than a terminal receipt."""
-
-    def __init__(
-        self,
-        *,
-        operation: str,
-        request_identity: AccountClerkRpcRequestIdentity,
-    ) -> None:
-        super().__init__(
-            reason_code="ACCOUNT_CLERK_CANCEL_NAMESPACE_UNCERTAIN",
-            operation=operation,
-            request_identity=request_identity,
-        )
-
-
-class _AccountClerkRpcRequestRejected(ValueError):
-    """Safe server-side rejection for malformed or unsupported requests."""
-
-    def __init__(self, reason: str) -> None:
-        super().__init__(reason)
-        self.reason = reason
 
 
 class AccountClerkCallbackPersistenceError(RuntimeError):
@@ -343,7 +164,7 @@ class AccountClerkRpcClient:
         except (KeyError, ValidationError, TypeError) as exc:
             raise AccountClerkRpcMalformedResponseError(
                 operation="submit",
-                request_identity=_request_identity({"intent": intent.model_dump(mode="json")}),
+                request_identity=request_identity({"intent": intent.model_dump(mode="json")}),
             ) from exc
 
     async def submit_recovery_flatten(self, intent: AccountOwnerSubmitIntent) -> AccountClerkRecoveryFlattenReceipt:
@@ -363,7 +184,7 @@ class AccountClerkRpcClient:
         except (KeyError, ValidationError, TypeError) as exc:
             raise AccountClerkRpcMalformedResponseError(
                 operation="recovery_flatten",
-                request_identity=_request_identity(request),
+                request_identity=request_identity(request),
             ) from exc
 
     async def submit_recovery_flatten_batch(
@@ -392,7 +213,7 @@ class AccountClerkRpcClient:
         except (KeyError, ValidationError, TypeError) as exc:
             raise AccountClerkRpcMalformedResponseError(
                 operation="recovery_flatten_batch",
-                request_identity=_request_identity(request),
+                request_identity=request_identity(request),
             ) from exc
 
     async def cancel_namespace(
@@ -408,7 +229,7 @@ class AccountClerkRpcClient:
         except (KeyError, ValidationError, TypeError) as exc:
             raise AccountClerkRpcMalformedResponseError(
                 operation="cancel_namespace",
-                request_identity=_request_identity(request),
+                request_identity=request_identity(request),
             ) from exc
 
     async def submit_operator_recovery_flatten(
@@ -428,7 +249,7 @@ class AccountClerkRpcClient:
         except (KeyError, ValidationError, TypeError) as exc:
             raise AccountClerkRpcMalformedResponseError(
                 operation="recovery_flatten",
-                request_identity=_request_identity(request),
+                request_identity=request_identity(request),
             ) from exc
 
     async def apply_operator_adjustment(self, request: JournalCureRequest) -> JournalCureReceipt:
@@ -441,7 +262,7 @@ class AccountClerkRpcClient:
         except (KeyError, ValidationError, TypeError) as exc:
             raise AccountClerkRpcMalformedResponseError(
                 operation="operator_adjustment",
-                request_identity=_request_identity(rpc_request),
+                request_identity=request_identity(rpc_request),
             ) from exc
 
     async def drain_events(
@@ -501,25 +322,25 @@ class AccountClerkRpcClient:
         except (KeyError, ValidationError, TypeError, ValueError) as exc:
             raise AccountClerkRpcMalformedResponseError(
                 operation="drain_events",
-                request_identity=_request_identity(request),
+                request_identity=request_identity(request),
             ) from exc
 
     async def _request(self, request: dict[str, object]) -> dict[str, object]:
-        operation = _request_operation(request)
-        request_identity = _request_identity(request)
+        operation = request_operation(request)
+        request_identity_value = request_identity(request)
         if not self._socket_path.exists():
             raise AccountClerkRpcUnavailableError(
                 reason="SOCKET_MISSING",
                 operation=operation,
-                request_identity=request_identity,
+                request_identity=request_identity_value,
             )
 
         writer: asyncio.StreamWriter | None = None
         try:
-            async with _request_timeout(_request_timeout_s(operation)):
+            async with _request_timeout(request_timeout_s(operation)):
                 reader, writer, _served_generation = await self._open_generation_checked_connection(
                     operation=operation,
-                    request_identity=request_identity,
+                    request_identity=request_identity_value,
                 )
                 writer.write((json.dumps(request) + "\n").encode())
                 await writer.drain()
@@ -527,13 +348,13 @@ class AccountClerkRpcClient:
         except TimeoutError as exc:
             raise AccountClerkRpcTimeoutError(
                 operation=operation,
-                request_identity=request_identity,
+                request_identity=request_identity_value,
             ) from exc
         except (ConnectionError, OSError) as exc:
             raise AccountClerkRpcUnavailableError(
                 reason="SOCKET_CONNECTION_LOST",
                 operation=operation,
-                request_identity=request_identity,
+                request_identity=request_identity_value,
             ) from exc
         finally:
             if writer is not None:
@@ -544,12 +365,12 @@ class AccountClerkRpcClient:
             raise AccountClerkRpcUnavailableError(
                 reason="EMPTY_RESPONSE",
                 operation=operation,
-                request_identity=request_identity,
+                request_identity=request_identity_value,
             )
-        return _decode_response(
+        return decode_response(
             line,
             operation=operation,
-            request_identity=request_identity,
+            request_identity=request_identity_value,
         )
 
     async def _open_generation_checked_connection(
@@ -567,7 +388,7 @@ class AccountClerkRpcClient:
                 request_identity=request_identity,
             ) from exc
         try:
-            handshake = _decode_generation_handshake(
+            handshake = decode_generation_handshake(
                 await reader.readline(),
                 operation=operation,
                 request_identity=request_identity,
@@ -681,23 +502,23 @@ class AccountClerkRpcServer:
                 ).encode()
             )
             await writer.drain()
-            request = _decode_request(await reader.readline())
-            operation = _request_operation(request)
+            request = decode_request(await reader.readline())
+            operation = request_operation(request)
             response: AccountClerkRpcSuccessEnvelope | AccountClerkRpcErrorEnvelope = await self._dispatch(request)
         except _AccountClerkRpcRequestRejected as exc:
-            response = _rejected_envelope(exc.reason)
+            response = rejected_envelope(exc.reason)
         except AccountClerkIntentRejected as exc:
-            response = _rejected_envelope(exc.reason)
+            response = rejected_envelope(exc.reason)
         except JournalCureError as exc:
-            response = _rejected_envelope(exc.reason_code)
+            response = rejected_envelope(exc.reason_code)
         except AccountClerkGenerationFencedError:
-            response = _rejected_envelope("CLERK_GENERATION_STALE")
+            response = rejected_envelope("CLERK_GENERATION_STALE")
         except AccountClerkCancelNamespaceUncertainError:
             response = AccountClerkRpcErrorEnvelope(
                 reason_code="ACCOUNT_CLERK_CANCEL_NAMESPACE_UNCERTAIN"
             )
         except (json.JSONDecodeError, ValidationError):
-            response = _rejected_envelope("INVALID_REQUEST")
+            response = rejected_envelope("INVALID_REQUEST")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -734,11 +555,11 @@ class AccountClerkRpcServer:
         self,
         request: dict[str, object],
     ) -> AccountClerkRpcSuccessEnvelope | AccountClerkRpcErrorEnvelope:
-        operation = _request_operation(request)
+        operation = request_operation(request)
         if self._closing and operation in _WRITE_OPERATIONS:
             raise _AccountClerkRpcRequestRejected("CLERK_RPC_CLOSED")
         if operation == "submit":
-            intent = AccountOwnerSubmitIntent.model_validate(_request_object(request, "intent"))
+            intent = AccountOwnerSubmitIntent.model_validate(request_object(request, "intent"))
             recorded, broker_acked = await self._clerk.submit_intent(intent)
             return AccountClerkRpcSuccessEnvelope(
                 payload={
@@ -747,16 +568,16 @@ class AccountClerkRpcServer:
                 }
             )
         if operation == "recovery_flatten":
-            intent = AccountOwnerSubmitIntent.model_validate(_request_object(request, "intent"))
+            intent = AccountOwnerSubmitIntent.model_validate(request_object(request, "intent"))
             actor = request.get("actor")
             if actor not in ("bot", "operator"):
                 raise _AccountClerkRpcRequestRejected("INVALID_RECOVERY_ACTOR")
             recovery = await self._clerk.submit_recovery_flatten(
                 intent,
                 actor=actor,
-                actor_strategy_instance_id=_optional_string(request, "actor_strategy_instance_id"),
-                actor_run_id=_optional_string(request, "actor_run_id"),
-                actor_bot_order_namespace=_optional_string(request, "actor_bot_order_namespace"),
+                actor_strategy_instance_id=optional_string(request, "actor_strategy_instance_id"),
+                actor_run_id=optional_string(request, "actor_run_id"),
+                actor_bot_order_namespace=optional_string(request, "actor_bot_order_namespace"),
             )
             return AccountClerkRpcSuccessEnvelope(
                 payload={"recovery_flatten": recovery.model_dump(mode="json")}
@@ -772,21 +593,21 @@ class AccountClerkRpcServer:
             recovery = await self._clerk.submit_recovery_flatten_batch(
                 intents,
                 actor=actor,
-                actor_strategy_instance_id=_optional_string(request, "actor_strategy_instance_id"),
-                actor_run_id=_optional_string(request, "actor_run_id"),
-                actor_bot_order_namespace=_optional_string(request, "actor_bot_order_namespace"),
+                actor_strategy_instance_id=optional_string(request, "actor_strategy_instance_id"),
+                actor_run_id=optional_string(request, "actor_run_id"),
+                actor_bot_order_namespace=optional_string(request, "actor_bot_order_namespace"),
             )
             return AccountClerkRpcSuccessEnvelope(
                 payload={"recovery_flattened": [item.model_dump(mode="json") for item in recovery]}
             )
         if operation == "cancel_namespace":
-            intent = AccountOwnerSubmitIntent.model_validate(_request_object(request, "intent"))
+            intent = AccountOwnerSubmitIntent.model_validate(request_object(request, "intent"))
             receipt = await self._clerk.cancel_namespace(intent)
             return AccountClerkRpcSuccessEnvelope(
                 payload={"cancel_confirmed": receipt.model_dump(mode="json")}
             )
         if operation == "operator_adjustment":
-            cure_request = JournalCureRequest.model_validate(_request_object(request, "request"))
+            cure_request = JournalCureRequest.model_validate(request_object(request, "request"))
             if self._operator_adjustment_handler is None:
                 raise _AccountClerkRpcRequestRejected("OPERATOR_ADJUSTMENT_UNAVAILABLE")
             receipt = await self._operator_adjustment_handler(cure_request)
@@ -794,7 +615,7 @@ class AccountClerkRpcServer:
                 payload={"operator_adjustment": receipt.model_dump(mode="json")}
             )
         consumer = self._validated_event_consumer(request)
-        after_seq = _required_nonnegative_int(request, "after_seq")
+        after_seq = required_nonnegative_int(request, "after_seq")
         events = await asyncio.to_thread(self._journal_events_after, consumer, after_seq)
         return AccountClerkRpcSuccessEnvelope(
             payload={"events": events}
@@ -808,10 +629,10 @@ class AccountClerkRpcServer:
 
         consumer = AccountClerkEventConsumerIdentity.model_validate(
             {
-                "account_id": _required_string(request, "account_id"),
-                "strategy_instance_id": _required_string(request, "strategy_instance_id"),
-                "run_id": _required_string(request, "run_id"),
-                "bot_order_namespace": _required_string(request, "bot_order_namespace"),
+                "account_id": required_string(request, "account_id"),
+                "strategy_instance_id": required_string(request, "strategy_instance_id"),
+                "run_id": required_string(request, "run_id"),
+                "bot_order_namespace": required_string(request, "bot_order_namespace"),
             }
         )
         if consumer.account_id != self._clerk._account_id:
@@ -923,142 +744,6 @@ class AccountClerkRpcServer:
             await self._callback_queue.join()
         if raise_on_failure and self._callback_failure is not None:
             raise AccountClerkCallbackPersistenceError(self._callback_failure)
-
-
-def _request_operation(request: Mapping[str, object]) -> AccountClerkRpcOperation:
-    operation = request.get("operation")
-    if operation not in (
-        "submit",
-        "cancel_namespace",
-        "recovery_flatten",
-        "recovery_flatten_batch",
-        "operator_adjustment",
-        "drain_events",
-    ):
-        raise _AccountClerkRpcRequestRejected("UNKNOWN_OPERATION")
-    return cast(AccountClerkRpcOperation, operation)
-
-
-def _request_timeout_s(operation: AccountClerkRpcOperation) -> float:
-    return (
-        ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S
-        if operation in ("recovery_flatten", "recovery_flatten_batch")
-        else ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S
-    )
-
-
-def _request_identity(request: Mapping[str, object]) -> AccountClerkRpcRequestIdentity:
-    intent = request.get("intent")
-    if not isinstance(intent, Mapping):
-        return AccountClerkRpcRequestIdentity(intent_id=None, order_ref=None)
-    intent_id = intent.get("intent_id")
-    order_ref = intent.get("order_ref")
-    return AccountClerkRpcRequestIdentity(
-        intent_id=intent_id if isinstance(intent_id, str) else None,
-        order_ref=order_ref if isinstance(order_ref, str) else None,
-    )
-
-
-def _decode_request(line: bytes) -> dict[str, object]:
-    if not line:
-        raise _AccountClerkRpcRequestRejected("EMPTY_REQUEST")
-    payload = json.loads(line)
-    if not isinstance(payload, dict):
-        raise _AccountClerkRpcRequestRejected("INVALID_REQUEST")
-    return cast(dict[str, object], payload)
-
-
-def _decode_generation_handshake(
-    line: bytes,
-    *,
-    operation: str,
-    request_identity: AccountClerkRpcRequestIdentity,
-) -> AccountClerkRpcGenerationHandshake:
-    try:
-        if not line:
-            raise ValueError("Account Clerk RPC generation handshake is empty")
-        payload = json.loads(line)
-        if not isinstance(payload, dict):
-            raise TypeError("Account Clerk RPC generation handshake is not an object")
-        return AccountClerkRpcGenerationHandshake.model_validate(payload)
-    except (json.JSONDecodeError, TypeError, ValidationError, ValueError) as exc:
-        raise AccountClerkRpcMalformedResponseError(
-            operation=operation,
-            request_identity=request_identity,
-        ) from exc
-
-
-def _decode_response(
-    line: bytes,
-    *,
-    operation: str,
-    request_identity: AccountClerkRpcRequestIdentity,
-) -> dict[str, object]:
-    try:
-        payload = json.loads(line)
-        if not isinstance(payload, dict):
-            raise TypeError("Account Clerk RPC response is not an object")
-        outcome = payload.get("outcome")
-        if outcome == "success":
-            return AccountClerkRpcSuccessEnvelope.model_validate(payload).payload
-        if outcome != "error":
-            raise ValueError("Account Clerk RPC response has no supported outcome")
-        error = AccountClerkRpcErrorEnvelope.model_validate(payload)
-    except (json.JSONDecodeError, TypeError, ValidationError, ValueError) as exc:
-        raise AccountClerkRpcMalformedResponseError(
-            operation=operation,
-            request_identity=request_identity,
-        ) from exc
-
-    if error.reason_code == "ACCOUNT_CLERK_REJECTED":
-        raise AccountClerkRpcRejectedError(
-            reason=error.reason or "REJECTION_REASON_MISSING",
-            operation=operation,
-            request_identity=request_identity,
-        )
-    if error.reason_code == "ACCOUNT_CLERK_CANCEL_NAMESPACE_UNCERTAIN":
-        raise AccountClerkRpcCancelNamespaceUncertainError(
-            operation=operation,
-            request_identity=request_identity,
-        )
-    raise AccountClerkRpcInternalError(operation=operation, request_identity=request_identity)
-
-
-def _rejected_envelope(reason: str) -> AccountClerkRpcErrorEnvelope:
-    return AccountClerkRpcErrorEnvelope(
-        reason_code="ACCOUNT_CLERK_REJECTED",
-        reason=reason,
-    )
-
-
-def _request_object(request: Mapping[str, object], key: str) -> dict[str, object]:
-    value = request.get(key)
-    if not isinstance(value, dict):
-        raise _AccountClerkRpcRequestRejected("INVALID_REQUEST")
-    return value
-
-
-def _required_string(request: Mapping[str, object], key: str) -> str:
-    value = request.get(key)
-    if not isinstance(value, str) or not value:
-        raise _AccountClerkRpcRequestRejected("INVALID_REQUEST")
-    return value
-
-
-def _required_nonnegative_int(request: Mapping[str, object], key: str) -> int:
-    value = request.get(key)
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        raise _AccountClerkRpcRequestRejected("INVALID_REQUEST")
-    return value
-
-
-def _optional_string(request: Mapping[str, object], key: str) -> str | None:
-    value = request.get(key)
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise _AccountClerkRpcRequestRejected("INVALID_REQUEST")
-    return value
 
 
 __all__ = [
