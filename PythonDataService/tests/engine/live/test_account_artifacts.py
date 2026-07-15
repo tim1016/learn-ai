@@ -122,6 +122,7 @@ def test_account_clerk_generation_and_lease_are_account_rooted(tmp_path: Path) -
         "DU-123456",
         "DU 123456",
         "DU/123456",
+        "DU%2F123456",
     ],
 )
 def test_account_artifacts_root_rejects_path_like_account_id(
@@ -152,6 +153,20 @@ def test_account_artifacts_root_rejects_symlink_escape(tmp_path: Path) -> None:
         account_artifacts_root(tmp_path, "DU123456")
 
 
+def test_account_artifacts_root_rejects_sibling_prefix_symlink_escape(tmp_path: Path) -> None:
+    accounts_root = tmp_path / "accounts"
+    accounts_root.mkdir()
+    sibling_root = tmp_path / "accounts-evil" / "DU123456"
+    sibling_root.mkdir(parents=True)
+    try:
+        (accounts_root / "DU123456").symlink_to(sibling_root, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable in this test environment: {exc}")
+
+    with pytest.raises(AccountArtifactError, match="path traversal"):
+        account_artifacts_root(tmp_path, "DU123456")
+
+
 def test_append_account_event_rejects_symlinked_event_file(tmp_path: Path) -> None:
     root = account_artifacts_root(tmp_path, "DU123456")
     root.mkdir(parents=True)
@@ -171,6 +186,22 @@ def test_append_account_event_rejects_symlinked_event_file(tmp_path: Path) -> No
                 "recorded_at_ms": 1_700_000_000_000,
             },
         )
+
+    assert not outside.exists()
+
+
+def test_read_account_events_rejects_symlinked_event_file(tmp_path: Path) -> None:
+    root = account_artifacts_root(tmp_path, "DU123456")
+    root.mkdir(parents=True)
+    outside = tmp_path / "outside-events.jsonl"
+    event_path = root / account_artifacts.ACCOUNT_EVENTS_FILENAME
+    try:
+        event_path.symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable in this test environment: {exc}")
+
+    with pytest.raises(AccountArtifactError, match="artifact path traversal"):
+        read_account_events(tmp_path, "DU123456")
 
     assert not outside.exists()
 

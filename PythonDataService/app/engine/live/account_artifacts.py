@@ -477,7 +477,24 @@ def clear_account_freeze(
 def read_account_events(artifacts_root: Path, account_id: str) -> list[dict]:
     """Read account events strictly for canonical safety consumers."""
 
-    path = _account_artifact_file_path(artifacts_root, account_id, ACCOUNT_EVENTS_FILENAME)
+    # Keep this resolved-path containment check at the read sink.  CodeQL must
+    # be able to see the user-provided account id constrained at the same
+    # boundary that opens the durable event ledger.
+    match = _ACCOUNT_ID_RE.fullmatch(account_id)
+    if match is None or account_id != account_id.strip():
+        raise AccountArtifactError(f"invalid account_id: {account_id!r}")
+    safe_account_id = match.group(0)
+    accounts_root = os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts"))
+    account_root = os.path.realpath(os.path.join(accounts_root, safe_account_id))
+    accounts_prefix = accounts_root if accounts_root.endswith(os.sep) else f"{accounts_root}{os.sep}"
+    if not account_root.startswith(accounts_prefix):
+        raise AccountArtifactError(f"path traversal detected for account_id: {account_id!r}")
+    event_filename = os.path.basename(ACCOUNT_EVENTS_FILENAME)
+    event_path = os.path.realpath(os.path.join(account_root, event_filename))
+    account_prefix = account_root if account_root.endswith(os.sep) else f"{account_root}{os.sep}"
+    if event_filename != ACCOUNT_EVENTS_FILENAME or not event_path.startswith(account_prefix):
+        raise AccountArtifactError(f"artifact path traversal detected for account_id: {account_id!r}")
+    path = Path(event_path)
     if not path.is_file():
         return []
     return _parse_account_event_bytes(path, path.read_bytes(), tolerant=False)
@@ -992,11 +1009,24 @@ def _append_account_event(
     *,
     only_if_receipt_absent: bool = False,
 ) -> bool:
-    path = _account_artifact_file_path(
-        artifacts_root,
-        account_id,
-        ACCOUNT_EVENTS_FILENAME,
-    )
+    # Keep the sanitizer and resolved containment check adjacent to every
+    # write-side sink.  This protects the append-only ledger from traversal,
+    # symlink escape, and sibling-prefix confusion and is visible to CodeQL.
+    match = _ACCOUNT_ID_RE.fullmatch(account_id)
+    if match is None or account_id != account_id.strip():
+        raise AccountArtifactError(f"invalid account_id: {account_id!r}")
+    safe_account_id = match.group(0)
+    accounts_root = os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts"))
+    account_root = os.path.realpath(os.path.join(accounts_root, safe_account_id))
+    accounts_prefix = accounts_root if accounts_root.endswith(os.sep) else f"{accounts_root}{os.sep}"
+    if not account_root.startswith(accounts_prefix):
+        raise AccountArtifactError(f"path traversal detected for account_id: {account_id!r}")
+    event_filename = os.path.basename(ACCOUNT_EVENTS_FILENAME)
+    event_path = os.path.realpath(os.path.join(account_root, event_filename))
+    account_prefix = account_root if account_root.endswith(os.sep) else f"{account_root}{os.sep}"
+    if event_filename != ACCOUNT_EVENTS_FILENAME or not event_path.startswith(account_prefix):
+        raise AccountArtifactError(f"artifact path traversal detected for account_id: {account_id!r}")
+    path = Path(event_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with _file_lock(path):
         if only_if_receipt_absent:
