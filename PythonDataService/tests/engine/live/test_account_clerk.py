@@ -16,7 +16,9 @@ import app.engine.live.account_clerk as account_clerk_module
 import app.engine.live.account_clerk_journal as account_clerk_journal_module
 from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
+    AccountAuditedOverride,
     advance_account_clerk_generation,
+    clear_account_freeze,
     read_account_clerk_generation,
     read_account_clerk_lease,
     read_account_events,
@@ -1062,6 +1064,52 @@ async def test_reconciler_reasserts_freeze_after_halt_journal_crash_window(tmp_p
     assert read_account_freeze(tmp_path, ACCOUNT) is None
     assert await AccountClerkReconciler(clerk).reconcile_once() == ()
     assert read_account_freeze(tmp_path, ACCOUNT) is not None
+
+
+@pytest.mark.asyncio
+async def test_reconciler_does_not_reassert_halt_freeze_after_audited_clear(tmp_path: Path) -> None:
+    """#1066: an operator clear supersedes the HALT crash-repair path."""
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=_FakeBroker(),
+        now_ms=lambda: START_MS,
+    )
+    intent = _intent("bot-a", "run-a", "halt-operator-clear")
+    await clerk.record_intent(intent)
+    await clerk.append_reconciliation_resolution(
+        intent,
+        verdict="HALT",
+        reason="simulated crash before freeze write",
+    )
+    reconciler = AccountClerkReconciler(clerk, now_ms=lambda: START_MS + 1)
+
+    assert await reconciler.reconcile_once() == ()
+    clear_account_freeze(
+        tmp_path,
+        audited_override=AccountAuditedOverride(
+            account_id=ACCOUNT,
+            override_id="override-halt-clear",
+            approved_decision="poison_run",
+            reason="operator verified the halted intent",
+            approved_by="operator",
+            approved_at_ms=START_MS + 2,
+            valid_until_ms=START_MS + 60_000,
+            prior_evidence={"intent_id": intent.intent_id},
+            next_reconciliation_step="RECHECK_BROKER_ON_RECONNECT",
+            strategy_instance_id="bot-a",
+            run_id="run-a",
+            bot_order_namespace=intent.bot_order_namespace,
+            affected_order_refs=(intent.order_ref,),
+        ),
+        now_ms=START_MS + 3,
+    )
+
+    assert read_account_freeze(tmp_path, ACCOUNT) is None
+    assert await reconciler.reconcile_once() == ()
+    assert read_account_freeze(tmp_path, ACCOUNT) is None
 
 
 @pytest.mark.asyncio

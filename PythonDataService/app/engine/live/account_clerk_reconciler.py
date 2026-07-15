@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from app.engine.live.account_artifacts import (
     AccountFreezeEvidence,
     append_account_event,
+    read_account_events,
     read_account_freeze,
     write_account_freeze,
 )
@@ -105,22 +106,13 @@ class AccountClerkReconciler:
 
         if read_account_freeze(self._clerk._artifacts_root, self._clerk._account_id) is not None:
             return
-        if not any(
-            entry.entry_kind == "reconciliation" and entry.reconciliation_verdict == "HALT"
-            for entry in entries
-        ):
+        halt = _latest_unresolved_halt(entries)
+        if halt is None:
             return
-        write_account_freeze(
-            self._clerk._artifacts_root,
-            AccountFreezeEvidence(
-                account_id=self._clerk._account_id,
-                freeze_kind="exposure",
-                reason="ACCOUNT_CLERK_RECONCILIATION_NOT_PROVABLE",
-                source="account_clerk_reconciler",
-                recorded_at_ms=self._now_ms(),
-                operator_next_step="CHECK_IBKR",
-            ),
-        )
+        events = read_account_events(self._clerk._artifacts_root, self._clerk._account_id)
+        if _halt_freeze_was_cleared(events, halt):
+            return
+        self._write_halt_freeze()
 
     async def start(self) -> None:
         if self._task is None:
@@ -147,17 +139,7 @@ class AccountClerkReconciler:
             return None
         verdict = SubmitVerdict(outcome.verdict)
         if verdict is SubmitVerdict.HALT:
-            write_account_freeze(
-                self._clerk._artifacts_root,
-                AccountFreezeEvidence(
-                    account_id=self._clerk._account_id,
-                    freeze_kind="exposure",
-                    reason="ACCOUNT_CLERK_RECONCILIATION_NOT_PROVABLE",
-                    source="account_clerk_reconciler",
-                    recorded_at_ms=self._now_ms(),
-                    operator_next_step="CHECK_IBKR",
-                ),
-            )
+            self._write_halt_freeze()
         return ReconciliationResolution(outcome.intent_id, outcome.order_ref, verdict, outcome.reason)
 
     async def _resolve_uncertain_cancel_namespace(
@@ -224,6 +206,50 @@ class AccountClerkReconciler:
                 operator_next_step="CHECK_IBKR",
             ),
         )
+
+    def _write_halt_freeze(self) -> None:
+        write_account_freeze(
+            self._clerk._artifacts_root,
+            AccountFreezeEvidence(
+                account_id=self._clerk._account_id,
+                freeze_kind="exposure",
+                reason="ACCOUNT_CLERK_RECONCILIATION_NOT_PROVABLE",
+                source="account_clerk_reconciler",
+                recorded_at_ms=self._now_ms(),
+                operator_next_step="CHECK_IBKR",
+            ),
+        )
+
+def _latest_unresolved_halt(
+    entries: list[AccountClerkJournalEntry],
+) -> AccountClerkJournalEntry | None:
+    """Return the newest HALT that no later adoption superseded."""
+
+    halts: dict[str, AccountClerkJournalEntry] = {}
+    for entry in entries:
+        if entry.intent is None or entry.entry_kind != "reconciliation":
+            continue
+        if entry.reconciliation_verdict == "HALT":
+            halts[entry.intent.intent_id] = entry
+        elif entry.reconciliation_verdict == "RECOVER_ADOPT":
+            halts.pop(entry.intent.intent_id, None)
+    return max(halts.values(), key=lambda entry: entry.seq, default=None)
+
+
+def _halt_freeze_was_cleared(
+    account_events: list[dict],
+    halt: AccountClerkJournalEntry,
+) -> bool:
+    """A later audited clear is not the crash window this repair owns."""
+
+    return any(
+        event.get("event_type") == "account_freeze_cleared"
+        and event.get("source") == "account_clerk_reconciler"
+        and event.get("reason") == "ACCOUNT_CLERK_RECONCILIATION_NOT_PROVABLE"
+        and isinstance(event.get("cleared_at_ms"), int)
+        and event["cleared_at_ms"] >= halt.recorded_at_ms
+        for event in account_events
+    )
 
 
 def _unresolved_intents(
