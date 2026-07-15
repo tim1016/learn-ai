@@ -554,7 +554,6 @@ class LiveEngine:
         # AccountOwnerSubmitIntent objects to this callable instead of calling
         # the broker adapter directly.
         account_owner_submitter: object = None,
-        account_owner_broker_writer: Callable[..., Awaitable[object]] | None = None,
         account_clerk_namespace_canceller: object = None,
         account_registry_gate_enabled: bool = True,
         account_gate_authority: Literal["account_truth", "observation_lease"] = (
@@ -709,7 +708,6 @@ class LiveEngine:
         self._artifacts_root_for_lease = artifacts_root_for_lease
         self._watchdog_factory = watchdog_factory
         self._account_owner_submitter = account_owner_submitter
-        self._account_owner_broker_writer = account_owner_broker_writer
         self._account_clerk_namespace_canceller = account_clerk_namespace_canceller
         self._account_registry_gate_enabled = account_registry_gate_enabled
         self._account_gate_authority = account_gate_authority
@@ -2678,14 +2676,7 @@ class LiveEngine:
     async def _cancel_open_orders_for_managed_write(self) -> list[int]:
         if self._account_clerk_namespace_canceller is not None:
             return await self._cancel_namespace_through_clerk()
-        writer = self._account_owner_broker_writer
-        if writer is None:
-            return await self._broker.cancel_open_orders()
-        cancelled = await writer(
-            boundary="broker.cancel_open_orders",
-            write=self._broker.cancel_open_orders,
-        )
-        return list(cancelled)
+        return await self._broker.cancel_open_orders()
 
     async def _cancel_namespace_through_clerk(self) -> list[int]:
         """Build one durable cancellation identity and submit it to the Clerk."""

@@ -2113,9 +2113,6 @@ def cmd_start(args: argparse.Namespace) -> int:
 
         account_clerk_submitter = _submit_to_account_clerk
 
-        async def _reject_direct_broker_write(*, boundary: str, write: object) -> object:
-            del write
-            raise RuntimeError(f"ACCOUNT_CLERK_DIRECT_BROKER_WRITE_FORBIDDEN:{boundary}")
     from app.broker.ibkr.config import get_settings as get_ibkr_settings
 
     engine = LiveEngine(
@@ -2156,9 +2153,6 @@ def cmd_start(args: argparse.Namespace) -> int:
         account_registry_gate_enabled=bool(ledger.strategy_instance_id),
         account_gate_authority=get_ibkr_settings().account_gate_authority,
         account_owner_submitter=account_clerk_submitter,
-        account_owner_broker_writer=(
-            _reject_direct_broker_write if account_owner is not None else None
-        ),
         account_clerk_namespace_canceller=(
             _cancel_namespace_through_account_clerk if account_owner is not None else None
         ),
@@ -2770,7 +2764,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                             recovery_account_id=ledger.account_id,
                             recovery_strategy_instance_id=strategy_instance_id,
                             recovery_run_id=ledger.run_id,
-                            recovery_owner_generation=_account_owner_generation_provider(),
+                            recovery_owner_generation=account_owner_generation,
                             recovery_artifacts_root=_artifacts_root,
                             failed_symbols=failed_symbols,
                         )
