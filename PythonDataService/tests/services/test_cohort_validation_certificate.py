@@ -55,7 +55,7 @@ async def _seed_evidence(root: Path) -> tuple[CohortValidationCertificateService
     return CohortValidationCertificateService(artifacts_root=root), receipt
 
 
-def _journal_entry() -> SimpleNamespace:
+def _journal_entry(exec_id: str = "exec-a") -> SimpleNamespace:
     intent = SimpleNamespace(
         strategy_instance_id="spy-a",
         run_id="run-a",
@@ -68,21 +68,37 @@ def _journal_entry() -> SimpleNamespace:
         broker_event=None,
         order_id=17,
         perm_id=23,
-        exec_id="exec-a",
+        exec_id=exec_id,
+    )
+
+
+def _fill_event(entry: SimpleNamespace) -> SimpleNamespace:
+    return SimpleNamespace(
+        event_type="fill",
+        side="BUY" if entry.exec_id == "exec-entry" else "SELL",
+        fill_quantity=1.0,
+        order_id=entry.order_id,
+        perm_id=entry.perm_id,
+        exec_id=entry.exec_id,
     )
 
 
 async def test_certificate_is_deterministic_and_refuses_overwrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     service, receipt = await _seed_evidence(tmp_path)
-    monkeypatch.setattr(certificate_module, "read_account_clerk_journal", lambda *_args: [_journal_entry()])
+    monkeypatch.setattr(
+        certificate_module,
+        "read_account_clerk_journal",
+        lambda *_args: [_journal_entry("exec-entry"), _journal_entry("exec-exit")],
+    )
     monkeypatch.setattr(certificate_module, "project_journal_exposure", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(certificate_module, "normalize_journal_broker_event", _fill_event)
 
     first = await service.generate(account_id=receipt.account_id, cohort_id=receipt.cohort_id)
     second = await service.generate(account_id=receipt.account_id, cohort_id=receipt.cohort_id)
 
     assert first.model_dump_json() == second.model_dump_json()
     assert first.verdict == "passed"
-    assert first.round_trips[0].exec_ids == ["exec-a"]
+    assert first.round_trips[0].exec_ids == ["exec-entry", "exec-exit"]
     service.write_once(first)
     assert service.read(account_id=receipt.account_id, cohort_id=receipt.cohort_id) == first
     with pytest.raises(FileExistsError):
@@ -121,7 +137,12 @@ async def test_certificate_is_incomplete_when_no_five_second_sample_exists(tmp_p
     )
     record_cohort_batch_launch_receipt(tmp_path, receipt)
     service = CohortValidationCertificateService(artifacts_root=tmp_path)
-    monkeypatch.setattr(certificate_module, "read_account_clerk_journal", lambda *_args: [_journal_entry()])
+    monkeypatch.setattr(
+        certificate_module,
+        "read_account_clerk_journal",
+        lambda *_args: [_journal_entry("exec-entry"), _journal_entry("exec-exit")],
+    )
+    monkeypatch.setattr(certificate_module, "normalize_journal_broker_event", _fill_event)
     monkeypatch.setattr(certificate_module, "project_journal_exposure", lambda *_args, **_kwargs: ())
 
     certificate = await service.generate(account_id=receipt.account_id, cohort_id=receipt.cohort_id)
@@ -164,8 +185,13 @@ async def test_certificate_api_reads_the_immutable_artifact(tmp_path: Path, monk
     from app.routers import cohort_batch_launch
 
     service, receipt = await _seed_evidence(tmp_path)
-    monkeypatch.setattr(certificate_module, "read_account_clerk_journal", lambda *_args: [_journal_entry()])
+    monkeypatch.setattr(
+        certificate_module,
+        "read_account_clerk_journal",
+        lambda *_args: [_journal_entry("exec-entry"), _journal_entry("exec-exit")],
+    )
     monkeypatch.setattr(certificate_module, "project_journal_exposure", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(certificate_module, "normalize_journal_broker_event", _fill_event)
     app.dependency_overrides[cohort_batch_launch.get_cohort_validation_certificate_service] = lambda: service
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

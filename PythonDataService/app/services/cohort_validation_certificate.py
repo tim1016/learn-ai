@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 from pathlib import Path
+from typing import TypedDict
 
 from app.engine.live.account_artifacts import CohortBatchLaunchReceipt, account_artifacts_root, read_account_events
 from app.engine.live.account_clerk_journal import read_account_clerk_journal
@@ -143,12 +145,31 @@ class CohortValidationCertificateService:
         return samples
 
 
+class _RoundTripFold(TypedDict):
+    refs: set[str]
+    order_ids: set[int]
+    perm_ids: set[int]
+    exec_ids: set[str]
+    exposure: float
+    saw_nonzero: bool
+
+
 def _round_trips(journal, namespaces: set[str], exposure: dict[str, dict[str, float]]) -> list[CohortCertificateRoundTrip]:
-    rows: dict[str, dict[str, set]] = {}
+    rows: dict[str, _RoundTripFold] = {}
     for entry in journal:
         if entry.intent is None or entry.intent.bot_order_namespace not in namespaces:
             continue
-        row = rows.setdefault(entry.intent.bot_order_namespace, {"refs": set(), "order_ids": set(), "perm_ids": set(), "exec_ids": set()})
+        row = rows.setdefault(
+            entry.intent.bot_order_namespace,
+            {
+                "refs": set(),
+                "order_ids": set(),
+                "perm_ids": set(),
+                "exec_ids": set(),
+                "exposure": 0.0,
+                "saw_nonzero": False,
+            },
+        )
         row["refs"].add(entry.intent.order_ref)
         if entry.order_id is not None:
             row["order_ids"].add(entry.order_id)
@@ -164,6 +185,16 @@ def _round_trips(journal, namespaces: set[str], exposure: dict[str, dict[str, fl
                 row["perm_ids"].add(broker_event.perm_id)
             if broker_event.exec_id:
                 row["exec_ids"].add(broker_event.exec_id)
+            if (
+                broker_event.event_type == "fill"
+                and broker_event.side in {"BUY", "SELL"}
+                and broker_event.fill_quantity is not None
+                and math.isfinite(float(broker_event.fill_quantity))
+            ):
+                current = row["exposure"]
+                current += float(broker_event.fill_quantity) * (1 if broker_event.side == "BUY" else -1)
+                row["exposure"] = current
+                row["saw_nonzero"] = row["saw_nonzero"] or current != 0.0
     return [
         CohortCertificateRoundTrip(
             bot_order_namespace=namespace,
@@ -171,7 +202,8 @@ def _round_trips(journal, namespaces: set[str], exposure: dict[str, dict[str, fl
             order_ids=sorted(row["order_ids"]),
             perm_ids=sorted(row["perm_ids"]),
             exec_ids=sorted(row["exec_ids"]),
-            closed=namespace not in exposure,
+            saw_nonzero_exposure=row["saw_nonzero"],
+            closed=row["saw_nonzero"] and row["exposure"] == 0.0 and namespace not in exposure,
         )
         for namespace, row in sorted(rows.items())
     ]
@@ -203,7 +235,15 @@ def _certificate_reasons(
         reasons.append("INCOMPLETE_ROUND_TRIP_IDENTITY")
     if observed_member_namespace_count != expected_member_count:
         reasons.append("INCOMPLETE_MEMBER_NAMESPACE_IDENTITY")
-    if any(not row.order_refs or not row.order_ids or not row.perm_ids or not row.exec_ids or not row.closed for row in round_trips):
+    if any(
+        not row.order_refs
+        or not row.order_ids
+        or not row.perm_ids
+        or not row.exec_ids
+        or not row.saw_nonzero_exposure
+        or not row.closed
+        for row in round_trips
+    ):
         reasons.append("INCOMPLETE_ROUND_TRIP_IDENTITY")
     if exposure:
         reasons.append("FAILED_NAMESPACE_EXPOSURE_NONZERO")

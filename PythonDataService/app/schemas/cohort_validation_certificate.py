@@ -29,6 +29,7 @@ class CohortCertificateRoundTrip(BaseModel):
     order_ids: list[int]
     perm_ids: list[int]
     exec_ids: list[str]
+    saw_nonzero_exposure: bool
     closed: bool
 
 
