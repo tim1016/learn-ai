@@ -75,8 +75,8 @@ def test_journal_exposure_is_canonical(tmp_path: Path, monkeypatch) -> None:
     assert explained == expected
     legacy["positions"] = {sid: {"SPY": 99}}
     assert collect_fleet_position_explanations(tmp_path / "live_runs") == expected
-    assert any(
-        event["event_type"] == "account_clerk_journal_authority_cutover"
+    assert not any(
+        event["event_type"].startswith("account_clerk_sidecar_journal")
         for event in read_account_events(tmp_path, account)
     )
     assert compute_fleet_contamination({"SPY": 2}, explained)["verdict"] == "clean"
@@ -134,15 +134,12 @@ def test_account_net_fetch_mismatch_blocks_account_fleet_starts(monkeypatch, tmp
     assert "mismatches" in contamination.summary
 
 
-def test_shadow_drift_keeps_legacy_authoritative_and_emits_alarm(tmp_path: Path, monkeypatch) -> None:
+def test_shadow_drift_does_not_make_status_reads_write_or_replace_journal(tmp_path: Path, monkeypatch) -> None:
     account = "DU123456"
     (tmp_path / "accounts" / account).mkdir(parents=True)
     (tmp_path / "accounts" / account / "clerk_journal.jsonl").write_text("", encoding="utf-8")
     monkeypatch.setattr(fleet_contamination, "_collect_journal_position_explanations", lambda _root: {"bot-a": {"SPY": 1}})
     monkeypatch.setattr(fleet_contamination, "_collect_legacy_fleet_position_explanations", lambda _root: {})
 
-    assert collect_fleet_position_explanations(tmp_path / "live_runs") == {}
-
-    [event] = read_account_events(tmp_path, account)
-    assert event["event_type"] == "account_clerk_sidecar_journal_parity"
-    assert event["status"] == "drift"
+    assert collect_fleet_position_explanations(tmp_path / "live_runs") == {"bot-a": {"SPY": 1}}
+    assert read_account_events(tmp_path, account) == []

@@ -109,14 +109,9 @@ def collect_fleet_position_explanations(
         else _collect_journal_position_explanations(root, account_id=account_id)
     )
     if journal_explained is not None:
-        legacy = (
-            _collect_legacy_fleet_position_explanations(root)
-            if account_id is None
-            else _collect_legacy_fleet_position_explanations(root, account_id=account_id)
-        )
-        if _record_sidecar_journal_parity(root, journal_explained, legacy, account_id=account_id):
-            return journal_explained
-        return legacy
+        # Contamination/status reads are pure projections.  Parity evidence
+        # belongs to a bounded background/state-change observer, never here.
+        return journal_explained
 
     # No account journal has ever been created. Retain the legacy read only
     # during the shadow bootstrap; once an account has a Clerk journal its
