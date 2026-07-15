@@ -582,7 +582,8 @@ class RunnerProcessManager:
             else:
                 managed = self._by_run_id(run_id)
                 process_status = (
-                    HostRunnerProcessStatus(
+                    self._persisted_terminal_process_status(run_id)
+                    or HostRunnerProcessStatus(
                         state=HostRunnerProcessState.idle,
                         message=f"No host runner process for {run_id}.",
                     )
@@ -594,6 +595,51 @@ class RunnerProcessManager:
         # the bounded process work after releasing the registry lock.
         self._supervise_account_clerks()
         return process_status
+
+    def _persisted_terminal_process_status(self, run_id: str) -> HostRunnerProcessStatus | None:
+        """Recover a dead run's proof after daemon restart without trusting stale files alone."""
+
+        if _RUN_ID_RE.fullmatch(run_id) is None:
+            return None
+        try:
+            payload = json.loads((self.live_runs_root / run_id / "run_status.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(payload, dict) or payload.get("run_id") != run_id:
+            return None
+
+        ended_at_ms = payload.get("ended_at_ms")
+        host_pid = payload.get("host_pid")
+        exit_code = payload.get("exit_code")
+        exit_reason = payload.get("exit_reason")
+        started_at_ms = payload.get("started_at_ms")
+        if (
+            type(ended_at_ms) is not int
+            or type(host_pid) is not int
+            or host_pid < 1
+            or type(exit_code) is not int
+            or (exit_reason is not None and not isinstance(exit_reason, str))
+        ):
+            return None
+        try:
+            os.kill(host_pid, 0)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            return None
+        else:
+            return None
+
+        return HostRunnerProcessStatus(
+            state=HostRunnerProcessState.exited,
+            run_id=run_id,
+            pid=host_pid,
+            started_at_ms=started_at_ms if type(started_at_ms) is int else None,
+            ended_at_ms=ended_at_ms,
+            exit_code=exit_code,
+            exit_reason=exit_reason,
+            message="Host runner process has a persisted terminal status and its PID is absent.",
+        )
 
     def _status_of(self, managed: ManagedProcess) -> HostRunnerProcessStatus:
         """Build a process-status snapshot from a managed process."""

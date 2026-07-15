@@ -89,7 +89,11 @@
         (retry)="refresh()"
       />
       @if (accountReconciliationAccountId(); as accountId) {
-        <app-legacy-stale-claim-cure [accountId]="accountId" (retired)="refresh()" />
+        <app-legacy-stale-claim-cure
+          [accountId]="accountId"
+          [fleetBlocked]="fleetContamination()?.policy_blocks_starts ?? false"
+          (retired)="refresh()"
+        />
         <app-journal-claim-cure [accountId]="accountId" (cured)="refresh()" />
       }
       <article class="account-outcome-card" aria-labelledby="account-outcome-title">

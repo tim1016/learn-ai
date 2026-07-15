@@ -49,6 +49,11 @@ header p,
   color: var(--bear, #e04f5f);
 }
 
+.empty-state {
+  margin-top: 0.75rem;
+  color: var(--text-secondary, #b2b5be);
+}
+
 @media (max-width: 600px) {
   .legacy-claim-row {
     align-items: stretch;

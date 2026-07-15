@@ -219,6 +219,32 @@ describe('BrokerAccountMonitorComponent', () => {
     });
   });
 
+  it('explains when a fleet block has no legacy claim the backend can safely retire yet', async () => {
+    const liveRuns = new FakeLiveRunsService();
+    liveRuns.getAccountFleet.mockResolvedValue({
+      net_positions: {},
+      explained_total: { SPY: 1 },
+      explained_by_instance: [],
+      residual: { SPY: -1 },
+      verdict: 'contaminated',
+      policy_blocks_starts: true,
+      summary: 'Managed bot artifacts overstate broker position(s): SPY -1.',
+    });
+
+    await render(BrokerAccountMonitorComponent, {
+      providers: [
+        { provide: BrokerService, useValue: new FakeBrokerService() },
+        { provide: BrokerHealthService, useClass: FakeBrokerHealthService },
+        { provide: LiveRunsService, useValue: liveRuns },
+        routeFragment(),
+      ],
+    });
+
+    expect(
+      await screen.findByText(/no stale legacy claim is currently eligible for retirement/i),
+    ).toBeTruthy();
+  });
+
   it('runs account reconciliation from the account truth account id', async () => {
     const broker = new FakeBrokerService();
     await render(BrokerAccountMonitorComponent, {

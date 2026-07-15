@@ -23,6 +23,7 @@ export class LegacyStaleClaimCureComponent {
   private readonly broker = inject(BrokerService);
 
   readonly accountId = input.required<string>();
+  readonly fleetBlocked = input(false);
   readonly retired = output();
   readonly candidates = signal<LegacyStaleClaimCandidate[]>([]);
   readonly loading = signal(false);
