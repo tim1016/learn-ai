@@ -702,6 +702,10 @@ class LivePortfolio:
     # submit is refused before any broker call. The provider must read cached
     # Account Truth only; it must not sweep IBKR from the submit path.
     account_truth_gate_provider: GateResultProvider | None = None
+    # Running bots may complete a bounded continuous account-truth outage,
+    # but must stop adding exposure after the grace window.  Admission uses
+    # the same gate without this runtime grace.
+    account_truth_outage_started_at_ms: int | None = None
     # Shadow-only durable Account Observation Lease comparison. This provider
     # never changes the submit decision until sequence parity has been proven;
     # its outcome is logged and counted against the live Account Truth gate.
@@ -1151,12 +1155,21 @@ class LivePortfolio:
                         ],
                     },
                 )
-        if account_truth_gate is not None and getattr(account_truth_gate, "status", None) != "pass":
-            self.drop_pending_before_submit(
-                drop_reason="account_truth_block",
-                ts_ms=now_ms_utc(),
-            )
-            raise AccountTruthBlockError(gate_result=account_truth_gate)
+        if account_truth_gate is not None and getattr(account_truth_gate, "status", None) == "pass":
+            self.account_truth_outage_started_at_ms = None
+        elif account_truth_gate is not None and not self._pending_orders_reduce_exposure_only():
+            submitted_at_ms = now_ms_utc()
+            if not requires_durable:
+                self.drop_pending_before_submit(drop_reason="account_truth_block", ts_ms=submitted_at_ms)
+                raise AccountTruthBlockError(gate_result=account_truth_gate)
+            if self.account_truth_outage_started_at_ms is None:
+                self.account_truth_outage_started_at_ms = submitted_at_ms
+            if submitted_at_ms - self.account_truth_outage_started_at_ms >= 120_000:
+                self.drop_pending_before_submit(
+                    drop_reason="broker_truth_stale",
+                    ts_ms=submitted_at_ms,
+                )
+                raise AccountTruthBlockError(gate_result=account_truth_gate)
 
         session_state_for_submit: SessionAuthorityState | None = None
         if self.pending_orders and self.session_gate_provider is not None:

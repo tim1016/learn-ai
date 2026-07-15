@@ -286,8 +286,8 @@ def _retired_claim_keys_for_run(
     return cache[account_id]
 
 
-async def fetch_net_positions() -> dict[str, int] | None:
-    """Best-effort net account position by symbol from the broker."""
+async def fetch_net_positions(account_id: str | None = None) -> dict[str, int] | None:
+    """Best-effort net position only when the broker proves the account id."""
 
     try:
         from app.broker.ibkr import account as ibkr_account
@@ -297,6 +297,12 @@ async def fetch_net_positions() -> dict[str, int] | None:
         snapshot = await ibkr_account.fetch_positions(client)
     except Exception as exc:
         logger.info("fleet net-position fetch unavailable: %s", exc)
+        return None
+    if account_id is not None and snapshot.account_id.upper() != account_id.upper():
+        logger.warning(
+            "fleet net-position account mismatch",
+            extra={"requested_account_id": account_id, "broker_account_id": snapshot.account_id},
+        )
         return None
     net: dict[str, int] = {}
     for pos in snapshot.positions:
@@ -311,7 +317,7 @@ async def compute_account_fleet_contamination(
     *,
     account_id: str | None = None,
 ) -> FleetContamination:
-    resolve_net_positions = fetch_positions or fetch_net_positions
+    resolve_net_positions = fetch_positions or (lambda: fetch_net_positions(account_id))
     result = compute_fleet_contamination(
         await resolve_net_positions(),
         collect_fleet_position_explanations(root, account_id=account_id),

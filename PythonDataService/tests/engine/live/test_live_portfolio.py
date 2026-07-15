@@ -462,6 +462,63 @@ async def test_submit_pending_orders_blocks_when_account_truth_rejects_unexplain
 
 
 @pytest.mark.asyncio
+async def test_durable_submit_truth_outage_grace_expires_at_120_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1050: a running live bot fails closed exactly after the outage grace."""
+
+    import app.utils.timestamps as timestamps
+
+    broker = RealBrokerStub()
+    gate = GateResult(
+        gate_id="account.account_truth",
+        status="block",
+        source="test",
+        operator_reason="ACCOUNT_TRUTH_STALE",
+        operator_next_step="REFRESH",
+        evidence_at_ms=_NOW_MS,
+    )
+    now = [_NOW_MS]
+    monkeypatch.setattr(timestamps, "now_ms_utc", lambda: now[0])
+    async def submitter(intent: AccountOwnerSubmitIntent) -> AccountOwnerSubmitResult:
+        return AccountOwnerSubmitResult(
+            status="accepted",
+            trace_id=intent.trace_id,
+            account_id=intent.account_id,
+            strategy_instance_id=intent.strategy_instance_id,
+            run_id=intent.run_id,
+            intent_id=intent.intent_id,
+            order_ref=intent.order_ref,
+            owner_generation=intent.owner_generation,
+            order_id=1,
+        )
+
+    portfolio = LivePortfolio(
+        broker,
+        account_truth_gate_provider=lambda: gate,
+        account_owner_submitter=submitter,
+        bot_order_namespace="learn-ai/test/v1",
+        account_id="DU123",
+        strategy_instance_id="test",
+        run_id="run",
+        owner_generation_provider=lambda: 1,
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+    await portfolio.submit_pending_orders()
+    now[0] += 119_999
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+    await portfolio.submit_pending_orders()
+    now[0] += 1
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    with pytest.raises(AccountTruthBlockError):
+        await portfolio.submit_pending_orders()
+
+
+@pytest.mark.asyncio
 async def test_submit_pending_orders_blocks_outside_allowed_session_before_broker_call() -> None:
     broker = FakeBroker()
     portfolio = LivePortfolio(

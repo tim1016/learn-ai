@@ -110,6 +110,21 @@ def test_account_fleet_computation_scopes_journal_reads_to_requested_account(
     assert seen == ["DU-A"]
 
 
+def test_default_account_net_fetch_rejects_broker_identity_mismatch(monkeypatch) -> None:
+    class _Snapshot:
+        account_id = "DU-OTHER"
+        positions = []
+
+    class _Account:
+        async def fetch_positions(self, _client):
+            return _Snapshot()
+
+    monkeypatch.setattr("app.broker.ibkr.account.fetch_positions", _Account().fetch_positions)
+    monkeypatch.setattr("app.routers.broker_dependencies.require_connected_client", lambda: object())
+
+    assert asyncio.run(fleet_contamination.fetch_net_positions("DU-EXPECTED")) is None
+
+
 def test_shadow_drift_keeps_legacy_authoritative_and_emits_alarm(tmp_path: Path, monkeypatch) -> None:
     account = "DU123456"
     (tmp_path / "accounts" / account).mkdir(parents=True)
