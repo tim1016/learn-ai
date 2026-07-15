@@ -34,8 +34,8 @@ from app.schemas.live_runs import (
 from app.services.bot_lifecycle_projection import latest_event_for_node, lifecycle_status_label
 from app.services.bot_lifecycle_receipts import (
     LifecycleReceiptContext,
+    account_clerk_receipts,
     account_freeze_receipts,
-    account_owner_receipts,
     account_safety_receipts,
     broker_ack_gap_receipts,
     broker_activity_receipts,
@@ -248,9 +248,9 @@ SUBGRAPH_DEFS: Mapping[str, GraphDef] = {
             NodeDef("publisher", "Activity publisher", "broker", operator_actionability="system-only"),
             NodeDef(
                 "writer_guard",
-                "Owner generation",
+                "Account Clerk",
                 "broker",
-                "R2 generation evidence",
+                "Clerk generation and lease evidence",
                 operator_actionability="system-only",
             ),
             NodeDef("broker_ack", "Broker acknowledgment", "broker", "Execution evidence", operator_actionability="system-only"),
@@ -515,35 +515,37 @@ def _event_or_unknown_fact(
 def _writer_guard_fact(surface: OperatorSurface, lifecycle_events: Sequence[BotLifecycleEvent]) -> NodeFact:
     event = latest_event_for_node(lifecycle_events, "writer_guard")
     if event is not None:
-        account_owner_receipt_rows = account_owner_receipts(surface)
+        account_clerk_receipt_rows = account_clerk_receipts(surface)
         fact = _node_fact_from_event(
             event,
             fallback_status="unknown",
-            fallback_evidence=_account_owner_evidence(surface),
-            fallback_why=_account_owner_evidence(surface),
+            fallback_evidence=_account_clerk_evidence(surface),
+            fallback_why=_account_clerk_evidence(surface),
             include_event_source_label=True,
         )
-        status = _account_owner_event_status(event)
-        if status is not None:
-            fact = replace(fact, status=status, status_label=lifecycle_status_label(status))
-        if account_owner_receipt_rows:
+        # Account-event rows are historic audit evidence, not current Clerk
+        # health.  Never let an accepting legacy event make the live writer
+        # guard look healthy after the Clerk lease has expired or disappeared.
+        status = _account_clerk_status(surface)
+        fact = replace(fact, status=status, status_label=lifecycle_status_label(status))
+        if account_clerk_receipt_rows:
             return replace(
                 fact,
-                technical_label=_account_owner_label(surface),
-                receipts=account_owner_receipt_rows,
+                technical_label=_account_clerk_label(surface),
+                receipts=account_clerk_receipt_rows,
             )
         return fact
-    account_owner_ts_ms = _account_owner_ts_ms(surface)
-    account_owner_status = _account_owner_status(surface)
+    account_clerk_ts_ms = _account_clerk_ts_ms(surface)
+    account_clerk_status = _account_clerk_status(surface)
     return NodeFact(
-        account_owner_status,
-        _account_owner_evidence(surface),
-        _account_owner_label(surface),
-        status_label=lifecycle_status_label(account_owner_status),
-        why=_account_owner_evidence(surface),
-        ts_ms=account_owner_ts_ms,
-        ts_ms_resolved=account_owner_ts_ms is not None,
-        receipts=account_owner_receipts(surface),
+        account_clerk_status,
+        _account_clerk_evidence(surface),
+        _account_clerk_label(surface),
+        status_label=lifecycle_status_label(account_clerk_status),
+        why=_account_clerk_evidence(surface),
+        ts_ms=account_clerk_ts_ms,
+        ts_ms_resolved=account_clerk_ts_ms is not None,
+        receipts=account_clerk_receipts(surface),
     )
 
 
@@ -976,41 +978,25 @@ def _broker_writer_status(surface: OperatorSurface) -> LifecycleChartStatus:
     return "blocked"
 
 
-def _account_owner_status(surface: OperatorSurface) -> LifecycleChartStatus:
-    owner = surface.account_owner
-    if owner is None:
-        return _account_owner_chart_status(None, None)
-    return _account_owner_chart_status(owner.phase, owner.generation)
+def _account_clerk_status(surface: OperatorSurface) -> LifecycleChartStatus:
+    clerk = surface.account_clerk
+    if clerk is None:
+        return _account_clerk_chart_status(None, None, False)
+    return _account_clerk_chart_status(clerk.phase, clerk.generation, clerk.lease_active)
 
 
-def _account_owner_event_status(event: BotLifecycleEvent) -> LifecycleChartStatus | None:
-    if event.event_type not in {"account_owner_generation_recorded", "account_owner_reconnect_resumed"}:
-        return None
-    phase = _payload_str(event.payload.get("phase"))
-    generation = _payload_positive_int(event.payload.get("generation"))
-    return _account_owner_chart_status(phase, generation)
-
-
-def _account_owner_chart_status(phase: str | None, generation: int | None) -> LifecycleChartStatus:
+def _account_clerk_chart_status(
+    phase: str | None,
+    generation: int | None,
+    lease_active: bool,
+) -> LifecycleChartStatus:
     if phase == "frozen":
         return "freeze"
-    if phase is None or phase == "unknown" or generation is None:
+    if phase is None or phase == "unknown" or generation is None or not lease_active:
         return "unknown"
     if phase == "accepting":
         return "passed"
     return "active"
-
-
-def _payload_str(value: object) -> str | None:
-    return value if isinstance(value, str) and value else None
-
-
-def _payload_positive_int(value: object) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int) and value >= 1:
-        return value
-    return None
 
 
 def _configuration_status(surface: OperatorSurface) -> LifecycleChartStatus:
@@ -1372,46 +1358,43 @@ def _broker_writer_evidence(surface: OperatorSurface) -> str:
     if health is None:
         return (
             "No broker-activity publisher is registered for this snapshot; this says nothing about "
-            "R3 AccountOwner daemon/IPC writer authority."
+            "Account Clerk write-authority health."
         )
     if health.headline is not None:
         return health.headline.message
     return (
-        f"Broker-activity publisher state is {health.state}; this is capture health, not proof that "
-        "R3 AccountOwner daemon/IPC single-writer authority is shipped."
+        f"Broker-activity publisher state is {health.state}; this is capture health, separate from "
+        "Account Clerk write-authority health."
     )
 
 
-def _account_owner_label(surface: OperatorSurface) -> str:
-    owner = surface.account_owner
-    if owner is None:
-        return "generation unproven"
-    if owner.generation is None:
-        return f"{owner.phase} generation unknown"
-    return f"{owner.phase} gen {owner.generation}"
+def _account_clerk_label(surface: OperatorSurface) -> str:
+    clerk = surface.account_clerk
+    if clerk is None:
+        return "generation and lease unproven"
+    if clerk.generation is None:
+        return f"{clerk.phase} generation unknown"
+    lease = "lease active" if clerk.lease_active else "lease inactive"
+    return f"{clerk.phase} gen {clerk.generation}; {lease}"
 
 
-def _account_owner_evidence(surface: OperatorSurface) -> str:
-    owner = surface.account_owner
-    if owner is None:
+def _account_clerk_evidence(surface: OperatorSurface) -> str:
+    clerk = surface.account_clerk
+    if clerk is None:
+        return "No Account Clerk generation or active-lease evidence is available."
+    if clerk.generation is None:
+        return f"Account Clerk phase is {clerk.phase}, but generation is unproven."
+    if not clerk.lease_active:
         return (
-            "No AccountOwner generation evidence is available; R2 still uses process-local broker "
-            "sessions and the R3 daemon/IPC single-writer authority is not shipped."
+            f"Account Clerk phase is {clerk.phase}; generation is {clerk.generation}, but the "
+            "matching accepting Clerk lease is not active."
         )
-    if owner.generation is None:
-        return (
-            f"AccountOwner phase is {owner.phase}, but generation is unproven; R2 still uses "
-            "process-local broker sessions."
-        )
-    return (
-        f"AccountOwner phase is {owner.phase}; generation is {owner.generation}. This is generation "
-        "evidence, not proof that R3 daemon/IPC single-writer authority is shipped."
-    )
+    return f"Account Clerk phase is {clerk.phase}; generation is {clerk.generation}; its lease is active."
 
 
-def _account_owner_ts_ms(surface: OperatorSurface) -> int | None:
-    owner = surface.account_owner
-    return owner.recorded_at_ms if owner is not None else None
+def _account_clerk_ts_ms(surface: OperatorSurface) -> int | None:
+    clerk = surface.account_clerk
+    return clerk.recorded_at_ms if clerk is not None else None
 
 
 def _configuration_evidence(surface: OperatorSurface) -> str:

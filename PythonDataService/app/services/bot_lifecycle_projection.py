@@ -78,6 +78,13 @@ UNKNOWN_ACCOUNT_EVENT_MAPPING = AccountEventLifecycleMapping(
 )
 
 ACCOUNT_EVENT_MAPPINGS: Mapping[str, AccountEventLifecycleMapping] = {
+    "account_clerk_generation_recorded": AccountEventLifecycleMapping(
+        "lifecycle_transition",
+        "writer_guard",
+        "lifecycle_transition",
+        "active",
+        "lifecycle_projection.account_event.account_clerk_generation_recorded.v1",
+    ),
     "account_freeze_recorded": AccountEventLifecycleMapping(
         "freeze", "account_safety", "freeze_halt_poison", "freeze", "lifecycle_projection.account_event.account_freeze_recorded.v1"
     ),
@@ -570,6 +577,12 @@ def _account_event_summary(event_type: str, row: Mapping[str, Any]) -> str:
         return "AccountOwner submit outcome is uncertain."
     if event_type == "account_owner_submit_rejected":
         return "AccountOwner rejected the submit before broker placement."
+    if event_type == "account_clerk_generation_recorded":
+        generation = row.get("generation")
+        phase = row.get("phase")
+        if generation is not None and phase:
+            return f"Account Clerk generation {generation} recorded ({phase})."
+        return "Account Clerk generation recorded."
     if event_type == "account_owner_generation_recorded":
         generation = row.get("generation")
         phase = row.get("phase")

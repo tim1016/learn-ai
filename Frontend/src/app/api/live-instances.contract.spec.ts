@@ -39,7 +39,7 @@ const STOPPED = stoppedFixture satisfies JsonImported<OperatorSurface>;
 
 describe('operator surface fixture wire contract', () => {
   it('STEADY fixture carries every projection block', () => {
-    expect(STEADY.schema_version).toBe(1);
+    expect(STEADY.schema_version).toBe(2);
     expect(STEADY.host_process.state).toBe('RUNNING');
     expect(STEADY.host_process.notice).toBeNull();
     expect(STEADY.host_process.copyable_command).toBeNull();
@@ -97,7 +97,7 @@ describe('operator surface fixture wire contract', () => {
       'current_risk',
       'daily_order_cap',
       'action_plan',
-      'account_owner',
+      'account_clerk',
       'account_observation',
       'submit_readiness',
       'trader_guidance',

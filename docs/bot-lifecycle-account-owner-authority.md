@@ -1,41 +1,40 @@
-# Bot Lifecycle and Account Ownership — Authority
+# Bot Lifecycle and AccountOwner — Historical R2 Record
 
-> **Canonical reference** for what the live-paper bot lifecycle and broker-account ownership model ships today.
-> This is an implementation snapshot, not a future-design document. When this page disagrees with code, code wins and this page must be updated in the same PR.
+> **Superseded for current broker-write authority.** Read [ADR-0030](architecture/adrs/0030-account-clerk-account-rooted-journal.md) and the [engine authority map](architecture/engine-authority-map.md) for current policy. This file retains the historical R2 details needed to interpret legacy artifacts and projection rows; it must not be used to infer the normal broker-write topology.
 >
-> **Current status:** R2 multi-runner runtime with AccountOwner submit-lane enforcement. Real-broker runner submits now route through AccountOwner, the persisted account owner generation is the cross-process fencing token, startup/takeover advances that token, and production startup configures the IBKR adapter to require an AccountOwner write grant before submit/cancel. The grant carries the writer's acquired generation while broker-boundary checks re-read the current persisted generation. The low-level broker order functions also require that grant, so raw `/api/broker/orders` submit/cancel calls without AccountOwner context fail closed before IBKR. The long-lived AccountOwner R3 daemon process and IPC intake are designed in `docs/architecture/bot-lifecycle-account-owner-prd.md` but are not implemented yet.
+> **Current status:** the **Account Clerk** owns the normal account broker session, its OS advisory lock, accepting generation, matching `RUNNING` lease, and durable journal. The host daemon supervises the Clerk. Runners use Clerk RPC for normal submit, namespace cancellation, and managed recovery operations; they do not own normal account write sessions. `AccountOwnerSubmitIntent`, `owner_generation`, and historical `account_owner_*` event tokens remain compatibility/artifact vocabulary until separately version-migrated. The direct `emergency-flatten` safety lane is deliberately not part of this statement; its replacement is proposed, not implemented, in ADR-0030.
 >
 > **Owner:** the engineer editing `PythonDataService/app/engine/live/*`, `PythonDataService/app/broker/ibkr/*`, `PythonDataService/app/routers/live_instances.py`, or `PythonDataService/app/services/operator_*.py`.
 >
-> **Last reviewed:** 2026-07-13 (Account-level reconciliation receipts have a five-minute TTL, are invalidated by newly observed broker executions, and may be automatically replaced for bot-owned executions under a durable opt-in account policy. Real-broker runner submits still require AccountOwner grants; R3 daemon/IPC AccountOwner remains unshipped.)
+> **Last reviewed:** 2026-07-15 (Track B authority truth-up. Account Observation Lease v2 is Clerk-fenced but remains shadow-only: `IBKR_ACCOUNT_GATE_AUTHORITY=account_truth`, zero v2 comparison rows, 69 legacy comparison rows, zero qualifying sessions, `cutover_ready=false`.)
 
 ---
 
 ## 1. Scope and Authority
 
-This document answers: **what actually owns bot lifecycle, broker order submission, reconciliation, and operator gates today?**
+This document preserves the R2 record and points to the current Account Clerk authority. The current design answers: **what owns normal broker order submission, account-wide reconciliation, and operator evidence today?**
 
 It does not answer:
 
-- The final AccountOwner daemon/IPC implementation details. Those live in the PRD until shipped.
+- Emergency-flatten replacement details. ADR-0030 records the proposal and its unresolved incident-mode design.
 - Alpha strategy behavior.
 - Live-money enablement. The lifecycle described here is paper trading only.
 - UI polish for the gate board. This document covers backend authority and artifacts.
 
-Authority order:
+Current-authority order:
 
 1. Code.
-2. This authority document.
-3. PRDs and ADRs.
+2. ADR-0030 and the engine authority map.
+3. This historical R2 document, only for legacy artifacts.
 4. Model memory.
 
-Same-PR rule: any PR that changes lifecycle gates, broker submit ownership, watchdog shutdown, reconciliation classification, or AccountOwner artifacts must update this document.
+Same-PR rule: any PR that changes lifecycle gates, Clerk broker ownership, watchdog shutdown, reconciliation classification, or compatibility artifacts must update ADR-0030 and the engine authority map. Update this document only when the historical-artifact interpretation changes.
 
 Timestamp rule: every lifecycle/account timestamp persisted to files, stored in Postgres, or sent over an API is `int64` Unix epoch milliseconds UTC. UI code may convert that integer to local/exchange time for display only; display strings are never canonical, never stored, never sent back as timestamps, and never used for lifecycle ordering.
 
-## 2. Current Architecture
+## 2. Current Architecture — Account Clerk
 
-Today the host daemon spawns one OS process per `strategy_instance_id`. Each runner process may construct its own `IbkrClient`, run cold-start reconciliation, and process bars. For real-broker runner submits, `LivePortfolio` must hand the order intent to AccountOwner; the legacy WAL-direct-submit lane remains available only to shadow/fake broker paths.
+The host daemon supervises one Account Clerk per broker account. The Clerk holds the account advisory lock and owns the normal write-capable IBKR client/session. It publishes an accepting generation only while its matching Clerk lease is unexpired and `RUNNING`. Runner processes remain responsible for strategy execution, run-scoped reconciliation, and bar processing, but normal account writes flow through Clerk RPC and the Clerk journal.
 
 ```mermaid
 flowchart TD
@@ -43,8 +42,8 @@ flowchart TD
     daemon["Host daemon<br/>RunnerProcessManager"]
     r1["Runner A process<br/>LiveEngine + LivePortfolio"]
     r2["Runner B process<br/>LiveEngine + LivePortfolio"]
-    ao1["Runner A AccountOwner<br/>generation-fenced grant"]
-    ao2["Runner B AccountOwner<br/>generation-fenced grant"]
+    clerk["Account Clerk<br/>advisory lock + active lease<br/>normal write-capable IBKR session"]
+    journal["Account Clerk journal<br/>generation-fenced receipts"]
     wal1["Run A artifacts<br/>intent_events.jsonl<br/>reconciliation_receipt.json"]
     wal2["Run B artifacts<br/>intent_events.jsonl<br/>reconciliation_receipt.json"]
     broker["IBKR Gateway / paper account"]
@@ -55,18 +54,28 @@ flowchart TD
     daemon --> r2
     r1 --> wal1
     r2 --> wal2
-    r1 --> ao1
-    r2 --> ao2
-    ao1 --> broker
-    ao2 --> broker
+    r1 -->|Clerk RPC intent| clerk
+    r2 -->|Clerk RPC intent| clerk
+    clerk --> journal
+    clerk --> broker
     wal1 --> surface
     wal2 --> surface
     broker --> surface
 ```
 
-This is **not** R3. There is still no long-lived AccountOwner daemon/IPC process. The shipped enforcement is a file-backed cross-process fencing token plus process-local submit serialization: AccountOwner serializes submit intents, persists and re-reads the account owner generation at intake and broker-write boundary, and production startup configures the IBKR adapter to reject direct broker writes unless an AccountOwner write grant is active. The broker order helpers themselves also reject missing grants, so callers that bypass the adapter still fail closed.
+The normal lane is therefore single-client at the account boundary: Clerk RPC validates the active generation, serializes/journals the operation, then performs the broker effect through the Clerk-held session. Compatibility names at the runner and broker fence do not create a second normal writer. Direct raw broker routes remain fail-closed without the required server-side grant.
 
-## 3. Current Lifecycle
+| Concern | Current authority | Evidence / code boundary |
+| --- | --- | --- |
+| Clerk lifecycle | Host daemon supervises the Clerk; Clerk lock, accepting generation, and `RUNNING` lease prove active authority. | `engine/live/account_clerk.py`, `account_artifacts.py`, Clerk lifecycle supervision |
+| Normal submit / cancellation | Runner sends an intent to Clerk RPC; Clerk journals and performs broker work. | `account_clerk_rpc.py`, `account_clerk_journal.py`, `account_clerk_operations.py` |
+| Account proof | Account Observation Lease v2 is fenced by active Clerk evidence, but remains a shadow comparison. | `services/observation_lease_parity.py`; selector remains `account_truth` |
+| Operator display | Schema-v2 `account_clerk` evidence reads Clerk generation plus active lease, not `owner_generation.json`. | `routers/live_instances.py`, `services/operator_surface.py` |
+| Emergency flatten | Existing direct safety lane is unchanged pending its dedicated Clerk-operation/takeover design. | ADR-0030 Track B proposal |
+
+## Appendix A — Historical R2 lifecycle
+
+> The remainder of this document is an archival R2 snapshot. Mentions of “current”, per-runner AccountOwner, `owner_generation.json`, and unshipped R3 daemon/IPC describe the historical implementation and legacy artifact interpretation only.
 
 | Phase | Current authority | Code |
 |---|---|---|
@@ -592,7 +601,7 @@ This is not a second account-clean engine. `Account Truth` remains the sole owne
 
 The main-process Account Truth refresh loop observes the broker execution set every refresh. A newly observed execution appends `account_reconciliation_invalidated` to `account_events.jsonl`; triage then exposes the backend-authored effective `account_reconciliation_valid_until_ms`. `PUT /api/accounts/{account_id}/reconciliation/automation` persists the opt-in policy. When enabled, the same fresh Account Truth sweep replaces the receipt only if every newly observed execution is bot-owned. Manual, mixed-known, foreign, and unclaimed executions remain invalidated and require operator review. Host-child refresh loops do not run this account-scoped observer, avoiding duplicate writers.
 
-The same main-process observer writes `accounts/<account_id>/account_observation_lease.json` from the already-composed Account Truth verdict. A passing attributed observation (including bot-owned non-zero exposure) renews the lease with the existing Account Truth freshness TTL; an explicit failed refresh, non-passing verdict, account freeze, or AccountOwner generation change revokes it immediately. The observer fences the account owner before and after writing, so a generation transition cannot inherit a lease issued for the prior writer. Lease transitions, not healthy heartbeats, are appended to `account_events.jsonl`. The artifact is account-scoped—there is no per-instance lease and no second ticker.
+The same main-process observer writes `accounts/<account_id>/account_observation_lease.json` from the already-composed Account Truth verdict. A passing attributed observation (including bot-owned non-zero exposure) renews the lease with the existing Account Truth freshness TTL; an explicit failed refresh, non-passing verdict, account freeze, or Clerk generation/lease transition revokes it immediately. The observer proves the accepting Clerk generation and matching active `RUNNING` Clerk lease before and after writing, so a stale generation file or transition cannot inherit a lease issued for a prior Clerk. Lease transitions, not healthy heartbeats, are appended to `account_events.jsonl`. The artifact is account-scoped—there is no per-instance lease and no second ticker.
 
 The lease is currently shadow evidence: `LivePortfolio` compares it to the authoritative in-process cached Account Truth submit gate and records every paired comparison at an actual submit boundary in `account_events.jsonl`; divergences are also structured-logged and counted in process. The durable records retain run/instance identity plus both gates' id, source, status, and reason code, so replay evidence survives child restarts and rejects look-alike rows. The cached gate remains the actual submit decision. Start and submit cutover are prohibited until replay and three trading sessions of shadow evidence establish parity; the child-local broker gate remains in force during that transition.
 

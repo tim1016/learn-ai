@@ -112,6 +112,9 @@ _HEADLINE_DEFAULTS: Mapping[str, str] = {
 }
 
 _DEFAULT_RECEIPT_COPY: Mapping[str, ReceiptCopy] = {
+    "account_clerk.generation": ("Account Clerk generation is {value}.", None),
+    "account_clerk.phase": ("Account Clerk phase is {value}.", None),
+    "account_clerk.lease_active": ("Account Clerk lease is {value}.", None),
     "account_owner.generation": ("AccountOwner generation is {value}.", None),
     "account_owner.phase": ("AccountOwner phase is {value}.", None),
     "adopted_intent_count": ("Reconciliation adopted {value} intent(s).", None),

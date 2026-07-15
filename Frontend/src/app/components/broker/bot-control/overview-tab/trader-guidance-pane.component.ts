@@ -23,7 +23,7 @@ export class TraderGuidancePaneComponent {
 
   readonly submitReadiness = computed(() => this.surface().submit_readiness);
   readonly traderGuidance = computed(() => this.surface().trader_guidance);
-  readonly accountOwner = computed(() => this.surface().account_owner);
+  readonly accountClerk = computed(() => this.surface().account_clerk);
   readonly proofLines = computed(() => this.traderGuidance().proof_lines);
   readonly attentionGroups = computed(() => this.traderGuidance().additional_attention_groups);
   readonly diagnosticEvidence = computed<DiagnosticEvidenceLine[]>(() =>

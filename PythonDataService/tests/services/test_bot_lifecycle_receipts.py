@@ -16,16 +16,16 @@ from app.schemas.live_runs import (
     LiveBinding,
     OperatorGate,
     OperatorSurface,
-    OperatorSurfaceAccountOwner,
+    OperatorSurfaceAccountClerk,
     ReadinessGate,
     ReadinessVector,
     ReconciliationReceipt,
 )
 from app.services.bot_lifecycle_receipts import (
     LifecycleReceiptContext,
+    account_clerk_receipts,
     account_freeze_receipts,
     account_identity_receipts,
-    account_owner_receipts,
     broker_ack_gap_receipts,
     broker_activity_receipts,
     broker_snapshot_receipts,
@@ -195,12 +195,13 @@ def test_desired_state_receipts_cover_absent_and_missing_sidecars() -> None:
 def test_account_identity_receipts_cover_fold_gap_and_populated_evidence() -> None:
     empty = _receipts_by_label(account_identity_receipts(_surface()))
     populated_surface = _surface(
-        account_owner=OperatorSurfaceAccountOwner(
+        account_clerk=OperatorSurfaceAccountClerk(
             account_id="DU123",
             generation=4,
             phase="accepting",
             recorded_at_ms=_NOW_MS - 1_000,
             source="test",
+            lease_active=True,
         ),
         broker_observation_consistency=BrokerObservationConsistency(
             verdict="CONSISTENT",
@@ -321,7 +322,7 @@ def test_configuration_receipts_cover_verdict_and_reason_code() -> None:
     } == {"The run is missing its strategy key."}
 
 
-def test_event_account_owner_capability_and_readiness_receipts_have_prose() -> None:
+def test_event_account_clerk_capability_and_readiness_receipts_have_prose() -> None:
     event = BotLifecycleEvent(
         event_id="event-12",
         bot_id=_SID,
@@ -337,13 +338,14 @@ def test_event_account_owner_capability_and_readiness_receipts_have_prose() -> N
         payload={"intent_id": "intent-12"},
         ts_ms=_NOW_MS,
     )
-    owner_surface = _surface(
-        account_owner=OperatorSurfaceAccountOwner(
+    clerk_surface = _surface(
+        account_clerk=OperatorSurfaceAccountClerk(
             account_id="DU123",
             generation=4,
             phase="accepting",
             recorded_at_ms=_NOW_MS,
             source="test",
+            lease_active=True,
         )
     )
     disabled = ActionCapability(
@@ -367,12 +369,12 @@ def test_event_account_owner_capability_and_readiness_receipts_have_prose() -> N
     )
 
     event_by_label = _receipts_by_label(event_receipts(event))
-    owner_by_label = _receipts_by_label(account_owner_receipts(owner_surface))
+    clerk_by_label = _receipts_by_label(account_clerk_receipts(clerk_surface))
     capability_by_label = _receipts_by_label(capability_receipts("resume", disabled))
     gate_by_label = _receipts_by_label(readiness_gate_receipts(gate))
 
     assert event_by_label["intent_id"].headline == "Order intent intent-12 was recorded."
-    assert owner_by_label["account_owner.generation"].headline == "AccountOwner generation is 4."
+    assert clerk_by_label["account_clerk.generation"].headline == "Account Clerk generation is 4."
     assert capability_by_label["action.resume.enabled"].headline == "Resume is currently blocked."
     assert capability_by_label["action.resume.disabled_reason"].headline == "Resume has a backend-authored disabled reason."
     assert gate_by_label["readiness_gate.status"].headline == "engine_ready is blocking this lifecycle step."
