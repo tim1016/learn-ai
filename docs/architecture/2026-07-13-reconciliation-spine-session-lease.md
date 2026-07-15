@@ -1,10 +1,18 @@
-# Reconciliation Spine — Account Observation Lease (rev 2)
+# Reconciliation Spine — Account Observation Lease (rev 3)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make account reconciliation the spine of the bot lifecycle by promoting the existing 15-second Account Truth observation into a named, durable, account-scoped **Account Observation Lease** — renewable, fail-closed, revoked immediately on explicit bad evidence — while start-time (run-scoped) reconciliation stays automatic and usually invisible.
 
-**Architecture:** Almost all machinery already exists: `AccountTruthRefreshLoop` sweeps the broker every 15 s with an observer hook (`main.py:194`), `assess_account_truth()` is the observation-grade verdict (fresh + sources present + fully attributed; **owned positions are clean**), the submit gate already chains freeze → registry → truth (`live_portfolio.py:~992`), and run-scoped cold-start/runtime reconciliation already gates the bar loop. The delta is small: persist the observation verdict as one durable account-scoped lease artifact, renew it on every clean quiet sweep (today a clean receipt can expire while clean sweeps continue), revoke it immediately on any material change (today only new executions invalidate), make Start consume it, and surface it. Every lease consumer must also prove its expected account ID equals the lease account ID; v1 therefore supports the existing single connected account observer, and a multi-account broker session requires an explicit account-to-observer mapping before it can share this artifact. **No new scheduler. No per-instance lease files. No new verdict math. No new tuning constants** (lease validity = the existing 60 s readiness TTL, whose `interval×2 < TTL` margin is already enforced by `validate_account_truth_refresh_cadence`).
+**Architecture:** Almost all machinery already exists: `AccountTruthRefreshLoop` sweeps the broker every 15 s with an observer hook (`main.py:194`), `assess_account_truth()` is the observation-grade verdict (fresh + sources present + fully attributed; **owned positions are clean**), the submit gate already chains freeze → registry → truth (`live_portfolio.py:~992`), and run-scoped cold-start/runtime reconciliation already gates the bar loop. The delta is small: persist the observation verdict as one durable account-scoped lease artifact, renew it on every clean quiet sweep, revoke it immediately on any material change, make Start and submit consume it through one atomic authority selector, and surface it. Every lease consumer must also prove its expected account ID equals the lease account ID. Schema v2 is fenced by the account Clerk generation; v1 owner-keyed leases fail closed and cannot contribute cutover evidence. **No new scheduler. No per-instance lease files. No new verdict math. No new tuning constants** (lease validity = the existing 60 s readiness TTL, whose `interval×2 < TTL` margin is already enforced by `validate_account_truth_refresh_cadence`).
+
+## Rev 3 implementation boundary
+
+- The lease schema is v2 and carries `clerk_generation`; the refresh observer requires a matching, unexpired `RUNNING` Clerk lease and captures the accepting Clerk generation before and after broker observation. It revokes with `ACCOUNT_CLERK_GENERATION_CHANGED` when that authority is absent, expired, draining, or changes across the sweep. A durable generation file alone never authorizes renewal because it can outlive a crashed Clerk.
+- Shadow-comparison rows are versioned. Legacy owner-keyed rows are reported separately and excluded from promotion rather than silently reused. The three-session parity clock therefore restarts for Clerk-keyed evidence.
+- `IBKR_ACCOUNT_GATE_AUTHORITY` is one process-wide selector for both Start and submit. It defaults to `account_truth`; `observation_lease` is implemented but must not be enabled until the versioned parity gate and Clerk-restart HITL smoke pass.
+- Start and submit both fail closed on an absent, malformed, expired, revoked, or generation-mismatched lease after that switch. There is no per-bot override and therefore no mixed authority inside one deployment.
+- The zero-production-caller `advance_account_owner_generation` writer and `AccountOwner.record_accepting_generation` entry point are deleted. Still-live legacy owner-generation readers remain until their Clerk replacements are separately characterized; this document does not relabel active safety code as dead.
 
 **Tech Stack:** Python 3.11 / FastAPI / Pydantic v2, existing OperatorSurface SSE contract, Angular 21 signals, pytest + Vitest.
 
@@ -54,11 +62,11 @@ Codex review claims were verified against code before revising. Seven confirmed,
 
 `accounts/<account_id>/account_observation_lease.json`, written by the **existing** refresh-loop observer (`AccountReconciliationService.observe_account_truth`, already invoked every sweep). A passing assessment renews (`status=VERIFIED`, `valid_until_ms = observed_at_ms + DEFAULT_ACCOUNT_TRUTH_READINESS_TTL_MS`); a blocking assessment **revokes immediately** with the assessment's own reason code. Expiry (`now ≥ valid_until_ms` with no revocation) covers exactly one failure mode: the observer itself silently died. Never held past bad evidence merely because a timer hasn't expired.
 
-### D2 — Immediate revocation triggers and owner-generation fencing (supersedes rev 1's TTL-decay-only model)
+### D2 — Immediate revocation triggers and Clerk-generation fencing (supersedes rev 1's TTL-decay-only model)
 
-The refresh loop must notify the lease writer on **both** a completed observation and every unavailable/error path; its success-only observer is not sufficient. Revoke on the sweep that observes any of: refresh failure / broker disconnect (`AccountTruthUnavailable`), connected-account mismatch, critical source staleness, `final_verdict != "clean"` (foreign/unattributed activity — this covers new foreign executions, foreign orders, unexplained position deltas, because Account Truth's verdict already folds them), active account freeze, or an owner-generation transition. All reason codes come from the existing `assess_account_truth` taxonomy plus `ACCOUNT_OWNER_GENERATION_CHANGED` and `ACCOUNT_FROZEN`.
+The refresh loop must notify the lease writer on **both** a completed observation and every unavailable/error path; its success-only observer is not sufficient. Revoke on the sweep that observes any of: refresh failure / broker disconnect (`AccountTruthUnavailable`), connected-account mismatch, critical source staleness, `final_verdict != "clean"` (foreign/unattributed activity — this covers new foreign executions, foreign orders, unexplained position deltas, because Account Truth's verdict already folds them), active account freeze, or a Clerk-generation transition. All reason codes come from the existing `assess_account_truth` taxonomy plus `ACCOUNT_CLERK_GENERATION_CHANGED` and `ACCOUNT_FROZEN`.
 
-Renewal is a fence, not a field comparison: read the account owner generation and accepting phase as `g0`, collect and assess the broker evidence, then read `g1`; renew only when `g0 == g1` and the owner phase remains accepting. A changed or non-accepting owner record revokes the lease. A later clean sweep for the new, stable accepting generation may renew it. Consumers must verify that the lease generation still equals the current accepting owner generation, preventing a clean observation from one owner generation authorizing another.
+Renewal is a fence, not a field comparison: require a matching, unexpired `RUNNING` Clerk lease and read the Account Clerk generation and accepting phase as `g0`, collect and assess the broker evidence, then require the same active authority as `g1`; renew only when `g0 == g1`. An absent, expired, draining, changed, or non-accepting Clerk authority revokes the lease. A later clean sweep for the new, stable accepting generation may renew it. Consumers repeat the active-Clerk check, preventing a clean observation from one Clerk authority—or a generation file left by a dead Clerk—authorizing another.
 
 ### D3 — No new scheduler; no per-instance files
 
@@ -154,15 +162,15 @@ Deliverable: the lease artifact exists, renews and revokes from the existing loo
 class AccountObservationLease(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     account_id: str
     status: Literal["VERIFIED", "REVOKED"]
     observed_at_ms: int              # backing AccountTruthResponse.generated_at_ms
     renewed_at_ms: int
     valid_until_ms: int              # observed_at_ms + DEFAULT_ACCOUNT_TRUTH_READINESS_TTL_MS
-    account_owner_generation: int | None = None
+    clerk_generation: int | None = None
     truth_watermark: str                     # f"account_truth:{generated_at_ms}"
-    revoked_reason_code: str | None = None   # assess_account_truth reason codes + ACCOUNT_OWNER_GENERATION_CHANGED + ACCOUNT_FROZEN
+    revoked_reason_code: str | None = None   # assess_account_truth reason codes + ACCOUNT_CLERK_GENERATION_CHANGED + ACCOUNT_FROZEN
     revoked_detail: str | None = None
 
 
@@ -178,7 +186,7 @@ class AccountObservationLeaseAssessment(BaseModel):
 class AccountObservationLeaseRepo:               # accounts/<id>/account_observation_lease.json
     def read(self, account_id: str) -> AccountObservationLease | None: ...
     def renew(self, *, account_id: str, observed_at_ms: int, now_ms: int,
-              account_owner_generation: int | None) -> AccountObservationLease: ...
+              clerk_generation: int | None) -> AccountObservationLease: ...
     def revoke(self, *, account_id: str, reason_code: str, detail: str, now_ms: int) -> AccountObservationLease: ...
 
 
@@ -188,7 +196,7 @@ def account_observation_lease_gate_result(assessment: AccountObservationLeaseAss
 
 Reader is fail-closed (missing/malformed/expired → not verified); writes use the existing `atomic_write_pydantic_artifact` from `account_artifacts.py`. Renewal validity reuses `DEFAULT_ACCOUNT_TRUTH_READINESS_TTL_MS` — zero new constants. `renew` on a REVOKED lease is legal (a clean sweep cures a revocation); the transition is what gets journaled (Task 2.2).
 
-- [x] Failing tests implemented and passing locally: absent, renew/60 s TTL, immediate revoke, expiry boundary, malformed artifact, current owner-generation mismatch, and gate mapping.
+- [x] Failing tests implemented and passing locally: absent, renew/60 s TTL, immediate revoke, expiry boundary, malformed artifact, current Clerk-generation mismatch, legacy-v1 rejection, and gate mapping.
 - [ ] Commit: `feat(live): account observation lease — durable, fail-closed, immediately revocable`
 
 ### Task 2.2: Wire renewal/revocation into the existing observer
@@ -197,7 +205,7 @@ Reader is fail-closed (missing/malformed/expired → not verified); writes use t
 - Modify: `PythonDataService/app/services/account_reconciliation.py` (`observe_account_truth`, line ~141 — the hook the refresh loop already calls every sweep) and the refresh-failure path (`AccountTruthSnapshotProvider.mark_refresh_failed` caller in `account_truth_refresh.py`)
 - Test: `tests/services/test_account_reconciliation.py` (extend)
 
-Behavior per sweep: a refresh-loop outcome callback drives the writer on success **and** unavailable/error paths. For a success, read accepting owner generation `g0`, run `assess_account_truth` on the fresh evidence, then read `g1`; pass plus `g0 == g1` → `renew`; changed/non-accepting owner → `revoke(ACCOUNT_OWNER_GENERATION_CHANGED)`; block → `revoke` with the assessment's `primary_reason_code`. Refresh failure → `revoke(ACCOUNT_TRUTH_REFRESH_FAILED)`. Active freeze → `revoke(ACCOUNT_FROZEN)`. Journal only status transitions to `account_events.jsonl` (`account_observation_lease_verified` / `account_observation_lease_revoked` with reason). Quiet clean sweeps write the file, not the journal.
+Behavior per sweep: a refresh-loop outcome callback drives the writer on success **and** unavailable/error paths. For a success, require an active Clerk lease and read accepting Clerk generation `g0`, run `assess_account_truth` on the fresh evidence, then require active generation `g1`; pass plus `g0 == g1` → `renew`; missing/expired/draining/changed Clerk → `revoke(ACCOUNT_CLERK_GENERATION_CHANGED)`; block → `revoke` with the assessment's `primary_reason_code`. Refresh failure → `revoke(ACCOUNT_TRUTH_REFRESH_FAILED)`. Active freeze → `revoke(ACCOUNT_FROZEN)`. Journal only status transitions to `account_events.jsonl` (`account_observation_lease_verified` / `account_observation_lease_revoked` with reason). Quiet clean sweeps write the file, not the journal.
 
 - [x] Implemented and locally covered: stable clean renewals, owner change during the sweep, transition-only journal behavior, foreign/unattributed revocation, clean recovery, and broker-unavailable callback revocation. The callback is wired for broker-error and unexpected-error paths as well.
 - [x] Focused service and router coverage passes locally (42 tests).
@@ -232,7 +240,7 @@ Deliverable: Start consumes the lease; the submit chain consumes the lease; the 
 ### Task 3.1: Sequence parity evidence from shadow mode
 
 - [x] The durable replay verifier is implemented in `app/services/observation_lease_parity.py` with `tests/services/test_observation_lease_parity.py`. It reads the canonical account journal, requires three distinct canonical-NYSE session dates, rejects malformed evidence and every truth=`block` / lease=`pass` pair, and lists lease-stricter pairs without failing the gate.
-- [ ] Operational gate: collect those submit-boundary rows from ≥ 3 paper-trading sessions with zero lease-weaker divergences, then replay the captured account journal and archive the resulting report before any enforcement edit. This is sequence parity, not a Cartesian table.
+- [ ] Operational gate: collect version-2, Clerk-keyed submit-boundary rows from ≥ 3 paper-trading sessions with zero lease-weaker divergences, then replay the captured account journal and archive the resulting report before enabling enforcement. The 69 owner-keyed rows from two sessions are legacy evidence and do not count. This is sequence parity, not a Cartesian table.
 - [ ] Commit: `test(live): sequence-parity replay for observation lease vs raw truth gate`
 
 ### Task 3.2: Start consumes the lease
@@ -243,7 +251,7 @@ Deliverable: Start consumes the lease; the submit chain consumes the lease; the 
 
 Start ordering stays: lease VERIFIED (account proof) → daemon accepts start → child runs run-scoped reconciliation → bar loop. Per D6, `set_phase(ON_DUTY, "start_accepted")` is unchanged; ADR amendment in Task 3.4 records the semantics.
 
-- [ ] Failing tests (revoked lease blocks start with `RECONCILE_NOW`; verified lease + passing run reconcile starts; ADR-required flat start rejects observation-only proof until a fresh `CLEAN` recovery proof exists) → implement → run → commit: `feat(live): start path consumes the account observation lease`
+- [x] Dormant cutover path implemented behind the default-off process-wide selector: absent/revoked lease blocks with `RECONCILE_NOW`; verified Clerk-keyed lease permits Start. The existing independent fleet, freeze, crash-recovery, session, and child run-reconciliation gates remain.
 
 ### Task 3.3: Submit cutover + retire the raw check
 
@@ -251,7 +259,8 @@ Start ordering stays: lease VERIFIED (account proof) → daemon accepts start �
 - Modify: `live_portfolio.py` (the `account_truth_gate_provider` slot now supplies the lease gate; shadow scaffold removed), `live_engine.py` (~914, provider wiring)
 - Test: submit-gate tests updated to the lease gate, including that the child-local broker connection remains an independent hard block; parity replay suite from 3.1 stays green
 
-- [ ] Implement → full engine test module + project-scope pytest (sibling container per the pytest rule) → commit: `refactor(live): observation lease replaces in-process truth check at the submit gate (post-parity)`
+- [x] Dormant lease-authority submit path implemented and fail-closed behind the same selector as Start; Account Truth remains the default authority and shadow comparison remains active.
+- [ ] After the three-session v2 parity gate and Clerk-restart HITL smoke pass: set `IBKR_ACCOUNT_GATE_AUTHORITY=observation_lease`, restart the process, verify one paper session, then remove the raw truth fallback and selector in a separate rollback-safe cleanup.
 
 ### Task 3.4: ADR + authority updates
 

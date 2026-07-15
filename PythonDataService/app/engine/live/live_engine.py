@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
@@ -557,6 +557,9 @@ class LiveEngine:
         account_owner_broker_writer: Callable[..., Awaitable[object]] | None = None,
         account_clerk_namespace_canceller: object = None,
         account_registry_gate_enabled: bool = True,
+        account_gate_authority: Literal["account_truth", "observation_lease"] = (
+            "account_truth"
+        ),
         owner_generation_provider: object = None,
         current_owner_generation_provider: object = None,
         trace_id_provider: object = None,
@@ -709,6 +712,7 @@ class LiveEngine:
         self._account_owner_broker_writer = account_owner_broker_writer
         self._account_clerk_namespace_canceller = account_clerk_namespace_canceller
         self._account_registry_gate_enabled = account_registry_gate_enabled
+        self._account_gate_authority = account_gate_authority
         self._account_truth_gate_provider: Callable[[], object] | None = None
         self._owner_generation_provider = owner_generation_provider
         self._current_owner_generation_provider = (
@@ -942,6 +946,10 @@ class LiveEngine:
                 account_observation_lease_gate_result,
                 assess_account_observation_lease,
             )
+            from app.services.observation_lease_parity import (
+                OBSERVATION_LEASE_GENERATION_AUTHORITY,
+                OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION,
+            )
             from app.utils.timestamps import now_ms_utc
 
             def account_observation_lease_gate_provider():
@@ -961,6 +969,9 @@ class LiveEngine:
                     self._account_id,
                     {
                         "event_type": "account_observation_lease_shadow_comparison",
+                        "comparison_schema_version": (
+                            OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION
+                        ),
                         "recorded_at_ms": now_ms_utc(),
                         "strategy_instance_id": self._strategy_instance_id,
                         "run_id": self._run_id,
@@ -972,6 +983,10 @@ class LiveEngine:
                         "lease_source": lease_gate.source,
                         "lease_status": lease_gate.status,
                         "lease_reason_code": lease_gate.operator_reason,
+                        "lease_schema_version": 2,
+                        "lease_generation_authority": (
+                            OBSERVATION_LEASE_GENERATION_AUTHORITY
+                        ),
                     },
                 )
 
@@ -1026,6 +1041,7 @@ class LiveEngine:
             ),
             account_truth_gate_provider=self._account_truth_gate_provider,
             account_observation_lease_gate_provider=account_observation_lease_gate_provider,
+            account_gate_authority=self._account_gate_authority,
             account_observation_lease_shadow_comparison_observer=(
                 account_observation_lease_shadow_comparison_observer
             ),

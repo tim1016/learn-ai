@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, ClassVar, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from app.engine.live.intent_wal import IntentWal
@@ -710,6 +710,11 @@ class LivePortfolio:
     # never changes the submit decision until sequence parity has been proven;
     # its outcome is logged and counted against the live Account Truth gate.
     account_observation_lease_gate_provider: GateResultProvider | None = None
+    # Atomic #1021 rollback seam. Account Truth remains authoritative by
+    # default while Clerk-keyed lease evidence requalifies in shadow mode.
+    account_gate_authority: Literal["account_truth", "observation_lease"] = (
+        "account_truth"
+    )
     # Durable account-event writer owned by the engine. It records every
     # paired shadow comparison at an actual submit boundary so parity evidence
     # survives child-process restarts without introducing a second scheduler.
@@ -1114,58 +1119,93 @@ class LivePortfolio:
         account_truth_gate = None
         if self.account_truth_gate_provider is not None:
             account_truth_gate = self.account_truth_gate_provider()
+        lease_gate = None
         if self.account_observation_lease_gate_provider is not None:
             try:
                 lease_gate = self.account_observation_lease_gate_provider()
             except Exception:
-                lease_gate = None
                 logger.exception("account observation lease shadow gate read failed")
-            if (
-                account_truth_gate is not None
-                and lease_gate is not None
-                and self.pending_orders
-                and self.account_observation_lease_shadow_comparison_observer is not None
-            ):
-                try:
-                    self.account_observation_lease_shadow_comparison_observer(
-                        account_truth_gate,
-                        lease_gate,
+                if self.account_gate_authority == "observation_lease":
+                    lease_gate = GateResult(
+                        gate_id="account.observation_lease",
+                        status="block",
+                        source="account_observation_lease",
+                        operator_reason="ACCOUNT_OBSERVATION_LEASE_READ_FAILED",
+                        operator_next_step="RECONCILE_NOW",
+                        evidence_at_ms=now_ms_utc(),
                     )
-                except Exception:
-                    logger.exception("account observation lease shadow comparison write failed")
-            if (
-                account_truth_gate is not None
-                and lease_gate is not None
-                and getattr(account_truth_gate, "status", None) != getattr(lease_gate, "status", None)
-            ):
-                shadow_key = (
-                    f"truth={getattr(account_truth_gate, 'status', None)}:"
-                    f"lease={getattr(lease_gate, 'status', None)}"
+        elif self.account_gate_authority == "observation_lease":
+            lease_gate = GateResult(
+                gate_id="account.observation_lease",
+                status="block",
+                source="account_observation_lease",
+                operator_reason="ACCOUNT_OBSERVATION_LEASE_PROVIDER_MISSING",
+                operator_next_step="RECONCILE_NOW",
+                evidence_at_ms=now_ms_utc(),
+            )
+        if (
+            account_truth_gate is not None
+            and lease_gate is not None
+            and self.pending_orders
+            and self.account_observation_lease_shadow_comparison_observer is not None
+        ):
+            try:
+                self.account_observation_lease_shadow_comparison_observer(
+                    account_truth_gate,
+                    lease_gate,
                 )
-                ACCOUNT_OBSERVATION_LEASE_SHADOW_DIVERGENCES[shadow_key] += 1
-                logger.warning(
-                    "account observation lease shadow divergence",
-                    extra={
-                        "truth_status": getattr(account_truth_gate, "status", None),
-                        "truth_reason": getattr(account_truth_gate, "operator_reason", None),
-                        "lease_status": getattr(lease_gate, "status", None),
-                        "lease_reason": getattr(lease_gate, "operator_reason", None),
-                        "divergence_count": ACCOUNT_OBSERVATION_LEASE_SHADOW_DIVERGENCES[
-                            shadow_key
-                        ],
-                    },
-                )
-        if account_truth_gate is not None and getattr(account_truth_gate, "status", None) == "pass":
+            except Exception:
+                logger.exception("account observation lease shadow comparison write failed")
+        if (
+            account_truth_gate is not None
+            and lease_gate is not None
+            and getattr(account_truth_gate, "status", None) != getattr(lease_gate, "status", None)
+        ):
+            shadow_key = (
+                f"truth={getattr(account_truth_gate, 'status', None)}:"
+                f"lease={getattr(lease_gate, 'status', None)}"
+            )
+            ACCOUNT_OBSERVATION_LEASE_SHADOW_DIVERGENCES[shadow_key] += 1
+            logger.warning(
+                "account observation lease shadow divergence",
+                extra={
+                    "truth_status": getattr(account_truth_gate, "status", None),
+                    "truth_reason": getattr(account_truth_gate, "operator_reason", None),
+                    "lease_status": getattr(lease_gate, "status", None),
+                    "lease_reason": getattr(lease_gate, "operator_reason", None),
+                    "divergence_count": ACCOUNT_OBSERVATION_LEASE_SHADOW_DIVERGENCES[
+                        shadow_key
+                    ],
+                },
+            )
+        account_verification_gate = (
+            lease_gate
+            if self.account_gate_authority == "observation_lease"
+            else account_truth_gate
+        )
+        if (
+            account_verification_gate is not None
+            and getattr(account_verification_gate, "status", None) == "pass"
+        ):
             self.account_truth_outage_started_at_ms = None
-        elif account_truth_gate is not None:
+        elif account_verification_gate is not None:
             submitted_at_ms = now_ms_utc()
-            outage_reason = getattr(account_truth_gate, "operator_reason", None) in {
+            outage_reason = (
+                self.account_gate_authority == "account_truth"
+                and getattr(account_verification_gate, "operator_reason", None)
+                in {
                 "ACCOUNT_TRUTH_NOT_AVAILABLE",
                 "ACCOUNT_TRUTH_STALE",
-            }
+                }
+            )
             if (not outage_reason or not requires_durable) and not self._pending_orders_reduce_exposure_only():
-                self.drop_pending_before_submit(drop_reason="account_truth_block", ts_ms=submitted_at_ms)
-                raise AccountTruthBlockError(gate_result=account_truth_gate)
+                drop_reason = (
+                    "account_observation_lease_block"
+                    if self.account_gate_authority == "observation_lease"
+                    else "account_truth_block"
+                )
+                self.drop_pending_before_submit(drop_reason=drop_reason, ts_ms=submitted_at_ms)
+                raise AccountTruthBlockError(gate_result=account_verification_gate)
             elif outage_reason and requires_durable and self.account_truth_outage_started_at_ms is None:
                 self.account_truth_outage_started_at_ms = submitted_at_ms
             elif outage_reason and requires_durable and (
@@ -1176,7 +1216,7 @@ class LivePortfolio:
                     drop_reason="broker_truth_stale",
                     ts_ms=submitted_at_ms,
                 )
-                raise AccountTruthBlockError(gate_result=account_truth_gate)
+                raise AccountTruthBlockError(gate_result=account_verification_gate)
 
         session_state_for_submit: SessionAuthorityState | None = None
         if self.pending_orders and self.session_gate_provider is not None:

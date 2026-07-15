@@ -22,6 +22,7 @@ def _comparison(
 ) -> dict[str, object]:
     return {
         "event_type": "account_observation_lease_shadow_comparison",
+        "comparison_schema_version": 2,
         "recorded_at_ms": recorded_at_ms,
         "strategy_instance_id": "bot-a",
         "run_id": "run-a",
@@ -31,6 +32,8 @@ def _comparison(
         "lease_gate_id": "account.observation_lease",
         "lease_source": "account_observation_lease",
         "lease_status": lease_status,
+        "lease_schema_version": 2,
+        "lease_generation_authority": "account_clerk",
     }
 
 
@@ -81,10 +84,8 @@ def test_assess_observation_lease_shadow_parity_rejects_malformed_comparison() -
         [
             _comparison(recorded_at_ms=1_704_209_400_000),
             {
-                "event_type": "account_observation_lease_shadow_comparison",
+                **_comparison(recorded_at_ms=1_704_250_000_000),
                 "recorded_at_ms": "not-a-timestamp",
-                "truth_status": "pass",
-                "lease_status": "pass",
             },
             _comparison(recorded_at_ms=1_704_295_800_000),
             _comparison(recorded_at_ms=1_704_382_200_000),
@@ -121,6 +122,42 @@ def test_assess_observation_lease_shadow_parity_rejects_unknown_gate_identity() 
 
     assert report.comparison_count == 0
     assert report.invalid_comparisons[0].reason == "lease gate identity is not account.observation_lease"
+
+
+def test_assess_observation_lease_shadow_parity_excludes_legacy_owner_keyed_rows() -> None:
+    legacy = _comparison(recorded_at_ms=1_704_209_400_000)
+    legacy.pop("comparison_schema_version")
+    legacy.pop("lease_schema_version")
+    legacy.pop("lease_generation_authority")
+
+    report = assess_observation_lease_shadow_parity(
+        [
+            legacy,
+            _comparison(recorded_at_ms=1_704_295_800_000),
+        ],
+        minimum_sessions=1,
+    )
+
+    assert report.legacy_comparison_count == 1
+    assert report.comparison_count == 1
+    assert report.observed_session_dates == ("2024-01-03",)
+    assert report.cutover_ready is True
+
+
+def test_assess_observation_lease_shadow_parity_rejects_wrong_generation_authority() -> None:
+    report = assess_observation_lease_shadow_parity(
+        [
+            {
+                **_comparison(recorded_at_ms=1_704_209_400_000),
+                "lease_generation_authority": "account_owner",
+            }
+        ]
+    )
+
+    assert report.comparison_count == 0
+    assert report.invalid_comparisons[0].reason == (
+        "lease_generation_authority must be account_clerk"
+    )
 
 
 @pytest.mark.parametrize("field", ["strategy_instance_id", "run_id"])
@@ -188,6 +225,10 @@ def test_observation_lease_parity_archive_uses_empty_snapshot_for_missing_journa
     assert payload["source"]["account_events_sha256"] == (
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     )
+    assert payload["schema_version"] == 2
+    assert payload["comparison_schema_version"] == 2
+    assert payload["lease_generation_authority"] == "account_clerk"
+    assert payload["legacy_comparison_count"] == 0
     assert payload["cutover_ready"] is False
 
 

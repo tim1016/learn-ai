@@ -40,7 +40,10 @@ from app.engine.live.account_artifacts import (
     read_account_owner_generation,
 )
 from app.engine.live.account_identity import InvalidAccountIdError, normalize_account_id
-from app.engine.live.account_observation_lease import assess_account_observation_lease
+from app.engine.live.account_observation_lease import (
+    account_observation_lease_gate_result,
+    assess_account_observation_lease,
+)
 from app.engine.live.bot_lifecycle_state import (
     BotLifecyclePhase,
     BotLifecycleStateCorruptError,
@@ -2716,6 +2719,36 @@ def _raise_if_start_boundary_blocks(root: Path, sid: str, *, now_ms: int) -> Non
     )
 
 
+def _raise_if_account_observation_lease_blocks_start(
+    artifacts_root: Path,
+    account_id: str,
+    settings: IbkrSettings,
+    *,
+    now_ms: int,
+) -> None:
+    """Apply the durable proof at Start only after the atomic authority switch."""
+
+    if settings.account_gate_authority != "observation_lease":
+        return
+    assessment = assess_account_observation_lease(
+        artifacts_root,
+        account_id,
+        now_ms=now_ms,
+    )
+    if assessment.state == "VERIFIED":
+        return
+    gate = account_observation_lease_gate_result(assessment)
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        detail={
+            "reason_code": assessment.reason_code,
+            "message": assessment.reason,
+            "gate_result": gate.model_dump(mode="json"),
+            "operator_next_step": "RECONCILE_NOW",
+        },
+    )
+
+
 def _assert_roll_call_offer_allows_start(
     root: Path,
     sid: str,
@@ -2968,6 +3001,13 @@ async def _assert_start_allowed(run_id: str, body: HostRunnerStartRequest, setti
                 "operator_next_step": "WAIT_FOR_BROKER_TRUTH",
             },
         )
+    now_ms = _now_ms()
+    _raise_if_account_observation_lease_blocks_start(
+        root.parent,
+        account_id,
+        settings,
+        now_ms=now_ms,
+    )
     await _raise_if_fleet_contamination_blocks_start(root, account_id=account_id)
     _raise_if_crash_recovery_blocks_start(
         root.parent,
@@ -3007,7 +3047,6 @@ async def _assert_start_allowed(run_id: str, body: HostRunnerStartRequest, setti
             },
         )
     # idle / exited / unrecognised -> proceed; daemon performs its own start gates.
-    now_ms = _now_ms()
     _raise_if_start_boundary_blocks(root, sid, now_ms=now_ms)
     _assert_roll_call_offer_allows_start(root, sid, run_id, body, now_ms=now_ms)
 

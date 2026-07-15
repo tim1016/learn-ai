@@ -18,16 +18,18 @@ from app.broker.ibkr.models import (
 from app.engine.live.account_artifacts import (
     RESTART_INTENSITY_SOURCE,
     AccountArtifactError,
+    AccountClerkGeneration,
+    AccountClerkLease,
     AccountFreezeEvidence,
     AccountInstanceBinding,
-    AccountOwnerGeneration,
     account_artifacts_root,
+    advance_account_clerk_generation,
     append_account_event,
     read_account_events,
     read_account_freeze,
+    write_account_clerk_lease,
     write_account_freeze,
     write_account_instance_binding,
-    write_account_owner_generation,
 )
 from app.engine.live.account_observation_lease import assess_account_observation_lease
 from app.schemas.account_reconciliation import AccountConditionType, AccountCureAction
@@ -119,6 +121,30 @@ def _binding() -> AccountInstanceBinding:
         lifecycle_state="ACTIVE",
         recorded_at_ms=1_780_000_000_000,
         source="test",
+    )
+
+
+def _write_accepting_clerk_generation(root: Path, *, generation: int) -> None:
+    for offset in range(generation):
+        advance_account_clerk_generation(
+            root,
+            "DU1234567",
+            phase="accepting",
+            recorded_at_ms=1_780_000_002_000 + offset,
+            source="test",
+        )
+    write_account_clerk_lease(
+        root,
+        AccountClerkLease(
+            account_id="DU1234567",
+            generation=generation,
+            pid=123,
+            ibkr_client_id=51,
+            status="RUNNING",
+            started_at_ms=1_780_000_002_000,
+            renewed_at_ms=1_780_000_002_000,
+            valid_until_ms=1_780_000_062_000,
+        ),
     )
 
 
@@ -221,6 +247,7 @@ def test_new_execution_invalidates_prior_receipt_until_reconciled(tmp_path: Path
 
 def test_account_truth_observer_renews_observation_lease(tmp_path: Path) -> None:
     service = AccountReconciliationService(artifacts_root=tmp_path)
+    _write_accepting_clerk_generation(tmp_path, generation=1)
 
     service.observe_account_truth(_truth(), now_ms=1_780_000_002_000)
     service.observe_account_truth(_truth(), now_ms=1_780_000_003_000)
@@ -241,10 +268,27 @@ def test_account_truth_observer_renews_observation_lease(tmp_path: Path) -> None
     ]
 
 
+def test_account_truth_observer_refuses_clean_truth_without_active_clerk(
+    tmp_path: Path,
+) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+
+    service.observe_account_truth(_truth(), now_ms=1_780_000_002_000)
+
+    assessment = assess_account_observation_lease(
+        tmp_path,
+        "DU1234567",
+        now_ms=1_780_000_002_001,
+    )
+    assert assessment.state == "REVOKED"
+    assert assessment.reason_code == "ACCOUNT_CLERK_GENERATION_CHANGED"
+
+
 def test_account_truth_observer_revokes_observation_lease_on_unattributed_exposure(
     tmp_path: Path,
 ) -> None:
     service = AccountReconciliationService(artifacts_root=tmp_path)
+    _write_accepting_clerk_generation(tmp_path, generation=1)
     service.observe_account_truth(_truth(), now_ms=1_780_000_002_000)
 
     service.observe_account_truth(
@@ -282,6 +326,7 @@ def test_account_truth_observer_revokes_observation_lease_on_unattributed_exposu
 
 def test_account_truth_refresh_failure_revokes_observation_lease(tmp_path: Path) -> None:
     service = AccountReconciliationService(artifacts_root=tmp_path)
+    _write_accepting_clerk_generation(tmp_path, generation=1)
     service.observe_account_truth(_truth(), now_ms=1_780_000_002_000)
 
     service.observe_account_truth_failure(
@@ -310,6 +355,7 @@ def test_account_truth_refresh_failure_revokes_observation_lease(tmp_path: Path)
 
 def test_account_observation_triage_bounds_long_reason_lines(tmp_path: Path) -> None:
     service = AccountReconciliationService(artifacts_root=tmp_path)
+    _write_accepting_clerk_generation(tmp_path, generation=1)
     long_detail = "broker sweep timed out: " + ("x" * 700)
     service.observe_account_truth(_truth(), now_ms=1_780_000_002_000)
 
@@ -332,20 +378,20 @@ def test_account_observation_triage_bounds_long_reason_lines(tmp_path: Path) -> 
     ).reason == long_detail
 
 
-def test_account_truth_observer_revokes_when_owner_generation_changes_during_sweep(
+def test_account_truth_observer_revokes_when_clerk_generation_changes_during_sweep(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     owners = iter(
         (
-            AccountOwnerGeneration(
+            AccountClerkGeneration(
                 account_id="DU1234567",
                 generation=3,
                 phase="accepting",
                 recorded_at_ms=1_780_000_002_000,
                 source="test",
             ),
-            AccountOwnerGeneration(
+            AccountClerkGeneration(
                 account_id="DU1234567",
                 generation=4,
                 phase="accepting",
@@ -356,7 +402,7 @@ def test_account_truth_observer_revokes_when_owner_generation_changes_during_swe
     )
     monkeypatch.setattr(
         account_reconciliation_module,
-        "read_account_owner_generation",
+        "read_account_clerk_generation",
         lambda *_args: next(owners),
     )
     service = AccountReconciliationService(artifacts_root=tmp_path)
@@ -369,28 +415,19 @@ def test_account_truth_observer_revokes_when_owner_generation_changes_during_swe
         now_ms=1_780_000_002_001,
     )
     assert assessment.state == "REVOKED"
-    assert assessment.reason_code == "ACCOUNT_OWNER_GENERATION_CHANGED"
+    assert assessment.reason_code == "ACCOUNT_CLERK_GENERATION_CHANGED"
 
 
-def test_account_truth_observer_uses_pre_collection_owner_generation_fence(
+def test_account_truth_observer_uses_pre_collection_clerk_generation_fence(
     tmp_path: Path,
 ) -> None:
     service = AccountReconciliationService(artifacts_root=tmp_path)
-    write_account_owner_generation(
-        tmp_path,
-        AccountOwnerGeneration(
-            account_id="DU1234567",
-            generation=4,
-            phase="accepting",
-            recorded_at_ms=1_780_000_002_001,
-            source="test",
-        ),
-    )
+    _write_accepting_clerk_generation(tmp_path, generation=4)
 
     service.observe_account_truth(
         _truth(),
-        owner_generation_before=(3, "accepting"),
-        owner_generation_captured=True,
+        clerk_generation_before=(3, "accepting"),
+        clerk_generation_captured=True,
         now_ms=1_780_000_002_000,
     )
 
@@ -400,28 +437,19 @@ def test_account_truth_observer_uses_pre_collection_owner_generation_fence(
         now_ms=1_780_000_002_001,
     )
     assert assessment.state == "REVOKED"
-    assert assessment.reason_code == "ACCOUNT_OWNER_GENERATION_CHANGED"
+    assert assessment.reason_code == "ACCOUNT_CLERK_GENERATION_CHANGED"
 
 
-def test_account_truth_observer_renews_when_captured_owner_generation_is_stable(
+def test_account_truth_observer_renews_when_captured_clerk_generation_is_stable(
     tmp_path: Path,
 ) -> None:
     service = AccountReconciliationService(artifacts_root=tmp_path)
-    write_account_owner_generation(
-        tmp_path,
-        AccountOwnerGeneration(
-            account_id="DU1234567",
-            generation=3,
-            phase="accepting",
-            recorded_at_ms=1_780_000_002_000,
-            source="test",
-        ),
-    )
+    _write_accepting_clerk_generation(tmp_path, generation=3)
 
     service.observe_account_truth(
         _truth(),
-        owner_generation_before=(3, "accepting"),
-        owner_generation_captured=True,
+        clerk_generation_before=(3, "accepting"),
+        clerk_generation_captured=True,
         now_ms=1_780_000_002_000,
     )
 
@@ -437,6 +465,7 @@ def test_account_truth_observer_revokes_when_freeze_evidence_is_unreadable(
     tmp_path: Path,
 ) -> None:
     service = AccountReconciliationService(artifacts_root=tmp_path)
+    _write_accepting_clerk_generation(tmp_path, generation=1)
     service.observe_account_truth(_truth(), now_ms=1_780_000_002_000)
     account_root = account_artifacts_root(tmp_path, "DU1234567")
     (account_root / "unresolved_exposure.flag").write_text("{not-json", encoding="utf-8")
@@ -457,6 +486,7 @@ def test_account_truth_observer_revokes_when_lease_update_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = AccountReconciliationService(artifacts_root=tmp_path)
+    _write_accepting_clerk_generation(tmp_path, generation=1)
     service.observe_account_truth(_truth(), now_ms=1_780_000_002_000)
     monkeypatch.setattr(
         account_reconciliation_module,

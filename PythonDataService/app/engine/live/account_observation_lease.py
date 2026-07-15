@@ -13,8 +13,10 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.engine.live.account_artifacts import (
+    AccountClerkLeaseUnavailableError,
     account_artifacts_root,
-    read_account_owner_generation,
+    read_account_clerk_generation,
+    require_active_account_clerk_generation,
 )
 from app.engine.live.account_identity import normalize_account_id
 from app.schemas.artifact_io import atomic_write_pydantic_artifact, read_pydantic_artifact
@@ -24,7 +26,7 @@ from app.services.account_truth_snapshot import DEFAULT_ACCOUNT_TRUTH_READINESS_
 ACCOUNT_OBSERVATION_LEASE_FILENAME = "account_observation_lease.json"
 ACCOUNT_OBSERVATION_LEASE_GATE_ID = "account.observation_lease"
 ACCOUNT_OBSERVATION_LEASE_GATE_SOURCE = "account_observation_lease"
-_OWNER_GENERATION_UNREADABLE = object()
+_CLERK_GENERATION_UNREADABLE = object()
 
 
 class AccountObservationLease(BaseModel):
@@ -32,13 +34,13 @@ class AccountObservationLease(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     account_id: str = Field(min_length=1, max_length=64)
     status: Literal["VERIFIED", "REVOKED"]
     observed_at_ms: int = Field(ge=0)
     renewed_at_ms: int = Field(ge=0)
     valid_until_ms: int = Field(ge=0)
-    account_owner_generation: int | None = Field(default=None, ge=0)
+    clerk_generation: int | None = Field(default=None, ge=1)
     truth_watermark: str = Field(min_length=1, max_length=128)
     revoked_reason_code: str | None = None
     revoked_detail: str | None = None
@@ -76,7 +78,7 @@ class AccountObservationLeaseRepo:
         account_id: str,
         observed_at_ms: int,
         now_ms: int,
-        account_owner_generation: int | None,
+        clerk_generation: int,
     ) -> AccountObservationLease:
         """Persist a verified observation using the existing truth TTL."""
 
@@ -87,7 +89,7 @@ class AccountObservationLeaseRepo:
             observed_at_ms=observed_at_ms,
             renewed_at_ms=now_ms,
             valid_until_ms=observed_at_ms + DEFAULT_ACCOUNT_TRUTH_READINESS_TTL_MS,
-            account_owner_generation=account_owner_generation,
+            clerk_generation=clerk_generation,
             truth_watermark=f"account_truth:{observed_at_ms}",
         )
         atomic_write_pydantic_artifact(self.path_for(canonical_account_id), lease)
@@ -111,9 +113,7 @@ class AccountObservationLeaseRepo:
             observed_at_ms=existing.observed_at_ms if existing is not None else now_ms,
             renewed_at_ms=now_ms,
             valid_until_ms=existing.valid_until_ms if existing is not None else now_ms,
-            account_owner_generation=(
-                existing.account_owner_generation if existing is not None else None
-            ),
+            clerk_generation=existing.clerk_generation if existing is not None else None,
             truth_watermark=(
                 existing.truth_watermark if existing is not None else f"account_truth:{now_ms}"
             ),
@@ -162,23 +162,29 @@ def assess_account_observation_lease(
             reason="Account verification is overdue.",
         )
 
-    owner = _read_owner_generation(artifacts_root, canonical_account_id)
-    if owner is _OWNER_GENERATION_UNREADABLE:
+    clerk = _read_active_clerk_generation(
+        artifacts_root,
+        canonical_account_id,
+        now_ms=now_ms,
+    )
+    if clerk is _CLERK_GENERATION_UNREADABLE:
         return _assessment(
             state="REVOKED",
             lease=lease,
-            reason_code="ACCOUNT_OWNER_GENERATION_CHANGED",
-            reason="Account ownership evidence is unreadable after this verification.",
+            reason_code="ACCOUNT_CLERK_GENERATION_CHANGED",
+            reason="Account Clerk evidence is unreadable after this verification.",
         )
-    if (owner is not None and (
-        owner.phase != "accepting"
-        or owner.generation != lease.account_owner_generation
-    )) or (owner is None and lease.account_owner_generation is not None):
+    if (
+        clerk is None
+        or lease.clerk_generation is None
+        or clerk.phase != "accepting"
+        or clerk.generation != lease.clerk_generation
+    ):
         return _assessment(
             state="REVOKED",
             lease=lease,
-            reason_code="ACCOUNT_OWNER_GENERATION_CHANGED",
-            reason="Account ownership changed after this verification.",
+            reason_code="ACCOUNT_CLERK_GENERATION_CHANGED",
+            reason="Account Clerk authority changed after this verification.",
         )
     return _assessment(
         state="VERIFIED",
@@ -203,13 +209,28 @@ def account_observation_lease_gate_result(
     )
 
 
-def _read_owner_generation(artifacts_root: Path, account_id: str):
+def _read_active_clerk_generation(
+    artifacts_root: Path,
+    account_id: str,
+    *,
+    now_ms: int,
+):
     try:
-        return read_account_owner_generation(artifacts_root, account_id)
+        clerk = read_account_clerk_generation(artifacts_root, account_id)
+        active_generation = require_active_account_clerk_generation(
+            artifacts_root,
+            account_id,
+            now_ms=now_ms,
+        )
+        if clerk is None or clerk.phase != "accepting" or clerk.generation != active_generation:
+            return None
+        return clerk
+    except AccountClerkLeaseUnavailableError:
+        return None
     except OSError:
         return None
     except ValueError:
-        return _OWNER_GENERATION_UNREADABLE
+        return _CLERK_GENERATION_UNREADABLE
 
 
 def _assessment(

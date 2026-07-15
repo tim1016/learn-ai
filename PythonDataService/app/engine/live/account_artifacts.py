@@ -680,49 +680,6 @@ def write_account_owner_generation(
     return path
 
 
-def advance_account_owner_generation(
-    artifacts_root: Path,
-    account_id: str,
-    *,
-    phase: Literal["accepting", "reconnecting", "draining", "frozen"],
-    recorded_at_ms: int,
-    source: str,
-) -> AccountOwnerGeneration:
-    path = _account_artifact_file_path(
-        artifacts_root,
-        account_id,
-        ACCOUNT_OWNER_GENERATION_FILENAME,
-    )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with _file_lock(path):
-        existing = (
-            AccountOwnerGeneration.model_validate_json(path.read_text(encoding="utf-8"))
-            if path.is_file()
-            else None
-        )
-        generation = AccountOwnerGeneration(
-            account_id=account_id,
-            generation=(existing.generation + 1 if existing is not None else 1),
-            phase=phase,
-            recorded_at_ms=recorded_at_ms,
-            source=source,
-        )
-        _atomic_write_json_locked(path, generation.model_dump())
-        _append_account_event(
-            artifacts_root,
-            account_id,
-            {
-                "event_type": "account_owner_generation_recorded",
-                "account_id": account_id,
-                "generation": generation.generation,
-                "phase": generation.phase,
-                "recorded_at_ms": generation.recorded_at_ms,
-                "source": generation.source,
-            },
-        )
-    return generation
-
-
 def read_account_owner_generation(
     artifacts_root: Path,
     account_id: str,
@@ -1287,7 +1244,6 @@ _LOCAL_EXPORTS = [
     "AccountRecoveryProof",
     "RestartIntensityPolicy",
     "account_artifacts_root",
-    "advance_account_owner_generation",
     "advance_account_clerk_generation",
     "append_account_event",
     "clear_account_freeze",

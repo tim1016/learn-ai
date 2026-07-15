@@ -21,12 +21,16 @@ from httpx import ASGITransport, AsyncClient
 from app.broker.ibkr.api_evidence import evidence_request, evidence_response, get_ibkr_api_evidence_recorder
 from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import (
+    AccountClerkLease,
     AccountFreezeEvidence,
+    advance_account_clerk_generation,
     append_account_event,
     read_account_events,
     read_account_freeze,
+    write_account_clerk_lease,
     write_account_freeze,
 )
+from app.engine.live.account_observation_lease import AccountObservationLeaseRepo
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
     crash_retired_restart_blocking_binding,
@@ -593,6 +597,7 @@ def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         # start_defaults resolves to place-orders; dedicated tests override.
         mode="paper",
         readonly=False,
+        account_gate_authority="account_truth",
     )
     monkeypatch.setattr(live_instances, "get_settings", lambda: stub)
 
@@ -5508,6 +5513,88 @@ async def test_start_run_rejects_contaminated_account_even_with_roll_call_offer(
     assert detail["reason_code"] == "FLEET_CONTAMINATED"
     assert detail["blockers"][0]["condition"]["id"] == "fleet_contaminated"
     assert called is False
+
+
+async def test_start_run_rejects_absent_lease_after_authority_switch(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-lease-absent", "spy_ema_paper", 100)
+    offer_id = _write_roll_call_offer(root.parent, run_id="run-lease-absent")
+    _set_startable_now(monkeypatch)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+    live_instances.get_settings().account_gate_authority = "observation_lease"
+    called = False
+
+    async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
+        nonlocal called
+        called = True
+        return {"accepted": True, "process": _running_process("run-lease-absent")}
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/runs/run-lease-absent/start",
+            json={"roll_call_offer_id": offer_id},
+        )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "ACCOUNT_OBSERVATION_LEASE_ABSENT"
+    assert detail["operator_next_step"] == "RECONCILE_NOW"
+    assert called is False
+
+
+async def test_start_run_accepts_verified_clerk_keyed_lease_after_authority_switch(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-lease-verified", "spy_ema_paper", 100)
+    offer_id = _write_roll_call_offer(root.parent, run_id="run-lease-verified")
+    _set_startable_now(monkeypatch)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+    settings = live_instances.get_settings()
+    settings.account_gate_authority = "observation_lease"
+    now_ms = live_instances._now_ms()
+    clerk = advance_account_clerk_generation(
+        root.parent,
+        "DU111",
+        phase="accepting",
+        recorded_at_ms=now_ms,
+        source="test",
+    )
+    write_account_clerk_lease(
+        root.parent,
+        AccountClerkLease(
+            account_id="DU111",
+            generation=clerk.generation,
+            pid=123,
+            ibkr_client_id=51,
+            status="RUNNING",
+            started_at_ms=now_ms,
+            renewed_at_ms=now_ms,
+            valid_until_ms=now_ms + 60_000,
+        ),
+    )
+    AccountObservationLeaseRepo(root.parent).renew(
+        account_id="DU111",
+        observed_at_ms=now_ms,
+        now_ms=now_ms,
+        clerk_generation=clerk.generation,
+    )
+
+    async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
+        return {"accepted": True, "process": _running_process("run-lease-verified")}
+
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/runs/run-lease-verified/start",
+            json={"roll_call_offer_id": offer_id},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["accepted"] is True
 
 
 async def test_start_run_rejects_unknown_broker_truth_even_with_roll_call_offer(

@@ -15,7 +15,6 @@ from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
     AccountFreezeEvidence,
     AccountOwnerGeneration,
-    advance_account_owner_generation,
     read_account_events,
     read_account_owner_generation,
     write_account_freeze,
@@ -177,23 +176,26 @@ def _persisted_generation_advancer(
     ) -> AccountOwnerGeneration:
         loaded = read_account_owner_generation(artifacts_root, ACCOUNT)
         if loaded is None and default > 0:
+            loaded = AccountOwnerGeneration(
+                account_id=ACCOUNT,
+                generation=default,
+                phase=phase,
+                recorded_at_ms=recorded_at_ms,
+                source="test",
+            )
             write_account_owner_generation(
                 artifacts_root,
-                AccountOwnerGeneration(
-                    account_id=ACCOUNT,
-                    generation=default,
-                    phase=phase,
-                    recorded_at_ms=recorded_at_ms,
-                    source="test",
-                ),
+                loaded,
             )
-        return advance_account_owner_generation(
-            artifacts_root,
-            ACCOUNT,
+        generation = AccountOwnerGeneration(
+            account_id=ACCOUNT,
+            generation=(loaded.generation + 1 if loaded is not None else 1),
             phase=phase,
             recorded_at_ms=recorded_at_ms,
             source="account_owner",
         )
+        write_account_owner_generation(artifacts_root, generation)
+        return generation
 
     return advancer
 
@@ -252,12 +254,15 @@ async def test_resumed_stale_owner_is_fenced_after_takeover(tmp_path: Path) -> N
     assert len(broker.calls) == 1
 
     # A pauses; the lease expires; a successor takes over the account.
-    advance_account_owner_generation(
+    write_account_owner_generation(
         tmp_path,
-        ACCOUNT,
-        phase="accepting",
-        recorded_at_ms=1_700_000_100_000,
-        source="takeover",
+        AccountOwnerGeneration(
+            account_id=ACCOUNT,
+            generation=GENERATION + 1,
+            phase="accepting",
+            recorded_at_ms=1_700_000_100_000,
+            source="takeover",
+        ),
     )
 
     # A resumes and submits under its stale held generation.
@@ -281,24 +286,6 @@ async def test_resumed_stale_owner_is_fenced_after_takeover(tmp_path: Path) -> N
     assert fenced.value.current_owner_generation == GENERATION + 1
     assert fenced.value.grant_owner_generation == GENERATION
     assert len(broker.calls) == 1
-
-
-def test_account_owner_records_accepting_generation_for_startup(tmp_path: Path) -> None:
-    broker = _Broker()
-    owner = _owner(tmp_path, broker, generation=0)
-
-    recorded = owner.record_accepting_generation(recorded_at_ms=1_700_000_005_000)
-
-    assert recorded.account_id == ACCOUNT
-    assert recorded.generation == 0
-    assert recorded.phase == "accepting"
-    assert recorded.recorded_at_ms == 1_700_000_005_000
-    loaded = read_account_owner_generation(tmp_path, ACCOUNT)
-    assert loaded == recorded
-    events = read_account_events(tmp_path, ACCOUNT)
-    assert events[-1]["event_type"] == "account_owner_generation_recorded"
-    assert events[-1]["generation"] == 0
-    assert events[-1]["phase"] == "accepting"
 
 
 def test_account_owner_accepting_transition_stays_closed_when_generation_persist_fails(
@@ -327,8 +314,6 @@ async def test_account_owner_preserves_initial_frozen_phase(tmp_path: Path) -> N
     assert owner.accepting is False
     gate = owner.reconnect_gate_result()
     assert gate.status == "freeze"
-    with pytest.raises(RuntimeError, match="cannot record accepting AccountOwner generation"):
-        owner.record_accepting_generation(recorded_at_ms=1_700_000_005_000)
     with pytest.raises(AccountOwnerSubmitRejected) as exc:
         await owner.submit(_intent())
     assert exc.value.reason == "ACCOUNT_OWNER_RECONNECTING"
@@ -394,7 +379,16 @@ async def test_account_owner_refuses_old_owner_after_takeover_advances_persisted
         owner_generation_advancer=advancer,
         classifier=lambda _intent: _continue_decision(),
     )
-    new_owner.record_accepting_generation(recorded_at_ms=1_700_000_020_000)
+    write_account_owner_generation(
+        tmp_path,
+        AccountOwnerGeneration(
+            account_id=ACCOUNT,
+            generation=GENERATION + 1,
+            phase="accepting",
+            recorded_at_ms=1_700_000_020_000,
+            source="test.takeover",
+        ),
+    )
 
     loaded = read_account_owner_generation(tmp_path, ACCOUNT)
     assert loaded is not None
