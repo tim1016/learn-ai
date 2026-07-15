@@ -22,8 +22,8 @@ import os
 import signal
 import tempfile
 import time
-from collections.abc import Callable
-from contextlib import suppress
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
 
@@ -33,22 +33,28 @@ from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
     AccountClerkLease,
     account_artifacts_root,
+    read_account_clerk_generation,
     write_account_clerk_lease,
 )
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
-from app.engine.live.account_owner_fence import account_clerk_write_grant
+from app.engine.live.account_owner_fence import (
+    AccountClerkWriteFenceError,
+    account_clerk_write_grant,
+)
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
     latest_account_instance_binding,
     read_account_instance_registry,
 )
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
+from app.utils.advisory_lock import advisory_file_lock
 
 if TYPE_CHECKING:
     from app.engine.live.account_clerk_rpc import AccountClerkRpcClient, AccountClerkRpcServer
 
 ACCOUNT_CLERK_INBOX_FILENAME = "clerk_inbox.jsonl"
 ACCOUNT_CLERK_JOURNAL_FILENAME = "clerk_journal.jsonl"
+ACCOUNT_CLERK_AUTHORITY_LOCK_TARGET_FILENAME = "clerk_authority"
 _MAX_INT64 = 9_223_372_036_854_775_807
 _CLERK_LEASE_TTL_MS = 5_000
 
@@ -69,6 +75,24 @@ class AccountClerkIntentRejected(RuntimeError):
         super().__init__(f"AccountClerkIntentRejected(reason={reason!r})")
         self.reason = reason
         self.diagnostics = diagnostics
+
+
+class AccountClerkGenerationFencedError(RuntimeError):
+    """A Clerk observed that its durable write generation is no longer active."""
+
+    def __init__(
+        self,
+        *,
+        account_id: str,
+        expected_generation: int,
+        observed_generation: int | None,
+        boundary: str,
+    ) -> None:
+        super().__init__("CLERK_GENERATION_STALE")
+        self.account_id = account_id
+        self.expected_generation = expected_generation
+        self.observed_generation = observed_generation
+        self.boundary = boundary
 
 
 class AccountClerkInboxEntry(BaseModel):
@@ -188,12 +212,16 @@ class AccountClerk:
         account_id: str,
         broker: object | None = None,
         clerk_generation: int | None = None,
+        durable_generation_provider: Callable[[], int | None] | None = None,
+        on_generation_fenced: Callable[[], None] | None = None,
         now_ms: Callable[[], int] | None = None,
     ) -> None:
         self._artifacts_root = artifacts_root
         self._account_id = account_id
         self._broker = broker
         self._clerk_generation = clerk_generation
+        self._durable_generation_provider = durable_generation_provider
+        self._on_generation_fenced = on_generation_fenced
         self._now_ms = now_ms if now_ms is not None else _now_ms
         self._intake_lock = asyncio.Lock()
         self._journal_entries: list[AccountClerkJournalEntry] | None = None
@@ -702,13 +730,54 @@ class AccountClerk:
     async def _run_broker_write(self, boundary: str, write: Callable[[], Any]) -> Any:
         if self._clerk_generation is None:
             return await write()
-        with account_clerk_write_grant(
-            account_id=self._account_id,
-            clerk_generation=self._clerk_generation,
-            boundary=boundary,
-            clerk_generation_provider=lambda: self._clerk_generation,
-        ):
-            return await write()
+        try:
+            observed_generation = self._read_active_generation()
+        except (OSError, ValueError) as exc:
+            self._fence_stale_generation()
+            raise AccountClerkGenerationFencedError(
+                account_id=self._account_id,
+                expected_generation=self._clerk_generation,
+                observed_generation=None,
+                boundary=boundary,
+            ) from exc
+        if observed_generation != self._clerk_generation:
+            self._fence_stale_generation()
+            raise AccountClerkGenerationFencedError(
+                account_id=self._account_id,
+                expected_generation=self._clerk_generation,
+                observed_generation=observed_generation,
+                boundary=boundary,
+            )
+        try:
+            with account_clerk_write_grant(
+                account_id=self._account_id,
+                clerk_generation=self._clerk_generation,
+                boundary=boundary,
+                clerk_generation_provider=self._read_active_generation,
+            ):
+                return await write()
+        except AccountClerkWriteFenceError as exc:
+            if exc.reason not in {
+                "CLERK_LEASE_UNAVAILABLE_AT_BROKER_WRITE",
+                "OWNER_GENERATION_STALE_AT_BROKER_WRITE",
+            }:
+                raise
+            self._fence_stale_generation()
+            raise AccountClerkGenerationFencedError(
+                account_id=self._account_id,
+                expected_generation=self._clerk_generation,
+                observed_generation=exc.current_clerk_generation,
+                boundary=boundary,
+            ) from exc
+
+    def _read_active_generation(self) -> int | None:
+        if self._durable_generation_provider is None:
+            return self._clerk_generation
+        return self._durable_generation_provider()
+
+    def _fence_stale_generation(self) -> None:
+        if self._on_generation_fenced is not None:
+            self._on_generation_fenced()
 
     def _reject(self, intent: AccountOwnerSubmitIntent, reason: str) -> None:
         raise AccountClerkIntentRejected(
@@ -731,6 +800,25 @@ def account_clerk_inbox_path(artifacts_root: Path, account_id: str) -> Path:
 
 def account_clerk_journal_path(artifacts_root: Path, account_id: str) -> Path:
     return account_artifacts_root(artifacts_root, account_id) / ACCOUNT_CLERK_JOURNAL_FILENAME
+
+
+def account_clerk_authority_lock_target(artifacts_root: Path, account_id: str) -> Path:
+    """Return the non-generation target used for this account's lifetime lock.
+
+    ``advisory_file_lock`` derives its lock file from this stable account-local
+    target. The durable generation record is fencing evidence only and is
+    never used as the exclusion primitive.
+    """
+
+    return account_artifacts_root(artifacts_root, account_id) / ACCOUNT_CLERK_AUTHORITY_LOCK_TARGET_FILENAME
+
+
+@contextmanager
+def account_clerk_authority_lock(artifacts_root: Path, account_id: str) -> Iterator[None]:
+    """Hold the same-host Clerk authority lock for one account's full lifetime."""
+
+    with advisory_file_lock(account_clerk_authority_lock_target(artifacts_root, account_id)):
+        yield
 
 
 def account_clerk_socket_path(artifacts_root: Path, account_id: str) -> Path:
@@ -905,7 +993,15 @@ class AccountClerkLeaseWriter:
         return lease
 
 
+def _active_durable_clerk_generation(artifacts_root: Path, account_id: str) -> int | None:
+    generation = read_account_clerk_generation(artifacts_root, account_id)
+    if generation is None or generation.phase != "accepting":
+        return None
+    return generation.generation
+
+
 async def _run_clerk_process(args: argparse.Namespace) -> int:
+    artifacts_root = Path(args.artifacts_root)
     stop = asyncio.Event()
 
     def _stop(_signum: int, _frame: object) -> None:
@@ -917,40 +1013,55 @@ async def _run_clerk_process(args: argparse.Namespace) -> int:
     from app.engine.live.account_clerk_rpc import AccountClerkRpcServer
     from app.engine.live.live_portfolio import IbkrBrokerAdapter
 
-    client = IbkrClient()
-    if client.settings.mode != "paper":
-        raise RuntimeError("ACCOUNT_CLERK_PAPER_MODE_REQUIRED")
-    await client.connect()
-    broker = IbkrBrokerAdapter(client)
-    broker.require_account_owner_write_fence(lambda: args.generation)
-    clerk = AccountClerk(
-        artifacts_root=Path(args.artifacts_root),
-        account_id=args.account_id,
-        broker=broker,
-        clerk_generation=args.generation,
-    )
-    server = AccountClerkRpcServer(clerk)
-    from app.engine.live.account_clerk_reconciler import AccountClerkReconciler
+    with account_clerk_authority_lock(artifacts_root, args.account_id):
+        def durable_generation_provider() -> int | None:
+            return _active_durable_clerk_generation(artifacts_root, args.account_id)
 
-    reconciler = AccountClerkReconciler(clerk)
-    writer = AccountClerkLeaseWriter(
-        artifacts_root=Path(args.artifacts_root),
-        account_id=args.account_id,
-        generation=args.generation,
-        pid=os.getpid(),
-    )
-    await server.start()
-    await reconciler.start()
-    try:
-        while not stop.is_set():
-            writer.renew()
-            with suppress(TimeoutError):
-                await asyncio.wait_for(stop.wait(), timeout=1)
-    finally:
-        writer.renew(draining=True)
-        await reconciler.close()
-        await server.close()
-        await client.disconnect()
+        observed_generation = durable_generation_provider()
+        if observed_generation != args.generation:
+            raise AccountClerkGenerationFencedError(
+                account_id=args.account_id,
+                expected_generation=args.generation,
+                observed_generation=observed_generation,
+                boundary="account_clerk.startup",
+            )
+
+        client = IbkrClient()
+        if client.settings.mode != "paper":
+            raise RuntimeError("ACCOUNT_CLERK_PAPER_MODE_REQUIRED")
+        await client.connect()
+        broker = IbkrBrokerAdapter(client)
+        broker.require_account_owner_write_fence(durable_generation_provider)
+        clerk = AccountClerk(
+            artifacts_root=artifacts_root,
+            account_id=args.account_id,
+            broker=broker,
+            clerk_generation=args.generation,
+            durable_generation_provider=durable_generation_provider,
+            on_generation_fenced=stop.set,
+        )
+        server = AccountClerkRpcServer(clerk)
+        from app.engine.live.account_clerk_reconciler import AccountClerkReconciler
+
+        reconciler = AccountClerkReconciler(clerk)
+        writer = AccountClerkLeaseWriter(
+            artifacts_root=artifacts_root,
+            account_id=args.account_id,
+            generation=args.generation,
+            pid=os.getpid(),
+        )
+        try:
+            await server.start()
+            await reconciler.start()
+            while not stop.is_set():
+                writer.renew()
+                with suppress(TimeoutError):
+                    await asyncio.wait_for(stop.wait(), timeout=1)
+        finally:
+            writer.renew(draining=True)
+            await reconciler.close()
+            await server.close()
+            await client.disconnect()
     return 0
 
 
@@ -973,10 +1084,12 @@ def __getattr__(name: str):
 
 
 __all__ = [
+    "ACCOUNT_CLERK_AUTHORITY_LOCK_TARGET_FILENAME",
     "ACCOUNT_CLERK_INBOX_FILENAME",
     "ACCOUNT_CLERK_JOURNAL_FILENAME",
     "AccountClerk",
     "AccountClerkBrokerAckReceipt",
+    "AccountClerkGenerationFencedError",
     "AccountClerkInboxEntry",
     "AccountClerkIntentRejected",
     "AccountClerkJournalCorruptError",
@@ -986,6 +1099,8 @@ __all__ = [
     "AccountClerkRecoveryFlattenReceipt",
     "AccountClerkRpcClient",
     "AccountClerkRpcServer",
+    "account_clerk_authority_lock",
+    "account_clerk_authority_lock_target",
     "account_clerk_inbox_path",
     "account_clerk_journal_path",
     "account_clerk_socket_path",

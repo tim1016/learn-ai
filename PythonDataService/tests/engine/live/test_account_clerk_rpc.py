@@ -16,12 +16,15 @@ import pytest
 import app.engine.live.account_clerk_rpc as account_clerk_rpc
 from app.broker.ibkr.models import IbkrOrderSpec
 from app.engine.execution.order_sizer import FixedShares, OrderSizer
+from app.engine.live.account_artifacts import advance_account_clerk_generation
 from app.engine.live.account_clerk import AccountClerk, account_clerk_socket_path
 from app.engine.live.account_clerk_rpc import (
     ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S,
     ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S,
     ACCOUNT_CLERK_RPC_SCHEMA_VERSION,
     AccountClerkRpcClient,
+    AccountClerkRpcGenerationHandshake,
+    AccountClerkRpcGenerationMismatchError,
     AccountClerkRpcInternalError,
     AccountClerkRpcMalformedResponseError,
     AccountClerkRpcRejectedError,
@@ -147,6 +150,9 @@ def _intent(intent_id: str = "intent-1040") -> AccountOwnerSubmitIntent:
 async def _read_raw_response(path: Path, request: dict[str, object]) -> dict[str, object]:
     reader, writer = await asyncio.open_unix_connection(str(path))
     try:
+        handshake = AccountClerkRpcGenerationHandshake.model_validate_json(await reader.readline())
+        assert handshake.account_id == ACCOUNT
+        assert handshake.served_generation == 1
         writer.write((json.dumps(request) + "\n").encode())
         await writer.drain()
         line = await reader.readline()
@@ -159,10 +165,29 @@ async def _read_raw_response(path: Path, request: dict[str, object]) -> dict[str
 async def _start_raw_server(
     tmp_path: Path,
     handler: Callable[[asyncio.StreamReader, asyncio.StreamWriter], object],
+    *,
+    served_generation: int = 1,
 ) -> tuple[asyncio.AbstractServer, Path]:
     path = account_clerk_socket_path(tmp_path, ACCOUNT)
     path.parent.mkdir(parents=True, exist_ok=True)
-    server = await asyncio.start_unix_server(handler, path=str(path))
+
+    async def generation_checked_handler(
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        writer.write(
+            (
+                AccountClerkRpcGenerationHandshake(
+                    account_id=ACCOUNT,
+                    served_generation=served_generation,
+                ).model_dump_json()
+                + "\n"
+            ).encode()
+        )
+        await writer.drain()
+        await handler(reader, writer)
+
+    server = await asyncio.start_unix_server(generation_checked_handler, path=str(path))
     return server, path
 
 
@@ -173,10 +198,23 @@ async def _close_raw_server(server: asyncio.AbstractServer, path: Path) -> None:
         path.unlink()
 
 
+@pytest.fixture(autouse=True)
+def _write_active_clerk_generation(tmp_path: Path) -> None:
+    advance_account_clerk_generation(
+        tmp_path,
+        ACCOUNT,
+        phase="accepting",
+        recorded_at_ms=START_MS,
+        source="test",
+    )
+
+
 @pytest.mark.asyncio
 async def test_success_envelope_round_trips_over_real_unix_socket(tmp_path: Path) -> None:
     _write_active_binding(tmp_path)
-    server = AccountClerkRpcServer(AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_Broker()))
+    server = AccountClerkRpcServer(
+        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_Broker(), clerk_generation=1)
+    )
     await server.start()
     try:
         response = await _read_raw_response(
@@ -194,7 +232,9 @@ async def test_success_envelope_round_trips_over_real_unix_socket(tmp_path: Path
 
 @pytest.mark.asyncio
 async def test_typed_clerk_rejection_round_trips_over_real_unix_socket(tmp_path: Path) -> None:
-    server = AccountClerkRpcServer(AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_Broker()))
+    server = AccountClerkRpcServer(
+        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_Broker(), clerk_generation=1)
+    )
     await server.start()
     try:
         with pytest.raises(AccountClerkRpcRejectedError) as exc:
@@ -215,7 +255,12 @@ async def test_internal_server_failure_is_logged_and_never_leaks_to_socket_clien
 ) -> None:
     _write_active_binding(tmp_path)
     server = AccountClerkRpcServer(
-        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_FailingBroker())
+        AccountClerk(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+            broker=_FailingBroker(),
+            clerk_generation=1,
+        )
     )
     await server.start()
     try:
@@ -287,6 +332,32 @@ async def test_transport_failures_are_typed_and_distinguishable(tmp_path: Path) 
         if path.exists():
             path.unlink()
     assert connect_failed.value.reason_code == "ACCOUNT_CLERK_UNAVAILABLE:SOCKET_CONNECT_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_client_rejects_a_stale_socket_generation_before_writing_a_request(tmp_path: Path) -> None:
+    request_received = asyncio.Event()
+
+    async def stale_socket(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        line = await reader.readline()
+        if line:
+            request_received.set()
+        writer.close()
+        await writer.wait_closed()
+
+    server, path = await _start_raw_server(tmp_path, stale_socket, served_generation=2)
+    try:
+        with pytest.raises(AccountClerkRpcGenerationMismatchError) as exc:
+            await AccountClerkRpcClient(artifacts_root=tmp_path, account_id=ACCOUNT).drain_events(
+                bot_order_namespace="learn-ai/bot-a/v1"
+            )
+    finally:
+        await _close_raw_server(server, path)
+
+    assert exc.value.reason_code == "ACCOUNT_CLERK_UNAVAILABLE:GENERATION_MISMATCH"
+    assert exc.value.expected_generation == 1
+    assert exc.value.served_generation == 2
+    assert not request_received.is_set()
 
 
 @pytest.mark.asyncio

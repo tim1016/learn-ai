@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import multiprocessing
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,12 +13,15 @@ import pytest
 import app.engine.live.account_clerk as account_clerk_module
 from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
+    advance_account_clerk_generation,
+    read_account_clerk_generation,
     read_account_clerk_lease,
     read_account_events,
     read_account_freeze,
 )
 from app.engine.live.account_clerk import (
     AccountClerk,
+    AccountClerkGenerationFencedError,
     AccountClerkInboxEntry,
     AccountClerkIntentRejected,
     AccountClerkJournalCorruptError,
@@ -27,6 +31,7 @@ from app.engine.live.account_clerk import (
     AccountClerkRecoveryFlattenReceipt,
     AccountClerkRpcClient,
     AccountClerkRpcServer,
+    account_clerk_authority_lock,
     read_account_clerk_inbox,
     read_account_clerk_journal,
 )
@@ -41,6 +46,26 @@ from app.engine.live.order_identity import build_order_ref
 
 ACCOUNT = "DU123456"
 START_MS = 1_784_000_000_000
+
+
+def _write_active_clerk_generation(tmp_path: Path) -> int:
+    return advance_account_clerk_generation(
+        tmp_path,
+        ACCOUNT,
+        phase="accepting",
+        recorded_at_ms=START_MS,
+        source="test",
+    ).generation
+
+
+def _hold_clerk_authority_lock(
+    artifacts_root: Path,
+    acquired: multiprocessing.synchronize.Event,
+    release: multiprocessing.synchronize.Event,
+) -> None:
+    with account_clerk_authority_lock(artifacts_root, ACCOUNT):
+        acquired.set()
+        release.wait(timeout=10)
 
 
 class _FakeBroker:
@@ -342,9 +367,15 @@ async def test_journal_exposure_survives_bot_crash_and_deduplicates_execution(tm
 @pytest.mark.asyncio
 async def test_bot_rpc_reaches_clerk_without_a_bot_broker_adapter(tmp_path: Path) -> None:
     _write_active_binding(tmp_path, "bot-a", "run-a")
+    generation = _write_active_clerk_generation(tmp_path)
     broker = _FakeBroker()
     server = AccountClerkRpcServer(
-        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+        AccountClerk(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+            broker=broker,
+            clerk_generation=generation,
+        )
     )
     await server.start()
     try:
@@ -359,11 +390,165 @@ async def test_bot_rpc_reaches_clerk_without_a_bot_broker_adapter(tmp_path: Path
     assert len(broker.calls) == 1
 
 
+def test_two_real_processes_cannot_acquire_account_clerk_authority_together(tmp_path: Path) -> None:
+    context = multiprocessing.get_context("spawn")
+    first_acquired = context.Event()
+    second_acquired = context.Event()
+    release = context.Event()
+    first = context.Process(
+        target=_hold_clerk_authority_lock,
+        args=(tmp_path, first_acquired, release),
+    )
+    second = context.Process(
+        target=_hold_clerk_authority_lock,
+        args=(tmp_path, second_acquired, release),
+    )
+    first.start()
+    try:
+        assert first_acquired.wait(timeout=5)
+        second.start()
+        assert not second_acquired.wait(timeout=0.25)
+        release.set()
+        assert second_acquired.wait(timeout=5)
+    finally:
+        release.set()
+        for process in (first, second):
+            process.join(timeout=5)
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=5)
+
+    assert first.exitcode == 0
+    assert second.exitcode == 0
+
+
+@pytest.mark.asyncio
+async def test_clerk_process_acquires_lock_before_broker_connect_and_releases_after_disconnect(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generation = _write_active_clerk_generation(tmp_path)
+    events: list[str] = []
+
+    class _StoppedEvent:
+        def set(self) -> None:
+            events.append("stop")
+
+        def is_set(self) -> bool:
+            return True
+
+        async def wait(self) -> None:
+            return None
+
+    class _OrderedLock:
+        def __enter__(self) -> None:
+            events.append("lock_acquired")
+
+        def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
+            events.append("lock_released")
+
+    class _Client:
+        settings = SimpleNamespace(mode="paper")
+
+        async def connect(self) -> None:
+            assert "lock_acquired" in events
+            events.append("broker_connect")
+
+        async def disconnect(self) -> None:
+            events.append("broker_disconnect")
+
+    class _BrokerAdapter:
+        def __init__(self, _client: object) -> None:
+            pass
+
+        def require_account_owner_write_fence(self, provider: object) -> None:
+            assert callable(provider)
+
+    class _Server:
+        def __init__(self, _clerk: AccountClerk) -> None:
+            pass
+
+        async def start(self) -> None:
+            events.append("socket_serve")
+
+        async def close(self) -> None:
+            events.append("socket_closed")
+
+    class _Reconciler:
+        def __init__(self, _clerk: AccountClerk) -> None:
+            pass
+
+        async def start(self) -> None:
+            events.append("reconciler_start")
+
+        async def close(self) -> None:
+            events.append("reconciler_closed")
+
+    from app.broker.ibkr import client as ibkr_client_module
+    from app.engine.live import account_clerk_reconciler, account_clerk_rpc, live_portfolio
+
+    monkeypatch.setattr(account_clerk_module, "account_clerk_authority_lock", lambda *_args: _OrderedLock())
+    monkeypatch.setattr(account_clerk_module.asyncio, "Event", _StoppedEvent)
+    monkeypatch.setattr(account_clerk_module.signal, "signal", lambda *_args: None)
+    monkeypatch.setattr(ibkr_client_module, "IbkrClient", _Client)
+    monkeypatch.setattr(live_portfolio, "IbkrBrokerAdapter", _BrokerAdapter)
+    monkeypatch.setattr(account_clerk_rpc, "AccountClerkRpcServer", _Server)
+    monkeypatch.setattr(account_clerk_reconciler, "AccountClerkReconciler", _Reconciler)
+
+    await account_clerk_module._run_clerk_process(
+        SimpleNamespace(artifacts_root=str(tmp_path), account_id=ACCOUNT, generation=generation)
+    )
+
+    assert events.index("lock_acquired") < events.index("broker_connect") < events.index("socket_serve")
+    assert events.index("broker_disconnect") < events.index("lock_released")
+
+
+@pytest.mark.asyncio
+async def test_durable_generation_change_rejects_write_and_terminates_stale_clerk(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    generation = _write_active_clerk_generation(tmp_path)
+    broker = _FakeBroker()
+    fenced = threading.Event()
+
+    def durable_generation_provider() -> int | None:
+        durable = read_account_clerk_generation(tmp_path, ACCOUNT)
+        return durable.generation if durable is not None and durable.phase == "accepting" else None
+
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=broker,
+        clerk_generation=generation,
+        durable_generation_provider=durable_generation_provider,
+        on_generation_fenced=fenced.set,
+    )
+    await clerk.submit_intent(_intent("bot-a", "run-a", "before-takeover"))
+    assert len(broker.calls) == 1
+
+    replacement = advance_account_clerk_generation(
+        tmp_path,
+        ACCOUNT,
+        phase="accepting",
+        recorded_at_ms=START_MS + 1,
+        source="test.takeover",
+    )
+    with pytest.raises(AccountClerkGenerationFencedError) as exc:
+        await clerk.submit_intent(_intent("bot-a", "run-a", "after-takeover"))
+
+    assert exc.value.expected_generation == generation
+    assert exc.value.observed_generation == replacement.generation
+    assert fenced.is_set()
+    assert len(broker.calls) == 1
+
+
 @pytest.mark.asyncio
 async def test_clerk_relays_callbacks_only_to_the_originating_namespace(tmp_path: Path) -> None:
     _write_active_binding(tmp_path, "bot-a", "run-a")
     _write_active_binding(tmp_path, "bot-b", "run-b")
-    server = AccountClerkRpcServer(AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT))
+    generation = _write_active_clerk_generation(tmp_path)
+    server = AccountClerkRpcServer(
+        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, clerk_generation=generation)
+    )
     await server.start()
     try:
         intent_a = _intent("bot-a", "run-a", "intent-a")
@@ -395,7 +580,10 @@ async def test_clerk_relays_callbacks_only_to_the_originating_namespace(tmp_path
 
 @pytest.mark.asyncio
 async def test_unexplained_broker_callback_is_an_observable_reconciliation_alarm(tmp_path: Path) -> None:
-    server = AccountClerkRpcServer(AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT))
+    generation = _write_active_clerk_generation(tmp_path)
+    server = AccountClerkRpcServer(
+        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, clerk_generation=generation)
+    )
     await server.start()
     try:
         server._record_broker_event(
@@ -411,7 +599,11 @@ async def test_unexplained_broker_callback_is_an_observable_reconciliation_alarm
     finally:
         await server.close()
 
-    [alarm] = read_account_events(tmp_path, ACCOUNT)
+    [alarm] = [
+        event
+        for event in read_account_events(tmp_path, ACCOUNT)
+        if event["event_type"] == "account_clerk_reconciliation_alarm"
+    ]
     assert alarm["event_type"] == "account_clerk_reconciliation_alarm"
     assert alarm["reason"] == "BROKER_EVENT_WITHOUT_DURABLE_CLERK_INTENT"
 

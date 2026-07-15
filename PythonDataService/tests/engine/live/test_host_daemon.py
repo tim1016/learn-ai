@@ -101,6 +101,41 @@ class FakeProcess:
         self.returncode = 0
 
 
+def test_clerk_readiness_requires_matching_generation_handshake(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live import account_clerk_rpc, host_daemon
+
+    calls: list[tuple[Path, str]] = []
+
+    class _Client:
+        def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
+            calls.append((artifacts_root, account_id))
+
+        async def verify_generation(self) -> int:
+            return 2
+
+    def run_coroutine(coroutine: object) -> int:
+        coroutine.close()  # type: ignore[attr-defined]
+        return 2
+
+    monotonic_values = iter((0.0, 0.0, 5.0))
+    monkeypatch.setattr(account_clerk_rpc, "AccountClerkRpcClient", _Client)
+    monkeypatch.setattr(host_daemon.asyncio, "run", run_coroutine)
+    monkeypatch.setattr(host_daemon.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(host_daemon.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(OSError, match="generation 3"):
+        RunnerProcessManager._wait_for_account_clerk_socket(
+            account_artifacts_root=tmp_path,
+            account_id="DU123",
+            expected_generation=3,
+        )
+
+    assert calls == [(tmp_path, "DU123")]
+
+
 def _add_managed_process(
     manager: RunnerProcessManager,
     *,

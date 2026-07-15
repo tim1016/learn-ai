@@ -1467,7 +1467,11 @@ class RunnerProcessManager:
             log_handle.close()
             raise
         if isinstance(process, _RealPopen):
-            self._wait_for_account_clerk_socket(account_artifacts_root=self.artifacts_root, account_id=account_id)
+            self._wait_for_account_clerk_socket(
+                account_artifacts_root=self.artifacts_root,
+                account_id=account_id,
+                expected_generation=generation.generation,
+            )
         AccountClerkLeaseWriter(
             artifacts_root=self.artifacts_root,
             account_id=account_id,
@@ -1487,18 +1491,37 @@ class RunnerProcessManager:
         return managed
 
     @staticmethod
-    def _wait_for_account_clerk_socket(*, account_artifacts_root: Path, account_id: str) -> None:
-        """Release bots only after the real Clerk RPC endpoint is reachable."""
+    def _wait_for_account_clerk_socket(
+        *,
+        account_artifacts_root: Path,
+        account_id: str,
+        expected_generation: int,
+    ) -> None:
+        """Release bots only after a matching-generation Clerk proves readiness."""
 
-        from app.engine.live.account_clerk import account_clerk_socket_path
+        from app.engine.live.account_clerk_rpc import (
+            AccountClerkRpcClient,
+            AccountClerkRpcError,
+        )
 
-        socket_path = account_clerk_socket_path(account_artifacts_root, account_id)
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
-            if socket_path.exists():
+            try:
+                served_generation = asyncio.run(
+                    AccountClerkRpcClient(
+                        artifacts_root=account_artifacts_root,
+                        account_id=account_id,
+                    ).verify_generation()
+                )
+            except AccountClerkRpcError:
+                time.sleep(0.05)
+                continue
+            if served_generation == expected_generation:
                 return
             time.sleep(0.05)
-        raise OSError(f"Account clerk RPC socket did not become ready for {account_id}")
+        raise OSError(
+            f"Account clerk RPC generation {expected_generation} did not become ready for {account_id}"
+        )
 
     def _clerk_health(self) -> list[AccountClerkHealth]:
         from app.engine.live.account_artifacts import read_account_clerk_lease

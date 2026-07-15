@@ -7,15 +7,17 @@ import json
 import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from app.broker.ibkr.models import IbkrOrderEvent
-from app.engine.live.account_artifacts import append_account_event
+from app.engine.live.account_artifacts import append_account_event, read_account_clerk_generation
 from app.engine.live.account_clerk import (
     AccountClerk,
     AccountClerkBrokerAckReceipt,
+    AccountClerkGenerationFencedError,
     AccountClerkIntentRejected,
     AccountClerkRecoveryFlattenReceipt,
     account_clerk_socket_path,
@@ -59,6 +61,17 @@ class AccountClerkRpcErrorEnvelope(BaseModel):
     outcome: Literal["error"] = "error"
     reason_code: AccountClerkRpcServerErrorCode
     reason: str | None = Field(default=None, min_length=1, max_length=128)
+
+
+class AccountClerkRpcGenerationHandshake(BaseModel):
+    """First frame on every Clerk socket connection before a request is read."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = ACCOUNT_CLERK_RPC_SCHEMA_VERSION
+    frame_type: Literal["generation_handshake"] = "generation_handshake"
+    account_id: str = Field(min_length=1)
+    served_generation: int = Field(ge=1)
 
 
 @dataclass(frozen=True)
@@ -115,6 +128,26 @@ class AccountClerkRpcTimeoutError(AccountClerkRpcUnavailableError):
     ) -> None:
         super().__init__(
             reason="TIMEOUT",
+            operation=operation,
+            request_identity=request_identity,
+        )
+
+
+class AccountClerkRpcGenerationMismatchError(AccountClerkRpcUnavailableError):
+    """The socket belongs to a Clerk fenced by a newer durable generation."""
+
+    def __init__(
+        self,
+        *,
+        expected_generation: int,
+        served_generation: int,
+        operation: str,
+        request_identity: AccountClerkRpcRequestIdentity,
+    ) -> None:
+        self.expected_generation = expected_generation
+        self.served_generation = served_generation
+        super().__init__(
+            reason="GENERATION_MISMATCH",
             operation=operation,
             request_identity=request_identity,
         )
@@ -181,8 +214,48 @@ class _AccountClerkRpcRequestRejected(ValueError):
 class AccountClerkRpcClient:
     """Bot-side client: enqueue intents; it never holds a broker adapter."""
 
-    def __init__(self, *, artifacts_root, account_id: str) -> None:
+    def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
+        self._artifacts_root = artifacts_root
+        self._account_id = account_id
         self._socket_path = account_clerk_socket_path(artifacts_root, account_id)
+
+    async def verify_generation(self) -> int:
+        """Verify that the reachable socket serves the durable account generation."""
+
+        operation = "generation_handshake"
+        request_identity = AccountClerkRpcRequestIdentity(intent_id=None, order_ref=None)
+        if not self._socket_path.exists():
+            raise AccountClerkRpcUnavailableError(
+                reason="SOCKET_MISSING",
+                operation=operation,
+                request_identity=request_identity,
+            )
+
+        writer: asyncio.StreamWriter | None = None
+        try:
+            async with _request_timeout(ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S):
+                reader, writer, served_generation = await self._open_generation_checked_connection(
+                    operation=operation,
+                    request_identity=request_identity,
+                )
+                del reader
+        except TimeoutError as exc:
+            raise AccountClerkRpcTimeoutError(
+                operation=operation,
+                request_identity=request_identity,
+            ) from exc
+        except (ConnectionError, OSError) as exc:
+            raise AccountClerkRpcUnavailableError(
+                reason="SOCKET_CONNECTION_LOST",
+                operation=operation,
+                request_identity=request_identity,
+            ) from exc
+        finally:
+            if writer is not None:
+                writer.close()
+                await writer.wait_closed()
+
+        return served_generation
 
     async def submit(self, intent: AccountOwnerSubmitIntent) -> AccountClerkBrokerAckReceipt:
         payload = await self._request({"operation": "submit", "intent": intent.model_dump(mode="json")})
@@ -264,14 +337,10 @@ class AccountClerkRpcClient:
         writer: asyncio.StreamWriter | None = None
         try:
             async with _request_timeout(_request_timeout_s(operation)):
-                try:
-                    reader, writer = await asyncio.open_unix_connection(str(self._socket_path))
-                except OSError as exc:
-                    raise AccountClerkRpcUnavailableError(
-                        reason="SOCKET_CONNECT_FAILED",
-                        operation=operation,
-                        request_identity=request_identity,
-                    ) from exc
+                reader, writer, _served_generation = await self._open_generation_checked_connection(
+                    operation=operation,
+                    request_identity=request_identity,
+                )
                 writer.write((json.dumps(request) + "\n").encode())
                 await writer.drain()
                 line = await reader.readline()
@@ -303,6 +372,62 @@ class AccountClerkRpcClient:
             request_identity=request_identity,
         )
 
+    async def _open_generation_checked_connection(
+        self,
+        *,
+        operation: str,
+        request_identity: AccountClerkRpcRequestIdentity,
+    ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, int]:
+        try:
+            reader, writer = await asyncio.open_unix_connection(str(self._socket_path))
+        except OSError as exc:
+            raise AccountClerkRpcUnavailableError(
+                reason="SOCKET_CONNECT_FAILED",
+                operation=operation,
+                request_identity=request_identity,
+            ) from exc
+        try:
+            handshake = _decode_generation_handshake(
+                await reader.readline(),
+                operation=operation,
+                request_identity=request_identity,
+            )
+            if handshake.account_id != self._account_id:
+                raise AccountClerkRpcMalformedResponseError(
+                    operation=operation,
+                    request_identity=request_identity,
+                )
+            durable_generation = self._durable_generation()
+            if handshake.served_generation != durable_generation:
+                raise AccountClerkRpcGenerationMismatchError(
+                    expected_generation=durable_generation,
+                    served_generation=handshake.served_generation,
+                    operation=operation,
+                    request_identity=request_identity,
+                )
+            return reader, writer, handshake.served_generation
+        except Exception:
+            writer.close()
+            await writer.wait_closed()
+            raise
+
+    def _durable_generation(self) -> int:
+        try:
+            generation = read_account_clerk_generation(self._artifacts_root, self._account_id)
+        except (OSError, ValueError) as exc:
+            raise AccountClerkRpcUnavailableError(
+                reason="DURABLE_GENERATION_UNAVAILABLE",
+                operation="generation_handshake",
+                request_identity=AccountClerkRpcRequestIdentity(intent_id=None, order_ref=None),
+            ) from exc
+        if generation is None:
+            raise AccountClerkRpcUnavailableError(
+                reason="DURABLE_GENERATION_MISSING",
+                operation="generation_handshake",
+                request_identity=AccountClerkRpcRequestIdentity(intent_id=None, order_ref=None),
+            )
+        return generation.generation
+
 
 class AccountClerkRpcServer:
     """Clerk-process RPC server; the broker stays exclusively behind this seam."""
@@ -311,6 +436,9 @@ class AccountClerkRpcServer:
         self._clerk = clerk
         self._server: asyncio.AbstractServer | None = None
         self._socket_path = account_clerk_socket_path(clerk._artifacts_root, clerk._account_id)
+        if clerk._clerk_generation is None:
+            raise RuntimeError("ACCOUNT_CLERK_GENERATION_REQUIRED_FOR_RPC")
+        self._served_generation = clerk._clerk_generation
         self._events_by_namespace: dict[str, list[IbkrOrderEvent]] = {}
         self._intents_by_order_ref: dict[str, AccountOwnerSubmitIntent] = {}
         set_callback = getattr(clerk._broker, "set_broker_callback_sink", None)
@@ -334,6 +462,16 @@ class AccountClerkRpcServer:
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         operation = "unknown"
         try:
+            writer.write(
+                (
+                    AccountClerkRpcGenerationHandshake(
+                        account_id=self._clerk._account_id,
+                        served_generation=self._served_generation,
+                    ).model_dump_json()
+                    + "\n"
+                ).encode()
+            )
+            await writer.drain()
             request = _decode_request(await reader.readline())
             operation = _request_operation(request)
             response: AccountClerkRpcSuccessEnvelope | AccountClerkRpcErrorEnvelope = await self._dispatch(request)
@@ -341,6 +479,8 @@ class AccountClerkRpcServer:
             response = _rejected_envelope(exc.reason)
         except AccountClerkIntentRejected as exc:
             response = _rejected_envelope(exc.reason)
+        except AccountClerkGenerationFencedError:
+            response = _rejected_envelope("CLERK_GENERATION_STALE")
         except (json.JSONDecodeError, ValidationError):
             response = _rejected_envelope("INVALID_REQUEST")
         except asyncio.CancelledError:
@@ -472,6 +612,26 @@ def _decode_request(line: bytes) -> dict[str, object]:
     return cast(dict[str, object], payload)
 
 
+def _decode_generation_handshake(
+    line: bytes,
+    *,
+    operation: str,
+    request_identity: AccountClerkRpcRequestIdentity,
+) -> AccountClerkRpcGenerationHandshake:
+    try:
+        if not line:
+            raise ValueError("Account Clerk RPC generation handshake is empty")
+        payload = json.loads(line)
+        if not isinstance(payload, dict):
+            raise TypeError("Account Clerk RPC generation handshake is not an object")
+        return AccountClerkRpcGenerationHandshake.model_validate(payload)
+    except (json.JSONDecodeError, TypeError, ValidationError, ValueError) as exc:
+        raise AccountClerkRpcMalformedResponseError(
+            operation=operation,
+            request_identity=request_identity,
+        ) from exc
+
+
 def _decode_response(
     line: bytes,
     *,
@@ -540,6 +700,8 @@ __all__ = [
     "AccountClerkRpcClient",
     "AccountClerkRpcError",
     "AccountClerkRpcErrorEnvelope",
+    "AccountClerkRpcGenerationHandshake",
+    "AccountClerkRpcGenerationMismatchError",
     "AccountClerkRpcInternalError",
     "AccountClerkRpcMalformedResponseError",
     "AccountClerkRpcRejectedError",
