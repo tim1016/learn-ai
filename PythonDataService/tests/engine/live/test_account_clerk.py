@@ -1122,6 +1122,56 @@ async def test_recovery_holds_submit_lane_but_not_intake_lock_during_cancel(tmp_
 
 
 @pytest.mark.asyncio
+async def test_recovery_serializes_a_concurrent_namespace_cancel_until_recovery_finishes(
+    tmp_path: Path,
+) -> None:
+    """A second cancel cannot write between recovery cancellation and liquidation."""
+
+    class _BlockedRecoveryCancelBroker(_FakeBroker):
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def cancel_open_orders_for_namespace(self, namespace: str) -> list[int]:
+            self.cancelled_namespaces.append(namespace)
+            self.started.set()
+            await self.release.wait()
+            return []
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _BlockedRecoveryCancelBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    await _record_owned_fill(clerk, instance_id="bot-a", run_id="run-a", intent_id="owned-fill")
+    recovery_task = asyncio.create_task(
+        clerk.submit_recovery_flatten(
+            _recovery_intent("bot-a", "run-a", "recovery"),
+            actor="bot",
+            actor_strategy_instance_id="bot-a",
+            actor_run_id="run-a",
+            actor_bot_order_namespace=bot_order_namespace_for_instance("bot-a"),
+        )
+    )
+    await broker.started.wait()
+    cancel_task = asyncio.create_task(
+        clerk.cancel_namespace(_cancel_intent("bot-a", "run-a", "concurrent-cancel"))
+    )
+    for _ in range(10):
+        await asyncio.sleep(0)
+        if not cancel_task.done():
+            break
+
+    assert broker.cancelled_namespaces == [bot_order_namespace_for_instance("bot-a")]
+    assert not cancel_task.done()
+
+    broker.release.set()
+    await recovery_task
+    await cancel_task
+    assert broker.cancelled_namespaces == [
+        bot_order_namespace_for_instance("bot-a"),
+        bot_order_namespace_for_instance("bot-a"),
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("order_spec_update", "reason"),
     [
