@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { DecimalPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal } from '@angular/core';
 
@@ -34,6 +35,7 @@ export class CohortLaunchMonitorComponent {
   readonly reloadVersion = input<number>(0);
   readonly cohort = signal<CohortBatchLaunchStatus | null>(null);
   readonly certificate = signal<CohortValidationCertificate | null>(null);
+  readonly certificateError = signal<string | null>(null);
   readonly loading = signal(false);
   readonly error = signal<string | null>(null);
 
@@ -68,6 +70,7 @@ export class CohortLaunchMonitorComponent {
     if (accountId === null) {
       this.cohort.set(null);
       this.certificate.set(null);
+      this.certificateError.set(null);
       this.error.set(null);
       return;
     }
@@ -77,9 +80,15 @@ export class CohortLaunchMonitorComponent {
       const cohort = await this.liveRuns.getLatestCohortBatchLaunch(accountId);
       if (epoch !== this.loadEpoch) return;
       this.cohort.set(cohort);
-      const certificate = await this.loadCertificate(accountId, cohort);
-      if (epoch !== this.loadEpoch) return;
-      this.certificate.set(certificate);
+      this.certificate.set(null);
+      this.certificateError.set(null);
+      try {
+        const certificate = await this.loadCertificate(accountId, cohort);
+        if (epoch !== this.loadEpoch) return;
+        this.certificate.set(certificate);
+      } catch (error) {
+        if (epoch === this.loadEpoch) this.certificateError.set(humanError(error));
+      }
     } catch (error) {
       if (epoch === this.loadEpoch) {
         this.error.set(humanError(error));
@@ -98,8 +107,9 @@ export class CohortLaunchMonitorComponent {
     if (cohort === null) return null;
     try {
       return await this.liveRuns.getCohortValidationCertificate(accountId, cohort.cohort_id);
-    } catch {
-      return null;
+    } catch (error) {
+      if (error instanceof HttpErrorResponse && error.status === 404) return null;
+      throw error;
     }
   }
 }

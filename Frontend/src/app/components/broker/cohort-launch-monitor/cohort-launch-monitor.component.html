@@ -49,6 +49,8 @@
       @for (reason of certificate.reasons; track reason) {
         <p class="pending mono">{{ reason | receiptLabel }}</p>
       }
+    } @else if (certificateError(); as certificateError) {
+      <p class="error" role="alert">Certificate retrieval failed: {{ certificateError }}</p>
     }
 
     <div class="table-wrap" tabindex="0" aria-label="Scrollable cohort monitor table">

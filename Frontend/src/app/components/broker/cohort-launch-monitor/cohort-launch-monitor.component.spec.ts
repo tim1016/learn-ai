@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { provideZonelessChangeDetection } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { describe, expect, it, vi } from 'vitest';
@@ -11,6 +12,42 @@ class FakeLiveRunsService {
 }
 
 describe('CohortLaunchMonitorComponent', () => {
+  const cohort = (cohortId: string) => ({
+    schema_version: 1,
+    account_id: 'DU1234567',
+    cohort_id: cohortId,
+    member_strategy_instance_ids: [],
+    window_start_ms: 1_780_000_000_000,
+    window_end_ms: 1_780_000_030_000,
+    authorized_by: 'operator.alice',
+    authorized_recorded_at_ms: 1_780_000_000_000,
+    outcomes_state: 'recorded',
+    outcomes: [],
+    outcomes_recorded_at_ms: 1_780_000_001_000,
+    outcomes_error: null,
+    evidence: {
+      sample_count: 1,
+      cadence_ms: 5_000,
+      healthy_overlap_ms: 5_000,
+      verdict: 'healthy',
+      reason: null,
+      source: 'account_event.cohort_evidence_sample',
+      members: [],
+    },
+  });
+
+  const certificate = (reason: string) => ({
+    schema_version: 1,
+    account_id: 'DU1234567',
+    cohort_id: 'paper-validation-1',
+    healthy_overlap_ms: 5_000,
+    evidence_verdict: 'healthy',
+    evidence_reason: null,
+    incidents: [],
+    verdict: 'passed',
+    reasons: [reason],
+  });
+
   it('renders only the durable server-authored cohort evidence', async () => {
     const liveRuns = new FakeLiveRunsService();
     liveRuns.getLatestCohortBatchLaunch.mockResolvedValue({
@@ -98,5 +135,57 @@ describe('CohortLaunchMonitorComponent', () => {
     expect(root.querySelector('table caption')?.textContent).toContain('latest server observation');
     expect(root.querySelectorAll('th[scope="col"]').length).toBe(5);
     expect(root.querySelector<HTMLButtonElement>('[aria-label="Refresh cohort monitor"]')).toBeTruthy();
+  });
+
+  it('surfaces certificate retrieval failures instead of presenting absence', async () => {
+    const liveRuns = new FakeLiveRunsService();
+    liveRuns.getLatestCohortBatchLaunch.mockResolvedValue(cohort('paper-validation-1'));
+    liveRuns.getCohortValidationCertificate.mockRejectedValue(
+      new HttpErrorResponse({ status: 500, error: { detail: 'certificate store unreadable' } }),
+    );
+    await TestBed.configureTestingModule({
+      imports: [CohortLaunchMonitorComponent],
+      providers: [provideZonelessChangeDetection(), { provide: LiveRunsService, useValue: liveRuns }],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(CohortLaunchMonitorComponent);
+    fixture.componentRef.setInput('accountId', 'DU1234567');
+    fixture.detectChanges();
+    await fixture.componentInstance.refresh();
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.textContent).toContain('Certificate retrieval failed');
+  });
+
+  it('clears a previous certificate while a newer cohort certificate is loading', async () => {
+    const liveRuns = new FakeLiveRunsService();
+    let resolveSecondCertificate: ((value: ReturnType<typeof certificate>) => void) | undefined;
+    const secondCertificate = new Promise<ReturnType<typeof certificate>>((resolve) => {
+      resolveSecondCertificate = resolve;
+    });
+    liveRuns.getLatestCohortBatchLaunch.mockResolvedValue(cohort('paper-validation-1'));
+    liveRuns.getCohortValidationCertificate.mockResolvedValue(certificate('FIRST_CERTIFICATE_REASON'));
+    await TestBed.configureTestingModule({
+      imports: [CohortLaunchMonitorComponent],
+      providers: [provideZonelessChangeDetection(), { provide: LiveRunsService, useValue: liveRuns }],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(CohortLaunchMonitorComponent);
+    fixture.componentRef.setInput('accountId', 'DU1234567');
+    fixture.detectChanges();
+    await fixture.componentInstance.refresh();
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).toContain('First Certificate Reason');
+
+    liveRuns.getLatestCohortBatchLaunch.mockResolvedValue(cohort('paper-validation-2'));
+    liveRuns.getCohortValidationCertificate.mockReturnValue(secondCertificate);
+    const refresh = fixture.componentInstance.refresh();
+    await vi.waitFor(() =>
+      expect(liveRuns.getCohortValidationCertificate).toHaveBeenCalledWith('DU1234567', 'paper-validation-2'),
+    );
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).not.toContain('First Certificate Reason');
+
+    if (resolveSecondCertificate === undefined) throw new Error('expected certificate request to be pending');
+    resolveSecondCertificate(certificate('SECOND_CERTIFICATE_REASON'));
+    await refresh;
   });
 });

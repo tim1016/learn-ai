@@ -13,7 +13,10 @@ from app.schemas.cohort_batch_launch import CohortBatchLaunchStatusResponse
 from app.schemas.cohort_validation_certificate import CohortValidationCertificate
 from app.services.account_truth_refresh import account_truth_artifacts_root
 from app.services.cohort_batch_launch import CohortBatchLaunchService
-from app.services.cohort_validation_certificate import CohortValidationCertificateService
+from app.services.cohort_validation_certificate import (
+    CohortValidationCertificateService,
+    CohortValidationCertificateWindowOpenError,
+)
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 
@@ -103,6 +106,8 @@ async def create_cohort_validation_certificate_endpoint(
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     except FileExistsError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except CohortValidationCertificateWindowOpenError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except (AccountArtifactError, ValueError) as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
@@ -118,11 +123,14 @@ async def get_cohort_validation_certificate_endpoint(
 ) -> CohortValidationCertificate:
     """Read the immutable server-authored certificate without recomputation."""
 
-    certificate = await asyncio.to_thread(
-        service.read,
-        account_id=normalize_account_id(account_id),
-        cohort_id=cohort_id,
-    )
+    try:
+        certificate = await asyncio.to_thread(
+            service.read,
+            account_id=normalize_account_id(account_id),
+            cohort_id=cohort_id,
+        )
+    except (AccountArtifactError, ValueError) as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     if certificate is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"cohort certificate not found: {cohort_id}")
     return certificate

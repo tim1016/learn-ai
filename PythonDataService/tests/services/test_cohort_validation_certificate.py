@@ -16,7 +16,10 @@ from app.engine.live.journal_exposure import JournalExposure
 from app.services import cohort_validation_certificate as certificate_module
 from app.services.cohort_batch_launch import CohortBatchLaunchService
 from app.services.cohort_evidence import CohortEvidenceSample, CohortMemberSample
-from app.services.cohort_validation_certificate import CohortValidationCertificateService
+from app.services.cohort_validation_certificate import (
+    CohortValidationCertificateService,
+    CohortValidationCertificateWindowOpenError,
+)
 from app.utils.timestamps import now_ms_utc
 
 
@@ -52,13 +55,21 @@ async def _seed_evidence(root: Path) -> tuple[CohortValidationCertificateService
             broker_residual={},
         ),
     )
-    return CohortValidationCertificateService(artifacts_root=root), receipt
+    return CohortValidationCertificateService(
+        artifacts_root=root,
+        now_ms=lambda: now_ms + 30_000,
+    ), receipt
 
 
-def _journal_entry(exec_id: str = "exec-a") -> SimpleNamespace:
+def _journal_entry(
+    exec_id: str = "exec-a",
+    *,
+    run_id: str = "run-a",
+    symbol: str = "SPY",
+) -> SimpleNamespace:
     intent = SimpleNamespace(
         strategy_instance_id="spy-a",
-        run_id="run-a",
+        run_id=run_id,
         bot_order_namespace="learn-ai/spy-a/v1",
         order_ref="learn-ai/spy-a/v1:intent-a",
     )
@@ -117,6 +128,64 @@ async def test_certificate_is_incomplete_without_linked_round_trip_identity(tmp_
     assert "INCOMPLETE_MEMBER_NAMESPACE_IDENTITY" in certificate.reasons
 
 
+async def test_certificate_refuses_generation_before_its_validation_window_ends(tmp_path: Path) -> None:
+    """A one-time certificate cannot be written from an unfinished window."""
+
+    _completed_service, receipt = await _seed_evidence(tmp_path)
+    service = CohortValidationCertificateService(artifacts_root=tmp_path, now_ms=lambda: receipt.window_start_ms)
+
+    with pytest.raises(CohortValidationCertificateWindowOpenError):
+        await service.generate(account_id=receipt.account_id, cohort_id=receipt.cohort_id)
+
+
+async def test_certificate_round_trips_exclude_prior_runs_in_the_same_namespace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, receipt = await _seed_evidence(tmp_path)
+    monkeypatch.setattr(
+        certificate_module,
+        "read_account_clerk_journal",
+        lambda *_args: [
+            _journal_entry("old-entry", run_id="old-run"),
+            _journal_entry("old-exit", run_id="old-run"),
+            _journal_entry("exec-entry"),
+            _journal_entry("exec-exit"),
+        ],
+    )
+    monkeypatch.setattr(certificate_module, "project_journal_exposure", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(certificate_module, "normalize_journal_broker_event", _fill_event)
+
+    certificate = await service.generate(account_id=receipt.account_id, cohort_id=receipt.cohort_id)
+
+    assert certificate.round_trips[0].exec_ids == ["exec-entry", "exec-exit"]
+
+
+async def test_certificate_preserves_every_final_exposure_symbol_per_namespace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, receipt = await _seed_evidence(tmp_path)
+    monkeypatch.setattr(
+        certificate_module,
+        "read_account_clerk_journal",
+        lambda *_args: [_journal_entry("exec-entry"), _journal_entry("exec-exit")],
+    )
+    monkeypatch.setattr(certificate_module, "normalize_journal_broker_event", _fill_event)
+    monkeypatch.setattr(
+        certificate_module,
+        "project_journal_exposure",
+        lambda *_args, **_kwargs: (
+            JournalExposure(receipt.account_id, "namespace", "learn-ai/spy-a/v1", "SPY", 1.0),
+            JournalExposure(receipt.account_id, "namespace", "learn-ai/spy-a/v1", "QQQ", -2.0),
+        ),
+    )
+
+    certificate = await service.generate(account_id=receipt.account_id, cohort_id=receipt.cohort_id)
+
+    assert certificate.final_journal_exposure == {"learn-ai/spy-a/v1": {"SPY": 1.0, "QQQ": -2.0}}
+
+
 async def test_certificate_is_incomplete_when_no_five_second_sample_exists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     now_ms = now_ms_utc()
     receipt = CohortBatchLaunchReceipt(
@@ -136,7 +205,10 @@ async def test_certificate_is_incomplete_when_no_five_second_sample_exists(tmp_p
         ),
     )
     record_cohort_batch_launch_receipt(tmp_path, receipt)
-    service = CohortValidationCertificateService(artifacts_root=tmp_path)
+    service = CohortValidationCertificateService(
+        artifacts_root=tmp_path,
+        now_ms=lambda: now_ms + 30_000,
+    )
     monkeypatch.setattr(
         certificate_module,
         "read_account_clerk_journal",
@@ -180,6 +252,33 @@ async def test_certificate_fails_for_nonflat_namespace_or_incident(tmp_path: Pat
     assert "FAILED_INCIDENT_RECORDED" in certificate.reasons
 
 
+async def test_certificate_ignores_incidents_after_its_validation_window(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, receipt = await _seed_evidence(tmp_path)
+    monkeypatch.setattr(
+        certificate_module,
+        "read_account_clerk_journal",
+        lambda *_args: [_journal_entry("exec-entry"), _journal_entry("exec-exit")],
+    )
+    monkeypatch.setattr(certificate_module, "project_journal_exposure", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(certificate_module, "normalize_journal_broker_event", _fill_event)
+    append_account_event(
+        tmp_path,
+        receipt.account_id,
+        {
+            "event_type": "account_freeze_recorded",
+            "reason": "unrelated-later-incident",
+            "recorded_at_ms": receipt.window_end_ms + 1,
+        },
+    )
+
+    certificate = await service.generate(account_id=receipt.account_id, cohort_id=receipt.cohort_id)
+
+    assert "FAILED_INCIDENT_RECORDED" not in certificate.reasons
+
+
 async def test_certificate_api_reads_the_immutable_artifact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from app.main import app
     from app.routers import cohort_batch_launch
@@ -204,6 +303,9 @@ async def test_certificate_api_reads_the_immutable_artifact(tmp_path: Path, monk
             duplicate = await client.post(
                 f"/api/accounts/{receipt.account_id}/cohort-batch-launches/{receipt.cohort_id}/certificate"
             )
+            malformed_account = await client.get(
+                f"/api/accounts/not%20an%20account/cohort-batch-launches/{receipt.cohort_id}/certificate"
+            )
     finally:
         app.dependency_overrides.clear()
 
@@ -211,3 +313,4 @@ async def test_certificate_api_reads_the_immutable_artifact(tmp_path: Path, monk
     assert fetched.status_code == 200
     assert fetched.json() == created.json()
     assert duplicate.status_code == 409
+    assert malformed_account.status_code == 400

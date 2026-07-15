@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import math
+from collections.abc import Callable
 from pathlib import Path
 from typing import TypedDict
 
@@ -20,13 +21,24 @@ from app.schemas.cohort_validation_certificate import (
     CohortValidationCertificate,
 )
 from app.services.cohort_batch_launch import CohortBatchLaunchService, parse_cohort_evidence_sample
+from app.utils.timestamps import now_ms_utc
+
+
+class CohortValidationCertificateWindowOpenError(RuntimeError):
+    """A cohort cannot be certified until its receipt-pinned window ends."""
 
 
 class CohortValidationCertificateService:
     """Certificate boundary: reads evidence; never polls or repairs live state."""
 
-    def __init__(self, *, artifacts_root: Path) -> None:
+    def __init__(
+        self,
+        *,
+        artifacts_root: Path,
+        now_ms: Callable[[], int] = now_ms_utc,
+    ) -> None:
         self._artifacts_root = artifacts_root
+        self._now_ms = now_ms
 
     async def generate(self, *, account_id: str, cohort_id: str) -> CohortValidationCertificate:
         events = await asyncio.to_thread(read_account_events, self._artifacts_root, account_id)
@@ -34,6 +46,10 @@ class CohortValidationCertificateService:
         if authorization is None:
             raise LookupError(f"cohort receipt not found: {cohort_id}")
         authorization_seq, receipt = authorization
+        if self._now_ms() < receipt.window_end_ms:
+            raise CohortValidationCertificateWindowOpenError(
+                f"cohort validation window remains open until {receipt.window_end_ms}"
+            )
         samples = self._samples(events, authorization_seq, receipt)
         status = await CohortBatchLaunchService(artifacts_root=self._artifacts_root).get_status(
             account_id=account_id,
@@ -51,14 +67,19 @@ class CohortValidationCertificateService:
             if entry.intent is not None and entry.intent.strategy_instance_id in namespaces
             and entry.intent.run_id == namespaces[entry.intent.strategy_instance_id].run_id
         }
-        final_journal_exposure = {
-            namespace: {row.symbol: row.quantity}
-            for row in exposure
-            if row.group_id in set(member_namespaces.values())
-            for namespace in (row.group_id,)
-        }
-        round_trips = _round_trips(journal, set(member_namespaces.values()), final_journal_exposure)
-        incidents = _incidents(events, authorization_seq)
+        final_journal_exposure: dict[str, dict[str, float]] = {}
+        for row in exposure:
+            if row.group_id not in set(member_namespaces.values()):
+                continue
+            final_journal_exposure.setdefault(row.group_id, {})[row.symbol] = row.quantity
+        pinned_runs = {pin.strategy_instance_id: pin.run_id for pin in receipt.member_pins}
+        round_trips = _round_trips(journal, pinned_runs, final_journal_exposure)
+        incidents = _incidents(
+            events,
+            authorization_seq=authorization_seq,
+            window_start_ms=receipt.window_start_ms,
+            window_end_ms=receipt.window_end_ms,
+        )
         reasons = _certificate_reasons(
             evidence_verdict=status.evidence.verdict,
             evidence_reason=status.evidence.reason,
@@ -154,10 +175,17 @@ class _RoundTripFold(TypedDict):
     saw_nonzero: bool
 
 
-def _round_trips(journal, namespaces: set[str], exposure: dict[str, dict[str, float]]) -> list[CohortCertificateRoundTrip]:
+def _round_trips(
+    journal,
+    pinned_runs: dict[str, str],
+    exposure: dict[str, dict[str, float]],
+) -> list[CohortCertificateRoundTrip]:
     rows: dict[str, _RoundTripFold] = {}
     for entry in journal:
-        if entry.intent is None or entry.intent.bot_order_namespace not in namespaces:
+        if (
+            entry.intent is None
+            or pinned_runs.get(entry.intent.strategy_instance_id) != entry.intent.run_id
+        ):
             continue
         row = rows.setdefault(
             entry.intent.bot_order_namespace,
@@ -209,8 +237,33 @@ def _round_trips(journal, namespaces: set[str], exposure: dict[str, dict[str, fl
     ]
 
 
-def _incidents(events: list[dict], authorization_seq: int) -> list[str]:
-    return sorted({str(event["event_type"]) for event in events if isinstance(event.get("seq"), int) and event["seq"] > authorization_seq and event.get("event_type") in {"account_freeze_recorded", "account_clerk_event_stream_down"}})
+def _incidents(
+    events: list[dict],
+    *,
+    authorization_seq: int,
+    window_start_ms: int,
+    window_end_ms: int,
+) -> list[str]:
+    """Return safety incidents observed during the immutable cohort window."""
+
+    incident_types = {"account_freeze_recorded", "account_clerk_event_stream_down"}
+    incidents: set[str] = set()
+    for event in events:
+        if (
+            not isinstance(event.get("seq"), int)
+            or event["seq"] <= authorization_seq
+            or event.get("event_type") not in incident_types
+        ):
+            continue
+        recorded_at_ms = event.get("recorded_at_ms", event.get("ts_ms"))
+        if not isinstance(recorded_at_ms, int):
+            # An incident that cannot be placed outside this window is unsafe
+            # to ignore in a one-time certificate.
+            incidents.add(str(event["event_type"]))
+            continue
+        if window_start_ms <= recorded_at_ms <= window_end_ms:
+            incidents.add(str(event["event_type"]))
+    return sorted(incidents)
 
 
 def _certificate_reasons(
