@@ -555,6 +555,7 @@ class LiveEngine:
         # the broker adapter directly.
         account_owner_submitter: object = None,
         account_owner_broker_writer: Callable[..., Awaitable[object]] | None = None,
+        account_clerk_namespace_canceller: object = None,
         account_registry_gate_enabled: bool = True,
         owner_generation_provider: object = None,
         current_owner_generation_provider: object = None,
@@ -706,6 +707,7 @@ class LiveEngine:
         self._watchdog_factory = watchdog_factory
         self._account_owner_submitter = account_owner_submitter
         self._account_owner_broker_writer = account_owner_broker_writer
+        self._account_clerk_namespace_canceller = account_clerk_namespace_canceller
         self._account_registry_gate_enabled = account_registry_gate_enabled
         self._owner_generation_provider = owner_generation_provider
         self._current_owner_generation_provider = (
@@ -2646,6 +2648,8 @@ class LiveEngine:
             raise
 
     async def _cancel_open_orders_for_managed_write(self) -> list[int]:
+        if self._account_clerk_namespace_canceller is not None:
+            return await self._cancel_namespace_through_clerk()
         writer = self._account_owner_broker_writer
         if writer is None:
             return await self._broker.cancel_open_orders()
@@ -2654,6 +2658,33 @@ class LiveEngine:
             write=self._broker.cancel_open_orders,
         )
         return list(cancelled)
+
+    async def _cancel_namespace_through_clerk(self) -> list[int]:
+        """Build one durable cancellation identity and submit it to the Clerk."""
+
+        if not self._account_id or not self._strategy_instance_id or not self._run_id:
+            raise RuntimeError("ACCOUNT_CLERK_CANCEL_IDENTITY_REQUIRED")
+        from app.engine.live.account_owner import AccountOwnerSubmitIntent
+        from app.engine.live.account_registry import bot_order_namespace_for_instance
+        from app.engine.live.order_identity import build_order_ref, mint_intent_id
+
+        intent_id = mint_intent_id()
+        namespace = bot_order_namespace_for_instance(self._strategy_instance_id)
+        intent = AccountOwnerSubmitIntent(
+            trace_id=f"cancel-{intent_id}",
+            account_id=self._account_id,
+            strategy_instance_id=self._strategy_instance_id,
+            run_id=self._run_id,
+            bot_order_namespace=namespace,
+            intent_id=intent_id,
+            order_ref=build_order_ref(namespace, intent_id),
+            intent_kind="CANCEL_NAMESPACE",
+            order_spec={},
+            owner_generation=(self._owner_generation_provider() if callable(self._owner_generation_provider) else 0),
+            created_at_ms=time.time_ns() // 1_000_000,
+        )
+        receipt = await self._account_clerk_namespace_canceller(intent)
+        return list(receipt.cancelled_order_ids)
 
     async def _flatten(
         self,
@@ -2885,7 +2916,7 @@ class LiveEngine:
         portfolio.pending_orders.clear()
         try:
             cancelled = await asyncio.wait_for(
-                self._broker.cancel_open_orders(),
+                self._cancel_open_orders_for_managed_write(),
                 timeout=FATAL_HALT_CANCEL_TIMEOUT_S,
             )
             if cancelled:

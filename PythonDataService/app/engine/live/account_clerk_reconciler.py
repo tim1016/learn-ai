@@ -10,7 +10,13 @@ from contextlib import suppress
 from dataclasses import dataclass
 
 from app.engine.live.account_artifacts import AccountFreezeEvidence, append_account_event, write_account_freeze
-from app.engine.live.account_clerk import AccountClerk, AccountClerkJournalEntry, read_account_clerk_journal
+from app.engine.live.account_clerk import (
+    ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S,
+    AccountClerk,
+    AccountClerkGenerationFencedError,
+    AccountClerkJournalEntry,
+    read_account_clerk_journal,
+)
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.journal_exposure import project_journal_exposure
 from app.engine.live.submit_state_machine import BrokerProbe, SubmitVerdict, next_action
@@ -65,6 +71,8 @@ class AccountClerkReconciler:
         )
         resolutions: list[ReconciliationResolution] = []
         for intent, retry_count in _unresolved_intents(entries).values():
+            if intent.intent_kind == "CANCEL_NAMESPACE" and self._clerk.cancel_namespace_in_progress:
+                continue
             resolution = await self._resolve(intent, retry_count)
             resolutions.append(resolution)
             append_account_event(
@@ -102,6 +110,8 @@ class AccountClerkReconciler:
             await asyncio.sleep(self._cadence_seconds)
 
     async def _resolve(self, intent, retry_count: int) -> ReconciliationResolution:
+        if intent.intent_kind == "CANCEL_NAMESPACE":
+            return await self._resolve_uncertain_cancel_namespace(intent)
         probe = await self._probe(intent.intent_id, intent.order_ref)
         verdict = next_action(
             current_status=_ack_failed_uncertain_status(),
@@ -109,8 +119,8 @@ class AccountClerkReconciler:
             retry_count=retry_count,
         )
         reason = f"probe={probe.value}; retry_count={retry_count}"
-        await self._clerk.append_reconciliation_resolution(intent, verdict=verdict.value, reason=reason)
         if verdict is SubmitVerdict.RETRY_ONCE:
+            await self._clerk.append_reconciliation_resolution(intent, verdict=verdict.value, reason=reason)
             try:
                 await self._clerk.retry_recorded_intent(intent)
             except Exception as exc:
@@ -127,6 +137,47 @@ class AccountClerkReconciler:
                     operator_next_step="CHECK_IBKR",
                 ),
             )
+            await self._clerk.append_reconciliation_resolution(intent, verdict=verdict.value, reason=reason)
+        else:
+            await self._clerk.append_reconciliation_resolution(intent, verdict=verdict.value, reason=reason)
+        return ReconciliationResolution(intent.intent_id, intent.order_ref, verdict, reason)
+
+    async def _resolve_uncertain_cancel_namespace(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> ReconciliationResolution:
+        """Resolve a fenced cancellation without allowing a blind submit.
+
+        A namespace with no remaining broker orders is terminal for the
+        cancellation because the Clerk gate has blocked all later writes to
+        that namespace.  If orders remain, cancellation is idempotent and may
+        be retried under the Clerk's write grant.  Any unprovable view halts.
+        """
+
+        probe = await self._probe_namespace_cancel(intent.bot_order_namespace)
+        reason = f"cancel_probe={probe.value}"
+        if probe is BrokerProbe.PROVABLY_ABSENT:
+            verdict = SubmitVerdict.RECOVER_ADOPT
+            await self._clerk.finalize_adopted_cancel_namespace(intent)
+            await self._clerk.append_reconciliation_resolution(intent, verdict=verdict.value, reason=reason)
+        elif probe is BrokerProbe.PRESENT:
+            try:
+                await self._clerk.resolve_uncertain_cancel_namespace(intent)
+            except AccountClerkGenerationFencedError:
+                raise
+            except Exception as exc:
+                verdict = SubmitVerdict.HALT
+                reason = f"{reason}; cancel retry raised {type(exc).__name__}: {exc}"
+                self._freeze_unprovable_namespace_cancel()
+                await self._clerk.append_reconciliation_resolution(intent, verdict=verdict.value, reason=reason)
+            else:
+                verdict = SubmitVerdict.RECOVER_ADOPT
+                reason = f"{reason}; cancel retry confirmed"
+                await self._clerk.append_reconciliation_resolution(intent, verdict=verdict.value, reason=reason)
+        else:
+            verdict = SubmitVerdict.HALT
+            self._freeze_unprovable_namespace_cancel()
+            await self._clerk.append_reconciliation_resolution(intent, verdict=verdict.value, reason=reason)
         return ReconciliationResolution(intent.intent_id, intent.order_ref, verdict, reason)
 
     async def _probe(self, intent_id: str, order_ref: str) -> BrokerProbe:
@@ -137,6 +188,33 @@ class AccountClerkReconciler:
             return BrokerProbe(await probe_fn(intent_id, order_ref))
         except Exception:
             return BrokerProbe.NOT_PROVABLE
+
+    async def _probe_namespace_cancel(self, namespace: str) -> BrokerProbe:
+        probe_fn = getattr(self._clerk._broker, "probe_namespace_cancel_status", None)
+        if not callable(probe_fn):
+            return BrokerProbe.NOT_PROVABLE
+        try:
+            return BrokerProbe(
+                await asyncio.wait_for(
+                    probe_fn(namespace),
+                    timeout=ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S,
+                )
+            )
+        except Exception:
+            return BrokerProbe.NOT_PROVABLE
+
+    def _freeze_unprovable_namespace_cancel(self) -> None:
+        write_account_freeze(
+            self._clerk._artifacts_root,
+            AccountFreezeEvidence(
+                account_id=self._clerk._account_id,
+                freeze_kind="exposure",
+                reason="ACCOUNT_CLERK_CANCEL_NAMESPACE_NOT_PROVABLE",
+                source="account_clerk_reconciler",
+                recorded_at_ms=self._now_ms(),
+                operator_next_step="CHECK_IBKR",
+            ),
+        )
 
 
 def _unresolved_intents(
@@ -164,9 +242,9 @@ def _unresolved_intents(
             recorded[intent_id] = entry.intent
         elif entry.entry_kind == "broker_submitting":
             submitting.add(intent_id)
-        elif entry.entry_kind == "broker_uncertain":
+        elif entry.entry_kind in {"broker_uncertain", "cancel_uncertain"}:
             uncertain.add(intent_id)
-        elif entry.entry_kind == "broker_acked":
+        elif entry.entry_kind in {"broker_acked", "cancel_confirmed"}:
             terminal.add(intent_id)
         elif entry.entry_kind == "reconciliation":
             if entry.reconciliation_verdict in {"RECOVER_ADOPT", "HALT"}:
@@ -176,7 +254,12 @@ def _unresolved_intents(
     return {
         intent_id: (intent, retries[intent_id])
         for intent_id, intent in recorded.items()
-        if intent_id not in terminal and (intent_id in uncertain or intent_id not in submitting)
+        if intent_id not in terminal
+        and (
+            intent_id in uncertain
+            or (intent.intent_kind == "CANCEL_NAMESPACE" and intent_id in submitting)
+            or (intent.intent_kind != "CANCEL_NAMESPACE" and intent_id not in submitting)
+        )
     }
 
 

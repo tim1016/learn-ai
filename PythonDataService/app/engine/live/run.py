@@ -1991,6 +1991,9 @@ def cmd_start(args: argparse.Namespace) -> int:
         async def _submit_recovery_to_account_clerk(intent):
             return await clerk_client.submit_recovery_flatten(intent)
 
+        async def _cancel_namespace_through_account_clerk(intent):
+            return await clerk_client.cancel_namespace(intent)
+
         account_clerk_submitter = _submit_to_account_clerk
 
         async def _reject_direct_broker_write(*, boundary: str, write: object) -> object:
@@ -2035,6 +2038,9 @@ def cmd_start(args: argparse.Namespace) -> int:
         account_owner_submitter=account_clerk_submitter,
         account_owner_broker_writer=(
             _reject_direct_broker_write if account_owner is not None else None
+        ),
+        account_clerk_namespace_canceller=(
+            _cancel_namespace_through_account_clerk if account_owner is not None else None
         ),
         owner_generation_provider=_account_owner_generation_provider if account_owner is not None else None,
         current_owner_generation_provider=(

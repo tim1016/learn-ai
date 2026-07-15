@@ -21,7 +21,7 @@ import hashlib
 import os
 import signal
 import tempfile
-from collections.abc import Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -44,6 +44,7 @@ from app.engine.live.account_clerk_journal import (
     ACCOUNT_CLERK_JOURNAL_FILENAME,
     AccountClerkBrokerAckReceipt,
     AccountClerkBrokerEventReceipt,
+    AccountClerkCancelNamespaceReceipt,
     AccountClerkInboxEntry,
     AccountClerkIntentRejected,
     AccountClerkJournal,
@@ -79,6 +80,7 @@ _CLERK_LEASE_TTL_MS = 5_000
 # budget expires.  A timed-out broker write is ambiguous, so its durable
 # ``broker_uncertain`` row is deliberately left for reconciliation.
 _BROKER_SUBMIT_TIMEOUT_S = 25.0
+ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S = 25.0
 
 
 class AccountClerkGenerationFencedError(RuntimeError):
@@ -97,6 +99,10 @@ class AccountClerkGenerationFencedError(RuntimeError):
         self.expected_generation = expected_generation
         self.observed_generation = observed_generation
         self.boundary = boundary
+
+
+class AccountClerkCancelNamespaceUncertainError(RuntimeError):
+    """The Clerk cannot prove that a namespace cancellation reached terminal state."""
 
 
 class AccountClerk:
@@ -134,6 +140,14 @@ class AccountClerk:
         # process restart by clearing only volatile callback attribution.
         self._intents_by_order_ref = self._journal.intents_by_order_ref
         self._normal_submit_intake_reason: str | None = None
+        self._cancel_operation_lock = asyncio.Lock()
+        self._cancel_namespace_in_progress = False
+        self._callback_drain: Callable[[], Awaitable[None]] | None = None
+
+    def set_callback_drain(self, drain: Callable[[], Awaitable[None]]) -> None:
+        """Install the sole RPC callback relay drain for terminal cancellation."""
+
+        self._callback_drain = drain
 
     async def record_intent(self, intent: AccountOwnerSubmitIntent) -> AccountClerkRecordedReceipt:
         """Validate, durably record, and acknowledge one intent without I/O to IBKR."""
@@ -159,15 +173,21 @@ class AccountClerk:
                 reason="CLERK_RECOVERY_OPERATION_REQUIRED",
                 diagnostics={"intent_id": intent.intent_id, "order_ref": intent.order_ref},
             )
-        self._require_normal_submit_intake(intent)
+        if intent.intent_kind == "CANCEL_NAMESPACE":
+            raise AccountClerkIntentRejected(
+                reason="CLERK_CANCEL_NAMESPACE_OPERATION_REQUIRED",
+                diagnostics={"intent_id": intent.intent_id, "order_ref": intent.order_ref},
+            )
+        await self._require_normal_submit_intake(intent)
         async with self._intake_lock:
+            await self._require_normal_submit_intake(intent)
             recorded = await asyncio.to_thread(self._record_intent_locked, intent)
             existing_ack = await asyncio.to_thread(self._journal.ack_for_intent, intent)
             if existing_ack is not None:
                 return recorded, existing_ack
             # A stream can die while the inbox/journal fsync is in flight.
             # Never start the broker write after that closed the submit lane.
-            self._require_normal_submit_intake(intent)
+            await self._require_normal_submit_intake(intent)
             self._require_paper_broker()
             spec = IbkrOrderSpec.model_validate(intent.order_spec)
             await asyncio.to_thread(self._journal.append_broker_submitting, intent)
@@ -208,7 +228,7 @@ class AccountClerk:
             actor_bot_order_namespace=actor_bot_order_namespace,
         )
         self._validate_recovery_order(intent)
-        async with self._intake_lock:
+        async with self._cancel_operation_lock, self._intake_lock:
             recorded = await asyncio.to_thread(self._record_intent_locked, intent)
             existing_ack = await asyncio.to_thread(self._journal.ack_for_intent, intent)
             if existing_ack is not None:
@@ -234,6 +254,146 @@ class AccountClerk:
                 broker_acked=broker_ack,
                 cancelled_order_ids=tuple(cancelled),
             )
+
+    async def cancel_namespace(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountClerkCancelNamespaceReceipt:
+        """Durably cancel one active run's namespace through the Clerk.
+
+        ``intent`` is a cancellation receipt identity, never an order to
+        submit.  The journaled receipt precedes the broker call and the same
+        identity returns the prior terminal confirmation without reissuing a
+        broker cancellation.
+        """
+
+        if self._broker is None:
+            raise RuntimeError("ACCOUNT_CLERK_BROKER_UNAVAILABLE")
+        if intent.intent_kind != "CANCEL_NAMESPACE":
+            self._reject(intent, "CLERK_CANCEL_NAMESPACE_INTENT_KIND_REQUIRED")
+        async with self._cancel_operation_lock:
+            try:
+                async with self._intake_lock:
+                    recorded = await asyncio.to_thread(self._record_intent_locked, intent)
+                    existing = await asyncio.to_thread(self._journal.cancel_confirmed_for_intent, intent)
+                    if existing is not None:
+                        return existing
+                    # Never repeat a cancellation after a process died in its
+                    # broker-write window.  The terminal state is unknowable,
+                    # so record that uncertainty and leave the namespace frozen.
+                    if await asyncio.to_thread(self._journal.cancel_submitting_for_intent, intent):
+                        uncertainty = RuntimeError("prior cancel attempt may have reached broker")
+                        await asyncio.to_thread(self._journal.append_cancel_uncertain, intent, uncertainty)
+                        raise AccountClerkCancelNamespaceUncertainError(
+                            "ACCOUNT_CLERK_CANCEL_NAMESPACE_UNCERTAIN"
+                        )
+                    self._require_paper_broker()
+                    self._cancel_namespace_in_progress = True
+                async with asyncio.timeout(ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S):
+                    cancelled = await self._cancel_namespace_open_orders(
+                        intent.bot_order_namespace,
+                        before_broker_write=lambda: asyncio.to_thread(
+                            self._journal.append_cancel_submitting,
+                            intent,
+                        ),
+                    )
+                    # The broker's terminal cancel may have emitted final fills.
+                    # Do not acknowledge cancellation until the RPC callback
+                    # worker has fsynced all callbacks already queued by it.
+                    if self._callback_drain is not None:
+                        await self._callback_drain()
+            except AccountClerkGenerationFencedError:
+                # Fencing proves this process never owned the broker write;
+                # preserve the typed stale-generation response instead of
+                # downgrading it to ambiguous cancellation.
+                raise
+            except AccountClerkCancelNamespaceUncertainError:
+                raise
+            except Exception as exc:
+                async with self._intake_lock:
+                    await asyncio.to_thread(self._journal.append_cancel_uncertain, intent, exc)
+                raise AccountClerkCancelNamespaceUncertainError(
+                    "ACCOUNT_CLERK_CANCEL_NAMESPACE_UNCERTAIN"
+                ) from exc
+            else:
+                async with self._intake_lock:
+                    receipt = await asyncio.to_thread(
+                        self._journal.append_cancel_confirmed,
+                        intent,
+                        cancelled,
+                    )
+                    if receipt.recorded != recorded:
+                        raise RuntimeError("cancel receipt recorded identity mismatch")
+                    return receipt
+            finally:
+                self._cancel_namespace_in_progress = False
+
+    @property
+    def cancel_namespace_in_progress(self) -> bool:
+        return self._cancel_namespace_in_progress
+
+    async def resolve_uncertain_cancel_namespace(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountClerkCancelNamespaceReceipt:
+        """Retry a fenced cancel after reconciliation observes surviving orders."""
+
+        if self._broker is None:
+            raise RuntimeError("ACCOUNT_CLERK_BROKER_UNAVAILABLE")
+        if intent.intent_kind != "CANCEL_NAMESPACE":
+            self._reject(intent, "CLERK_CANCEL_NAMESPACE_INTENT_KIND_REQUIRED")
+        async with self._cancel_operation_lock:
+            async with self._intake_lock:
+                existing = await asyncio.to_thread(self._journal.cancel_confirmed_for_intent, intent)
+                if existing is not None:
+                    return existing
+                self._require_paper_broker()
+                self._cancel_namespace_in_progress = True
+            try:
+                async with asyncio.timeout(ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S):
+                    cancelled = await self._cancel_namespace_open_orders(intent.bot_order_namespace)
+                    if self._callback_drain is not None:
+                        await self._callback_drain()
+            except AccountClerkGenerationFencedError:
+                raise
+            except Exception as exc:
+                async with self._intake_lock:
+                    await asyncio.to_thread(self._journal.append_cancel_uncertain, intent, exc)
+                raise
+            else:
+                async with self._intake_lock:
+                    return await asyncio.to_thread(
+                        self._journal.append_cancel_confirmed,
+                        intent,
+                        cancelled,
+                    )
+            finally:
+                self._cancel_namespace_in_progress = False
+
+    async def finalize_adopted_cancel_namespace(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountClerkCancelNamespaceReceipt:
+        """Persist a terminal cancel receipt after reconciliation proves no order remains."""
+
+        async with self._cancel_operation_lock:
+            async with self._intake_lock:
+                existing = await asyncio.to_thread(self._journal.cancel_confirmed_for_intent, intent)
+                if existing is not None:
+                    return existing
+                self._cancel_namespace_in_progress = True
+            try:
+                async with asyncio.timeout(ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S):
+                    if self._callback_drain is not None:
+                        await self._callback_drain()
+                async with self._intake_lock:
+                    return await asyncio.to_thread(
+                        self._journal.append_cancel_confirmed,
+                        intent,
+                        (),
+                    )
+            finally:
+                self._cancel_namespace_in_progress = False
 
     def replay_recorded_receipts(self) -> list[AccountClerkRecordedReceipt]:
         """Return receipt #1 values from the journal after a clerk restart."""
@@ -402,8 +562,10 @@ class AccountClerk:
 
         if self._broker is None:
             raise RuntimeError("ACCOUNT_CLERK_BROKER_UNAVAILABLE")
+        await self._require_normal_submit_intake(intent)
         self._require_paper_broker()
         async with self._intake_lock:
+            await self._require_normal_submit_intake(intent)
             await asyncio.to_thread(self._journal.register_attribution, intent)
             spec = IbkrOrderSpec.model_validate(intent.order_spec)
             await asyncio.to_thread(self._journal.append_broker_submitting, intent)
@@ -420,10 +582,17 @@ class AccountClerk:
         if getattr(settings, "mode", None) != "paper":
             raise RuntimeError("ACCOUNT_CLERK_PAPER_MODE_REQUIRED")
 
-    def _require_normal_submit_intake(self, intent: AccountOwnerSubmitIntent) -> None:
-        if self._normal_submit_intake_reason is None:
-            return
-        self._reject(intent, self._normal_submit_intake_reason)
+    async def _require_normal_submit_intake(self, intent: AccountOwnerSubmitIntent) -> None:
+        if self._normal_submit_intake_reason is not None:
+            self._reject(intent, self._normal_submit_intake_reason)
+        if self._cancel_namespace_in_progress:
+            self._reject(intent, "CLERK_CANCEL_NAMESPACE_IN_PROGRESS")
+        unresolved = await asyncio.to_thread(
+            self._journal.has_unresolved_namespace_cancellation,
+            intent.bot_order_namespace,
+        )
+        if unresolved:
+            self._reject(intent, "CLERK_CANCEL_NAMESPACE_UNRESOLVED")
 
     def _validate_intent_identity(self, intent: AccountOwnerSubmitIntent) -> None:
         binding = latest_account_instance_binding(
@@ -505,13 +674,19 @@ class AccountClerk:
         if spec.order_ref != intent.order_ref or spec.order_type != "MKT" or not spec.confirm_paper:
             self._reject(intent, "CLERK_INVALID_RECOVERY_ORDER")
 
-    async def _cancel_namespace_open_orders(self, namespace: str) -> list[int]:
+    async def _cancel_namespace_open_orders(
+        self,
+        namespace: str,
+        *,
+        before_broker_write: Callable[[], Awaitable[None]] | None = None,
+    ) -> list[int]:
         cancel_namespace = getattr(self._broker, "cancel_open_orders_for_namespace", None)
         if not callable(cancel_namespace):
-            return []
+            raise RuntimeError("ACCOUNT_CLERK_CANCEL_NAMESPACE_UNSUPPORTED")
         return await self._run_broker_write(
             "account_clerk.broker.cancel_open_orders_for_namespace",
             lambda: cancel_namespace(namespace),
+            before_broker_write=before_broker_write,
         )
 
     async def _place_under_clerk_grant(self, spec: IbkrOrderSpec) -> Any:
@@ -523,8 +698,16 @@ class AccountClerk:
             timeout=_BROKER_SUBMIT_TIMEOUT_S,
         )
 
-    async def _run_broker_write(self, boundary: str, write: Callable[[], Any]) -> Any:
+    async def _run_broker_write(
+        self,
+        boundary: str,
+        write: Callable[[], Any],
+        *,
+        before_broker_write: Callable[[], Awaitable[None]] | None = None,
+    ) -> Any:
         if self._clerk_generation is None:
+            if before_broker_write is not None:
+                await before_broker_write()
             return await write()
         try:
             observed_generation = self._read_active_generation()
@@ -551,6 +734,8 @@ class AccountClerk:
                 boundary=boundary,
                 clerk_generation_provider=self._read_active_generation,
             ):
+                if before_broker_write is not None:
+                    await before_broker_write()
                 return await write()
         except AccountClerkWriteFenceError as exc:
             if exc.reason not in {
@@ -837,6 +1022,7 @@ def __getattr__(name: str):
 
 __all__ = [
     "ACCOUNT_CLERK_AUTHORITY_LOCK_TARGET_FILENAME",
+    "ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S",
     "ACCOUNT_CLERK_INBOX_FILENAME",
     "ACCOUNT_CLERK_JOURNAL_FILENAME",
     "AccountClerk",
