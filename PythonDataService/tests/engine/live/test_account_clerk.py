@@ -131,6 +131,12 @@ class _UncertainCancelBroker(_FakeBroker):
         return self.cancel_probe
 
 
+class _RecoveryCancelTimeoutBroker(_FakeBroker):
+    async def cancel_open_orders_for_namespace(self, namespace: str) -> list[int]:
+        self.cancelled_namespaces.append(namespace)
+        raise TimeoutError("simulated recovery cancel timeout")
+
+
 class _MarketFillBeforeAckBroker(_FakeBroker):
     """Emits a fill through the production callback sink before its ack returns."""
 
@@ -861,6 +867,258 @@ async def test_operator_recovery_cure_only_flattens_a_retired_namespace_and_writ
     assert receipt.status == "recovery_flattened"
     assert receipt.recorded.intent_id == "operator-cure"
     assert len(broker.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_recovery_cancel_timeout_is_durable_uncertain_and_never_submits_flatten(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _RecoveryCancelTimeoutBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    position = _intent("bot-a", "run-a", "position")
+    await clerk.submit_intent(position)
+    await clerk.record_broker_event(
+        IbkrOrderEvent(
+            account_id=ACCOUNT,
+            order_id=1,
+            event_type="fill",
+            order_ref=position.order_ref,
+            symbol="SPY",
+            side="BUY",
+            fill_quantity=1,
+            exec_id="position-fill",
+            ts_ms=START_MS + 1,
+        )
+    )
+
+    with pytest.raises(TimeoutError, match="recovery cancel timeout"):
+        await clerk.submit_recovery_flatten(
+            _recovery_intent("bot-a", "run-a", "recovery"),
+            actor="bot",
+            actor_strategy_instance_id="bot-a",
+            actor_run_id="run-a",
+            actor_bot_order_namespace=bot_order_namespace_for_instance("bot-a"),
+        )
+
+    entries = read_account_clerk_journal(tmp_path, ACCOUNT)
+    recovery_entries = [entry for entry in entries if entry.intent and entry.intent.intent_id == "recovery"]
+    assert [entry.entry_kind for entry in recovery_entries] == [
+        "recorded",
+        "recovery_cancelling",
+        "broker_uncertain",
+    ]
+    assert len(broker.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_recovery_bounds_hung_cancel_and_durably_records_uncertainty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _HangingRecoveryCancelBroker(_FakeBroker):
+        async def cancel_open_orders_for_namespace(self, namespace: str) -> list[int]:
+            self.cancelled_namespaces.append(namespace)
+            await asyncio.Event().wait()
+            return []
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _HangingRecoveryCancelBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    position = _intent("bot-a", "run-a", "position")
+    await clerk.submit_intent(position)
+    await clerk.record_broker_event(
+        IbkrOrderEvent(
+            account_id=ACCOUNT,
+            order_id=1,
+            event_type="fill",
+            order_ref=position.order_ref,
+            symbol="SPY",
+            side="BUY",
+            fill_quantity=1,
+            exec_id="position-fill",
+            ts_ms=START_MS + 1,
+        )
+    )
+    monkeypatch.setattr(account_clerk_module, "ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S", 0.01)
+
+    with pytest.raises(TimeoutError):
+        await clerk.submit_recovery_flatten(
+            _recovery_intent("bot-a", "run-a", "recovery"),
+            actor="bot",
+            actor_strategy_instance_id="bot-a",
+            actor_run_id="run-a",
+            actor_bot_order_namespace=bot_order_namespace_for_instance("bot-a"),
+        )
+
+    assert not clerk.recovery_flatten_in_progress
+    assert [entry.entry_kind for entry in read_account_clerk_journal(tmp_path, ACCOUNT)[-3:]] == [
+        "recorded",
+        "recovery_cancelling",
+        "broker_uncertain",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_recovery_pre_broker_journal_failure_releases_volatile_submit_fence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_FakeBroker())
+    await _record_owned_fill(clerk, instance_id="bot-a", run_id="run-a", intent_id="owned-fill")
+
+    def fail_journal(_intent: AccountOwnerSubmitIntent) -> None:
+        raise OSError("journal unwritable")
+
+    monkeypatch.setattr(clerk._journal, "append_broker_submitting", fail_journal)
+
+    with pytest.raises(OSError, match="journal unwritable"):
+        await clerk.submit_recovery_flatten(
+            _recovery_intent("bot-a", "run-a", "recovery"),
+            actor="bot",
+            actor_strategy_instance_id="bot-a",
+            actor_run_id="run-a",
+            actor_bot_order_namespace=bot_order_namespace_for_instance("bot-a"),
+        )
+
+    assert not clerk.recovery_flatten_in_progress
+
+
+@pytest.mark.asyncio
+async def test_recovery_bounds_hung_callback_drain_and_fences_restart(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _FakeBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    position = _intent("bot-a", "run-a", "position")
+    await clerk.submit_intent(position)
+    await clerk.record_broker_event(
+        IbkrOrderEvent(
+            account_id=ACCOUNT,
+            order_id=1,
+            event_type="fill",
+            order_ref=position.order_ref,
+            symbol="SPY",
+            side="BUY",
+            fill_quantity=1,
+            exec_id="position-fill",
+            ts_ms=START_MS + 1,
+        )
+    )
+    never_drained = asyncio.Event()
+
+    async def drain() -> None:
+        await never_drained.wait()
+
+    clerk.set_callback_drain(drain)
+    monkeypatch.setattr(account_clerk_module, "ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S", 0.01)
+
+    with pytest.raises(TimeoutError):
+        await clerk.submit_recovery_flatten(
+            _recovery_intent("bot-a", "run-a", "recovery"),
+            actor="bot",
+            actor_strategy_instance_id="bot-a",
+            actor_run_id="run-a",
+            actor_bot_order_namespace=bot_order_namespace_for_instance("bot-a"),
+        )
+
+    restarted = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    with pytest.raises(AccountClerkIntentRejected, match="CLERK_CANCEL_NAMESPACE_UNRESOLVED"):
+        await restarted.submit_intent(_intent("bot-a", "run-a", "normal-after-restart"))
+
+
+@pytest.mark.asyncio
+async def test_recovery_accepts_fractional_exposure_within_explicit_tolerance(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _FakeBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    first = _intent("bot-a", "run-a", "fraction-a").model_copy(
+        update={"order_spec": {**_intent("bot-a", "run-a", "fraction-a").order_spec, "quantity": 0.1}}
+    )
+    second = _intent("bot-a", "run-a", "fraction-b").model_copy(
+        update={"order_spec": {**_intent("bot-a", "run-a", "fraction-b").order_spec, "quantity": 0.2}}
+    )
+    await clerk.submit_intent(first)
+    await clerk.submit_intent(second)
+    for order_id, intent in enumerate((first, second), start=1):
+        await clerk.record_broker_event(
+            IbkrOrderEvent(
+                account_id=ACCOUNT,
+                order_id=order_id,
+                event_type="fill",
+                order_ref=intent.order_ref,
+                symbol="SPY",
+                side="BUY",
+                fill_quantity=float(intent.order_spec["quantity"]),
+                exec_id=f"fraction-fill-{order_id}",
+                ts_ms=START_MS + order_id,
+            )
+        )
+    recovery = _recovery_intent("bot-a", "run-a", "fraction-recovery").model_copy(
+        update={
+            "order_spec": {
+                **_recovery_intent("bot-a", "run-a", "fraction-recovery").order_spec,
+                "quantity": 0.3,
+            }
+        }
+    )
+
+    receipt = await clerk.submit_recovery_flatten(
+        recovery,
+        actor="bot",
+        actor_strategy_instance_id="bot-a",
+        actor_run_id="run-a",
+        actor_bot_order_namespace=bot_order_namespace_for_instance("bot-a"),
+    )
+
+    assert receipt.status == "recovery_flattened"
+
+
+@pytest.mark.asyncio
+async def test_recovery_holds_submit_lane_but_not_intake_lock_during_cancel(tmp_path: Path) -> None:
+    class _BlockedRecoveryCancelBroker(_FakeBroker):
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def cancel_open_orders_for_namespace(self, namespace: str) -> list[int]:
+            self.cancelled_namespaces.append(namespace)
+            self.started.set()
+            await self.release.wait()
+            return []
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _BlockedRecoveryCancelBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    position = _intent("bot-a", "run-a", "position")
+    await clerk.submit_intent(position)
+    await clerk.record_broker_event(
+        IbkrOrderEvent(
+            account_id=ACCOUNT,
+            order_id=1,
+            event_type="fill",
+            order_ref=position.order_ref,
+            symbol="SPY",
+            side="BUY",
+            fill_quantity=1,
+            exec_id="position-fill",
+            ts_ms=START_MS + 1,
+        )
+    )
+    recovery_task = asyncio.create_task(
+        clerk.submit_recovery_flatten(
+            _recovery_intent("bot-a", "run-a", "recovery"),
+            actor="bot",
+            actor_strategy_instance_id="bot-a",
+            actor_run_id="run-a",
+            actor_bot_order_namespace=bot_order_namespace_for_instance("bot-a"),
+        )
+    )
+    await broker.started.wait()
+
+    with pytest.raises(AccountClerkIntentRejected, match="CLERK_RECOVERY_FLATTEN_IN_PROGRESS"):
+        await clerk.submit_intent(_intent("bot-a", "run-a", "normal"))
+    assert await AccountClerkReconciler(clerk).reconcile_once() == ()
+
+    broker.release.set()
+    await recovery_task
 
 
 @pytest.mark.asyncio

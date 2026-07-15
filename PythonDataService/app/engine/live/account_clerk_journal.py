@@ -542,7 +542,7 @@ class AccountClerkJournal:
             return self._cancel_submitting_for_intent_entries(entries, intent) is not None
 
     def has_unresolved_namespace_cancellation(self, bot_order_namespace: str) -> bool:
-        """Return whether a prior cancellation still fences this namespace.
+        """Return whether a prior cancel or recovery broker write fences this namespace.
 
         A terminal confirmation or a reconciliation adoption is the only
         durable clearing path.  In particular, a crash after
@@ -557,9 +557,15 @@ class AccountClerkJournal:
                 entry.intent.intent_id
                 for entry in entries
                 if entry.intent is not None
-                and entry.intent.intent_kind == "CANCEL_NAMESPACE"
                 and (
-                    entry.entry_kind == "cancel_confirmed"
+                    (
+                        entry.intent.intent_kind == "CANCEL_NAMESPACE"
+                        and entry.entry_kind == "cancel_confirmed"
+                    )
+                    or (
+                        entry.intent.intent_kind == "RECOVERY_FLATTEN"
+                        and entry.entry_kind == "broker_acked"
+                    )
                     or (
                         entry.entry_kind == "reconciliation"
                         and entry.reconciliation_verdict == "RECOVER_ADOPT"
@@ -568,10 +574,17 @@ class AccountClerkJournal:
             }
             return any(
                 entry.intent is not None
-                and entry.intent.intent_kind == "CANCEL_NAMESPACE"
+                and entry.intent.intent_kind in {"CANCEL_NAMESPACE", "RECOVERY_FLATTEN"}
                 and entry.intent.bot_order_namespace == bot_order_namespace
                 and entry.intent.intent_id not in terminal_intent_ids
-                and entry.entry_kind in {"cancel_submitting", "cancel_uncertain"}
+                and entry.entry_kind
+                in {
+                    "cancel_submitting",
+                    "cancel_uncertain",
+                    "broker_submitting",
+                    "recovery_cancelling",
+                    "broker_uncertain",
+                }
                 for entry in entries
             )
 
