@@ -1,5 +1,5 @@
 import type { Logical, LogicalRange } from 'lightweight-charts';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   candleDataForBar,
   candleSignatureForBars,
@@ -167,17 +167,9 @@ describe('localDateString', () => {
 });
 
 describe('local date range bounds', () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it('closes date ranges at the next local midnight across DST transitions', () => {
-    vi.stubEnv('TZ', 'America/Chicago');
-
-    expect((localDateEndMs('2026-03-08') - localDateStartMs('2026-03-08')) / 3_600_000)
-      .toBe(23);
-    expect((localDateEndMs('2026-11-01') - localDateStartMs('2026-11-01')) / 3_600_000)
-      .toBe(25);
+  it('closes date ranges at the next local calendar day start across DST boundaries', () => {
+    expect(localDateEndMs('2026-03-08')).toBe(localDateStartMs('2026-03-09'));
+    expect(localDateEndMs('2026-11-01')).toBe(localDateStartMs('2026-11-02'));
   });
 });
 

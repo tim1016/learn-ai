@@ -1,6 +1,6 @@
 {
+  "account_clerk": null,
   "account_observation": null,
-  "account_owner": null,
   "action_plan": {
     "anomaly_verdict": "UNKNOWN",
     "consumption": "UNKNOWN"
@@ -153,16 +153,16 @@
       },
       {
         "current": false,
-        "id": "account_owner",
-        "label": "Account owner",
-        "next_step": "Wait for AccountOwner accepting/generation proof before expecting submit readiness to clear.",
+        "id": "account_clerk",
+        "label": "Account Clerk",
+        "next_step": "Wait for Account Clerk accepting/generation and active-lease proof before expecting submit readiness to clear.",
         "reason_codes": [
-          "ACCOUNT_OWNER_GENERATION_UNPROVEN"
+          "ACCOUNT_CLERK_GENERATION_UNPROVEN"
         ],
         "severity": "warning",
         "state": "warning",
-        "summary": "AccountOwner phase is unknown.",
-        "title": "AccountOwner not proven accepting"
+        "summary": "Account Clerk phase is unknown; active lease is False.",
+        "title": "Account Clerk not proven accepting"
       },
       {
         "current": false,
@@ -448,13 +448,13 @@
     "tone": "off"
   },
   "runtime_freshness": null,
-  "schema_version": 1,
+  "schema_version": 2,
   "submit_readiness": {
     "blocking_reason_codes": [
       "BROKER_SAFETY_UNKNOWN",
       "BROKER_RUNTIME_UNBOUND",
       "SUBMISSION_CAPABILITY_UNKNOWN",
-      "ACCOUNT_OWNER_GENERATION_UNPROVEN",
+      "ACCOUNT_CLERK_GENERATION_UNPROVEN",
       "RECONCILIATION_NOT_AVAILABLE",
       "ACCOUNT_TRUTH_NOT_AVAILABLE",
       "READINESS_GATE_desired_state",
@@ -504,10 +504,10 @@
         "severity": "warning"
       },
       {
-        "code": "account_owner",
-        "explanation": "AccountOwner phase is unknown.",
-        "headline": "AccountOwner not proven accepting",
-        "operator_next_step": "Wait for AccountOwner accepting/generation proof before expecting submit readiness to clear.",
+        "code": "account_clerk",
+        "explanation": "Account Clerk phase is unknown; active lease is False.",
+        "headline": "Account Clerk not proven accepting",
+        "operator_next_step": "Wait for Account Clerk accepting/generation and active-lease proof before expecting submit readiness to clear.",
         "remediation": {
           "kind": "open_runbook",
           "slug": "broker-instance-operator-surface"
@@ -629,7 +629,7 @@
       },
       {
         "gate_id": null,
-        "label": "account_owner.phase",
+        "label": "account_clerk.phase",
         "source": "account_artifacts",
         "ts_ms": null,
         "ts_ms_resolved": false,
@@ -666,10 +666,10 @@
         "tone": "attention"
       },
       {
-        "detail": "No AccountOwner artifact is available for this bot.",
-        "id": "account-owner",
-        "label": "Account owner",
-        "message": "Waiting for AccountOwner proof.",
+        "detail": "No Account Clerk artifact is available for this bot.",
+        "id": "account-clerk",
+        "label": "Account Clerk",
+        "message": "Waiting for Account Clerk proof.",
         "tone": "attention"
       },
       {

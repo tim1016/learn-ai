@@ -24,8 +24,11 @@ from httpx import ASGITransport, AsyncClient
 
 from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import (
+    AccountClerkLease,
     AccountFreezeEvidence,
     AccountOwnerGeneration,
+    advance_account_clerk_generation,
+    write_account_clerk_lease,
     write_account_freeze,
     write_account_owner_generation,
 )
@@ -137,15 +140,15 @@ def _write_runtime_snapshot(
 
 
 # ---------------------------------------------------------------------------
-# Cycle 1 — tracer bullet: operator_surface field with schema_version: 1
+# Cycle 1 — tracer bullet: operator_surface field with schema_version: 2
 # ---------------------------------------------------------------------------
 
 
-async def test_status_response_includes_operator_surface_schema_version_one(
+async def test_status_response_includes_operator_surface_schema_version_two(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Tracer bullet: the new projection field appears on every status
-    response (running OR dead instance) and carries ``schema_version: 1``.
+    response (running OR dead instance) and carries ``schema_version: 2``.
 
     All other fields of the projection are exercised by cumulative cycles
     below.  This first test just asserts the field is *present* and pinned
@@ -162,7 +165,7 @@ async def test_status_response_includes_operator_surface_schema_version_one(
     assert response.status_code == 200
     body = response.json()
     assert "operator_surface" in body, "Slice 1 contract: operator_surface field missing"
-    assert body["operator_surface"]["schema_version"] == 1
+    assert body["operator_surface"]["schema_version"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +306,7 @@ async def test_running_instance_status_carries_every_operator_surface_block(
         "configuration",
         "current_risk",
         "daily_order_cap",
-        "account_owner",
+        "account_clerk",
         # Durable Account Truth observation proof for account-scoped safety.
         "account_observation",
         "submit_readiness",
@@ -332,7 +335,7 @@ async def test_running_instance_status_carries_every_operator_surface_block(
         # ADR-0025 / PRD #972 — backend-authored single-banner placement.
         "notice_placement",
     }
-    assert surface["schema_version"] == 1
+    assert surface["schema_version"] == 2
     assert surface["host_process"]["state"] == "RUNNING"
     assert surface["run_signal"] == {
         "state_label": "On",
@@ -358,7 +361,7 @@ async def test_running_instance_status_carries_every_operator_surface_block(
         "blocked_before_submit",
         "broker_state_unproven",
         "account_frozen",
-        "waiting_for_owner_generation",
+        "waiting_for_clerk_generation",
         "submit_outcome_uncertain",
     }
     assert surface["trader_guidance"]["headline"]
@@ -374,7 +377,7 @@ async def test_running_instance_status_carries_every_operator_surface_block(
     assert {line["id"] for line in surface["trader_guidance"]["proof_lines"]} == {
         "broker-proof",
         "submit-readiness",
-        "account-owner",
+            "account-clerk",
         "reconciliation",
         "runtime-freshness",
     }
@@ -417,10 +420,12 @@ async def test_running_instance_status_carries_every_operator_surface_block(
         assert surface["actions"][name]["enabled"] is True
 
 
-async def test_running_instance_status_carries_account_owner_generation(
+async def test_running_instance_status_uses_active_account_clerk_not_legacy_owner_generation(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app, root = app_with_root
+    now_ms = 1_700_000_001_000
+    monkeypatch.setattr(live_instances, "_now_ms", lambda: now_ms)
     _write_ledger(root, "run-owner", "spy_ema_paper", 100, account_id="DU123")
     write_account_owner_generation(
         root.parent,
@@ -430,6 +435,26 @@ async def test_running_instance_status_carries_account_owner_generation(
             phase="draining",
             recorded_at_ms=1_700_000_001_000,
             source="account_owner",
+        ),
+    )
+    clerk = advance_account_clerk_generation(
+        root.parent,
+        "DU123",
+        phase="accepting",
+        recorded_at_ms=now_ms,
+        source="account_clerk",
+    )
+    write_account_clerk_lease(
+        root.parent,
+        AccountClerkLease(
+            account_id="DU123",
+            generation=clerk.generation,
+            pid=123,
+            ibkr_client_id=51,
+            status="RUNNING",
+            started_at_ms=now_ms,
+            renewed_at_ms=now_ms,
+            valid_until_ms=now_ms + 60_000,
         ),
     )
     _set_daemon(
@@ -442,15 +467,15 @@ async def test_running_instance_status_carries_account_owner_generation(
 
     assert response.status_code == 200
     surface = response.json()["operator_surface"]
-    assert surface["account_owner"] == {
+    assert "account_owner" not in surface
+    assert surface["account_clerk"] == {
         "account_id": "DU123",
-        "generation": 9,
-        "phase": "draining",
-        "recorded_at_ms": 1_700_000_001_000,
-        "source": "account_owner",
+        "generation": 1,
+        "phase": "accepting",
+        "lease_active": True,
+        "recorded_at_ms": now_ms,
+        "source": "account_clerk",
     }
-    assert surface["submit_readiness"]["can_submit"] is False
-    assert any(group["code"] == "account_owner" for group in surface["trader_guidance"]["additional_attention_groups"])
 
 
 async def test_running_instance_fresh_runtime_keeps_actions_current(

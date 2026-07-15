@@ -32,8 +32,10 @@ function diagnosticEvidenceMessage(fact: OperatorSurfaceEvidenceFact): string {
       return `Broker connection is ${value.toLowerCase()}.`;
     case 'reconciliation.state':
       return `Reconciliation is ${value.toLowerCase()}.`;
-    case 'account_owner.generation':
-      return `AccountOwner generation is ${value}.`;
+    case 'account_clerk.generation':
+      return `Account Clerk generation is ${value}.`;
+    case 'account_clerk.lease_active':
+      return `Account Clerk lease is ${value}.`;
     default:
       return `${formatReceiptLabel(fact.label)} is ${value}.`;
   }

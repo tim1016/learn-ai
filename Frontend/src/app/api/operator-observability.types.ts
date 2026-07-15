@@ -31,7 +31,7 @@ export type OperatorSurfaceBlockageStageId =
   | 'host_process'
   | 'broker'
   | 'account_safety'
-  | 'account_owner'
+  | 'account_clerk'
   | 'reconciliation'
   | 'preflight'
   | 'trading_session'

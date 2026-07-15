@@ -365,7 +365,7 @@ export type TradingSessionPhase =
   | 'CLOSED'
   | 'UNKNOWN';
 
-export type AccountOwnerPhase = 'accepting' | 'reconnecting' | 'draining' | 'frozen' | 'unknown';
+export type AccountClerkPhase = 'accepting' | 'reconnecting' | 'draining' | 'frozen' | 'unknown';
 
 export type SubmitReadinessCode =
   | 'safe_to_submit'
@@ -373,7 +373,7 @@ export type SubmitReadinessCode =
   | 'blocked_before_submit'
   | 'broker_state_unproven'
   | 'account_frozen'
-  | 'waiting_for_owner_generation'
+  | 'waiting_for_clerk_generation'
   | 'submit_outcome_uncertain';
 
 export type TraderSituationCode =
@@ -382,7 +382,7 @@ export type TraderSituationCode =
   | 'submission_blocked'
   | 'broker_state_unproven'
   | 'account_frozen'
-  | 'waiting_for_owner_generation'
+  | 'waiting_for_clerk_generation'
   | 'submit_outcome_uncertain'
   | 'attention_required'
   | 'unknown';
@@ -509,12 +509,13 @@ export interface OperatorSurfacePriorRun {
   classification: PriorRunClassification;
 }
 
-/** PRD #718 — AccountOwner generation/phase surfaced from canonical
- * account artifacts. `phase = unknown` means missing proof, not healthy. */
-export interface OperatorSurfaceAccountOwner {
+/** Account Clerk generation/lease evidence from canonical account artifacts.
+ * `phase = unknown` or `lease_active = false` means missing proof, not healthy. */
+export interface OperatorSurfaceAccountClerk {
   account_id: string;
   generation: number | null;
-  phase: AccountOwnerPhase;
+  phase: AccountClerkPhase;
+  lease_active: boolean;
   recorded_at_ms: number | null;
   source: string | null;
 }
@@ -886,8 +887,8 @@ export interface OperatorSurface {
   current_risk: OperatorSurfaceCurrentRisk;
   daily_order_cap: OperatorSurfaceDailyOrderCap;
   action_plan: OperatorSurfaceActionPlan;
-  /** PRD #718 — optional AccountOwner generation/phase evidence. */
-  account_owner: OperatorSurfaceAccountOwner | null;
+  /** Optional Account Clerk generation/lease evidence. */
+  account_clerk: OperatorSurfaceAccountClerk | null;
   /** Durable account observation proof; null when no account can be resolved. */
   account_observation: OperatorSurfaceAccountObservation | null;
   /** PRD #718 — backend-authored submit-readiness answer. */

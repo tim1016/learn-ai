@@ -46,22 +46,26 @@
     </section>
   }
 
-  @if (accountOwner(); as owner) {
+  @if (accountClerk(); as clerk) {
     <section class="owner-band">
-      <p class="eyebrow">Account owner</p>
+      <p class="eyebrow">Account Clerk</p>
       <dl>
         <div>
           <dt>Account</dt>
-          <dd>{{ owner.account_id }}</dd>
+          <dd>{{ clerk.account_id }}</dd>
         </div>
         <div>
           <dt>Phase</dt>
-          <dd>{{ owner.phase }}</dd>
+          <dd>{{ clerk.phase }}</dd>
         </div>
-        @if (owner.generation !== null) {
+        <div>
+          <dt>Lease</dt>
+          <dd>{{ clerk.lease_active ? 'active' : 'unproven' }}</dd>
+        </div>
+        @if (clerk.generation !== null) {
           <div>
             <dt>Generation</dt>
-            <dd>{{ owner.generation }}</dd>
+            <dd>{{ clerk.generation }}</dd>
           </div>
         }
       </dl>

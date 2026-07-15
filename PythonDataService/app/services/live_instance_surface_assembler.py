@@ -97,7 +97,7 @@ class LiveInstanceSurfaceDependencies:
     broker_connection_state_from_readiness: Callable[..., Any]
     instance_ledger_account_id: Callable[..., Any]
     crash_recovery_gate_for_instance: Callable[..., Any]
-    resolve_account_owner_surface: Callable[..., Any]
+    resolve_account_clerk_surface: Callable[..., Any]
     resolve_account_observation_surface: Callable[..., Any]
     get_account_truth_snapshot_provider: Callable[..., Any]
     resolve_latest_mutation: Callable[..., Any]
@@ -224,7 +224,11 @@ class LiveInstanceSurfaceAssembler:
             account_id=instance_account_id,
             strategy_instance_id=sid,
         )
-        account_owner = d.resolve_account_owner_surface(root.parent, instance_account_id)
+        account_clerk = d.resolve_account_clerk_surface(
+            root.parent,
+            instance_account_id,
+            now_ms=observed_at_ms,
+        )
         account_observation = d.resolve_account_observation_surface(
             root.parent,
             instance_account_id,
@@ -289,7 +293,7 @@ class LiveInstanceSurfaceAssembler:
             start_run_id=d.resolve_start_run_id(root, live_binding, runs),
             account_freeze=account_freeze,
             crash_recovery_gate=crash_recovery_gate,
-            account_owner=account_owner,
+            account_clerk=account_clerk,
             account_observation=account_observation,
             reconciliation_receipt=reconciliation_receipt,
             current_wal_seq=current_wal_seq,

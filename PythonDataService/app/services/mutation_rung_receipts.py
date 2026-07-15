@@ -151,10 +151,10 @@ def _receipt_for_current_stage(
             "account_safety",
             "Clears when account safety evidence is proven clean or the blocking account condition is resolved.",
         ),
-        "account_owner": (
-            "Review AccountOwner",
-            "account_owner",
-            "Clears when AccountOwner generation and accepting phase are proven.",
+        "account_clerk": (
+            "Review Account Clerk",
+            "account_clerk",
+            "Clears when Account Clerk generation, accepting phase, and active lease are proven.",
         ),
         "preflight": (
             "Review pre-flight gate",

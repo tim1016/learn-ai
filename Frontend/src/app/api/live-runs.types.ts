@@ -230,7 +230,7 @@ export type MutationRungReceiptStageId =
   | 'host_process'
   | 'broker'
   | 'account_safety'
-  | 'account_owner'
+  | 'account_clerk'
   | 'reconciliation'
   | 'preflight'
   | 'trading_session'
@@ -276,6 +276,7 @@ export type SourceAuthority =
   | 'engine_loop'
   | 'daemon_launcher'
   | 'broker_session'
+  // Historical BotEvent token; changing it would corrupt replayed audit data.
   | 'account_owner';
 
 export type GateStepResult = 'pass' | 'skip' | 'block';

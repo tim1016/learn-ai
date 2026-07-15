@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from app.engine.live.account_artifacts import AccountFreezeEvidence
 from app.engine.live.intent_events import DropReason, IntentEvent, IntentEventType
 from app.operator.notices.schema import OperatorNotice, OperatorNoticeAction
@@ -18,7 +16,7 @@ from app.schemas.live_runs import (
     InstanceStartDefaults,
     LiveBinding,
     OperatorSurface,
-    OperatorSurfaceAccountOwner,
+    OperatorSurfaceAccountClerk,
     ReadinessGate,
     ReadinessVector,
     ReconciliationReceipt,
@@ -160,15 +158,16 @@ def _surface(**overrides: object) -> OperatorSurface:
     return compute_operator_surface(**kwargs)
 
 
-def _account_owner(
+def _account_clerk(
     *,
     generation: int | None = 4,
     phase: str = "accepting",
-) -> OperatorSurfaceAccountOwner:
-    return OperatorSurfaceAccountOwner(
+) -> OperatorSurfaceAccountClerk:
+    return OperatorSurfaceAccountClerk(
         account_id="DU123",
         generation=generation,
         phase=phase,  # type: ignore[arg-type]
+        lease_active=True,
         recorded_at_ms=_NOW_MS - 1_000,
         source="test",
     )
@@ -220,13 +219,13 @@ def test_chart_clean_running_bot_marks_active_path() -> None:
     assert broker_writer.label == "Broker activity"
     assert broker_writer.technical_label == "Publisher health"
     assert "capture health" in (broker_writer.summary or "")
-    assert "not proof that R3 AccountOwner daemon/IPC single-writer authority is shipped" in (
+    assert "separate from Account Clerk write-authority health" in (
         broker_writer.summary or ""
     )
 
 
 def test_chart_authors_node_receipt_prose_and_actionability() -> None:
-    surface = _surface(account_owner=_account_owner())
+    surface = _surface(account_clerk=_account_clerk())
     chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=_desired("RUNNING"))
     submit_nodes = {node.id: node for node in chart.subgraphs["submit_order"].nodes}
     broker_nodes = {node.id: node for node in chart.subgraphs["broker_writer"].nodes}
@@ -244,7 +243,7 @@ def test_chart_authors_node_receipt_prose_and_actionability() -> None:
         broker_ack_receipts["broker_acknowledgment.evidence"].headline
         == "No direct broker acknowledgment evidence emitted yet."
     )
-    assert writer_receipts["account_owner.generation"].headline == "AccountOwner generation is 4."
+    assert writer_receipts["account_clerk.generation"].headline == "Account Clerk generation is 4."
 
 
 def test_chart_preflight_receipts_use_status_level_context_without_frontend_joining() -> None:
@@ -344,83 +343,34 @@ def test_submit_subgraph_is_unknown_without_durable_submit_evidence() -> None:
     assert "No Intent WAL row" in (nodes["intent_wal"].why or "")
     broker_nodes = {node.id: node for node in chart.subgraphs["broker_writer"].nodes}
     assert broker_nodes["writer_guard"].status == "unknown"
-    assert "R3 daemon/IPC single-writer authority is not shipped" in (broker_nodes["writer_guard"].summary or "")
-
-
-def test_writer_guard_surfaces_account_owner_generation_without_claiming_r3_daemon() -> None:
-    surface = _surface(account_owner=_account_owner())
-    chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=_desired("RUNNING"))
-    broker_nodes = {node.id: node for node in chart.subgraphs["broker_writer"].nodes}
-    receipts = {receipt.label: receipt for receipt in broker_nodes["writer_guard"].receipts}
-
-    assert broker_nodes["writer_guard"].label == "Owner generation"
-    assert broker_nodes["writer_guard"].technical_label == "accepting gen 4"
-    assert broker_nodes["writer_guard"].status == "passed"
-    assert broker_nodes["writer_guard"].ts_ms == _NOW_MS - 1_000
-    assert broker_nodes["writer_guard"].ts_ms_resolved is True
-    assert receipts["account_owner.phase"].value == "accepting"
-    assert receipts["account_owner.phase"].source == "test"
-    assert receipts["account_owner.generation"].value == "4"
-    assert receipts["account_owner.generation"].ts_ms == _NOW_MS - 1_000
-    assert receipts["account_owner.generation"].ts_ms_resolved is True
-    assert "generation is 4" in (broker_nodes["writer_guard"].summary or "")
-    assert "not proof that R3 daemon/IPC single-writer authority is shipped" in (
+    assert "No Account Clerk generation or active-lease evidence is available" in (
         broker_nodes["writer_guard"].summary or ""
     )
 
 
-@pytest.mark.parametrize(
-    ("phase", "generation", "expected_status"),
-    [
-        ("accepting", 4, "passed"),
-        ("reconnecting", 4, "active"),
-        ("draining", 4, "active"),
-        ("frozen", 4, "freeze"),
-        (None, None, "unknown"),
-    ],
-)
-def test_writer_guard_event_uses_account_owner_status_mapping(
-    phase: str | None,
-    generation: int | None,
-    expected_status: str,
-) -> None:
-    payload = {}
-    if phase is not None:
-        payload["phase"] = phase
-    if generation is not None:
-        payload["generation"] = generation
-    event = BotLifecycleEvent(
-        event_id=f"account_event:DU123:1:account_owner_generation_recorded:{phase}",
-        account_id="DU123",
-        event_type="account_owner_generation_recorded",
-        category="lifecycle_transition",
-        node_id="writer_guard",
-        status="active",
-        severity="info",
-        ts_ms=_NOW_MS - 1_000,
-        source="account_owner",
-        source_rank=20,
-        source_local_seq=1,
-        summary="AccountOwner generation recorded.",
-        payload=payload,
-    )
+def test_writer_guard_surfaces_account_clerk_generation_and_lease() -> None:
+    surface = _surface(account_clerk=_account_clerk())
+    chart = compose_bot_lifecycle_chart(_SID, surface, desired_state=_desired("RUNNING"))
+    broker_nodes = {node.id: node for node in chart.subgraphs["broker_writer"].nodes}
+    receipts = {receipt.label: receipt for receipt in broker_nodes["writer_guard"].receipts}
 
-    chart = compose_bot_lifecycle_chart(_SID, _surface(), desired_state=_desired("RUNNING"), lifecycle_events=[event])
-    writer_guard = next(node for node in chart.subgraphs["broker_writer"].nodes if node.id == "writer_guard")
-
-    assert writer_guard.status == expected_status
-    assert (
-        writer_guard.status_label
-        == {
-            "active": "Here now",
-            "freeze": "Frozen",
-            "passed": "Clear",
-            "unknown": "Unknown",
-        }[expected_status]
+    assert broker_nodes["writer_guard"].label == "Account Clerk"
+    assert broker_nodes["writer_guard"].technical_label == "accepting gen 4; lease active"
+    assert broker_nodes["writer_guard"].status == "passed"
+    assert broker_nodes["writer_guard"].ts_ms == _NOW_MS - 1_000
+    assert broker_nodes["writer_guard"].ts_ms_resolved is True
+    assert receipts["account_clerk.phase"].value == "accepting"
+    assert receipts["account_clerk.phase"].source == "test"
+    assert receipts["account_clerk.generation"].value == "4"
+    assert receipts["account_clerk.generation"].ts_ms == _NOW_MS - 1_000
+    assert receipts["account_clerk.generation"].ts_ms_resolved is True
+    assert "generation is 4" in (broker_nodes["writer_guard"].summary or "")
+    assert "its lease is active" in (
+        broker_nodes["writer_guard"].summary or ""
     )
 
 
-def test_writer_guard_event_preserves_surface_owner_receipts() -> None:
+def test_writer_guard_legacy_event_does_not_override_current_clerk_health() -> None:
     event = BotLifecycleEvent(
         event_id="account_event:DU123:1:account_owner_generation_recorded",
         account_id="DU123",
@@ -437,9 +387,33 @@ def test_writer_guard_event_preserves_surface_owner_receipts() -> None:
         payload={"phase": "accepting", "generation": 4},
     )
 
+    chart = compose_bot_lifecycle_chart(_SID, _surface(), desired_state=_desired("RUNNING"), lifecycle_events=[event])
+    writer_guard = next(node for node in chart.subgraphs["broker_writer"].nodes if node.id == "writer_guard")
+
+    assert writer_guard.status == "unknown"
+    assert writer_guard.status_label == "Unknown"
+
+
+def test_writer_guard_event_preserves_surface_owner_receipts() -> None:
+    event = BotLifecycleEvent(
+        event_id="account_event:DU123:1:account_owner_generation_recorded",
+        account_id="DU123",
+        event_type="account_owner_generation_recorded",
+        category="lifecycle_transition",
+        node_id="writer_guard",
+        status="active",
+        severity="info",
+        ts_ms=_NOW_MS - 1_000,
+        source="account_owner",
+        source_rank=20,
+        source_local_seq=1,
+        summary="Account Clerk generation recorded.",
+        payload={"phase": "accepting", "generation": 4},
+    )
+
     chart = compose_bot_lifecycle_chart(
         _SID,
-        _surface(account_owner=_account_owner()),
+        _surface(account_clerk=_account_clerk()),
         desired_state=_desired("RUNNING"),
         lifecycle_events=[event],
     )
@@ -447,12 +421,12 @@ def test_writer_guard_event_preserves_surface_owner_receipts() -> None:
     receipts = {receipt.label: receipt for receipt in writer_guard.receipts}
 
     assert writer_guard.status == "passed"
-    assert writer_guard.technical_label == "accepting gen 4"
-    assert receipts["account_owner.phase"].value == "accepting"
-    assert receipts["account_owner.generation"].value == "4"
+    assert writer_guard.technical_label == "accepting gen 4; lease active"
+    assert receipts["account_clerk.phase"].value == "accepting"
+    assert receipts["account_clerk.generation"].value == "4"
 
 
-def test_reconnect_resumed_event_with_generation_marks_writer_guard_passed() -> None:
+def test_legacy_reconnect_event_does_not_mark_writer_guard_passed() -> None:
     account_events = project_account_events(
         [
             {
@@ -478,8 +452,8 @@ def test_reconnect_resumed_event_with_generation_marks_writer_guard_passed() -> 
     )
     writer_guard = next(node for node in chart.subgraphs["broker_writer"].nodes if node.id == "writer_guard")
 
-    assert writer_guard.status == "passed"
-    assert writer_guard.status_label == "Clear"
+    assert writer_guard.status == "unknown"
+    assert writer_guard.status_label == "Unknown"
 
 
 def test_submit_uncertainty_reaches_submit_subgraph() -> None:

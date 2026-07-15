@@ -84,6 +84,63 @@ still active compatibility/safety consumers and are not deleted under a false
 "dead code" claim; each must move to a characterized Clerk-backed replacement
 before its artifact contract can be retired.
 
+## Track B deletion ledger and authority truth-up (2026-07-15)
+
+Issue #1058 was closed on 2026-07-15 before this ledger and the operator
+surface cutover were complete. This section records the honest post-closure
+state. It is the deletion ledger for every `owner_generation`,
+`AccountOwnerGeneration`, `AccountOwner`, and per-runner AccountOwner
+reference under `PythonDataService/app` as of this change; a single source
+reference may serve more than one category only when its data model is used by
+both the Clerk and a historic replay.
+
+| Exact source coverage | Classification | Track B disposition |
+| --- | --- | --- |
+| Bot-start `accounts/<account>/owner_generation.json` advancement; `advance_account_owner_generation`; `AccountOwner.record_accepting_generation` | **DEAD** | Already deleted before this change. The source tree has zero production references, so there is no further deletion to claim. |
+| `engine/live/account_owner.py::AccountOwnerSubmitIntent`; `engine/live/account_clerk*.py`; `schemas/journal_cures.py`; Clerk journal/reconciler/operation models | **CLERK-BACKED-LEGACY-NAME** | The name is the compatibility wire identity for Clerk intake and journal rows. It does not select a per-runner broker writer. Defer the coordinated wire/model rename; do not churn it in Track B. |
+| `engine/live/run.py` Clerk-generation providers, `owner_generation` callback fields, and `AccountOwnerSubmitResult` adaptation; `engine/live/live_engine.py`; `engine/live/live_portfolio.py`; `engine/live/reconciliation_orchestrator.py` | **CLERK-BACKED-LEGACY-NAME** | Normal strategy submit and namespace cancellation use Clerk RPC. These parameters retain the old vocabulary while carrying the active Clerk generation. Rename only with the compatibility model above. |
+| `broker/ibkr/orders.py`; `routers/broker.py`; `engine/live/account_owner_fence.py` | **CLERK-BACKED-LEGACY-NAME** | The grant/fence spelling is compatibility debt at the broker boundary. It remains fail-closed and is not evidence of a runner-owned normal submit path. A separate rename must preserve the existing fail-closed fence. |
+| `engine/live/account_artifacts.py` legacy `AccountOwnerGeneration` read/write model and `owner_generation.json`; `services/bot_lifecycle_projection.py`; `services/lifecycle_projection_{store,replay,schema}.py`; `schemas/lifecycle_projection.py`; `schemas/bot_events.py` | **LEGACY-READER** | These consume or preserve historic owner-keyed artifacts/events and PostgreSQL projection rows. They are not current write authority. Keep dual-read/history until a versioned artifact and database migration retires the historic record. |
+| `services/bot_lifecycle_receipt_copy.py` historical receipt labels and `services/account_reconciliation.py`'s generic account-condition helper | **LEGACY-READER** / **not a runner owner** | Historic raw receipt tokens remain exact audit values. The account-condition helper's `owner` is ordinary domain ownership, not `AccountOwner` broker authority. Neither is renamed in this track. |
+| `routers/live_instances.py::_resolve_account_owner_surface`; `services/live_instance_surface_assembler.py`; `services/operator_surface.py`; `services/operator_trader_guidance.py`; `services/operator_blockage_ladder.py`; `services/bot_lifecycle_{chart,receipts}.py`; Frontend operator-surface types and fixtures | **LEGACY-READER — MIGRATED** | Done in Track B. The read-only response is now schema v2 `account_clerk`, sourced from the Clerk generation plus matching active lease. It no longer reads or returns the legacy owner artifact. Historic account-event tokens remain opaque audit data. |
+| `engine/live/run.py::emergency_flatten` direct broker cancel/place calls, `read_account_owner_generation`, and `account_owner_write_grant` | **SAFETY-LANE** | Do not modify in Track B. This is the separately invoked emergency path, not the normal Clerk RPC path. Its direct IBKR session and lock/fence coordination require a dedicated design and regression suite. |
+| `engine/live/run.py` recovery fallback `account_owner.run_broker_write` | **SAFETY-LANE** | Do not delete under a caller-count heuristic. It participates in recovery handling and must be characterized with the emergency/recovery architecture before removal. |
+
+The Track B operator-surface migration is display-only: it feeds
+readiness/guidance/chart evidence and does not change Start, normal submit,
+`IBKR_ACCOUNT_GATE_AUTHORITY`, or a broker write boundary. A response is
+healthy only when the Clerk generation is `accepting` **and** its matching
+`RUNNING` lease is unexpired. The regression test writes a conflicting legacy
+owner artifact and proves the response returns only the active Clerk evidence.
+
+### Emergency flatten decision proposal — not implemented
+
+**Decision proposed for the #1058 follow-up:** make emergency flatten an
+elevated Account Clerk operation. The Clerk retains the OS advisory lock and
+the only write-capable IBKR session, validates an explicit whole-account
+emergency actor/confirmation, and writes a journal/audit receipt before broker
+effects. The operation must depend only on account identity, Clerk state, and
+broker evidence; it must not depend on a LiveEngine instance or its run ledger.
+
+Alternatives considered:
+
+1. **Recommended: route through the active Clerk.** Preserves the single
+   broker session and the lock invariant. When the Clerk cannot be reached,
+   fail closed and require Clerk/daemon recovery before any write.
+2. **Independent emergency process that coordinates the existing lock.** Only
+   viable with an explicit Clerk-death/reap and fencing-takeover protocol. A
+   plain lock acquisition is insufficient because it can race a live Clerk or
+   broker session. This is more complex than the Clerk operation and is not
+   recommended without a distinct incident-mode ADR.
+3. **Allow direct emergency writes only when Clerk appears down.** Rejected.
+   “Appears down” is not a fencing proof and would recreate two-write-client
+   risk precisely when evidence is least reliable.
+
+This proposal leaves the current safety lane unchanged. Its implementation
+needs an ADR-approved takeover/recovery policy, a Clerk-unavailable operator
+workflow, journal receipt semantics, and failure-injection tests for lock,
+session, and crash races.
+
 ## Issue #1044 callback-stream hardening traceability
 
 | Requirement | Verification |

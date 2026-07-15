@@ -35,10 +35,12 @@ from app.engine.action_plan.parity import parity_diagnostics
 from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import (
     AccountArtifactError,
+    AccountClerkLeaseUnavailableError,
     AccountFreezeEvidence,
+    read_account_clerk_generation,
     read_account_events,
     read_account_freeze,
-    read_account_owner_generation,
+    read_active_accepting_account_clerk_generation,
 )
 from app.engine.live.account_identity import InvalidAccountIdError, normalize_account_id
 from app.engine.live.account_observation_lease import (
@@ -163,8 +165,8 @@ from app.schemas.live_runs import (
     LiveInstanceSummary,
     MutationOutcomeUnknownResponse,
     MutationRungReceipt,
+    OperatorSurfaceAccountClerk,
     OperatorSurfaceAccountObservation,
-    OperatorSurfaceAccountOwner,
     QcAuditCopyListing,
     ReadinessVector,
     ReconcileAckResponse,
@@ -666,26 +668,43 @@ def _raise_if_crash_recovery_blocks_start(
     )
 
 
-def _resolve_account_owner_surface(
+def _resolve_account_clerk_surface(
     artifacts_root: Path,
     account_id: str | None,
-) -> OperatorSurfaceAccountOwner | None:
+    *,
+    now_ms: int,
+) -> OperatorSurfaceAccountClerk | None:
     if account_id is None:
         return None
     try:
-        generation = read_account_owner_generation(artifacts_root, account_id)
+        generation = read_account_clerk_generation(artifacts_root, account_id)
     except (OSError, json.JSONDecodeError, ValidationError) as exc:
         logger.warning(
-            "failed to read account owner generation while resolving operator surface",
+            "failed to read account clerk generation while resolving operator surface",
             extra={"account_id": account_id, "exception": repr(exc)},
         )
-        return OperatorSurfaceAccountOwner(account_id=account_id, phase="unknown")
+        return OperatorSurfaceAccountClerk(account_id=account_id, phase="unknown")
+    try:
+        active_generation = read_active_accepting_account_clerk_generation(
+            artifacts_root,
+            account_id,
+            now_ms=now_ms,
+        )
+    except AccountClerkLeaseUnavailableError:
+        active_generation = None
+    except (OSError, json.JSONDecodeError, ValidationError) as exc:
+        logger.warning(
+            "failed to read account clerk generation while resolving operator surface",
+            extra={"account_id": account_id, "exception": repr(exc)},
+        )
+        return OperatorSurfaceAccountClerk(account_id=account_id, phase="unknown")
     if generation is None:
-        return OperatorSurfaceAccountOwner(account_id=account_id, phase="unknown")
-    return OperatorSurfaceAccountOwner(
+        return OperatorSurfaceAccountClerk(account_id=account_id, phase="unknown")
+    return OperatorSurfaceAccountClerk(
         account_id=generation.account_id,
         generation=generation.generation,
         phase=generation.phase,
+        lease_active=active_generation is not None,
         recorded_at_ms=generation.recorded_at_ms,
         source=generation.source,
     )
@@ -1845,7 +1864,7 @@ def _get_surface_assembler() -> LiveInstanceSurfaceAssembler:
             broker_connection_state_from_readiness=(_broker_connection_state_from_readiness),
             instance_ledger_account_id=_instance_ledger_account_id,
             crash_recovery_gate_for_instance=crash_recovery_gate_for_instance,
-            resolve_account_owner_surface=_resolve_account_owner_surface,
+            resolve_account_clerk_surface=_resolve_account_clerk_surface,
             resolve_account_observation_surface=_resolve_account_observation_surface,
             get_account_truth_snapshot_provider=get_account_truth_snapshot_provider,
             resolve_latest_mutation=_resolve_latest_mutation,

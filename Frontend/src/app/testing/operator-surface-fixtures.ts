@@ -40,7 +40,7 @@ export function makeOperatorSurfaceFixture(
   overrides: Partial<OperatorSurface> = {},
 ): OperatorSurface {
   const surface: OperatorSurface = {
-    schema_version: 1,
+    schema_version: 2,
     host_process: {
       state: 'RUNNING',
       notice: null,
@@ -79,12 +79,13 @@ export function makeOperatorSurfaceFixture(
     },
     daily_order_cap: { used: 0, limit: 2 },
     action_plan: { consumption: 'ACTIVE', anomaly_verdict: 'READY' },
-    account_owner: {
+    account_clerk: {
       account_id: 'DU123',
       generation: 4,
       phase: 'accepting',
+      lease_active: true,
       recorded_at_ms: 1_800_000_000_000,
-      source: 'account_owner',
+      source: 'account_clerk',
     },
     account_observation: {
       state: 'VERIFIED',
@@ -95,7 +96,7 @@ export function makeOperatorSurfaceFixture(
     submit_readiness: {
       code: 'safe_to_submit',
       label: 'Safe to submit',
-      explanation: 'Broker safety, submit capability, AccountOwner generation, reconciliation, and runtime proofs are all satisfied.',
+      explanation: 'Broker safety, submit capability, Account Clerk generation, reconciliation, and runtime proofs are all satisfied.',
       can_submit: true,
       blocking_reason_codes: [],
       template_id: 'operator_surface.submit_readiness.safe_to_submit',
@@ -106,7 +107,7 @@ export function makeOperatorSurfaceFixture(
       headline: 'This bot is ready to submit paper orders.',
       explanation: 'All backend submit-readiness proofs are currently satisfied.',
       risk_headline: 'Submission gates are satisfied',
-      risk_explanation: 'The surface is allowed to say safe to submit because the broker, submit lane, owner generation, and reconciliation proofs are all present.',
+      risk_explanation: 'The surface is allowed to say safe to submit because the broker, submit lane, Account Clerk generation, and reconciliation proofs are all present.',
       primary_remediation: { kind: 'none', reason: 'READY' },
       additional_attention_groups: [],
       proof_lines: [
@@ -121,14 +122,14 @@ export function makeOperatorSurfaceFixture(
           id: 'submit-readiness',
           label: 'Trade submit',
           message: 'Safe to submit',
-          detail: 'Broker safety, submit capability, AccountOwner generation, reconciliation, and runtime proofs are all satisfied.',
+          detail: 'Broker safety, submit capability, Account Clerk generation, reconciliation, and runtime proofs are all satisfied.',
           tone: 'ok',
         },
         {
-          id: 'account-owner',
-          label: 'Account owner',
-          message: 'Owner generation 4 is accepting commands.',
-          detail: 'Account DU123 owner phase is accepting commands. Generation 4.',
+          id: 'account-clerk',
+          label: 'Account Clerk',
+          message: 'Account Clerk generation 4 is accepting commands.',
+          detail: 'Account DU123 Clerk phase is accepting. Generation 4. Clerk lease is active.',
           tone: 'ok',
         },
         {
@@ -148,9 +149,17 @@ export function makeOperatorSurfaceFixture(
       ],
       advanced_evidence: [
         {
-          label: 'account_owner.generation',
+          label: 'account_clerk.generation',
           value: '4',
-          source: 'account_owner',
+          source: 'account_clerk',
+          gate_id: null,
+          ts_ms: 1_800_000_000_000,
+          ts_ms_resolved: true,
+        },
+        {
+          label: 'account_clerk.lease_active',
+          value: 'true',
+          source: 'account_clerk',
           gate_id: null,
           ts_ms: 1_800_000_000_000,
           ts_ms_resolved: true,

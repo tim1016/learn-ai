@@ -74,10 +74,10 @@ const DEFAULT_PROOF_LINES: OperatorSurfaceProofLine[] = [
     tone: 'attention',
   },
   {
-    id: 'account-owner',
-    label: 'Account owner',
-    message: 'Waiting for AccountOwner proof.',
-    detail: 'No AccountOwner artifact is available for this bot.',
+    id: 'account-clerk',
+    label: 'Account Clerk',
+    message: 'Waiting for Account Clerk proof.',
+    detail: 'No Account Clerk artifact is available for this bot.',
     tone: 'attention',
   },
   {
@@ -135,7 +135,7 @@ const OPERATOR_CONFIRMATIONS: OperatorSurfaceConfirmations = {
  * tests opt in to a specific phase.
  */
 export const DEFAULT_OPERATOR_SURFACE: OperatorSurface = {
-  schema_version: 1,
+  schema_version: 2,
   host_process: {
     state: 'IDLE',
     notice: null,
@@ -180,7 +180,7 @@ export const DEFAULT_OPERATOR_SURFACE: OperatorSurface = {
   },
   daily_order_cap: { used: null, limit: null },
   action_plan: { consumption: 'UNKNOWN', anomaly_verdict: 'UNKNOWN' },
-  account_owner: null,
+  account_clerk: null,
   account_observation: null,
   submit_readiness: {
     code: 'safe_to_monitor',

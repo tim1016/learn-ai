@@ -534,7 +534,7 @@ OperatorSurfaceBlockageStageId = Literal[
     "host_process",
     "broker",
     "account_safety",
-    "account_owner",
+    "account_clerk",
     "reconciliation",
     "preflight",
     "trading_session",
@@ -1315,14 +1315,14 @@ OperatorVerdict = Literal["READY", "ATTENTION", "UNKNOWN"]
 RiskPosture = Literal["FLAT", "LONG", "SHORT", "MIXED", "UNKNOWN"]
 ActionPlanConsumption = Literal["ACTIVE", "DECLARATIVE_ONLY", "UNKNOWN"]
 TradingSessionPhase = Literal["PRE", "RTH", "POST", "OVERNIGHT", "CLOSED", "UNKNOWN"]
-AccountOwnerPhase = Literal["accepting", "reconnecting", "draining", "frozen", "unknown"]
+AccountClerkPhase = Literal["accepting", "reconnecting", "draining", "frozen", "unknown"]
 SubmitReadinessCode = Literal[
     "safe_to_submit",
     "safe_to_monitor",
     "blocked_before_submit",
     "broker_state_unproven",
     "account_frozen",
-    "waiting_for_owner_generation",
+    "waiting_for_clerk_generation",
     "submit_outcome_uncertain",
 ]
 TraderSituationCode = Literal[
@@ -1331,7 +1331,7 @@ TraderSituationCode = Literal[
     "submission_blocked",
     "broker_state_unproven",
     "account_frozen",
-    "waiting_for_owner_generation",
+    "waiting_for_clerk_generation",
     "submit_outcome_uncertain",
     "attention_required",
     "unknown",
@@ -1374,18 +1374,20 @@ class OperatorSurfaceDailyOrderCap(BaseModel):
     limit: int | None
 
 
-class OperatorSurfaceAccountOwner(BaseModel):
-    """AccountOwner generation/phase surfaced from canonical account artifacts.
+class OperatorSurfaceAccountClerk(BaseModel):
+    """Account Clerk generation and lease health from canonical account artifacts.
 
-    ``phase=unknown`` means the account exists but no generation evidence is
-    available yet. The cockpit renders this as missing proof, not as healthy.
+    ``phase=unknown`` or ``lease_active=False`` means the account exists but
+    Clerk write authority is not proven. The cockpit renders either as missing
+    proof, not as healthy.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     account_id: str
     generation: int | None = Field(default=None, ge=0)
-    phase: AccountOwnerPhase
+    phase: AccountClerkPhase
+    lease_active: bool = False
     recorded_at_ms: int | None = Field(default=None, ge=0)
     source: str | None = None
 
@@ -1842,7 +1844,7 @@ class OperatorSurfaceProofLine(BaseModel):
 _OPERATOR_SURFACE_PROOF_LINE_IDS = (
     "broker-proof",
     "submit-readiness",
-    "account-owner",
+    "account-clerk",
     "reconciliation",
     "runtime-freshness",
 )
@@ -2190,7 +2192,7 @@ class OperatorSurface(BaseModel):
 
     # Bump on breaking shape changes; additive fields (new capability,
     # new reason code) do NOT bump the version.
-    schema_version: int = 1
+    schema_version: int = 2
     host_process: OperatorSurfaceHostProcess
     prior_run: OperatorSurfacePriorRun
     broker: OperatorSurfaceBroker
@@ -2199,15 +2201,16 @@ class OperatorSurface(BaseModel):
     current_risk: OperatorSurfaceCurrentRisk
     daily_order_cap: OperatorSurfaceDailyOrderCap
     action_plan: OperatorSurfaceActionPlan
-    account_owner: OperatorSurfaceAccountOwner | None = None
+    account_clerk: OperatorSurfaceAccountClerk | None = None
     account_observation: OperatorSurfaceAccountObservation | None = None
     submit_readiness: OperatorSurfaceSubmitReadiness
     trader_guidance: OperatorSurfaceTraderGuidance
     # Backend-authored current blockage ladder for the lifecycle/About pane.
-    # Additive field; schema_version remains 1.
+    # Additive field; schema version 2 also renames account_owner to account_clerk.
     blockage_ladder: OperatorSurfaceBlockageLadder
     # Backend-authored compact process signal rendered beside one-click
-    # lifecycle controls. Additive field; schema_version remains 1.
+    # lifecycle controls. Additive field; schema version 2 also renames
+    # account_owner to account_clerk.
     run_signal: OperatorSurfaceRunSignal
     actions: OperatorSurfaceActions
     confirmations: OperatorSurfaceConfirmations

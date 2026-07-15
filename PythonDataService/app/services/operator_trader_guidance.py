@@ -11,7 +11,7 @@ from app.schemas.live_runs import (
     NoPrimaryRemediationAction,
     OpenRunbookAction,
     OperatorGate,
-    OperatorSurfaceAccountOwner,
+    OperatorSurfaceAccountClerk,
     OperatorSurfaceAttentionGroup,
     OperatorSurfaceBroker,
     OperatorSurfaceDailyOrderCap,
@@ -39,7 +39,7 @@ IBKR_CLIENT_ID_IN_USE = "IBKR_CLIENT_ID_IN_USE"
 _SUBMIT_READINESS_COPY: dict[SubmitReadinessCode, tuple[str, str]] = {
     "safe_to_submit": (
         "Safe to submit",
-        "Broker safety, submit capability, AccountOwner generation, reconciliation, and runtime proofs are all satisfied.",
+        "Broker safety, submit capability, Account Clerk generation and lease, reconciliation, and runtime proofs are all satisfied.",
     ),
     "safe_to_monitor": (
         "Safe to monitor",
@@ -57,9 +57,9 @@ _SUBMIT_READINESS_COPY: dict[SubmitReadinessCode, tuple[str, str]] = {
         "Account frozen",
         "Account-wide unresolved exposure is active; no sibling bot on this account may submit.",
     ),
-    "waiting_for_owner_generation": (
-        "Waiting for owner generation",
-        "The AccountOwner generation or phase is not proven accepting, so single-writer submission is not proven.",
+    "waiting_for_clerk_generation": (
+        "Waiting for Account Clerk",
+        "The Account Clerk generation, phase, or active lease is not proven, so single-writer submission is not proven.",
     ),
     "submit_outcome_uncertain": (
         "Submit outcome uncertain",
@@ -72,7 +72,7 @@ _TRADER_GUIDANCE_COPY: dict[TraderSituationCode, tuple[str, str, str, str]] = {
         "This bot is ready to submit paper orders.",
         "All backend submit-readiness proofs are currently satisfied.",
         "Submission gates are satisfied",
-        "The surface is allowed to say safe to submit because the broker, submit lane, owner generation, and reconciliation proofs are all present.",
+        "The surface is allowed to say safe to submit because the broker, submit lane, Account Clerk generation, and reconciliation proofs are all present.",
     ),
     "monitor_only": (
         "This bot is safe to monitor, not safe to submit right now.",
@@ -98,11 +98,11 @@ _TRADER_GUIDANCE_COPY: dict[TraderSituationCode, tuple[str, str, str, str]] = {
         "Account-wide stop sign",
         "Resolve the account exposure before any bot on this account submits.",
     ),
-    "waiting_for_owner_generation": (
-        "AccountOwner is not accepting submits yet.",
-        "The current AccountOwner generation/phase is missing or not in the accepting phase.",
+    "waiting_for_clerk_generation": (
+        "Account Clerk is not accepting submits yet.",
+        "The current Account Clerk generation, phase, or active lease is not proven.",
         "Single-writer proof is incomplete",
-        "Wait for AccountOwner to reach accepting, or recover the owner lane before trading.",
+        "Wait for the Account Clerk to become accepting with an active lease before trading.",
     ),
     "submit_outcome_uncertain": (
         "A previous submit outcome is uncertain.",
@@ -144,7 +144,7 @@ def author_submit_readiness(
     host_process: OperatorSurfaceHostProcess,
     broker: OperatorSurfaceBroker,
     trading_session: OperatorSurfaceTradingSession,
-    account_owner: OperatorSurfaceAccountOwner | None,
+    account_clerk: OperatorSurfaceAccountClerk | None,
     account_freeze: AccountFreezeEvidence | None,
     guard_state: ResumeGuardState,
     reconciliation: OperatorSurfaceReconciliation | None,
@@ -158,7 +158,7 @@ def author_submit_readiness(
         host_process=host_process,
         broker=broker,
         trading_session=trading_session,
-        account_owner=account_owner,
+        account_clerk=account_clerk,
         account_freeze=account_freeze,
         guard_state=guard_state,
         reconciliation=reconciliation,
@@ -185,7 +185,7 @@ def author_trader_guidance(
     host_process: OperatorSurfaceHostProcess,
     broker: OperatorSurfaceBroker,
     trading_session: OperatorSurfaceTradingSession,
-    account_owner: OperatorSurfaceAccountOwner | None,
+    account_clerk: OperatorSurfaceAccountClerk | None,
     account_freeze: AccountFreezeEvidence | None,
     guard_state: ResumeGuardState,
     reconciliation: OperatorSurfaceReconciliation | None,
@@ -200,7 +200,7 @@ def author_trader_guidance(
         host_process=host_process,
         broker=broker,
         trading_session=trading_session,
-        account_owner=account_owner,
+        account_clerk=account_clerk,
         account_freeze=account_freeze,
         guard_state=guard_state,
         reconciliation=reconciliation,
@@ -221,7 +221,7 @@ def author_trader_guidance(
         proof_lines=_proof_lines(
             submit_readiness=submit_readiness,
             broker=broker,
-            account_owner=account_owner,
+            account_clerk=account_clerk,
             reconciliation=reconciliation,
             runtime_freshness=runtime_freshness,
         ),
@@ -229,7 +229,7 @@ def author_trader_guidance(
             host_process=host_process,
             broker=broker,
             trading_session=trading_session,
-            account_owner=account_owner,
+            account_clerk=account_clerk,
             account_freeze=account_freeze,
             guard_state=guard_state,
             reconciliation=reconciliation,
@@ -246,7 +246,7 @@ def build_submit_readiness_findings(
     host_process: OperatorSurfaceHostProcess,
     broker: OperatorSurfaceBroker,
     trading_session: OperatorSurfaceTradingSession,
-    account_owner: OperatorSurfaceAccountOwner | None,
+    account_clerk: OperatorSurfaceAccountClerk | None,
     account_freeze: AccountFreezeEvidence | None,
     guard_state: ResumeGuardState,
     reconciliation: OperatorSurfaceReconciliation | None,
@@ -364,22 +364,26 @@ def build_submit_readiness_findings(
                 OpenRunbookAction(kind="open_runbook", slug="broker-instance-operator-surface"),
             )
         )
-    if not _account_owner_ready(account_owner):
-        phase = "unknown" if account_owner is None else account_owner.phase
+    if not _account_clerk_ready(account_clerk):
+        phase = "unknown" if account_clerk is None else account_clerk.phase
         reason = (
-            "ACCOUNT_OWNER_GENERATION_UNPROVEN"
-            if account_owner is None or account_owner.generation is None or phase == "unknown"
-            else f"ACCOUNT_OWNER_PHASE_{phase.upper()}"
+            "ACCOUNT_CLERK_GENERATION_UNPROVEN"
+            if account_clerk is None or account_clerk.generation is None or phase == "unknown"
+            else (
+                "ACCOUNT_CLERK_LEASE_UNAVAILABLE"
+                if not account_clerk.lease_active
+                else f"ACCOUNT_CLERK_PHASE_{phase.upper()}"
+            )
         )
         findings.append(
             _finding(
-                "waiting_for_owner_generation",
+                "waiting_for_clerk_generation",
                 reason,
-                "account_owner",
+                "account_clerk",
                 "warning",
-                "AccountOwner not proven accepting",
-                f"AccountOwner phase is {phase}.",
-                "Wait for AccountOwner accepting/generation proof before expecting submit readiness to clear.",
+                "Account Clerk not proven accepting",
+                f"Account Clerk phase is {phase}; active lease is {account_clerk.lease_active if account_clerk is not None else False}.",
+                "Wait for Account Clerk accepting/generation and active-lease proof before expecting submit readiness to clear.",
                 OpenRunbookAction(kind="open_runbook", slug="broker-instance-operator-surface"),
             )
         )
@@ -506,8 +510,13 @@ def _is_reconciliation_ready(reconciliation: OperatorSurfaceReconciliation | Non
     return reconciliation is not None and reconciliation.state in _READY_RECONCILIATION_STATES
 
 
-def _account_owner_ready(account_owner: OperatorSurfaceAccountOwner | None) -> bool:
-    return account_owner is not None and account_owner.generation is not None and account_owner.phase == "accepting"
+def _account_clerk_ready(account_clerk: OperatorSurfaceAccountClerk | None) -> bool:
+    return (
+        account_clerk is not None
+        and account_clerk.generation is not None
+        and account_clerk.phase == "accepting"
+        and account_clerk.lease_active
+    )
 
 
 def _account_truth_findings(assessment: AccountTruthAssessment) -> list[SubmitReadinessFinding]:
@@ -641,14 +650,14 @@ def _proof_lines(
     *,
     submit_readiness: OperatorSurfaceSubmitReadiness,
     broker: OperatorSurfaceBroker,
-    account_owner: OperatorSurfaceAccountOwner | None,
+    account_clerk: OperatorSurfaceAccountClerk | None,
     reconciliation: OperatorSurfaceReconciliation | None,
     runtime_freshness: OperatorSurfaceRuntimeFreshness | None,
 ) -> list[OperatorSurfaceProofLine]:
     return [
         _broker_proof_line(broker),
         _submit_readiness_proof_line(submit_readiness),
-        _account_owner_proof_line(account_owner),
+        _account_clerk_proof_line(account_clerk),
         _reconciliation_proof_line(reconciliation),
         _runtime_freshness_proof_line(runtime_freshness),
     ]
@@ -713,37 +722,40 @@ def _submit_readiness_proof_line(readiness: OperatorSurfaceSubmitReadiness) -> O
     )
 
 
-def _account_owner_proof_line(owner: OperatorSurfaceAccountOwner | None) -> OperatorSurfaceProofLine:
-    if owner is None:
+def _account_clerk_proof_line(clerk: OperatorSurfaceAccountClerk | None) -> OperatorSurfaceProofLine:
+    if clerk is None:
         return _proof_line(
-            "account-owner",
-            "Account owner",
-            "Waiting for AccountOwner proof.",
-            "No AccountOwner artifact is available for this bot.",
+            "account-clerk",
+            "Account Clerk",
+            "Waiting for Account Clerk proof.",
+            "No Account Clerk artifact is available for this bot.",
             "attention",
         )
-    if owner.generation is None:
-        message = "Waiting for AccountOwner generation."
-    elif owner.phase == "accepting":
-        message = f"Owner generation {owner.generation} is accepting commands."
-    elif owner.phase == "reconnecting":
-        message = f"Owner generation {owner.generation} is reconnecting."
-    elif owner.phase == "draining":
-        message = f"Owner generation {owner.generation} is draining open work."
-    elif owner.phase == "frozen":
-        message = f"Owner generation {owner.generation} is frozen."
+    if clerk.generation is None:
+        message = "Waiting for Account Clerk generation."
+    elif clerk.phase == "accepting" and clerk.lease_active:
+        message = f"Account Clerk generation {clerk.generation} is accepting commands."
+    elif clerk.phase == "accepting":
+        message = f"Account Clerk generation {clerk.generation} is accepting, but its lease is inactive."
+    elif clerk.phase == "reconnecting":
+        message = f"Account Clerk generation {clerk.generation} is reconnecting."
+    elif clerk.phase == "draining":
+        message = f"Account Clerk generation {clerk.generation} is draining open work."
+    elif clerk.phase == "frozen":
+        message = f"Account Clerk generation {clerk.generation} is frozen."
     else:
-        message = f"Owner generation {owner.generation} has unknown state."
+        message = f"Account Clerk generation {clerk.generation} has unknown state."
     detail_parts = [
-        f"Account {owner.account_id} owner phase is {_owner_phase_label(owner.phase)}.",
-        f"Generation {owner.generation}." if owner.generation is not None else "Generation is not recorded.",
+        f"Account {clerk.account_id} Clerk phase is {_owner_phase_label(clerk.phase)}.",
+        f"Generation {clerk.generation}." if clerk.generation is not None else "Generation is not recorded.",
+        "Clerk lease is active." if clerk.lease_active else "Clerk lease is not active.",
     ]
     return _proof_line(
-        "account-owner",
-        "Account owner",
+        "account-clerk",
+        "Account Clerk",
         message,
         ". ".join(part for part in detail_parts if part is not None),
-        "ok" if _account_owner_ready(owner) else "attention",
+        "ok" if _account_clerk_ready(clerk) else "attention",
     )
 
 
@@ -872,7 +884,7 @@ def _situation_code_for_submit_readiness(
     if code in {
         "broker_state_unproven",
         "account_frozen",
-        "waiting_for_owner_generation",
+        "waiting_for_clerk_generation",
         "submit_outcome_uncertain",
     }:
         return code
@@ -886,7 +898,7 @@ def _submit_readiness_evidence(
     host_process: OperatorSurfaceHostProcess,
     broker: OperatorSurfaceBroker,
     trading_session: OperatorSurfaceTradingSession,
-    account_owner: OperatorSurfaceAccountOwner | None,
+    account_clerk: OperatorSurfaceAccountClerk | None,
     account_freeze: AccountFreezeEvidence | None,
     guard_state: ResumeGuardState,
     reconciliation: OperatorSurfaceReconciliation | None,
@@ -928,23 +940,31 @@ def _submit_readiness_evidence(
                 source="readiness",
             )
         )
-    if account_owner is None:
-        facts.append(_fact("account_owner.phase", "unknown", source="account_artifacts"))
+    if account_clerk is None:
+        facts.append(_fact("account_clerk.phase", "unknown", source="account_artifacts"))
     else:
         facts.append(
             _fact(
-                "account_owner.phase",
-                account_owner.phase,
-                source=account_owner.source or "account_artifacts",
-                ts_ms=account_owner.recorded_at_ms,
+                "account_clerk.phase",
+                account_clerk.phase,
+                source=account_clerk.source or "account_artifacts",
+                ts_ms=account_clerk.recorded_at_ms,
             )
         )
         facts.append(
             _fact(
-                "account_owner.generation",
-                account_owner.generation if account_owner.generation is not None else "unknown",
-                source=account_owner.source or "account_artifacts",
-                ts_ms=account_owner.recorded_at_ms,
+                "account_clerk.generation",
+                account_clerk.generation if account_clerk.generation is not None else "unknown",
+                source=account_clerk.source or "account_artifacts",
+                ts_ms=account_clerk.recorded_at_ms,
+            )
+        )
+        facts.append(
+            _fact(
+                "account_clerk.lease_active",
+                str(account_clerk.lease_active).lower(),
+                source=account_clerk.source or "account_artifacts",
+                ts_ms=account_clerk.recorded_at_ms,
             )
         )
     if account_freeze is not None:

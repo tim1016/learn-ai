@@ -240,7 +240,7 @@ Deliverable: Start consumes the lease; the submit chain consumes the lease; the 
 ### Task 3.1: Sequence parity evidence from shadow mode
 
 - [x] The durable replay verifier is implemented in `app/services/observation_lease_parity.py` with `tests/services/test_observation_lease_parity.py`. It reads the canonical account journal, requires three distinct canonical-NYSE session dates, rejects malformed evidence and every truth=`block` / lease=`pass` pair, and lists lease-stricter pairs without failing the gate.
-- [ ] Operational gate: collect version-2, Clerk-keyed submit-boundary rows from ≥ 3 paper-trading sessions with zero lease-weaker divergences, then replay the captured account journal and archive the resulting report before enabling enforcement. The 69 owner-keyed rows from two sessions are legacy evidence and do not count. This is sequence parity, not a Cartesian table.
+- [ ] Operational gate: collect version-2, Clerk-keyed submit-boundary rows from ≥ 3 paper-trading sessions with zero lease-weaker divergences, then replay the captured account journal and archive the resulting report before enabling enforcement. **Current replay (2026-07-15):** `comparison_count=0`, `legacy_comparison_count=69`, `observed_session_dates=[]`, and `cutover_ready=false`. The 69 owner-keyed rows are legacy evidence and do not count; there are zero qualifying v2 sessions. This is sequence parity, not a Cartesian table.
 - [ ] Commit: `test(live): sequence-parity replay for observation lease vs raw truth gate`
 
 ### Task 3.2: Start consumes the lease
@@ -251,7 +251,7 @@ Deliverable: Start consumes the lease; the submit chain consumes the lease; the 
 
 Start ordering stays: lease VERIFIED (account proof) → daemon accepts start → child runs run-scoped reconciliation → bar loop. Per D6, `set_phase(ON_DUTY, "start_accepted")` is unchanged; ADR amendment in Task 3.4 records the semantics.
 
-- [x] Dormant cutover path implemented behind the default-off process-wide selector: absent/revoked lease blocks with `RECONCILE_NOW`; verified Clerk-keyed lease permits Start. The existing independent fleet, freeze, crash-recovery, session, and child run-reconciliation gates remain.
+- [x] Dormant cutover path implemented behind the default-off process-wide selector: absent/revoked lease blocks with `RECONCILE_NOW`; verified Clerk-keyed lease permits Start. The existing independent fleet, freeze, crash-recovery, session, and child run-reconciliation gates remain. **Current selector:** `IBKR_ACCOUNT_GATE_AUTHORITY=account_truth`; do not enable `observation_lease` while Task 3.1 remains unmet.
 
 ### Task 3.3: Submit cutover + retire the raw check
 
@@ -259,12 +259,12 @@ Start ordering stays: lease VERIFIED (account proof) → daemon accepts start �
 - Modify: `live_portfolio.py` (the `account_truth_gate_provider` slot now supplies the lease gate; shadow scaffold removed), `live_engine.py` (~914, provider wiring)
 - Test: submit-gate tests updated to the lease gate, including that the child-local broker connection remains an independent hard block; parity replay suite from 3.1 stays green
 
-- [x] Dormant lease-authority submit path implemented and fail-closed behind the same selector as Start; Account Truth remains the default authority and shadow comparison remains active.
+- [x] Dormant lease-authority submit path implemented and fail-closed behind the same selector as Start; Account Truth remains the default authority and shadow comparison remains active. **Current selector:** `IBKR_ACCOUNT_GATE_AUTHORITY=account_truth`; no cutover action is authorized by the legacy rows.
 - [ ] After the three-session v2 parity gate and Clerk-restart HITL smoke pass: set `IBKR_ACCOUNT_GATE_AUTHORITY=observation_lease`, restart the process, verify one paper session, then remove the raw truth fallback and selector in a separate rollback-safe cleanup.
 
 ### Task 3.4: ADR + authority updates
 
-- [ ] ADR-0026 amendment: ON_DUTY = presence; trading permission = observation lease + run receipt + submit chain; the "coarse background tick that reconciles drift" is realized by the existing 15 s observer writing the lease. Authority doc §"Account-Level Reconciliation Receipt" gains the lease subsection (artifact path, renewal/revocation rules, gate id). Flag the auto-reconciliation-policy retirement question as an open decision.
+- [ ] ADR-0026 amendment: ON_DUTY = presence; trading permission = observation lease + run receipt + submit chain; the "coarse background tick that reconciles drift" is realized by the existing 15 s observer writing the lease. The current-authority statement belongs in ADR-0030: a v2 lease requires an accepting Clerk generation and matching active `RUNNING` Clerk lease. This historical plan's former AccountOwner wording must not be used as current architecture. Flag the auto-reconciliation-policy retirement question as an open decision.
 - [ ] Commit: `docs: ADR-0026 amendment + authority update for the observation lease`
 
 ---

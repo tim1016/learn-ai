@@ -341,16 +341,16 @@ def account_freeze_receipts(gate_result: GateResult | None) -> tuple[LifecycleCh
 
 def account_identity_receipts(surface: OperatorSurface) -> tuple[LifecycleChartReceipt, ...]:
     receipts: list[LifecycleChartReceipt] = []
-    owner = surface.account_owner
-    if owner is not None:
+    clerk = surface.account_clerk
+    if clerk is not None:
         receipts.append(
             chart_receipt(
                 "account.account_id",
-                owner.account_id,
-                headline=f"AccountOwner is scoped to account {owner.account_id}.",
-                detail="This is AccountOwner evidence for the bot's account context.",
-                source=owner.source or "operator_surface.account_owner",
-                ts_ms=owner.recorded_at_ms,
+                clerk.account_id,
+                headline=f"Account Clerk is scoped to account {clerk.account_id}.",
+                detail="This is Account Clerk evidence for the bot's account context.",
+                source=clerk.source or "operator_surface.account_clerk",
+                ts_ms=clerk.recorded_at_ms,
             )
         )
     consistency = surface.broker_observation_consistency
@@ -392,7 +392,7 @@ def account_identity_receipts(surface: OperatorSurface) -> tuple[LifecycleChartR
             "account_identity.fold",
             headline="Account identity proof has not been folded into this node yet.",
             detail="The inspector will not guess account cleanliness from a separate endpoint.",
-            source="operator_surface.account_owner",
+            source="operator_surface.account_clerk",
         ),
     )
 
@@ -464,17 +464,23 @@ def current_risk_receipts(surface: OperatorSurface) -> tuple[LifecycleChartRecei
     return tuple(receipts)
 
 
-def account_owner_receipts(surface: OperatorSurface) -> tuple[LifecycleChartReceipt, ...]:
-    owner = surface.account_owner
-    if owner is None:
+def account_clerk_receipts(surface: OperatorSurface) -> tuple[LifecycleChartReceipt, ...]:
+    clerk = surface.account_clerk
+    if clerk is None:
         return ()
-    ts_ms = owner.recorded_at_ms
+    ts_ms = clerk.recorded_at_ms
     return (
-        chart_receipt("account_owner.phase", owner.phase, source=owner.source, ts_ms=ts_ms),
+        chart_receipt("account_clerk.phase", clerk.phase, source=clerk.source, ts_ms=ts_ms),
         chart_receipt(
-            "account_owner.generation",
-            owner.generation if owner.generation is not None else "unknown",
-            source=owner.source,
+            "account_clerk.generation",
+            clerk.generation if clerk.generation is not None else "unknown",
+            source=clerk.source,
+            ts_ms=ts_ms,
+        ),
+        chart_receipt(
+            "account_clerk.lease_active",
+            str(clerk.lease_active).lower(),
+            source=clerk.source,
             ts_ms=ts_ms,
         ),
     )
@@ -810,8 +816,8 @@ def _stable_config_value(value: object) -> str:
 
 __all__ = [
     "LifecycleReceiptContext",
+    "account_clerk_receipts",
     "account_freeze_receipts",
-    "account_owner_receipts",
     "account_safety_receipts",
     "broker_ack_gap_receipts",
     "broker_activity_receipts",

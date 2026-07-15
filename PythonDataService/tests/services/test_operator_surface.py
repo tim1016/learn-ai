@@ -36,8 +36,8 @@ from app.schemas.live_runs import (
     InstanceSizing,
     InstanceStartDefaults,
     LiveBinding,
+    OperatorSurfaceAccountClerk,
     OperatorSurfaceAccountObservation,
-    OperatorSurfaceAccountOwner,
     ReadinessGate,
     ReadinessVector,
 )
@@ -159,17 +159,18 @@ def _guard(
     )
 
 
-def _owner(
+def _clerk(
     *,
     phase: str = "accepting",
     generation: int | None = 4,
-) -> OperatorSurfaceAccountOwner:
-    return OperatorSurfaceAccountOwner(
+) -> OperatorSurfaceAccountClerk:
+    return OperatorSurfaceAccountClerk(
         account_id="DU123",
         generation=generation,
         phase=phase,  # type: ignore[arg-type]
+        lease_active=True,
         recorded_at_ms=_NOW_MS - 10_000,
-        source="account_owner",
+        source="account_clerk",
     )
 
 
@@ -775,7 +776,7 @@ def test_trader_guidance_safe_to_submit_requires_all_proofs() -> None:
         broker_connection_state="connected",
         runtime_freshness=_runtime_freshness(),
         guard_state=_guard(),
-        account_owner=_owner(),
+        account_clerk=_clerk(),
         reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
         now_ms=_RTH_MID,
     )
@@ -787,14 +788,14 @@ def test_trader_guidance_safe_to_submit_requires_all_proofs() -> None:
     assert surface.trader_guidance.primary_remediation.kind == "none"
     assert surface.trader_guidance.additional_attention_groups == []
     evidence = {fact.label: fact for fact in surface.trader_guidance.advanced_evidence}
-    assert evidence["account_owner.generation"].value == "4"
+    assert evidence["account_clerk.generation"].value == "4"
     assert evidence["broker.safety_verdict"].value == "PAPER_ONLY"
     assert evidence["reconciliation.state"].value == "CLEAN"
     proof_lines = {line.id: line for line in surface.trader_guidance.proof_lines}
     assert list(proof_lines) == [
         "broker-proof",
         "submit-readiness",
-        "account-owner",
+        "account-clerk",
         "reconciliation",
         "runtime-freshness",
     ]
@@ -814,7 +815,7 @@ def test_trader_guidance_missing_account_truth_cache_is_not_safe_to_submit() -> 
         broker_connection_state="connected",
         runtime_freshness=_runtime_freshness(),
         guard_state=_guard(),
-        account_owner=_owner(),
+        account_clerk=_clerk(),
         reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
         account_truth_snapshot=None,
         now_ms=_RTH_MID,
@@ -837,7 +838,7 @@ def test_trader_guidance_stale_account_truth_cache_is_not_safe_to_submit() -> No
         broker_connection_state="connected",
         runtime_freshness=_runtime_freshness(),
         guard_state=_guard(),
-        account_owner=_owner(),
+        account_clerk=_clerk(),
         reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
         account_truth_snapshot=_account_truth_snapshot(generated_at_ms=_NOW_MS - 60_001),
         now_ms=_NOW_MS,
@@ -867,7 +868,7 @@ def test_trader_guidance_not_clean_account_truth_cache_is_not_safe_to_submit() -
         broker_connection_state="connected",
         runtime_freshness=_runtime_freshness(),
         guard_state=_guard(),
-        account_owner=_owner(),
+        account_clerk=_clerk(),
         reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
         account_truth_snapshot=_account_truth_snapshot(
             final_verdict="not_proven",
@@ -909,7 +910,7 @@ def test_trader_guidance_runtime_market_closed_uses_notice_copy() -> None:
         broker_connection_state="connected",
         runtime_freshness=runtime,
         guard_state=_guard(),
-        account_owner=_owner(),
+        account_clerk=_clerk(),
         reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
         now_ms=_RTH_MID,
     )
@@ -949,7 +950,7 @@ def test_trader_guidance_runtime_first_bar_timeout_blocks_submit_loudly() -> Non
         broker_connection_state="connected",
         runtime_freshness=runtime,
         guard_state=_guard(),
-        account_owner=_owner(),
+        account_clerk=_clerk(),
         reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
         now_ms=_RTH_MID,
     )
@@ -1065,7 +1066,7 @@ def test_trader_guidance_account_freeze_is_never_collapsed() -> None:
         safety_verdict_final="paper-only",
         broker_connection_state="connected",
         guard_state=_guard(),
-        account_owner=_owner(),
+        account_clerk=_clerk(),
         account_freeze=freeze,
         reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
     )
@@ -1087,7 +1088,7 @@ def test_trader_guidance_submit_uncertainty_routes_to_reconcile_endpoint() -> No
             uncertain_state="PRESENT",
             unresolved_intent_ids=("intent-1",),
         ),
-        account_owner=_owner(),
+        account_clerk=_clerk(),
         reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
     )
 
@@ -1110,18 +1111,18 @@ def test_trader_guidance_missing_owner_generation_is_waiting_not_safe() -> None:
         safety_verdict_final="paper-only",
         broker_connection_state="connected",
         guard_state=_guard(),
-        account_owner=_owner(phase="unknown", generation=None),
+        account_clerk=_clerk(phase="unknown", generation=None),
         reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
     )
 
-    assert surface.submit_readiness.code == "waiting_for_owner_generation"
+    assert surface.submit_readiness.code == "waiting_for_clerk_generation"
     assert surface.submit_readiness.can_submit is False
-    assert "ACCOUNT_OWNER_GENERATION_UNPROVEN" in surface.submit_readiness.blocking_reason_codes
-    assert surface.trader_guidance.situation_code == "waiting_for_owner_generation"
-    assert any(group.code == "account_owner" for group in surface.trader_guidance.additional_attention_groups)
+    assert "ACCOUNT_CLERK_GENERATION_UNPROVEN" in surface.submit_readiness.blocking_reason_codes
+    assert surface.trader_guidance.situation_code == "waiting_for_clerk_generation"
+    assert any(group.code == "account_clerk" for group in surface.trader_guidance.additional_attention_groups)
     proof_lines = {line.id: line for line in surface.trader_guidance.proof_lines}
-    assert proof_lines["account-owner"].message == "Waiting for AccountOwner generation."
-    assert proof_lines["account-owner"].tone == "attention"
+    assert proof_lines["account-clerk"].message == "Waiting for Account Clerk generation."
+    assert proof_lines["account-clerk"].tone == "attention"
 
 
 def test_trader_guidance_reconciliation_not_available_cannot_be_safe_to_submit() -> None:
@@ -1129,7 +1130,7 @@ def test_trader_guidance_reconciliation_not_available_cannot_be_safe_to_submit()
         safety_verdict_final="paper-only",
         broker_connection_state="connected",
         guard_state=_guard(),
-        account_owner=_owner(),
+        account_clerk=_clerk(),
         reconciliation_receipt=None,
     )
 
@@ -1152,7 +1153,7 @@ def test_trader_guidance_reconciliation_waits_for_live_runtime_when_process_exit
         safety_verdict_final="paper-only",
         broker_connection_state="connected",
         guard_state=_guard(),
-        account_owner=_owner(),
+        account_clerk=_clerk(),
         reconciliation_receipt=None,
     )
 
@@ -1183,7 +1184,7 @@ def test_trader_guidance_client_id_collision_is_louder_than_reconcile() -> None:
         safety_verdict_final="paper-only",
         broker_connection_state="connected",
         guard_state=_guard(),
-        account_owner=_owner(),
+        account_clerk=_clerk(),
         reconciliation_receipt=None,
     )
 
@@ -1222,7 +1223,7 @@ def test_host_process_client_id_collision_notice_survives_idle_state() -> None:
         safety_verdict_final="paper-only",
         broker_connection_state="connected",
         guard_state=_guard(),
-        account_owner=_owner(),
+        account_clerk=_clerk(),
         reconciliation_receipt=None,
     )
 
@@ -1237,7 +1238,7 @@ def test_trader_guidance_disconnected_broker_reconnects_before_reconcile() -> No
         safety_verdict_final="paper-only",
         broker_connection_state="disconnected",
         guard_state=_guard(),
-        account_owner=_owner(),
+        account_clerk=_clerk(),
         reconciliation_receipt=None,
     )
 
@@ -1261,7 +1262,7 @@ def test_trader_guidance_broker_connection_unknown_has_no_action_without_live_ru
         safety_verdict_final="paper-only",
         broker_connection_state="unknown",
         guard_state=_guard(),
-        account_owner=_owner(),
+        account_clerk=_clerk(),
         reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
     )
 
@@ -1281,7 +1282,7 @@ def test_trader_guidance_disconnected_broker_without_live_runtime_uses_runtime_c
         safety_verdict_final="paper-only",
         broker_connection_state="disconnected",
         guard_state=_guard(),
-        account_owner=_owner(),
+        account_clerk=_clerk(),
         reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
     )
 
@@ -1313,7 +1314,7 @@ def test_trader_guidance_degraded_broker_preserves_recovering_copy() -> None:
         safety_verdict_final="paper-only",
         broker_connection_state="recovering",
         guard_state=_guard(),
-        account_owner=_owner(),
+        account_clerk=_clerk(),
         reconciliation_receipt=None,
     )
 
@@ -1334,7 +1335,7 @@ def test_trader_guidance_data_farm_degraded_is_critical() -> None:
         safety_verdict_final="paper-only",
         broker_connection_state="degraded_data_farm",
         guard_state=_guard(),
-        account_owner=_owner(),
+        account_clerk=_clerk(),
         reconciliation_receipt=None,
     )
 
@@ -1356,7 +1357,7 @@ def test_blockage_ladder_names_the_degraded_broker_contract() -> None:
         broker_connection_state="degraded_data_farm",
         runtime_freshness=_runtime_freshness(),
         guard_state=_guard(),
-        account_owner=_owner(),
+        account_clerk=_clerk(),
         reconciliation_receipt=None,
         now_ms=_RTH_MID,
     )
@@ -1376,7 +1377,7 @@ def test_blockage_ladder_daemon_control_plane_is_warning() -> None:
         broker_connection_state="connected",
         runtime_freshness=_runtime_freshness(),
         guard_state=_guard(),
-        account_owner=_owner(),
+        account_clerk=_clerk(),
         reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
         control_plane_state=_conn_state("UNREACHABLE", last_success_ms=None, daemon_boot_id=None),
         now_ms=_RTH_MID,
@@ -1394,7 +1395,7 @@ def test_blockage_ladder_missing_account_truth_is_warning_not_danger() -> None:
         broker_connection_state="connected",
         runtime_freshness=_runtime_freshness(),
         guard_state=_guard(),
-        account_owner=_owner(),
+        account_clerk=_clerk(),
         reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
         account_truth_snapshot=None,
         now_ms=_RTH_MID,
