@@ -38,7 +38,7 @@ from app.engine.live.account_registry import (
     read_account_instance_registry,
 )
 from app.schemas.journal_cures import JournalCureReceipt, JournalCureRequest
-from app.services.journal_cures import JournalCureError, JournalCureService
+from app.services.journal_cures import JournalCureError, JournalCureHandler
 
 logger = logging.getLogger(__name__)
 
@@ -617,6 +617,7 @@ class AccountClerkRpcServer:
         clerk: AccountClerk,
         *,
         on_callback_persistence_failure: Callable[[BaseException], None] | None = None,
+        operator_adjustment_handler: JournalCureHandler | None = None,
     ) -> None:
         self._clerk = clerk
         self._server: asyncio.AbstractServer | None = None
@@ -628,6 +629,7 @@ class AccountClerkRpcServer:
         self._callback_worker: asyncio.Task[None] | None = None
         self._callback_failure: BaseException | None = None
         self._on_callback_persistence_failure = on_callback_persistence_failure
+        self._operator_adjustment_handler = operator_adjustment_handler
         clerk.set_callback_drain(lambda: self._flush_broker_callbacks(raise_on_failure=True))
         self._closing = False
         set_callback = getattr(clerk._broker, "set_broker_callback_sink", None)
@@ -785,16 +787,11 @@ class AccountClerkRpcServer:
             )
         if operation == "operator_adjustment":
             cure_request = JournalCureRequest.model_validate(_request_object(request, "request"))
-            service = JournalCureService(artifacts_root=self._clerk._artifacts_root)
-            adjustment = service.adjustment_for(account_id=self._clerk._account_id, request=cure_request)
-            entry = await self._clerk.append_operator_adjustment(
-                adjustment,
-                validate_adjustment=lambda entries: service.validate_adjustment(
-                    entries, account_id=self._clerk._account_id, request=cure_request
-                ),
-            )
+            if self._operator_adjustment_handler is None:
+                raise _AccountClerkRpcRequestRejected("OPERATOR_ADJUSTMENT_UNAVAILABLE")
+            receipt = await self._operator_adjustment_handler(cure_request)
             return AccountClerkRpcSuccessEnvelope(
-                payload={"operator_adjustment": service.receipt_for(entry).model_dump(mode="json")}
+                payload={"operator_adjustment": receipt.model_dump(mode="json")}
             )
         consumer = self._validated_event_consumer(request)
         after_seq = _required_nonnegative_int(request, "after_seq")

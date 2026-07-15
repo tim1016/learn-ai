@@ -53,6 +53,7 @@ from app.engine.live.account_registry import (
 from app.engine.live.live_portfolio import LivePortfolio, SubmitUncertainHaltError
 from app.engine.live.order_identity import build_order_ref
 from app.schemas.journal_cures import JournalCureRequest
+from app.services.journal_cures import JournalCureService
 from tests.engine.live.fixtures.fake_broker import FakeBroker
 
 ACCOUNT = "DU1040"
@@ -353,7 +354,13 @@ async def test_operator_adjustment_round_trips_through_the_live_clerk_journal(tm
             source="test.retired",
         ),
     )
-    server = AccountClerkRpcServer(clerk)
+    server = AccountClerkRpcServer(
+        clerk,
+        operator_adjustment_handler=JournalCureService(artifacts_root=tmp_path).handler_for_clerk(
+            account_id=ACCOUNT,
+            append_operator_adjustment=clerk.append_operator_adjustment,
+        ),
+    )
     await server.start()
     try:
         receipt = await AccountClerkRpcClient(artifacts_root=tmp_path, account_id=ACCOUNT).apply_operator_adjustment(
@@ -371,6 +378,33 @@ async def test_operator_adjustment_round_trips_through_the_live_clerk_journal(tm
         await server.close()
 
     assert receipt.journal_seq > 0
+
+
+@pytest.mark.asyncio
+async def test_operator_adjustment_requires_an_injected_cure_handler(tmp_path: Path) -> None:
+    """The RPC transport must not reach into Clerk storage to construct a cure service."""
+
+    server = AccountClerkRpcServer(
+        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_Broker(), clerk_generation=1)
+    )
+    await server.start()
+    try:
+        with pytest.raises(AccountClerkRpcRejectedError) as exc_info:
+            await AccountClerkRpcClient(artifacts_root=tmp_path, account_id=ACCOUNT).apply_operator_adjustment(
+                JournalCureRequest(
+                    bot_order_namespace="learn-ai/retired/v1",
+                    symbol="SPY",
+                    signed_quantity=-1,
+                    reason="operator review",
+                    evidence_refs=("account-reconciliation:test",),
+                    request_provenance="test",
+                    idempotency_key="requires-injected-handler",
+                )
+            )
+    finally:
+        await server.close()
+
+    assert exc_info.value.reason == "OPERATOR_ADJUSTMENT_UNAVAILABLE"
 
 
 @pytest.mark.asyncio

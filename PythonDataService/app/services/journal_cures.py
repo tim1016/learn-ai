@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Protocol
 
 from app.engine.live.account_clerk_journal import (
     AccountClerkJournal,
@@ -15,6 +17,20 @@ from app.engine.live.account_registry import index_account_instance_bindings, re
 from app.engine.live.journal_exposure import project_journal_exposure
 from app.schemas.journal_cures import JournalCurePreview, JournalCureReceipt, JournalCureRequest
 from app.utils.timestamps import now_ms_utc
+
+
+class JournalCureAppender(Protocol):
+    """The Clerk-owned serialized append boundary required by a cure."""
+
+    async def __call__(
+        self,
+        adjustment: AccountClerkOperatorAdjustment,
+        *,
+        validate_adjustment: Callable[[list[AccountClerkJournalEntry]], None],
+    ) -> AccountClerkJournalEntry: ...
+
+
+JournalCureHandler = Callable[[JournalCureRequest], Awaitable[JournalCureReceipt]]
 
 
 class JournalCureError(ValueError):
@@ -105,6 +121,32 @@ class JournalCureService:
                 "idempotency key was already used with a different cure payload",
             ) from exc
         return _receipt(entry)
+
+    def handler_for_clerk(
+        self,
+        *,
+        account_id: str,
+        append_operator_adjustment: JournalCureAppender,
+    ) -> JournalCureHandler:
+        """Bind cure validation to the Clerk's sole serialized append seam.
+
+        The returned handler is deliberately narrow: the RPC server needs no
+        artifact path or concrete cure service to route an operator request.
+        """
+
+        async def apply(request: JournalCureRequest) -> JournalCureReceipt:
+            adjustment = self.adjustment_for(account_id=account_id, request=request)
+            entry = await append_operator_adjustment(
+                adjustment,
+                validate_adjustment=lambda entries: self.validate_adjustment(
+                    entries,
+                    account_id=account_id,
+                    request=request,
+                ),
+            )
+            return self.receipt_for(entry)
+
+        return apply
 
     @staticmethod
     def receipt_for(entry: AccountClerkJournalEntry) -> JournalCureReceipt:

@@ -1218,6 +1218,7 @@ async def _run_clerk_process(args: argparse.Namespace) -> int:
     from app.broker.ibkr.client import IbkrClient
     from app.engine.live.account_clerk_rpc import AccountClerkRpcServer
     from app.engine.live.live_portfolio import IbkrBrokerAdapter
+    from app.services.journal_cures import JournalCureService
 
     with account_clerk_authority_lock(artifacts_root, args.account_id):
         def durable_generation_provider() -> int | None:
@@ -1251,9 +1252,14 @@ async def _run_clerk_process(args: argparse.Namespace) -> int:
             stream_failed.set()
             stop.set()
 
+        journal_cures = JournalCureService(artifacts_root=artifacts_root)
         server = AccountClerkRpcServer(
             clerk,
             on_callback_persistence_failure=on_callback_persistence_failure,
+            operator_adjustment_handler=journal_cures.handler_for_clerk(
+                account_id=args.account_id,
+                append_operator_adjustment=clerk.append_operator_adjustment,
+            ),
         )
         from app.engine.live.account_clerk_reconciler import AccountClerkReconciler
 
