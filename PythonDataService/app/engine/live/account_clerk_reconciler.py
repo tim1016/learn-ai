@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections import defaultdict
 from collections.abc import Callable, Mapping
@@ -29,6 +30,9 @@ from app.engine.live.submit_state_machine import BrokerProbe, SubmitVerdict
 _CADENCE_SECONDS = 5.0
 _SUBMIT_IN_FLIGHT_TTL_MS = 30_000 + 30_000
 _RECOVERY_IN_FLIGHT_TTL_MS = 120_000 + 30_000
+_MAX_CONSECUTIVE_FAILURES = 3
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -66,11 +70,28 @@ class AccountClerkReconciler:
         *,
         cadence_seconds: float = _CADENCE_SECONDS,
         now_ms: Callable[[], int] | None = None,
+        on_unhealthy: Callable[[], None] | None = None,
     ) -> None:
         self._clerk = clerk
         self._cadence_seconds = cadence_seconds
         self._now_ms = now_ms if now_ms is not None else lambda: time.time_ns() // 1_000_000
+        self._on_unhealthy = on_unhealthy
         self._task: asyncio.Task[None] | None = None
+        self._consecutive_failures = 0
+        self._unhealthy = False
+        self._closing = False
+
+    @property
+    def healthy(self) -> bool:
+        """Whether reconciliation is still safe to support a running lease."""
+
+        return not self._unhealthy and self._task is not None and not self._task.done()
+
+    @property
+    def unhealthy(self) -> bool:
+        """Whether liveness supervision has terminally failed this Clerk."""
+
+        return self._unhealthy
 
     async def reconcile_once(self) -> tuple[ReconciliationResolution, ...]:
         entries = await self._clerk.reconciliation_snapshot()
@@ -115,11 +136,14 @@ class AccountClerkReconciler:
 
     async def start(self) -> None:
         if self._task is None:
+            self._closing = False
             self._task = asyncio.create_task(self._run(), name="account-clerk-reconciler")
+            self._task.add_done_callback(self._record_unexpected_task_completion)
 
     async def close(self) -> None:
         if self._task is None:
             return
+        self._closing = True
         self._task.cancel()
         with suppress(asyncio.CancelledError):
             await self._task
@@ -127,8 +151,86 @@ class AccountClerkReconciler:
 
     async def _run(self) -> None:
         while True:
-            await self.reconcile_once()
+            try:
+                await self.reconcile_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._consecutive_failures += 1
+                self._record_iteration_failure(exc)
+                if self._consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
+                    self._mark_unhealthy("CONSECUTIVE_RECONCILIATION_FAILURES")
+                    return
+            else:
+                self._consecutive_failures = 0
             await asyncio.sleep(self._cadence_seconds)
+
+    def _record_iteration_failure(self, failure: BaseException) -> None:
+        logger.exception(
+            "account Clerk reconciliation iteration failed",
+            exc_info=failure,
+            extra={
+                "account_id": self._clerk._account_id,
+                "consecutive_failures": self._consecutive_failures,
+            },
+        )
+        append_account_event(
+            self._clerk._artifacts_root,
+            self._clerk._account_id,
+            {
+                "event_type": "account_clerk_reconciliation_iteration_failed",
+                "ts_ms": self._now_ms(),
+                "reason": "ACCOUNT_CLERK_RECONCILIATION_ITERATION_FAILED",
+                "failure_type": type(failure).__name__,
+                "consecutive_failures": self._consecutive_failures,
+            },
+        )
+
+    def _mark_unhealthy(self, reason: str) -> None:
+        if self._unhealthy:
+            return
+        self._unhealthy = True
+        # The supervisor stops renewing the Clerk lease through this hook.
+        # Invoke it before best-effort observability writes: a full disk or a
+        # corrupt artifact must not leave a dead reconciler holding authority.
+        if self._on_unhealthy is not None:
+            self._on_unhealthy()
+        now_ms = self._now_ms()
+        append_account_event(
+            self._clerk._artifacts_root,
+            self._clerk._account_id,
+            {
+                "event_type": "account_clerk_reconciliation_unhealthy",
+                "ts_ms": now_ms,
+                "reason": reason,
+                "consecutive_failures": self._consecutive_failures,
+            },
+        )
+        if read_account_freeze(self._clerk._artifacts_root, self._clerk._account_id) is None:
+            write_account_freeze(
+                self._clerk._artifacts_root,
+                AccountFreezeEvidence(
+                    account_id=self._clerk._account_id,
+                    freeze_kind="account",
+                    reason="ACCOUNT_CLERK_RECONCILIATION_UNHEALTHY",
+                    source="account_clerk_reconciler",
+                    recorded_at_ms=now_ms,
+                    operator_next_step="RESTART_ACCOUNT_CLERK_AND_RECONCILE",
+                ),
+            )
+
+    def _record_unexpected_task_completion(self, task: asyncio.Task[None]) -> None:
+        if self._closing or self._unhealthy:
+            return
+        reason = (
+            "ACCOUNT_CLERK_RECONCILIATION_TASK_CANCELLED"
+            if task.cancelled()
+            else "ACCOUNT_CLERK_RECONCILIATION_TASK_FAILED"
+            if task.exception() is not None
+            else "ACCOUNT_CLERK_RECONCILIATION_TASK_EXITED"
+        )
+        self._consecutive_failures = max(self._consecutive_failures, _MAX_CONSECUTIVE_FAILURES)
+        self._mark_unhealthy(reason)
 
     async def _resolve(self, intent, retry_count: int) -> ReconciliationResolution | None:
         if intent.intent_kind == "CANCEL_NAMESPACE":

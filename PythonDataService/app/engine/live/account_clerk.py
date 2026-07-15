@@ -1187,7 +1187,7 @@ async def _run_clerk_process(args: argparse.Namespace) -> int:
         )
         from app.engine.live.account_clerk_reconciler import AccountClerkReconciler
 
-        reconciler = AccountClerkReconciler(clerk)
+        reconciler = AccountClerkReconciler(clerk, on_unhealthy=stop.set)
         writer = AccountClerkLeaseWriter(
             artifacts_root=artifacts_root,
             account_id=args.account_id,
@@ -1238,7 +1238,7 @@ async def _run_clerk_process(args: argparse.Namespace) -> int:
             await reconciler.close()
             await server.close()
             await client.disconnect()
-    return 1 if stream_failed.is_set() else 0
+        return 1 if stream_failed.is_set() or reconciler.unhealthy else 0
 
 
 async def _supervise_broker_event_stream(
