@@ -696,6 +696,28 @@ async def test_refresh_loop_notifies_account_truth_observer(
 
 
 @pytest.mark.asyncio
+async def test_refresh_loop_runs_account_journal_observer_after_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    observed: list[str] = []
+    monkeypatch.setattr(account_truth_refresh, "get_monitor", lambda: None)
+
+    async def fake_refresh_now(_client, **_kwargs) -> AccountTruthResponse:
+        return _truth(generated_at_ms=2_000)
+
+    loop = AccountTruthRefreshLoop(
+        client=_FakeClient(_health(account_id="DU123", fetched_at_ms=2_000)),  # type: ignore[arg-type]
+        snapshot_provider=provider,
+        refresh_now=fake_refresh_now,
+        account_journal_observer=observed.append,
+    )
+
+    assert await loop.refresh_once() is not None
+    assert observed == ["DU123"]
+
+
+@pytest.mark.asyncio
 async def test_refresh_loop_marks_last_account_failed_when_broker_disconnects(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -19,6 +19,7 @@ from app.schemas.live_runs import GateResult
 
 ACCOUNT_FREEZE_FILENAME = "unresolved_exposure.flag"
 ACCOUNT_EVENTS_FILENAME = "account_events.jsonl"
+ACCOUNT_EVENTS_SEQUENCE_FILENAME = "account_events.seq"
 ACCOUNT_OWNER_GENERATION_FILENAME = "owner_generation.json"
 ACCOUNT_CLERK_GENERATION_FILENAME = "clerk_generation.json"
 ACCOUNT_CLERK_LEASE_FILENAME = "clerk_lease.json"
@@ -1020,6 +1021,7 @@ def _append_account_event(
             fh.write(line)
             fh.flush()
             os.fsync(fh.fileno())
+        _write_account_event_sequence_locked(path, enriched["seq"])
         _fsync_parent_dir(path)
     return True
 
@@ -1051,24 +1053,83 @@ def _account_event_ledger_path(artifacts_root: Path, account_id: str) -> Path:
 
 
 def _next_account_event_seq_locked(path: Path) -> int:
-    if not path.exists():
+    """Allocate from a durable counter, repairing it from the ledger tail.
+
+    The event line is fsynced before its counter is advanced.  A crash in that
+    narrow interval leaves a counter behind the tail, while a stale/ahead
+    counter can only have been written before its corresponding event became
+    durable.  In both cases the tail wins, so recovery neither duplicates nor
+    skips a durable sequence identity.  Reading one tail row is constant work
+    and replaces the former full-ledger rescan on every append.
+    """
+
+    counter_path = _account_event_sequence_path(path)
+    counter = _read_account_event_sequence_counter(counter_path)
+    tail_seq = _read_account_event_tail_seq(path)
+    if tail_seq is None:
         return 1
-    max_seq = 0
-    row_count = 0
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        row_count += 1
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if not isinstance(row, dict):
-            continue
-        seq = row.get("seq")
-        if isinstance(seq, int) and not isinstance(seq, bool) and seq > max_seq:
-            max_seq = seq
-    return max(max_seq, row_count) + 1
+    if counter is None or counter != tail_seq:
+        return tail_seq + 1
+    return counter + 1
+
+
+def _account_event_sequence_path(event_path: Path) -> Path:
+    """Return the static counter companion to a validated event-ledger path."""
+
+    return event_path.with_name(ACCOUNT_EVENTS_SEQUENCE_FILENAME)
+
+
+def _read_account_event_sequence_counter(path: Path) -> int | None:
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    value = payload.get("last_seq") if isinstance(payload, dict) else None
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _read_account_event_tail_seq(path: Path) -> int | None:
+    """Read only the final complete ledger row for crash-counter recovery."""
+
+    if not path.is_file() or path.stat().st_size == 0:
+        return None
+    with open(path, "rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        end = fh.tell()
+        chunk_size = 4096
+        data = b""
+        while end > 0:
+            size = min(chunk_size, end)
+            end -= size
+            fh.seek(end)
+            data = fh.read(size) + data
+            lines = data.splitlines()
+            if len(lines) < 2 and end > 0:
+                continue
+            for line in reversed(lines):
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    # Old ledgers may contain tolerated projection rows.  The
+                    # last valid sequence is enough to migrate them without a
+                    # full rescan; strict readers still fail closed later.
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                seq = row.get("seq")
+                if not isinstance(seq, int) or isinstance(seq, bool) or seq < 1:
+                    continue
+                return seq
+    return None
+
+
+def _write_account_event_sequence_locked(event_path: Path, last_seq: int) -> None:
+    counter_path = _account_event_sequence_path(event_path)
+    _atomic_write_json_locked(counter_path, {"last_seq": last_seq})
 
 
 def _account_event_ts_ms_for_write(payload: dict) -> int:

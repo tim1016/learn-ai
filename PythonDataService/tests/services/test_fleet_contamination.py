@@ -7,7 +7,13 @@ from pathlib import Path
 
 import app.services.fleet_contamination as fleet_contamination
 from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
-from app.engine.live.account_artifacts import read_account_events
+from app.engine.live.account_artifacts import (
+    AccountFreezeEvidence,
+    append_account_event,
+    read_account_events,
+    read_account_freeze,
+    write_account_freeze,
+)
 from app.engine.live.account_clerk import AccountClerk
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import (
@@ -17,6 +23,7 @@ from app.engine.live.account_registry import (
 )
 from app.engine.live.fleet import compute_fleet_contamination
 from app.engine.live.order_identity import build_order_ref
+from app.services.account_journal_authority import _has_requalification_window
 from app.services.fleet_contamination import (
     collect_fleet_position_explanations,
     record_account_journal_parity_observation,
@@ -158,3 +165,140 @@ def test_explicit_parity_observer_writes_only_for_requested_account(tmp_path: Pa
     assert record_account_journal_parity_observation(tmp_path / "live_runs", account_id=account) is False
     [event] = read_account_events(tmp_path, account)
     assert event["event_type"] == "account_clerk_sidecar_journal_parity"
+
+
+def test_legacy_cutover_is_invalidated_once_before_new_shadow_observations(tmp_path: Path, monkeypatch) -> None:
+    account = "DU123456"
+    (tmp_path / "accounts" / account).mkdir(parents=True)
+    (tmp_path / "accounts" / account / "clerk_journal.jsonl").write_text("", encoding="utf-8")
+    append_account_event(
+        tmp_path,
+        account,
+        {"event_type": "account_clerk_journal_authority_cutover", "ts_ms": 1},
+    )
+    monkeypatch.setattr(fleet_contamination, "_collect_journal_position_explanations", lambda _root, **_kw: {})
+    monkeypatch.setattr(fleet_contamination, "_collect_legacy_fleet_position_explanations", lambda _root, **_kw: {})
+
+    assert record_account_journal_parity_observation(tmp_path / "live_runs", account_id=account) is False
+    assert record_account_journal_parity_observation(tmp_path / "live_runs", account_id=account) is False
+
+    event_types = [event["event_type"] for event in read_account_events(tmp_path, account)]
+    assert event_types.count("account_clerk_journal_authority_requalification_required") == 1
+    assert "account_clerk_journal_authority_requalified" not in event_types
+
+
+def test_requalification_requires_fifteen_minutes_ten_observations_and_nonzero_to_zero(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    account = "DU123456"
+    (tmp_path / "accounts" / account).mkdir(parents=True)
+    (tmp_path / "accounts" / account / "clerk_journal.jsonl").write_text("", encoding="utf-8")
+    clock = {"ms": 1_700_000_000_000}
+    monkeypatch.setattr(fleet_contamination.time, "time_ns", lambda: clock["ms"] * 1_000_000)
+
+    def explained(_root: Path, **_kw) -> dict[str, dict[str, int]]:
+        return {"bot-a": {"SPY": 1}} if clock["ms"] == 1_700_000_000_000 else {}
+
+    monkeypatch.setattr(fleet_contamination, "_collect_journal_position_explanations", explained)
+    monkeypatch.setattr(fleet_contamination, "_collect_legacy_fleet_position_explanations", explained)
+
+    for observation in range(16):
+        assert record_account_journal_parity_observation(tmp_path / "live_runs", account_id=account) is (observation == 15)
+        clock["ms"] += 60_000
+
+    events = read_account_events(tmp_path, account)
+    qualified = [event for event in events if event["event_type"] == "account_clerk_journal_authority_requalified"]
+    assert len(qualified) == 1
+    assert [event for event in events if event["event_type"] == "account_clerk_sidecar_journal_parity"][-1]["journal_nonzero"] is False
+
+
+def test_parity_observer_throttles_per_account_and_alarm_resets_qualification_window(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    account = "DU123456"
+    (tmp_path / "accounts" / account).mkdir(parents=True)
+    (tmp_path / "accounts" / account / "clerk_journal.jsonl").write_text("", encoding="utf-8")
+    clock = {"ms": 1_700_000_000_000}
+    monkeypatch.setattr(fleet_contamination.time, "time_ns", lambda: clock["ms"] * 1_000_000)
+    monkeypatch.setattr(fleet_contamination, "_collect_journal_position_explanations", lambda _root, **_kw: {"bot-a": {"SPY": 1}})
+    monkeypatch.setattr(fleet_contamination, "_collect_legacy_fleet_position_explanations", lambda _root, **_kw: {"bot-a": {"SPY": 1}})
+
+    record_account_journal_parity_observation(tmp_path / "live_runs", account_id=account)
+    record_account_journal_parity_observation(tmp_path / "live_runs", account_id=account)
+    assert len(read_account_events(tmp_path, account)) == 1
+
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id=account,
+            reason="test.alarm",
+            source="test",
+            recorded_at_ms=clock["ms"],
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+    clock["ms"] += 60_000
+    record_account_journal_parity_observation(tmp_path / "live_runs", account_id=account)
+    parity = [event for event in read_account_events(tmp_path, account) if event["event_type"] == "account_clerk_sidecar_journal_parity"]
+    assert [event["status"] for event in parity] == ["clean", "drift"]
+
+
+def test_post_cutover_drift_creates_an_account_operator_condition(tmp_path: Path, monkeypatch) -> None:
+    account = "DU123456"
+    (tmp_path / "accounts" / account).mkdir(parents=True)
+    (tmp_path / "accounts" / account / "clerk_journal.jsonl").write_text("", encoding="utf-8")
+    append_account_event(
+        tmp_path,
+        account,
+        {"event_type": "account_clerk_journal_authority_requalified", "ts_ms": 1},
+    )
+    monkeypatch.setattr(fleet_contamination, "_collect_journal_position_explanations", lambda _root, **_kw: {"bot-a": {"SPY": 1}})
+    monkeypatch.setattr(fleet_contamination, "_collect_legacy_fleet_position_explanations", lambda _root, **_kw: {})
+
+    assert record_account_journal_parity_observation(tmp_path / "live_runs", account_id=account) is True
+
+    event_types = [event["event_type"] for event in read_account_events(tmp_path, account)]
+    assert "account_clerk_journal_authority_drift_detected" in event_types
+    assert read_account_freeze(tmp_path, account) is not None
+
+
+def test_cleared_alarm_still_restarts_the_requalification_window() -> None:
+    events: list[dict] = [
+        {"seq": 1, "event_type": "account_clerk_journal_authority_requalification_required"},
+        *[
+            {
+                "seq": sequence,
+                "event_type": "account_clerk_sidecar_journal_parity",
+                "status": "clean",
+                "ts_ms": 1_000_000 + (sequence * 100_000),
+                "journal_nonzero": sequence == 2,
+            }
+            for sequence in range(2, 6)
+        ],
+        {"seq": 6, "event_type": "account_freeze_recorded"},
+        {"seq": 7, "event_type": "account_freeze_cleared"},
+    ]
+    events.extend(
+        {
+            "seq": sequence,
+            "event_type": "account_clerk_sidecar_journal_parity",
+            "status": "clean",
+            "ts_ms": 2_000_000 + ((sequence - 8) * 100_000),
+            "journal_nonzero": sequence == 8,
+        }
+        for sequence in range(8, 17)
+    )
+    assert _has_requalification_window(events) is False
+
+    events.append(
+        {
+            "seq": 17,
+            "event_type": "account_clerk_sidecar_journal_parity",
+            "status": "clean",
+            "ts_ms": 2_900_000,
+            "journal_nonzero": False,
+        }
+    )
+    assert _has_requalification_window(events) is True
