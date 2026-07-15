@@ -1,3 +1,4 @@
+import { HttpErrorResponse } from '@angular/common/http';
 import { DecimalPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal } from '@angular/core';
 
@@ -5,6 +6,7 @@ import type {
   CohortBatchLaunchMemberOutcome,
   CohortBatchLaunchStatus,
   CohortEvidenceMember,
+  CohortValidationCertificate,
 } from '../../../api/cohort-batch-launch.types';
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
@@ -32,6 +34,8 @@ export class CohortLaunchMonitorComponent {
   readonly accountId = input.required<string | null>();
   readonly reloadVersion = input<number>(0);
   readonly cohort = signal<CohortBatchLaunchStatus | null>(null);
+  readonly certificate = signal<CohortValidationCertificate | null>(null);
+  readonly certificateError = signal<string | null>(null);
   readonly loading = signal(false);
   readonly error = signal<string | null>(null);
 
@@ -65,6 +69,8 @@ export class CohortLaunchMonitorComponent {
     const epoch = ++this.loadEpoch;
     if (accountId === null) {
       this.cohort.set(null);
+      this.certificate.set(null);
+      this.certificateError.set(null);
       this.error.set(null);
       return;
     }
@@ -74,13 +80,36 @@ export class CohortLaunchMonitorComponent {
       const cohort = await this.liveRuns.getLatestCohortBatchLaunch(accountId);
       if (epoch !== this.loadEpoch) return;
       this.cohort.set(cohort);
+      this.certificate.set(null);
+      this.certificateError.set(null);
+      try {
+        const certificate = await this.loadCertificate(accountId, cohort);
+        if (epoch !== this.loadEpoch) return;
+        this.certificate.set(certificate);
+      } catch (error) {
+        if (epoch === this.loadEpoch) this.certificateError.set(humanError(error));
+      }
     } catch (error) {
       if (epoch === this.loadEpoch) {
         this.error.set(humanError(error));
         this.cohort.set(null);
+        this.certificate.set(null);
       }
     } finally {
       if (epoch === this.loadEpoch) this.loading.set(false);
+    }
+  }
+
+  private async loadCertificate(
+    accountId: string,
+    cohort: CohortBatchLaunchStatus | null,
+  ): Promise<CohortValidationCertificate | null> {
+    if (cohort === null) return null;
+    try {
+      return await this.liveRuns.getCohortValidationCertificate(accountId, cohort.cohort_id);
+    } catch (error) {
+      if (error instanceof HttpErrorResponse && error.status === 404) return null;
+      throw error;
     }
   }
 }
