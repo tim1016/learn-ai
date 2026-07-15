@@ -7,12 +7,10 @@ import { CohortLaunchMonitorComponent } from './cohort-launch-monitor.component'
 
 class FakeLiveRunsService {
   getLatestCohortBatchLaunch = vi.fn();
-  getInstanceStatus = vi.fn();
-  getStatus = vi.fn();
 }
 
 describe('CohortLaunchMonitorComponent', () => {
-  it('renders the durable blocker and live per-bot success evidence', async () => {
+  it('renders only the durable server-authored cohort evidence', async () => {
     const liveRuns = new FakeLiveRunsService();
     liveRuns.getLatestCohortBatchLaunch.mockResolvedValue({
       schema_version: 1,
@@ -40,23 +38,32 @@ describe('CohortLaunchMonitorComponent', () => {
       ],
       outcomes_recorded_at_ms: 1_780_000_001_000,
       outcomes_error: null,
-    });
-    liveRuns.getInstanceStatus.mockImplementation(async (instanceId: string) => ({
-      strategy_instance_id: instanceId,
-      process: {
-        state: instanceId === 'spy-a' ? 'running' : 'idle',
-        ibkr_client_id: 17,
-        started_at_ms: 1_779_999_990_000,
+      evidence: {
+        sample_count: 2,
+        cadence_ms: 5_000,
+        healthy_overlap_ms: 10_000,
+        verdict: 'failed',
+        reason: 'COHORT_MEMBER_HALTED',
+        source: 'account_event.cohort_evidence_sample',
+        members: [
+          {
+            strategy_instance_id: 'spy-a',
+            run_id: 'run-spy-a',
+            verdict: 'healthy',
+            reason: null,
+            orders_used: 2,
+            orders_cap: 4,
+          },
+          {
+            strategy_instance_id: 'spy-b',
+            run_id: 'run-spy-b',
+            verdict: 'failed',
+            reason: 'COHORT_MEMBER_HALTED',
+            orders_used: 1,
+            orders_cap: 4,
+          },
+        ],
       },
-      live_binding: instanceId === 'spy-a' ? { run_id: 'run-spy-a' } : null,
-      evidence_binding: instanceId === 'spy-b' ? { run_id: 'run-spy-b' } : null,
-      readiness: { orders_cap: 4, orders_used: 2 },
-      start_defaults: { max_orders_per_day: 4 },
-      broker: { bot_order_namespace: `learn-ai/${instanceId}/v1`, owned_positions: { SPY: 0 } },
-    }));
-    liveRuns.getStatus.mockResolvedValue({
-      executions: { row_count: 2, last_fills: [{ symbol: 'SPY', fill_quantity: 1, fill_price: 500, ts_ms: 1_780_000_001_000 }] },
-      trades: { row_count: 1 },
     });
     await TestBed.configureTestingModule({
       imports: [CohortLaunchMonitorComponent],
@@ -69,13 +76,13 @@ describe('CohortLaunchMonitorComponent', () => {
     fixture.detectChanges();
 
     const root = fixture.nativeElement as HTMLElement;
-    expect(root.textContent).toContain('Target count');
+    expect(root.textContent).toContain('Evidence verdict');
     expect(root.textContent).toContain('Account Frozen');
     expect(root.textContent).toContain('Clear the account freeze.');
     expect(root.textContent).toContain('run-spy-a');
-    expect(root.textContent).toContain('learn-ai/spy-a/v1: SPY 0');
-    expect(root.querySelector('table caption')?.textContent).toContain('Per-bot durable receipt state');
-    expect(root.querySelectorAll('th[scope="col"]').length).toBe(7);
+    expect(root.textContent).toContain('Cohort Member Halted');
+    expect(root.querySelector('table caption')?.textContent).toContain('latest server observation');
+    expect(root.querySelectorAll('th[scope="col"]').length).toBe(5);
     expect(root.querySelector<HTMLButtonElement>('[aria-label="Refresh cohort monitor"]')).toBeTruthy();
   });
 });

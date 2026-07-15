@@ -59,6 +59,47 @@ class CohortBatchLaunchMemberOutcomeRequest(BaseModel):
     next_safe_action: str = Field(min_length=1, max_length=512)
 
 
+class CohortEvidenceSummaryResponse(BaseModel):
+    """Server-authored cohort-window evidence with its calculation provenance."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    sample_count: int = Field(ge=0)
+    cadence_ms: int = Field(gt=0)
+    healthy_overlap_ms: int = Field(ge=0)
+    verdict: Literal["healthy", "failed", "unknown"]
+    reason: str | None = None
+    source: Literal["account_event.cohort_evidence_sample"]
+    members: list[CohortEvidenceMemberResponse] = Field(default_factory=list)
+
+
+class CohortEvidenceMemberResponse(BaseModel):
+    """Latest server observation for one receipt-pinned cohort member."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    strategy_instance_id: str = Field(min_length=1, max_length=128)
+    run_id: str | None = Field(default=None, min_length=1, max_length=128)
+    verdict: Literal["healthy", "failed", "unknown"]
+    reason: str | None = None
+    orders_used: int | None = Field(default=None, ge=0)
+    orders_cap: int | None = Field(default=None, gt=0)
+
+
+def unknown_cohort_evidence_summary() -> CohortEvidenceSummaryResponse:
+    """Return the fail-closed state before the server sampler has proof."""
+
+    return CohortEvidenceSummaryResponse(
+        sample_count=0,
+        cadence_ms=5_000,
+        healthy_overlap_ms=0,
+        verdict="unknown",
+        reason="COHORT_EVIDENCE_MISSING",
+        source="account_event.cohort_evidence_sample",
+        members=[],
+    )
+
+
 class CohortBatchLaunchStatusResponse(BaseModel):
     """Durable cohort authorization plus the latest exact member outcomes."""
 
@@ -76,6 +117,7 @@ class CohortBatchLaunchStatusResponse(BaseModel):
     outcomes: list[CohortBatchLaunchMemberOutcomeRequest] = Field(default_factory=list)
     outcomes_recorded_at_ms: int | None = Field(default=None, ge=0)
     outcomes_error: str | None = None
+    evidence: CohortEvidenceSummaryResponse = Field(default_factory=unknown_cohort_evidence_summary)
 
     @classmethod
     def from_receipts(
@@ -84,6 +126,7 @@ class CohortBatchLaunchStatusResponse(BaseModel):
         outcomes_receipt: CohortBatchLaunchOutcomesReceipt | None,
         *,
         outcomes_error: str | None = None,
+        evidence: CohortEvidenceSummaryResponse | None = None,
     ) -> CohortBatchLaunchStatusResponse:
         return cls(
             account_id=receipt.account_id,
@@ -112,4 +155,5 @@ class CohortBatchLaunchStatusResponse(BaseModel):
                 outcomes_receipt.recorded_at_ms if outcomes_receipt is not None else None
             ),
             outcomes_error=outcomes_error,
+            evidence=evidence if evidence is not None else unknown_cohort_evidence_summary(),
         )

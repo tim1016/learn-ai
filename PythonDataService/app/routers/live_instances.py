@@ -234,6 +234,7 @@ from app.services.bot_roll_call import (
 from app.services.broker_activity_publisher_registry import get_publisher_registry
 from app.services.broker_activity_wal import BrokerActivityWal, instance_broker_activity_wal_path
 from app.services.broker_capability_service import get_broker_capability_service
+from app.services.cohort_evidence import get_cohort_evidence_sampler_registry
 from app.services.cohort_launch import CohortLaunchCoordinator
 from app.services.daemon_diagnostics import (
     get_daemon_diagnostics_service,
@@ -3112,6 +3113,7 @@ async def launch_cohort(
             visible_runs_by_instance=_visible_runs_by_instance,
             run_account_id=_run_dir_account_id,
             now_ms=_now_ms,
+            evidence_samplers=get_cohort_evidence_sampler_registry(),
         )
         return await coordinator.launch(
             account_id=normalized_account_id,

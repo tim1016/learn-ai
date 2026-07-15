@@ -249,6 +249,9 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        from app.services.cohort_evidence import get_cohort_evidence_sampler_registry
+
+        await get_cohort_evidence_sampler_registry().stop_all()
         await live_instances_router.stop_surface_hubs()
         await bot_events.get_bot_event_stream_service().stop_all()
         # Stop the daemon monitor first — its probe traffic stops cleanly
