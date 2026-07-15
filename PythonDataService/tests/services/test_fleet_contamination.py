@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 import app.services.fleet_contamination as fleet_contamination
 from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
@@ -261,6 +263,57 @@ def test_post_cutover_drift_creates_an_account_operator_condition(tmp_path: Path
 
     event_types = [event["event_type"] for event in read_account_events(tmp_path, account)]
     assert "account_clerk_journal_authority_drift_detected" in event_types
+    assert read_account_freeze(tmp_path, account) is not None
+
+
+def test_post_cutover_state_change_bypasses_background_parity_cadence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A clean sample must not defer a newly observed unsafe account state."""
+
+    account = "DU123456"
+    (tmp_path / "accounts" / account).mkdir(parents=True)
+    (tmp_path / "accounts" / account / "clerk_journal.jsonl").write_text("", encoding="utf-8")
+    append_account_event(
+        tmp_path,
+        account,
+        {"event_type": "account_clerk_journal_authority_requalified", "ts_ms": 1},
+    )
+    clock = {"ms": 1_700_000_000_000}
+    monkeypatch.setattr(fleet_contamination.time, "time_ns", lambda: clock["ms"] * 1_000_000)
+    monkeypatch.setattr(
+        fleet_contamination,
+        "_collect_journal_position_explanations",
+        lambda _root, **_kw: {},
+    )
+    monkeypatch.setattr(
+        fleet_contamination,
+        "_collect_legacy_fleet_position_explanations",
+        lambda _root, **_kw: {},
+    )
+
+    assert record_account_journal_parity_observation(tmp_path / "live_runs", account_id=account) is True
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id=account,
+            reason="test.new_alarm",
+            source="test",
+            recorded_at_ms=clock["ms"],
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+
+    assert record_account_journal_parity_observation(tmp_path / "live_runs", account_id=account) is True
+    parity = [
+        event
+        for event in read_account_events(tmp_path, account)
+        if event["event_type"] == "account_clerk_sidecar_journal_parity"
+    ]
+    assert [event["status"] for event in parity] == ["clean", "drift"]
+    assert parity[-1]["reason"] == "ACCOUNT_CLERK_UNRESOLVED_ALARM"
+    assert parity[-1]["trigger"] == "state_change"
     assert read_account_freeze(tmp_path, account) is not None
 
 

@@ -2568,7 +2568,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                         client=client,
                         artifacts_root=_artifacts_root,
                         account_journal_observer=lambda account_id: record_account_journal_parity_observation(
-                            args.run_dir.parent,
+                            _artifacts_root / "live_runs",
                             account_id=account_id,
                         ),
                     )

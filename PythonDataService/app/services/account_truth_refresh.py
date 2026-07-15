@@ -323,7 +323,11 @@ class AccountTruthRefreshLoop:
                 result = await self._refresh_now(self._client, **refresh_kwargs)
                 if not success_observer_notified:
                     self._notify_account_truth(result)
-                self._notify_account_journal_observer(result.account_id)
+                # A refresh that cannot prove one account is explicitly not
+                # account-scoped evidence.  Do not let it advance a local
+                # Clerk-journal qualification window.
+                if result.account_id is not None:
+                    self._notify_account_journal_observer(result.account_id)
                 self._last_refresh_result = "success"
                 return result
             except BrokerError as exc:

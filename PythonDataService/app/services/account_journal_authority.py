@@ -74,11 +74,25 @@ def observe_account_journal_parity(
         else JOURNAL_PARITY_PRE_CUTOVER_INTERVAL_MS
     )
     fingerprint = _parity_fingerprint(journal=journal, legacy=legacy)
-    if latest is not None and now_ms - _event_ts_ms(latest) < interval_ms:
-        return
-
     alarm_active = _qualification_alarm_is_active(artifacts_root, account_id, events)
     clean = journal == legacy and not alarm_active
+    reason = _parity_reason(journal_matches=journal == legacy, alarm_active=alarm_active)
+    # The cadence constrains unchanged background sampling only.  A newly
+    # observed mismatch or alarm is an account-safety state transition, not a
+    # sample we may defer for up to fifteen minutes after cutover.
+    state_changed = (
+        latest is None
+        or latest.get("fingerprint") != fingerprint
+        or latest.get("status") != ("clean" if clean else "drift")
+        or latest.get("reason") != reason
+    )
+    if (
+        latest is not None
+        and not state_changed
+        and now_ms - _event_ts_ms(latest) < interval_ms
+    ):
+        return
+
     append_account_event(
         artifacts_root,
         account_id,
@@ -86,8 +100,8 @@ def observe_account_journal_parity(
             "event_type": PARITY_EVENT_TYPE,
             "ts_ms": now_ms,
             "status": "clean" if clean else "drift",
-            "reason": _parity_reason(journal_matches=journal == legacy, alarm_active=alarm_active),
-            "trigger": _parity_trigger(latest, fingerprint),
+            "reason": reason,
+            "trigger": _parity_trigger(latest, state_changed=state_changed),
             "fingerprint": fingerprint,
             "journal_nonzero": _has_nonzero_exposure(journal),
             "journal": journal,
@@ -153,10 +167,10 @@ def _parity_reason(*, journal_matches: bool, alarm_active: bool) -> str:
     return "SIDECAR_JOURNAL_EXPOSURE_MATCH" if journal_matches else "SIDECAR_JOURNAL_EXPOSURE_MISMATCH"
 
 
-def _parity_trigger(latest: dict | None, fingerprint: str) -> str:
+def _parity_trigger(latest: dict | None, *, state_changed: bool) -> str:
     if latest is None:
         return "initial"
-    return "state_change" if latest.get("fingerprint") != fingerprint else "bounded_background_cadence"
+    return "state_change" if state_changed else "bounded_background_cadence"
 
 
 def _has_nonzero_exposure(explained: dict[str, dict[str, int]]) -> bool:
