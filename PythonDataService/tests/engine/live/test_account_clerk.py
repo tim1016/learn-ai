@@ -43,7 +43,11 @@ from app.engine.live.account_clerk_cursor import (
     AccountClerkEventConsumerIdentity,
     AccountClerkEventCursorRepo,
 )
-from app.engine.live.account_clerk_reconciler import AccountClerkReconciler, namespace_expected_exposure
+from app.engine.live.account_clerk_reconciler import (
+    AccountClerkReconciler,
+    _unresolved_intents,
+    namespace_expected_exposure,
+)
 from app.engine.live.account_clerk_rpc import AccountClerkCallbackPersistenceError
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import (
@@ -993,6 +997,71 @@ async def test_submit_reconciler_never_retries_a_recovery_intent(tmp_path: Path)
     await clerk.record_intent(_recovery_intent("bot-a", "run-a", "recovery-reconcile"))
 
     assert await AccountClerkReconciler(clerk).reconcile_once() == ()
+
+
+@pytest.mark.asyncio
+async def test_reconciler_releases_stale_submitting_rows_at_derived_ttl_boundaries(tmp_path: Path) -> None:
+    """#1052: live writes retain their full RPC budget; stale writes do not hide forever."""
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    clerk = AccountClerk(
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT,
+        broker=_FakeBroker(),
+        now_ms=lambda: 100,
+    )
+    submit = _intent("bot-a", "run-a", "stale-submit")
+    recovery = _recovery_intent("bot-a", "run-a", "stale-recovery")
+    await clerk.record_intent(submit)
+    await clerk.record_intent(recovery)
+    await asyncio.to_thread(clerk._journal.append_broker_submitting, submit)
+    await asyncio.to_thread(clerk._journal.append_broker_submitting, recovery)
+    entries = await clerk.reconciliation_snapshot()
+
+    assert _unresolved_intents(entries, now_ms=60_099) == {}
+    assert set(_unresolved_intents(entries, now_ms=60_100)) == {submit.intent_id}
+    assert set(_unresolved_intents(entries, now_ms=150_099)) == {submit.intent_id}
+    assert set(_unresolved_intents(entries, now_ms=150_100)) == {
+        submit.intent_id,
+        recovery.intent_id,
+    }
+
+
+@pytest.mark.asyncio
+async def test_stale_recovery_is_halted_without_automatic_broker_retry(tmp_path: Path) -> None:
+    """#1052: stale recovery is probed, but ambiguity cannot create a second flatten."""
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _ReconciliationBroker("PROVABLY_ABSENT")
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    recovery = _recovery_intent("bot-a", "run-a", "stale-recovery-halt")
+    await clerk.record_intent(recovery)
+    await asyncio.to_thread(clerk._journal.append_broker_submitting, recovery)
+
+    outcome = await clerk.reconcile_uncertain_intent(recovery, retry_count=0)
+
+    assert outcome is not None
+    assert outcome.verdict == "HALT"
+    assert broker.calls == []
+
+
+@pytest.mark.asyncio
+async def test_reconciler_reasserts_freeze_after_halt_journal_crash_window(tmp_path: Path) -> None:
+    """#1052: a durable HALT cannot lose its derived account freeze on crash."""
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_FakeBroker())
+    intent = _intent("bot-a", "run-a", "halt-crash-window")
+    await clerk.record_intent(intent)
+    await clerk.append_reconciliation_resolution(
+        intent,
+        verdict="HALT",
+        reason="simulated crash before freeze write",
+    )
+
+    assert read_account_freeze(tmp_path, ACCOUNT) is None
+    assert await AccountClerkReconciler(clerk).reconcile_once() == ()
+    assert read_account_freeze(tmp_path, ACCOUNT) is not None
 
 
 @pytest.mark.asyncio
