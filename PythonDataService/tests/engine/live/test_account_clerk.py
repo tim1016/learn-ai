@@ -1358,8 +1358,11 @@ async def test_clerk_process_acquires_lock_before_broker_connect_and_releases_af
             events.append("socket_closed")
 
     class _Reconciler:
-        def __init__(self, _clerk: AccountClerk) -> None:
+        def __init__(self, _clerk: AccountClerk, **_kwargs: object) -> None:
             pass
+
+        healthy = True
+        unhealthy = False
 
         async def start(self) -> None:
             events.append("reconciler_start")
@@ -2095,3 +2098,72 @@ def test_clerk_lease_writer_renews_and_drains(tmp_path: Path) -> None:
     assert draining.status == "DRAINING"
     assert draining.valid_until_ms == START_MS + 2_000
     assert read_account_clerk_lease(tmp_path, ACCOUNT) == draining
+
+
+@pytest.mark.asyncio
+async def test_reconciler_resets_failures_then_exits_unhealthy_after_three_consecutive_failures(
+    tmp_path: Path,
+) -> None:
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_FakeBroker())
+    stopped = asyncio.Event()
+    reconciler = AccountClerkReconciler(
+        clerk,
+        cadence_seconds=0,
+        now_ms=lambda: START_MS,
+        on_unhealthy=stopped.set,
+    )
+    outcomes = iter(
+        [
+            RuntimeError("first"),
+            RuntimeError("second"),
+            None,
+            RuntimeError("third-1"),
+            RuntimeError("third-2"),
+            RuntimeError("third-3"),
+        ]
+    )
+
+    async def scripted_reconcile_once() -> tuple[object, ...]:
+        outcome = next(outcomes)
+        if outcome is not None:
+            raise outcome
+        return ()
+
+    reconciler.reconcile_once = scripted_reconcile_once  # type: ignore[method-assign]
+    await reconciler.start()
+    await asyncio.wait_for(stopped.wait(), timeout=1)
+    await asyncio.sleep(0)
+
+    failed = [
+        event
+        for event in read_account_events(tmp_path, ACCOUNT)
+        if event["event_type"] == "account_clerk_reconciliation_iteration_failed"
+    ]
+    assert [event["consecutive_failures"] for event in failed] == [1, 2, 1, 2, 3]
+    assert reconciler.healthy is False
+    assert read_account_freeze(tmp_path, ACCOUNT).reason == "ACCOUNT_CLERK_RECONCILIATION_UNHEALTHY"
+
+
+@pytest.mark.asyncio
+async def test_reconciler_unexpected_task_cancellation_records_terminal_alarm(tmp_path: Path) -> None:
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_FakeBroker())
+    stopped = asyncio.Event()
+    reconciler = AccountClerkReconciler(
+        clerk,
+        cadence_seconds=60,
+        now_ms=lambda: START_MS,
+        on_unhealthy=stopped.set,
+    )
+    await reconciler.start()
+    assert reconciler._task is not None
+    reconciler._task.cancel()
+    with suppress(asyncio.CancelledError):
+        await reconciler._task
+    await asyncio.wait_for(stopped.wait(), timeout=1)
+
+    [alarm] = [
+        event
+        for event in read_account_events(tmp_path, ACCOUNT)
+        if event["event_type"] == "account_clerk_reconciliation_unhealthy"
+    ]
+    assert alarm["reason"] == "ACCOUNT_CLERK_RECONCILIATION_TASK_CANCELLED"
