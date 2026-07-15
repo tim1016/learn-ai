@@ -620,6 +620,7 @@ class AccountClerkRpcServer:
         self._callback_failure: BaseException | None = None
         self._on_callback_persistence_failure = on_callback_persistence_failure
         clerk.set_callback_drain(lambda: self._flush_broker_callbacks(raise_on_failure=True))
+        self._closing = False
         set_callback = getattr(clerk._broker, "set_broker_callback_sink", None)
         if callable(set_callback):
             set_callback(self._record_broker_event)
@@ -638,6 +639,12 @@ class AccountClerkRpcServer:
         self._socket_path.chmod(0o600)
 
     async def close(self) -> None:
+        # Fence before awaiting the callback drain: otherwise a request already
+        # accepted by the Unix server can place an order after its callback
+        # writer has been stopped.
+        self._closing = True
+        self._clerk.close_normal_submit_intake()
+        await self._clerk.wait_for_broker_writes_quiesced()
         await self._flush_broker_callbacks()
         if self._callback_worker is not None:
             self._callback_worker.cancel()
@@ -717,6 +724,8 @@ class AccountClerkRpcServer:
         request: dict[str, object],
     ) -> AccountClerkRpcSuccessEnvelope | AccountClerkRpcErrorEnvelope:
         operation = _request_operation(request)
+        if self._closing and operation in ("submit", "recovery_flatten"):
+            raise _AccountClerkRpcRequestRejected("CLERK_RPC_CLOSED")
         if operation == "submit":
             intent = AccountOwnerSubmitIntent.model_validate(_request_object(request, "intent"))
             recorded, broker_acked = await self._clerk.submit_intent(intent)

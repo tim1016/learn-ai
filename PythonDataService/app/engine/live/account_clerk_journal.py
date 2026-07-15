@@ -56,7 +56,7 @@ class AccountClerkInboxEntry(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: int = 1
+    schema_version: Literal[1] = 1
     seq: int = Field(ge=1)
     received_at_ms: int = Field(ge=0, le=_MAX_INT64)
     intent: AccountOwnerSubmitIntent
@@ -97,7 +97,7 @@ class AccountClerkJournalEntry(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: int = 1
+    schema_version: Literal[1] = 1
     seq: int = Field(ge=1)
     entry_kind: Literal[
         "recorded",

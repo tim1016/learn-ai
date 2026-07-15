@@ -169,6 +169,8 @@ class AccountClerk:
         # out during that callback-drain window.
         self._recovery_flatten_namespace: str | None = None
         self._callback_drain: Callable[[], Awaitable[None]] | None = None
+        self._rpc_write_intake_closed = False
+        self._event_stream_down_recorded = False
 
     @property
     def recovery_flatten_in_progress(self) -> bool:
@@ -308,6 +310,7 @@ class AccountClerk:
 
         async with self._cancel_operation_lock:
             async with self._intake_lock:
+                self._require_recovery_submit_intake(first)
                 recorded = tuple([
                     await asyncio.to_thread(self._record_intent_locked, intent)
                     for intent in intents
@@ -360,6 +363,7 @@ class AccountClerk:
                 await asyncio.to_thread(self._validate_recovery_batch_exposure, intents, specs)
                 broker_acks: list[AccountClerkBrokerAckReceipt] = []
                 for intent, spec in zip(intents, specs, strict=True):
+                    self._require_recovery_submit_intake(intent)
                     await asyncio.to_thread(self._journal.append_broker_submitting, intent)
                     try:
                         ack = await self._place_under_clerk_grant(spec, wait_for_perm_id=True)
@@ -567,12 +571,27 @@ class AccountClerk:
     async def mark_event_stream_down(self, failure: BaseException | None = None) -> None:
         """Close normal submit intake and durably alarm a dead broker stream."""
 
-        if self._normal_submit_intake_reason is not None:
-            return
         # Set before the fsync so concurrent submit callers fail closed
         # immediately, rather than racing an alarm write.
         self._normal_submit_intake_reason = "CLERK_EVENT_STREAM_DOWN"
-        await asyncio.to_thread(self._record_event_stream_down_locked, failure)
+        async with self._intake_lock:
+            if self._event_stream_down_recorded:
+                return
+            await asyncio.to_thread(self._record_event_stream_down_locked, failure)
+            self._event_stream_down_recorded = True
+
+    def close_normal_submit_intake(self) -> None:
+        """Fence all broker writes before this Clerk's RPC transport shuts down."""
+
+        self._rpc_write_intake_closed = True
+        if self._normal_submit_intake_reason is None:
+            self._normal_submit_intake_reason = "CLERK_RPC_CLOSED"
+
+    async def wait_for_broker_writes_quiesced(self) -> None:
+        """Wait until every broker-write handler accepted before shutdown exits."""
+
+        async with self._intake_lock:
+            return
 
     async def recover_inbox(self) -> list[AccountClerkRecordedReceipt]:
         """Replay an inbox row left durable by a crash before journal fsync."""
@@ -827,6 +846,11 @@ class AccountClerk:
         )
         if unresolved:
             self._reject(intent, "CLERK_CANCEL_NAMESPACE_UNRESOLVED")
+
+    def _require_recovery_submit_intake(self, intent: AccountOwnerSubmitIntent) -> None:
+        if not self._rpc_write_intake_closed:
+            return
+        self._reject(intent, "CLERK_RPC_CLOSED")
 
     def _validate_intent_identity(self, intent: AccountOwnerSubmitIntent) -> None:
         binding = latest_account_instance_binding(

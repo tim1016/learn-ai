@@ -1887,6 +1887,38 @@ async def test_callback_persistence_failure_closes_intake_and_balances_callback_
 
 
 @pytest.mark.asyncio
+async def test_concurrent_stream_failures_write_one_durable_alarm(tmp_path: Path) -> None:
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_FakeBroker())
+
+    await asyncio.gather(
+        clerk.mark_event_stream_down(ConnectionError("first")),
+        clerk.mark_event_stream_down(OSError("second")),
+    )
+
+    alarms = [
+        event
+        for event in read_account_events(tmp_path, ACCOUNT)
+        if event["event_type"] == "account_clerk_event_stream_down"
+    ]
+    assert len(alarms) == 1
+
+
+@pytest.mark.asyncio
+async def test_rpc_shutdown_rejects_reconciliation_retry_before_broker_write(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _FakeBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    intent = _intent("bot-a", "run-a", "retry-after-rpc-close")
+    await clerk.record_intent(intent)
+    clerk.close_normal_submit_intake()
+
+    with pytest.raises(AccountClerkIntentRejected, match="CLERK_RPC_CLOSED"):
+        await clerk.retry_recorded_intent(intent)
+
+    assert broker.calls == []
+
+
+@pytest.mark.asyncio
 async def test_durable_generation_change_rejects_write_and_terminates_stale_clerk(tmp_path: Path) -> None:
     _write_active_binding(tmp_path, "bot-a", "run-a")
     generation = _write_active_clerk_generation(tmp_path)
@@ -2339,6 +2371,29 @@ def test_read_account_clerk_journal_rejects_non_contiguous_sequence(
 
     with pytest.raises(AccountClerkJournalCorruptError, match=error):
         read_account_clerk_journal(tmp_path, ACCOUNT)
+
+
+def test_clerk_journal_entries_reject_future_schema_versions() -> None:
+    """Durable Clerk artifacts must not silently accept unknown wire formats."""
+
+    with pytest.raises(ValueError, match="schema_version"):
+        AccountClerkJournalEntry.model_validate(
+            {
+                "schema_version": 2,
+                "seq": 1,
+                "recorded_at_ms": START_MS,
+                "intent": _intent("bot-a", "run-a", "future-journal"),
+            }
+        )
+    with pytest.raises(ValueError, match="schema_version"):
+        AccountClerkInboxEntry.model_validate(
+            {
+                "schema_version": 2,
+                "seq": 1,
+                "received_at_ms": START_MS,
+                "intent": _intent("bot-a", "run-a", "future-inbox"),
+            }
+        )
 
 
 @pytest.mark.asyncio
