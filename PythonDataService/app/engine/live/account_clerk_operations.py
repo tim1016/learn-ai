@@ -95,7 +95,7 @@ class AccountClerkOperationDependencies:
     record_intent_locked: Callable[[AccountOwnerSubmitIntent], AccountClerkRecordedReceipt]
     reject: Callable[[AccountOwnerSubmitIntent, str], NoReturn]
     require_paper_broker: Callable[[], None]
-    require_recovery_submit_intake: Callable[[AccountOwnerSubmitIntent], None]
+    require_rpc_write_intake: Callable[[AccountOwnerSubmitIntent], None]
     cancel_namespace_open_orders: Callable[
         [str, Callable[[], Awaitable[None]] | None], Awaitable[list[int]]
     ]
@@ -174,7 +174,7 @@ class AccountClerkCancellationRecoveryCoordinator:
 
         async with deps.cancel_operation_lock:
             async with deps.intake_lock:
-                deps.require_recovery_submit_intake(first)
+                deps.require_rpc_write_intake(first)
                 recorded = tuple(
                     [await asyncio.to_thread(deps.record_intent_locked, intent) for intent in intents]
                 )
@@ -217,7 +217,7 @@ class AccountClerkCancellationRecoveryCoordinator:
                     await asyncio.to_thread(self.validate_recovery_batch_exposure, intents, specs)
                     broker_acks: list[AccountClerkBrokerAckReceipt] = []
                     for intent, spec in zip(intents, specs, strict=True):
-                        deps.require_recovery_submit_intake(intent)
+                        deps.require_rpc_write_intake(intent)
                         await asyncio.to_thread(deps.journal.append_broker_submitting, intent)
                         try:
                             ack = await deps.place_under_clerk_grant(spec, True)
@@ -253,6 +253,7 @@ class AccountClerkCancellationRecoveryCoordinator:
         async with deps.cancel_operation_lock:
             try:
                 async with deps.intake_lock:
+                    deps.require_rpc_write_intake(intent)
                     recorded = await asyncio.to_thread(deps.record_intent_locked, intent)
                     existing = await asyncio.to_thread(deps.journal.cancel_confirmed_for_intent, intent)
                     if existing is not None:
@@ -305,6 +306,7 @@ class AccountClerkCancellationRecoveryCoordinator:
             deps.reject(intent, "CLERK_CANCEL_NAMESPACE_INTENT_KIND_REQUIRED")
         async with deps.cancel_operation_lock:
             async with deps.intake_lock:
+                deps.require_rpc_write_intake(intent)
                 existing = await asyncio.to_thread(deps.journal.cancel_confirmed_for_intent, intent)
                 if existing is not None:
                     return existing
@@ -337,6 +339,7 @@ class AccountClerkCancellationRecoveryCoordinator:
         deps = self._deps
         async with deps.cancel_operation_lock:
             async with deps.intake_lock:
+                deps.require_rpc_write_intake(intent)
                 existing = await asyncio.to_thread(deps.journal.cancel_confirmed_for_intent, intent)
                 if existing is not None:
                     return existing
@@ -382,6 +385,7 @@ class AccountClerkCancellationRecoveryCoordinator:
             )
             if verdict is SubmitVerdict.RETRY_ONCE:
                 try:
+                    deps.require_rpc_write_intake(intent)
                     deps.require_paper_broker()
                     await deps.retry_recorded_intent_locked(intent)
                 except Exception as exc:

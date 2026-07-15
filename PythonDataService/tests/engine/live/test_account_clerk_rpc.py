@@ -506,6 +506,54 @@ async def test_close_waits_for_active_submit_and_persists_its_callback(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_close_waits_for_an_admitted_namespace_cancel(tmp_path: Path) -> None:
+    """RPC shutdown retains its fence until an admitted cancel reaches a terminal journal state."""
+
+    class _BlockingCancelBroker(_Broker):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def cancel_open_orders_for_namespace(self, namespace: str) -> list[int]:
+            self.started.set()
+            await self.release.wait()
+            return await super().cancel_open_orders_for_namespace(namespace)
+
+    _write_active_binding(tmp_path)
+    broker = _BlockingCancelBroker()
+    server = AccountClerkRpcServer(
+        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker, clerk_generation=1)
+    )
+    await server.start()
+    try:
+        cancel = asyncio.create_task(
+            server._dispatch(
+                {
+                    "operation": "cancel_namespace",
+                    "intent": _intent("shutdown-cancel")
+                    .model_copy(update={"intent_kind": "CANCEL_NAMESPACE", "order_spec": {}})
+                    .model_dump(mode="json"),
+                }
+            )
+        )
+        await asyncio.wait_for(broker.started.wait(), timeout=1)
+
+        closing = asyncio.create_task(server.close())
+        await asyncio.sleep(0)
+        assert not closing.done()
+
+        broker.release.set()
+        await cancel
+        await closing
+    finally:
+        if not broker.release.is_set():
+            broker.release.set()
+        if not server._closing:
+            await server.close()
+
+
+@pytest.mark.asyncio
 async def test_close_rejects_queued_submit_before_it_records_receipt(tmp_path: Path) -> None:
     """A request queued behind shutdown is rejected without a replayable row."""
 

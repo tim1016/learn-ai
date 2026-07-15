@@ -6,6 +6,7 @@ import asyncio
 import multiprocessing
 import threading
 import time
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 from types import SimpleNamespace
@@ -1814,6 +1815,86 @@ async def test_clerk_process_acquires_lock_before_broker_connect_and_releases_af
     assert events.index("lock_acquired") < events.index("broker_connect") < events.index("socket_serve")
     assert events.index("socket_serve") < events.index("stream_started") < events.index("stream_stopped")
     assert events.index("broker_disconnect") < events.index("lock_released")
+
+
+@pytest.mark.asyncio
+async def test_callback_persistence_failure_hook_stops_runtime_and_drains(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The runtime composition turns an RPC callback durability failure into an unhealthy exit."""
+
+    generation = _write_active_clerk_generation(tmp_path)
+    events: list[str] = []
+
+    class _Client:
+        settings = SimpleNamespace(mode="paper")
+
+        async def connect(self) -> None:
+            events.append("connected")
+
+        async def disconnect(self) -> None:
+            events.append("disconnected")
+
+    class _BrokerAdapter:
+        def __init__(self, _client: object) -> None:
+            self.stream_failure: BaseException | None = None
+
+        def require_account_owner_write_fence(self, _provider: object) -> None:
+            return None
+
+        async def start_event_stream(self) -> None:
+            events.append("stream_started")
+
+        async def stop_event_stream(self) -> None:
+            events.append("stream_stopped")
+
+    class _Server:
+        def __init__(
+            self,
+            _clerk: AccountClerk,
+            *,
+            on_callback_persistence_failure: Callable[[BaseException], None],
+            **_kwargs: object,
+        ) -> None:
+            self._on_callback_persistence_failure = on_callback_persistence_failure
+
+        async def start(self) -> None:
+            events.append("server_started")
+            self._on_callback_persistence_failure(OSError("simulated callback fsync failure"))
+
+        async def close(self) -> None:
+            events.append("server_closed")
+
+    class _Reconciler:
+        healthy = True
+        unhealthy = False
+
+        def __init__(self, _clerk: AccountClerk, **_kwargs: object) -> None:
+            pass
+
+        async def start(self) -> None:
+            events.append("reconciler_started")
+
+        async def close(self) -> None:
+            events.append("reconciler_closed")
+
+    from app.broker.ibkr import client as ibkr_client_module
+    from app.engine.live import account_clerk_reconciler, account_clerk_rpc, live_portfolio
+
+    monkeypatch.setattr(account_clerk_module.signal, "signal", lambda *_args: None)
+    monkeypatch.setattr(ibkr_client_module, "IbkrClient", _Client)
+    monkeypatch.setattr(live_portfolio, "IbkrBrokerAdapter", _BrokerAdapter)
+    monkeypatch.setattr(account_clerk_rpc, "AccountClerkRpcServer", _Server)
+    monkeypatch.setattr(account_clerk_reconciler, "AccountClerkReconciler", _Reconciler)
+
+    exit_code = await account_clerk_module._run_clerk_process(
+        SimpleNamespace(artifacts_root=str(tmp_path), account_id=ACCOUNT, generation=generation)
+    )
+
+    assert exit_code == 1
+    assert events.index("server_started") < events.index("stream_stopped")
+    assert events.index("stream_stopped") < events.index("server_closed") < events.index("disconnected")
 
 
 @pytest.mark.asyncio

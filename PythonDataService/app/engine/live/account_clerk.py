@@ -140,7 +140,7 @@ class AccountClerk:
                 record_intent_locked=self._record_intent_locked,
                 reject=self._reject,
                 require_paper_broker=self._require_paper_broker,
-                require_recovery_submit_intake=self._require_recovery_submit_intake,
+                require_rpc_write_intake=self._require_rpc_write_intake,
                 cancel_namespace_open_orders=lambda namespace, before_broker_write: (
                     self._cancel_namespace_open_orders(
                         namespace,
@@ -341,7 +341,11 @@ class AccountClerk:
     async def wait_for_broker_writes_quiesced(self) -> None:
         """Wait until every broker-write handler accepted before shutdown exits."""
 
-        async with self._intake_lock:
+        # Cancellation and recovery release the intake lock while they wait on
+        # the broker, but retain this operation lock.  Preserve that acquisition
+        # order so shutdown cannot return while an admitted cancel is still able
+        # to write to the broker or enqueue a callback.
+        async with self._cancel_operation_lock, self._intake_lock:
             return
 
     async def recover_inbox(self) -> list[AccountClerkRecordedReceipt]:
@@ -529,7 +533,7 @@ class AccountClerk:
         if unresolved:
             self._reject(intent, "CLERK_CANCEL_NAMESPACE_UNRESOLVED")
 
-    def _require_recovery_submit_intake(self, intent: AccountOwnerSubmitIntent) -> None:
+    def _require_rpc_write_intake(self, intent: AccountOwnerSubmitIntent) -> None:
         if not self._rpc_write_intake_closed:
             return
         self._reject(intent, "CLERK_RPC_CLOSED")
