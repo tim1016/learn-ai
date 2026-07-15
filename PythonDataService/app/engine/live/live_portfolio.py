@@ -1157,14 +1157,21 @@ class LivePortfolio:
                 )
         if account_truth_gate is not None and getattr(account_truth_gate, "status", None) == "pass":
             self.account_truth_outage_started_at_ms = None
-        elif account_truth_gate is not None and not self._pending_orders_reduce_exposure_only():
+        elif account_truth_gate is not None:
             submitted_at_ms = now_ms_utc()
-            if not requires_durable:
+            outage_reason = getattr(account_truth_gate, "operator_reason", None) in {
+                "ACCOUNT_TRUTH_NOT_AVAILABLE",
+                "ACCOUNT_TRUTH_STALE",
+            }
+            if (not outage_reason or not requires_durable) and not self._pending_orders_reduce_exposure_only():
                 self.drop_pending_before_submit(drop_reason="account_truth_block", ts_ms=submitted_at_ms)
                 raise AccountTruthBlockError(gate_result=account_truth_gate)
-            if self.account_truth_outage_started_at_ms is None:
+            elif outage_reason and requires_durable and self.account_truth_outage_started_at_ms is None:
                 self.account_truth_outage_started_at_ms = submitted_at_ms
-            if submitted_at_ms - self.account_truth_outage_started_at_ms >= 120_000:
+            elif outage_reason and requires_durable and (
+                not self._pending_orders_reduce_exposure_only()
+                and submitted_at_ms - self.account_truth_outage_started_at_ms >= 120_000
+            ):
                 self.drop_pending_before_submit(
                     drop_reason="broker_truth_stale",
                     ts_ms=submitted_at_ms,

@@ -519,6 +519,79 @@ async def test_durable_submit_truth_outage_grace_expires_at_120_seconds(
 
 
 @pytest.mark.asyncio
+async def test_durable_submit_blocks_non_outage_account_truth_without_grace() -> None:
+    """A durable submit must not treat a safety verdict as a transient outage."""
+
+    broker = RealBrokerStub()
+    gate = GateResult(
+        gate_id="account.account_truth",
+        status="block",
+        source="test",
+        operator_reason="ACCOUNT_TRUTH_UNKNOWN_POSITIONS",
+        operator_next_step="INSPECT",
+        evidence_at_ms=_NOW_MS,
+    )
+    portfolio = LivePortfolio(
+        broker,
+        account_truth_gate_provider=lambda: gate,
+        account_owner_submitter=lambda _intent: (_ for _ in ()).throw(AssertionError("must not submit")),
+        bot_order_namespace="learn-ai/test/v1",
+        account_id="DU123",
+        strategy_instance_id="test",
+        run_id="run",
+        owner_generation_provider=lambda: 1,
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    with pytest.raises(AccountTruthBlockError):
+        await portfolio.submit_pending_orders()
+
+    assert portfolio.account_truth_outage_started_at_ms is None
+
+
+@pytest.mark.asyncio
+async def test_durable_submit_counts_truth_outage_during_reduce_only_orders(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reduce-only activity cannot reset the continuous truth-outage window."""
+
+    import app.utils.timestamps as timestamps
+
+    broker = RealBrokerStub()
+    gate = GateResult(
+        gate_id="account.account_truth",
+        status="block",
+        source="test",
+        operator_reason="ACCOUNT_TRUTH_STALE",
+        operator_next_step="REFRESH",
+        evidence_at_ms=_NOW_MS,
+    )
+    now = [_NOW_MS]
+    monkeypatch.setattr(timestamps, "now_ms_utc", lambda: now[0])
+    async def submitter(intent: AccountOwnerSubmitIntent) -> AccountOwnerSubmitResult:
+        raise AssertionError(f"must not submit {intent.intent_id}")
+
+    portfolio = LivePortfolio(
+        broker,
+        account_truth_gate_provider=lambda: gate,
+        account_owner_submitter=submitter,
+        bot_order_namespace="learn-ai/test/v1",
+        account_id="DU123",
+        strategy_instance_id="test",
+        run_id="run",
+        owner_generation_provider=lambda: 1,
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("0"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    await portfolio.submit_pending_orders()
+    assert portfolio.account_truth_outage_started_at_ms == _NOW_MS
+
+
+@pytest.mark.asyncio
 async def test_submit_pending_orders_blocks_outside_allowed_session_before_broker_call() -> None:
     broker = FakeBroker()
     portfolio = LivePortfolio(
