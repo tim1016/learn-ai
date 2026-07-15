@@ -29,6 +29,18 @@ export interface CohortEvidenceSummary {
   members: CohortEvidenceMember[];
 }
 
+export interface CohortValidationCertificate {
+  schema_version: 1;
+  account_id: string;
+  cohort_id: string;
+  healthy_overlap_ms: number;
+  evidence_verdict: 'healthy' | 'failed' | 'unknown';
+  evidence_reason: string | null;
+  incidents: string[];
+  verdict: 'passed' | 'failed' | 'incomplete';
+  reasons: string[];
+}
+
 export interface CohortBatchLaunchStatus {
   schema_version: number;
   account_id: string;

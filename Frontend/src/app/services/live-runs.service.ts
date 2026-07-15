@@ -50,6 +50,7 @@ import type { DeployPreflightResponse } from '../api/operator-blocker.types';
 import type {
   CohortBatchLaunchCommandRequest,
   CohortBatchLaunchStatus,
+  CohortValidationCertificate,
 } from '../api/cohort-batch-launch.types';
 
 @Injectable({ providedIn: 'root' })
@@ -262,6 +263,15 @@ export class LiveRunsService {
   ): Promise<CohortBatchLaunchStatus> {
     return firstValueFrom(this.http.get<CohortBatchLaunchStatus>(
       `/api/accounts/${encodeURIComponent(accountId)}/cohort-batch-launches/${encodeURIComponent(cohortId)}`,
+    ));
+  }
+
+  getCohortValidationCertificate(
+    accountId: string,
+    cohortId: string,
+  ): Promise<CohortValidationCertificate> {
+    return firstValueFrom(this.http.get<CohortValidationCertificate>(
+      `/api/accounts/${encodeURIComponent(accountId)}/cohort-batch-launches/${encodeURIComponent(cohortId)}/certificate`,
     ));
   }
 

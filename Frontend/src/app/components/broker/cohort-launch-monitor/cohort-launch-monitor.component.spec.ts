@@ -7,6 +7,7 @@ import { CohortLaunchMonitorComponent } from './cohort-launch-monitor.component'
 
 class FakeLiveRunsService {
   getLatestCohortBatchLaunch = vi.fn();
+  getCohortValidationCertificate = vi.fn();
 }
 
 describe('CohortLaunchMonitorComponent', () => {
@@ -65,6 +66,17 @@ describe('CohortLaunchMonitorComponent', () => {
         ],
       },
     });
+    liveRuns.getCohortValidationCertificate.mockResolvedValue({
+      schema_version: 1,
+      account_id: 'DU1234567',
+      cohort_id: 'paper-validation-1',
+      healthy_overlap_ms: 10_000,
+      evidence_verdict: 'failed',
+      evidence_reason: 'COHORT_MEMBER_HALTED',
+      incidents: [],
+      verdict: 'failed',
+      reasons: ['FAILED_NAMESPACE_EXPOSURE_NONZERO'],
+    });
     await TestBed.configureTestingModule({
       imports: [CohortLaunchMonitorComponent],
       providers: [provideZonelessChangeDetection(), { provide: LiveRunsService, useValue: liveRuns }],
@@ -81,6 +93,8 @@ describe('CohortLaunchMonitorComponent', () => {
     expect(root.textContent).toContain('Clear the account freeze.');
     expect(root.textContent).toContain('run-spy-a');
     expect(root.textContent).toContain('Cohort Member Halted');
+    expect(root.textContent).toContain('Certificate overlap');
+    expect(root.textContent).toContain('Failed Namespace Exposure Nonzero');
     expect(root.querySelector('table caption')?.textContent).toContain('latest server observation');
     expect(root.querySelectorAll('th[scope="col"]').length).toBe(5);
     expect(root.querySelector<HTMLButtonElement>('[aria-label="Refresh cohort monitor"]')).toBeTruthy();

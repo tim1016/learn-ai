@@ -41,6 +41,15 @@
     @if (cohort.evidence.reason; as reason) {
       <p class="pending mono">{{ reason | receiptLabel }}</p>
     }
+    @if (certificate(); as certificate) {
+      <dl class="success-meter" aria-label="Stored cohort validation certificate">
+        <div><dt>Certificate</dt><dd class="mono">{{ certificate.verdict | receiptLabel }}</dd></div>
+        <div><dt>Certificate overlap</dt><dd>{{ certificate.healthy_overlap_ms / 1000 | number: '1.0-0' }} s</dd></div>
+      </dl>
+      @for (reason of certificate.reasons; track reason) {
+        <p class="pending mono">{{ reason | receiptLabel }}</p>
+      }
+    }
 
     <div class="table-wrap" tabindex="0" aria-label="Scrollable cohort monitor table">
       <table>
