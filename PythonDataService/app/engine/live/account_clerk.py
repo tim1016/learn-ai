@@ -21,14 +21,12 @@ import hashlib
 import os
 import signal
 import tempfile
-import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import ValidationError
 
 from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
@@ -41,6 +39,24 @@ from app.engine.live.account_artifacts import (
     write_account_clerk_lease,
     write_account_freeze,
 )
+from app.engine.live.account_clerk_journal import (
+    ACCOUNT_CLERK_INBOX_FILENAME,
+    ACCOUNT_CLERK_JOURNAL_FILENAME,
+    AccountClerkBrokerAckReceipt,
+    AccountClerkBrokerEventReceipt,
+    AccountClerkInboxEntry,
+    AccountClerkIntentRejected,
+    AccountClerkJournal,
+    AccountClerkJournalCorruptError,
+    AccountClerkJournalEntry,
+    AccountClerkRecordedReceipt,
+    AccountClerkRecoveryFlattenReceipt,
+    _now_ms,
+    account_clerk_inbox_path,
+    account_clerk_journal_path,
+    read_account_clerk_inbox,
+    read_account_clerk_journal,
+)
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_owner_fence import (
     AccountClerkWriteFenceError,
@@ -52,35 +68,13 @@ from app.engine.live.account_registry import (
     read_account_instance_registry,
 )
 from app.engine.live.broker_callbacks import broker_callback_idempotency_key
-from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
 from app.utils.advisory_lock import advisory_file_lock
 
 if TYPE_CHECKING:
     from app.engine.live.account_clerk_rpc import AccountClerkRpcClient, AccountClerkRpcServer
 
-ACCOUNT_CLERK_INBOX_FILENAME = "clerk_inbox.jsonl"
-ACCOUNT_CLERK_JOURNAL_FILENAME = "clerk_journal.jsonl"
 ACCOUNT_CLERK_AUTHORITY_LOCK_TARGET_FILENAME = "clerk_authority"
-_MAX_INT64 = 9_223_372_036_854_775_807
 _CLERK_LEASE_TTL_MS = 5_000
-
-
-class AccountClerkJournalCorruptError(RuntimeError):
-    """Raised when an account clerk inbox or journal cannot be safely replayed."""
-
-    def __init__(self, path: Path, detail: str) -> None:
-        super().__init__(f"account clerk artifact at {path} is corrupt: {detail}")
-        self.path = path
-        self.detail = detail
-
-
-class AccountClerkIntentRejected(RuntimeError):
-    """Identity-scoped intake rejection before the durable inbox is written."""
-
-    def __init__(self, *, reason: str, diagnostics: dict[str, object]) -> None:
-        super().__init__(f"AccountClerkIntentRejected(reason={reason!r})")
-        self.reason = reason
-        self.diagnostics = diagnostics
 
 
 class AccountClerkGenerationFencedError(RuntimeError):
@@ -99,152 +93,6 @@ class AccountClerkGenerationFencedError(RuntimeError):
         self.expected_generation = expected_generation
         self.observed_generation = observed_generation
         self.boundary = boundary
-
-
-class AccountClerkInboxEntry(BaseModel):
-    """A validated durable intake row awaiting journal recording, if necessary."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    schema_version: int = 1
-    seq: int = Field(ge=1)
-    received_at_ms: int = Field(ge=0, le=_MAX_INT64)
-    intent: AccountOwnerSubmitIntent
-
-
-class AccountClerkJournalEntry(BaseModel):
-    """One serial, durable receipt-#1 ledger entry for an account intent."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    schema_version: int = 1
-    seq: int = Field(ge=1)
-    entry_kind: Literal[
-        "recorded",
-        "broker_submitting",
-        "broker_uncertain",
-        "recovery_cancelled",
-        "broker_acked",
-        "broker_event",
-        "reconciliation",
-    ] = "recorded"
-    recorded_at_ms: int = Field(ge=0, le=_MAX_INT64)
-    # The original attributed shape always has an intent.  A broker callback
-    # with no durable Clerk intent is a real account fact too, but must not be
-    # fabricated into a namespace; only those broker-event rows may omit it.
-    intent: AccountOwnerSubmitIntent | None = None
-    order_id: int | None = Field(default=None, ge=0)
-    perm_id: int | None = Field(default=None, ge=0)
-    exec_id: str | None = None
-    broker_event: dict[str, object] | None = None
-    cancelled_order_ids: tuple[int, ...] | None = None
-    reconciliation_verdict: Literal["RECOVER_ADOPT", "RETRY_ONCE", "HALT"] | None = None
-    reconciliation_reason: str | None = None
-    broker_error: str | None = None
-    event_account_id: str | None = Field(default=None, min_length=1)
-    broker_callback_idempotency_key: str | None = Field(default=None, min_length=1)
-
-    @model_validator(mode="after")
-    def validate_attribution_shape(self) -> AccountClerkJournalEntry:
-        """Keep existing attributed rows readable while forbidding guessed ownership."""
-
-        if self.entry_kind != "broker_event":
-            if self.intent is None:
-                raise ValueError("non-broker-event journal rows require an intent")
-            if self.event_account_id is not None or self.broker_callback_idempotency_key is not None:
-                raise ValueError("callback metadata is only valid on broker_event rows")
-            return self
-
-        if self.broker_event is None:
-            raise ValueError("broker_event journal rows require broker_event")
-        if (
-            self.intent is not None
-            and self.event_account_id is not None
-            and self.event_account_id != self.intent.account_id
-        ):
-            raise ValueError("event_account_id must match the attributed intent account")
-        if self.intent is None and self.event_account_id is None:
-            raise ValueError("unattributed broker_event rows require event_account_id")
-        return self
-
-
-class AccountClerkRecordedReceipt(BaseModel):
-    """Durable receipt #1 returned before any future broker contact."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    status: Literal["recorded"] = "recorded"
-    trace_id: str = Field(min_length=1)
-    account_id: str = Field(min_length=1)
-    strategy_instance_id: str = Field(min_length=1)
-    run_id: str = Field(min_length=1)
-    bot_order_namespace: str = Field(min_length=1)
-    intent_id: str = Field(min_length=1)
-    order_ref: str = Field(min_length=1)
-    journal_seq: int = Field(ge=1)
-    recorded_at_ms: int = Field(ge=0, le=_MAX_INT64)
-
-    @classmethod
-    def from_journal_entry(cls, entry: AccountClerkJournalEntry) -> AccountClerkRecordedReceipt:
-        intent = entry.intent
-        return cls(
-            trace_id=intent.trace_id,
-            account_id=intent.account_id,
-            strategy_instance_id=intent.strategy_instance_id,
-            run_id=intent.run_id,
-            bot_order_namespace=intent.bot_order_namespace,
-            intent_id=intent.intent_id,
-            order_ref=intent.order_ref,
-            journal_seq=entry.seq,
-            recorded_at_ms=entry.recorded_at_ms,
-        )
-
-
-class AccountClerkBrokerAckReceipt(AccountClerkRecordedReceipt):
-    """Receipt #2, appended by the clerk only after the paper broker acks."""
-
-    status: Literal["broker_acked"] = "broker_acked"
-    order_id: int = Field(ge=0)
-    perm_id: int | None = Field(default=None, ge=0)
-    exec_id: str | None = None
-
-    @classmethod
-    def from_journal_entry(cls, entry: AccountClerkJournalEntry) -> AccountClerkBrokerAckReceipt:
-        if entry.entry_kind != "broker_acked" or entry.order_id is None:
-            raise ValueError("journal entry is not a broker acknowledgement")
-        recorded = AccountClerkRecordedReceipt.from_journal_entry(entry)
-        return cls(
-            **recorded.model_dump(exclude={"status"}),
-            order_id=entry.order_id,
-            perm_id=entry.perm_id,
-            exec_id=entry.exec_id,
-        )
-
-
-class AccountClerkRecoveryFlattenReceipt(BaseModel):
-    """Durable outcome of one Clerk-owned recovery liquidation."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    status: Literal["recovery_flattened"] = "recovery_flattened"
-    recorded: AccountClerkRecordedReceipt
-    broker_acked: AccountClerkBrokerAckReceipt
-    cancelled_order_ids: tuple[int, ...]
-
-
-@dataclass(frozen=True)
-class AccountClerkBrokerEventReceipt:
-    """Durable callback result used to gate relay after persistence.
-
-    ``journal_seq`` is the delivery identity. ``broker_callback_idempotency_key``
-    prevents duplicate callback records; it deliberately does not change fill
-    exposure semantics, which remain deduplicated by ``exec_id`` downstream.
-    """
-
-    journal_seq: int
-    event: IbkrOrderEvent
-    intent: AccountOwnerSubmitIntent | None
-    newly_recorded: bool
 
 
 class AccountClerk:
@@ -273,8 +121,14 @@ class AccountClerk:
         self._on_generation_fenced = on_generation_fenced
         self._now_ms = now_ms if now_ms is not None else _now_ms
         self._intake_lock = asyncio.Lock()
-        self._journal_entries: list[AccountClerkJournalEntry] | None = None
-        self._intents_by_order_ref: dict[str, AccountOwnerSubmitIntent] = {}
+        self._journal = AccountClerkJournal(
+            artifacts_root=artifacts_root,
+            account_id=account_id,
+            now_ms=self._now_ms,
+        )
+        # Kept as a direct alias for focused compatibility tests that model a
+        # process restart by clearing only volatile callback attribution.
+        self._intents_by_order_ref = self._journal.intents_by_order_ref
         self._normal_submit_intake_reason: str | None = None
 
     async def record_intent(self, intent: AccountOwnerSubmitIntent) -> AccountClerkRecordedReceipt:
@@ -304,7 +158,7 @@ class AccountClerk:
         self._require_normal_submit_intake(intent)
         async with self._intake_lock:
             recorded = await asyncio.to_thread(self._record_intent_locked, intent)
-            existing_ack = await asyncio.to_thread(self._ack_for_intent_locked, intent)
+            existing_ack = await asyncio.to_thread(self._journal.ack_for_intent, intent)
             if existing_ack is not None:
                 return recorded, existing_ack
             # A stream can die while the inbox/journal fsync is in flight.
@@ -312,13 +166,13 @@ class AccountClerk:
             self._require_normal_submit_intake(intent)
             self._require_paper_broker()
             spec = IbkrOrderSpec.model_validate(intent.order_spec)
-            await asyncio.to_thread(self._append_broker_submitting_locked, intent)
+            await asyncio.to_thread(self._journal.append_broker_submitting, intent)
             try:
                 ack = await self._place_under_clerk_grant(spec)
             except Exception as exc:
-                await asyncio.to_thread(self._append_broker_uncertain_locked, intent, exc)
+                await asyncio.to_thread(self._journal.append_broker_uncertain, intent, exc)
                 raise
-            broker_ack = await asyncio.to_thread(self._append_broker_ack_locked, intent, ack)
+            broker_ack = await asyncio.to_thread(self._journal.append_broker_ack, intent, ack)
             return recorded, broker_ack
 
     async def submit_recovery_flatten(
@@ -352,9 +206,9 @@ class AccountClerk:
         self._validate_recovery_order(intent)
         async with self._intake_lock:
             recorded = await asyncio.to_thread(self._record_intent_locked, intent)
-            existing_ack = await asyncio.to_thread(self._ack_for_intent_locked, intent)
+            existing_ack = await asyncio.to_thread(self._journal.ack_for_intent, intent)
             if existing_ack is not None:
-                cancelled = await asyncio.to_thread(self._recovery_cancelled_for_intent_locked, intent)
+                cancelled = await asyncio.to_thread(self._journal.recovery_cancelled_for_intent, intent)
                 return AccountClerkRecoveryFlattenReceipt(
                     recorded=recorded,
                     broker_acked=existing_ack,
@@ -362,10 +216,10 @@ class AccountClerk:
                 )
             self._require_paper_broker()
             cancelled = await self._cancel_namespace_open_orders(intent.bot_order_namespace)
-            await asyncio.to_thread(self._append_recovery_cancelled_locked, intent, cancelled)
+            await asyncio.to_thread(self._journal.append_recovery_cancelled, intent, cancelled)
             spec = IbkrOrderSpec.model_validate(intent.order_spec)
             ack = await self._place_under_clerk_grant(spec)
-            broker_ack = await asyncio.to_thread(self._append_broker_ack_locked, intent, ack)
+            broker_ack = await asyncio.to_thread(self._journal.append_broker_ack, intent, ack)
             return AccountClerkRecoveryFlattenReceipt(
                 recorded=recorded,
                 broker_acked=broker_ack,
@@ -376,7 +230,7 @@ class AccountClerk:
         """Return receipt #1 values from the journal after a clerk restart."""
 
         return [
-            AccountClerkRecordedReceipt.from_journal_entry(_require_entry_intent(entry))
+            AccountClerkRecordedReceipt.from_journal_entry(entry)
             for entry in read_account_clerk_journal(self._artifacts_root, self._account_id)
             if entry.entry_kind == "recorded"
         ]
@@ -390,7 +244,13 @@ class AccountClerk:
         """
 
         async with self._intake_lock:
-            await asyncio.to_thread(self._rebuild_attribution_locked)
+            unattributed_events = await asyncio.to_thread(self._journal.rebuild_attribution)
+            for event, callback_key in unattributed_events:
+                await asyncio.to_thread(
+                    self._assert_unattributed_broker_event_guardrail,
+                    event,
+                    callback_key,
+                )
 
     async def record_broker_event(self, event: IbkrOrderEvent) -> AccountClerkBrokerEventReceipt:
         """Persist one callback off-loop before any downstream relay.
@@ -401,7 +261,14 @@ class AccountClerk:
         """
 
         async with self._intake_lock:
-            return await asyncio.to_thread(self._record_broker_event_locked, event)
+            receipt = await asyncio.to_thread(self._journal.record_broker_event, event)
+            if receipt.intent is None:
+                await asyncio.to_thread(
+                    self._assert_unattributed_broker_event_guardrail,
+                    event,
+                    broker_callback_idempotency_key(event),
+                )
+        return receipt
 
     async def mark_event_stream_down(self, failure: BaseException | None = None) -> None:
         """Close normal submit intake and durably alarm a dead broker stream."""
@@ -420,167 +287,15 @@ class AccountClerk:
             return await asyncio.to_thread(self._recover_inbox_locked)
 
     def _recover_inbox_locked(self) -> list[AccountClerkRecordedReceipt]:
-        inbox_path = account_clerk_inbox_path(self._artifacts_root, self._account_id)
-        journal_path = account_clerk_journal_path(self._artifacts_root, self._account_id)
-        journal_path.parent.mkdir(parents=True, exist_ok=True)
-        with _file_lock(journal_path):
-            journal_entries = self._load_journal_tail_locked(inbox_path, journal_path)
-        return [
-            AccountClerkRecordedReceipt.from_journal_entry(_require_entry_intent(entry))
-            for entry in journal_entries
-            if entry.entry_kind == "recorded"
-        ]
+        """Compatibility seam for proving recovery stays off the event loop."""
+
+        return self._journal.recover_inbox()
 
     def _record_intent_locked(self, intent: AccountOwnerSubmitIntent) -> AccountClerkRecordedReceipt:
         if intent.account_id != self._account_id:
             self._reject(intent, "CLERK_ACCOUNT_MISMATCH")
 
-        inbox_path = account_clerk_inbox_path(self._artifacts_root, self._account_id)
-        journal_path = account_clerk_journal_path(self._artifacts_root, self._account_id)
-        journal_path.parent.mkdir(parents=True, exist_ok=True)
-        with _file_lock(journal_path):
-            journal_entries = self._load_journal_tail_locked(inbox_path, journal_path)
-
-            existing = _journal_entry_for_intent(journal_entries, intent)
-            if existing is not None:
-                return AccountClerkRecordedReceipt.from_journal_entry(existing)
-
-            self._validate_intent_identity(intent)
-            next_seq = (journal_entries[-1].seq + 1) if journal_entries else 1
-            inbox_entry = AccountClerkInboxEntry(
-                seq=next_seq,
-                received_at_ms=self._now_ms(),
-                intent=intent,
-            )
-            _append_jsonl(inbox_path, inbox_entry)
-            journal_entry = AccountClerkJournalEntry(
-                seq=inbox_entry.seq,
-                recorded_at_ms=self._now_ms(),
-                intent=inbox_entry.intent,
-            )
-            _append_jsonl(journal_path, journal_entry)
-            self._journal_entries.append(journal_entry)
-            self._register_attribution_locked(intent)
-            _rewrite_jsonl(inbox_path, [])
-            return AccountClerkRecordedReceipt.from_journal_entry(journal_entry)
-
-    def _ack_for_intent_locked(
-        self,
-        intent: AccountOwnerSubmitIntent,
-    ) -> AccountClerkBrokerAckReceipt | None:
-        journal_path = account_clerk_journal_path(self._artifacts_root, self._account_id)
-        with _file_lock(journal_path):
-            entries = self._load_journal_tail_locked(
-                account_clerk_inbox_path(self._artifacts_root, self._account_id),
-                journal_path,
-            )
-            for entry in entries:
-                if entry.entry_kind == "broker_acked" and entry.intent == intent:
-                    return AccountClerkBrokerAckReceipt.from_journal_entry(entry)
-        return None
-
-    def _append_broker_ack_locked(
-        self,
-        intent: AccountOwnerSubmitIntent,
-        ack: Any,
-    ) -> AccountClerkBrokerAckReceipt:
-        journal_path = account_clerk_journal_path(self._artifacts_root, self._account_id)
-        with _file_lock(journal_path):
-            entries = self._load_journal_tail_locked(
-                account_clerk_inbox_path(self._artifacts_root, self._account_id),
-                journal_path,
-            )
-            entry = AccountClerkJournalEntry(
-                seq=entries[-1].seq + 1,
-                entry_kind="broker_acked",
-                recorded_at_ms=self._now_ms(),
-                intent=intent,
-                order_id=int(ack.order_id),
-                perm_id=_try_int(getattr(ack, "perm_id", None)),
-                exec_id=getattr(ack, "exec_id", None),
-            )
-            _append_jsonl(journal_path, entry)
-            entries.append(entry)
-            return AccountClerkBrokerAckReceipt.from_journal_entry(entry)
-
-    def _append_broker_submitting_locked(self, intent: AccountOwnerSubmitIntent) -> None:
-        self._append_broker_transition_locked(intent, entry_kind="broker_submitting")
-
-    def _append_broker_uncertain_locked(self, intent: AccountOwnerSubmitIntent, error: Exception) -> None:
-        self._append_broker_transition_locked(
-            intent,
-            entry_kind="broker_uncertain",
-            broker_error=f"{type(error).__name__}: {error}",
-        )
-
-    def _append_broker_transition_locked(
-        self,
-        intent: AccountOwnerSubmitIntent,
-        *,
-        entry_kind: Literal["broker_submitting", "broker_uncertain"],
-        broker_error: str | None = None,
-    ) -> None:
-        journal_path = account_clerk_journal_path(self._artifacts_root, self._account_id)
-        with _file_lock(journal_path):
-            entries = self._load_journal_tail_locked(
-                account_clerk_inbox_path(self._artifacts_root, self._account_id), journal_path
-            )
-            entry = AccountClerkJournalEntry(
-                seq=entries[-1].seq + 1,
-                entry_kind=entry_kind,
-                recorded_at_ms=self._now_ms(),
-                intent=intent,
-                broker_error=broker_error,
-            )
-            _append_jsonl(journal_path, entry)
-            entries.append(entry)
-
-    def _append_recovery_cancelled_locked(
-        self,
-        intent: AccountOwnerSubmitIntent,
-        cancelled_order_ids: list[int],
-    ) -> None:
-        journal_path = account_clerk_journal_path(self._artifacts_root, self._account_id)
-        with _file_lock(journal_path):
-            entries = self._load_journal_tail_locked(
-                account_clerk_inbox_path(self._artifacts_root, self._account_id),
-                journal_path,
-            )
-            if self._recovery_cancelled_for_intent_entries(entries, intent) is not None:
-                return
-            entry = AccountClerkJournalEntry(
-                seq=entries[-1].seq + 1,
-                entry_kind="recovery_cancelled",
-                recorded_at_ms=self._now_ms(),
-                intent=intent,
-                cancelled_order_ids=tuple(cancelled_order_ids),
-            )
-            _append_jsonl(journal_path, entry)
-            entries.append(entry)
-
-    def _recovery_cancelled_for_intent_locked(self, intent: AccountOwnerSubmitIntent) -> tuple[int, ...]:
-        journal_path = account_clerk_journal_path(self._artifacts_root, self._account_id)
-        with _file_lock(journal_path):
-            entries = self._load_journal_tail_locked(
-                account_clerk_inbox_path(self._artifacts_root, self._account_id),
-                journal_path,
-            )
-            entry = self._recovery_cancelled_for_intent_entries(entries, intent)
-            return entry.cancelled_order_ids if entry is not None and entry.cancelled_order_ids is not None else ()
-
-    @staticmethod
-    def _recovery_cancelled_for_intent_entries(
-        entries: list[AccountClerkJournalEntry],
-        intent: AccountOwnerSubmitIntent,
-    ) -> AccountClerkJournalEntry | None:
-        return next(
-            (
-                entry
-                for entry in entries
-                if entry.entry_kind == "recovery_cancelled" and entry.intent == intent
-            ),
-            None,
-        )
+        return self._journal.record_intent(intent, validate_intent=self._validate_intent_identity)
 
     def append_broker_event(self, intent: AccountOwnerSubmitIntent, event: IbkrOrderEvent) -> None:
         """Compatibility helper for synchronous test-only callback injection.
@@ -591,60 +306,25 @@ class AccountClerk:
         attribution map the sole callback owner.
         """
 
-        self._register_attribution_locked(intent)
-        self._record_broker_event_locked(event)
-
-    def _record_broker_event_locked(self, event: IbkrOrderEvent) -> AccountClerkBrokerEventReceipt:
-        """Append one deduplicated callback, then alarm if it is unattributed."""
-
-        journal_path = account_clerk_journal_path(self._artifacts_root, self._account_id)
-        callback_key = broker_callback_idempotency_key(event)
-        with _file_lock(journal_path):
-            entries = self._load_journal_tail_locked(
-                account_clerk_inbox_path(self._artifacts_root, self._account_id),
-                journal_path,
+        self._journal.register_attribution(intent)
+        receipt = self._journal.record_broker_event(event)
+        if receipt.intent is None:
+            self._assert_unattributed_broker_event_guardrail(
+                event,
+                broker_callback_idempotency_key(event),
             )
-            existing = _broker_callback_entry_for_key(entries, callback_key)
-            if existing is not None:
-                return AccountClerkBrokerEventReceipt(
-                    journal_seq=existing.seq,
-                    event=event,
-                    intent=existing.intent,
-                    newly_recorded=False,
-                )
 
-            intent = self._intents_by_order_ref.get(event.order_ref or "")
-            entry = AccountClerkJournalEntry(
-                seq=entries[-1].seq + 1 if entries else 1,
-                entry_kind="broker_event",
-                recorded_at_ms=self._now_ms(),
-                intent=intent,
-                broker_event=event.model_dump(mode="json"),
-                event_account_id=event.account_id,
-                broker_callback_idempotency_key=callback_key,
-            )
-            _append_jsonl(journal_path, entry)
-            entries.append(entry)
-
-        if intent is None:
-            self._record_unattributed_broker_event_locked(event, callback_key)
-        return AccountClerkBrokerEventReceipt(
-            journal_seq=entry.seq,
-            event=event,
-            intent=intent,
-            newly_recorded=True,
-        )
-
-    def _record_unattributed_broker_event_locked(
+    def _assert_unattributed_broker_event_guardrail(
         self,
         event: IbkrOrderEvent,
         callback_key: str,
     ) -> None:
         """Make unknown broker flow visible and block further account starts.
 
-        This happens only after the callback itself is journal-fsynced. The
-        opaque broker event retains its own account/symbol/side data, while no
-        fake bot namespace or strategy id is invented for it.
+        The Clerk calls this after every duplicate observation and after
+        rebuilding a journal, not just on the first append. The opaque broker
+        event retains its own account/symbol/side data, while no fake bot
+        namespace or strategy id is invented for it.
         """
 
         append_account_event(
@@ -701,32 +381,12 @@ class AccountClerk:
         """Durably record a Clerk reconciliation decision before its effect."""
 
         async with self._intake_lock:
-            await asyncio.to_thread(self._append_reconciliation_resolution_locked, intent, verdict, reason)
-
-    def _append_reconciliation_resolution_locked(
-        self,
-        intent: AccountOwnerSubmitIntent,
-        verdict: Literal["RECOVER_ADOPT", "RETRY_ONCE", "HALT"],
-        reason: str,
-    ) -> None:
-        journal_path = account_clerk_journal_path(self._artifacts_root, self._account_id)
-        with _file_lock(journal_path):
-            entries = self._load_journal_tail_locked(
-                account_clerk_inbox_path(self._artifacts_root, self._account_id), journal_path
+            await asyncio.to_thread(
+                self._journal.append_reconciliation_resolution,
+                intent,
+                verdict=verdict,
+                reason=reason,
             )
-            # A reconciler may adopt a broker order after a Clerk restart. Its
-            # durable recorded receipt is still the only attribution source.
-            self._register_attribution_locked(intent)
-            entry = AccountClerkJournalEntry(
-                seq=entries[-1].seq + 1,
-                entry_kind="reconciliation",
-                recorded_at_ms=self._now_ms(),
-                intent=intent,
-                reconciliation_verdict=verdict,
-                reconciliation_reason=reason,
-            )
-            _append_jsonl(journal_path, entry)
-            entries.append(entry)
 
     async def retry_recorded_intent(self, intent: AccountOwnerSubmitIntent) -> AccountClerkBrokerAckReceipt:
         """Re-place one Clerk-owned intent after a provably-absent probe."""
@@ -735,15 +395,15 @@ class AccountClerk:
             raise RuntimeError("ACCOUNT_CLERK_BROKER_UNAVAILABLE")
         self._require_paper_broker()
         async with self._intake_lock:
-            await asyncio.to_thread(self._register_attribution_locked, intent)
+            await asyncio.to_thread(self._journal.register_attribution, intent)
             spec = IbkrOrderSpec.model_validate(intent.order_spec)
-            await asyncio.to_thread(self._append_broker_submitting_locked, intent)
+            await asyncio.to_thread(self._journal.append_broker_submitting, intent)
             try:
                 ack = await self._place_under_clerk_grant(spec)
             except Exception as exc:
-                await asyncio.to_thread(self._append_broker_uncertain_locked, intent, exc)
+                await asyncio.to_thread(self._journal.append_broker_uncertain, intent, exc)
                 raise
-            return await asyncio.to_thread(self._append_broker_ack_locked, intent, ack)
+            return await asyncio.to_thread(self._journal.append_broker_ack, intent, ack)
 
     def _require_paper_broker(self) -> None:
         client = getattr(self._broker, "_client", None)
@@ -751,102 +411,10 @@ class AccountClerk:
         if getattr(settings, "mode", None) != "paper":
             raise RuntimeError("ACCOUNT_CLERK_PAPER_MODE_REQUIRED")
 
-    def _load_journal_tail_locked(
-        self,
-        inbox_path: Path,
-        journal_path: Path,
-    ) -> list[AccountClerkJournalEntry]:
-        """Recover once, then keep the serial journal tail in process memory."""
-
-        if self._journal_entries is None:
-            journal_entries = _read_journal_jsonl(journal_path)
-            self._journal_entries = self._replay_inbox_locked(
-                inbox_entries=_read_jsonl(inbox_path, AccountClerkInboxEntry),
-                journal_entries=journal_entries,
-                journal_path=journal_path,
-            )
-            _rewrite_jsonl(inbox_path, [])
-            self._rebuild_attribution_from_entries(self._journal_entries)
-        return self._journal_entries
-
-    def _rebuild_attribution_locked(self) -> None:
-        journal_path = account_clerk_journal_path(self._artifacts_root, self._account_id)
-        with _file_lock(journal_path):
-            entries = self._load_journal_tail_locked(
-                account_clerk_inbox_path(self._artifacts_root, self._account_id),
-                journal_path,
-            )
-            self._rebuild_attribution_from_entries(entries)
-
-    def _rebuild_attribution_from_entries(self, entries: list[AccountClerkJournalEntry]) -> None:
-        self._intents_by_order_ref.clear()
-        for entry in entries:
-            if entry.entry_kind == "recorded" and entry.intent is not None:
-                self._register_attribution_locked(entry.intent)
-
-    def _register_attribution_locked(self, intent: AccountOwnerSubmitIntent) -> None:
-        existing = self._intents_by_order_ref.get(intent.order_ref)
-        if existing is not None and existing != intent:
-            raise AccountClerkIntentRejected(
-                reason="CLERK_ORDER_REF_COLLISION",
-                diagnostics={
-                    "existing_intent": existing.model_dump(mode="json"),
-                    "received_intent": intent.model_dump(mode="json"),
-                },
-            )
-        self._intents_by_order_ref[intent.order_ref] = intent
-
     def _require_normal_submit_intake(self, intent: AccountOwnerSubmitIntent) -> None:
         if self._normal_submit_intake_reason is None:
             return
         self._reject(intent, self._normal_submit_intake_reason)
-
-    def _replay_inbox_locked(
-        self,
-        *,
-        inbox_entries: list[AccountClerkInboxEntry],
-        journal_entries: list[AccountClerkJournalEntry],
-        journal_path: Path,
-    ) -> list[AccountClerkJournalEntry]:
-        journal_by_seq = {entry.seq: entry for entry in journal_entries}
-        unique_inbox_entries: list[AccountClerkInboxEntry] = []
-        inbox_by_seq: dict[int, AccountClerkInboxEntry] = {}
-        for inbox_entry in inbox_entries:
-            existing_inbox_entry = inbox_by_seq.get(inbox_entry.seq)
-            if existing_inbox_entry is None:
-                inbox_by_seq[inbox_entry.seq] = inbox_entry
-                unique_inbox_entries.append(inbox_entry)
-                continue
-            if existing_inbox_entry != inbox_entry:
-                raise AccountClerkJournalCorruptError(
-                    journal_path,
-                    f"duplicate incompatible inbox rows at seq {inbox_entry.seq}",
-                )
-
-        for inbox_entry in unique_inbox_entries:
-            journal_entry = journal_by_seq.get(inbox_entry.seq)
-            if journal_entry is not None:
-                if journal_entry.intent != inbox_entry.intent:
-                    raise AccountClerkJournalCorruptError(
-                        journal_path,
-                        f"inbox and journal intent differ at seq {inbox_entry.seq}",
-                    )
-                continue
-            expected_seq = (journal_entries[-1].seq + 1) if journal_entries else 1
-            if inbox_entry.seq != expected_seq:
-                raise AccountClerkJournalCorruptError(
-                    journal_path,
-                    f"inbox seq {inbox_entry.seq} cannot follow journal seq {expected_seq - 1}",
-                )
-            replayed = AccountClerkJournalEntry(
-                seq=inbox_entry.seq,
-                recorded_at_ms=inbox_entry.received_at_ms,
-                intent=inbox_entry.intent,
-            )
-            _append_jsonl(journal_path, replayed)
-            journal_entries.append(replayed)
-            journal_by_seq[replayed.seq] = replayed
-        return journal_entries
 
     def _validate_intent_identity(self, intent: AccountOwnerSubmitIntent) -> None:
         binding = latest_account_instance_binding(
@@ -1010,14 +578,6 @@ class AccountClerk:
         )
 
 
-def account_clerk_inbox_path(artifacts_root: Path, account_id: str) -> Path:
-    return account_artifacts_root(artifacts_root, account_id) / ACCOUNT_CLERK_INBOX_FILENAME
-
-
-def account_clerk_journal_path(artifacts_root: Path, account_id: str) -> Path:
-    return account_artifacts_root(artifacts_root, account_id) / ACCOUNT_CLERK_JOURNAL_FILENAME
-
-
 def account_clerk_authority_lock_target(artifacts_root: Path, account_id: str) -> Path:
     """Return the non-generation target used for this account's lifetime lock.
 
@@ -1049,168 +609,6 @@ def account_clerk_socket_path(artifacts_root: Path, account_id: str) -> Path:
     return Path(tempfile.gettempdir()) / "learn-ai-clerk" / f"{digest}.sock"
 
 
-def read_account_clerk_inbox(
-    artifacts_root: Path,
-    account_id: str,
-) -> list[AccountClerkInboxEntry]:
-    """Read the strict, replayable durable intake inbox for an account."""
-
-    path = account_clerk_inbox_path(artifacts_root, account_id)
-    journal_path = account_clerk_journal_path(artifacts_root, account_id)
-    with _file_lock(journal_path):
-        return _read_jsonl(path, AccountClerkInboxEntry)
-
-
-def read_account_clerk_journal(
-    artifacts_root: Path,
-    account_id: str,
-) -> list[AccountClerkJournalEntry]:
-    """Read the strict, serial receipt-#1 ledger for an account."""
-
-    path = account_clerk_journal_path(artifacts_root, account_id)
-    with _file_lock(path):
-        return _read_journal_jsonl(path)
-
-
-@overload
-def _read_jsonl(path: Path, model_type: type[AccountClerkInboxEntry]) -> list[AccountClerkInboxEntry]: ...
-
-
-@overload
-def _read_jsonl(path: Path, model_type: type[AccountClerkJournalEntry]) -> list[AccountClerkJournalEntry]: ...
-
-
-def _read_jsonl(
-    path: Path,
-    model_type: type[AccountClerkInboxEntry] | type[AccountClerkJournalEntry],
-) -> list[AccountClerkInboxEntry] | list[AccountClerkJournalEntry]:
-    if not path.exists():
-        return []
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except UnicodeDecodeError as exc:
-        raise AccountClerkJournalCorruptError(path, f"invalid UTF-8: {exc}") from exc
-
-    entries = []
-    for line_no, line in enumerate(lines, start=1):
-        if not line:
-            raise AccountClerkJournalCorruptError(path, f"blank row at line {line_no}")
-        try:
-            entry = model_type.model_validate_json(line)
-        except (ValidationError, ValueError) as exc:
-            raise AccountClerkJournalCorruptError(path, f"invalid row at line {line_no}: {exc}") from exc
-        entries.append(entry)
-    return entries
-
-
-def _read_journal_jsonl(path: Path) -> list[AccountClerkJournalEntry]:
-    entries = _read_jsonl(path, AccountClerkJournalEntry)
-    expected_seq = 1
-    for line_no, entry in enumerate(entries, start=1):
-        if entry.seq != expected_seq:
-            raise AccountClerkJournalCorruptError(
-                path,
-                f"expected seq {expected_seq} at line {line_no}, found {entry.seq}",
-            )
-        expected_seq += 1
-    return entries
-
-
-def _append_jsonl(path: Path, entry: AccountClerkInboxEntry | AccountClerkJournalEntry) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as file_handle:
-        file_handle.write(entry.model_dump_json() + "\n")
-        file_handle.flush()
-        os.fsync(file_handle.fileno())
-    _fsync_parent_dir(path)
-
-
-def _rewrite_jsonl(path: Path, entries: list[AccountClerkInboxEntry]) -> None:
-    """Atomically compact acknowledged inbox rows after journal durability."""
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        with temporary_path.open("w", encoding="utf-8") as file_handle:
-            for entry in entries:
-                file_handle.write(entry.model_dump_json() + "\n")
-            file_handle.flush()
-            os.fsync(file_handle.fileno())
-        os.replace(temporary_path, path)
-        _fsync_parent_dir(path)
-    finally:
-        if temporary_path.exists():
-            temporary_path.unlink()
-
-
-def _journal_entry_for_intent(
-    journal_entries: list[AccountClerkJournalEntry],
-    intent: AccountOwnerSubmitIntent,
-) -> AccountClerkJournalEntry | None:
-    matching = [
-        entry
-        for entry in journal_entries
-        if entry.intent is not None and entry.intent.intent_id == intent.intent_id
-    ]
-    if not matching:
-        return None
-    existing = matching[0]
-    if existing.intent != intent:
-        raise AccountClerkIntentRejected(
-            reason="CLERK_INTENT_ID_COLLISION",
-            diagnostics={
-                "existing_intent": existing.intent.model_dump(mode="json"),
-                "received_intent": intent.model_dump(mode="json"),
-            },
-        )
-    return existing
-
-
-def _broker_callback_entry_for_key(
-    entries: list[AccountClerkJournalEntry],
-    callback_key: str,
-) -> AccountClerkJournalEntry | None:
-    """Find a callback row by the ADR 0014 idempotency identity.
-
-    Pre-#1044 rows did not serialize the key. Derive it from their normalized
-    payload so a restart still refuses a duplicate redelivery.
-    """
-
-    for entry in entries:
-        if entry.entry_kind != "broker_event" or entry.broker_event is None:
-            continue
-        if entry.broker_callback_idempotency_key == callback_key:
-            return entry
-        try:
-            existing_event = IbkrOrderEvent.model_validate(entry.broker_event)
-        except (TypeError, ValidationError, ValueError):
-            continue
-        if broker_callback_idempotency_key(existing_event) == callback_key:
-            return entry
-    return None
-
-
-def _require_entry_intent(entry: AccountClerkJournalEntry) -> AccountClerkJournalEntry:
-    """Narrow a validated non-callback journal row for receipt conversion."""
-
-    if entry.intent is None:
-        raise ValueError("receipt entry unexpectedly lacks an intent")
-    return entry
-
-
-def _now_ms() -> int:
-    return time.time_ns() // 1_000_000
-
-
-def _try_int(value: object) -> int | None:
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
 class AccountClerkLeaseWriter:
     """Renew one supervised clerk lease until the daemon reaps the process."""
 
@@ -1221,12 +619,14 @@ class AccountClerkLeaseWriter:
         account_id: str,
         generation: int,
         pid: int,
+        ibkr_client_id: int | None = None,
         now_ms: Callable[[], int] = _now_ms,
     ) -> None:
         self._artifacts_root = artifacts_root
         self._account_id = account_id
         self._generation = generation
         self._pid = pid
+        self._ibkr_client_id = ibkr_client_id
         self._now_ms = now_ms
         self._started_at_ms = now_ms()
 
@@ -1236,6 +636,7 @@ class AccountClerkLeaseWriter:
             account_id=self._account_id,
             generation=self._generation,
             pid=self._pid,
+            ibkr_client_id=self._ibkr_client_id,
             status="DRAINING" if draining else "RUNNING",
             started_at_ms=self._started_at_ms,
             renewed_at_ms=now_ms,
@@ -1256,6 +657,11 @@ async def _run_clerk_process(args: argparse.Namespace) -> int:
     artifacts_root = Path(args.artifacts_root)
     stop = asyncio.Event()
     stream_failed = asyncio.Event()
+    configured_client_id = getattr(args, "ibkr_client_id", os.environ.get("IBKR_CLIENT_ID"))
+    try:
+        ibkr_client_id = int(configured_client_id) if configured_client_id is not None else None
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("ACCOUNT_CLERK_IBKR_CLIENT_ID_INVALID") from exc
 
     def _stop(_signum: int, _frame: object) -> None:
         stop.set()
@@ -1293,7 +699,15 @@ async def _run_clerk_process(args: argparse.Namespace) -> int:
             durable_generation_provider=durable_generation_provider,
             on_generation_fenced=stop.set,
         )
-        server = AccountClerkRpcServer(clerk)
+
+        def on_callback_persistence_failure(_failure: BaseException) -> None:
+            stream_failed.set()
+            stop.set()
+
+        server = AccountClerkRpcServer(
+            clerk,
+            on_callback_persistence_failure=on_callback_persistence_failure,
+        )
         from app.engine.live.account_clerk_reconciler import AccountClerkReconciler
 
         reconciler = AccountClerkReconciler(clerk)
@@ -1302,6 +716,7 @@ async def _run_clerk_process(args: argparse.Namespace) -> int:
             account_id=args.account_id,
             generation=args.generation,
             pid=os.getpid(),
+            ibkr_client_id=ibkr_client_id,
         )
         event_stream_started = False
         event_stream_supervisor: asyncio.Task[None] | None = None
@@ -1394,6 +809,7 @@ def main() -> int:
     parser.add_argument("--artifacts-root", required=True)
     parser.add_argument("--account-id", required=True)
     parser.add_argument("--generation", required=True, type=int)
+    parser.add_argument("--ibkr-client-id", required=True, type=int)
     return asyncio.run(_run_clerk_process(parser.parse_args()))
 
 

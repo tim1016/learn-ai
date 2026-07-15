@@ -671,6 +671,7 @@ class LiveEngine:
         self._broker_callbacks_wal_attached_to_stream = False
         if self._broker_callbacks_wal is not None and isinstance(self._broker, IbkrBrokerAdapter):
             self._broker.set_broker_callback_sink(self._append_raw_broker_callback)
+            self._broker.set_account_clerk_delivery_sink(self._append_account_clerk_broker_callback)
             self._broker_callbacks_wal_attached_to_stream = True
         bot_event_wal = bot_event_wal_for_run(
             run_dir=output_dir,
@@ -2759,6 +2760,20 @@ class LiveEngine:
         if self._broker_callbacks_wal is None:
             return
         self._broker_callbacks_wal.append_event(event)
+
+    def _append_account_clerk_broker_callback(
+        self,
+        event: IbkrOrderEvent,
+        journal_seq: int,
+    ) -> bool:
+        """Persist and sequence-deduplicate an at-least-once Clerk delivery."""
+
+        if self._broker_callbacks_wal is None:
+            raise RuntimeError("ACCOUNT_CLERK_DELIVERY_WAL_UNAVAILABLE")
+        return self._broker_callbacks_wal.append_account_clerk_event(
+            event,
+            journal_seq=journal_seq,
+        )
 
     def _extend_seen_executions(self, seen_executions: list[dict], raw_events: list[IbkrOrderEvent]) -> None:
         """Append fill events from a raw drain to the cumulative executions list.

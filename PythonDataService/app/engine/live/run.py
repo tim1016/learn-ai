@@ -1864,6 +1864,10 @@ def cmd_start(args: argparse.Namespace) -> int:
             classify_account,
         )
         from app.engine.live.account_clerk import AccountClerkRpcClient
+        from app.engine.live.account_clerk_cursor import (
+            AccountClerkEventConsumerIdentity,
+            AccountClerkEventCursorRepo,
+        )
         from app.engine.live.account_owner import AccountOwner, AccountOwnerSubmitResult
         from app.engine.live.account_registry import read_account_instance_registry
         from app.engine.live.fleet_reset_baseline import read_applicable_baseline
@@ -1953,9 +1957,18 @@ def cmd_start(args: argparse.Namespace) -> int:
         )
         use_clerk_events = getattr(broker, "use_account_clerk_event_stream", None)
         if callable(use_clerk_events):
+            clerk_event_consumer = AccountClerkEventConsumerIdentity(
+                account_id=ledger.account_id,
+                strategy_instance_id=strategy_instance_id,
+                run_id=ledger.run_id,
+                bot_order_namespace=bot_order_namespace_for_instance(strategy_instance_id),
+            )
+            clerk_event_cursor = AccountClerkEventCursorRepo(args.run_dir)
             use_clerk_events(
                 lambda: clerk_client.drain_events(
-                    bot_order_namespace=bot_order_namespace_for_instance(strategy_instance_id)
+                    after_seq=clerk_event_cursor.last_journal_seq(clerk_event_consumer),
+                    consumer=clerk_event_consumer,
+                    cursor=clerk_event_cursor,
                 )
             )
 

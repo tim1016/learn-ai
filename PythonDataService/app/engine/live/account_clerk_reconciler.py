@@ -154,6 +154,11 @@ def _unresolved_intents(
     submitting: set[str] = set()
     uncertain: set[str] = set()
     for entry in entries:
+        # A callback with no durable Clerk intent is deliberately retained as
+        # account truth, but it is never an intent-reconciliation candidate.
+        # Skip it before dereferencing the optional attribution payload.
+        if entry.intent is None:
+            continue
         intent_id = entry.intent.intent_id
         if entry.entry_kind == "recorded":
             recorded[intent_id] = entry.intent

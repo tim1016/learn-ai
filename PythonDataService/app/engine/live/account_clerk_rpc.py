@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,8 +22,18 @@ from app.engine.live.account_clerk import (
     AccountClerkIntentRejected,
     AccountClerkRecoveryFlattenReceipt,
     account_clerk_socket_path,
+    read_account_clerk_journal,
+)
+from app.engine.live.account_clerk_cursor import (
+    AccountClerkEventConsumerIdentity,
+    AccountClerkEventCursorRepo,
 )
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
+from app.engine.live.account_registry import (
+    ACTIVE_INSTANCE_BINDING_STATES,
+    index_account_instance_bindings,
+    read_account_instance_registry,
+)
 from app.engine.live.journal_exposure import normalize_broker_event
 
 logger = logging.getLogger(__name__)
@@ -81,6 +91,29 @@ class AccountClerkRpcRequestIdentity:
 
     intent_id: str | None
     order_ref: str | None
+
+
+@dataclass(frozen=True)
+class AccountClerkDeliveredEvent:
+    """One at-least-once Clerk journal delivery to a bot run.
+
+    ``acknowledge_after_durable_event_write`` is intentionally separate from
+    drain: callers invoke it only after their run-scoped durable callback WAL
+    accepted (or proved it already contains) this journal sequence.
+    """
+
+    journal_seq: int
+    event: IbkrOrderEvent
+    _consumer: AccountClerkEventConsumerIdentity
+    _cursor: AccountClerkEventCursorRepo
+
+    def acknowledge_after_durable_event_write(self) -> bool:
+        """Durably advance this bot's cursor after its own event fsync."""
+
+        return self._cursor.advance_after_durable_event_write(
+            self._consumer,
+            journal_seq=self.journal_seq,
+        )
 
 
 class AccountClerkRpcError(RuntimeError):
@@ -212,6 +245,14 @@ class _AccountClerkRpcRequestRejected(ValueError):
         self.reason = reason
 
 
+class AccountClerkCallbackPersistenceError(RuntimeError):
+    """The Clerk can no longer durably accept broker callbacks."""
+
+    def __init__(self, failure: BaseException) -> None:
+        super().__init__("ACCOUNT_CLERK_CALLBACK_PERSISTENCE_FAILED")
+        self.failure = failure
+
+
 class AccountClerkRpcClient:
     """Bot-side client: enqueue intents; it never holds a broker adapter."""
 
@@ -308,17 +349,60 @@ class AccountClerkRpcClient:
                 request_identity=_request_identity(request),
             ) from exc
 
-    async def drain_events(self, *, bot_order_namespace: str) -> list[IbkrOrderEvent]:
-        request = {"operation": "drain_events", "bot_order_namespace": bot_order_namespace}
+    async def drain_events(
+        self,
+        *,
+        after_seq: int,
+        consumer: AccountClerkEventConsumerIdentity,
+        cursor: AccountClerkEventCursorRepo,
+    ) -> list[AccountClerkDeliveredEvent]:
+        """Read non-destructive Clerk journal rows after a durable cursor.
+
+        A bot cannot claim a sequence different from its persisted cursor.
+        That prevents a stale in-memory loop from consuming events on behalf of
+        a restarted run while preserving intentional at-least-once recovery
+        when a crash happened before a cursor acknowledgement.
+        """
+
+        if after_seq < 0:
+            raise ValueError("after_seq must be >= 0")
+        if consumer.account_id != self._account_id:
+            raise ValueError("consumer account_id does not match this Clerk client")
+        if cursor.last_journal_seq(consumer) != after_seq:
+            raise ValueError("after_seq does not match the durable Clerk event cursor")
+        request = {
+            "operation": "drain_events",
+            "after_seq": after_seq,
+            **consumer.model_dump(mode="json"),
+        }
         payload = await self._request(request)
         try:
             events = payload["events"]
             if not isinstance(events, list):
                 raise TypeError("drain_events payload must be a list")
-            normalized = [normalize_broker_event(event) for event in events]
-            if any(event is None for event in normalized):
-                raise ValueError("drain_events payload contains an invalid broker event")
-            return [event for event in normalized if event is not None]
+            deliveries: list[AccountClerkDeliveredEvent] = []
+            last_journal_seq = after_seq
+            for item in events:
+                if not isinstance(item, dict):
+                    raise TypeError("drain_events delivery must be an object")
+                journal_seq = item.get("journal_seq")
+                if not isinstance(journal_seq, int) or isinstance(journal_seq, bool):
+                    raise TypeError("drain_events journal_seq must be an integer")
+                if journal_seq <= last_journal_seq:
+                    raise ValueError("drain_events journal sequences must be strictly ordered")
+                event = normalize_broker_event(item.get("event"))
+                if event is None:
+                    raise ValueError("drain_events payload contains an invalid broker event")
+                deliveries.append(
+                    AccountClerkDeliveredEvent(
+                        journal_seq=journal_seq,
+                        event=event,
+                        _consumer=consumer,
+                        _cursor=cursor,
+                    )
+                )
+                last_journal_seq = journal_seq
+            return deliveries
         except (KeyError, ValidationError, TypeError, ValueError) as exc:
             raise AccountClerkRpcMalformedResponseError(
                 operation="drain_events",
@@ -433,16 +517,22 @@ class AccountClerkRpcClient:
 class AccountClerkRpcServer:
     """Clerk-process RPC server; the broker stays exclusively behind this seam."""
 
-    def __init__(self, clerk: AccountClerk) -> None:
+    def __init__(
+        self,
+        clerk: AccountClerk,
+        *,
+        on_callback_persistence_failure: Callable[[BaseException], None] | None = None,
+    ) -> None:
         self._clerk = clerk
         self._server: asyncio.AbstractServer | None = None
         self._socket_path = account_clerk_socket_path(clerk._artifacts_root, clerk._account_id)
         if clerk._clerk_generation is None:
             raise RuntimeError("ACCOUNT_CLERK_GENERATION_REQUIRED_FOR_RPC")
         self._served_generation = clerk._clerk_generation
-        self._events_by_namespace: dict[str, list[IbkrOrderEvent]] = {}
         self._callback_queue: asyncio.Queue[IbkrOrderEvent] = asyncio.Queue()
         self._callback_worker: asyncio.Task[None] | None = None
+        self._callback_failure: BaseException | None = None
+        self._on_callback_persistence_failure = on_callback_persistence_failure
         set_callback = getattr(clerk._broker, "set_broker_callback_sink", None)
         if callable(set_callback):
             set_callback(self._record_broker_event)
@@ -558,15 +648,78 @@ class AccountClerkRpcServer:
             return AccountClerkRpcSuccessEnvelope(
                 payload={"recovery_flatten": recovery.model_dump(mode="json")}
             )
-        namespace = _required_string(request, "bot_order_namespace")
-        events = self._events_by_namespace.pop(namespace, [])
+        consumer = self._validated_event_consumer(request)
+        after_seq = _required_nonnegative_int(request, "after_seq")
+        events = await asyncio.to_thread(self._journal_events_after, consumer, after_seq)
         return AccountClerkRpcSuccessEnvelope(
-            payload={"events": [event.model_dump(mode="json") for event in events]}
+            payload={"events": events}
         )
+
+    def _validated_event_consumer(
+        self,
+        request: Mapping[str, object],
+    ) -> AccountClerkEventConsumerIdentity:
+        """Reject any consumer that is not the active full registry identity."""
+
+        consumer = AccountClerkEventConsumerIdentity.model_validate(
+            {
+                "account_id": _required_string(request, "account_id"),
+                "strategy_instance_id": _required_string(request, "strategy_instance_id"),
+                "run_id": _required_string(request, "run_id"),
+                "bot_order_namespace": _required_string(request, "bot_order_namespace"),
+            }
+        )
+        if consumer.account_id != self._clerk._account_id:
+            raise _AccountClerkRpcRequestRejected("EVENT_CONSUMER_ACCOUNT_MISMATCH")
+        binding_index = index_account_instance_bindings(
+            read_account_instance_registry(self._clerk._artifacts_root, self._clerk._account_id),
+            account_id=self._clerk._account_id,
+        )
+        binding = binding_index.latest_by_instance.get(consumer.strategy_instance_id)
+        if (
+            binding is None
+            or binding.lifecycle_state not in ACTIVE_INSTANCE_BINDING_STATES
+            or binding.account_id != consumer.account_id
+            or binding.run_id != consumer.run_id
+            or binding.bot_order_namespace != consumer.bot_order_namespace
+        ):
+            raise _AccountClerkRpcRequestRejected("STALE_EVENT_CONSUMER")
+        return consumer
+
+    def _journal_events_after(
+        self,
+        consumer: AccountClerkEventConsumerIdentity,
+        after_seq: int,
+    ) -> list[dict[str, object]]:
+        """Project only this active consumer's ordered callback journal rows."""
+
+        deliveries: list[dict[str, object]] = []
+        for entry in read_account_clerk_journal(self._clerk._artifacts_root, self._clerk._account_id):
+            if entry.seq <= after_seq or entry.entry_kind != "broker_event" or entry.intent is None:
+                continue
+            if (
+                entry.intent.account_id != consumer.account_id
+                or entry.intent.strategy_instance_id != consumer.strategy_instance_id
+                or entry.intent.run_id != consumer.run_id
+                or entry.intent.bot_order_namespace != consumer.bot_order_namespace
+            ):
+                continue
+            event = normalize_broker_event(entry.broker_event)
+            if event is None:
+                raise RuntimeError("ACCOUNT_CLERK_JOURNAL_BROKER_EVENT_INVALID")
+            deliveries.append(
+                {
+                    "journal_seq": entry.seq,
+                    "event": event.model_dump(mode="json"),
+                }
+            )
+        return deliveries
 
     def _record_broker_event(self, event: IbkrOrderEvent) -> None:
         """Queue broker callbacks; disk work is serialized off the event loop."""
 
+        if self._callback_failure is not None:
+            raise AccountClerkCallbackPersistenceError(self._callback_failure)
         self._callback_queue.put_nowait(event)
 
     async def _persist_broker_callbacks(self) -> None:
@@ -575,12 +728,48 @@ class AccountClerkRpcServer:
         while True:
             event = await self._callback_queue.get()
             try:
-                receipt = await self._clerk.record_broker_event(event)
-                if receipt.newly_recorded and receipt.intent is not None:
-                    namespace = receipt.intent.bot_order_namespace
-                    self._events_by_namespace.setdefault(namespace, []).append(event)
+                await self._clerk.record_broker_event(event)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # This is the same safety boundary as a dead broker stream:
+                # once a callback cannot be durably recorded, no future normal
+                # broker write may start. Set the failure before awaiting the
+                # alarm fsync so receipt-time callbacks reject immediately.
+                self._callback_failure = exc
+                try:
+                    await self._clerk.mark_event_stream_down(exc)
+                except Exception:
+                    logger.exception(
+                        "Account Clerk callback persistence failure could not write its alarm",
+                        extra={"account_id": self._clerk._account_id},
+                    )
+                if self._on_callback_persistence_failure is not None:
+                    try:
+                        self._on_callback_persistence_failure(exc)
+                    except Exception:
+                        logger.exception(
+                            "Account Clerk callback persistence failure hook raised",
+                            extra={"account_id": self._clerk._account_id},
+                        )
+                self._discard_queued_callbacks_after_failure()
+                logger.exception(
+                    "Account Clerk callback persistence failed; Clerk intake is closed",
+                    extra={"account_id": self._clerk._account_id},
+                )
+                return
             finally:
                 self._callback_queue.task_done()
+
+    def _discard_queued_callbacks_after_failure(self) -> None:
+        """Balance every queued task so shutdown never waits on a dead worker."""
+
+        while True:
+            try:
+                self._callback_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            self._callback_queue.task_done()
 
     async def _flush_broker_callbacks(self) -> None:
         """Complete callbacks received before normal Clerk shutdown."""
@@ -697,6 +886,13 @@ def _required_string(request: Mapping[str, object], key: str) -> str:
     return value
 
 
+def _required_nonnegative_int(request: Mapping[str, object], key: str) -> int:
+    value = request.get(key)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise _AccountClerkRpcRequestRejected("INVALID_REQUEST")
+    return value
+
+
 def _optional_string(request: Mapping[str, object], key: str) -> str | None:
     value = request.get(key)
     if value is None:
@@ -710,6 +906,10 @@ __all__ = [
     "ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S",
     "ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S",
     "ACCOUNT_CLERK_RPC_SCHEMA_VERSION",
+    "AccountClerkCallbackPersistenceError",
+    "AccountClerkDeliveredEvent",
+    "AccountClerkEventConsumerIdentity",
+    "AccountClerkEventCursorRepo",
     "AccountClerkRpcClient",
     "AccountClerkRpcError",
     "AccountClerkRpcErrorEnvelope",

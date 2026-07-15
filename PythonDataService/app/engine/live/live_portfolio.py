@@ -90,6 +90,15 @@ class LiveBrokerEventStreamError(RuntimeError):
     """
 
 
+class AccountClerkEventDelivery(Protocol):
+    """A Clerk journal event that can be acknowledged after local fsync."""
+
+    journal_seq: int
+    event: IbkrOrderEvent
+
+    def acknowledge_after_durable_event_write(self) -> bool: ...
+
+
 def _append_sizing_skip_line(path: Path, payload: dict) -> None:
     """Best-effort append to the SIZING_SKIP audit log. A write failure
     is logged but does not break the bar handler — the in-memory
@@ -312,7 +321,8 @@ class IbkrBrokerAdapter(BrokerAdapter):
         self._event_task: asyncio.Task[None] | None = None
         self._stream_failure: BaseException | None = None
         self._broker_callback_sink: Callable[[IbkrOrderEvent], None] | None = None
-        self._clerk_event_reader: Callable[[], Awaitable[list[IbkrOrderEvent]]] | None = None
+        self._clerk_event_reader: Callable[[], Awaitable[list[AccountClerkEventDelivery]]] | None = None
+        self._clerk_delivery_sink: Callable[[IbkrOrderEvent, int], bool] | None = None
         self._observed_fill_count_by_order_id: dict[int, int] = {}
         self._event_buffer_changed = asyncio.Event()
         self._require_account_owner_write_fence = require_account_owner_write_fence
@@ -339,11 +349,24 @@ class IbkrBrokerAdapter(BrokerAdapter):
 
     def use_account_clerk_event_stream(
         self,
-        reader: Callable[[], Awaitable[list[IbkrOrderEvent]]],
+        reader: Callable[[], Awaitable[list[AccountClerkEventDelivery]]],
     ) -> None:
         """Consume callbacks relayed by the Clerk, never from this bot client."""
 
         self._clerk_event_reader = reader
+
+    def set_account_clerk_delivery_sink(
+        self,
+        sink: Callable[[IbkrOrderEvent, int], bool] | None,
+    ) -> None:
+        """Install the bot's durable Clerk-delivery writer.
+
+        The sink returns whether the journal sequence was newly persisted. A
+        redelivery whose sequence is already durable must still acknowledge the
+        Clerk cursor, but it must not enter the portfolio buffer again.
+        """
+
+        self._clerk_delivery_sink = sink
 
     def require_account_owner_write_fence(
         self,
@@ -566,13 +589,23 @@ class IbkrBrokerAdapter(BrokerAdapter):
     async def _run_clerk_event_stream(self) -> None:
         assert self._clerk_event_reader is not None
         while True:
-            events = await self._clerk_event_reader()
-            for event in events:
-                self._record_event(event)
+            deliveries = await self._clerk_event_reader()
+            for delivery in deliveries:
+                self._record_clerk_delivery(delivery)
             await asyncio.sleep(0.5)
 
-    def _record_event(self, event: IbkrOrderEvent) -> None:
-        if self._broker_callback_sink is not None:
+    def _record_clerk_delivery(self, delivery: AccountClerkEventDelivery) -> None:
+        """Persist one Clerk row locally before its cursor can advance."""
+
+        if self._clerk_delivery_sink is None:
+            raise RuntimeError("ACCOUNT_CLERK_DELIVERY_DURABLE_SINK_REQUIRED")
+        newly_persisted = self._clerk_delivery_sink(delivery.event, delivery.journal_seq)
+        if newly_persisted:
+            self._record_event(delivery.event, callback_already_durable=True)
+        delivery.acknowledge_after_durable_event_write()
+
+    def _record_event(self, event: IbkrOrderEvent, *, callback_already_durable: bool = False) -> None:
+        if self._broker_callback_sink is not None and not callback_already_durable:
             self._broker_callback_sink(event)
         if event.event_type == "fill":
             order_id = int(event.order_id)

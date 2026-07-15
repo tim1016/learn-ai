@@ -18,6 +18,10 @@ from app.broker.ibkr.models import IbkrOrderSpec
 from app.engine.execution.order_sizer import FixedShares, OrderSizer
 from app.engine.live.account_artifacts import advance_account_clerk_generation
 from app.engine.live.account_clerk import AccountClerk, account_clerk_socket_path
+from app.engine.live.account_clerk_cursor import (
+    AccountClerkEventConsumerIdentity,
+    AccountClerkEventCursorRepo,
+)
 from app.engine.live.account_clerk_rpc import (
     ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S,
     ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S,
@@ -145,6 +149,23 @@ def _intent(intent_id: str = "intent-1040") -> AccountOwnerSubmitIntent:
         owner_generation=99,
         created_at_ms=START_MS,
     )
+
+
+def _event_consumer() -> AccountClerkEventConsumerIdentity:
+    return AccountClerkEventConsumerIdentity(
+        account_id=ACCOUNT,
+        strategy_instance_id="bot-a",
+        run_id="run-a",
+        bot_order_namespace=bot_order_namespace_for_instance("bot-a"),
+    )
+
+
+def _drain_kwargs(tmp_path: Path) -> dict[str, object]:
+    return {
+        "after_seq": 0,
+        "consumer": _event_consumer(),
+        "cursor": AccountClerkEventCursorRepo(tmp_path / "run"),
+    }
 
 
 async def _read_raw_response(path: Path, request: dict[str, object]) -> dict[str, object]:
@@ -285,7 +306,7 @@ async def test_transport_failures_are_typed_and_distinguishable(tmp_path: Path) 
     client = AccountClerkRpcClient(artifacts_root=tmp_path, account_id=ACCOUNT)
 
     with pytest.raises(AccountClerkRpcUnavailableError) as missing:
-        await client.drain_events(bot_order_namespace="learn-ai/bot-a/v1")
+        await client.drain_events(**_drain_kwargs(tmp_path))
     assert missing.value.reason_code == "ACCOUNT_CLERK_UNAVAILABLE:SOCKET_MISSING"
 
     async def empty_response(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -296,7 +317,7 @@ async def test_transport_failures_are_typed_and_distinguishable(tmp_path: Path) 
     server, path = await _start_raw_server(tmp_path, empty_response)
     try:
         with pytest.raises(AccountClerkRpcUnavailableError) as empty:
-            await client.drain_events(bot_order_namespace="learn-ai/bot-a/v1")
+            await client.drain_events(**_drain_kwargs(tmp_path))
     finally:
         await _close_raw_server(server, path)
     assert empty.value.reason_code == "ACCOUNT_CLERK_UNAVAILABLE:EMPTY_RESPONSE"
@@ -311,7 +332,7 @@ async def test_transport_failures_are_typed_and_distinguishable(tmp_path: Path) 
     server, path = await _start_raw_server(tmp_path, malformed_response)
     try:
         with pytest.raises(AccountClerkRpcMalformedResponseError) as malformed:
-            await client.drain_events(bot_order_namespace="learn-ai/bot-a/v1")
+            await client.drain_events(**_drain_kwargs(tmp_path))
     finally:
         await _close_raw_server(server, path)
     assert malformed.value.reason_code == "ACCOUNT_CLERK_PROTOCOL_ERROR:MALFORMED_RESPONSE"
@@ -327,7 +348,7 @@ async def test_transport_failures_are_typed_and_distinguishable(tmp_path: Path) 
     assert path.exists()
     try:
         with pytest.raises(AccountClerkRpcUnavailableError) as connect_failed:
-            await client.drain_events(bot_order_namespace="learn-ai/bot-a/v1")
+            await client.drain_events(**_drain_kwargs(tmp_path))
     finally:
         if path.exists():
             path.unlink()
@@ -349,7 +370,7 @@ async def test_client_rejects_a_stale_socket_generation_before_writing_a_request
     try:
         with pytest.raises(AccountClerkRpcGenerationMismatchError) as exc:
             await AccountClerkRpcClient(artifacts_root=tmp_path, account_id=ACCOUNT).drain_events(
-                bot_order_namespace="learn-ai/bot-a/v1"
+                **_drain_kwargs(tmp_path)
             )
     finally:
         await _close_raw_server(server, path)
@@ -376,7 +397,7 @@ async def test_drain_events_rejects_a_broker_event_outside_the_canonical_shape(t
     try:
         with pytest.raises(AccountClerkRpcMalformedResponseError) as exc:
             await AccountClerkRpcClient(artifacts_root=tmp_path, account_id=ACCOUNT).drain_events(
-                bot_order_namespace="learn-ai/bot-a/v1"
+                **_drain_kwargs(tmp_path)
             )
     finally:
         await _close_raw_server(server, path)
