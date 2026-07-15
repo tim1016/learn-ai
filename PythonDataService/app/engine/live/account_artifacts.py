@@ -517,6 +517,30 @@ def read_account_events(artifacts_root: Path, account_id: str) -> list[dict]:
     return _parse_account_event_bytes(path, path.read_bytes(), tolerant=False)
 
 
+def read_account_events_with_snapshot(
+    artifacts_root: Path,
+    account_id: str,
+) -> tuple[list[dict], bytes]:
+    """Read strict journal rows and their exact, locked source bytes.
+
+    Cutover evidence must name the same journal image it replays.  Select the
+    existing ledger through the non-symlinked artifact boundary, then keep the
+    writer lock while taking its one byte snapshot.  A missing ledger is the
+    canonical empty journal and therefore has the stable empty-byte snapshot.
+    """
+
+    path = _existing_account_artifact_file_path(
+        artifacts_root,
+        account_id,
+        ACCOUNT_EVENTS_FILENAME,
+    )
+    if path is None:
+        return [], b""
+    with _file_lock(path):
+        raw = path.read_bytes()
+    return _parse_account_event_bytes(path, raw, tolerant=False), raw
+
+
 def read_account_events_tolerant(artifacts_root: Path, account_id: str) -> list[dict]:
     """Read account events tolerantly for legacy projection/replay adapters."""
 
@@ -1269,6 +1293,7 @@ _LOCAL_EXPORTS = [
     "clear_account_freeze",
     "evaluate_restart_intensity",
     "read_account_events",
+    "read_account_events_with_snapshot",
     "read_account_clerk_generation",
     "read_account_clerk_lease",
     "require_active_account_clerk_generation",
