@@ -21,8 +21,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.broker.ibkr.models import IbkrOrderEvent
-from app.engine.live.account_clerk import AccountClerkJournalEntry
-from app.engine.live.account_clerk_journal import normalize_broker_event
+from app.engine.live.account_clerk_journal import AccountClerkJournalEntry, normalize_broker_event
 
 JournalExposureGroup = Literal["namespace", "strategy_instance"]
 

@@ -28,13 +28,13 @@ from app.engine.live.account_clerk_cursor import (
     AccountClerkEventConsumerIdentity,
     AccountClerkEventCursorRepo,
 )
+from app.engine.live.account_clerk_journal import normalize_broker_event
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import (
     ACTIVE_INSTANCE_BINDING_STATES,
     index_account_instance_bindings,
     read_account_instance_registry,
 )
-from app.engine.live.journal_exposure import normalize_broker_event
 
 logger = logging.getLogger(__name__)
 
