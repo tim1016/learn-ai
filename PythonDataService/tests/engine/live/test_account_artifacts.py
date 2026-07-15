@@ -625,7 +625,7 @@ def test_restart_intensity_counts_authorized_cohort_bindings_once(tmp_path: Path
                 run_id=f"run-{index}",
                 namespace=f"learn-ai/spy-{chr(96 + index)}/v1",
                 recorded_at_ms=recorded_at_ms,
-            ),
+            ).model_copy(update={"cohort_id": "opening-batch-1"}),
         )
 
     gate = evaluate_restart_intensity(

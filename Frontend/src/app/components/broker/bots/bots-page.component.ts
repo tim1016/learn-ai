@@ -38,6 +38,7 @@ import {
 import { CohortLaunchMonitorComponent } from '../cohort-launch-monitor/cohort-launch-monitor.component';
 import { fmtInteger, fmtSignedCurrency, fmtTimestampLocal } from '../format';
 import { lifecycleConditionCureTarget } from '../lib/condition-cure-actions';
+import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 
 type AttentionFilter = 'all' | 'needs-attention' | 'healthy';
 type BotModeTab = BotCatalogTradingMode;
@@ -105,6 +106,7 @@ interface BotLaunchRowProgress {
   botName: string;
   status: BotLaunchRowStatus;
   detail: string;
+  reasonCode: string | null;
 }
 
 interface BotLaunchProgress {
@@ -127,6 +129,7 @@ interface BotLaunchProgress {
     AccountFreezeBannerComponent,
     CohortLaunchDialogComponent,
     CohortLaunchMonitorComponent,
+    ReceiptLabelPipe,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './bots-page.component.html',
@@ -327,6 +330,7 @@ export class BotsPageComponent {
         botName: row.name,
         status: 'queued',
         detail: 'Queued after preflight.',
+        reasonCode: null,
       })),
     });
     try {
@@ -357,83 +361,64 @@ export class BotsPageComponent {
         return;
       }
 
-      const incomplete = refreshedRows.find((row) => !row.latestRunId || !this.startRequestForRow(row));
-      if (incomplete) {
-        this.launchProgress.set({
-          phase: 'blocked',
-          title: 'Start offer is incomplete',
-          detail: `${incomplete.name} is marked ready, but its run id or offer id is missing.`,
-          activeBotId: incomplete.id,
-          rows: refreshedRows.map((row) => ({ botId: row.id, botName: row.name, status: 'blocked', detail: 'A current offer is required for every cohort member.' })),
-        });
-        return;
-      }
       const accountId = this.accountId();
       if (!accountId) {
         this.blockLaunchProgress('No paper broker account is connected for cohort authorization.');
         return;
       }
-      const nowMs = Date.now();
-      const receipt = await this.liveRuns.createCohortBatchLaunch(accountId, {
-        cohort_id: `paper-validation-${nowMs}`,
-        member_strategy_instance_ids: refreshedRows.map((row) => row.id),
-        window_start_ms: nowMs,
-        window_end_ms: nowMs + 300_000,
-        authorized_by: 'bots-page.operator',
-      });
 
       this.launchProgress.set({
         phase: 'running',
         title: 'Starting authorized cohort',
-        detail: `${receipt.member_strategy_instance_ids.length} bots are starting under one durable receipt.`,
+        detail: `${refreshedRows.length} bots are starting under one server-authorized receipt.`,
         activeBotId: null,
-        rows: refreshedRows.map((row) => ({ botId: row.id, botName: row.name, status: 'starting', detail: 'Start request is in flight.' })),
+        rows: refreshedRows.map((row) => ({
+          botId: row.id,
+          botName: row.name,
+          status: 'starting',
+          detail: 'Start request is in flight.',
+          reasonCode: null,
+        })),
       });
-      const outcomes = await Promise.allSettled(refreshedRows.map((row) => {
-        const runId = row.latestRunId;
-        const request = this.startRequestForRow(row);
-        if (runId === null || request === null) {
-          return Promise.reject(new Error('Cohort member lost its current start offer.'));
-        }
-        return this.liveRuns.startHostRunner(runId, request);
-      }));
-      await this.liveRuns.recordCohortBatchLaunchOutcomes(accountId, receipt.cohort_id, {
-        outcomes: refreshedRows.map((row, index) => {
-          const outcome = outcomes[index];
-          if (outcome.status === 'fulfilled') {
-            return {
-              strategy_instance_id: row.id,
-              state: 'accepted',
-              reason: 'start.request.accepted',
-              next_safe_action: 'Monitor the bot receipt state and account exposure.',
-            };
-          }
-          return {
-            strategy_instance_id: row.id,
-            state: 'blocked',
-            reason: this.humanError(outcome.reason),
-            next_safe_action: 'Review the bot blocker, refresh roll call, then authorize a new cohort.',
-          };
-        }),
+      const cohort = await this.liveRuns.launchCohort(accountId, {
+        member_strategy_instance_ids: refreshedRows.map((row) => row.id),
       });
       this.cohortMonitorReloadVersion.update((version) => version + 1);
       await this.refresh();
       const liveStatusById = new Map(
         this.bots().map((bot) => [bot.strategy_instance_id, bot.daily_lifecycle.display_status]),
       );
+      const outcomesById = new Map(
+        cohort.outcomes.map((outcome) => [outcome.strategy_instance_id, outcome]),
+      );
+      const accepted = refreshedRows.every(
+        (row) => outcomesById.get(row.id)?.state === 'accepted',
+      );
       this.launchProgress.update((current) => ({
         ...current,
-        phase: outcomes.every((outcome) => outcome.status === 'fulfilled') ? 'complete' : 'blocked',
-        title: outcomes.every((outcome) => outcome.status === 'fulfilled') ? 'Cohort start accepted' : 'Cohort start needs attention',
-        detail: `Cohort receipt ${receipt.cohort_id} records this start window.`,
-        rows: refreshedRows.map((row, index) => outcomes[index].status === 'fulfilled'
-          ? {
+        phase: accepted ? 'complete' : 'blocked',
+        title: accepted ? 'Cohort start accepted' : 'Cohort start needs attention',
+        detail: `Cohort receipt ${cohort.cohort_id} records server-derived outcomes.`,
+        rows: refreshedRows.map((row) => {
+          const outcome = outcomesById.get(row.id);
+          return outcome?.state === 'accepted'
+            ? {
               botId: row.id,
               botName: row.name,
               status: 'accepted',
               detail: `Start accepted; live status is ${liveStatusById.get(row.id) ?? 'unavailable'}.`,
+              reasonCode: outcome.reason,
             }
-          : { botId: row.id, botName: row.name, status: 'blocked', detail: this.humanError((outcomes[index] as PromiseRejectedResult).reason) }),
+            : {
+              botId: row.id,
+              botName: row.name,
+              status: 'blocked',
+              detail: outcome
+                ? 'The server did not accept this cohort member.'
+                : 'The server did not record a cohort outcome for this bot.',
+              reasonCode: outcome?.reason ?? null,
+            };
+        }),
       }));
     } catch (err) {
       const message = this.humanError(err);
@@ -680,14 +665,6 @@ export class BotsPageComponent {
     return 'Could not load bots.';
   }
 
-  private startRequestForRow(row: BotTableRow): HostRunnerStartRequest | null {
-    if (!row.startRequest || !row.startOfferId) return null;
-    return {
-      ...row.startRequest,
-      roll_call_offer_id: row.startOfferId,
-    };
-  }
-
   private accountId(): string | null {
     return this.connectedAccountId();
   }
@@ -746,6 +723,7 @@ export class BotsPageComponent {
           botName: row.name,
           status,
           detail,
+          reasonCode: null,
         };
       }
       return {
@@ -753,6 +731,7 @@ export class BotsPageComponent {
         botName: row.name,
         status: 'queued',
         detail: 'Waiting for the canary result before another start.',
+        reasonCode: null,
       };
     });
   }
