@@ -12,12 +12,17 @@ from app.broker.ibkr.config import get_settings
 from app.broker.runtime_snapshot import BrokerRuntimeSnapshot, snapshot_data_plane_broker
 from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import read_account_freeze
+from app.engine.live.account_observation_lease import assess_account_observation_lease
 from app.schemas.operator_blocker import (
     NavigateAction,
     OperatorBlocker,
     OperatorMove,
 )
-from app.services.account_truth_snapshot import assess_account_truth, get_account_truth_snapshot_provider
+from app.services.account_truth_snapshot import (
+    AccountTruthSnapshot,
+    assess_account_truth,
+    get_account_truth_snapshot_provider,
+)
 from app.services.fleet_contamination import compute_account_fleet_contamination
 from app.services.strategy_validation_manifest import (
     load_strategy_validation_entries,
@@ -96,6 +101,26 @@ async def _instance_is_running_or_stopping(instance_id: str) -> bool:
     return False
 
 
+def _account_proof_is_current(
+    *,
+    authority: Literal["account_truth", "observation_lease"],
+    artifacts_root: Path,
+    account_id: str,
+    account_truth: AccountTruthSnapshot | None,
+    now_ms: int,
+) -> bool:
+    if authority == "observation_lease":
+        return (
+            assess_account_observation_lease(
+                artifacts_root,
+                account_id,
+                now_ms=now_ms,
+            ).state
+            == "VERIFIED"
+        )
+    return assess_account_truth(account_truth, now_ms=now_ms).status == "pass"
+
+
 async def gather_deploy_preflight_signals(
     strategy_key: str,
     account_id: str,
@@ -110,13 +135,21 @@ async def gather_deploy_preflight_signals(
     daemon_result, _health = await host_daemon_client.fetch_health(settings.live_runner_daemon_url)
     account_freeze = read_account_freeze(artifacts_root, account_id)
     account_truth = get_account_truth_snapshot_provider().get(account_id)
+    now_ms = _now_ms()
+    account_proven = _account_proof_is_current(
+        authority=settings.account_gate_authority,
+        artifacts_root=artifacts_root,
+        account_id=account_id,
+        account_truth=account_truth,
+        now_ms=now_ms,
+    )
     fleet = await compute_account_fleet_contamination(root, account_id=account_id)
 
     return DeployPreflightSignals(
         daemon_reachable=daemon_result.kind == "CONNECTED",
         broker_connection_state=_runtime_connection_state_value(snapshot_data_plane_broker()),
         account_frozen=account_freeze is not None,
-        account_proven=assess_account_truth(account_truth, now_ms=_now_ms()).status == "pass",
+        account_proven=account_proven,
         fleet_blocks_starts=fleet.policy_blocks_starts,
         strategy_deployable=_strategy_is_deployable(strategy_key),
         instance_already_running=await _instance_is_running_or_stopping(instance_id),

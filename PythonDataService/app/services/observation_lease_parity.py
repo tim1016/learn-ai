@@ -22,6 +22,7 @@ from app.engine.live.account_artifacts import (
 from app.engine.live.account_observation_lease import (
     ACCOUNT_OBSERVATION_LEASE_GATE_ID,
     ACCOUNT_OBSERVATION_LEASE_GATE_SOURCE,
+    ACCOUNT_OBSERVATION_LEASE_SCHEMA_VERSION,
 )
 from app.lean_sidecar.trading_calendar import is_trading_day
 from app.services.account_truth_snapshot import ACCOUNT_TRUTH_GATE_ID, ACCOUNT_TRUTH_GATE_SOURCE
@@ -31,7 +32,9 @@ ACCOUNT_OBSERVATION_LEASE_SHADOW_COMPARISON_EVENT = (
 )
 _NY_TZ = ZoneInfo("America/New_York")
 _GATE_STATUSES = frozenset({"pass", "block"})
-OBSERVATION_LEASE_PARITY_ARCHIVE_SCHEMA_VERSION = 1
+OBSERVATION_LEASE_PARITY_ARCHIVE_SCHEMA_VERSION = 2
+OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION = 2
+OBSERVATION_LEASE_GENERATION_AUTHORITY = "account_clerk"
 
 
 @dataclass(frozen=True)
@@ -67,6 +70,7 @@ class AccountObservationLeaseParityReport:
 
     comparisons: tuple[AccountObservationLeaseShadowComparison, ...]
     invalid_comparisons: tuple[InvalidAccountObservationLeaseShadowComparison, ...]
+    legacy_comparison_count: int
     observed_session_dates: tuple[str, ...]
     minimum_sessions: int
 
@@ -115,9 +119,13 @@ def assess_observation_lease_shadow_parity(
 
     comparisons: list[AccountObservationLeaseShadowComparison] = []
     invalid: list[InvalidAccountObservationLeaseShadowComparison] = []
+    legacy_comparison_count = 0
     session_dates: set[str] = set()
     for event_index, event in enumerate(account_events):
         if event.get("event_type") != ACCOUNT_OBSERVATION_LEASE_SHADOW_COMPARISON_EVENT:
+            continue
+        if event.get("comparison_schema_version") in (None, 1):
+            legacy_comparison_count += 1
             continue
         comparison, reason = _parse_shadow_comparison(event, event_index=event_index)
         if comparison is None:
@@ -135,6 +143,7 @@ def assess_observation_lease_shadow_parity(
     return AccountObservationLeaseParityReport(
         comparisons=tuple(comparisons),
         invalid_comparisons=tuple(invalid),
+        legacy_comparison_count=legacy_comparison_count,
         observed_session_dates=tuple(sorted(session_dates)),
         minimum_sessions=minimum_sessions,
     )
@@ -171,6 +180,8 @@ def observation_lease_shadow_parity_archive_payload(
     report = assess_observation_lease_shadow_parity(events, minimum_sessions=minimum_sessions)
     return {
         "schema_version": OBSERVATION_LEASE_PARITY_ARCHIVE_SCHEMA_VERSION,
+        "comparison_schema_version": OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION,
+        "lease_generation_authority": OBSERVATION_LEASE_GENERATION_AUTHORITY,
         "account_id": account_id,
         "source": {
             "account_events_filename": ACCOUNT_EVENTS_FILENAME,
@@ -179,6 +190,7 @@ def observation_lease_shadow_parity_archive_payload(
         },
         "minimum_sessions": report.minimum_sessions,
         "comparison_count": report.comparison_count,
+        "legacy_comparison_count": report.legacy_comparison_count,
         "invalid_comparisons": [
             {"event_index": row.event_index, "reason": row.reason}
             for row in report.invalid_comparisons
@@ -212,6 +224,15 @@ def _parse_shadow_comparison(
     event_index: int,
 ) -> tuple[AccountObservationLeaseShadowComparison | None, str]:
     recorded_at_ms = event.get("recorded_at_ms")
+    if (
+        event.get("comparison_schema_version")
+        != OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION
+    ):
+        return None, "comparison_schema_version is not supported"
+    if event.get("lease_schema_version") != ACCOUNT_OBSERVATION_LEASE_SCHEMA_VERSION:
+        return None, f"lease_schema_version must be {ACCOUNT_OBSERVATION_LEASE_SCHEMA_VERSION}"
+    if event.get("lease_generation_authority") != OBSERVATION_LEASE_GENERATION_AUTHORITY:
+        return None, "lease_generation_authority must be account_clerk"
     if not isinstance(recorded_at_ms, int) or isinstance(recorded_at_ms, bool) or recorded_at_ms < 0:
         return None, "recorded_at_ms must be a non-negative int64 ms UTC value"
     strategy_instance_id = event.get("strategy_instance_id")
@@ -255,6 +276,7 @@ def _parse_shadow_comparison(
 __all__ = [
     "ACCOUNT_OBSERVATION_LEASE_SHADOW_COMPARISON_EVENT",
     "OBSERVATION_LEASE_PARITY_ARCHIVE_SCHEMA_VERSION",
+    "OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION",
     "AccountObservationLeaseParityReport",
     "AccountObservationLeaseShadowComparison",
     "InvalidAccountObservationLeaseShadowComparison",

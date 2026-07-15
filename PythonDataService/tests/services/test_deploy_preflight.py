@@ -1,6 +1,18 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+from app.engine.live.account_artifacts import (
+    AccountClerkLease,
+    advance_account_clerk_generation,
+    write_account_clerk_lease,
+)
+from app.engine.live.account_observation_lease import AccountObservationLeaseRepo
+from app.services import deploy_preflight
 from app.services.deploy_preflight import DeployPreflightSignals, author_deploy_blockers
+
+ACCOUNT_ID = "DU1234567"
+NOW_MS = 1_780_000_000_000
 
 
 def _healthy() -> DeployPreflightSignals:
@@ -17,6 +29,53 @@ def _healthy() -> DeployPreflightSignals:
 
 def test_healthy_signals_produce_no_blockers() -> None:
     assert author_deploy_blockers(_healthy()) == []
+
+
+def test_deploy_proof_switch_fails_closed_without_observation_lease(tmp_path: Path) -> None:
+    assert not deploy_preflight._account_proof_is_current(
+        authority="observation_lease",
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT_ID,
+        account_truth=None,
+        now_ms=NOW_MS,
+    )
+
+
+def test_deploy_proof_switch_accepts_verified_clerk_keyed_lease(tmp_path: Path) -> None:
+    clerk = advance_account_clerk_generation(
+        tmp_path,
+        ACCOUNT_ID,
+        phase="accepting",
+        recorded_at_ms=NOW_MS,
+        source="test",
+    )
+    write_account_clerk_lease(
+        tmp_path,
+        AccountClerkLease(
+            account_id=ACCOUNT_ID,
+            generation=clerk.generation,
+            pid=123,
+            ibkr_client_id=51,
+            status="RUNNING",
+            started_at_ms=NOW_MS,
+            renewed_at_ms=NOW_MS,
+            valid_until_ms=NOW_MS + 60_000,
+        ),
+    )
+    AccountObservationLeaseRepo(tmp_path).renew(
+        account_id=ACCOUNT_ID,
+        observed_at_ms=NOW_MS,
+        now_ms=NOW_MS,
+        clerk_generation=clerk.generation,
+    )
+
+    assert deploy_preflight._account_proof_is_current(
+        authority="observation_lease",
+        artifacts_root=tmp_path,
+        account_id=ACCOUNT_ID,
+        account_truth=None,
+        now_ms=NOW_MS,
+    )
 
 
 def test_daemon_down_is_blocking_fix_elsewhere() -> None:

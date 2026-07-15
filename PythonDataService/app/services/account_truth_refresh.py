@@ -21,7 +21,10 @@ from app.broker.ibkr.client import BrokerError, IbkrClient
 from app.broker.ibkr.config import IbkrSettings, get_settings
 from app.broker.ibkr.health import build_broker_health
 from app.broker.ibkr.models import IbkrConnectionHealth
-from app.engine.live.account_artifacts import read_account_owner_generation
+from app.engine.live.account_artifacts import (
+    AccountClerkLeaseUnavailableError,
+    read_active_accepting_account_clerk_generation,
+)
 from app.schemas.account_truth import AccountTruthResponse
 from app.services.account_truth_snapshot import (
     DEFAULT_ACCOUNT_TRUTH_READINESS_TTL_MS,
@@ -44,7 +47,7 @@ _ACCOUNT_TRUTH_REFRESH_UNAVAILABLE_STATES = frozenset(
         "soft_lost",
     }
 )
-OwnerGenerationFence = tuple[int, str] | None
+ClerkGenerationFence = tuple[int, str] | None
 
 
 def validate_account_truth_refresh_cadence(
@@ -120,9 +123,10 @@ async def refresh_account_truth_now(
         artifacts_root if artifacts_root is not None else account_truth_artifacts_root()
     )
     resolved_account_id = account_id if account_id is not None else health.account_id
-    owner_generation_before = _read_owner_generation_fence(
+    clerk_generation_before = _read_clerk_generation_fence(
         resolved_artifacts_root,
         resolved_account_id,
+        now_ms=now_ms_utc(),
     )
     collection_context = build_account_truth_collection_context(
         artifacts_root=resolved_artifacts_root,
@@ -134,7 +138,7 @@ async def refresh_account_truth_now(
         health=health,
         collection_context=collection_context,
         snapshot_provider=snapshot_provider,
-        owner_generation_before=owner_generation_before,
+        clerk_generation_before=clerk_generation_before,
         account_truth_observer=account_truth_observer,
         account_truth_failure_observer=account_truth_failure_observer,
     )
@@ -146,7 +150,7 @@ async def refresh_account_truth_and_update_cache(
     health: IbkrConnectionHealth,
     collection_context: AccountTruthCollectionContext,
     snapshot_provider: AccountTruthSnapshotProvider | None = None,
-    owner_generation_before: OwnerGenerationFence = None,
+    clerk_generation_before: ClerkGenerationFence = None,
     account_truth_observer: Callable[..., object] | None = None,
     account_truth_failure_observer: Callable[..., object] | None = None,
 ) -> AccountTruthResponse:
@@ -179,8 +183,8 @@ async def refresh_account_truth_and_update_cache(
         _notify_account_truth_observer,
         account_truth_observer,
         truth,
-        owner_generation_before=owner_generation_before,
-        owner_generation_captured=True,
+        clerk_generation_before=clerk_generation_before,
+        clerk_generation_captured=True,
     )
     return truth
 
@@ -294,15 +298,15 @@ class AccountTruthRefreshLoop:
                 def observe_success(
                     account_truth: AccountTruthResponse,
                     *,
-                    owner_generation_before: OwnerGenerationFence = None,
-                    owner_generation_captured: bool = False,
+                    clerk_generation_before: ClerkGenerationFence = None,
+                    clerk_generation_captured: bool = False,
                 ) -> None:
                     nonlocal success_observer_notified
                     success_observer_notified = True
                     self._observe_account_truth(
                         account_truth,
-                        owner_generation_before=owner_generation_before,
-                        owner_generation_captured=owner_generation_captured,
+                        clerk_generation_before=clerk_generation_before,
+                        clerk_generation_captured=clerk_generation_captured,
                     )
 
                 def observe_failure(
@@ -439,30 +443,30 @@ class AccountTruthRefreshLoop:
         self,
         account_truth: AccountTruthResponse,
         *,
-        owner_generation_before: OwnerGenerationFence = None,
-        owner_generation_captured: bool = False,
+        clerk_generation_before: ClerkGenerationFence = None,
+        clerk_generation_captured: bool = False,
     ) -> None:
         await asyncio.to_thread(
             self._observe_account_truth,
             account_truth,
-            owner_generation_before=owner_generation_before,
-            owner_generation_captured=owner_generation_captured,
+            clerk_generation_before=clerk_generation_before,
+            clerk_generation_captured=clerk_generation_captured,
         )
 
     def _observe_account_truth(
         self,
         account_truth: AccountTruthResponse,
         *,
-        owner_generation_before: OwnerGenerationFence = None,
-        owner_generation_captured: bool = False,
+        clerk_generation_before: ClerkGenerationFence = None,
+        clerk_generation_captured: bool = False,
     ) -> None:
         if self._account_truth_observer is None:
             return
         _notify_account_truth_observer(
             self._account_truth_observer,
             account_truth,
-            owner_generation_before=owner_generation_before,
-            owner_generation_captured=owner_generation_captured,
+            clerk_generation_before=clerk_generation_before,
+            clerk_generation_captured=clerk_generation_captured,
         )
 
     async def _notify_account_journal_observer(self, account_id: str) -> None:
@@ -482,25 +486,29 @@ class AccountTruthRefreshLoop:
             )
 
 
-def _read_owner_generation_fence(
+def _read_clerk_generation_fence(
     artifacts_root: Path,
     account_id: str | None,
-) -> OwnerGenerationFence:
+    *,
+    now_ms: int,
+) -> ClerkGenerationFence:
     if account_id is None:
         return None
     try:
-        owner = read_account_owner_generation(artifacts_root, account_id)
-    except (OSError, ValidationError, ValueError):
+        clerk = read_active_accepting_account_clerk_generation(
+            artifacts_root,
+            account_id,
+            now_ms=now_ms,
+        )
+    except (AccountClerkLeaseUnavailableError, OSError, ValidationError, ValueError):
         logger.warning(
-            "account owner generation could not be read before Account Truth refresh",
+            "account Clerk generation could not be read before Account Truth refresh",
             extra={"account_id": account_id},
         )
         return None
-    generation = getattr(owner, "generation", None)
-    phase = getattr(owner, "phase", None)
-    if not isinstance(generation, int) or not isinstance(phase, str):
+    if clerk is None:
         return None
-    return generation, phase
+    return clerk.generation, clerk.phase
 
 
 def _accepts_refresh_outcome_observers(refresh_now: Callable[..., object]) -> bool:
@@ -515,14 +523,14 @@ def _accepts_refresh_outcome_observers(refresh_now: Callable[..., object]) -> bo
     )
 
 
-def _accepts_owner_generation_metadata(observer: Callable[..., object]) -> bool:
+def _accepts_clerk_generation_metadata(observer: Callable[..., object]) -> bool:
     try:
         parameters = inspect.signature(observer).parameters
     except (TypeError, ValueError):
         return True
     return (
-        "owner_generation_before" in parameters
-        or "owner_generation_captured" in parameters
+        "clerk_generation_before" in parameters
+        or "clerk_generation_captured" in parameters
         or any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values())
     )
 
@@ -531,17 +539,17 @@ def _notify_account_truth_observer(
     observer: Callable[..., object] | None,
     account_truth: AccountTruthResponse,
     *,
-    owner_generation_before: OwnerGenerationFence = None,
-    owner_generation_captured: bool = False,
+    clerk_generation_before: ClerkGenerationFence = None,
+    clerk_generation_captured: bool = False,
 ) -> None:
     if observer is None:
         return
     try:
-        if _accepts_owner_generation_metadata(observer):
+        if _accepts_clerk_generation_metadata(observer):
             observer(
                 account_truth,
-                owner_generation_before=owner_generation_before,
-                owner_generation_captured=owner_generation_captured,
+                clerk_generation_before=clerk_generation_before,
+                clerk_generation_captured=clerk_generation_captured,
             )
         else:
             observer(account_truth)

@@ -79,6 +79,16 @@ effective_stop(D)`, evidence snapshot), not a lifecycle state: offers
 expire at stop-time, so the day boundary garbage-collects readiness
 and no decay transitions exist.
 
+**Amendment 2026-07-15 — presence is not trading permission.** `ON_DUTY`
+means that the bot process is present and bound to a run. It does not assert
+that orders may be submitted. Trading permission is the conjunction of the
+account proof selected for the deployment (eventually the Account Observation
+Lease), the run-scoped reconciliation receipt, and the existing submit chain.
+The accepted Start transition therefore remains presence-honest while the
+existing 15-second Account Truth observer supplies the coarse background drift
+check by renewing or revoking account evidence. Account proof is evidence and
+never a second phase writer.
+
 ### 3. The Button Rule
 
 **Every non-terminal state and every condition must declare exactly

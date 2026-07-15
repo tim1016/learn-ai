@@ -184,6 +184,14 @@ class IbkrSettings(BaseSettings):
     # cockpit's STALE banner asks the operator to re-reconcile.
     reconciliation_receipt_ttl_ms: int = 24 * 3600 * 1000
 
+    # #1021 atomic authority/rollback seam. Keep Account Truth authoritative
+    # until the versioned Clerk-keyed shadow replay satisfies the promotion
+    # gate. Changing this setting requires a process restart; there is no
+    # per-bot override and therefore no split authority within one deployment.
+    account_gate_authority: Literal["account_truth", "observation_lease"] = (
+        "account_truth"
+    )
+
     @model_validator(mode="after")
     def _enforce_port_mode_consistency(self) -> IbkrSettings:
         """Refuse to run with a port that disagrees with ``mode``.

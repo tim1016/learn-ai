@@ -15,6 +15,7 @@ from app.broker.ibkr.account_truth_freshness import critical_source_freshness_bl
 from app.engine.live.account_artifacts import (
     AccountArtifactError,
     AccountAuditedOverride,
+    AccountClerkLeaseUnavailableError,
     AccountFreezeEvidence,
     AccountRecoveryProof,
     account_artifacts_root,
@@ -22,7 +23,7 @@ from app.engine.live.account_artifacts import (
     clear_account_freeze,
     read_account_events,
     read_account_freeze,
-    read_account_owner_generation,
+    read_active_accepting_account_clerk_generation,
 )
 from app.engine.live.account_identity import InvalidAccountIdError, normalize_account_id
 from app.engine.live.account_observation_lease import (
@@ -85,16 +86,21 @@ class _ReceiptInvalidation:
     execution_ids: tuple[str, ...]
 
 
-def _owner_generation_fence(owner: object | None) -> tuple[int, str] | None:
-    """Return the owner-generation fields that must stay stable during a sweep."""
-
-    if owner is None:
+def _active_clerk_generation_fence(
+    artifacts_root: Path,
+    account_id: str,
+    *,
+    now_ms: int,
+) -> tuple[int, str] | None:
+    try:
+        clerk = read_active_accepting_account_clerk_generation(
+            artifacts_root,
+            account_id,
+            now_ms=now_ms,
+        )
+    except (AccountClerkLeaseUnavailableError, OSError, ValueError):
         return None
-    generation = getattr(owner, "generation", None)
-    phase = getattr(owner, "phase", None)
-    if not isinstance(generation, int) or not isinstance(phase, str):
-        return None
-    return generation, phase
+    return None if clerk is None else (clerk.generation, clerk.phase)
 
 
 class AccountReconciliationService:
@@ -166,8 +172,8 @@ class AccountReconciliationService:
         self,
         account_truth: AccountTruthResponse,
         *,
-        owner_generation_before: tuple[int, str] | None = None,
-        owner_generation_captured: bool = False,
+        clerk_generation_before: tuple[int, str] | None = None,
+        clerk_generation_captured: bool = False,
         now_ms: int | None = None,
     ) -> AccountReconciliationReceipt | None:
         """Persist observation proof, then manage recovery-receipt invalidation."""
@@ -182,8 +188,8 @@ class AccountReconciliationService:
             account_id=canonical_account_id,
             account_truth=account_truth,
             observed_at_ms=observed_at_ms,
-            owner_generation_before=owner_generation_before,
-            owner_generation_captured=owner_generation_captured,
+            clerk_generation_before=clerk_generation_before,
+            clerk_generation_captured=clerk_generation_captured,
         )
         receipt = self.read_latest_receipt(canonical_account_id)
         receipted_execution_ids = (
@@ -257,20 +263,22 @@ class AccountReconciliationService:
         account_id: str,
         account_truth: AccountTruthResponse,
         observed_at_ms: int,
-        owner_generation_before: tuple[int, str] | None = None,
-        owner_generation_captured: bool = False,
+        clerk_generation_before: tuple[int, str] | None = None,
+        clerk_generation_captured: bool = False,
     ) -> None:
-        """Renew only across a stable owner generation; otherwise revoke."""
+        """Renew only across a stable Clerk generation; otherwise revoke."""
 
         repo = AccountObservationLeaseRepo(self._artifacts_root)
         before = None
         try:
             before = repo.read(account_id)
-            owner_before_fence = (
-                owner_generation_before
-                if owner_generation_captured
-                else _owner_generation_fence(
-                    read_account_owner_generation(self._artifacts_root, account_id)
+            clerk_before_fence = (
+                clerk_generation_before
+                if clerk_generation_captured
+                else _active_clerk_generation_fence(
+                    self._artifacts_root,
+                    account_id,
+                    now_ms=observed_at_ms,
                 )
             )
             assessment = assess_account_truth(
@@ -280,16 +288,21 @@ class AccountReconciliationService:
                 ),
                 now_ms=observed_at_ms,
             )
-            owner_after = read_account_owner_generation(self._artifacts_root, account_id)
-            owner_after_fence = _owner_generation_fence(owner_after)
+            clerk_after_fence = _active_clerk_generation_fence(
+                self._artifacts_root,
+                account_id,
+                now_ms=observed_at_ms,
+            )
 
-            if owner_before_fence != owner_after_fence or (
-                owner_after is not None and owner_after.phase != "accepting"
+            if (
+                clerk_before_fence is None
+                or clerk_after_fence is None
+                or clerk_before_fence != clerk_after_fence
             ):
                 after = repo.revoke(
                     account_id=account_id,
-                    reason_code="ACCOUNT_OWNER_GENERATION_CHANGED",
-                    detail="Account ownership changed or is not accepting during account verification.",
+                    reason_code="ACCOUNT_CLERK_GENERATION_CHANGED",
+                    detail="Account Clerk authority changed or is not accepting during account verification.",
                     now_ms=observed_at_ms,
                 )
             elif assessment.status != "pass":
@@ -326,9 +339,7 @@ class AccountReconciliationService:
                             account_id=account_id,
                             observed_at_ms=account_truth.generated_at_ms,
                             now_ms=observed_at_ms,
-                            account_owner_generation=(
-                                owner_after.generation if owner_after is not None else None
-                            ),
+                            clerk_generation=clerk_after_fence[0],
                         )
             self._append_observation_lease_transition(before=before, after=after)
         except Exception as exc:
@@ -376,6 +387,9 @@ class AccountReconciliationService:
                 "recorded_at_ms": after.renewed_at_ms,
                 "observed_at_ms": after.observed_at_ms,
                 "valid_until_ms": after.valid_until_ms,
+                "lease_schema_version": after.schema_version,
+                "generation_authority": "account_clerk",
+                "clerk_generation": after.clerk_generation,
             },
         )
 

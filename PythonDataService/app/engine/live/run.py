@@ -2116,6 +2116,8 @@ def cmd_start(args: argparse.Namespace) -> int:
         async def _reject_direct_broker_write(*, boundary: str, write: object) -> object:
             del write
             raise RuntimeError(f"ACCOUNT_CLERK_DIRECT_BROKER_WRITE_FORBIDDEN:{boundary}")
+    from app.broker.ibkr.config import get_settings as get_ibkr_settings
+
     engine = LiveEngine(
         client,
         live_config,
@@ -2152,6 +2154,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         artifacts_root_for_lease=_artifacts_root,
         watchdog_factory=_build_child_watchdog_factory(_artifacts_root, args.run_dir),
         account_registry_gate_enabled=bool(ledger.strategy_instance_id),
+        account_gate_authority=get_ibkr_settings().account_gate_authority,
         account_owner_submitter=account_clerk_submitter,
         account_owner_broker_writer=(
             _reject_direct_broker_write if account_owner is not None else None

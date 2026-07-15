@@ -20,13 +20,14 @@ from app.broker.ibkr.models import (
     IbkrPositionsSnapshot,
 )
 from app.engine.live.account_artifacts import (
-    ACCOUNT_OWNER_GENERATION_FILENAME,
+    ACCOUNT_CLERK_GENERATION_FILENAME,
+    AccountClerkLease,
     AccountFreezeEvidence,
     AccountInstanceBinding,
-    AccountOwnerGeneration,
     account_artifacts_root,
+    advance_account_clerk_generation,
+    write_account_clerk_lease,
     write_account_freeze,
-    write_account_owner_generation,
 )
 from app.engine.live.account_observation_lease import assess_account_observation_lease
 from app.schemas.account_truth import (
@@ -398,21 +399,32 @@ async def test_refresh_now_builds_context_once_and_remembers_truth(
 
 
 @pytest.mark.asyncio
-async def test_refresh_now_captures_owner_generation_before_collection(
+async def test_refresh_now_captures_clerk_generation_before_collection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
     truth = _truth(account_id="DU123")
     observed: dict[str, object] = {}
-    write_account_owner_generation(
+    for offset in range(3):
+        advance_account_clerk_generation(
+            tmp_path,
+            "DU123",
+            phase="accepting",
+            recorded_at_ms=1_700_000_000_000 + offset,
+            source="test",
+        )
+    write_account_clerk_lease(
         tmp_path,
-        AccountOwnerGeneration(
+        AccountClerkLease(
             account_id="DU123",
             generation=3,
-            phase="accepting",
-            recorded_at_ms=1_700_000_000_000,
-            source="test",
+            pid=123,
+            ibkr_client_id=51,
+            status="RUNNING",
+            started_at_ms=1_700_000_000_000,
+            renewed_at_ms=1_700_000_000_002,
+            valid_until_ms=9_000_000_000_000,
         ),
     )
 
@@ -422,27 +434,24 @@ async def test_refresh_now_captures_owner_generation_before_collection(
         account_id: str | None,
         context: str,
     ) -> AccountTruthCollectionContext:
-        write_account_owner_generation(
+        advance_account_clerk_generation(
             tmp_path,
-            AccountOwnerGeneration(
-                account_id="DU123",
-                generation=4,
-                phase="accepting",
-                recorded_at_ms=1_700_000_000_001,
-                source="test",
-            ),
+            "DU123",
+            phase="accepting",
+            recorded_at_ms=1_700_000_000_003,
+            source="test",
         )
         return _collection_context(account_id or "")
 
     def observe_success(
         account_truth: AccountTruthResponse,
         *,
-        owner_generation_before: tuple[int, str] | None,
-        owner_generation_captured: bool,
+        clerk_generation_before: tuple[int, str] | None,
+        clerk_generation_captured: bool,
     ) -> None:
         observed["truth"] = account_truth
-        observed["owner_generation_before"] = owner_generation_before
-        observed["owner_generation_captured"] = owner_generation_captured
+        observed["clerk_generation_before"] = clerk_generation_before
+        observed["clerk_generation_captured"] = clerk_generation_captured
 
     monkeypatch.setattr(account_truth_refresh, "get_monitor", lambda: None)
     monkeypatch.setattr(
@@ -468,18 +477,25 @@ async def test_refresh_now_captures_owner_generation_before_collection(
     assert result is truth
     assert observed == {
         "truth": truth,
-        "owner_generation_before": (3, "accepting"),
-        "owner_generation_captured": True,
+        "clerk_generation_before": (3, "accepting"),
+        "clerk_generation_captured": True,
     }
 
 
-def test_read_owner_generation_fence_fails_closed_for_malformed_artifact(tmp_path: Path) -> None:
+def test_read_clerk_generation_fence_fails_closed_for_malformed_artifact(tmp_path: Path) -> None:
     account_id = "DU123"
-    path = account_artifacts_root(tmp_path, account_id) / ACCOUNT_OWNER_GENERATION_FILENAME
+    path = account_artifacts_root(tmp_path, account_id) / ACCOUNT_CLERK_GENERATION_FILENAME
     path.parent.mkdir(parents=True)
     path.write_text('{"generation":"not-an-integer"}', encoding="utf-8")
 
-    assert account_truth_refresh._read_owner_generation_fence(tmp_path, account_id) is None
+    assert (
+        account_truth_refresh._read_clerk_generation_fence(
+            tmp_path,
+            account_id,
+            now_ms=1_700_000_000_000,
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio

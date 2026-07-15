@@ -61,6 +61,29 @@ identity-scoped rejection, and replay. Clerk process lifecycle and lease
 fencing follow in #1018; the broker drain and receipt #2 follow in #1020; the
 journal ledger verdict cutover follows the reconciler and shadow-parity work.
 
+## Account Observation Lease migration boundary (2026-07-15)
+
+The Account Observation Lease is now fenced by the accepting Account Clerk
+generation plus its matching, unexpired `RUNNING` Clerk lease, not the retired
+per-runner owner generation. A generation file alone is insufficient because
+it survives a crashed or reaped Clerk. Lease schema v2 and shadow-comparison
+schema v2 make that boundary explicit. Owner-keyed v1 lease artifacts fail
+closed, and owner-keyed comparison rows are classified as legacy evidence that
+cannot authorize promotion.
+
+One process-wide setting, `IBKR_ACCOUNT_GATE_AUTHORITY`, selects the account
+proof consumed by both Start and submit. Its default remains `account_truth`.
+The `observation_lease` branch is deliberately dormant until three distinct
+canonical NYSE paper sessions produce valid v2 comparisons with no
+lease-weaker result and the Clerk-restart HITL smoke passes. Per-bot selection
+is forbidden because it would create split account authority.
+
+The obsolete, zero-production-caller owner-generation advance writer and
+startup recording method are removed. Remaining owner-generation reads are
+still active compatibility/safety consumers and are not deleted under a false
+"dead code" claim; each must move to a characterized Clerk-backed replacement
+before its artifact contract can be retired.
+
 ## Issue #1044 callback-stream hardening traceability
 
 | Requirement | Verification |

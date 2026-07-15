@@ -11,6 +11,7 @@ from scripts.archive_observation_lease_parity import main
 def _comparison(recorded_at_ms: int) -> dict[str, object]:
     return {
         "event_type": "account_observation_lease_shadow_comparison",
+        "comparison_schema_version": 2,
         "recorded_at_ms": recorded_at_ms,
         "strategy_instance_id": "bot-a",
         "run_id": "run-a",
@@ -20,6 +21,8 @@ def _comparison(recorded_at_ms: int) -> dict[str, object]:
         "lease_gate_id": "account.observation_lease",
         "lease_source": "account_observation_lease",
         "lease_status": "pass",
+        "lease_schema_version": 2,
+        "lease_generation_authority": "account_clerk",
     }
 
 

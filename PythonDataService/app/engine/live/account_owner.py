@@ -153,15 +153,6 @@ class AccountOwner:
             evidence_at_ms=time.time_ns() // 1_000_000,
         )
 
-    def record_accepting_generation(self, *, recorded_at_ms: int | None = None) -> AccountOwnerGeneration:
-        if self._phase != "accepting":
-            raise RuntimeError(f"cannot record accepting AccountOwner generation while phase is {self._phase!r}")
-        return self._write_generation(
-            "accepting",
-            recorded_at_ms=recorded_at_ms,
-            advance=True,
-        )
-
     async def submit(self, intent: AccountOwnerSubmitIntent) -> AccountOwnerSubmitResult:
         if not self._accepting:
             self._reject(intent, "ACCOUNT_OWNER_RECONNECTING", self._diagnostics(intent))

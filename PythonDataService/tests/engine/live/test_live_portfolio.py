@@ -935,6 +935,79 @@ async def test_submit_pending_orders_logs_observation_lease_shadow_divergence_wi
 
 
 @pytest.mark.asyncio
+async def test_submit_pending_orders_lease_authority_blocks_on_revoked_lease(
+    tmp_path: Path,
+) -> None:
+    from app.engine.execution.order_sizer import FixedShares, OrderSizer
+    from app.engine.live.intent_events import IntentEventType
+    from app.engine.live.intent_wal import IntentWal
+    from app.engine.live.order_identity import build_bot_order_namespace
+
+    broker = FakeBroker()
+    truth_gate = account_truth_gate_result(_account_truth_snapshot(), now_ms=_NOW_MS)
+    lease_gate = GateResult(
+        gate_id="account.observation_lease",
+        status="block",
+        source="account_observation_lease",
+        operator_reason="ACCOUNT_OBSERVATION_LEASE_REVOKED",
+        operator_next_step="RECONCILE_NOW",
+        evidence_at_ms=_NOW_MS,
+    )
+    wal = IntentWal(tmp_path / "intent_events.jsonl")
+    portfolio = LivePortfolio(
+        broker,
+        intent_wal=wal,
+        bot_order_namespace=build_bot_order_namespace("lease-block"),
+        account_truth_gate_provider=lambda: truth_gate,
+        account_observation_lease_gate_provider=lambda: lease_gate,
+        account_gate_authority="observation_lease",
+    )
+    portfolio.order_sizer = OrderSizer(FixedShares(value=10))
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    with pytest.raises(AccountTruthBlockError) as exc:
+        await portfolio.submit_pending_orders()
+
+    assert exc.value.gate_result == lease_gate
+    events = wal.read_tail()
+    assert [event.event_type for event in events] == [
+        IntentEventType.SIZING_RESOLVED,
+        IntentEventType.INTENT_DROPPED_BEFORE_SUBMIT,
+    ]
+    assert events[1].intent_id == events[0].intent_id
+    assert events[1].drop_reason == "account_observation_lease_block"
+    assert broker.orders == []
+    assert list(portfolio.drain_pending()) == []
+
+
+@pytest.mark.asyncio
+async def test_submit_pending_orders_lease_authority_fails_closed_on_provider_error() -> None:
+    broker = FakeBroker()
+    truth_gate = account_truth_gate_result(_account_truth_snapshot(), now_ms=_NOW_MS)
+
+    def broken_lease_gate() -> GateResult:
+        raise OSError("lease artifact read failed")
+
+    portfolio = LivePortfolio(
+        broker,
+        account_truth_gate_provider=lambda: truth_gate,
+        account_observation_lease_gate_provider=broken_lease_gate,
+        account_gate_authority="observation_lease",
+    )
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    with pytest.raises(AccountTruthBlockError) as exc:
+        await portfolio.submit_pending_orders()
+
+    assert exc.value.gate_result.operator_reason == "ACCOUNT_OBSERVATION_LEASE_READ_FAILED"
+    assert broker.orders == []
+
+
+@pytest.mark.asyncio
 async def test_submit_pending_orders_ignores_observation_lease_shadow_provider_failure(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
