@@ -18,7 +18,6 @@ from app.broker.ibkr.models import (
 from app.engine.live.account_artifacts import (
     RESTART_INTENSITY_SOURCE,
     AccountArtifactError,
-    AccountClerkGeneration,
     AccountClerkLease,
     AccountFreezeEvidence,
     AccountInstanceBinding,
@@ -382,28 +381,41 @@ def test_account_truth_observer_revokes_when_clerk_generation_changes_during_swe
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    owners = iter(
-        (
-            AccountClerkGeneration(
-                account_id="DU1234567",
-                generation=3,
-                phase="accepting",
-                recorded_at_ms=1_780_000_002_000,
-                source="test",
-            ),
-            AccountClerkGeneration(
-                account_id="DU1234567",
-                generation=4,
+    _write_accepting_clerk_generation(tmp_path, generation=3)
+    original_read = account_reconciliation_module.read_active_accepting_account_clerk_generation
+    read_count = 0
+
+    def read_then_advance_generation(*args, **kwargs):
+        nonlocal read_count
+        clerk = original_read(*args, **kwargs)
+        read_count += 1
+        if read_count == 1:
+            advanced = advance_account_clerk_generation(
+                tmp_path,
+                "DU1234567",
                 phase="accepting",
                 recorded_at_ms=1_780_000_002_001,
                 source="test",
-            ),
-        )
-    )
+            )
+            write_account_clerk_lease(
+                tmp_path,
+                AccountClerkLease(
+                    account_id="DU1234567",
+                    generation=advanced.generation,
+                    pid=123,
+                    ibkr_client_id=51,
+                    status="RUNNING",
+                    started_at_ms=1_780_000_002_001,
+                    renewed_at_ms=1_780_000_002_001,
+                    valid_until_ms=1_780_000_062_001,
+                ),
+            )
+        return clerk
+
     monkeypatch.setattr(
         account_reconciliation_module,
-        "read_account_clerk_generation",
-        lambda *_args: next(owners),
+        "read_active_accepting_account_clerk_generation",
+        read_then_advance_generation,
     )
     service = AccountReconciliationService(artifacts_root=tmp_path)
 

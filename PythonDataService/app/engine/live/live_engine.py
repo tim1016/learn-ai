@@ -943,6 +943,7 @@ class LiveEngine:
         ):
             from app.engine.live.account_artifacts import append_account_event
             from app.engine.live.account_observation_lease import (
+                ACCOUNT_OBSERVATION_LEASE_SCHEMA_VERSION,
                 account_observation_lease_gate_result,
                 assess_account_observation_lease,
             )
@@ -983,7 +984,7 @@ class LiveEngine:
                         "lease_source": lease_gate.source,
                         "lease_status": lease_gate.status,
                         "lease_reason_code": lease_gate.operator_reason,
-                        "lease_schema_version": 2,
+                        "lease_schema_version": ACCOUNT_OBSERVATION_LEASE_SCHEMA_VERSION,
                         "lease_generation_authority": (
                             OBSERVATION_LEASE_GENERATION_AUTHORITY
                         ),

@@ -21,10 +21,9 @@ from app.engine.live.account_artifacts import (
     account_artifacts_root,
     append_account_event,
     clear_account_freeze,
-    read_account_clerk_generation,
     read_account_events,
     read_account_freeze,
-    require_active_account_clerk_generation,
+    read_active_accepting_account_clerk_generation,
 )
 from app.engine.live.account_identity import InvalidAccountIdError, normalize_account_id
 from app.engine.live.account_observation_lease import (
@@ -87,18 +86,6 @@ class _ReceiptInvalidation:
     execution_ids: tuple[str, ...]
 
 
-def _clerk_generation_fence(clerk: object | None) -> tuple[int, str] | None:
-    """Return the Clerk-generation fields that must stay stable during a sweep."""
-
-    if clerk is None:
-        return None
-    generation = getattr(clerk, "generation", None)
-    phase = getattr(clerk, "phase", None)
-    if not isinstance(generation, int) or not isinstance(phase, str):
-        return None
-    return generation, phase
-
-
 def _active_clerk_generation_fence(
     artifacts_root: Path,
     account_id: str,
@@ -106,18 +93,14 @@ def _active_clerk_generation_fence(
     now_ms: int,
 ) -> tuple[int, str] | None:
     try:
-        clerk = read_account_clerk_generation(artifacts_root, account_id)
-        active_generation = require_active_account_clerk_generation(
+        clerk = read_active_accepting_account_clerk_generation(
             artifacts_root,
             account_id,
             now_ms=now_ms,
         )
     except (AccountClerkLeaseUnavailableError, OSError, ValueError):
         return None
-    fence = _clerk_generation_fence(clerk)
-    if fence is None or fence != (active_generation, "accepting"):
-        return None
-    return fence
+    return None if clerk is None else (clerk.generation, clerk.phase)
 
 
 class AccountReconciliationService:

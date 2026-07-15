@@ -13,10 +13,10 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.engine.live.account_artifacts import (
+    AccountClerkGeneration,
     AccountClerkLeaseUnavailableError,
     account_artifacts_root,
-    read_account_clerk_generation,
-    require_active_account_clerk_generation,
+    read_active_accepting_account_clerk_generation,
 )
 from app.engine.live.account_identity import normalize_account_id
 from app.schemas.artifact_io import atomic_write_pydantic_artifact, read_pydantic_artifact
@@ -24,6 +24,7 @@ from app.schemas.live_runs import GateResult
 from app.services.account_truth_snapshot import DEFAULT_ACCOUNT_TRUTH_READINESS_TTL_MS
 
 ACCOUNT_OBSERVATION_LEASE_FILENAME = "account_observation_lease.json"
+ACCOUNT_OBSERVATION_LEASE_SCHEMA_VERSION = 2
 ACCOUNT_OBSERVATION_LEASE_GATE_ID = "account.observation_lease"
 ACCOUNT_OBSERVATION_LEASE_GATE_SOURCE = "account_observation_lease"
 _CLERK_GENERATION_UNREADABLE = object()
@@ -214,17 +215,13 @@ def _read_active_clerk_generation(
     account_id: str,
     *,
     now_ms: int,
-):
+) -> AccountClerkGeneration | object | None:
     try:
-        clerk = read_account_clerk_generation(artifacts_root, account_id)
-        active_generation = require_active_account_clerk_generation(
+        return read_active_accepting_account_clerk_generation(
             artifacts_root,
             account_id,
             now_ms=now_ms,
         )
-        if clerk is None or clerk.phase != "accepting" or clerk.generation != active_generation:
-            return None
-        return clerk
     except AccountClerkLeaseUnavailableError:
         return None
     except OSError:
@@ -250,6 +247,9 @@ def _assessment(
 
 __all__ = [
     "ACCOUNT_OBSERVATION_LEASE_FILENAME",
+    "ACCOUNT_OBSERVATION_LEASE_GATE_ID",
+    "ACCOUNT_OBSERVATION_LEASE_GATE_SOURCE",
+    "ACCOUNT_OBSERVATION_LEASE_SCHEMA_VERSION",
     "AccountObservationLease",
     "AccountObservationLeaseAssessment",
     "AccountObservationLeaseRepo",

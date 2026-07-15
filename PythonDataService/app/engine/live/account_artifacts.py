@@ -815,6 +815,29 @@ def require_active_account_clerk_generation(
     return generation.generation
 
 
+def read_active_accepting_account_clerk_generation(
+    artifacts_root: Path,
+    account_id: str,
+    *,
+    now_ms: int,
+) -> AccountClerkGeneration | None:
+    """Return the active Clerk generation only while it is accepting work.
+
+    Lease/artifact failures intentionally propagate so each boundary can
+    preserve its existing fail-closed logging or unreadable-evidence mapping.
+    """
+
+    clerk = read_account_clerk_generation(artifacts_root, account_id)
+    active_generation = require_active_account_clerk_generation(
+        artifacts_root,
+        account_id,
+        now_ms=now_ms,
+    )
+    if clerk is None or clerk.phase != "accepting" or clerk.generation != active_generation:
+        return None
+    return clerk
+
+
 def evaluate_restart_intensity(
     artifacts_root: Path,
     *,
@@ -1252,6 +1275,7 @@ _LOCAL_EXPORTS = [
     "read_account_events_with_snapshot",
     "read_account_clerk_generation",
     "read_account_clerk_lease",
+    "read_active_accepting_account_clerk_generation",
     "require_active_account_clerk_generation",
     "read_account_events_tolerant",
     "read_account_events_tolerant_with_hash",

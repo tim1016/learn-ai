@@ -23,8 +23,7 @@ from app.broker.ibkr.health import build_broker_health
 from app.broker.ibkr.models import IbkrConnectionHealth
 from app.engine.live.account_artifacts import (
     AccountClerkLeaseUnavailableError,
-    read_account_clerk_generation,
-    require_active_account_clerk_generation,
+    read_active_accepting_account_clerk_generation,
 )
 from app.schemas.account_truth import AccountTruthResponse
 from app.services.account_truth_snapshot import (
@@ -496,8 +495,7 @@ def _read_clerk_generation_fence(
     if account_id is None:
         return None
     try:
-        clerk = read_account_clerk_generation(artifacts_root, account_id)
-        active_generation = require_active_account_clerk_generation(
+        clerk = read_active_accepting_account_clerk_generation(
             artifacts_root,
             account_id,
             now_ms=now_ms,
@@ -508,15 +506,9 @@ def _read_clerk_generation_fence(
             extra={"account_id": account_id},
         )
         return None
-    generation = getattr(clerk, "generation", None)
-    phase = getattr(clerk, "phase", None)
-    if (
-        not isinstance(generation, int)
-        or phase != "accepting"
-        or generation != active_generation
-    ):
+    if clerk is None:
         return None
-    return generation, phase
+    return clerk.generation, clerk.phase
 
 
 def _accepts_refresh_outcome_observers(refresh_now: Callable[..., object]) -> bool:

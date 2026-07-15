@@ -22,6 +22,7 @@ from app.engine.live.account_artifacts import (
 from app.engine.live.account_observation_lease import (
     ACCOUNT_OBSERVATION_LEASE_GATE_ID,
     ACCOUNT_OBSERVATION_LEASE_GATE_SOURCE,
+    ACCOUNT_OBSERVATION_LEASE_SCHEMA_VERSION,
 )
 from app.lean_sidecar.trading_calendar import is_trading_day
 from app.services.account_truth_snapshot import ACCOUNT_TRUTH_GATE_ID, ACCOUNT_TRUTH_GATE_SOURCE
@@ -228,8 +229,8 @@ def _parse_shadow_comparison(
         != OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION
     ):
         return None, "comparison_schema_version is not supported"
-    if event.get("lease_schema_version") != 2:
-        return None, "lease_schema_version must be 2"
+    if event.get("lease_schema_version") != ACCOUNT_OBSERVATION_LEASE_SCHEMA_VERSION:
+        return None, f"lease_schema_version must be {ACCOUNT_OBSERVATION_LEASE_SCHEMA_VERSION}"
     if event.get("lease_generation_authority") != OBSERVATION_LEASE_GENERATION_AUTHORITY:
         return None, "lease_generation_authority must be account_clerk"
     if not isinstance(recorded_at_ms, int) or isinstance(recorded_at_ms, bool) or recorded_at_ms < 0:
