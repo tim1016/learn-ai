@@ -11,6 +11,7 @@ from pathlib import Path
 from app.engine.live.account_artifacts import append_account_event, read_account_events
 from app.engine.live.account_clerk import read_account_clerk_journal
 from app.engine.live.fleet import compute_fleet_contamination
+from app.engine.live.journal_exposure import project_journal_exposure
 from app.engine.live.live_state_sidecar import (
     LiveStateEnvelope,
     LiveStateSidecarCorruptError,
@@ -24,6 +25,10 @@ from app.services.legacy_stale_claim_retirement import retired_legacy_claim_keys
 logger = logging.getLogger(__name__)
 NetPositionFetcher = Callable[[], Awaitable[dict[str, int] | None]]
 _JOURNAL_PARITY_WINDOW = 3
+
+
+class AccountJournalScopeRequiredError(ValueError):
+    """Raised rather than allowing two account journals to net in one verdict."""
 
 
 def scan_runs_by_instance(root: Path) -> dict[str, list[dict]]:
@@ -81,7 +86,11 @@ def instance_broker(root: Path, sid: str) -> InstanceBrokerView | None:
     )
 
 
-def collect_fleet_position_explanations(root: Path) -> dict[str, dict[str, int]]:
+def collect_fleet_position_explanations(
+    root: Path,
+    *,
+    account_id: str | None = None,
+) -> dict[str, dict[str, int]]:
     """Read canonical Clerk-journal exposure; sidecars are bot-local only.
 
     Formula: residual[symbol] = broker_net[symbol] - Σ journal_namespace_exposure[symbol]
@@ -90,20 +99,36 @@ def collect_fleet_position_explanations(root: Path) -> dict[str, dict[str, int]]
     Validated against: tests/services/test_fleet_contamination.py::test_journal_exposure_is_canonical.
     """
 
-    journal_explained = _collect_journal_position_explanations(root)
+    journal_explained = (
+        _collect_journal_position_explanations(root)
+        if account_id is None
+        else _collect_journal_position_explanations(root, account_id=account_id)
+    )
     if journal_explained is not None:
-        legacy = _collect_legacy_fleet_position_explanations(root)
-        if _record_sidecar_journal_parity(root, journal_explained, legacy):
+        legacy = (
+            _collect_legacy_fleet_position_explanations(root)
+            if account_id is None
+            else _collect_legacy_fleet_position_explanations(root, account_id=account_id)
+        )
+        if _record_sidecar_journal_parity(root, journal_explained, legacy, account_id=account_id):
             return journal_explained
         return legacy
 
     # No account journal has ever been created. Retain the legacy read only
     # during the shadow bootstrap; once an account has a Clerk journal its
     # stale per-run sidecars can never contribute to account truth again.
-    return _collect_legacy_fleet_position_explanations(root)
+    return (
+        _collect_legacy_fleet_position_explanations(root)
+        if account_id is None
+        else _collect_legacy_fleet_position_explanations(root, account_id=account_id)
+    )
 
 
-def _collect_journal_position_explanations(root: Path) -> dict[str, dict[str, int]] | None:
+def _collect_journal_position_explanations(
+    root: Path,
+    *,
+    account_id: str | None = None,
+) -> dict[str, dict[str, int]] | None:
     artifacts_root = root.parent
     accounts_root = artifacts_root / "accounts"
     if not accounts_root.is_dir():
@@ -111,25 +136,22 @@ def _collect_journal_position_explanations(root: Path) -> dict[str, dict[str, in
     explained: dict[str, dict[str, int]] = {}
     found_journal = False
     for account_dir in sorted(path for path in accounts_root.iterdir() if path.is_dir()):
+        if account_id is not None and account_dir.name != account_id:
+            continue
         journal_path = account_dir / "clerk_journal.jsonl"
         if not journal_path.exists():
             continue
+        if account_id is None and found_journal:
+            raise AccountJournalScopeRequiredError("ACCOUNT_JOURNAL_SCOPE_REQUIRED")
         found_journal = True
         entries = read_account_clerk_journal(artifacts_root, account_dir.name)
-        for entry in entries:
-            if entry.entry_kind != "broker_event" or entry.broker_event is None:
-                continue
-            event = entry.broker_event
-            if event.get("event_type") != "fill":
-                continue
-            symbol = event.get("symbol")
-            side = event.get("side")
-            quantity = event.get("fill_quantity")
-            if not isinstance(symbol, str) or side not in {"BUY", "SELL"} or not isinstance(quantity, (int, float)):
-                continue
-            positions = explained.setdefault(entry.intent.strategy_instance_id, {})
-            signed = int(quantity) if side == "BUY" else -int(quantity)
-            positions[symbol.upper()] = positions.get(symbol.upper(), 0) + signed
+        for exposure in project_journal_exposure(
+            entries,
+            account_id=account_dir.name,
+            group_by="strategy_instance",
+        ):
+            positions = explained.setdefault(exposure.group_id, {})
+            positions[exposure.symbol] = int(exposure.quantity)
     return explained if found_journal else None
 
 
@@ -137,12 +159,16 @@ def _record_sidecar_journal_parity(
     root: Path,
     journal: dict[str, dict[str, int]],
     legacy: dict[str, dict[str, int]],
+    *,
+    account_id: str | None,
 ) -> bool:
     """Record shadow parity and cut over only after a clean durable window."""
 
     clean = legacy == journal
     accounts_root = root.parent / "accounts"
     for account_dir in accounts_root.iterdir() if accounts_root.is_dir() else ():
+        if account_id is not None and account_dir.name != account_id:
+            continue
         if (account_dir / "clerk_journal.jsonl").exists():
             append_account_event(
                 root.parent,
@@ -161,7 +187,9 @@ def _record_sidecar_journal_parity(
     return all(
         _account_journal_authority_is_active(root.parent, path.name)
         for path in accounts_root.iterdir()
-        if path.is_dir() and (path / "clerk_journal.jsonl").exists()
+        if path.is_dir()
+        and (account_id is None or path.name == account_id)
+        and (path / "clerk_journal.jsonl").exists()
     )
 
 
@@ -193,7 +221,11 @@ def _account_journal_authority_is_active(artifacts_root: Path, account_id: str) 
     )
 
 
-def _collect_legacy_fleet_position_explanations(root: Path) -> dict[str, dict[str, int]]:
+def _collect_legacy_fleet_position_explanations(
+    root: Path,
+    *,
+    account_id: str | None = None,
+) -> dict[str, dict[str, int]]:
     """Deprecated shadow comparator; never feeds the account verdict."""
 
     explained: dict[str, dict[str, int]] = {}
@@ -201,6 +233,13 @@ def _collect_legacy_fleet_position_explanations(root: Path) -> dict[str, dict[st
     for sid in scan_runs_by_instance(root):
         envelope = read_instance_live_state(root, sid)
         if envelope is not None and envelope.expected_position_by_symbol:
+            if account_id is not None:
+                try:
+                    ledger = read_ledger(root / envelope.run_id / "run_ledger.json")
+                except (OSError, ValueError):
+                    continue
+                if ledger.account_id != account_id:
+                    continue
             retired = _retired_claim_keys_for_run(
                 artifacts_root=root.parent, run_id=envelope.run_id, cache=retired_by_account
             )

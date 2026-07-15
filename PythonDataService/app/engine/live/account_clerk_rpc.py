@@ -21,6 +21,7 @@ from app.engine.live.account_clerk import (
     account_clerk_socket_path,
 )
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
+from app.engine.live.journal_exposure import normalize_broker_event
 
 logger = logging.getLogger(__name__)
 
@@ -237,8 +238,14 @@ class AccountClerkRpcClient:
         request = {"operation": "drain_events", "bot_order_namespace": bot_order_namespace}
         payload = await self._request(request)
         try:
-            return [IbkrOrderEvent.model_validate(event) for event in payload["events"]]
-        except (KeyError, ValidationError, TypeError) as exc:
+            events = payload["events"]
+            if not isinstance(events, list):
+                raise TypeError("drain_events payload must be a list")
+            normalized = [normalize_broker_event(event) for event in events]
+            if any(event is None for event in normalized):
+                raise ValueError("drain_events payload contains an invalid broker event")
+            return [event for event in normalized if event is not None]
+        except (KeyError, ValidationError, TypeError, ValueError) as exc:
             raise AccountClerkRpcMalformedResponseError(
                 operation="drain_events",
                 request_identity=_request_identity(request),

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from app.engine.live.account_artifacts import AccountFreezeEvidence, append_account_event, write_account_freeze
 from app.engine.live.account_clerk import AccountClerk, AccountClerkJournalEntry, read_account_clerk_journal
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
+from app.engine.live.journal_exposure import project_journal_exposure
 from app.engine.live.submit_state_machine import BrokerProbe, SubmitVerdict, next_action
 
 _CADENCE_SECONDS = 5.0
@@ -35,32 +36,11 @@ class ReconciliationResolution:
 
 
 def namespace_expected_exposure(entries: list[AccountClerkJournalEntry]) -> tuple[NamespaceExposure, ...]:
-    """Fold broker fill receipts into durable per-namespace signed exposure."""
+    """Return the canonical journal projection grouped by namespace."""
 
-    quantities: dict[tuple[str, str], float] = defaultdict(float)
-    seen_exec_ids: set[str] = set()
-    for entry in entries:
-        if entry.entry_kind != "broker_event" or entry.broker_event is None:
-            continue
-        event = entry.broker_event
-        if event.get("event_type") != "fill":
-            continue
-        exec_id = event.get("exec_id")
-        if isinstance(exec_id, str) and exec_id:
-            if exec_id in seen_exec_ids:
-                continue
-            seen_exec_ids.add(exec_id)
-        symbol = event.get("symbol")
-        side = event.get("side")
-        quantity = event.get("fill_quantity")
-        if not isinstance(symbol, str) or side not in {"BUY", "SELL"} or not isinstance(quantity, (int, float)):
-            continue
-        signed = float(quantity) if side == "BUY" else -float(quantity)
-        quantities[(entry.intent.bot_order_namespace, symbol.upper())] += signed
     return tuple(
-        NamespaceExposure(namespace, symbol, quantity)
-        for (namespace, symbol), quantity in sorted(quantities.items())
-        if quantity != 0
+        NamespaceExposure(exposure.group_id, exposure.symbol, exposure.quantity)
+        for exposure in project_journal_exposure(entries, group_by="namespace")
     )
 
 

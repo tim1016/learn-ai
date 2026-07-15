@@ -290,6 +290,30 @@ async def test_transport_failures_are_typed_and_distinguishable(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_drain_events_rejects_a_broker_event_outside_the_canonical_shape(tmp_path: Path) -> None:
+    async def invalid_event_response(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.readline()
+        response = AccountClerkRpcSuccessEnvelope(
+            payload={"events": [{"event_type": "fill", "exec_id": "missing-required-fields"}]}
+        )
+        writer.write((response.model_dump_json() + "\n").encode())
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    server, path = await _start_raw_server(tmp_path, invalid_event_response)
+    try:
+        with pytest.raises(AccountClerkRpcMalformedResponseError) as exc:
+            await AccountClerkRpcClient(artifacts_root=tmp_path, account_id=ACCOUNT).drain_events(
+                bot_order_namespace="learn-ai/bot-a/v1"
+            )
+    finally:
+        await _close_raw_server(server, path)
+
+    assert exc.value.reason_code == "ACCOUNT_CLERK_PROTOCOL_ERROR:MALFORMED_RESPONSE"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("rpc_request", "expected_budget", "expected_identity"),
     [
