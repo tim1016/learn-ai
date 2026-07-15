@@ -101,6 +101,35 @@ async def test_certificate_is_incomplete_without_linked_round_trip_identity(tmp_
     assert "INCOMPLETE_MEMBER_NAMESPACE_IDENTITY" in certificate.reasons
 
 
+async def test_certificate_is_incomplete_when_no_five_second_sample_exists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    now_ms = now_ms_utc()
+    receipt = CohortBatchLaunchReceipt(
+        account_id="DU1234567",
+        cohort_id="missing-sample-cohort",
+        member_strategy_instance_ids=("spy-a",),
+        window_start_ms=now_ms,
+        window_end_ms=now_ms + 30_000,
+        authorized_by="operator.alice",
+        recorded_at_ms=now_ms,
+        member_pins=(
+            CohortBatchLaunchMemberPin(
+                strategy_instance_id="spy-a",
+                run_id="run-a",
+                roll_call_offer_id="offer-a",
+            ),
+        ),
+    )
+    record_cohort_batch_launch_receipt(tmp_path, receipt)
+    service = CohortValidationCertificateService(artifacts_root=tmp_path)
+    monkeypatch.setattr(certificate_module, "read_account_clerk_journal", lambda *_args: [_journal_entry()])
+    monkeypatch.setattr(certificate_module, "project_journal_exposure", lambda *_args, **_kwargs: ())
+
+    certificate = await service.generate(account_id=receipt.account_id, cohort_id=receipt.cohort_id)
+
+    assert certificate.verdict == "incomplete"
+    assert "INCOMPLETE_EVIDENCE_SAMPLES" in certificate.reasons
+
+
 async def test_certificate_fails_for_nonflat_namespace_or_incident(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     service, receipt = await _seed_evidence(tmp_path)
     monkeypatch.setattr(certificate_module, "read_account_clerk_journal", lambda *_args: [_journal_entry()])

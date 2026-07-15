@@ -195,8 +195,10 @@ def _certificate_reasons(
     reasons: list[str] = []
     if not samples:
         reasons.append("INCOMPLETE_EVIDENCE_SAMPLES")
-    if evidence_verdict != "healthy":
+    if evidence_verdict == "failed":
         reasons.append(f"FAILED_EVIDENCE_{evidence_reason or evidence_verdict}")
+    elif evidence_verdict == "unknown":
+        reasons.append(f"INCOMPLETE_EVIDENCE_{evidence_reason or evidence_verdict}")
     if not round_trips:
         reasons.append("INCOMPLETE_ROUND_TRIP_IDENTITY")
     if observed_member_namespace_count != expected_member_count:
