@@ -58,6 +58,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 
 if TYPE_CHECKING:
     from app.broker.ibkr.client import IbkrClient
+    from app.broker.ibkr.models import IbkrOrderSpec
     from app.engine.live.account_artifacts import (
         AccountOwnerGeneration,
     )
@@ -106,7 +107,7 @@ class AccountOwnerBrokerWriter(Protocol):
 
 
 class AccountClerkRecoverySubmitter(Protocol):
-    async def __call__(self, intent: object) -> object: ...
+    async def __call__(self, intents: tuple[object, ...]) -> tuple[object, ...]: ...
 
 
 @dataclass(frozen=True)
@@ -492,6 +493,125 @@ def _append_live_state_submitted_order(
 _RECOVERY_PERM_ID_WAIT_S = 2.0
 
 
+def _journal_recovery_order_specs(
+    *,
+    artifacts_root: Path,
+    account_id: str,
+    bot_order_namespace: str,
+) -> tuple[IbkrOrderSpec, ...]:
+    """Build exact recovery liquidations from the canonical namespace fill fold."""
+
+    from app.broker.ibkr.models import IbkrOrderSpec
+    from app.engine.live.account_clerk import read_account_clerk_journal
+    from app.engine.live.journal_exposure import project_journal_exposure
+    from app.engine.live.order_identity import build_order_ref, mint_intent_id
+
+    entries = read_account_clerk_journal(artifacts_root, account_id)
+    specs_by_symbol: dict[str, IbkrOrderSpec] = {}
+    for entry in reversed(entries):
+        intent = entry.intent
+        if entry.entry_kind != "recorded" or intent is None or intent.bot_order_namespace != bot_order_namespace:
+            continue
+        try:
+            spec = IbkrOrderSpec.model_validate(intent.order_spec)
+        except ValueError:
+            continue
+        specs_by_symbol.setdefault(spec.symbol.upper(), spec)
+
+    recovery_specs: list[IbkrOrderSpec] = []
+    for exposure in project_journal_exposure(
+        entries,
+        account_id=account_id,
+        group_by="namespace",
+    ):
+        if exposure.group_id != bot_order_namespace:
+            continue
+        source = specs_by_symbol.get(exposure.symbol)
+        if source is None:
+            raise RuntimeError(f"CLERK_RECOVERY_SYMBOL_METADATA_MISSING:{exposure.symbol}")
+        intent_id = mint_intent_id()
+        recovery_specs.append(
+            IbkrOrderSpec(
+                symbol=source.symbol,
+                sec_type=source.sec_type,
+                action="SELL" if exposure.quantity > 0 else "BUY",
+                quantity=abs(exposure.quantity),
+                order_type="MKT",
+                time_in_force="DAY",
+                confirm_paper=True,
+                client_order_id=f"recovery-flatten-{source.symbol}-{int(time.time() * 1000)}",
+                order_ref=build_order_ref(bot_order_namespace, intent_id),
+            )
+        )
+    return tuple(recovery_specs)
+
+
+async def _recovery_flatten_through_clerk(
+    *,
+    order_specs: tuple[IbkrOrderSpec, ...],
+    submitter: AccountClerkRecoverySubmitter,
+    account_id: str,
+    strategy_instance_id: str,
+    run_id: str,
+    bot_order_namespace: str,
+    owner_generation: int,
+    live_state_path: Path | None,
+    live_state_trusted_root: Path | None,
+    live_state_seed: LiveStateEnvelope | None,
+) -> int:
+    """Submit one Clerk-owned, namespace-atomic recovery batch."""
+
+    from app.broker.ibkr.models import IbkrOrderSpec
+    from app.engine.live.account_owner import AccountOwnerSubmitIntent
+
+    intents: list[AccountOwnerSubmitIntent] = []
+    for spec in order_specs:
+        if spec.order_ref is None:
+            raise RuntimeError("CLERK_RECOVERY_ORDER_REF_REQUIRED")
+        intents.append(
+            AccountOwnerSubmitIntent(
+                trace_id=f"recovery-{spec.order_ref}",
+                account_id=account_id,
+                strategy_instance_id=strategy_instance_id,
+                run_id=run_id,
+                bot_order_namespace=bot_order_namespace,
+                intent_id=spec.order_ref.rsplit(":", maxsplit=1)[1],
+                order_ref=spec.order_ref,
+                intent_kind="RECOVERY_FLATTEN",
+                order_spec=spec.model_dump(mode="json"),
+                owner_generation=owner_generation,
+                created_at_ms=int(time.time() * 1000),
+            )
+        )
+    receipts = await submitter(tuple(intents))
+    if len(receipts) != len(intents):
+        raise RuntimeError("CLERK_RECOVERY_BATCH_RECEIPT_COUNT_MISMATCH")
+    for intent, receipt in zip(intents, receipts, strict=True):
+        spec = IbkrOrderSpec.model_validate(intent.order_spec)
+        broker_acked = getattr(receipt, "broker_acked", None)
+        if broker_acked is None:
+            raise RuntimeError("CLERK_RECOVERY_BATCH_RECEIPT_INVALID")
+        if live_state_path is None or spec.client_order_id is None:
+            continue
+        try:
+            _append_live_state_submitted_order(
+                live_state_path,
+                trusted_root=live_state_trusted_root,
+                client_order_id=spec.client_order_id,
+                perm_id=broker_acked.perm_id,
+                order_id=broker_acked.order_id,
+                status=broker_acked.status,
+                symbol=spec.symbol,
+                seed_envelope=live_state_seed,
+            )
+        except Exception:
+            logger.exception(
+                "Clerk recovery flatten could not record submitted order fingerprint",
+                extra={"step": "8"},
+            )
+    return len(receipts)
+
+
 async def _recovery_flatten(
     broker,
     *,
@@ -506,6 +626,7 @@ async def _recovery_flatten(
     recovery_strategy_instance_id: str | None = None,
     recovery_run_id: str | None = None,
     recovery_owner_generation: int = 0,
+    recovery_artifacts_root: Path | None = None,
     failed_symbols: list[str] | None = None,
 ) -> int:
     """Best-effort cancel + flatten for the cmd_start unhandled-exception path.
@@ -556,9 +677,8 @@ async def _recovery_flatten(
     if resolved_namespace is None and live_state_seed is not None:
         resolved_namespace = live_state_seed.bot_order_namespace
 
-    snapshot = await broker.fetch_positions()
-
     if readonly:
+        snapshot = await broker.fetch_positions()
         detected = 0
         for pos in snapshot.positions:
             qty_signed = float(pos.quantity)
@@ -575,6 +695,34 @@ async def _recovery_flatten(
             detected += 1
         return detected
 
+    if account_clerk_recovery_submitter is not None:
+        if (
+            recovery_artifacts_root is None
+            or recovery_account_id is None
+            or recovery_strategy_instance_id is None
+            or recovery_run_id is None
+            or resolved_namespace is None
+        ):
+            raise ValueError("Clerk recovery flatten requires complete account binding identity")
+        return await _recovery_flatten_through_clerk(
+            order_specs=_journal_recovery_order_specs(
+                artifacts_root=recovery_artifacts_root,
+                account_id=recovery_account_id,
+                bot_order_namespace=resolved_namespace,
+            ),
+            submitter=account_clerk_recovery_submitter,
+            account_id=recovery_account_id,
+            strategy_instance_id=recovery_strategy_instance_id,
+            run_id=recovery_run_id,
+            bot_order_namespace=resolved_namespace,
+            owner_generation=recovery_owner_generation,
+            live_state_path=live_state_path,
+            live_state_trusted_root=live_state_trusted_root,
+            live_state_seed=live_state_seed,
+        )
+
+    snapshot = await broker.fetch_positions()
+
     # Phase 5C / VCR-0002 — managed cancel-confirm timeout in the
     # recovery-flatten path. PRD §5C: do NOT liquidate when the cancel
     # confirms can't return within the window; surface as a fatal halt
@@ -588,33 +736,27 @@ async def _recovery_flatten(
     async def _cancel_open_orders():
         return await broker.cancel_open_orders()
 
-    if account_clerk_recovery_submitter is None:
-        try:
-            cancel_call = (
-                account_owner_broker_writer(
-                    boundary="broker.cancel_open_orders",
-                    write=_cancel_open_orders,
-                )
-                if account_owner_broker_writer is not None
-                else _cancel_open_orders()
+    try:
+        cancel_call = (
+            account_owner_broker_writer(
+                boundary="broker.cancel_open_orders",
+                write=_cancel_open_orders,
             )
-            cancelled = await asyncio.wait_for(cancel_call, timeout=CANCEL_CONFIRM_TIMEOUT_S)
-        except TimeoutError as exc:
-            logger.error(
-                "cancel_open_orders timed out during recovery flatten; refusing to liquidate",
-                extra={"step": "8", "timeout_s": CANCEL_CONFIRM_TIMEOUT_S},
-            )
-            raise CancelConfirmTimeoutHaltError(timeout_s=CANCEL_CONFIRM_TIMEOUT_S) from exc
-        except Exception:
-            logger.exception(
-                "cancel_open_orders failed during recovery flatten",
-                extra={"step": "8"},
-            )
-            cancelled = []
-    else:
-        # The Clerk executes the namespace-scoped terminal-cancel barrier
-        # immediately before each recovery liquidation.  The bot must never
-        # call its fenced broker adapter on this path.
+            if account_owner_broker_writer is not None
+            else _cancel_open_orders()
+        )
+        cancelled = await asyncio.wait_for(cancel_call, timeout=CANCEL_CONFIRM_TIMEOUT_S)
+    except TimeoutError as exc:
+        logger.error(
+            "cancel_open_orders timed out during recovery flatten; refusing to liquidate",
+            extra={"step": "8", "timeout_s": CANCEL_CONFIRM_TIMEOUT_S},
+        )
+        raise CancelConfirmTimeoutHaltError(timeout_s=CANCEL_CONFIRM_TIMEOUT_S) from exc
+    except Exception:
+        logger.exception(
+            "cancel_open_orders failed during recovery flatten",
+            extra={"step": "8"},
+        )
         cancelled = []
     if cancelled:
         logger.info(
@@ -672,42 +814,14 @@ async def _recovery_flatten(
             async def _place_order(order_spec=spec):
                 return await broker.place_order(order_spec, perm_id_wait_s=_RECOVERY_PERM_ID_WAIT_S)
 
-            if account_clerk_recovery_submitter is not None:
-                if (
-                    recovery_account_id is None
-                    or recovery_strategy_instance_id is None
-                    or recovery_run_id is None
-                    or resolved_namespace is None
-                    or order_ref is None
-                ):
-                    raise ValueError("Clerk recovery flatten requires complete account binding identity")
-                from app.engine.live.account_owner import AccountOwnerSubmitIntent
-
-                recovery_result = await account_clerk_recovery_submitter(
-                    AccountOwnerSubmitIntent(
-                        trace_id=f"recovery-{order_ref}",
-                        account_id=recovery_account_id,
-                        strategy_instance_id=recovery_strategy_instance_id,
-                        run_id=recovery_run_id,
-                        bot_order_namespace=resolved_namespace,
-                        intent_id=order_ref.rsplit(":", maxsplit=1)[1],
-                        order_ref=order_ref,
-                        intent_kind="RECOVERY_FLATTEN",
-                        order_spec=spec.model_dump(mode="json"),
-                        owner_generation=recovery_owner_generation,
-                        created_at_ms=int(time.time() * 1000),
-                    )
+            ack = (
+                await account_owner_broker_writer(
+                    boundary="broker.place_order",
+                    write=_place_order,
                 )
-                ack = recovery_result.broker_acked
-            else:
-                ack = (
-                    await account_owner_broker_writer(
-                        boundary="broker.place_order",
-                        write=_place_order,
-                    )
-                    if account_owner_broker_writer is not None
-                    else await _place_order()
-                )
+                if account_owner_broker_writer is not None
+                else await _place_order()
+            )
             logger.info(
                 "Recovery flatten liquidated %s qty=%s order_id=%s",
                 pos.symbol,
@@ -1988,8 +2102,8 @@ def cmd_start(args: argparse.Namespace) -> int:
                 exec_id=receipt.exec_id,
             )
 
-        async def _submit_recovery_to_account_clerk(intent):
-            return await clerk_client.submit_recovery_flatten(intent)
+        async def _submit_recovery_to_account_clerk(intents):
+            return await clerk_client.submit_recovery_flatten_batch(intents)
 
         async def _cancel_namespace_through_account_clerk(intent):
             return await clerk_client.cancel_namespace(intent)
@@ -2646,6 +2760,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                             recovery_strategy_instance_id=strategy_instance_id,
                             recovery_run_id=ledger.run_id,
                             recovery_owner_generation=_account_owner_generation_provider(),
+                            recovery_artifacts_root=_artifacts_root,
                             failed_symbols=failed_symbols,
                         )
                         if failed_symbols and not is_readonly:
