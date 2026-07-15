@@ -19,11 +19,13 @@ import argparse
 import asyncio
 import hashlib
 import inspect
+import logging
 import os
 import signal
 import tempfile
 from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -72,8 +74,11 @@ from app.engine.live.account_registry import (
 from app.engine.live.broker_callbacks import broker_callback_idempotency_key
 from app.utils.advisory_lock import advisory_file_lock
 
+logger = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     from app.engine.live.account_clerk_rpc import AccountClerkRpcClient, AccountClerkRpcServer
+    from app.engine.live.submit_state_machine import BrokerProbe
 
 ACCOUNT_CLERK_AUTHORITY_LOCK_TARGET_FILENAME = "clerk_authority"
 _CLERK_LEASE_TTL_MS = 5_000
@@ -105,6 +110,16 @@ class AccountClerkGenerationFencedError(RuntimeError):
 
 class AccountClerkCancelNamespaceUncertainError(RuntimeError):
     """The Clerk cannot prove that a namespace cancellation reached terminal state."""
+
+
+@dataclass(frozen=True)
+class AccountClerkReconciliationOutcome:
+    """One stable, Clerk-owned reconciliation decision."""
+
+    intent_id: str
+    order_ref: str
+    verdict: Literal["RECOVER_ADOPT", "RETRY_ONCE", "HALT"]
+    reason: str
 
 
 class AccountClerk:
@@ -663,6 +678,57 @@ class AccountClerk:
             )
             return True
 
+    async def reconciliation_snapshot(self) -> list[AccountClerkJournalEntry]:
+        """Return a stable recovered journal tail without disk-wide rescans."""
+
+        async with self._intake_lock:
+            return await asyncio.to_thread(self._journal.snapshot)
+
+    async def reconcile_uncertain_intent(
+        self,
+        intent: AccountOwnerSubmitIntent,
+        *,
+        retry_count: int,
+    ) -> AccountClerkReconciliationOutcome | None:
+        """Probe, decide, record, and (only when safe) retry under one lock."""
+
+        from app.engine.live.submit_state_machine import SubmitVerdict, next_action
+
+        async with self._intake_lock:
+            if self.recovery_flatten_in_progress or self._intent_is_terminal(intent):
+                return None
+            probe = await self._probe_intent_status(intent)
+            verdict = next_action(
+                current_status=_ack_failed_uncertain_status(),
+                probe=probe,
+                retry_count=retry_count,
+            )
+            reason = f"probe={probe.value}; retry_count={retry_count}"
+            # Recovery retry would repeat an ambiguous cancellation/flatten
+            # sequence.  It remains fail-closed even when the broker says the
+            # final order is absent; an operator must inspect the journal.
+            if intent.intent_kind == "RECOVERY_FLATTEN" and verdict is SubmitVerdict.RETRY_ONCE:
+                verdict = SubmitVerdict.HALT
+                reason = f"{reason}; recovery retry requires operator reconciliation"
+            await asyncio.to_thread(
+                self._journal.append_reconciliation_resolution,
+                intent,
+                verdict=verdict.value,
+                reason=reason,
+            )
+            if verdict is SubmitVerdict.RETRY_ONCE:
+                try:
+                    self._require_paper_broker()
+                    await self._retry_recorded_intent_locked(intent)
+                except Exception as exc:
+                    reason = f"{reason}; retry raised {type(exc).__name__}: {exc}"
+            return AccountClerkReconciliationOutcome(
+                intent_id=intent.intent_id,
+                order_ref=intent.order_ref,
+                verdict=verdict.value,
+                reason=reason,
+            )
+
     async def retry_recorded_intent(self, intent: AccountOwnerSubmitIntent) -> AccountClerkBrokerAckReceipt:
         """Re-place one Clerk-owned intent after a provably-absent probe."""
 
@@ -672,15 +738,52 @@ class AccountClerk:
         self._require_paper_broker()
         async with self._intake_lock:
             await self._require_normal_submit_intake(intent)
-            await asyncio.to_thread(self._journal.register_attribution, intent)
-            spec = IbkrOrderSpec.model_validate(intent.order_spec)
-            await asyncio.to_thread(self._journal.append_broker_submitting, intent)
-            try:
-                ack = await self._place_under_clerk_grant(spec)
-            except Exception as exc:
-                await asyncio.to_thread(self._journal.append_broker_uncertain, intent, exc)
-                raise
-            return await asyncio.to_thread(self._journal.append_broker_ack, intent, ack)
+            return await self._retry_recorded_intent_locked(intent)
+
+    async def _retry_recorded_intent_locked(self, intent: AccountOwnerSubmitIntent) -> AccountClerkBrokerAckReceipt:
+        """Retry an ordinary intent while the Clerk intake lock is held."""
+
+        await asyncio.to_thread(self._journal.register_attribution, intent)
+        spec = IbkrOrderSpec.model_validate(intent.order_spec)
+        await asyncio.to_thread(self._journal.append_broker_submitting, intent)
+        try:
+            ack = await self._place_under_clerk_grant(spec)
+        except Exception as exc:
+            await asyncio.to_thread(self._journal.append_broker_uncertain, intent, exc)
+            raise
+        return await asyncio.to_thread(self._journal.append_broker_ack, intent, ack)
+
+    def _intent_is_terminal(self, intent: AccountOwnerSubmitIntent) -> bool:
+        """Re-check the current tail immediately before a reconciliation act."""
+
+        for entry in self._journal.snapshot():
+            if entry.intent != intent:
+                continue
+            if entry.entry_kind == "broker_acked":
+                return True
+            if entry.entry_kind == "reconciliation" and entry.reconciliation_verdict in {
+                "RECOVER_ADOPT",
+                "HALT",
+            }:
+                return True
+        return False
+
+    async def _probe_intent_status(self, intent: AccountOwnerSubmitIntent) -> BrokerProbe:
+        """Use the Clerk's public broker seam and preserve probe diagnostics."""
+
+        from app.engine.live.submit_state_machine import BrokerProbe
+
+        probe_fn = getattr(self._broker, "probe_intent_status", None)
+        if not callable(probe_fn):
+            return BrokerProbe.NOT_PROVABLE
+        try:
+            return BrokerProbe(await probe_fn(intent.intent_id, intent.order_ref))
+        except Exception:
+            logger.exception(
+                "Account Clerk reconciliation probe failed",
+                extra={"account_id": self._account_id, "intent_id": intent.intent_id},
+            )
+            return BrokerProbe.NOT_PROVABLE
 
     def _require_paper_broker(self) -> None:
         client = getattr(self._broker, "_client", None)
@@ -1178,6 +1281,14 @@ async def _supervise_broker_event_stream(
     stop.set()
 
 
+def _ack_failed_uncertain_status():
+    """Avoid importing the intent event graph during Clerk module import."""
+
+    from app.engine.live.intent_events import IntentEventType
+
+    return IntentEventType.ACK_FAILED_UNCERTAIN
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run one account clerk lease process.")
     parser.add_argument("--artifacts-root", required=True)
@@ -1210,6 +1321,7 @@ __all__ = [
     "AccountClerkJournalCorruptError",
     "AccountClerkJournalEntry",
     "AccountClerkLeaseWriter",
+    "AccountClerkReconciliationOutcome",
     "AccountClerkRecordedReceipt",
     "AccountClerkRecoveryFlattenReceipt",
     "AccountClerkRpcClient",

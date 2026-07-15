@@ -627,6 +627,13 @@ class AccountClerkJournal:
             _append_jsonl(journal_path, entry)
             entries.append(entry)
 
+    def snapshot(self) -> list[AccountClerkJournalEntry]:
+        """Return the recovered in-memory journal tail for reconciliation."""
+
+        inbox_path, journal_path = self._paths()
+        with _file_lock(journal_path):
+            return list(self._load_tail_locked(inbox_path, journal_path))
+
     def rebuild_attribution(self) -> list[tuple[IbkrOrderEvent, str]]:
         """Rebuild durable callback attribution and return unowned callbacks."""
 

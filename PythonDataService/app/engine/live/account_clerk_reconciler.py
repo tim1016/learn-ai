@@ -9,19 +9,26 @@ from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 
-from app.engine.live.account_artifacts import AccountFreezeEvidence, append_account_event, write_account_freeze
+from app.engine.live.account_artifacts import (
+    AccountFreezeEvidence,
+    append_account_event,
+    read_account_events,
+    read_account_freeze,
+    write_account_freeze,
+)
 from app.engine.live.account_clerk import (
     ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S,
     AccountClerk,
     AccountClerkGenerationFencedError,
     AccountClerkJournalEntry,
-    read_account_clerk_journal,
 )
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.journal_exposure import project_journal_exposure
-from app.engine.live.submit_state_machine import BrokerProbe, SubmitVerdict, next_action
+from app.engine.live.submit_state_machine import BrokerProbe, SubmitVerdict
 
 _CADENCE_SECONDS = 5.0
+_SUBMIT_IN_FLIGHT_TTL_MS = 30_000 + 30_000
+_RECOVERY_IN_FLIGHT_TTL_MS = 120_000 + 30_000
 
 
 @dataclass(frozen=True)
@@ -66,11 +73,10 @@ class AccountClerkReconciler:
         self._task: asyncio.Task[None] | None = None
 
     async def reconcile_once(self) -> tuple[ReconciliationResolution, ...]:
-        entries = await asyncio.to_thread(
-            read_account_clerk_journal, self._clerk._artifacts_root, self._clerk._account_id
-        )
+        entries = await self._clerk.reconciliation_snapshot()
+        self._reassert_missing_halt_freeze(entries)
         resolutions: list[ReconciliationResolution] = []
-        for intent, retry_count in _unresolved_intents(entries).values():
+        for intent, retry_count in _unresolved_intents(entries, now_ms=self._now_ms()).values():
             if intent.intent_kind == "CANCEL_NAMESPACE" and self._clerk.cancel_namespace_in_progress:
                 continue
             resolution = await self._resolve(intent, retry_count)
@@ -94,6 +100,19 @@ class AccountClerkReconciler:
             )
         return tuple(resolutions)
 
+    def _reassert_missing_halt_freeze(self, entries: list[AccountClerkJournalEntry]) -> None:
+        """Repair the journal-to-freeze crash window without rewriting history."""
+
+        if read_account_freeze(self._clerk._artifacts_root, self._clerk._account_id) is not None:
+            return
+        halt = _latest_unresolved_halt(entries)
+        if halt is None:
+            return
+        events = read_account_events(self._clerk._artifacts_root, self._clerk._account_id)
+        if _halt_freeze_was_cleared(events, halt):
+            return
+        self._write_halt_freeze()
+
     async def start(self) -> None:
         if self._task is None:
             self._task = asyncio.create_task(self._run(), name="account-clerk-reconciler")
@@ -114,41 +133,13 @@ class AccountClerkReconciler:
     async def _resolve(self, intent, retry_count: int) -> ReconciliationResolution | None:
         if intent.intent_kind == "CANCEL_NAMESPACE":
             return await self._resolve_uncertain_cancel_namespace(intent)
-        probe = await self._probe(intent.intent_id, intent.order_ref)
-        verdict = next_action(
-            current_status=_ack_failed_uncertain_status(),
-            probe=probe,
-            retry_count=retry_count,
-        )
-        reason = f"probe={probe.value}; retry_count={retry_count}"
-        recorded = await self._clerk.append_reconciliation_resolution(
-            intent,
-            verdict=verdict.value,
-            reason=reason,
-        )
-        if not recorded:
-            # A Clerk recovery has the serialized broker-write lane.  A probe
-            # begun just before its cancellation barrier must not append a
-            # decision or retry into that recovery window.
+        outcome = await self._clerk.reconcile_uncertain_intent(intent, retry_count=retry_count)
+        if outcome is None:
             return None
-        if verdict is SubmitVerdict.RETRY_ONCE:
-            try:
-                await self._clerk.retry_recorded_intent(intent)
-            except Exception as exc:
-                reason = f"{reason}; retry raised {type(exc).__name__}: {exc}"
-        elif verdict is SubmitVerdict.HALT:
-            write_account_freeze(
-                self._clerk._artifacts_root,
-                AccountFreezeEvidence(
-                    account_id=self._clerk._account_id,
-                    freeze_kind="exposure",
-                    reason="ACCOUNT_CLERK_RECONCILIATION_NOT_PROVABLE",
-                    source="account_clerk_reconciler",
-                    recorded_at_ms=self._now_ms(),
-                    operator_next_step="CHECK_IBKR",
-                ),
-            )
-        return ReconciliationResolution(intent.intent_id, intent.order_ref, verdict, reason)
+        verdict = SubmitVerdict(outcome.verdict)
+        if verdict is SubmitVerdict.HALT:
+            self._write_halt_freeze()
+        return ReconciliationResolution(outcome.intent_id, outcome.order_ref, verdict, outcome.reason)
 
     async def _resolve_uncertain_cancel_namespace(
         self,
@@ -188,15 +179,6 @@ class AccountClerkReconciler:
             await self._clerk.append_reconciliation_resolution(intent, verdict=verdict.value, reason=reason)
         return ReconciliationResolution(intent.intent_id, intent.order_ref, verdict, reason)
 
-    async def _probe(self, intent_id: str, order_ref: str) -> BrokerProbe:
-        probe_fn = getattr(self._clerk._broker, "probe_intent_status", None)
-        if not callable(probe_fn):
-            return BrokerProbe.NOT_PROVABLE
-        try:
-            return BrokerProbe(await probe_fn(intent_id, order_ref))
-        except Exception:
-            return BrokerProbe.NOT_PROVABLE
-
     async def _probe_namespace_cancel(self, namespace: str) -> BrokerProbe:
         probe_fn = getattr(self._clerk._broker, "probe_namespace_cancel_status", None)
         if not callable(probe_fn):
@@ -224,9 +206,55 @@ class AccountClerkReconciler:
             ),
         )
 
+    def _write_halt_freeze(self) -> None:
+        write_account_freeze(
+            self._clerk._artifacts_root,
+            AccountFreezeEvidence(
+                account_id=self._clerk._account_id,
+                freeze_kind="exposure",
+                reason="ACCOUNT_CLERK_RECONCILIATION_NOT_PROVABLE",
+                source="account_clerk_reconciler",
+                recorded_at_ms=self._now_ms(),
+                operator_next_step="CHECK_IBKR",
+            ),
+        )
+
+def _latest_unresolved_halt(
+    entries: list[AccountClerkJournalEntry],
+) -> AccountClerkJournalEntry | None:
+    """Return the newest HALT that no later adoption superseded."""
+
+    halts: dict[str, AccountClerkJournalEntry] = {}
+    for entry in entries:
+        if entry.intent is None or entry.entry_kind != "reconciliation":
+            continue
+        if entry.reconciliation_verdict == "HALT":
+            halts[entry.intent.intent_id] = entry
+        elif entry.reconciliation_verdict == "RECOVER_ADOPT":
+            halts.pop(entry.intent.intent_id, None)
+    return max(halts.values(), key=lambda entry: entry.seq, default=None)
+
+
+def _halt_freeze_was_cleared(
+    account_events: list[dict],
+    halt: AccountClerkJournalEntry,
+) -> bool:
+    """A later audited clear is not the crash window this repair owns."""
+
+    return any(
+        event.get("event_type") == "account_freeze_cleared"
+        and event.get("source") == "account_clerk_reconciler"
+        and event.get("reason") == "ACCOUNT_CLERK_RECONCILIATION_NOT_PROVABLE"
+        and isinstance(event.get("cleared_at_ms"), int)
+        and event["cleared_at_ms"] >= halt.recorded_at_ms
+        for event in account_events
+    )
+
 
 def _unresolved_intents(
     entries: list[AccountClerkJournalEntry],
+    *,
+    now_ms: int,
 ) -> Mapping[str, tuple[AccountOwnerSubmitIntent, int]]:
     """Return crash-recovered or explicitly uncertain intents only.
 
@@ -237,25 +265,21 @@ def _unresolved_intents(
     recorded: dict[str, AccountOwnerSubmitIntent] = {}
     terminal: set[str] = set()
     retries: dict[str, int] = defaultdict(int)
-    submitting: set[str] = set()
-    uncertain: set[str] = set()
+    submitting_at: dict[str, tuple[int, int]] = {}
+    uncertainty_at: dict[str, tuple[int, int]] = {}
     for entry in entries:
         # A callback with no durable Clerk intent is deliberately retained as
         # account truth, but it is never an intent-reconciliation candidate.
         # Skip it before dereferencing the optional attribution payload.
         if entry.intent is None:
             continue
-        if entry.intent.intent_kind == "RECOVERY_FLATTEN":
-            # Recovery has its own terminal state machine and must never be
-            # retried as an ordinary Clerk submit.
-            continue
         intent_id = entry.intent.intent_id
         if entry.entry_kind == "recorded":
             recorded[intent_id] = entry.intent
         elif entry.entry_kind == "broker_submitting":
-            submitting.add(intent_id)
+            submitting_at[intent_id] = (entry.recorded_at_ms, entry.seq)
         elif entry.entry_kind in {"broker_uncertain", "cancel_uncertain"}:
-            uncertain.add(intent_id)
+            uncertainty_at[intent_id] = (entry.recorded_at_ms, entry.seq)
         elif entry.entry_kind in {"broker_acked", "cancel_confirmed"}:
             terminal.add(intent_id)
         elif entry.entry_kind == "reconciliation":
@@ -263,22 +287,29 @@ def _unresolved_intents(
                 terminal.add(intent_id)
             elif entry.reconciliation_verdict == "RETRY_ONCE":
                 retries[intent_id] += 1
-    return {
-        intent_id: (intent, retries[intent_id])
-        for intent_id, intent in recorded.items()
-        if intent_id not in terminal
-        and (
-            intent_id in uncertain
-            or (intent.intent_kind == "CANCEL_NAMESPACE" and intent_id in submitting)
-            or (intent.intent_kind != "CANCEL_NAMESPACE" and intent_id not in submitting)
+    candidates: dict[str, tuple[AccountOwnerSubmitIntent, int]] = {}
+    for intent_id, intent in recorded.items():
+        if intent_id in terminal:
+            continue
+        submitted_at = submitting_at.get(intent_id)
+        uncertainty_marker = uncertainty_at.get(intent_id)
+        if intent.intent_kind == "CANCEL_NAMESPACE":
+            if uncertainty_marker is not None or submitted_at is not None:
+                candidates[intent_id] = (intent, retries[intent_id])
+            continue
+        if intent.intent_kind == "RECOVERY_FLATTEN" and submitted_at is None and uncertainty_marker is None:
+            continue
+        if submitted_at is None or (uncertainty_marker is not None and uncertainty_marker > submitted_at):
+            candidates[intent_id] = (intent, retries[intent_id])
+            continue
+        ttl_ms = (
+            _RECOVERY_IN_FLIGHT_TTL_MS
+            if intent.intent_kind == "RECOVERY_FLATTEN"
+            else _SUBMIT_IN_FLIGHT_TTL_MS
         )
-    }
-
-
-def _ack_failed_uncertain_status():
-    from app.engine.live.intent_events import IntentEventType
-
-    return IntentEventType.ACK_FAILED_UNCERTAIN
+        if now_ms - submitted_at[0] >= ttl_ms:
+            candidates[intent_id] = (intent, retries[intent_id])
+    return candidates
 
 
 __all__ = [
