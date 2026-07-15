@@ -9,6 +9,7 @@ import pytest
 from app.broker.ibkr.models import IbkrOrderEvent
 from app.engine.live.account_clerk_journal import AccountClerkJournal, read_account_clerk_journal
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
+from app.engine.live.account_registry import AccountInstanceBinding, write_account_instance_binding
 from app.engine.live.journal_exposure import project_journal_account_exposure, project_journal_exposure
 from app.schemas.journal_cures import JournalCureRequest
 from app.services.journal_cures import JournalCureError, JournalCureService
@@ -63,6 +64,18 @@ def _journal_with_fill(root: Path) -> None:
             exec_id="cure-fill-1",
             ts_ms=100,
         )
+    )
+    write_account_instance_binding(
+        root,
+        AccountInstanceBinding(
+            account_id=ACCOUNT,
+            strategy_instance_id="bot-a",
+            run_id="run-a",
+            bot_order_namespace=NAMESPACE,
+            lifecycle_state="RETIRED",
+            recorded_at_ms=101,
+            source="test.retired",
+        ),
     )
 
 
@@ -132,6 +145,27 @@ def test_preview_reports_the_server_derived_direction_for_a_reducible_claim(tmp_
     assert preview.journal_quantity == 2
     assert preview.required_adjustment_sign == "negative"
     assert preview.can_cure is True
+
+
+def test_apply_refuses_a_claim_from_an_active_namespace(tmp_path: Path) -> None:
+    _journal_with_fill(tmp_path)
+    write_account_instance_binding(
+        tmp_path,
+        AccountInstanceBinding(
+            account_id=ACCOUNT,
+            strategy_instance_id="bot-a",
+            run_id="run-active",
+            bot_order_namespace=NAMESPACE,
+            lifecycle_state="ACTIVE",
+            recorded_at_ms=200,
+            source="test.active",
+        ),
+    )
+
+    with pytest.raises(JournalCureError, match="registry-proven retired"):
+        JournalCureService(artifacts_root=tmp_path).apply(
+            account_id=ACCOUNT, request=_request(), now_ms=201
+        )
 
 
 def test_request_rejects_blank_evidence_reference() -> None:

@@ -12,7 +12,7 @@ from app.broker.ibkr.client import BrokerError, IbkrClient
 from app.broker.ibkr.config import get_settings
 from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import AccountArtifactError, append_account_event
-from app.engine.live.account_clerk_rpc import AccountClerkRpcClient
+from app.engine.live.account_clerk_rpc import AccountClerkRpcClient, AccountClerkRpcError
 from app.engine.live.account_identity import normalize_account_id
 from app.engine.live.account_registry import backfill_false_crash_registry_rows
 from app.routers.broker_dependencies import require_connected_client
@@ -66,6 +66,28 @@ def get_legacy_stale_claim_retirement_service() -> LegacyStaleClaimRetirementSer
 
 def get_journal_cure_service() -> JournalCureService:
     return JournalCureService(artifacts_root=get_account_artifacts_root())
+
+
+def _outcome_unknown_http_error(exc: host_daemon_client.HostDaemonOutcomeUnknownError) -> HTTPException:
+    """Preserve ambiguous daemon mutations as a refresh-before-retry response."""
+
+    return HTTPException(
+        status.HTTP_409_CONFLICT,
+        detail={
+            "reason_code": "OUTCOME_UNKNOWN",
+            "message": exc.detail or "The Clerk readiness request may have completed; refresh before retrying.",
+        },
+    )
+
+
+def _clerk_rpc_http_error(exc: AccountClerkRpcError) -> HTTPException:
+    """Expose normal Clerk rejections without collapsing them into a server error."""
+
+    unavailable = exc.reason_code.startswith("ACCOUNT_CLERK_UNAVAILABLE:")
+    return HTTPException(
+        status.HTTP_503_SERVICE_UNAVAILABLE if unavailable else status.HTTP_409_CONFLICT,
+        detail={"reason_code": exc.reason_code, "message": "Clerk rejected or could not complete the request."},
+    )
 
 
 @router.post("/{account_id}/reconciliation", response_model=AccountReconciliationReceipt)
@@ -188,7 +210,7 @@ async def retire_legacy_stale_claim_endpoint(
 async def apply_journal_cure_endpoint(
     account_id: str,
     request: JournalCureRequest,
-    service: Annotated[JournalCureService, Depends(get_journal_cure_service)],
+    artifacts_root: AccountArtifactsRoot,
 ) -> JournalCureReceipt:
     """Append a claim-reducing cure only after the account Clerk is healthy."""
 
@@ -196,16 +218,19 @@ async def apply_journal_cure_endpoint(
     try:
         settings = get_settings()
         await host_daemon_client.ensure_account_clerk(settings.live_runner_daemon_url, canonical_account_id)
-        return await run_in_threadpool(
-            service.apply,
+        return await AccountClerkRpcClient(
+            artifacts_root=artifacts_root,
             account_id=canonical_account_id,
-            request=request,
-        )
+        ).apply_operator_adjustment(request)
     except JournalCureError as exc:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             detail={"reason_code": exc.reason_code, "message": exc.detail},
         ) from exc
+    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
+        raise _outcome_unknown_http_error(exc) from exc
+    except AccountClerkRpcError as exc:
+        raise _clerk_rpc_http_error(exc) from exc
     except host_daemon_client.HostDaemonError as exc:
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
@@ -264,6 +289,10 @@ async def operator_recovery_flatten_endpoint(
         return OperatorRecoveryFlattenResponse(recovery_flatten=receipt)
     except host_daemon_client.HostDaemonError as exc:
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
+    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
+        raise _outcome_unknown_http_error(exc) from exc
+    except AccountClerkRpcError as exc:
+        raise _clerk_rpc_http_error(exc) from exc
 
 
 @router.get(

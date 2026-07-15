@@ -11,6 +11,7 @@ from app.engine.live.account_clerk_journal import (
     AccountClerkOperatorAdjustmentConflict,
     read_account_clerk_journal,
 )
+from app.engine.live.account_registry import index_account_instance_bindings, read_account_instance_registry
 from app.engine.live.journal_exposure import project_journal_exposure
 from app.schemas.journal_cures import JournalCurePreview, JournalCureReceipt, JournalCureRequest
 from app.utils.timestamps import now_ms_utc
@@ -41,7 +42,19 @@ class JournalCureService:
         """Reduce a durable namespace claim or return its idempotent prior receipt."""
 
         journal = AccountClerkJournal(artifacts_root=self._artifacts_root, account_id=account_id)
-        adjustment = AccountClerkOperatorAdjustment(
+        adjustment = self.adjustment_for(account_id=account_id, request=request, now_ms=now_ms)
+        return self.apply_adjustment(account_id=account_id, adjustment=adjustment, request=request, journal=journal)
+
+    def adjustment_for(
+        self,
+        *,
+        account_id: str,
+        request: JournalCureRequest,
+        now_ms: int | None = None,
+    ) -> AccountClerkOperatorAdjustment:
+        """Build the immutable cure payload before handing it to the Clerk."""
+
+        return AccountClerkOperatorAdjustment(
             account_id=account_id,
             bot_order_namespace=request.bot_order_namespace,
             symbol=request.symbol,
@@ -52,13 +65,38 @@ class JournalCureService:
             idempotency_key=request.idempotency_key,
             recorded_at_ms=now_ms_utc() if now_ms is None else now_ms,
         )
+
+    def validate_adjustment(
+        self,
+        entries: list[AccountClerkJournalEntry],
+        *,
+        account_id: str,
+        request: JournalCureRequest,
+    ) -> None:
+        """Validate a cure while the Clerk holds its durable journal lock."""
+
+        _validate_claim_reduction(
+            entries,
+            artifacts_root=self._artifacts_root,
+            account_id=account_id,
+            request=request,
+        )
+
+    def apply_adjustment(
+        self,
+        *,
+        account_id: str,
+        adjustment: AccountClerkOperatorAdjustment,
+        request: JournalCureRequest,
+        journal: AccountClerkJournal,
+    ) -> JournalCureReceipt:
+        """Validate and append through the caller's sole serialized Clerk journal."""
+
         try:
             entry = journal.append_operator_adjustment(
                 adjustment,
-                validate_adjustment=lambda entries: _validate_claim_reduction(
-                    entries,
-                    account_id=account_id,
-                    request=request,
+                validate_adjustment=lambda entries: self.validate_adjustment(
+                    entries, account_id=account_id, request=request
                 ),
             )
         except AccountClerkOperatorAdjustmentConflict as exc:
@@ -66,6 +104,12 @@ class JournalCureService:
                 "JOURNAL_CURE_IDEMPOTENCY_CONFLICT",
                 "idempotency key was already used with a different cure payload",
             ) from exc
+        return _receipt(entry)
+
+    @staticmethod
+    def receipt_for(entry: AccountClerkJournalEntry) -> JournalCureReceipt:
+        """Convert the Clerk-owned durable entry to the public receipt."""
+
         return _receipt(entry)
 
     def preview(
@@ -124,6 +168,7 @@ def _namespace_quantity(
 def _validate_claim_reduction(
     entries: list[AccountClerkJournalEntry],
     *,
+    artifacts_root: Path,
     account_id: str,
     request: JournalCureRequest,
 ) -> None:
@@ -139,6 +184,14 @@ def _validate_claim_reduction(
         raise JournalCureError(
             "JOURNAL_CURE_NO_STALE_CLAIM",
             "namespace has no Clerk-attributed claim for this symbol to cure",
+        )
+    binding = index_account_instance_bindings(
+        read_account_instance_registry(artifacts_root, account_id), account_id=account_id
+    ).latest_by_namespace.get(request.bot_order_namespace)
+    if binding is None or binding.lifecycle_state != "RETIRED":
+        raise JournalCureError(
+            "JOURNAL_CURE_NAMESPACE_NOT_PROVEN_RETIRED",
+            "A cure requires a registry-proven retired namespace.",
         )
     if current_quantity * request.signed_quantity >= 0 or abs(request.signed_quantity) > abs(current_quantity):
         raise JournalCureError(

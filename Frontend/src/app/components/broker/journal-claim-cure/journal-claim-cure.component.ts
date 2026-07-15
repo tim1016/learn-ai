@@ -22,12 +22,14 @@ export class JournalClaimCureComponent {
   readonly evidenceRef = signal('');
   readonly preview = signal<JournalCurePreview | null>(null);
   readonly receipt = signal<JournalCureReceipt | null>(null);
+  readonly cureAttemptKey = signal<string | null>(null);
   readonly loading = signal(false);
   readonly error = signal<unknown>(null);
 
   update(field: 'namespace' | 'symbol' | 'quantity' | 'reason' | 'evidenceRef', event: Event): void {
     if (!(event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)) return;
     this[field].set(event.target.value);
+    this.cureAttemptKey.set(null);
   }
 
   async previewCure(): Promise<void> {
@@ -37,6 +39,7 @@ export class JournalClaimCureComponent {
     this.loading.set(true);
     this.error.set(null);
     this.receipt.set(null);
+    this.cureAttemptKey.set(null);
     try {
       this.preview.set(await this.broker.previewJournalCure(this.accountId(), namespace, symbol));
     } catch (error) {
@@ -57,6 +60,8 @@ export class JournalClaimCureComponent {
     }
     this.loading.set(true);
     this.error.set(null);
+    const idempotencyKey = this.cureAttemptKey() ?? crypto.randomUUID();
+    this.cureAttemptKey.set(idempotencyKey);
     try {
       const receipt = await this.broker.applyJournalCure(this.accountId(), {
         bot_order_namespace: preview.bot_order_namespace,
@@ -65,11 +70,12 @@ export class JournalClaimCureComponent {
         reason,
         evidence_refs: [evidenceRef],
         request_provenance: 'account-monitor/journal-cure',
-        idempotency_key: crypto.randomUUID(),
+        idempotency_key: idempotencyKey,
       });
       this.receipt.set(receipt);
       this.cured.emit(receipt);
       this.preview.set(null);
+      this.cureAttemptKey.set(null);
     } catch (error) {
       this.error.set(error);
     } finally {

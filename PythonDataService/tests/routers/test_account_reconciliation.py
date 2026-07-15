@@ -46,11 +46,11 @@ from app.engine.live.daemon_transport import DaemonResult
 from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarRepo, stable_live_state_path
 from app.engine.live.run_ledger import LiveRunLedger, write_ledger
 from app.routers import account_reconciliation, cohort_batch_launch
+from app.schemas.journal_cures import JournalCureReceipt, JournalCureRequest
 from app.services import cohort_batch_launch as cohort_batch_launch_service
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.cohort_batch_launch import CohortBatchLaunchService
 from app.services.cohort_evidence import CohortEvidenceSample, CohortMemberSample
-from app.services.journal_cures import JournalCureService
 from app.services.legacy_stale_claim_retirement import LegacyStaleClaimRetirementService
 from app.utils.timestamps import now_ms_utc
 
@@ -833,10 +833,29 @@ async def test_journal_cure_endpoint_ensures_clerk_before_appending_adjustment(
         ensured.append(account_id)
         return {}
 
+    class FakeRpcClient:
+        def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
+            assert artifacts_root == tmp_path
+            assert account_id == "DU1234567"
+
+        async def apply_operator_adjustment(self, request: JournalCureRequest) -> JournalCureReceipt:
+            assert request.idempotency_key == "cure-route-1"
+            return JournalCureReceipt(
+                account_id="DU1234567",
+                bot_order_namespace=namespace,
+                symbol="SPY",
+                signed_quantity=-1,
+                request_provenance=request.request_provenance,
+                reason=request.reason,
+                evidence_refs=request.evidence_refs,
+                idempotency_key=request.idempotency_key,
+                recorded_at_ms=101,
+                journal_seq=3,
+            )
+
     monkeypatch.setattr(account_reconciliation.host_daemon_client, "ensure_account_clerk", _ensure_clerk)
-    app.dependency_overrides[account_reconciliation.get_journal_cure_service] = lambda: JournalCureService(
-        artifacts_root=tmp_path
-    )
+    monkeypatch.setattr(account_reconciliation, "AccountClerkRpcClient", FakeRpcClient)
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post(

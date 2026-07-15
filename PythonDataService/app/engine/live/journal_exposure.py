@@ -89,17 +89,25 @@ def project_journal_exposure(
     if group_by not in {"namespace", "strategy_instance"}:
         raise ValueError(f"unsupported journal exposure grouping: {group_by!r}")
 
+    entries = tuple(entries)
     quantities: dict[tuple[str, str, str], float] = defaultdict(float)
     seen_execution_effects: set[tuple[str, str]] = set()
     for entry in entries:
         if entry.entry_kind == "operator_adjustment" and entry.operator_adjustment is not None:
             adjustment = entry.operator_adjustment
-            if group_by != "namespace" or (
-                account_id is not None and adjustment.account_id != account_id
-            ):
+            if account_id is not None and adjustment.account_id != account_id:
+                continue
+            group_id = (
+                adjustment.bot_order_namespace
+                if group_by == "namespace"
+                else _strategy_instance_for_namespace(entries, adjustment.bot_order_namespace)
+            )
+            if group_id is None:
+                # A cure is only accepted for a retired registry namespace;
+                # no strategy projection is possible without its durable owner.
                 continue
             quantities[
-                (adjustment.account_id, adjustment.bot_order_namespace, adjustment.symbol)
+                (adjustment.account_id, group_id, adjustment.symbol)
             ] += adjustment.signed_quantity
             continue
         event = normalize_journal_broker_event(entry)
@@ -139,6 +147,20 @@ def project_journal_exposure(
         for (projected_account_id, group_id, symbol), quantity in sorted(quantities.items())
         if quantity != 0.0
     )
+
+
+def _strategy_instance_for_namespace(
+    entries: Iterable[AccountClerkJournalEntry],
+    namespace: str,
+) -> str | None:
+    """Return the sole journal-proven strategy owner for a cured namespace."""
+
+    owners = {
+        entry.intent.strategy_instance_id
+        for entry in entries
+        if entry.intent is not None and entry.intent.bot_order_namespace == namespace
+    }
+    return next(iter(owners)) if len(owners) == 1 else None
 
 
 def project_journal_account_exposure(

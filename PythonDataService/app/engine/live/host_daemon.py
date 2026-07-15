@@ -1935,6 +1935,14 @@ def create_app(
             await run_in_threadpool(process_manager._ensure_account_clerk, account_id)
         except HostRunnerError as exc:
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
+        except OSError as exc:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "reason_code": "ACCOUNT_CLERK_START_FAILED",
+                    "message": str(exc),
+                },
+            ) from exc
         return process_manager.health()
 
     @app.get("/process", response_model=HostRunnerProcessStatus, dependencies=auth)
