@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 import app.engine.live.account_clerk_rpc as account_clerk_rpc
-from app.broker.ibkr.models import IbkrOrderSpec
+from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
 from app.engine.execution.order_sizer import FixedShares, OrderSizer
 from app.engine.live.account_artifacts import advance_account_clerk_generation
 from app.engine.live.account_clerk import AccountClerk, account_clerk_socket_path
@@ -47,6 +47,7 @@ from app.engine.live.account_registry import (
 )
 from app.engine.live.live_portfolio import LivePortfolio, SubmitUncertainHaltError
 from app.engine.live.order_identity import build_order_ref
+from app.schemas.journal_cures import JournalCureRequest
 from tests.engine.live.fixtures.fake_broker import FakeBroker
 
 ACCOUNT = "DU1040"
@@ -280,6 +281,60 @@ async def test_cancel_namespace_round_trips_as_a_durable_terminal_receipt(tmp_pa
 
     assert receipt.status == "cancel_confirmed"
     assert receipt.cancelled_order_ids == (1046,)
+
+
+@pytest.mark.asyncio
+async def test_operator_adjustment_round_trips_through_the_live_clerk_journal(tmp_path: Path) -> None:
+    """A cure must share the Clerk's serialized journal tail, never append behind it."""
+
+    _write_active_binding(tmp_path)
+    intent = _intent("cure-1059")
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_Broker(), clerk_generation=1)
+    await clerk.submit_intent(intent)
+    clerk.append_broker_event(
+        intent,
+        IbkrOrderEvent(
+            account_id=ACCOUNT,
+            order_id=1,
+            event_type="fill",
+            order_ref=intent.order_ref,
+            symbol="SPY",
+            side="BUY",
+            fill_quantity=1,
+            exec_id="cure-rpc-fill",
+            ts_ms=START_MS,
+        ),
+    )
+    write_account_instance_binding(
+        tmp_path,
+        AccountInstanceBinding(
+            account_id=ACCOUNT,
+            strategy_instance_id=intent.strategy_instance_id,
+            run_id=intent.run_id,
+            bot_order_namespace=intent.bot_order_namespace,
+            lifecycle_state="RETIRED",
+            recorded_at_ms=START_MS + 1,
+            source="test.retired",
+        ),
+    )
+    server = AccountClerkRpcServer(clerk)
+    await server.start()
+    try:
+        receipt = await AccountClerkRpcClient(artifacts_root=tmp_path, account_id=ACCOUNT).apply_operator_adjustment(
+            JournalCureRequest(
+                bot_order_namespace=intent.bot_order_namespace,
+                symbol="SPY",
+                signed_quantity=-1,
+                reason="retired namespace fill was already reconciled",
+                evidence_refs=("account-reconciliation:test",),
+                request_provenance="test",
+                idempotency_key="cure-rpc-1059",
+            )
+        )
+    finally:
+        await server.close()
+
+    assert receipt.journal_seq > 0
 
 
 @pytest.mark.asyncio

@@ -53,6 +53,7 @@ from app.engine.live.account_clerk_journal import (
     AccountClerkJournal,
     AccountClerkJournalCorruptError,
     AccountClerkJournalEntry,
+    AccountClerkOperatorAdjustment,
     AccountClerkRecordedReceipt,
     AccountClerkRecoveryFlattenReceipt,
     _now_ms,
@@ -573,6 +574,22 @@ class AccountClerk:
         async with self._intake_lock:
             return await asyncio.to_thread(self._recover_inbox_locked)
 
+    async def append_operator_adjustment(
+        self,
+        adjustment: AccountClerkOperatorAdjustment,
+        *,
+        validate_adjustment: Callable[[list[AccountClerkJournalEntry]], None],
+    ) -> AccountClerkJournalEntry:
+        """Serialize an operator cure with every other Clerk journal writer."""
+
+        async with self._intake_lock:
+            self._assert_current_generation("append_operator_adjustment")
+            return await asyncio.to_thread(
+                self._journal.append_operator_adjustment,
+                adjustment,
+                validate_adjustment=validate_adjustment,
+            )
+
     def _recover_inbox_locked(self) -> list[AccountClerkRecordedReceipt]:
         """Compatibility seam for proving recovery stays off the event loop."""
 
@@ -1035,6 +1052,22 @@ class AccountClerk:
         if self._durable_generation_provider is None:
             return self._clerk_generation
         return self._durable_generation_provider()
+
+    def _assert_current_generation(self, boundary: str) -> None:
+        """Fence non-broker journal mutations when this Clerk was superseded."""
+
+        if self._clerk_generation is None:
+            return
+        observed_generation = self._read_active_generation()
+        if observed_generation == self._clerk_generation:
+            return
+        self._fence_stale_generation()
+        raise AccountClerkGenerationFencedError(
+            account_id=self._account_id,
+            expected_generation=self._clerk_generation,
+            observed_generation=observed_generation,
+            boundary=boundary,
+        )
 
     def _fence_stale_generation(self) -> None:
         if self._on_generation_fenced is not None:

@@ -513,6 +513,26 @@ async def test_health_reports_idle_process(daemon_context: tuple[RunnerProcessMa
     assert body["commits_behind"] is None
 
 
+async def test_ensure_clerk_endpoint_runs_generation_handshake(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, _ = daemon_context
+    ensured: list[str] = []
+
+    def ensure(account_id: str) -> None:
+        ensured.append(account_id)
+
+    monkeypatch.setattr(manager, "_ensure_account_clerk", ensure)
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
+        response = await client.post("/accounts/DU123/clerk/ensure", json={})
+
+    assert response.status_code == 200
+    assert ensured == ["DU123"]
+
+
 def test_instances_prunes_exited_records_by_ttl_and_count(tmp_path: Path) -> None:
     now_ms = 10_000
     repo_root = tmp_path / "repo"

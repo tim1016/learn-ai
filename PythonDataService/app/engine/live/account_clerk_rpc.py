@@ -37,6 +37,8 @@ from app.engine.live.account_registry import (
     index_account_instance_bindings,
     read_account_instance_registry,
 )
+from app.schemas.journal_cures import JournalCureReceipt, JournalCureRequest
+from app.services.journal_cures import JournalCureError, JournalCureService
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,7 @@ AccountClerkRpcOperation = Literal[
     "cancel_namespace",
     "recovery_flatten",
     "recovery_flatten_batch",
+    "operator_adjustment",
     "drain_events",
 ]
 AccountClerkRpcServerErrorCode = Literal[
@@ -419,6 +422,19 @@ class AccountClerkRpcClient:
                 request_identity=_request_identity(request),
             ) from exc
 
+    async def apply_operator_adjustment(self, request: JournalCureRequest) -> JournalCureReceipt:
+        """Ask the live Clerk to serialize one stale-claim cure."""
+
+        rpc_request = {"operation": "operator_adjustment", "request": request.model_dump(mode="json")}
+        payload = await self._request(rpc_request)
+        try:
+            return JournalCureReceipt.model_validate(payload["operator_adjustment"])
+        except (KeyError, ValidationError, TypeError) as exc:
+            raise AccountClerkRpcMalformedResponseError(
+                operation="operator_adjustment",
+                request_identity=_request_identity(rpc_request),
+            ) from exc
+
     async def drain_events(
         self,
         *,
@@ -654,6 +670,8 @@ class AccountClerkRpcServer:
             response = _rejected_envelope(exc.reason)
         except AccountClerkIntentRejected as exc:
             response = _rejected_envelope(exc.reason)
+        except JournalCureError as exc:
+            response = _rejected_envelope(exc.reason_code)
         except AccountClerkGenerationFencedError:
             response = _rejected_envelope("CLERK_GENERATION_STALE")
         except AccountClerkCancelNamespaceUncertainError:
@@ -746,6 +764,19 @@ class AccountClerkRpcServer:
             receipt = await self._clerk.cancel_namespace(intent)
             return AccountClerkRpcSuccessEnvelope(
                 payload={"cancel_confirmed": receipt.model_dump(mode="json")}
+            )
+        if operation == "operator_adjustment":
+            cure_request = JournalCureRequest.model_validate(_request_object(request, "request"))
+            service = JournalCureService(artifacts_root=self._clerk._artifacts_root)
+            adjustment = service.adjustment_for(account_id=self._clerk._account_id, request=cure_request)
+            entry = await self._clerk.append_operator_adjustment(
+                adjustment,
+                validate_adjustment=lambda entries: service.validate_adjustment(
+                    entries, account_id=self._clerk._account_id, request=cure_request
+                ),
+            )
+            return AccountClerkRpcSuccessEnvelope(
+                payload={"operator_adjustment": service.receipt_for(entry).model_dump(mode="json")}
             )
         consumer = self._validated_event_consumer(request)
         after_seq = _required_nonnegative_int(request, "after_seq")
@@ -886,6 +917,7 @@ def _request_operation(request: Mapping[str, object]) -> AccountClerkRpcOperatio
         "cancel_namespace",
         "recovery_flatten",
         "recovery_flatten_batch",
+        "operator_adjustment",
         "drain_events",
     ):
         raise _AccountClerkRpcRequestRejected("UNKNOWN_OPERATION")

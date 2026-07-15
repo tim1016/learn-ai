@@ -13,6 +13,7 @@ from app.broker.ibkr.account_truth import compose_account_truth
 from app.broker.ibkr.models import (
     IbkrAccountSummary,
     IbkrConnectionHealth,
+    IbkrOrderEvent,
     IbkrPositionsSnapshot,
 )
 from app.engine.live.account_artifacts import (
@@ -28,6 +29,13 @@ from app.engine.live.account_artifacts import (
     record_cohort_batch_launch_receipt,
     write_account_freeze,
 )
+from app.engine.live.account_clerk_journal import (
+    AccountClerkBrokerAckReceipt,
+    AccountClerkJournal,
+    AccountClerkRecordedReceipt,
+    AccountClerkRecoveryFlattenReceipt,
+)
+from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
     latest_account_instance_binding,
@@ -38,6 +46,7 @@ from app.engine.live.daemon_transport import DaemonResult
 from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarRepo, stable_live_state_path
 from app.engine.live.run_ledger import LiveRunLedger, write_ledger
 from app.routers import account_reconciliation, cohort_batch_launch
+from app.schemas.journal_cures import JournalCureReceipt, JournalCureRequest
 from app.services import cohort_batch_launch as cohort_batch_launch_service
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.cohort_batch_launch import CohortBatchLaunchService
@@ -781,3 +790,189 @@ async def test_false_crash_backfill_endpoint_repairs_disproven_registry_row(
     )
     assert repaired is not None
     assert repaired.source == "host_daemon.process_halted"
+
+
+async def test_journal_cure_endpoint_ensures_clerk_before_appending_adjustment(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from app.main import app
+
+    namespace = "learn-ai/bot-a/v1"
+    intent = AccountOwnerSubmitIntent(
+        trace_id="trace-cure-route",
+        account_id="DU1234567",
+        strategy_instance_id="bot-a",
+        run_id="run-a",
+        bot_order_namespace=namespace,
+        intent_id="intent-cure-route",
+        order_ref=f"{namespace}:intent-cure-route",
+        intent_kind="ORDER",
+        order_spec={},
+        owner_generation=1,
+        created_at_ms=100,
+    )
+    journal = AccountClerkJournal(artifacts_root=tmp_path, account_id="DU1234567", now_ms=lambda: 100)
+    journal.record_intent(intent, validate_intent=lambda _: None)
+    journal.record_broker_event(
+        IbkrOrderEvent(
+            account_id="DU1234567",
+            order_id=1,
+            event_type="fill",
+            order_ref=intent.order_ref,
+            symbol="SPY",
+            side="BUY",
+            fill_quantity=1,
+            exec_id="cure-route-fill",
+            ts_ms=100,
+        )
+    )
+    ensured: list[str] = []
+
+    async def _ensure_clerk(_base_url: str, account_id: str) -> dict:
+        ensured.append(account_id)
+        return {}
+
+    class FakeRpcClient:
+        def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
+            assert artifacts_root == tmp_path
+            assert account_id == "DU1234567"
+
+        async def apply_operator_adjustment(self, request: JournalCureRequest) -> JournalCureReceipt:
+            assert request.idempotency_key == "cure-route-1"
+            return JournalCureReceipt(
+                account_id="DU1234567",
+                bot_order_namespace=namespace,
+                symbol="SPY",
+                signed_quantity=-1,
+                request_provenance=request.request_provenance,
+                reason=request.reason,
+                evidence_refs=request.evidence_refs,
+                idempotency_key=request.idempotency_key,
+                recorded_at_ms=101,
+                journal_seq=3,
+            )
+
+    monkeypatch.setattr(account_reconciliation.host_daemon_client, "ensure_account_clerk", _ensure_clerk)
+    monkeypatch.setattr(account_reconciliation, "AccountClerkRpcClient", FakeRpcClient)
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/accounts/DU1234567/journal-cures",
+                json={
+                    "bot_order_namespace": namespace,
+                    "symbol": "SPY",
+                    "signed_quantity": -1,
+                    "reason": "operator verified stale claim",
+                    "evidence_refs": ["account-reconciliation:receipt-1"],
+                    "request_provenance": "account-monitor/cure",
+                    "idempotency_key": "cure-route-1",
+                },
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    assert ensured == ["DU1234567"]
+    assert response.json()["signed_quantity"] == -1
+
+
+async def test_operator_recovery_flatten_endpoint_ensures_clerk_and_appends_audit_event(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from app.main import app
+
+    namespace = "learn-ai/retired-bot/v1"
+    intent = AccountOwnerSubmitIntent(
+        trace_id="trace-operator-recovery",
+        account_id="DU1234567",
+        strategy_instance_id="retired-bot",
+        run_id="run-retired",
+        bot_order_namespace=namespace,
+        intent_id="intent-operator-recovery",
+        order_ref=f"{namespace}:intent-operator-recovery",
+        intent_kind="ORDER",
+        order_spec={},
+        owner_generation=2,
+        created_at_ms=100,
+    )
+    recorded = AccountClerkRecordedReceipt(
+        trace_id=intent.trace_id,
+        account_id=intent.account_id,
+        strategy_instance_id=intent.strategy_instance_id,
+        run_id=intent.run_id,
+        bot_order_namespace=intent.bot_order_namespace,
+        intent_id=intent.intent_id,
+        order_ref=intent.order_ref,
+        journal_seq=1,
+        recorded_at_ms=100,
+    )
+    receipt = AccountClerkRecoveryFlattenReceipt(
+        recorded=recorded,
+        broker_acked=AccountClerkBrokerAckReceipt(
+            **recorded.model_dump(exclude={"status", "recorded_at_ms"}),
+            order_id=12,
+            recorded_at_ms=101,
+        ),
+        cancelled_order_ids=(11,),
+    )
+    ensured: list[str] = []
+
+    async def _ensure_clerk(_base_url: str, account_id: str) -> dict:
+        ensured.append(account_id)
+        return {}
+
+    class FakeRpcClient:
+        def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
+            assert artifacts_root == tmp_path
+            assert account_id == "DU1234567"
+
+        async def submit_operator_recovery_flatten(
+            self,
+            submitted_intent: AccountOwnerSubmitIntent,
+        ) -> AccountClerkRecoveryFlattenReceipt:
+            assert submitted_intent == intent
+            return receipt
+
+    monkeypatch.setattr(account_reconciliation.host_daemon_client, "ensure_account_clerk", _ensure_clerk)
+    monkeypatch.setattr(account_reconciliation, "AccountClerkRpcClient", FakeRpcClient)
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/accounts/DU1234567/operator-recovery-flatten",
+                json={"intent": intent.model_dump(mode="json"), "request_provenance": "account-monitor/recovery"},
+            )
+            replay = await client.post(
+                "/api/accounts/DU1234567/operator-recovery-flatten",
+                json={"intent": intent.model_dump(mode="json"), "request_provenance": "account-monitor/recovery"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert replay.status_code == 200
+    assert ensured == ["DU1234567", "DU1234567"]
+    [event] = read_account_events(tmp_path, "DU1234567")
+    assert {
+        key: event[key]
+        for key in (
+            "account_id",
+            "event_type",
+            "intent_id",
+            "order_ref",
+            "request_provenance",
+            "recorded_at_ms",
+            "receipt_id",
+        )
+    } == {
+        "account_id": "DU1234567",
+        "event_type": "account_clerk_operator_recovery_flatten",
+        "intent_id": intent.intent_id,
+        "order_ref": intent.order_ref,
+        "request_provenance": "account-monitor/recovery",
+        "recorded_at_ms": 101,
+        "receipt_id": "account-clerk-operator-recovery:intent-operator-recovery:1",
+    }

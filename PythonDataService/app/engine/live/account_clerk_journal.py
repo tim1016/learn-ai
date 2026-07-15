@@ -8,6 +8,7 @@ the durable recorded-intent rows.
 
 from __future__ import annotations
 
+import math
 import os
 import time
 from collections.abc import Callable, Iterator, Mapping
@@ -61,6 +62,36 @@ class AccountClerkInboxEntry(BaseModel):
     intent: AccountOwnerSubmitIntent
 
 
+class AccountClerkOperatorAdjustment(BaseModel):
+    """Immutable local correction of a stale Clerk-attributed claim."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1] = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    bot_order_namespace: str = Field(min_length=1, max_length=256)
+    symbol: str = Field(min_length=1, max_length=32)
+    signed_quantity: float
+    operator_attribution: Literal["local-operator"] = "local-operator"
+    request_provenance: str = Field(min_length=1, max_length=256)
+    reason: str = Field(min_length=1, max_length=512)
+    evidence_refs: tuple[str, ...] = Field(min_length=1)
+    idempotency_key: str = Field(min_length=1, max_length=160)
+    recorded_at_ms: int = Field(ge=0, le=_MAX_INT64)
+
+    @model_validator(mode="after")
+    def validate_signed_quantity(self) -> AccountClerkOperatorAdjustment:
+        """Reject a no-op cure before it becomes durable history."""
+
+        if self.signed_quantity == 0 or not math.isfinite(self.signed_quantity):
+            raise ValueError("signed_quantity must be finite and non-zero")
+        return self
+
+
+class AccountClerkOperatorAdjustmentConflict(ValueError):
+    """A durable operator-adjustment idempotency key was reused differently."""
+
+
 class AccountClerkJournalEntry(BaseModel):
     """One serial, durable receipt-#1 ledger entry for an account intent."""
 
@@ -80,6 +111,7 @@ class AccountClerkJournalEntry(BaseModel):
         "broker_acked",
         "broker_event",
         "reconciliation",
+        "operator_adjustment",
     ] = "recorded"
     recorded_at_ms: int = Field(ge=0, le=_MAX_INT64)
     # All intent lifecycle entries are attributed. A broker callback without a
@@ -95,15 +127,27 @@ class AccountClerkJournalEntry(BaseModel):
     broker_error: str | None = None
     event_account_id: str | None = Field(default=None, min_length=1)
     broker_callback_idempotency_key: str | None = Field(default=None, min_length=1)
+    operator_adjustment: AccountClerkOperatorAdjustment | None = None
 
     @model_validator(mode="after")
     def validate_attribution_shape(self) -> AccountClerkJournalEntry:
         """Keep attributed rows readable while forbidding guessed ownership."""
 
+        if self.entry_kind == "operator_adjustment":
+            if self.intent is not None or self.operator_adjustment is None:
+                raise ValueError("operator_adjustment rows require only operator_adjustment")
+            if self.event_account_id is not None or self.broker_callback_idempotency_key is not None:
+                raise ValueError("callback metadata is invalid on operator_adjustment rows")
+            return self
+
         if self.entry_kind != "broker_event":
             if self.intent is None:
                 raise ValueError("non-broker-event journal rows require an intent")
-            if self.event_account_id is not None or self.broker_callback_idempotency_key is not None:
+            if (
+                self.event_account_id is not None
+                or self.broker_callback_idempotency_key is not None
+                or self.operator_adjustment is not None
+            ):
                 raise ValueError("callback metadata is only valid on broker_event rows")
             return self
 
@@ -117,6 +161,8 @@ class AccountClerkJournalEntry(BaseModel):
             raise ValueError("event_account_id must match the attributed intent account")
         if self.intent is None and self.event_account_id is None:
             raise ValueError("unattributed broker_event rows require event_account_id")
+        if self.operator_adjustment is not None:
+            raise ValueError("operator adjustment is invalid on broker_event rows")
         return self
 
 
@@ -627,6 +673,46 @@ class AccountClerkJournal:
             _append_jsonl(journal_path, entry)
             entries.append(entry)
 
+    def append_operator_adjustment(
+        self,
+        adjustment: AccountClerkOperatorAdjustment,
+        *,
+        validate_adjustment: Callable[[list[AccountClerkJournalEntry]], None],
+    ) -> AccountClerkJournalEntry:
+        """Atomically validate and append one idempotent compensating journal entry."""
+
+        if adjustment.account_id != self._account_id:
+            raise ValueError("operator adjustment account_id does not match journal account")
+        inbox_path, journal_path = self._paths()
+        with _file_lock(journal_path):
+            entries = self._load_tail_locked(inbox_path, journal_path)
+            existing = next(
+                (
+                    entry
+                    for entry in entries
+                    if entry.entry_kind == "operator_adjustment"
+                    and entry.operator_adjustment is not None
+                    and entry.operator_adjustment.idempotency_key == adjustment.idempotency_key
+                ),
+                None,
+            )
+            if existing is not None:
+                if not _same_operator_adjustment_request(existing.operator_adjustment, adjustment):
+                    raise AccountClerkOperatorAdjustmentConflict(
+                        "operator adjustment idempotency key conflicts with prior payload"
+                    )
+                return existing
+            validate_adjustment(entries)
+            entry = AccountClerkJournalEntry(
+                seq=_next_seq(entries),
+                entry_kind="operator_adjustment",
+                recorded_at_ms=adjustment.recorded_at_ms,
+                operator_adjustment=adjustment,
+            )
+            _append_jsonl(journal_path, entry)
+            entries.append(entry)
+            return entry
+
     def snapshot(self) -> list[AccountClerkJournalEntry]:
         """Return the recovered in-memory journal tail for reconciliation."""
 
@@ -950,6 +1036,17 @@ def _next_seq(entries: list[AccountClerkJournalEntry]) -> int:
     return entries[-1].seq + 1 if entries else 1
 
 
+def _same_operator_adjustment_request(
+    existing: AccountClerkOperatorAdjustment,
+    received: AccountClerkOperatorAdjustment,
+) -> bool:
+    """Compare stable request identity while allowing a replay's new clock value."""
+
+    return existing.model_dump(exclude={"recorded_at_ms"}) == received.model_dump(
+        exclude={"recorded_at_ms"}
+    )
+
+
 def _require_entry_intent(entry: AccountClerkJournalEntry) -> AccountOwnerSubmitIntent:
     if entry.intent is None:
         raise ValueError("receipt entry unexpectedly lacks an intent")
@@ -975,6 +1072,8 @@ __all__ = [
     "AccountClerkJournal",
     "AccountClerkJournalCorruptError",
     "AccountClerkJournalEntry",
+    "AccountClerkOperatorAdjustment",
+    "AccountClerkOperatorAdjustmentConflict",
     "AccountClerkRecordedReceipt",
     "AccountClerkRecoveryFlattenReceipt",
     "account_clerk_inbox_path",
