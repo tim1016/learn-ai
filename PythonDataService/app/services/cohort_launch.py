@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
@@ -30,7 +32,17 @@ RollCall = Callable[[], Awaitable[BotRollCallResponse]]
 StartRun = Callable[[str, HostRunnerStartRequest], Awaitable[HostRunnerActionResponse]]
 VisibleRuns = Callable[[Path], dict[str, list[dict[str, object]]]]
 RunAccountId = Callable[[Path], str | None]
+StartRequestForRun = Callable[[Path], HostRunnerStartRequest | None]
 NowMs = Callable[[], int]
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _PinnedCohortMember:
+    """One pinned authorization member and its persisted start settings."""
+
+    pin: CohortBatchLaunchMemberPin
+    start_request: HostRunnerStartRequest
 
 
 class CohortLaunchCoordinator:
@@ -45,6 +57,7 @@ class CohortLaunchCoordinator:
         start_run: StartRun,
         visible_runs_by_instance: VisibleRuns,
         run_account_id: RunAccountId,
+        start_request_for_run: StartRequestForRun,
         now_ms: NowMs,
     ) -> None:
         self._artifacts_root = artifacts_root
@@ -53,6 +66,7 @@ class CohortLaunchCoordinator:
         self._start_run = start_run
         self._visible_runs_by_instance = visible_runs_by_instance
         self._run_account_id = run_account_id
+        self._start_request_for_run = start_request_for_run
         self._now_ms = now_ms
 
     async def launch(
@@ -67,17 +81,22 @@ class CohortLaunchCoordinator:
         """Refresh, pin, record, then start without rolling back siblings."""
 
         roll_call = await self._run_roll_call()
-        pins = await asyncio.to_thread(self._pins, account_id, requested_members, roll_call.offers)
+        members = await asyncio.to_thread(
+            self._pins,
+            account_id,
+            requested_members,
+            roll_call.offers,
+        )
         now_ms = self._now_ms()
         receipt = CohortBatchLaunchReceipt(
             account_id=account_id,
             cohort_id=f"paper-validation-{now_ms}-{uuid4().hex[:12]}",
-            member_strategy_instance_ids=tuple(pin.strategy_instance_id for pin in pins),
+            member_strategy_instance_ids=tuple(member.pin.strategy_instance_id for member in members),
             window_start_ms=now_ms,
             window_end_ms=now_ms + 300_000,
             authorized_by=operator_identity,
             recorded_at_ms=now_ms,
-            member_pins=pins,
+            member_pins=tuple(member.pin for member in members),
             request_provenance=CohortBatchLaunchRequestProvenance(
                 operator_identity_header_present=identity_header_present,
                 client_host=client_host,
@@ -85,7 +104,7 @@ class CohortLaunchCoordinator:
         )
         await asyncio.to_thread(record_cohort_batch_launch_receipt, self._artifacts_root, receipt)
         outcomes = await asyncio.gather(
-            *(self._start_member(pin, cohort_id=receipt.cohort_id) for pin in pins),
+            *(self._start_member(member, cohort_id=receipt.cohort_id) for member in members),
         )
         outcomes_receipt = CohortBatchLaunchOutcomesReceipt(
             account_id=account_id,
@@ -105,7 +124,7 @@ class CohortLaunchCoordinator:
         account_id: str,
         requested_members: tuple[str, ...],
         offers: list[BotRollCallOffer],
-    ) -> tuple[CohortBatchLaunchMemberPin, ...]:
+    ) -> tuple[_PinnedCohortMember, ...]:
         runs_by_member = self._visible_runs_by_instance(self._live_runs_root)
         pinned: dict[str, tuple[BotRollCallOffer, dict[str, object]]] = {}
         for offer in offers:
@@ -115,7 +134,8 @@ class CohortLaunchCoordinator:
             )
             if run is not None and self._run_account_id(Path(str(run["run_dir"]))) == account_id:
                 pinned[offer.strategy_instance_id] = (offer, run)
-        if set(requested_members) != set(pinned):
+        requested_member_ids = set(requested_members)
+        if not requested_member_ids.issubset(pinned):
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
                 detail={
@@ -123,46 +143,78 @@ class CohortLaunchCoordinator:
                     "message": "The ready cohort changed. Refresh roll call before authorizing a new batch.",
                 },
             )
-        return tuple(
-            CohortBatchLaunchMemberPin(
-                strategy_instance_id=member_id,
-                run_id=pinned[member_id][0].run_id,
-                roll_call_offer_id=pinned[member_id][0].offer_id,
+        members: list[_PinnedCohortMember] = []
+        for member_id in sorted(requested_member_ids):
+            offer, run = pinned[member_id]
+            request = self._start_request_for_run(Path(str(run["run_dir"])))
+            if request is None:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    detail={
+                        "reason_code": "COHORT_START_SETTINGS_INCOMPLETE",
+                        "message": "A displayed cohort member has no safe persisted start settings.",
+                    },
+                )
+            members.append(
+                _PinnedCohortMember(
+                    pin=CohortBatchLaunchMemberPin(
+                        strategy_instance_id=member_id,
+                        run_id=offer.run_id,
+                        roll_call_offer_id=offer.offer_id,
+                    ),
+                    start_request=request,
+                )
             )
-            for member_id in sorted(set(requested_members))
-        )
+        return tuple(members)
 
     async def _start_member(
         self,
-        pin: CohortBatchLaunchMemberPin,
+        member: _PinnedCohortMember,
         *,
         cohort_id: str,
     ) -> CohortBatchLaunchMemberOutcome:
         try:
             response = await self._start_run(
-                pin.run_id,
-                HostRunnerStartRequest(
-                    roll_call_offer_id=pin.roll_call_offer_id,
-                    cohort_id=cohort_id,
+                member.pin.run_id,
+                member.start_request.model_copy(
+                    update={
+                        "roll_call_offer_id": member.pin.roll_call_offer_id,
+                        "cohort_id": cohort_id,
+                    }
                 ),
             )
         except HTTPException as exc:
             reason = exc.detail.get("reason_code") if isinstance(exc.detail, dict) else None
             return CohortBatchLaunchMemberOutcome(
-                strategy_instance_id=pin.strategy_instance_id,
+                strategy_instance_id=member.pin.strategy_instance_id,
                 state="blocked",
                 reason=reason if isinstance(reason, str) else "COHORT_START_REJECTED",
                 next_safe_action="Refresh roll call and resolve the backend blocker before authorizing a new cohort.",
             )
+        except Exception:
+            logger.exception(
+                "cohort member start failed unexpectedly",
+                extra={
+                    "strategy_instance_id": member.pin.strategy_instance_id,
+                    "run_id": member.pin.run_id,
+                    "cohort_id": cohort_id,
+                },
+            )
+            return CohortBatchLaunchMemberOutcome(
+                strategy_instance_id=member.pin.strategy_instance_id,
+                state="blocked",
+                reason="COHORT_START_FAILED",
+                next_safe_action="Inspect the durable cohort receipt and reconcile this bot before authorizing another cohort.",
+            )
         if response.accepted:
             return CohortBatchLaunchMemberOutcome(
-                strategy_instance_id=pin.strategy_instance_id,
+                strategy_instance_id=member.pin.strategy_instance_id,
                 state="accepted",
                 reason="COHORT_START_ACCEPTED",
                 next_safe_action="Monitor the bot receipt state and account exposure.",
             )
         return CohortBatchLaunchMemberOutcome(
-            strategy_instance_id=pin.strategy_instance_id,
+            strategy_instance_id=member.pin.strategy_instance_id,
             state="blocked",
             reason="COHORT_START_NOT_ACCEPTED",
             next_safe_action="Review the backend start response before authorizing a new cohort.",

@@ -3104,6 +3104,31 @@ async def launch_cohort(
     async with _cohort_launch_lock(normalized_account_id):
         identity_header = request.headers.get("X-Operator-Identity")
         settings = get_settings()
+        readonly_default = _resolve_readonly_default(settings)
+
+        def start_request_for_run(run_dir: Path) -> HostRunnerStartRequest | None:
+            try:
+                defaults = _start_defaults(
+                    run_dir.parent,
+                    None,
+                    [{"run_dir": str(run_dir)}],
+                    readonly_default=readonly_default,
+                )
+            except ValidationError:
+                return None
+            if defaults is None or not defaults.strategy:
+                return None
+            try:
+                return HostRunnerStartRequest(
+                    readonly=defaults.readonly,
+                    hydrate_policy=defaults.hydrate_policy,
+                    strategy=defaults.strategy,
+                    max_orders_per_day=defaults.max_orders_per_day,
+                    ibkr_host=defaults.ibkr_host,
+                )
+            except ValidationError:
+                return None
+
         coordinator = CohortLaunchCoordinator(
             artifacts_root=Path(settings.live_runs_root).parent,
             live_runs_root=Path(settings.live_runs_root),
@@ -3111,6 +3136,7 @@ async def launch_cohort(
             start_run=start_run,
             visible_runs_by_instance=_visible_runs_by_instance,
             run_account_id=_run_dir_account_id,
+            start_request_for_run=start_request_for_run,
             now_ms=_now_ms,
         )
         return await coordinator.launch(
