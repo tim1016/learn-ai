@@ -40,7 +40,7 @@ class CohortBatchLaunchService:
         """Read the latest durable cohort state without inferring missing outcomes."""
 
         events = await asyncio.to_thread(read_account_events, self._artifacts_root, account_id)
-        authorization = self._authorization_event(events, cohort_id)
+        authorization = self.authorization_event(events, cohort_id)
         if authorization is None:
             if cohort_id is None:
                 return None
@@ -142,7 +142,7 @@ class CohortBatchLaunchService:
         )
 
     @staticmethod
-    def _authorization_event(
+    def authorization_event(
         events: list[dict],
         cohort_id: str | None,
     ) -> tuple[int, CohortBatchLaunchReceipt] | None:
