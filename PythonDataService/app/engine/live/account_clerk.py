@@ -548,7 +548,7 @@ class AccountClerk:
         """Recover once, then keep the serial journal tail in process memory."""
 
         if self._journal_entries is None:
-            journal_entries = _read_jsonl(journal_path, AccountClerkJournalEntry)
+            journal_entries = _read_journal_jsonl(journal_path)
             self._journal_entries = self._replay_inbox_locked(
                 inbox_entries=_read_jsonl(inbox_path, AccountClerkInboxEntry),
                 journal_entries=journal_entries,
@@ -565,7 +565,21 @@ class AccountClerk:
         journal_path: Path,
     ) -> list[AccountClerkJournalEntry]:
         journal_by_seq = {entry.seq: entry for entry in journal_entries}
+        unique_inbox_entries: list[AccountClerkInboxEntry] = []
+        inbox_by_seq: dict[int, AccountClerkInboxEntry] = {}
         for inbox_entry in inbox_entries:
+            existing_inbox_entry = inbox_by_seq.get(inbox_entry.seq)
+            if existing_inbox_entry is None:
+                inbox_by_seq[inbox_entry.seq] = inbox_entry
+                unique_inbox_entries.append(inbox_entry)
+                continue
+            if existing_inbox_entry != inbox_entry:
+                raise AccountClerkJournalCorruptError(
+                    journal_path,
+                    f"duplicate incompatible inbox rows at seq {inbox_entry.seq}",
+                )
+
+        for inbox_entry in unique_inbox_entries:
             journal_entry = journal_by_seq.get(inbox_entry.seq)
             if journal_entry is not None:
                 if journal_entry.intent != inbox_entry.intent:
@@ -751,7 +765,7 @@ def read_account_clerk_journal(
 
     path = account_clerk_journal_path(artifacts_root, account_id)
     with _file_lock(path):
-        return _read_jsonl(path, AccountClerkJournalEntry)
+        return _read_journal_jsonl(path)
 
 
 @overload
@@ -774,7 +788,6 @@ def _read_jsonl(
         raise AccountClerkJournalCorruptError(path, f"invalid UTF-8: {exc}") from exc
 
     entries = []
-    expected_seq = 1
     for line_no, line in enumerate(lines, start=1):
         if not line:
             raise AccountClerkJournalCorruptError(path, f"blank row at line {line_no}")
@@ -782,12 +795,19 @@ def _read_jsonl(
             entry = model_type.model_validate_json(line)
         except (ValidationError, ValueError) as exc:
             raise AccountClerkJournalCorruptError(path, f"invalid row at line {line_no}: {exc}") from exc
+        entries.append(entry)
+    return entries
+
+
+def _read_journal_jsonl(path: Path) -> list[AccountClerkJournalEntry]:
+    entries = _read_jsonl(path, AccountClerkJournalEntry)
+    expected_seq = 1
+    for line_no, entry in enumerate(entries, start=1):
         if entry.seq != expected_seq:
             raise AccountClerkJournalCorruptError(
                 path,
                 f"expected seq {expected_seq} at line {line_no}, found {entry.seq}",
             )
-        entries.append(entry)
         expected_seq += 1
     return entries
 

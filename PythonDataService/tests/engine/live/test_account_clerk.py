@@ -20,6 +20,7 @@ from app.engine.live.account_clerk import (
     AccountClerk,
     AccountClerkInboxEntry,
     AccountClerkIntentRejected,
+    AccountClerkJournalCorruptError,
     AccountClerkJournalEntry,
     AccountClerkLeaseWriter,
     AccountClerkRecordedReceipt,
@@ -416,9 +417,11 @@ async def test_unexplained_broker_callback_is_an_observable_reconciliation_alarm
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("crash_seq", [1, 2, 4])
 async def test_recover_inbox_replays_durable_intent_after_crash_before_journal_write(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    crash_seq: int,
 ) -> None:
     _write_active_binding(tmp_path, "bot-a", "run-a")
     broker = _FakeBroker()
@@ -429,29 +432,199 @@ async def test_recover_inbox_replays_durable_intent_after_crash_before_journal_w
         now_ms=lambda: START_MS + 2,
     )
     original_append = account_clerk_module._append_jsonl
+    inbox_path = account_clerk_module.account_clerk_inbox_path(tmp_path, ACCOUNT)
 
     def crash_between_inbox_and_journal(
         path: Path,
         entry: AccountClerkInboxEntry | AccountClerkJournalEntry,
     ) -> None:
-        if isinstance(entry, AccountClerkJournalEntry):
+        if isinstance(entry, AccountClerkJournalEntry) and entry.seq == crash_seq:
             raise OSError("simulated process crash before journal fsync")
         original_append(path, entry)
 
+    for sequence in range(1, crash_seq):
+        await clerk.record_intent(_intent("bot-a", "run-a", f"durable-{sequence}"))
+
     monkeypatch.setattr(account_clerk_module, "_append_jsonl", crash_between_inbox_and_journal)
-    intent = _intent("bot-a", "run-a", "crash-intent")
+    intent = _intent("bot-a", "run-a", f"crash-intent-{crash_seq}")
     with pytest.raises(OSError, match="simulated process crash"):
         await clerk.record_intent(intent)
     monkeypatch.setattr(account_clerk_module, "_append_jsonl", original_append)
 
+    assert inbox_path.read_text(encoding="utf-8").endswith("\n")
+    assert [entry.seq for entry in read_account_clerk_inbox(tmp_path, ACCOUNT)] == [crash_seq]
+    assert [entry.seq for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == list(
+        range(1, crash_seq)
+    )
+
+    restarted_clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    first_replay = await restarted_clerk.recover_inbox()
+    second_replay = await restarted_clerk.recover_inbox()
+
+    assert read_account_clerk_inbox(tmp_path, ACCOUNT) == []
+    assert inbox_path.read_text(encoding="utf-8") == ""
+    assert [entry.intent.intent_id for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [
+        *(f"durable-{sequence}" for sequence in range(1, crash_seq)),
+        intent.intent_id,
+    ]
+    assert [entry.seq for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == list(
+        range(1, crash_seq + 1)
+    )
+    assert first_replay == second_replay
+    assert first_replay[-1].intent_id == intent.intent_id
+    assert first_replay[-1].recorded_at_ms == START_MS + 2
+    assert broker.calls == []
+
+
+@pytest.mark.asyncio
+async def test_recover_inbox_discards_already_journaled_matching_row_idempotently(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _FakeBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    inbox_path = account_clerk_module.account_clerk_inbox_path(tmp_path, ACCOUNT)
+    journal_path = account_clerk_module.account_clerk_journal_path(tmp_path, ACCOUNT)
+    original_rewrite = account_clerk_module._rewrite_jsonl
+
+    def crash_after_journal_fsync(path: Path, entries: list[AccountClerkInboxEntry]) -> None:
+        if path == inbox_path and journal_path.exists():
+            raise OSError("simulated process crash before inbox compaction")
+        original_rewrite(path, entries)
+
+    monkeypatch.setattr(account_clerk_module, "_rewrite_jsonl", crash_after_journal_fsync)
+    intent = _intent("bot-a", "run-a", "already-journaled")
+    with pytest.raises(OSError, match="simulated process crash"):
+        await clerk.record_intent(intent)
+    monkeypatch.setattr(account_clerk_module, "_rewrite_jsonl", original_rewrite)
+
+    assert [entry.seq for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [1]
+    assert [entry.seq for entry in read_account_clerk_inbox(tmp_path, ACCOUNT)] == [1]
+
     restarted_clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
     receipts = await restarted_clerk.recover_inbox()
 
+    assert [receipt.intent_id for receipt in receipts] == [intent.intent_id]
     assert read_account_clerk_inbox(tmp_path, ACCOUNT) == []
-    assert [entry.intent for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [intent]
-    assert receipts[0].intent_id == intent.intent_id
-    assert receipts[0].recorded_at_ms == START_MS + 2
+    assert [entry.seq for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [1]
     assert broker.calls == []
+
+
+@pytest.mark.asyncio
+async def test_recover_inbox_rejects_conflicting_journal_row_without_broker_contact(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _FakeBroker()
+    journal_path = account_clerk_module.account_clerk_journal_path(tmp_path, ACCOUNT)
+    inbox_path = account_clerk_module.account_clerk_inbox_path(tmp_path, ACCOUNT)
+    journal_intent = _intent("bot-a", "run-a", "journal-intent")
+    conflicting_intent = _intent("bot-a", "run-a", "conflicting-intent")
+    account_clerk_module._append_jsonl(
+        journal_path,
+        AccountClerkJournalEntry(
+            seq=1,
+            recorded_at_ms=START_MS,
+            intent=journal_intent,
+        ),
+    )
+    account_clerk_module._append_jsonl(
+        inbox_path,
+        AccountClerkInboxEntry(
+            seq=1,
+            received_at_ms=START_MS,
+            intent=conflicting_intent,
+        ),
+    )
+
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    with pytest.raises(AccountClerkJournalCorruptError, match="inbox and journal intent differ"):
+        await clerk.recover_inbox()
+
+    assert [entry.intent.intent_id for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [
+        journal_intent.intent_id
+    ]
+    assert [entry.intent.intent_id for entry in read_account_clerk_inbox(tmp_path, ACCOUNT)] == [
+        conflicting_intent.intent_id
+    ]
+    assert broker.calls == []
+
+
+@pytest.mark.asyncio
+async def test_recover_inbox_rejects_incompatible_duplicate_rows(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    journal_path = account_clerk_module.account_clerk_journal_path(tmp_path, ACCOUNT)
+    inbox_path = account_clerk_module.account_clerk_inbox_path(tmp_path, ACCOUNT)
+    first_intent = _intent("bot-a", "run-a", "first-duplicate")
+    second_intent = _intent("bot-a", "run-a", "second-duplicate")
+    account_clerk_module._append_jsonl(
+        journal_path,
+        AccountClerkJournalEntry(seq=1, recorded_at_ms=START_MS, intent=_intent("bot-a", "run-a", "base")),
+    )
+    for intent in (first_intent, second_intent):
+        account_clerk_module._append_jsonl(
+            inbox_path,
+            AccountClerkInboxEntry(seq=2, received_at_ms=START_MS, intent=intent),
+        )
+
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT)
+    with pytest.raises(AccountClerkJournalCorruptError, match="duplicate incompatible inbox rows"):
+        await clerk.recover_inbox()
+
+    assert [entry.seq for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [1]
+    assert [entry.seq for entry in read_account_clerk_inbox(tmp_path, ACCOUNT)] == [2, 2]
+
+
+@pytest.mark.asyncio
+async def test_recover_inbox_rejects_genuine_journal_gap(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    journal_path = account_clerk_module.account_clerk_journal_path(tmp_path, ACCOUNT)
+    inbox_path = account_clerk_module.account_clerk_inbox_path(tmp_path, ACCOUNT)
+    account_clerk_module._append_jsonl(
+        journal_path,
+        AccountClerkJournalEntry(seq=1, recorded_at_ms=START_MS, intent=_intent("bot-a", "run-a", "base")),
+    )
+    account_clerk_module._append_jsonl(
+        inbox_path,
+        AccountClerkInboxEntry(
+            seq=3,
+            received_at_ms=START_MS,
+            intent=_intent("bot-a", "run-a", "gap"),
+        ),
+    )
+
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT)
+    with pytest.raises(AccountClerkJournalCorruptError, match="cannot follow journal seq 1"):
+        await clerk.recover_inbox()
+
+    assert [entry.seq for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [1]
+    assert [entry.seq for entry in read_account_clerk_inbox(tmp_path, ACCOUNT)] == [3]
+
+
+@pytest.mark.parametrize(
+    ("sequences", "error"),
+    [
+        ([2], "expected seq 1"),
+        ([1, 3], "expected seq 2"),
+    ],
+)
+def test_read_account_clerk_journal_rejects_non_contiguous_sequence(
+    tmp_path: Path,
+    sequences: list[int],
+    error: str,
+) -> None:
+    journal_path = account_clerk_module.account_clerk_journal_path(tmp_path, ACCOUNT)
+    for sequence in sequences:
+        account_clerk_module._append_jsonl(
+            journal_path,
+            AccountClerkJournalEntry(
+                seq=sequence,
+                recorded_at_ms=START_MS,
+                intent=_intent("bot-a", "run-a", f"journal-{sequence}"),
+            ),
+        )
+
+    with pytest.raises(AccountClerkJournalCorruptError, match=error):
+        read_account_clerk_journal(tmp_path, ACCOUNT)
 
 
 @pytest.mark.asyncio
