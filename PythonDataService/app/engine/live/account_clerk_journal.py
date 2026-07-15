@@ -73,6 +73,7 @@ class AccountClerkJournalEntry(BaseModel):
         "broker_submitting",
         "broker_uncertain",
         "recovery_cancelled",
+        "cancel_submitting",
         "cancel_confirmed",
         "cancel_uncertain",
         "broker_acked",
@@ -395,6 +396,23 @@ class AccountClerkJournal:
             entries.append(entry)
             return self._cancel_namespace_receipt(entries, intent, entry)
 
+    def append_cancel_submitting(self, intent: AccountOwnerSubmitIntent) -> None:
+        """Record the crash boundary immediately before a broker cancel."""
+
+        inbox_path, journal_path = self._paths()
+        with _file_lock(journal_path):
+            entries = self._load_tail_locked(inbox_path, journal_path)
+            if self._cancel_submitting_for_intent_entries(entries, intent) is not None:
+                return
+            entry = AccountClerkJournalEntry(
+                seq=_next_seq(entries),
+                entry_kind="cancel_submitting",
+                recorded_at_ms=self._now_ms(),
+                intent=intent,
+            )
+            _append_jsonl(journal_path, entry)
+            entries.append(entry)
+
     def cancel_confirmed_for_intent(
         self,
         intent: AccountOwnerSubmitIntent,
@@ -422,6 +440,28 @@ class AccountClerkJournal:
             )
             _append_jsonl(journal_path, entry)
             entries.append(entry)
+
+    def cancel_submitting_for_intent(self, intent: AccountOwnerSubmitIntent) -> bool:
+        """Whether a prior process crossed the durable cancel-write boundary."""
+
+        inbox_path, journal_path = self._paths()
+        with _file_lock(journal_path):
+            entries = self._load_tail_locked(inbox_path, journal_path)
+            return self._cancel_submitting_for_intent_entries(entries, intent) is not None
+
+    @staticmethod
+    def _cancel_submitting_for_intent_entries(
+        entries: list[AccountClerkJournalEntry],
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountClerkJournalEntry | None:
+        return next(
+            (
+                entry
+                for entry in entries
+                if entry.entry_kind == "cancel_submitting" and entry.intent == intent
+            ),
+            None,
+        )
 
     @staticmethod
     def _cancel_confirmed_for_intent_entries(

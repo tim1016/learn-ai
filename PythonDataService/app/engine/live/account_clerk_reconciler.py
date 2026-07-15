@@ -159,6 +159,10 @@ def _unresolved_intents(
         # Skip it before dereferencing the optional attribution payload.
         if entry.intent is None:
             continue
+        if entry.intent.intent_kind == "CANCEL_NAMESPACE":
+            # A cancellation receipt is its own terminal state machine, not a
+            # broker submit that can be safely probed/retried by this loop.
+            continue
         intent_id = entry.intent.intent_id
         if entry.entry_kind == "recorded":
             recorded[intent_id] = entry.intent

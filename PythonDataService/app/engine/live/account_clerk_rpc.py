@@ -568,6 +568,7 @@ class AccountClerkRpcServer:
         self._callback_worker: asyncio.Task[None] | None = None
         self._callback_failure: BaseException | None = None
         self._on_callback_persistence_failure = on_callback_persistence_failure
+        clerk.set_callback_drain(lambda: self._flush_broker_callbacks(raise_on_failure=True))
         set_callback = getattr(clerk._broker, "set_broker_callback_sink", None)
         if callable(set_callback):
             set_callback(self._record_broker_event)
@@ -816,11 +817,13 @@ class AccountClerkRpcServer:
                 return
             self._callback_queue.task_done()
 
-    async def _flush_broker_callbacks(self) -> None:
+    async def _flush_broker_callbacks(self, *, raise_on_failure: bool = False) -> None:
         """Complete callbacks received before normal Clerk shutdown."""
 
         if self._callback_worker is not None:
             await self._callback_queue.join()
+        if raise_on_failure and self._callback_failure is not None:
+            raise AccountClerkCallbackPersistenceError(self._callback_failure)
 
 
 def _request_operation(request: Mapping[str, object]) -> AccountClerkRpcOperation:
