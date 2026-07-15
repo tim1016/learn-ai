@@ -1218,6 +1218,13 @@ class LivePortfolio:
                 )
 
             if self.account_owner_submitter is not None:
+                from app.engine.live.account_clerk_rpc import (
+                    AccountClerkRpcInternalError,
+                    AccountClerkRpcMalformedResponseError,
+                    AccountClerkRpcRejectedError,
+                    AccountClerkRpcTimeoutError,
+                    AccountClerkRpcUnavailableError,
+                )
                 from app.engine.live.account_owner import AccountOwnerSubmitIntent, AccountOwnerSubmitRejected
                 from app.utils.timestamps import now_ms_utc
 
@@ -1257,6 +1264,46 @@ class LivePortfolio:
                         probe_result="rejected",
                         retry_count=0,
                         reason=exc.reason,
+                    ) from exc
+                except AccountClerkRpcRejectedError as exc:
+                    raise SubmitUncertainHaltError(
+                        intent_id=intent_id,
+                        order_ref=order_ref,
+                        probe_result="rejected",
+                        retry_count=0,
+                        reason=exc.reason,
+                    ) from exc
+                except AccountClerkRpcTimeoutError as exc:
+                    raise SubmitUncertainHaltError(
+                        intent_id=intent_id,
+                        order_ref=order_ref,
+                        probe_result="timeout",
+                        retry_count=0,
+                        reason=exc.reason_code,
+                    ) from exc
+                except AccountClerkRpcUnavailableError as exc:
+                    raise SubmitUncertainHaltError(
+                        intent_id=intent_id,
+                        order_ref=order_ref,
+                        probe_result="unavailable",
+                        retry_count=0,
+                        reason=exc.reason_code,
+                    ) from exc
+                except AccountClerkRpcMalformedResponseError as exc:
+                    raise SubmitUncertainHaltError(
+                        intent_id=intent_id,
+                        order_ref=order_ref,
+                        probe_result="protocol_error",
+                        retry_count=0,
+                        reason=exc.reason_code,
+                    ) from exc
+                except AccountClerkRpcInternalError as exc:
+                    raise SubmitUncertainHaltError(
+                        intent_id=intent_id,
+                        order_ref=order_ref,
+                        probe_result="internal_error",
+                        retry_count=0,
+                        reason=exc.reason_code,
                     ) from exc
                 if getattr(result, "status", None) != "accepted":
                     reason = str(getattr(result, "reason", None) or "AccountOwner submit was not accepted")
