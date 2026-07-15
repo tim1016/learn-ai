@@ -18,6 +18,7 @@ from app.schemas.live_runs import GateResult
 from app.utils.timestamps import now_ms_utc
 
 DEFAULT_ACCOUNT_TRUTH_READINESS_TTL_MS = 60_000
+BROKER_TRUTH_SUBMIT_GRACE_MS = 120_000
 ACCOUNT_TRUTH_GATE_ID = "account.account_truth"
 ACCOUNT_TRUTH_GATE_SOURCE = "account_truth_snapshot"
 
@@ -137,6 +138,45 @@ class AccountTruthSnapshotProvider:
     def clear(self) -> None:
         with self._lock:
             self._entries.clear()
+
+
+class AccountTruthSubmitGrace:
+    """Allow a running strategy a bounded continuous broker-truth outage."""
+
+    def __init__(self, *, grace_ms: int = BROKER_TRUTH_SUBMIT_GRACE_MS) -> None:
+        self._grace_ms = grace_ms
+        self._outage_started_at_ms: int | None = None
+
+    def gate(
+        self,
+        evidence: AccountTruthReadinessEvidence | None,
+        *,
+        now_ms: int,
+    ) -> GateResult:
+        assessment = assess_account_truth(evidence, now_ms=now_ms)
+        if assessment.status == "pass":
+            self._outage_started_at_ms = None
+            return assessment.to_gate_result()
+        if not _is_broker_truth_outage(assessment):
+            return assessment.to_gate_result()
+        if self._outage_started_at_ms is None:
+            self._outage_started_at_ms = _broker_truth_outage_started_at_ms(
+                evidence,
+                assessment=assessment,
+                detected_at_ms=now_ms,
+            )
+        if now_ms < self._outage_started_at_ms:
+            return _broker_truth_stale_gate(assessment)
+        if now_ms - self._outage_started_at_ms < self._grace_ms:
+            return GateResult(
+                gate_id=ACCOUNT_TRUTH_GATE_ID,
+                status="pass",
+                source=ACCOUNT_TRUTH_GATE_SOURCE,
+                operator_reason="BROKER_TRUTH_GRACE",
+                operator_next_step="WAIT_FOR_BROKER_TRUTH",
+                evidence_at_ms=assessment.evidence_at_ms,
+            )
+        return _broker_truth_stale_gate(assessment)
 
 
 _PROVIDER = AccountTruthSnapshotProvider()
@@ -261,4 +301,43 @@ def assess_account_truth(
         evidence_at_ms=evidence.truth.generated_at_ms,
         age_ms=age_ms,
         hard_ttl_ms=evidence.hard_ttl_ms,
+    )
+
+
+def _is_broker_truth_outage(assessment: AccountTruthAssessment) -> bool:
+    return assessment.primary_reason_code in {
+        "ACCOUNT_TRUTH_NOT_AVAILABLE",
+        "ACCOUNT_TRUTH_REFRESH_FAILED",
+        "ACCOUNT_TRUTH_STALE",
+    } or any(code.startswith("ACCOUNT_TRUTH_SOURCE_") for code in assessment.reason_codes)
+
+
+def _broker_truth_outage_started_at_ms(
+    evidence: AccountTruthReadinessEvidence | None,
+    *,
+    assessment: AccountTruthAssessment,
+    detected_at_ms: int,
+) -> int:
+    """Return the earliest durable time at which this outage was known."""
+
+    if isinstance(evidence, AccountTruthUnavailable):
+        return evidence.attempted_at_ms
+    if isinstance(evidence, AccountTruthSnapshot):
+        if assessment.primary_reason_code == "ACCOUNT_TRUTH_STALE":
+            return evidence.cached_at_ms + evidence.hard_ttl_ms
+        if any(code.startswith("ACCOUNT_TRUTH_SOURCE_") for code in assessment.reason_codes):
+            if any("_STALE_" in code for code in assessment.reason_codes):
+                return assessment.evidence_at_ms + assessment.hard_ttl_ms
+            return assessment.evidence_at_ms
+    return detected_at_ms
+
+
+def _broker_truth_stale_gate(assessment: AccountTruthAssessment) -> GateResult:
+    return GateResult(
+        gate_id=ACCOUNT_TRUTH_GATE_ID,
+        status="block",
+        source=ACCOUNT_TRUTH_GATE_SOURCE,
+        operator_reason="BROKER_TRUTH_STALE",
+        operator_next_step="WAIT_FOR_BROKER_TRUTH",
+        evidence_at_ms=assessment.evidence_at_ms,
     )

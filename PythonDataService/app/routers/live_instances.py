@@ -2132,8 +2132,16 @@ async def run_roll_call() -> BotRollCallResponse:
 
     settings = get_settings()
     root = Path(settings.live_runs_root)
-    await _raise_if_fleet_contamination_blocks_start(root)
     by_instance = await asyncio.to_thread(_visible_runs_by_instance, root)
+    account_ids = {
+        account_id
+        for runs in by_instance.values()
+        if runs
+        for account_id in [_run_dir_account_id(Path(runs[0]["run_dir"]))]
+        if account_id is not None
+    }
+    for account_id in sorted(account_ids):
+        await _raise_if_fleet_contamination_blocks_start(root, account_id=account_id)
     _result, daemon = await host_daemon_client.fetch_instances(settings.live_runner_daemon_url)
     daemon_by_sid: dict[str, dict] = {}
     if daemon:
@@ -2482,6 +2490,10 @@ async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -
                 "gate_result": account_freeze.to_gate_result().model_dump(mode="json"),
             },
         )
+    await _raise_if_fleet_contamination_blocks_start(
+        root,
+        account_id=daemon_request.account_id,
+    )
     if daemon_request.start and daemon_request.strategy_instance_id:
         _raise_if_crash_recovery_blocks_start(
             root.parent,
@@ -2914,14 +2926,23 @@ async def _assert_start_allowed(run_id: str, body: HostRunnerStartRequest, setti
                 "gate_result": account_freeze.to_gate_result().model_dump(mode="json"),
             },
         )
-    await _raise_if_fleet_contamination_blocks_start(root)
     account_id = _run_dir_account_id(run_dir)
-    if account_id is not None:
-        _raise_if_crash_recovery_blocks_start(
-            root.parent,
-            account_id=account_id,
-            strategy_instance_id=sid,
+    if account_id is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "ACCOUNT_ID_UNAVAILABLE",
+                "message": "The run ledger has no account identity; broker truth cannot be verified.",
+                "gate_id": "account.broker_truth",
+                "operator_next_step": "WAIT_FOR_BROKER_TRUTH",
+            },
         )
+    await _raise_if_fleet_contamination_blocks_start(root, account_id=account_id)
+    _raise_if_crash_recovery_blocks_start(
+        root.parent,
+        account_id=account_id,
+        strategy_instance_id=sid,
+    )
 
     if (run_dir / "poisoned.flag").exists():
         raise HTTPException(
@@ -3626,18 +3647,49 @@ async def _fetch_broker_connected_account(
 
 async def _compute_account_fleet_contamination(
     root: Path,
+    *,
+    account_id: str | None = None,
 ) -> FleetContamination:
     return await fleet_contamination_service.compute_account_fleet_contamination(
         root,
         fetch_positions=_fetch_net_positions,
+        account_id=account_id,
     )
 
 
-async def _raise_if_fleet_contamination_blocks_start(root: Path) -> None:
+async def _raise_if_fleet_contamination_blocks_start(
+    root: Path,
+    *,
+    account_id: str | None = None,
+) -> None:
     """Make the Clerk-owned account verdict an authoritative start boundary."""
 
+    if account_id is not None:
+        broker_account, broker_known = await _fetch_broker_connected_account()
+        if not broker_known or broker_account is None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": "BROKER_TRUTH_UNAVAILABLE",
+                    "message": "Connected broker account identity is unavailable. Wait for a fresh broker observation before starting bots.",
+                    "gate_id": "account.broker_truth",
+                    "operator_next_step": "WAIT_FOR_BROKER_TRUTH",
+                },
+            )
+        if broker_account != account_id:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": "BROKER_ACCOUNT_MISMATCH",
+                    "message": "Connected broker account does not match this run's account identity.",
+                    "gate_id": "account.broker_truth",
+                    "operator_next_step": "WAIT_FOR_BROKER_TRUTH",
+                    "expected_account_id": account_id,
+                    "connected_account_id": broker_account,
+                },
+            )
     try:
-        fleet = await _compute_account_fleet_contamination(root)
+        fleet = await _compute_account_fleet_contamination(root, account_id=account_id)
     except Exception as exc:
         logger.warning("fleet contamination gate unavailable", extra={"error": str(exc)})
         raise HTTPException(
@@ -3648,6 +3700,17 @@ async def _raise_if_fleet_contamination_blocks_start(root: Path) -> None:
                 "gate_id": "account.fleet_contamination",
             },
         ) from exc
+    if fleet.verdict == "unknown" and fleet.policy_blocks_starts:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "BROKER_TRUTH_UNAVAILABLE",
+                "message": "Broker account position truth is unavailable. Wait for a fresh account sweep before starting bots.",
+                "gate_id": "account.broker_truth",
+                "operator_next_step": "WAIT_FOR_BROKER_TRUTH",
+                "contamination": fleet.model_dump(mode="json"),
+            },
+        )
     if fleet.verdict != "contaminated":
         return
     raise HTTPException(

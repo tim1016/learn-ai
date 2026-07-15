@@ -168,6 +168,7 @@ def build_live_readiness(
     bar_source: str,
     expected_bar_source: str,
     account_registry_gate_result: dict | None = None,
+    account_truth_gate_result: dict | None = None,
 ) -> dict:
     """Engine-authored live readiness from in-loop guard values."""
     vector, _gates = _build_live_readiness_projection(
@@ -183,6 +184,7 @@ def build_live_readiness(
         bar_source=bar_source,
         expected_bar_source=expected_bar_source,
         account_registry_gate_result=account_registry_gate_result,
+        account_truth_gate_result=account_truth_gate_result,
     )
     return vector
 
@@ -202,6 +204,7 @@ def build_live_readiness_emission(
     expected_bar_source: str,
     evaluation_id: str,
     account_registry_gate_result: dict | None = None,
+    account_truth_gate_result: dict | None = None,
 ) -> ReadinessEmission:
     """Build current readiness and raw gate-steps from one gate payload."""
     vector, gates = _build_live_readiness_projection(
@@ -217,6 +220,7 @@ def build_live_readiness_emission(
         bar_source=bar_source,
         expected_bar_source=expected_bar_source,
         account_registry_gate_result=account_registry_gate_result,
+        account_truth_gate_result=account_truth_gate_result,
     )
     return ReadinessEmission(
         vector=vector,
@@ -243,6 +247,7 @@ def _build_live_readiness_projection(
     bar_source: str,
     expected_bar_source: str,
     account_registry_gate_result: dict | None = None,
+    account_truth_gate_result: dict | None = None,
 ) -> tuple[dict, list[dict]]:
     gates: list[dict] = [
         gate("desired_state", FAIL if paused else PASS, HARD, "PAUSED" if paused else "RUNNING"),
@@ -281,6 +286,26 @@ def _build_live_readiness_projection(
                     str(account_registry_gate_result.get("operator_reason") or registry_status),
                 ),
                 "gate_result": account_registry_gate_result,
+            }
+        )
+    if account_truth_gate_result is not None:
+        truth_status = str(account_truth_gate_result.get("status") or UNKNOWN)
+        truth_reason = str(account_truth_gate_result.get("operator_reason") or truth_status)
+        # A running process is degraded as soon as broker truth goes away, while
+        # the submit gate may still grant its bounded outage grace. Once that
+        # grace expires, the same canonical gate becomes a hard block.
+        if truth_status == "pass" and truth_reason == "BROKER_TRUTH_GRACE":
+            status = UNKNOWN
+        elif truth_status == "pass":
+            status = PASS
+        elif truth_status == "unknown":
+            status = UNKNOWN
+        else:
+            status = FAIL
+        gates.append(
+            {
+                **gate("account_broker_truth", status, HARD, truth_reason),
+                "gate_result": account_truth_gate_result,
             }
         )
     if expected_bar_source and bar_source and bar_source != expected_bar_source:

@@ -68,6 +68,13 @@ def test_unknown_when_net_unavailable() -> None:
     assert result["net_positions"] is None
     assert result["policy_blocks_starts"] is False
 
+    blocking = compute_fleet_contamination(
+        net_positions=None,
+        explained_by_instance={"a": {"SPY": 100}},
+        policy_blocks_starts=True,
+    )
+    assert blocking["policy_blocks_starts"] is True
+
 
 def test_policy_gate_blocks_only_when_enabled_and_contaminated() -> None:
     contaminated = compute_fleet_contamination(

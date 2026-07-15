@@ -41,7 +41,7 @@ def compute_fleet_contamination(
             "explained_by_instance": buckets,
             "residual": {},
             "verdict": "unknown",
-            "policy_blocks_starts": False,
+            "policy_blocks_starts": policy_blocks_starts,
             "summary": "Net account position unavailable — contamination unknown.",
         }
 

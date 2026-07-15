@@ -709,6 +709,7 @@ class LiveEngine:
         self._account_owner_broker_writer = account_owner_broker_writer
         self._account_clerk_namespace_canceller = account_clerk_namespace_canceller
         self._account_registry_gate_enabled = account_registry_gate_enabled
+        self._account_truth_gate_provider: Callable[[], object] | None = None
         self._owner_generation_provider = owner_generation_provider
         self._current_owner_generation_provider = (
             current_owner_generation_provider
@@ -916,14 +917,18 @@ class LiveEngine:
         account_truth_gate_provider = None
         if self._account_id and getattr(self._broker, "requires_durable_submit", False):
             from app.services.account_truth_snapshot import (
-                account_truth_gate_result,
+                AccountTruthSubmitGrace,
                 get_account_truth_snapshot_provider,
             )
             from app.utils.timestamps import now_ms_utc
 
+            account_truth_submit_grace = AccountTruthSubmitGrace()
+
             def account_truth_gate_provider():
                 snapshot = get_account_truth_snapshot_provider().get(self._account_id)
-                return account_truth_gate_result(snapshot, now_ms=now_ms_utc())
+                return account_truth_submit_grace.gate(snapshot, now_ms=now_ms_utc())
+
+            self._account_truth_gate_provider = account_truth_gate_provider
 
         account_observation_lease_gate_provider = None
         account_observation_lease_shadow_comparison_observer = None
@@ -1019,7 +1024,7 @@ class LiveEngine:
             account_registry_gate_provider=(
                 self._account_registry_gate_result if self._account_registry_gate_enabled else None
             ),
-            account_truth_gate_provider=account_truth_gate_provider,
+            account_truth_gate_provider=self._account_truth_gate_provider,
             account_observation_lease_gate_provider=account_observation_lease_gate_provider,
             account_observation_lease_shadow_comparison_observer=(
                 account_observation_lease_shadow_comparison_observer
@@ -1837,6 +1842,9 @@ class LiveEngine:
             return
         poisoned = (self._output_dir / "poisoned.flag").exists()
         account_registry_gate = self._account_registry_gate_result()
+        account_truth_gate = (
+            self._account_truth_gate_provider() if self._account_truth_gate_provider is not None else None
+        )
         evaluation_id = evaluation_id_for_bar(as_of_ms)
         emission = build_live_readiness_emission(
             as_of_ms=as_of_ms,
@@ -1852,6 +1860,9 @@ class LiveEngine:
             expected_bar_source=self._bar_source,
             account_registry_gate_result=(
                 account_registry_gate.model_dump(mode="json") if account_registry_gate is not None else None
+            ),
+            account_truth_gate_result=(
+                account_truth_gate.model_dump(mode="json") if account_truth_gate is not None else None
             ),
             evaluation_id=evaluation_id,
         )
