@@ -44,6 +44,7 @@ class AccountInstanceBinding(BaseModel):
     strategy_instance_id: str = Field(min_length=1, max_length=128)
     run_id: str = Field(min_length=1, max_length=128)
     bot_order_namespace: str = Field(min_length=1, max_length=256)
+    cohort_id: str | None = Field(default=None, min_length=1, max_length=128)
     lifecycle_state: Literal["DEPLOYED", "ACTIVE", "RETIRED"] = "ACTIVE"
     recorded_at_ms: int = Field(ge=0)
     source: str = Field(min_length=1)

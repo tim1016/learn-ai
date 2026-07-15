@@ -17,9 +17,13 @@ from app.broker.ibkr.models import (
 )
 from app.engine.live.account_artifacts import (
     AccountFreezeEvidence,
+    CohortBatchLaunchMemberOutcome,
+    CohortBatchLaunchOutcomesReceipt,
+    CohortBatchLaunchReceipt,
     account_artifacts_root,
-    read_account_events,
     read_account_freeze,
+    record_cohort_batch_launch_outcomes,
+    record_cohort_batch_launch_receipt,
     write_account_freeze,
 )
 from app.engine.live.account_registry import (
@@ -237,174 +241,47 @@ async def _async_truth():
     return _truth()
 
 
-async def test_create_cohort_batch_launch_receipt_records_operator_authorization(tmp_path: Path) -> None:
-    from app.main import app
-
-    service = CohortBatchLaunchService(artifacts_root=tmp_path)
-    app.dependency_overrides[
-        cohort_batch_launch.get_cohort_batch_launch_service
-    ] = lambda: service
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(
-                "/api/accounts/du1234567/cohort-batch-launches",
-                json={
-                    "cohort_id": "opening-batch-1",
-                    "member_strategy_instance_ids": ["spy-a", "spy-b", "spy-c"],
-                    "window_start_ms": 1_780_000_000_000,
-                    "window_end_ms": 1_780_000_030_000,
-                    "authorized_by": "operator.alice",
-                },
-            )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["account_id"] == "DU1234567"
-    assert body["cohort_id"] == "opening-batch-1"
-    assert body["member_strategy_instance_ids"] == ["spy-a", "spy-b", "spy-c"]
-    assert body["window_start_ms"] == 1_780_000_000_000
-    assert body["window_end_ms"] == 1_780_000_030_000
-    assert body["authorized_by"] == "operator.alice"
-    assert body["recorded_at_ms"] >= 1_780_000_000_000
-
-
-async def test_record_cohort_batch_launch_outcomes_persists_blocked_safe_action(tmp_path: Path) -> None:
-    from app.main import app
-
-    service = CohortBatchLaunchService(artifacts_root=tmp_path)
-    app.dependency_overrides[
-        cohort_batch_launch.get_cohort_batch_launch_service
-    ] = lambda: service
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            authorized = await client.post(
-                "/api/accounts/DU1234567/cohort-batch-launches",
-                json={
-                    "cohort_id": "opening-batch-1",
-                    "member_strategy_instance_ids": ["spy-a", "spy-b"],
-                    "window_start_ms": 1_780_000_000_000,
-                    "window_end_ms": 1_780_000_030_000,
-                    "authorized_by": "operator.alice",
-                },
-            )
-            response = await client.post(
-                "/api/accounts/DU1234567/cohort-batch-launches/opening-batch-1/outcomes",
-                json={
-                    "outcomes": [
-                        {
-                            "strategy_instance_id": "spy-a",
-                            "state": "accepted",
-                            "reason": "start.request.accepted",
-                            "next_safe_action": "Monitor receipt state.",
-                        },
-                        {
-                            "strategy_instance_id": "spy-b",
-                            "state": "blocked",
-                            "reason": "ACCOUNT_FROZEN",
-                            "next_safe_action": "Clear the account freeze.",
-                        },
-                    ],
-                },
-            )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert authorized.status_code == 200
-    assert response.status_code == 200
-    assert response.json()["outcomes"][1] == {
-        "strategy_instance_id": "spy-b",
-        "state": "blocked",
-        "reason": "ACCOUNT_FROZEN",
-        "next_safe_action": "Clear the account freeze.",
-    }
-    event = next(
-        event
-        for event in read_account_events(tmp_path, "DU1234567")
-        if event["event_type"] == "cohort_batch_launch_outcomes_recorded"
-    )
-    assert event["cohort_id"] == "opening-batch-1"
-    assert event["outcomes"][1]["next_safe_action"] == "Clear the account freeze."
-
-
-async def test_cohort_outcomes_reject_partial_authorization_coverage(tmp_path: Path) -> None:
-    from app.main import app
-
-    service = CohortBatchLaunchService(artifacts_root=tmp_path)
-    app.dependency_overrides[
-        cohort_batch_launch.get_cohort_batch_launch_service
-    ] = lambda: service
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            await client.post(
-                "/api/accounts/DU1234567/cohort-batch-launches",
-                json={
-                    "cohort_id": "opening-batch-1",
-                    "member_strategy_instance_ids": ["spy-a", "spy-b"],
-                    "window_start_ms": 1_780_000_000_000,
-                    "window_end_ms": 1_780_000_030_000,
-                    "authorized_by": "operator.alice",
-                },
-            )
-            response = await client.post(
-                "/api/accounts/DU1234567/cohort-batch-launches/opening-batch-1/outcomes",
-                json={
-                    "outcomes": [{
-                        "strategy_instance_id": "spy-a",
-                        "state": "accepted",
-                        "reason": "start.request.accepted",
-                        "next_safe_action": "Monitor receipt state.",
-                    }],
-                },
-            )
-    finally:
-        app.dependency_overrides.clear()
-
-    assert response.status_code == 400
-    assert response.json()["detail"] == (
-        "cohort outcomes must cover exactly the authorization receipt members"
-    )
-
-
 async def test_latest_cohort_status_reloads_exact_persisted_blocker(tmp_path: Path) -> None:
     from app.main import app
 
+    receipt = CohortBatchLaunchReceipt(
+        account_id="DU1234567",
+        cohort_id="opening-batch-1",
+        member_strategy_instance_ids=("spy-a", "spy-b"),
+        window_start_ms=1_780_000_000_000,
+        window_end_ms=1_780_000_030_000,
+        authorized_by="local-operator",
+        recorded_at_ms=1_780_000_000_000,
+    )
+    record_cohort_batch_launch_receipt(tmp_path, receipt)
+    record_cohort_batch_launch_outcomes(
+        tmp_path,
+        CohortBatchLaunchOutcomesReceipt(
+            account_id="DU1234567",
+            cohort_id="opening-batch-1",
+            outcomes=(
+                CohortBatchLaunchMemberOutcome(
+                    strategy_instance_id="spy-a",
+                    state="accepted",
+                    reason="COHORT_START_ACCEPTED",
+                    next_safe_action="Monitor receipt state.",
+                ),
+                CohortBatchLaunchMemberOutcome(
+                    strategy_instance_id="spy-b",
+                    state="blocked",
+                    reason="ACCOUNT_FROZEN",
+                    next_safe_action="Clear the account freeze.",
+                ),
+            ),
+            recorded_at_ms=1_780_000_000_001,
+        ),
+    )
     service = CohortBatchLaunchService(artifacts_root=tmp_path)
     app.dependency_overrides[
         cohort_batch_launch.get_cohort_batch_launch_service
     ] = lambda: service
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            await client.post(
-                "/api/accounts/DU1234567/cohort-batch-launches",
-                json={
-                    "cohort_id": "opening-batch-1",
-                    "member_strategy_instance_ids": ["spy-a", "spy-b"],
-                    "window_start_ms": 1_780_000_000_000,
-                    "window_end_ms": 1_780_000_030_000,
-                    "authorized_by": "operator.alice",
-                },
-            )
-            await client.post(
-                "/api/accounts/DU1234567/cohort-batch-launches/opening-batch-1/outcomes",
-                json={
-                    "outcomes": [
-                        {
-                            "strategy_instance_id": "spy-a",
-                            "state": "accepted",
-                            "reason": "start.request.accepted",
-                            "next_safe_action": "Monitor receipt state.",
-                        },
-                        {
-                            "strategy_instance_id": "spy-b",
-                            "state": "blocked",
-                            "reason": "ACCOUNT_FROZEN",
-                            "next_safe_action": "Clear the account freeze.",
-                        },
-                    ],
-                },
-            )
             response = await client.get(
                 "/api/accounts/DU1234567/cohort-batch-launches/latest",
             )

@@ -232,6 +232,8 @@ class CohortBatchLaunchReceipt(BaseModel):
     window_end_ms: int = Field(ge=0)
     authorized_by: str = Field(min_length=1, max_length=128)
     recorded_at_ms: int = Field(ge=0)
+    member_pins: tuple[CohortBatchLaunchMemberPin, ...] = ()
+    request_provenance: CohortBatchLaunchRequestProvenance | None = None
 
     @model_validator(mode="after")
     def validate_window_and_members(self) -> CohortBatchLaunchReceipt:
@@ -240,7 +242,30 @@ class CohortBatchLaunchReceipt(BaseModel):
             self.window_end_ms,
             self.member_strategy_instance_ids,
         )
+        if self.member_pins and {
+            pin.strategy_instance_id for pin in self.member_pins
+        } != set(self.member_strategy_instance_ids):
+            raise ValueError("member_pins must cover exactly the authorized cohort members")
         return self
+
+
+class CohortBatchLaunchMemberPin(BaseModel):
+    """Server-observed identity/version pin before a cohort receipt is durable."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    strategy_instance_id: str = Field(min_length=1, max_length=128)
+    run_id: str = Field(min_length=1, max_length=128)
+    roll_call_offer_id: str = Field(min_length=1, max_length=128)
+
+
+class CohortBatchLaunchRequestProvenance(BaseModel):
+    """Non-authoritative request context retained for operator audit."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    operator_identity_header_present: bool
+    client_host: str | None = Field(default=None, max_length=255)
 
 
 class CohortBatchLaunchMemberOutcome(BaseModel):
@@ -954,6 +979,18 @@ def _cohort_key_for_binding(
     recorded_at_ms = binding_event.get("recorded_at_ms")
     if not isinstance(strategy_instance_id, str) or not isinstance(recorded_at_ms, int):
         return None
+    cohort_id = binding_event.get("cohort_id")
+    if isinstance(cohort_id, str):
+        eligible = [
+            (seq, receipt)
+            for seq, receipt in receipts
+            if receipt.cohort_id == cohort_id
+            and strategy_instance_id in receipt.member_strategy_instance_ids
+        ]
+        if not eligible:
+            return None
+        seq, _receipt = max(eligible, key=lambda item: item[0])
+        return f"cohort:{seq}"
     eligible = [
         (seq, receipt)
         for seq, receipt in receipts

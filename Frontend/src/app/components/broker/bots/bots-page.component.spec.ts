@@ -178,8 +178,7 @@ class FakeLiveRunsService {
   getBotCatalog = vi.fn<() => Promise<BotCatalogResponse>>();
   deleteBot = vi.fn<(instanceId: string, request?: unknown) => Promise<unknown>>();
   runRollCall = vi.fn<() => Promise<BotRollCallResponse>>();
-  createCohortBatchLaunch = vi.fn();
-  recordCohortBatchLaunchOutcomes = vi.fn();
+  launchCohort = vi.fn();
   startHostRunner = vi.fn<(runId: string, request: unknown) => Promise<unknown>>();
   deployPreflight = vi.fn();
   getLatestCohortBatchLaunch = vi.fn();
@@ -324,17 +323,32 @@ async function setup(options: { triage?: AccountTriageResponse } = {}) {
       started_at_ms: NEW_RUN,
     },
   });
-  service.createCohortBatchLaunch.mockResolvedValue({
-    schema_version: 1, account_id: 'DU1234567', cohort_id: 'paper-validation-test',
-    member_strategy_instance_ids: ['live-idle-spy', 'live-running-aapl'], window_start_ms: NEW_RUN,
-    window_end_ms: NEW_RUN + 300_000, authorized_by: 'bots-page.operator', recorded_at_ms: NEW_RUN,
-  });
-  service.recordCohortBatchLaunchOutcomes.mockResolvedValue({
+  service.launchCohort.mockResolvedValue({
     schema_version: 1,
     account_id: 'DU1234567',
     cohort_id: 'paper-validation-test',
-    outcomes: [],
-    recorded_at_ms: NEW_RUN,
+    member_strategy_instance_ids: ['live-idle-spy', 'live-running-aapl'],
+    window_start_ms: NEW_RUN,
+    window_end_ms: NEW_RUN + 300_000,
+    authorized_by: 'local-operator',
+    authorized_recorded_at_ms: NEW_RUN,
+    outcomes_state: 'recorded',
+    outcomes: [
+      {
+        strategy_instance_id: 'live-idle-spy',
+        state: 'accepted',
+        reason: 'START_ACCEPTED',
+        next_safe_action: 'Monitor the bot receipt state and account exposure.',
+      },
+      {
+        strategy_instance_id: 'live-idle-qqq',
+        state: 'accepted',
+        reason: 'START_ACCEPTED',
+        next_safe_action: 'Monitor the bot receipt state and account exposure.',
+      },
+    ],
+    outcomes_recorded_at_ms: NEW_RUN,
+    outcomes_error: null,
   });
   service.deployPreflight.mockResolvedValue({ ready: true, blockers: [] });
   service.getLatestCohortBatchLaunch.mockResolvedValue(null);
@@ -481,7 +495,7 @@ describe('BotsPageComponent', () => {
     expect(navigate).not.toHaveBeenCalledWith(['/broker/bots', 'live-running-aapl']);
   });
 
-  it('authorizes and starts the ready cohort with current offer ids', async () => {
+  it('sends the displayed cohort once and renders server-derived outcomes', async () => {
     const { fixture, service } = await setup();
     const secondReady = bot({
       strategy_instance_id: 'live-idle-qqq',
@@ -501,29 +515,16 @@ describe('BotsPageComponent', () => {
     await fixture.componentInstance.refresh();
     await settle(fixture);
     vi.mocked(service.runRollCall).mockClear();
-    vi.mocked(service.startHostRunner).mockClear();
 
     await fixture.componentInstance.startReadyBots();
     await settle(fixture);
 
     expect(service.runRollCall).toHaveBeenCalledTimes(1);
-    expect(service.createCohortBatchLaunch).toHaveBeenCalledTimes(1);
-    expect(service.recordCohortBatchLaunchOutcomes).toHaveBeenCalledWith(
+    expect(service.launchCohort).toHaveBeenCalledWith(
       'DU1234567',
-      expect.any(String),
-      expect.objectContaining({ outcomes: expect.arrayContaining([
-        expect.objectContaining({ state: 'accepted', strategy_instance_id: 'live-idle-spy' }),
-      ]) }),
+      { member_strategy_instance_ids: expect.arrayContaining(['live-idle-spy', 'live-idle-qqq']) },
     );
-    expect(service.startHostRunner).toHaveBeenCalledTimes(2);
-    expect(service.startHostRunner).toHaveBeenCalledWith('run-live-idle-qqq', {
-      readonly: false,
-      hydrate_policy: 'require',
-      strategy: 'spy_ema',
-      max_orders_per_day: 2,
-      ibkr_host: '127.0.0.1',
-      roll_call_offer_id: 'offer-live-idle-qqq',
-    });
+    expect(service.startHostRunner).not.toHaveBeenCalled();
     expect(fixture.componentInstance.launchProgress().title).toBe('Cohort start accepted');
     expect((fixture.nativeElement as HTMLElement).textContent).toContain(
       'Start accepted; live status is Ready.',
@@ -537,7 +538,7 @@ describe('BotsPageComponent', () => {
     await settle(fixture);
 
     expect(root.querySelector('[role="alertdialog"]')?.textContent).toContain('Authorize ready bots');
-    expect(service.createCohortBatchLaunch).not.toHaveBeenCalled();
+    expect(service.launchCohort).not.toHaveBeenCalled();
   });
 
   it('lists hard cohort preflight blockers and disables authorization', async () => {

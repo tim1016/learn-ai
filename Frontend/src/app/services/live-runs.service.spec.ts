@@ -176,6 +176,36 @@ describe('LiveRunsService start/stop proxy', () => {
     await expect(promise).resolves.toEqual(response);
   });
 
+  it('submits only displayed member IDs to the server-owned cohort command', async () => {
+    const response = {
+      schema_version: 1,
+      account_id: 'DU123',
+      cohort_id: 'paper-validation-server-authored',
+      member_strategy_instance_ids: ['bot-1'],
+      window_start_ms: 1,
+      window_end_ms: 2,
+      authorized_by: 'local-operator',
+      authorized_recorded_at_ms: 1,
+      outcomes_state: 'recorded',
+      outcomes: [{
+        strategy_instance_id: 'bot-1',
+        state: 'accepted',
+        reason: 'COHORT_START_ACCEPTED',
+        next_safe_action: 'Monitor the bot receipt state and account exposure.',
+      }],
+      outcomes_recorded_at_ms: 2,
+      outcomes_error: null,
+    };
+    const promise = service.launchCohort('DU123', { member_strategy_instance_ids: ['bot-1'] });
+
+    const req = httpMock.expectOne('/api/live-instances/accounts/DU123/cohort-launch');
+    expect(req.request.method).toBe('POST');
+    expect(req.request.body).toEqual({ member_strategy_instance_ids: ['bot-1'] });
+    req.flush(response);
+
+    await expect(promise).resolves.toEqual(response);
+  });
+
   it('reads the bounded lifecycle projection timeline through the data plane', async () => {
     const response: LifecycleTimelineResponse = {
       projection_available: true,

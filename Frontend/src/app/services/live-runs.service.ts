@@ -48,10 +48,7 @@ import type {
 } from '../api/live-instances.types';
 import type { DeployPreflightResponse } from '../api/operator-blocker.types';
 import type {
-  CohortBatchLaunchCreateRequest,
-  CohortBatchLaunchOutcomesReceipt,
-  CohortBatchLaunchOutcomesRequest,
-  CohortBatchLaunchReceipt,
+  CohortBatchLaunchCommandRequest,
   CohortBatchLaunchStatus,
 } from '../api/cohort-batch-launch.types';
 
@@ -247,20 +244,9 @@ export class LiveRunsService {
     );
   }
 
-  createCohortBatchLaunch(accountId: string, request: CohortBatchLaunchCreateRequest): Promise<CohortBatchLaunchReceipt> {
-    return firstValueFrom(this.http.post<CohortBatchLaunchReceipt>(
-      `/api/accounts/${encodeURIComponent(accountId)}/cohort-batch-launches`, request,
-    ));
-  }
-
-  recordCohortBatchLaunchOutcomes(
-    accountId: string,
-    cohortId: string,
-    request: CohortBatchLaunchOutcomesRequest,
-  ): Promise<CohortBatchLaunchOutcomesReceipt> {
-    return firstValueFrom(this.http.post<CohortBatchLaunchOutcomesReceipt>(
-      `/api/accounts/${encodeURIComponent(accountId)}/cohort-batch-launches/${encodeURIComponent(cohortId)}/outcomes`,
-      request,
+  launchCohort(accountId: string, request: CohortBatchLaunchCommandRequest): Promise<CohortBatchLaunchStatus> {
+    return firstValueFrom(this.http.post<CohortBatchLaunchStatus>(
+      `${this.instancesBase}/accounts/${encodeURIComponent(accountId)}/cohort-launch`, request,
     ));
   }
 
