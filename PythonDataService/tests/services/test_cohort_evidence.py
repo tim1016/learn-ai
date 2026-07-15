@@ -1,13 +1,18 @@
 """Tests for server-authored cohort evidence evaluation."""
 
 import asyncio
+from pathlib import Path
+from types import SimpleNamespace
 
+from app.engine.live.account_artifacts import CohortBatchLaunchMemberPin
+from app.engine.live.live_state_sidecar import LiveStateEnvelope
 from app.services.cohort_evidence import (
     CohortEvidenceSample,
     CohortEvidenceSampler,
     CohortMemberSample,
     evaluate_healthy_overlap,
 )
+from app.services.cohort_evidence_runtime import CohortEvidenceRuntimeObserver
 
 
 def _sample(at_ms: int, *members: str) -> CohortEvidenceSample:
@@ -106,3 +111,101 @@ def test_healthy_overlap_refuses_missing_runtime_counters() -> None:
 
     assert evidence.verdict == "failed"
     assert evidence.reason == "RUNTIME_COUNTERS_MISSING"
+
+
+def test_runtime_observer_fails_member_when_poisoned_flag_precedes_sidecar_update(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A fatal disk sentinel must stop proof even with stale healthy sidecars."""
+
+    from app.services import cohort_evidence_runtime
+
+    run_dir = tmp_path / "run-a"
+    run_dir.mkdir()
+    (run_dir / "poisoned.flag").write_text("{}", encoding="utf-8")
+    observer = CohortEvidenceRuntimeObserver(
+        live_runs_root=tmp_path,
+        visible_runs_by_instance=lambda _root: {},
+        now_ms=lambda: 10_000,
+    )
+    monkeypatch.setattr(
+        cohort_evidence_runtime,
+        "read_instance_live_state",
+        lambda _root, _sid: LiveStateEnvelope(
+            strategy_instance_id="a",
+            run_id="run-a",
+            bot_order_namespace="ns",
+            ib_client_id=1,
+            last_processed_bar_ms=1,
+            last_artifact_flush_ms=1,
+        ),
+    )
+
+    sample = observer._member(
+        CohortBatchLaunchMemberPin(strategy_instance_id="a", run_id="run-a", roll_call_offer_id="offer"),
+        {"a": [{"run_id": "run-a", "run_dir": str(run_dir)}]},
+    )
+
+    assert sample.state == "failed"
+    assert sample.reason == "COHORT_MEMBER_HALTED"
+
+
+def test_runtime_observer_requires_fresh_running_runtime_and_ready_vector(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Readiness counters alone cannot prove a dead or blocked child healthy."""
+
+    from app.services import cohort_evidence_runtime
+
+    run_dir = tmp_path / "run-a"
+    run_dir.mkdir()
+    observer = CohortEvidenceRuntimeObserver(
+        live_runs_root=tmp_path,
+        visible_runs_by_instance=lambda _root: {},
+        now_ms=lambda: 10_000,
+    )
+    monkeypatch.setattr(
+        cohort_evidence_runtime,
+        "read_instance_live_state",
+        lambda _root, _sid: LiveStateEnvelope(
+            strategy_instance_id="a",
+            run_id="run-a",
+            bot_order_namespace="ns",
+            ib_client_id=1,
+            last_processed_bar_ms=1,
+            last_artifact_flush_ms=1,
+        ),
+    )
+    monkeypatch.setattr(
+        cohort_evidence_runtime,
+        "read_engine_runtime_snapshot",
+        lambda _path: SimpleNamespace(
+            run_id="run-a", command_loop=SimpleNamespace(state="RUNNING")
+        ),
+    )
+    monkeypatch.setattr(
+        cohort_evidence_runtime,
+        "evaluate_runtime_freshness",
+        lambda _runtime, **_kwargs: SimpleNamespace(posture_demoted=False),
+    )
+    monkeypatch.setattr(
+        cohort_evidence_runtime,
+        "read_readiness",
+        lambda _path: {
+            "kind": "live_readiness",
+            "as_of_ms": 10_000,
+            "source": "engine",
+            "verdict": "BLOCKED",
+            "summary": "broker unavailable",
+            "orders_used": 0,
+            "orders_cap": 4,
+        },
+    )
+
+    sample = observer._member(
+        CohortBatchLaunchMemberPin(strategy_instance_id="a", run_id="run-a", roll_call_offer_id="offer"),
+        {"a": [{"run_id": "run-a", "run_dir": str(run_dir)}]},
+    )
+
+    assert sample.state == "failed"
+    assert sample.reason == "RUNTIME_READINESS_BLOCKED"

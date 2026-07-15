@@ -131,7 +131,10 @@ class CohortLaunchCoordinator:
             cadence_ms=_COHORT_EVIDENCE_CADENCE_MS,
             now_ms=self._now_ms,
             first_expected_at_ms=receipt.window_start_ms,
-            last_expected_at_ms=receipt.window_end_ms,
+            # ``window_end_ms`` is an exclusive boundary.  Each tick credits
+            # one cadence, so sampling exactly at the boundary would credit
+            # evidence outside the receipt's authorization window.
+            last_expected_at_ms=receipt.window_end_ms - _COHORT_EVIDENCE_CADENCE_MS,
             observe=lambda expected_at_ms: observer.observe(receipt, expected_at_ms),
             persist=lambda sample: service.record_evidence_sample(
                 account_id=receipt.account_id,

@@ -102,14 +102,16 @@ class CohortEvidenceSampler:
                 and self._next_expected_at_ms > self._last_expected_at_ms
             ):
                 return
-            await self.sample_once()
             expected_at_ms = self._next_expected_at_ms
             assert expected_at_ms is not None
             delay_seconds = max(0, expected_at_ms - self._now_ms()) / 1_000
             try:
                 await asyncio.wait_for(stop.wait(), timeout=delay_seconds)
             except TimeoutError:
-                continue
+                pass
+            else:
+                return
+            await self.sample_once()
 
 
 class CohortEvidenceSamplerRegistry:
