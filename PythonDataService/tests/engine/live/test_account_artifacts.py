@@ -77,6 +77,7 @@ def test_account_clerk_generation_and_lease_are_account_rooted(tmp_path: Path) -
         account_id="DU123456",
         generation=generation.generation,
         pid=123,
+        ibkr_client_id=80,
         started_at_ms=1_700_000_000_000,
         renewed_at_ms=1_700_000_000_100,
         valid_until_ms=1_700_000_060_100,
