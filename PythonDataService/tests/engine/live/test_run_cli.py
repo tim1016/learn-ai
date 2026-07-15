@@ -1540,6 +1540,77 @@ def test_hydration_failure_exits_code_4(tmp_path: Path) -> None:
     assert rc == 4, f"expected exit 4 (hydration failure), got {rc}"
 
 
+def test_start_legacy_engine_exception_reaches_recovery_without_generation_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A legacy run has no Clerk generation provider to mask engine failures."""
+    import argparse as _argparse
+    from collections.abc import AsyncIterator
+
+    from app.engine.live import live_engine as live_engine_mod
+    from app.engine.live import run as run_mod
+    from app.engine.live.run_ledger import build_ledger, write_ledger
+    from tests.engine.live.fixtures.fake_broker import FakeBroker
+
+    class _FailingEngine:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        async def run(self, *args: object, **kwargs: object) -> None:
+            raise RuntimeError("engine exploded")
+
+    recovery_generations: list[int] = []
+
+    async def _recovery_flatten_spy(*args: object, **kwargs: object) -> int:
+        recovery_generations.append(kwargs["recovery_owner_generation"])
+        return 0
+
+    strategy_spec = tmp_path / "spec.json"
+    _write_valid_deployment_validation_spec(
+        strategy_spec,
+        bar_source_descriptor="ibkr_realtime_bars",
+    )
+    qc_audit = tmp_path / "qc_audit.py"
+    qc_audit.write_text("# QC audit copy stub\n", encoding="utf-8")
+    ledger = build_ledger(
+        code_sha="deadbeef" * 5,
+        strategy_spec_path=strategy_spec,
+        qc_audit_copy_path=qc_audit,
+        qc_cloud_backtest_id="bt-legacy-recovery",
+        account_id="DU123",
+        start_date_ms=1714838400000,
+        live_config={"sizing": {"kind": "FixedShares", "value": 1}},
+    )
+    run_dir = tmp_path / ledger.run_id
+    write_ledger(run_dir / "run_ledger.json", ledger)
+
+    async def _empty_bars() -> AsyncIterator:  # type: ignore[override]
+        return
+        yield
+
+    monkeypatch.setattr(live_engine_mod, "LiveEngine", _FailingEngine)
+    monkeypatch.setattr(run_mod, "_recovery_flatten", _recovery_flatten_spy)
+
+    rc = run_mod.cmd_start(
+        _argparse.Namespace(
+            command="start",
+            run_dir=run_dir,
+            strategy="deployment_validation",
+            readonly=False,
+            max_orders_per_day=4,
+            hydrate_policy="optional",
+            artifacts_root=tmp_path / "artifacts",
+            broker=FakeBroker(),
+            bars=_empty_bars(),
+            client=None,
+        )
+    )
+
+    assert rc == 3
+    assert recovery_generations == [0]
+
+
 def test_stateless_strategy_starts_under_require_without_seed_day(tmp_path: Path) -> None:
     """A stateless strategy (no warm-startable indicator state) must NOT exit 4
     under the default hydrate_policy=require.
@@ -2432,7 +2503,8 @@ def test_cmd_start_wires_account_owner_submitter_for_real_client(
     assert rc == 0
     kwargs = captured["kwargs"]
     assert callable(kwargs["account_owner_submitter"])
-    assert callable(kwargs["account_owner_broker_writer"])
+    assert "account_owner_broker_writer" not in kwargs
+    assert callable(kwargs["account_clerk_namespace_canceller"])
     assert callable(kwargs["owner_generation_provider"])
     clerk_generation = read_account_clerk_generation(artifacts_root, "DU123")
     assert clerk_generation is not None

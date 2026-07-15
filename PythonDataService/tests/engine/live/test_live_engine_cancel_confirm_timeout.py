@@ -19,6 +19,7 @@ import pytest
 
 from app.engine.execution.order import Direction, OrderEvent
 from app.engine.live.config import LiveConfig
+from app.engine.live.halt import FatalHaltError, PoisonedHaltReason, PoisonedHaltTrigger
 from app.engine.live.live_engine import (
     CancelConfirmTimeoutHaltError,
     LiveEngine,
@@ -57,15 +58,14 @@ class _AccountNetMustNotSizeInstanceFlattenBroker(FakeBroker):
         raise AssertionError("account-net positions are not an instance ownership ledger")
 
 
-class _WriterRequiredCancelBroker(FakeBroker):
+class _DirectCancelForbiddenBroker(FakeBroker):
     def __init__(self) -> None:
         super().__init__()
-        self.writer_active = False
+        self.direct_cancel_attempts = 0
 
     async def cancel_open_orders(self) -> list[int]:
-        if not self.writer_active:
-            raise AssertionError("managed flatten must cancel through the account-owner writer")
-        return await super().cancel_open_orders()
+        self.direct_cancel_attempts += 1
+        raise AssertionError("Clerk-mode cancellation must not call the broker directly")
 
 
 @pytest.mark.asyncio
@@ -146,51 +146,10 @@ async def test_flatten_proceeds_when_cancel_completes_in_time(
 
 
 @pytest.mark.asyncio
-async def test_flatten_routes_cancel_through_account_owner_broker_writer(
-    tmp_path: Path,
-) -> None:
-    broker = _WriterRequiredCancelBroker()
-    boundaries: list[str] = []
-
-    async def writer(*, boundary: str, write):
-        boundaries.append(boundary)
-        broker.writer_active = True
-        try:
-            return await write()
-        finally:
-            broker.writer_active = False
-
-    engine = LiveEngine(
-        None,
-        LiveConfig(),
-        broker=broker,
-        output_dir=tmp_path,
-        account_id="DU123",
-        cancel_confirm_timeout_s=0.5,
-        account_owner_broker_writer=writer,
-    )
-    from app.engine.live.live_portfolio import LivePortfolio
-
-    portfolio = LivePortfolio(broker)
-    portfolio.update_reference_price("SPY", Decimal("500"))
-    ctx = type("ctx", (), {"log": lambda self_, msg: None})()
-
-    acks = await engine._flatten(
-        portfolio,
-        ctx,
-        bar_time=datetime(2026, 5, 4, 14, 30, tzinfo=UTC),
-        reconcile_owned_state=_no_reconcile,
-    )  # type: ignore[arg-type]
-
-    assert acks == []
-    assert boundaries == ["broker.cancel_open_orders"]
-
-
-@pytest.mark.asyncio
 async def test_flatten_routes_clerk_mode_cancellation_through_namespace_receipt(
     tmp_path: Path,
 ) -> None:
-    broker = _WriterRequiredCancelBroker()
+    broker = _DirectCancelForbiddenBroker()
     received = []
 
     async def cancel_through_clerk(intent):
@@ -218,7 +177,48 @@ async def test_flatten_routes_clerk_mode_cancellation_through_namespace_receipt(
     )  # type: ignore[arg-type]
 
     assert acks == []
-    assert broker.writer_active is False
+    assert broker.direct_cancel_attempts == 0
+    assert len(received) == 1
+    assert received[0].intent_kind == "CANCEL_NAMESPACE"
+    assert received[0].bot_order_namespace == "learn-ai/bot-a/v1"
+
+
+@pytest.mark.asyncio
+async def test_fatal_halt_routes_cancellation_through_clerk_namespace_receipt(
+    tmp_path: Path,
+) -> None:
+    """Fatal halt shares the Clerk cancel lane with managed flatten."""
+    broker = _DirectCancelForbiddenBroker()
+    received = []
+
+    async def cancel_through_clerk(intent):
+        received.append(intent)
+        return type("Receipt", (), {"cancelled_order_ids": (1047,)})()
+
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        output_dir=tmp_path,
+        account_id="DU123",
+        strategy_instance_id="bot-a",
+        run_id="run-a",
+        account_clerk_namespace_canceller=cancel_through_clerk,
+    )
+    from app.engine.live.live_portfolio import LivePortfolio
+
+    with pytest.raises(FatalHaltError):
+        await engine._fatal_halt(
+            PoisonedHaltReason(
+                trigger=PoisonedHaltTrigger.OUTSIDE_MUTATION,
+                halted_at_ms=1,
+                last_clean_bar_close_ms=0,
+            ),
+            portfolio=LivePortfolio(broker),
+            writers=None,
+        )
+
+    assert broker.direct_cancel_attempts == 0
     assert len(received) == 1
     assert received[0].intent_kind == "CANCEL_NAMESPACE"
     assert received[0].bot_order_namespace == "learn-ai/bot-a/v1"
