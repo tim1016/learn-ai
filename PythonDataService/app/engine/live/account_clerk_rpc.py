@@ -54,6 +54,15 @@ AccountClerkRpcOperation = Literal[
     "operator_adjustment",
     "drain_events",
 ]
+_WRITE_OPERATIONS = frozenset(
+    {
+        "submit",
+        "cancel_namespace",
+        "recovery_flatten",
+        "recovery_flatten_batch",
+        "operator_adjustment",
+    }
+)
 AccountClerkRpcServerErrorCode = Literal[
     "ACCOUNT_CLERK_REJECTED",
     "ACCOUNT_CLERK_CANCEL_NAMESPACE_UNCERTAIN",
@@ -724,7 +733,7 @@ class AccountClerkRpcServer:
         request: dict[str, object],
     ) -> AccountClerkRpcSuccessEnvelope | AccountClerkRpcErrorEnvelope:
         operation = _request_operation(request)
-        if self._closing and operation in ("submit", "recovery_flatten"):
+        if self._closing and operation in _WRITE_OPERATIONS:
             raise _AccountClerkRpcRequestRejected("CLERK_RPC_CLOSED")
         if operation == "submit":
             intent = AccountOwnerSubmitIntent.model_validate(_request_object(request, "intent"))

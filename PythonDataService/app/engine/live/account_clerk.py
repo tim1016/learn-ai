@@ -352,37 +352,38 @@ class AccountClerk:
                     await asyncio.to_thread(self._journal.append_broker_uncertain, first, exc)
                     self._recovery_flatten_namespace = None
                 raise
-
-        try:
-            # Cancellation is terminal before this point, but its last fill
-            # callback can still be queued by the broker adapter.  Releasing
-            # the intake lock lets the sole callback worker fsync that event;
-            # only then may recovery size from the canonical journal fold.
-            async with self._intake_lock:
-                specs = tuple(IbkrOrderSpec.model_validate(intent.order_spec) for intent in intents)
-                await asyncio.to_thread(self._validate_recovery_batch_exposure, intents, specs)
-                broker_acks: list[AccountClerkBrokerAckReceipt] = []
-                for intent, spec in zip(intents, specs, strict=True):
-                    self._require_recovery_submit_intake(intent)
-                    await asyncio.to_thread(self._journal.append_broker_submitting, intent)
-                    try:
-                        ack = await self._place_under_clerk_grant(spec, wait_for_perm_id=True)
-                    except Exception as exc:
-                        await asyncio.to_thread(self._journal.append_broker_uncertain, intent, exc)
-                        raise
-                    broker_acks.append(await asyncio.to_thread(self._journal.append_broker_ack, intent, ack))
-                return tuple(
-                    AccountClerkRecoveryFlattenReceipt(
-                        recorded=record,
-                        broker_acked=broker_ack,
-                        cancelled_order_ids=tuple(cancelled),
+            try:
+                # The account-wide cancel grant stays held until every recovery
+                # order is acknowledged.  Only the intake lock is released for
+                # callback draining, so another namespace cancel cannot erase a
+                # recovery order placed by this batch.
+                async with self._intake_lock:
+                    specs = tuple(IbkrOrderSpec.model_validate(intent.order_spec) for intent in intents)
+                    await asyncio.to_thread(self._validate_recovery_batch_exposure, intents, specs)
+                    broker_acks: list[AccountClerkBrokerAckReceipt] = []
+                    for intent, spec in zip(intents, specs, strict=True):
+                        self._require_recovery_submit_intake(intent)
+                        await asyncio.to_thread(self._journal.append_broker_submitting, intent)
+                        try:
+                            ack = await self._place_under_clerk_grant(spec, wait_for_perm_id=True)
+                        except Exception as exc:
+                            await asyncio.to_thread(self._journal.append_broker_uncertain, intent, exc)
+                            raise
+                        broker_acks.append(
+                            await asyncio.to_thread(self._journal.append_broker_ack, intent, ack)
+                        )
+                    return tuple(
+                        AccountClerkRecoveryFlattenReceipt(
+                            recorded=record,
+                            broker_acked=broker_ack,
+                            cancelled_order_ids=tuple(cancelled),
+                        )
+                        for record, broker_ack in zip(recorded, broker_acks, strict=True)
                     )
-                    for record, broker_ack in zip(recorded, broker_acks, strict=True)
-                )
-        finally:
-            async with self._intake_lock:
-                if self._recovery_flatten_namespace == first.bot_order_namespace:
-                    self._recovery_flatten_namespace = None
+            finally:
+                async with self._intake_lock:
+                    if self._recovery_flatten_namespace == first.bot_order_namespace:
+                        self._recovery_flatten_namespace = None
 
     async def cancel_namespace(
         self,

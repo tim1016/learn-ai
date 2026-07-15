@@ -412,6 +412,35 @@ async def test_close_fences_normal_submit_intake_before_callback_drain(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_closing_rejects_cancel_before_any_broker_write(tmp_path: Path) -> None:
+    """A shutdown-window cancel cannot outlive the callback persistence worker."""
+
+    class _CountingBroker(_Broker):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cancel_count = 0
+
+        async def cancel_open_orders_for_namespace(self, namespace: str) -> list[int]:
+            self.cancel_count += 1
+            return await super().cancel_open_orders_for_namespace(namespace)
+
+    _write_active_binding(tmp_path)
+    broker = _CountingBroker()
+    server = AccountClerkRpcServer(
+        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker, clerk_generation=1)
+    )
+    server._closing = True
+    intent = _intent("closing-cancel").model_copy(
+        update={"intent_kind": "CANCEL_NAMESPACE", "order_spec": {}}
+    )
+
+    with pytest.raises(account_clerk_rpc._AccountClerkRpcRequestRejected, match="CLERK_RPC_CLOSED"):
+        await server._dispatch({"operation": "cancel_namespace", "intent": intent.model_dump(mode="json")})
+
+    assert broker.cancel_count == 0
+
+
+@pytest.mark.asyncio
 async def test_close_waits_for_active_submit_and_persists_its_callback(tmp_path: Path) -> None:
     """A broker write accepted before shutdown drains its callback before exit."""
 
