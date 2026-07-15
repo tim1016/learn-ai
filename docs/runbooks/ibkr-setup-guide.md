@@ -86,3 +86,63 @@ Before enabling any real code path that depends on live broker evidence:
 - Any retired-bot recovery row is resolved or deliberately left frozen.
 
 Do not replace these checks with dummy production code. Pre-market work can add read-only display and disabled affordances; order-changing paths should wait for market-hours evidence.
+
+## Account Clerk restart smoke for observation-lease cutover
+
+This human-in-the-loop smoke is one of the promotion requirements for the
+Account Observation Lease. Run it only against a `DU...` paper account during a
+supported NYSE session. It validates Clerk recovery; it does **not** authorize
+changing `IBKR_ACCOUNT_GATE_AUTHORITY` from its default `account_truth`.
+
+### Preconditions
+
+- Complete the market-hours cutover checklist above and keep the account free
+  of unattributed exposure, unresolved recovery incidents, and unknown working
+  orders.
+- Keep exactly one approved paper-validation bot active for the target account.
+  Do not use a live bot, emergency flatten, direct IBKR API calls, or a second
+  writer to manufacture the test.
+- From the host-daemon health view, record the target row in `clerks[]`:
+  `account_id`, `generation`, `pid`, `status`, `renewed_at_ms`,
+  `valid_until_ms`, and `lease_valid`. Before the restart it must be one
+  `RUNNING` Clerk with `lease_valid=true`.
+- Record the current account-reconciliation receipt and the current
+  `account_clerk` evidence from the bot status view. If a normal submit was
+  already journaled, note its intent/order reference; do not create a new order
+  solely to test recovery.
+
+### Procedure
+
+1. Use the approved host deployment/process-supervisor procedure to restart
+   the target **Account Clerk**. Do not kill a PID by hand or invoke a direct
+   broker-write path. The host supervisor owns Clerk lifecycle, lock handling,
+   client-ID quarantine, and generation advancement.
+2. During the transition, treat absent, expired, draining, or
+   generation-mismatched Clerk/lease evidence as a hard stop. Do not start or
+   resume another bot and do not retry a submit merely because a socket exists.
+3. Wait for the host-daemon health view to show exactly one replacement row for
+   the account. It must have a strictly higher `generation`, `status=RUNNING`,
+   and `lease_valid=true`. The replacement must have completed its generation
+   RPC handshake; a generation file or socket alone is not proof of readiness.
+4. Refresh Account Monitor and run account reconciliation. Confirm a fresh
+   post-restart Account Truth receipt, no client-ID overlap/orphan-socket
+   warning, and `account_clerk` evidence whose accepting generation matches the
+   active Clerk lease.
+5. Resume only the approved paper-validation bot. Confirm the next normal
+   submit boundary records a schema-v2, Clerk-keyed shadow comparison. If an
+   intent existed before the restart, verify its durable journal/receipt is
+   represented once rather than replayed as a second broker action.
+
+### Pass and stop conditions
+
+Pass only when the replacement Clerk is healthy, the reconciliation and
+post-restart lease are fresh, there is no second broker writer or orphaned
+socket, and the observed shadow comparison is not lease-weaker. Preserve the
+daemon health snapshot, reconciliation receipt, and account-events journal for
+the three-session parity archive.
+
+Stop and leave the account blocked if the old generation remains usable, the
+replacement generation cannot complete its RPC handshake, the lease is not
+valid, broker/session evidence is ambiguous, or the lease allows a submit that
+Account Truth blocks. Resolve and document the incident before another paper
+session; never bypass the failure with a per-bot authority override.
