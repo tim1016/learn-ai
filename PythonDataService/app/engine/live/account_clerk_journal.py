@@ -358,7 +358,7 @@ class AccountClerkJournal:
         inbox_path, journal_path = self._paths()
         with _file_lock(journal_path):
             entries = self._load_tail_locked(inbox_path, journal_path)
-            if self._recovery_operation_started_for_intent_entries(entries, intent):
+            if self._recovery_operation_started_for_namespace_entries(entries, intent):
                 return
             entry = AccountClerkJournalEntry(
                 seq=_next_seq(entries),
@@ -376,21 +376,29 @@ class AccountClerkJournal:
             entry = self._recovery_cancelled_for_intent_entries(entries, intent)
             return entry.cancelled_order_ids if entry is not None and entry.cancelled_order_ids is not None else ()
 
-    def recovery_operation_started_for_intent(self, intent: AccountOwnerSubmitIntent) -> bool:
-        """Whether recovery crossed any broker-affecting durable boundary."""
+    def recovery_operation_started_for_namespace(self, intent: AccountOwnerSubmitIntent) -> bool:
+        """Whether this namespace has an incomplete recovery broker boundary."""
 
         inbox_path, journal_path = self._paths()
         with _file_lock(journal_path):
             entries = self._load_tail_locked(inbox_path, journal_path)
-            return self._recovery_operation_started_for_intent_entries(entries, intent)
+            return self._recovery_operation_started_for_namespace_entries(entries, intent)
 
     @staticmethod
-    def _recovery_operation_started_for_intent_entries(
+    def _recovery_operation_started_for_namespace_entries(
         entries: list[AccountClerkJournalEntry],
         intent: AccountOwnerSubmitIntent,
     ) -> bool:
+        terminal_intent_ids = {
+            entry.intent.intent_id
+            for entry in entries
+            if entry.intent is not None
+            and entry.entry_kind == "broker_acked"
+        }
         return any(
-            entry.intent == intent
+            entry.intent is not None
+            and entry.intent.bot_order_namespace == intent.bot_order_namespace
+            and entry.intent.intent_id not in terminal_intent_ids
             and entry.entry_kind
             in {"recovery_cancelling", "recovery_cancelled", "broker_submitting", "broker_uncertain"}
             for entry in entries

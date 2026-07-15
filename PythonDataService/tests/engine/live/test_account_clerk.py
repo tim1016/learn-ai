@@ -963,9 +963,10 @@ async def test_recovery_crash_marker_fails_closed_without_reissuing_broker_write
     _write_active_binding(tmp_path, "bot-a", "run-a")
     broker = _FakeBroker()
     clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
-    recovery = _recovery_intent("bot-a", "run-a", "crashed-recovery")
-    await clerk.record_intent(recovery)
-    await asyncio.to_thread(clerk._journal.append_recovery_cancelling, recovery)
+    crashed_recovery = _recovery_intent("bot-a", "run-a", "crashed-recovery")
+    await clerk.record_intent(crashed_recovery)
+    await asyncio.to_thread(clerk._journal.append_recovery_cancelling, crashed_recovery)
+    recovery = _recovery_intent("bot-a", "run-a", "fresh-recovery-after-crash")
 
     with pytest.raises(AccountClerkIntentRejected, match="CLERK_RECOVERY_REQUIRES_OPERATOR_RECONCILIATION"):
         await clerk.submit_recovery_flatten(

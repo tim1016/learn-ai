@@ -257,7 +257,7 @@ class AccountClerk:
                 )
             if self._recovery_flatten_namespace is not None:
                 self._reject(intent, "CLERK_RECOVERY_FLATTEN_IN_PROGRESS")
-            if await asyncio.to_thread(self._journal.recovery_operation_started_for_intent, intent):
+            if await asyncio.to_thread(self._journal.recovery_operation_started_for_namespace, intent):
                 self._reject(intent, "CLERK_RECOVERY_REQUIRES_OPERATOR_RECONCILIATION")
             self._recovery_flatten_namespace = intent.bot_order_namespace
             try:
