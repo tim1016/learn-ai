@@ -75,6 +75,10 @@ if TYPE_CHECKING:
 
 ACCOUNT_CLERK_AUTHORITY_LOCK_TARGET_FILENAME = "clerk_authority"
 _CLERK_LEASE_TTL_MS = 5_000
+# The Clerk must release its account-wide intake lock before the bot-side RPC
+# budget expires.  A timed-out broker write is ambiguous, so its durable
+# ``broker_uncertain`` row is deliberately left for reconciliation.
+_BROKER_SUBMIT_TIMEOUT_S = 25.0
 
 
 class AccountClerkGenerationFencedError(RuntimeError):
@@ -218,7 +222,12 @@ class AccountClerk:
             cancelled = await self._cancel_namespace_open_orders(intent.bot_order_namespace)
             await asyncio.to_thread(self._journal.append_recovery_cancelled, intent, cancelled)
             spec = IbkrOrderSpec.model_validate(intent.order_spec)
-            ack = await self._place_under_clerk_grant(spec)
+            await asyncio.to_thread(self._journal.append_broker_submitting, intent)
+            try:
+                ack = await self._place_under_clerk_grant(spec)
+            except Exception as exc:
+                await asyncio.to_thread(self._journal.append_broker_uncertain, intent, exc)
+                raise
             broker_ack = await asyncio.to_thread(self._journal.append_broker_ack, intent, ack)
             return AccountClerkRecoveryFlattenReceipt(
                 recorded=recorded,
@@ -506,9 +515,12 @@ class AccountClerk:
         )
 
     async def _place_under_clerk_grant(self, spec: IbkrOrderSpec) -> Any:
-        return await self._run_broker_write(
-            "account_clerk.broker.place_order",
-            lambda: self._broker.place_order(spec),
+        return await asyncio.wait_for(
+            self._run_broker_write(
+                "account_clerk.broker.place_order",
+                lambda: self._broker.place_order(spec),
+            ),
+            timeout=_BROKER_SUBMIT_TIMEOUT_S,
         )
 
     async def _run_broker_write(self, boundary: str, write: Callable[[], Any]) -> Any:

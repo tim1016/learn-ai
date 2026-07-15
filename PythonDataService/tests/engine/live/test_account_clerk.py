@@ -240,6 +240,40 @@ async def test_clerk_records_before_paper_broker_submit_and_deduplicates_ack(tmp
 
 
 @pytest.mark.asyncio
+async def test_bounded_broker_submit_records_uncertainty_and_releases_account_intake(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stuck broker write must not park every bot behind the Clerk lock."""
+
+    class _FirstSubmitHangsBroker(_FakeBroker):
+        async def place_order(self, order: object) -> object:
+            self.calls.append(order)
+            if len(self.calls) == 1:
+                await asyncio.Event().wait()
+            return SimpleNamespace(order_id=102, perm_id=202, exec_id="exec-2")
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _FirstSubmitHangsBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    monkeypatch.setattr(account_clerk_module, "_BROKER_SUBMIT_TIMEOUT_S", 0.01)
+
+    with pytest.raises(TimeoutError):
+        await clerk.submit_intent(_intent("bot-a", "run-a", "hung-submit"))
+    _, acked = await clerk.submit_intent(_intent("bot-a", "run-a", "next-submit"))
+
+    assert acked.order_id == 102
+    assert [entry.entry_kind for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [
+        "recorded",
+        "broker_submitting",
+        "broker_uncertain",
+        "recorded",
+        "broker_submitting",
+        "broker_acked",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_market_fill_before_ack_is_attributed_before_broker_await(tmp_path: Path) -> None:
     """#1044: callback attribution is durable before a fast MKT ack can race it."""
 
@@ -405,6 +439,7 @@ async def test_fenced_bot_can_recovery_flatten_its_retired_namespace(tmp_path: P
     assert [entry.entry_kind for entry in read_account_clerk_journal(tmp_path, ACCOUNT)] == [
         "recorded",
         "recovery_cancelled",
+        "broker_submitting",
         "broker_acked",
     ]
 

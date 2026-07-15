@@ -110,7 +110,7 @@ async def gather_deploy_preflight_signals(
     daemon_result, _health = await host_daemon_client.fetch_health(settings.live_runner_daemon_url)
     account_freeze = read_account_freeze(artifacts_root, account_id)
     account_truth = get_account_truth_snapshot_provider().get(account_id)
-    fleet = await compute_account_fleet_contamination(root)
+    fleet = await compute_account_fleet_contamination(root, account_id=account_id)
 
     return DeployPreflightSignals(
         daemon_reachable=daemon_result.kind == "CONNECTED",

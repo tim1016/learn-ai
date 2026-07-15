@@ -308,11 +308,13 @@ async def fetch_net_positions() -> dict[str, int] | None:
 async def compute_account_fleet_contamination(
     root: Path,
     fetch_positions: NetPositionFetcher | None = None,
+    *,
+    account_id: str | None = None,
 ) -> FleetContamination:
     resolve_net_positions = fetch_positions or fetch_net_positions
     result = compute_fleet_contamination(
         await resolve_net_positions(),
-        collect_fleet_position_explanations(root),
+        collect_fleet_position_explanations(root, account_id=account_id),
         policy_blocks_starts=True,
     )
     return FleetContamination(**result)
