@@ -12,18 +12,95 @@ from types import SimpleNamespace
 import pytest
 
 from app.broker.ibkr.models import (
+    IbkrOrderSpec,
     IbkrPosition,
     IbkrPositionsSnapshot,
+)
+from app.engine.live.account_clerk import AccountClerk
+from app.engine.live.account_owner import AccountOwnerSubmitIntent
+from app.engine.live.account_registry import (
+    AccountInstanceBinding,
+    bot_order_namespace_for_instance,
+    write_account_instance_binding,
 )
 from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarRepo
 from app.engine.live.run import (
     _is_recovery_readonly,
+    _journal_recovery_order_specs,
     _record_recovery_flatten_residual_incident,
     _recovery_flatten,
     _resolve_recovery_broker,
 )
 from app.operator.incidents.store import IncidentStore
 from tests.engine.live.fixtures.fake_broker import FakeBroker
+
+
+def _journal_intent(instance_id: str, run_id: str, intent_id: str, *, action: str) -> AccountOwnerSubmitIntent:
+    namespace = bot_order_namespace_for_instance(instance_id)
+    return AccountOwnerSubmitIntent(
+        trace_id=f"trace-{intent_id}",
+        account_id="DU123",
+        strategy_instance_id=instance_id,
+        run_id=run_id,
+        bot_order_namespace=namespace,
+        intent_id=intent_id,
+        order_ref=f"{namespace}:{intent_id}",
+        intent_kind="STRATEGY",
+        order_spec=IbkrOrderSpec(
+            symbol="SPY",
+            sec_type="STK",
+            action=action,
+            quantity=1,
+            order_type="MKT",
+            time_in_force="DAY",
+            confirm_paper=True,
+            client_order_id=f"client-{intent_id}",
+            order_ref=f"{namespace}:{intent_id}",
+        ).model_dump(),
+        owner_generation=1,
+        created_at_ms=1,
+    )
+
+
+def _write_journal_binding(tmp_path, instance_id: str, run_id: str) -> None:
+    write_account_instance_binding(
+        tmp_path,
+        AccountInstanceBinding(
+            account_id="DU123",
+            strategy_instance_id=instance_id,
+            run_id=run_id,
+            bot_order_namespace=bot_order_namespace_for_instance(instance_id),
+            lifecycle_state="ACTIVE",
+            recorded_at_ms=1,
+            source="test",
+        ),
+    )
+
+
+async def _record_journal_fill(
+    clerk: AccountClerk,
+    intent: AccountOwnerSubmitIntent,
+    *,
+    side: str,
+    quantity: float,
+    exec_id: str,
+) -> None:
+    from app.broker.ibkr.models import IbkrOrderEvent
+
+    await clerk.record_intent(intent)
+    await clerk.record_broker_event(
+        IbkrOrderEvent(
+            account_id="DU123",
+            order_id=1,
+            event_type="fill",
+            order_ref=intent.order_ref,
+            symbol="SPY",
+            side=side,
+            fill_quantity=quantity,
+            exec_id=exec_id,
+            ts_ms=1,
+        )
+    )
 
 
 class _Args:
@@ -89,12 +166,36 @@ async def test_recovery_flatten_routes_broker_writes_through_account_owner_write
 
 
 @pytest.mark.asyncio
-async def test_recovery_flatten_uses_clerk_for_the_halt_write_path() -> None:
+async def test_recovery_flatten_uses_clerk_for_the_halt_write_path(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A bot may read positions, but its fenced adapter never writes recovery orders."""
 
     broker = FakeBroker()
+
+    async def account_net_must_not_be_read():
+        raise AssertionError("Clerk recovery must not size from account-net positions")
+
+    broker.fetch_positions = account_net_must_not_be_read
     _seed_position(broker, "SPY", 100.0)
     submitted = []
+    monkeypatch.setattr(
+        "app.engine.live.run._journal_recovery_order_specs",
+        lambda **_kwargs: (
+            IbkrOrderSpec(
+                symbol="SPY",
+                sec_type="STK",
+                action="SELL",
+                quantity=1,
+                order_type="MKT",
+                time_in_force="DAY",
+                confirm_paper=True,
+                client_order_id="recovery-flat",
+                order_ref="learn-ai/bot-a/v1:recovery-intent",
+            ),
+        ),
+    )
 
     async def clerk_submitter(intent):
         submitted.append(intent)
@@ -115,6 +216,7 @@ async def test_recovery_flatten_uses_clerk_for_the_halt_write_path() -> None:
         recovery_strategy_instance_id="bot-a",
         recovery_run_id="run-a",
         recovery_owner_generation=42,
+        recovery_artifacts_root=tmp_path,
     )
 
     assert liquidated == 1
@@ -122,6 +224,49 @@ async def test_recovery_flatten_uses_clerk_for_the_halt_write_path() -> None:
     [intent] = submitted
     assert intent.intent_kind == "RECOVERY_FLATTEN"
     assert intent.bot_order_namespace == "learn-ai/bot-a/v1"
+
+
+@pytest.mark.asyncio
+async def test_journal_recovery_plan_uses_only_target_namespace_signed_exposure(tmp_path) -> None:
+    """Recovery ignores sibling and foreign account flow, and preserves sign."""
+
+    _write_journal_binding(tmp_path, "bot-a", "run-a")
+    _write_journal_binding(tmp_path, "bot-b", "run-b")
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id="DU123")
+    target_buy = _journal_intent("bot-a", "run-a", "target-buy", action="BUY")
+    target_sell = _journal_intent("bot-a", "run-a", "target-sell", action="SELL")
+    sibling = _journal_intent("bot-b", "run-b", "sibling", action="BUY")
+    await _record_journal_fill(clerk, target_buy, side="BUY", quantity=3, exec_id="target-buy")
+    await _record_journal_fill(clerk, target_sell, side="SELL", quantity=5, exec_id="target-sell")
+    await _record_journal_fill(clerk, sibling, side="BUY", quantity=99, exec_id="sibling")
+
+    # A manual/foreign fill remains account truth but has no namespace, so it
+    # cannot change the target bot's recovery plan.
+    from app.broker.ibkr.models import IbkrOrderEvent
+
+    await clerk.record_broker_event(
+        IbkrOrderEvent(
+            account_id="DU123",
+            order_id=4,
+            event_type="fill",
+            order_ref="manual-order",
+            symbol="SPY",
+            side="BUY",
+            fill_quantity=500,
+            exec_id="manual",
+            ts_ms=1,
+        )
+    )
+
+    [spec] = _journal_recovery_order_specs(
+        artifacts_root=tmp_path,
+        account_id="DU123",
+        bot_order_namespace=bot_order_namespace_for_instance("bot-a"),
+    )
+
+    assert spec.symbol == "SPY"
+    assert spec.action == "BUY"
+    assert spec.quantity == 2
 
 
 @pytest.mark.asyncio

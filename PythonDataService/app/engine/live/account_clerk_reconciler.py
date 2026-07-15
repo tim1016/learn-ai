@@ -74,6 +74,8 @@ class AccountClerkReconciler:
             if intent.intent_kind == "CANCEL_NAMESPACE" and self._clerk.cancel_namespace_in_progress:
                 continue
             resolution = await self._resolve(intent, retry_count)
+            if resolution is None:
+                continue
             resolutions.append(resolution)
             append_account_event(
                 self._clerk._artifacts_root,
@@ -109,7 +111,7 @@ class AccountClerkReconciler:
             await self.reconcile_once()
             await asyncio.sleep(self._cadence_seconds)
 
-    async def _resolve(self, intent, retry_count: int) -> ReconciliationResolution:
+    async def _resolve(self, intent, retry_count: int) -> ReconciliationResolution | None:
         if intent.intent_kind == "CANCEL_NAMESPACE":
             return await self._resolve_uncertain_cancel_namespace(intent)
         probe = await self._probe(intent.intent_id, intent.order_ref)
@@ -119,8 +121,17 @@ class AccountClerkReconciler:
             retry_count=retry_count,
         )
         reason = f"probe={probe.value}; retry_count={retry_count}"
+        recorded = await self._clerk.append_reconciliation_resolution(
+            intent,
+            verdict=verdict.value,
+            reason=reason,
+        )
+        if not recorded:
+            # A Clerk recovery has the serialized broker-write lane.  A probe
+            # begun just before its cancellation barrier must not append a
+            # decision or retry into that recovery window.
+            return None
         if verdict is SubmitVerdict.RETRY_ONCE:
-            await self._clerk.append_reconciliation_resolution(intent, verdict=verdict.value, reason=reason)
             try:
                 await self._clerk.retry_recorded_intent(intent)
             except Exception as exc:
@@ -137,9 +148,6 @@ class AccountClerkReconciler:
                     operator_next_step="CHECK_IBKR",
                 ),
             )
-            await self._clerk.append_reconciliation_resolution(intent, verdict=verdict.value, reason=reason)
-        else:
-            await self._clerk.append_reconciliation_resolution(intent, verdict=verdict.value, reason=reason)
         return ReconciliationResolution(intent.intent_id, intent.order_ref, verdict, reason)
 
     async def _resolve_uncertain_cancel_namespace(
@@ -236,6 +244,10 @@ def _unresolved_intents(
         # account truth, but it is never an intent-reconciliation candidate.
         # Skip it before dereferencing the optional attribution payload.
         if entry.intent is None:
+            continue
+        if entry.intent.intent_kind == "RECOVERY_FLATTEN":
+            # Recovery has its own terminal state machine and must never be
+            # retried as an ordinary Clerk submit.
             continue
         intent_id = entry.intent.intent_id
         if entry.entry_kind == "recorded":
