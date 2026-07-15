@@ -17,10 +17,14 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.engine.live.account_artifacts import (
+    AccountClerkLease,
+    account_artifacts_root,
+    advance_account_clerk_generation,
     append_account_event,
     read_account_clerk_generation,
     read_account_clerk_lease,
     read_account_freeze,
+    write_account_clerk_lease,
 )
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
@@ -38,6 +42,7 @@ from app.engine.live.desired_state import (
 from app.engine.live.host_daemon import (
     HostRunnerError,
     RunnerProcessManager,
+    _AccountClerkProcessEvidence,
     _parse_ibkr_client_id_pool,
     build_parser,
     create_app,
@@ -134,6 +139,225 @@ def test_clerk_readiness_requires_matching_generation_handshake(
         )
 
     assert calls == [(tmp_path, "DU123")]
+
+
+def _write_orphan_clerk_evidence(
+    manager: RunnerProcessManager,
+    *,
+    account_id: str = "DU123",
+    pid: int = 9123,
+    generation_count: int = 1,
+    lease_generation: int | None = None,
+    valid_until_ms: int = 10_000_000_000_000,
+) -> Path:
+    for _ in range(generation_count):
+        generation = advance_account_clerk_generation(
+            manager.artifacts_root,
+            account_id,
+            phase="accepting",
+            recorded_at_ms=1_000,
+            source="test",
+        )
+    lease = AccountClerkLease(
+        account_id=account_id,
+        generation=lease_generation if lease_generation is not None else generation.generation,
+        pid=pid,
+        status="RUNNING",
+        started_at_ms=1_000,
+        renewed_at_ms=1_000,
+        valid_until_ms=valid_until_ms,
+    )
+    write_account_clerk_lease(manager.artifacts_root, lease)
+    from app.engine.live.account_clerk import account_clerk_socket_path
+
+    socket_path = account_clerk_socket_path(manager.artifacts_root, account_id)
+    socket_path.parent.mkdir(parents=True, exist_ok=True)
+    socket_path.touch()
+    return socket_path
+
+
+def _orphan_clerk_process_evidence(
+    manager: RunnerProcessManager,
+    *,
+    account_id: str = "DU123",
+    pid: int = 9123,
+    generation: int = 1,
+) -> _AccountClerkProcessEvidence:
+    return _AccountClerkProcessEvidence(
+        pid=pid,
+        process_start_identity="2026-07-14T12:00:00Z",
+        command=(
+            sys.executable,
+            "-m",
+            "app.engine.live.account_clerk",
+            "--artifacts-root",
+            str(manager.artifacts_root),
+            "--account-id",
+            account_id,
+            "--generation",
+            str(generation),
+        ),
+    )
+
+
+def test_boot_adopts_healthy_orphan_clerk_only_after_generation_handshake(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live import host_daemon
+
+    manager, _ = daemon_context
+    _write_orphan_clerk_evidence(manager)
+    evidence = _orphan_clerk_process_evidence(manager)
+    handshakes: list[tuple[Path, str]] = []
+    monkeypatch.setattr(host_daemon, "_inspect_account_clerk_process", lambda _pid: evidence)
+
+    def verify_generation(*, account_artifacts_root: Path, account_id: str) -> int:
+        handshakes.append((account_artifacts_root, account_id))
+        return 1
+
+    monkeypatch.setattr(
+        RunnerProcessManager,
+        "_verify_account_clerk_generation",
+        staticmethod(verify_generation),
+    )
+
+    manager.reconcile_account_clerks_on_boot()
+
+    adopted = manager._clerks["DU123"]
+    assert adopted.generation == 1
+    assert adopted.process.pid == 9123
+    assert handshakes == [(manager.artifacts_root, "DU123")]
+    assert manager._account_clerk_start_blockers == {}
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("must not respawn adopted Clerk"))
+    assert manager._ensure_account_clerk("DU123") is adopted
+
+
+def test_stale_orphan_generation_is_terminated_before_replacement_and_socket_removal(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live import host_daemon
+
+    manager, _ = daemon_context
+    socket_path = _write_orphan_clerk_evidence(manager, generation_count=2, lease_generation=1)
+    evidence = _orphan_clerk_process_evidence(manager, generation=1)
+    current: list[_AccountClerkProcessEvidence | None] = [evidence]
+    signals: list[int] = []
+    replacement = FakeProcess()
+
+    monkeypatch.setattr(host_daemon, "_inspect_account_clerk_process", lambda _pid: current[0])
+
+    def signal_old_clerk(_pid: int, sig: int) -> None:
+        signals.append(sig)
+        current[0] = None
+
+    monkeypatch.setattr(host_daemon.os, "kill", signal_old_clerk)
+    monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: replacement)
+
+    restarted = manager._ensure_account_clerk("DU123")
+
+    assert signals == [signal.SIGTERM]
+    assert socket_path.exists() is False
+    assert restarted.process is replacement
+    generation = read_account_clerk_generation(manager.artifacts_root, "DU123")
+    assert generation is not None and generation.generation == 3
+
+
+def test_unresponsive_orphan_escalates_to_kill_and_waits_before_replacement(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live import host_daemon
+    from app.engine.live.account_clerk_rpc import (
+        AccountClerkRpcRequestIdentity,
+        AccountClerkRpcUnavailableError,
+    )
+
+    manager, _ = daemon_context
+    socket_path = _write_orphan_clerk_evidence(manager)
+    evidence = _orphan_clerk_process_evidence(manager)
+    current: list[_AccountClerkProcessEvidence | None] = [evidence]
+    signals: list[int] = []
+    replacement = FakeProcess()
+    monkeypatch.setattr(host_daemon, "_inspect_account_clerk_process", lambda _pid: current[0])
+
+    def unavailable_handshake(**_kwargs: object) -> int:
+        raise AccountClerkRpcUnavailableError(
+            reason="SOCKET_CONNECTION_LOST",
+            operation="generation_handshake",
+            request_identity=AccountClerkRpcRequestIdentity(intent_id=None, order_ref=None),
+        )
+
+    monkeypatch.setattr(
+        RunnerProcessManager,
+        "_verify_account_clerk_generation",
+        staticmethod(unavailable_handshake),
+    )
+    monkeypatch.setattr(host_daemon, "_ACCOUNT_CLERK_TERMINATE_WAIT_SECONDS", 0.0)
+    monkeypatch.setattr(host_daemon, "_ACCOUNT_CLERK_KILL_WAIT_SECONDS", 0.0)
+
+    def signal_old_clerk(_pid: int, sig: int) -> None:
+        signals.append(sig)
+        if sig == signal.SIGKILL:
+            current[0] = None
+
+    monkeypatch.setattr(host_daemon.os, "kill", signal_old_clerk)
+    monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: replacement)
+
+    restarted = manager._ensure_account_clerk("DU123")
+
+    assert signals == [signal.SIGTERM, signal.SIGKILL]
+    assert socket_path.exists() is False
+    assert restarted.process is replacement
+
+
+def test_pid_reuse_or_mismatched_command_blocks_without_signalling_or_unlinking_socket(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live import host_daemon
+
+    manager, _ = daemon_context
+    socket_path = _write_orphan_clerk_evidence(manager)
+    evidence = _orphan_clerk_process_evidence(manager)
+    unrelated = evidence.__class__(
+        pid=evidence.pid,
+        process_start_identity=evidence.process_start_identity,
+        command=(sys.executable, "-c", "unrelated"),
+    )
+    signals: list[int] = []
+    monkeypatch.setattr(host_daemon, "_inspect_account_clerk_process", lambda _pid: unrelated)
+    monkeypatch.setattr(host_daemon.os, "kill", lambda _pid, sig: signals.append(sig))
+
+    manager.reconcile_account_clerks_on_boot()
+
+    assert signals == []
+    assert socket_path.exists() is True
+    assert "PID-reuse" in manager._account_clerk_start_blockers["DU123"]
+    with pytest.raises(OSError, match="replacement blocked"):
+        manager._ensure_account_clerk("DU123")
+
+
+def test_preexisting_socket_without_lease_cannot_satisfy_readiness_or_be_unlinked(
+    daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    manager, _ = daemon_context
+    account_id = "DU123"
+    root = account_artifacts_root(manager.artifacts_root, account_id)
+    root.mkdir(parents=True)
+    from app.engine.live.account_clerk import account_clerk_socket_path
+
+    socket_path = account_clerk_socket_path(manager.artifacts_root, account_id)
+    socket_path.parent.mkdir(parents=True, exist_ok=True)
+    socket_path.touch()
+
+    manager.reconcile_account_clerks_on_boot()
+
+    assert socket_path.exists() is True
+    with pytest.raises(OSError, match="socket exists without a lease PID"):
+        manager._ensure_account_clerk(account_id)
 
 
 def _add_managed_process(
