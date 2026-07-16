@@ -3,6 +3,7 @@ import {
   Component,
   computed,
   inject,
+  signal,
 } from "@angular/core";
 import { Router } from "@angular/router";
 import { ButtonModule } from "primeng/button";
@@ -39,6 +40,7 @@ export class AccountRosterPageComponent {
   readonly skeletonRows = [0, 1, 2];
   readonly rosterRows = computed(() => [...this.directory.rosterRows()]);
   readonly postureSeverity = accountPostureTagSeverity;
+  readonly selectedAccount = signal<AccountRosterRow | null>(null);
 
   constructor() {
     void this.directory.loadRoster();
@@ -46,6 +48,13 @@ export class AccountRosterPageComponent {
 
   openDesk(row: AccountRosterRow): void {
     void this.router.navigate(["/broker/accounts", row.account_id]);
+  }
+
+  openSelectedDesk(
+    row: AccountRosterRow | AccountRosterRow[] | undefined,
+  ): void {
+    if (row === undefined || Array.isArray(row)) return;
+    this.openDesk(row);
   }
 
   retry(): void {

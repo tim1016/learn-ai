@@ -16,19 +16,11 @@ import { ButtonModule } from "primeng/button";
 import { CardModule } from "primeng/card";
 import { MessageModule } from "primeng/message";
 import { PanelModule } from "primeng/panel";
-import { TagModule } from "primeng/tag";
 
 import type { AccountTriageVerdictMove } from "../../../api/account-reconciliation.types";
 import type { AccountDeskLens } from "../../../api/operator-blocker.types";
 import { PageHeaderComponent } from "../../../shared/page-header/page-header.component";
-import { ReceiptLabelPipe } from "../../../shared/pipes/receipt-label.pipe";
-import { TimestampDisplayComponent } from "../../../shared/timestamp";
-import {
-  fmtCurrency,
-  fmtDurationRemaining,
-  fmtSignedCurrency,
-} from "../format";
-import { accountPostureTagSeverity } from "../lib/account-posture-tag-severity";
+import { fmtDurationRemaining } from "../format";
 import { AccountDeskHoldingsStore } from "./account-desk-holdings-store.service";
 import {
   AccountDeskLensSelectComponent,
@@ -37,18 +29,15 @@ import {
 import { AccountDeskEventsStore } from "./account-desk-events-store.service";
 import { AccountDeskAccountSwitcherComponent } from "./account-desk-account-switcher.component";
 import { AccountDeskDirectoryStore } from "./account-desk-directory-store.service";
-import { AccountDeskOperatorEventsComponent } from "./account-desk-operator-events.component";
-import { AccountDeskOperatorServiceComponent } from "./account-desk-operator-service.component";
-import { AccountDeskOperatorProofComponent } from "./account-desk-operator-proof.component";
-import { AccountDeskOperatorFleetComponent } from "./account-desk-operator-fleet.component";
+import { AccountDeskOperatorWorkspaceComponent } from "./account-desk-operator-workspace.component";
 import { AccountDeskFleetStore } from "./account-desk-fleet-store.service";
 import { AccountDeskGuidanceComponent } from "./account-desk-guidance.component";
 import { AccountDeskGuidanceStore } from "./account-desk-guidance-store.service";
-import { AccountDeskRecoveryControlsComponent } from "./account-desk-recovery-controls.component";
 import { AccountDeskRecoveryStore } from "./account-desk-recovery-store.service";
 import { AccountDeskSurfaceStore } from "./account-desk-surface-store.service";
 import { AccountDeskTraderEventsComponent } from "./account-desk-trader-events.component";
 import { AccountDeskTraderHoldingsComponent } from "./account-desk-trader-holdings.component";
+import { AccountDeskVerdictComponent } from "./account-desk-verdict.component";
 import { accountDeskFragmentTarget } from "./account-desk-legacy-fragments";
 
 /** Account-id route host for the shared verdict spine and the later desk lenses. */
@@ -58,22 +47,16 @@ import { accountDeskFragmentTarget } from "./account-desk-legacy-fragments";
   imports: [
     AccountDeskAccountSwitcherComponent,
     AccountDeskGuidanceComponent,
-    AccountDeskRecoveryControlsComponent,
+    AccountDeskVerdictComponent,
+    AccountDeskOperatorWorkspaceComponent,
     AccountDeskTraderHoldingsComponent,
     AccountDeskLensSelectComponent,
     AccountDeskTraderEventsComponent,
-    AccountDeskOperatorEventsComponent,
-    AccountDeskOperatorServiceComponent,
-    AccountDeskOperatorProofComponent,
-    AccountDeskOperatorFleetComponent,
     ButtonModule,
     CardModule,
     MessageModule,
     PageHeaderComponent,
     PanelModule,
-    ReceiptLabelPipe,
-    TagModule,
-    TimestampDisplayComponent,
   ],
   templateUrl: "./account-desk-page.component.html",
   styleUrl: "./account-desk-page.component.scss",
@@ -104,9 +87,6 @@ export class AccountDeskPageComponent {
   readonly error = this.store.error;
   readonly showingStaleLastGood = this.store.showingStaleLastGood;
   readonly headlineMetrics = this.holdings.headlineMetrics;
-  readonly fmtCurrency = fmtCurrency;
-  readonly fmtSignedCurrency = fmtSignedCurrency;
-  readonly postureSeverity = accountPostureTagSeverity;
   readonly displayAccountId = computed(
     () => this.triage()?.account_id ?? this.store.accountId(),
   );
@@ -139,7 +119,7 @@ export class AccountDeskPageComponent {
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe((params) => {
         const accountId = params.get("accountId");
-        if (accountId) {
+        if (accountId !== null) {
           void this.store.load(accountId);
           void this.holdings.load(accountId);
           void this.events.load(accountId);

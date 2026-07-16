@@ -12,107 +12,18 @@
 </app-page-header>
 
 <main class="account-desk" aria-label="Account desk">
-  <p-card
-    id="account-desk-verdict"
-    class="verdict-card"
-    aria-live="polite"
-    tabindex="-1"
-  >
-    @if (loading() && !triage()) {
-      <p>Loading account verdict…</p>
-    } @else if (triage(); as triage) {
-      <ng-template #header>
-        <header class="flex flex-wrap justify-between gap-4">
-          <div class="grid gap-2">
-            <p class="eyebrow m-0">Effective posture</p>
-            <p-tag
-              class="text-base"
-              [severity]="postureSeverity(triage.verdict.state)"
-              [value]="triage.verdict.state | receiptLabel"
-            />
-          </div>
-          <dl class="flex flex-wrap justify-end gap-4 m-0 text-right">
-            <div>
-              <dt>As of</dt>
-              <dd>
-                <app-timestamp-display
-                  [value]="triage.generated_at_ms"
-                  mode="local"
-                />
-              </dd>
-            </div>
-            <div>
-              <dt>Observation</dt>
-              <dd>{{ triage.account_observation.state | receiptLabel }}</dd>
-            </div>
-            @if (triage.account_observation.valid_until_ms !== null) {
-              <div>
-                <dt>Fresh for</dt>
-                <dd aria-live="off">{{ freshnessCountdown() }}</dd>
-              </div>
-            }
-          </dl>
-        </header>
-      </ng-template>
-      <h2>{{ triage.verdict.headline }}</h2>
-      <p>{{ triage.verdict.detail }}</p>
-      <app-account-desk-guidance
-        anchor="verdict"
-        [lens]="lens()"
-        ariaLabel="Verdict guidance"
-      />
-      @if (lens() === "trader" && guidance.operatorAttentionCount() > 0) {
-        <p>
-          {{ guidance.operatorAttentionCount() }} items need operator attention.
-        </p>
-      }
-      @if (triage.verdict.primary_move; as move) {
-        <button pButton type="button" (click)="followPrimaryMove(move)">
-          <span class="p-button-label">{{ move.label }}</span>
-        </button>
-      }
-      <dl class="headline-metrics" aria-label="Headline metrics">
-        <div>
-          <dt>Net liquidation</dt>
-          <dd>{{ fmtCurrency(headlineMetrics()?.equity) }}</dd>
-        </div>
-        <div>
-          <dt>Day P&amp;L</dt>
-          <dd
-            [class.positive]="(headlineMetrics()?.dayPnl ?? 0) > 0"
-            [class.negative]="(headlineMetrics()?.dayPnl ?? 0) < 0"
-          >
-            {{ fmtSignedCurrency(headlineMetrics()?.dayPnl) }}
-          </dd>
-        </div>
-        <div>
-          <dt>Open positions</dt>
-          <dd>{{ headlineMetrics()?.openPositions ?? "—" }}</dd>
-        </div>
-      </dl>
-      @if (showingStaleLastGood()) {
-        <p-message severity="warn">
-          <span
-            >Showing last good account data from
-            <app-timestamp-display
-              [value]="triage.generated_at_ms"
-              mode="local"
-            />. Refresh failed.</span
-          >
-          <button pButton type="button" severity="secondary" (click)="retry()">
-            <span class="p-button-label">Retry</span>
-          </button>
-        </p-message>
-      }
-    } @else if (error()) {
-      <p-message severity="error">
-        <span>We could not load this account verdict.</span>
-        <button pButton type="button" severity="secondary" (click)="retry()">
-          <span class="p-button-label">Retry</span>
-        </button>
-      </p-message>
-    }
-  </p-card>
+  <app-account-desk-verdict
+    [triage]="triage()"
+    [loading]="loading()"
+    [error]="error()"
+    [showingStaleLastGood]="showingStaleLastGood()"
+    [headlineMetrics]="headlineMetrics()"
+    [freshnessCountdown]="freshnessCountdown()"
+    [lens]="lens()"
+    [operatorAttentionCount]="guidance.operatorAttentionCount()"
+    (retryRequested)="retry()"
+    (primaryMoveFollowed)="followPrimaryMove($event)"
+  />
 
   <app-account-desk-lens-select
     [options]="lensOptions"
@@ -120,7 +31,7 @@
     (valueChange)="selectLens($event)"
   />
 
-  <p-card styleClass="!p-0" aria-live="polite">
+  <p-card styleClass="p-0" aria-live="polite">
     @if (loading() && !triage()) {
       <p>Loading desk details…</p>
     } @else if (error() && !triage()) {
@@ -148,25 +59,7 @@
           }
         </p-panel>
       } @else {
-        <section class="operator-workspace" aria-label="Operator workspace">
-          <header class="operator-workspace__header">
-            <p class="eyebrow">Operator workspace</p>
-            <h2>Resolve the account posture</h2>
-            <p>
-              Start with the current proof and server-declared actions. Audit
-              history stays available below.
-            </p>
-          </header>
-          <div class="operator-workspace__actions">
-            <p-card>
-              <app-account-desk-operator-proof />
-            </p-card>
-            <app-account-desk-recovery-controls />
-          </div>
-          <app-account-desk-operator-service />
-          <app-account-desk-operator-fleet />
-          <app-account-desk-operator-events />
-        </section>
+        <app-account-desk-operator-workspace />
       }
     }
   </p-card>

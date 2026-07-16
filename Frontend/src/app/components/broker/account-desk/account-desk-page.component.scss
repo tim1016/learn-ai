@@ -2,35 +2,3 @@
   display: grid;
   gap: 1rem;
 }
-.operator-workspace {
-  display: grid;
-  gap: 1.25rem;
-}
-.operator-workspace__actions {
-  display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(19rem, 0.8fr);
-  gap: 1rem;
-  align-items: start;
-}
-.operator-workspace__header {
-  display: grid;
-  gap: 0.25rem;
-  padding-bottom: 0.25rem;
-  border-bottom: 1px solid var(--border-light);
-}
-.headline-metrics {
-  display: flex;
-  gap: 1rem;
-  flex-wrap: wrap;
-  margin: 0;
-}
-.headline-metrics div {
-  display: grid;
-  gap: 0.2rem;
-}
-
-@media (max-width: 48rem) {
-  .operator-workspace__actions {
-    grid-template-columns: 1fr;
-  }
-}

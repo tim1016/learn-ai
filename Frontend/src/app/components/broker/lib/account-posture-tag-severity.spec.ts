@@ -10,6 +10,7 @@ describe("accountPostureTagSeverity", () => {
     ["degraded feed", "warn"],
     ["stale evidence", "warn"],
     ["FROZEN", "danger"],
+    ["UNSAFE", "danger"],
     ["blocked by policy", "danger"],
     ["NOT_PROVEN", "secondary"],
   ] as const)("maps %s to %s", (posture, expectedSeverity) => {

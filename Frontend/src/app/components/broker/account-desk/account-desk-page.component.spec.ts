@@ -296,6 +296,26 @@ describe("AccountDeskPageComponent", () => {
     expect(await screen.findByText("DU7654321")).toBeTruthy();
   });
 
+  it("loads an explicitly empty account route parameter", async () => {
+    const route$ = new BehaviorSubject(
+      convertToParamMap({ accountId: "DU1234567" }),
+    );
+    const { broker, directory, events, fleet, recovery } = await setup({
+      route$,
+    });
+    broker.accountTriage.mockResolvedValueOnce(
+      makeCleanAccountTriage({ accountId: "" }),
+    );
+
+    route$.next(convertToParamMap({ accountId: "" }));
+
+    await waitFor(() => expect(broker.accountTriage).toHaveBeenCalledWith(""));
+    expect(events.load).toHaveBeenCalledWith("");
+    expect(fleet.load).toHaveBeenCalledWith("");
+    expect(recovery.load).toHaveBeenCalledWith("");
+    expect(directory.loadServiceStatus).toHaveBeenCalledWith("");
+  });
+
   it("switches accounts without leaving the current lens", async () => {
     const route$ = new BehaviorSubject(
       convertToParamMap({ accountId: "DU1234567" }),

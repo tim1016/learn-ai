@@ -62,74 +62,10 @@
         No open holdings are reported for this attested account.
       </p>
     } @else {
-      <p-table
-        dataKey="position.con_id"
-        [value]="tableRows()"
-        [stripedRows]="true"
-        [rowTrackBy]="trackHolding"
-        aria-label="Open holdings"
-      >
-        <ng-template #header>
-          <tr>
-            <th>Symbol</th>
-            <th>Type</th>
-            <th class="text-right">Quantity</th>
-            <th class="text-right">Value</th>
-            <th class="text-right">Live P&amp;L</th>
-            <th>Owner</th>
-          </tr>
-        </ng-template>
-        <ng-template #body let-row let-expanded="expanded">
-          <tr>
-            <td class="font-mono">
-              @if (row.blockers.length > 0) {
-                <button
-                  pButton
-                  type="button"
-                  severity="secondary"
-                  [text]="true"
-                  [rounded]="true"
-                  [pRowToggler]="row"
-                  [icon]="
-                    expanded ? 'pi pi-chevron-down' : 'pi pi-chevron-right'
-                  "
-                  [attr.aria-label]="
-                    (expanded ? 'Hide guidance for ' : 'Show guidance for ') +
-                    row.position.symbol
-                  "
-                ></button>
-              }
-              {{ row.position.symbol }}
-            </td>
-            <td class="font-mono">{{ row.position.sec_type }}</td>
-            <td class="text-right font-mono">
-              {{
-                fmtSignedQuantity(row.pnl?.position ?? row.position.quantity)
-              }}
-            </td>
-            <td class="text-right font-mono">
-              {{
-                fmtCurrency(row.pnl?.market_value ?? row.position.market_value)
-              }}
-            </td>
-            <td class="text-right font-mono">
-              {{ fmtSignedCurrency(row.pnl?.unrealized_pnl) }}
-            </td>
-            <td>{{ row.owner.owner_label }}</td>
-          </tr>
-        </ng-template>
-        <ng-template #expandedrow let-row>
-          <tr>
-            <td colspan="6">
-              <app-operator-blocker-list
-                [blockers]="row.blockers"
-                ariaLabel="Holding guidance"
-                (moveSelected)="followBlockerMove($event)"
-              />
-            </td>
-          </tr>
-        </ng-template>
-      </p-table>
+      <app-account-desk-trader-holdings-table
+        [rows]="tableRows()"
+        (blockerMoveSelected)="followBlockerMove($event)"
+      />
     }
   }
 </section>

@@ -17,8 +17,7 @@ header p,
 dt {
   color: var(--text-secondary);
 }
-.automation,
-.receipt {
+.automation {
   display: grid;
   gap: 0.5rem;
   border: 1px solid var(--border-light);

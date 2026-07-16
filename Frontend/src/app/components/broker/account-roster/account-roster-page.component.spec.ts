@@ -50,6 +50,19 @@ describe("AccountRosterPageComponent", () => {
     ]);
   });
 
+  it("opens the selected account desk from the keyboard", async () => {
+    const { router } = await setup();
+
+    fireEvent.keyDown(screen.getByLabelText("Open account DU1234567"), {
+      code: "Enter",
+    });
+
+    expect(router.navigate).toHaveBeenCalledWith([
+      "/broker/accounts",
+      "DU1234567",
+    ]);
+  });
+
   it("renders the configured-empty state", async () => {
     await setup(makeDirectory());
 

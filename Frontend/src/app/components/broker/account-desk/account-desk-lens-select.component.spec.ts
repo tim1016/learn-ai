@@ -5,7 +5,7 @@ import { AccountDeskLensSelectComponent } from "./account-desk-lens-select.compo
 
 describe("AccountDeskLensSelectComponent", () => {
   it("renders its initial signal value and emits the selected lens", async () => {
-    const { fixture } = await render(AccountDeskLensSelectComponent, {
+    await render(AccountDeskLensSelectComponent, {
       inputs: {
         options: [
           { label: "Trader", value: "trader" },
@@ -26,6 +26,8 @@ describe("AccountDeskLensSelectComponent", () => {
     expect(operator.getAttribute("aria-pressed")).toBe("false");
 
     fireEvent.click(operator);
-    expect(fixture.componentInstance.value()).toBe("operator");
+    await waitFor(() => {
+      expect(operator.getAttribute("aria-pressed")).toBe("true");
+    });
   });
 });

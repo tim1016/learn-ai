@@ -73,6 +73,7 @@ describe("AccountDeskTraderHoldingsComponent", () => {
     expect(await screen.findByText("Broker-attested balances")).toBeTruthy();
     expect(screen.getByText("$10,000.00")).toBeTruthy();
     expect(screen.getByText("$1,020.00")).toBeTruthy();
+    expect(screen.getByText("Stk")).toBeTruthy();
     expect(screen.getByText("Bot alpha")).toBeTruthy();
     fireEvent.click(
       screen.getByRole("button", { name: "Show guidance for SPY" }),

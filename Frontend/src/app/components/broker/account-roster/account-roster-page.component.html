@@ -52,8 +52,11 @@
     <p-table
       dataKey="account_id"
       [value]="rosterRows()"
+      [selection]="selectedAccount()"
       [selectionMode]="'single'"
       [rowHover]="true"
+      (selectionChange)="selectedAccount.set($event)"
+      (onRowSelect)="openSelectedDesk($event.data)"
       aria-label="Account roster"
     >
       <ng-template #header>
@@ -70,7 +73,6 @@
         <tr
           [pSelectableRow]="row"
           [attr.aria-label]="'Open account ' + row.account_id"
-          (click)="openDesk(row)"
         >
           <td class="font-mono">{{ row.account_id }}</td>
           <td>{{ row.broker }}</td>
