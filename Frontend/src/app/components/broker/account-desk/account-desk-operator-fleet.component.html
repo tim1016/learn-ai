@@ -1,14 +1,39 @@
-<section class="fleet-evidence" aria-label="Fleet contamination evidence" aria-live="polite">
-  <header><h2>Fleet contamination</h2><p>Server-attested fleet evidence for this account.</p></header>
+<p-panel
+  class="fleet-evidence"
+  aria-label="Fleet contamination evidence"
+  aria-live="polite"
+>
+  <ng-template #header><h2>Fleet contamination</h2></ng-template>
+  <p>Server-attested fleet evidence for this account.</p>
   @if (store.loading() && !store.hasLastGood()) {
     <p class="state">Loading fleet evidence…</p>
   } @else if (store.errorMessage() && !store.hasLastGood()) {
-    <div class="state state-error" role="alert"><p>{{ store.errorMessage() }}</p><button type="button" (click)="retry()">Retry</button></div>
+    <div class="state state-error" role="alert">
+      <p>{{ store.errorMessage() }}</p>
+      <button pButton type="button" severity="secondary" (click)="retry()">
+        <span class="p-button-label">Retry</span>
+      </button>
+    </div>
   } @else if (store.summary(); as summary) {
     <dl>
-      <div><dt>Account identity</dt><dd>{{ summary.account_identity | receiptLabel }}</dd></div>
-      <div><dt>Contamination</dt><dd>{{ summary.contamination.verdict | receiptLabel }}</dd></div>
-      <div><dt>Start policy</dt><dd>{{ summary.contamination.policy_blocks_starts ? 'Starts are blocked by fleet policy.' : 'Fleet policy does not block starts.' }}</dd></div>
+      <div>
+        <dt>Account identity</dt>
+        <dd>{{ summary.account_identity | receiptLabel }}</dd>
+      </div>
+      <div>
+        <dt>Contamination</dt>
+        <dd>{{ summary.contamination.verdict | receiptLabel }}</dd>
+      </div>
+      <div>
+        <dt>Start policy</dt>
+        <dd>
+          {{
+            summary.contamination.policy_blocks_starts
+              ? "Starts are blocked by fleet policy."
+              : "Fleet policy does not block starts."
+          }}
+        </dd>
+      </div>
     </dl>
     <p>{{ summary.contamination.summary }}</p>
     @if (summary.contamination.net_positions === null) {
@@ -17,13 +42,22 @@
       <p class="state">No fleet net positions are reported.</p>
     } @else {
       <ul aria-label="Fleet net positions">
-        @for (row of netPositionRows(); track row[0]) { <li><code>{{ row[0] }}</code>: {{ row[1] }}</li> }
+        @for (row of netPositionRows(); track row[0]) {
+          <li>
+            <code>{{ row[0] }}</code
+            >: {{ row[1] }}
+          </li>
+        }
       </ul>
     }
   } @else {
     <p class="state">No fleet evidence is available for this account.</p>
   }
   @if (store.showingStaleLastGood()) {
-    <p class="state state-stale">Showing last available fleet evidence from <app-timestamp-display [value]="store.lastGoodAtMs()" mode="local" />. Refresh is unavailable.</p>
+    <p class="state state-stale">
+      Showing last available fleet evidence from
+      <app-timestamp-display [value]="store.lastGoodAtMs()" mode="local" />.
+      Refresh is unavailable.
+    </p>
   }
-</section>
+</p-panel>

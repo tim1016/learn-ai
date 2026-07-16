@@ -1,0 +1,23 @@
+<section class="receipt" aria-label="Recovery receipt">
+  @let receiptView = receipt();
+  <h3>Latest recovery result</h3>
+  <p>{{ receiptView.message }}</p>
+  <dl>
+    @for (field of receiptView.fields; track field.label) {
+      <div>
+        <dt>{{ field.label }}</dt>
+        <dd>
+          @if (field.timestampMs !== null) {
+            <app-timestamp-display [value]="field.timestampMs" mode="local" />
+          } @else if (field.kind === "code") {
+            <code>{{ field.value }}</code>
+          } @else if (field.kind === "label") {
+            {{ field.value | receiptLabel }}
+          } @else {
+            {{ field.value }}
+          }
+        </dd>
+      </div>
+    }
+  </dl>
+</section>

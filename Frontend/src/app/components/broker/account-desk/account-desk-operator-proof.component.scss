@@ -1,11 +1,45 @@
-.operations-proof { display: grid; gap: .75rem; }
-header, h2, h3, p, dl, ol, ul { margin: 0; }
-header { display: grid; gap: .2rem; }
-header p, dt { color: var(--text-color-secondary, #556070); }
-.operations-proof__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr)); gap: 1rem; }
-.operations-proof__grid > section { display: grid; gap: .6rem; }
-dl { display: grid; gap: .45rem; }
-dd { margin: .15rem 0 0; }
-ol, ul { display: grid; gap: .35rem; padding-left: 1.25rem; }
-.state-error { color: #a30000; }
-.state-stale { color: #8a5a00; }
+.operations-proof {
+  display: grid;
+  gap: 0.75rem;
+}
+header,
+h2,
+h3,
+p,
+dl,
+ol,
+ul {
+  margin: 0;
+}
+header {
+  display: grid;
+  gap: 0.2rem;
+}
+header p,
+dt {
+  color: var(--text-secondary);
+}
+.operations-proof__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: 1rem;
+}
+dl {
+  display: grid;
+  gap: 0.45rem;
+}
+dd {
+  margin: 0.15rem 0 0;
+}
+ol,
+ul {
+  display: grid;
+  gap: 0.35rem;
+  padding-left: 1.25rem;
+}
+.state-error {
+  color: var(--bear);
+}
+.state-stale {
+  color: var(--warn);
+}

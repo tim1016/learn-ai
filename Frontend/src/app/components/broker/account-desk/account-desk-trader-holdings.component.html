@@ -1,22 +1,30 @@
 <section class="holdings" aria-label="Trader holdings" aria-live="polite">
   @if (store.loading() && !store.hasLastGood()) {
-    <p class="state state-loading">Attesting broker account before loading holdings…</p>
+    <p class="state state-loading">
+      Attesting broker account before loading holdings…
+    </p>
   } @else if (store.unavailableMessage(); as message) {
     <div class="state state-unavailable" role="alert">
       <p>{{ message }}</p>
       @if (!store.hasLastGood()) {
-        <button type="button" (click)="retry()">Retry</button>
+        <button pButton type="button" severity="secondary" (click)="retry()">
+          <span class="p-button-label">Retry</span>
+        </button>
       }
     </div>
   } @else if (store.error() && !store.hasLastGood()) {
     <div class="state state-error" role="alert">
       <p>We could not load attested live holdings.</p>
-      <button type="button" (click)="retry()">Retry</button>
+      <button pButton type="button" severity="secondary" (click)="retry()">
+        <span class="p-button-label">Retry</span>
+      </button>
     </div>
   }
 
   @if (store.showingStaleLastGood()) {
-    <p class="state state-stale">Showing the last attested holdings. A live refresh is unavailable.</p>
+    <p class="state state-stale">
+      Showing the last attested holdings. A live refresh is unavailable.
+    </p>
   }
 
   @if (store.account(); as account) {
@@ -24,41 +32,40 @@
     <header class="holdings-header">
       <div>
         <p class="eyebrow">Broker-attested balances</p>
-        <p class="muted">Last account snapshot <app-timestamp-display [value]="account.fetched_at_ms" mode="local" /></p>
+        <p class="muted">
+          Last account snapshot
+          <app-timestamp-display [value]="account.fetched_at_ms" mode="local" />
+        </p>
       </div>
       <dl class="balances" aria-label="Broker account balances">
-        <div><dt>Equity</dt><dd>{{ fmtCurrency(metrics?.equity) }}</dd></div>
-        <div><dt>Cash</dt><dd>{{ fmtCurrency(metrics?.cash) }}</dd></div>
-        <div><dt>Buying power</dt><dd>{{ fmtCurrency(metrics?.buyingPower) }}</dd></div>
-        <div><dt>Day P&amp;L</dt><dd>{{ fmtSignedCurrency(metrics?.dayPnl) }}</dd></div>
+        <div>
+          <dt>Equity</dt>
+          <dd>{{ fmtCurrency(metrics?.equity) }}</dd>
+        </div>
+        <div>
+          <dt>Cash</dt>
+          <dd>{{ fmtCurrency(metrics?.cash) }}</dd>
+        </div>
+        <div>
+          <dt>Buying power</dt>
+          <dd>{{ fmtCurrency(metrics?.buyingPower) }}</dd>
+        </div>
+        <div>
+          <dt>Day P&amp;L</dt>
+          <dd>{{ fmtSignedCurrency(metrics?.dayPnl) }}</dd>
+        </div>
       </dl>
     </header>
 
     @if (store.rows().length === 0) {
-      <p class="state state-empty">No open holdings are reported for this attested account.</p>
+      <p class="state state-empty">
+        No open holdings are reported for this attested account.
+      </p>
     } @else {
-      <div class="table-wrap">
-        <table class="holdings-table">
-          <thead><tr><th>Symbol</th><th>Type</th><th class="num">Quantity</th><th class="num">Value</th><th class="num">Live P&amp;L</th><th>Owner</th></tr></thead>
-          <tbody>
-            @for (row of store.rows(); track trackHolding($index, row)) {
-              <tr [class.has-blocker]="row.blockers.length > 0">
-                <td class="mono">{{ row.position.symbol }}</td>
-                <td class="mono">{{ row.position.sec_type }}</td>
-                <td class="num mono">{{ fmtSignedQuantity(row.pnl?.position ?? row.position.quantity) }}</td>
-                <td class="num mono">{{ fmtCurrency(row.pnl?.market_value ?? row.position.market_value) }}</td>
-                <td class="num mono">{{ fmtSignedCurrency(row.pnl?.unrealized_pnl) }}</td>
-                <td>{{ row.owner.owner_label }}</td>
-              </tr>
-              @if (row.blockers.length > 0) {
-                <tr class="holding-blocker"><td colspan="6">
-                  <app-operator-blocker-list [blockers]="row.blockers" ariaLabel="Holding guidance" (moveSelected)="followBlockerMove($event)" />
-                </td></tr>
-              }
-            }
-          </tbody>
-        </table>
-      </div>
+      <app-account-desk-trader-holdings-table
+        [rows]="tableRows()"
+        (blockerMoveSelected)="followBlockerMove($event)"
+      />
     }
   }
 </section>
