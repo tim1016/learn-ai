@@ -22,7 +22,7 @@
             : 'Nothing changed; the existing deployment already matches this ticket.' }}
         </p>
         @if (deployment.start) {
-          <p>Start {{ deployment.start.accepted ? 'accepted' : 'rejected' }}: {{ deployment.start.process.message ?? deployment.start.process.state }}</p>
+          <p>Start {{ deployment.start.accepted ? 'accepted' : 'rejected' }}: {{ deployment.start.process.message ?? (deployment.start.process.state | receiptLabel) }}</p>
         }
       </div>
       <div class="deployed-actions">

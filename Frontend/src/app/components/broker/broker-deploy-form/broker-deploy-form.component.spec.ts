@@ -439,17 +439,17 @@ describe('BrokerDeployFormComponent', () => {
     expect(host.querySelector('.ticket-blockers')).toBeNull();
   });
 
-  it('keeps launch disabled and never calls deploy for an invalid deployment name', async () => {
+  it('keeps launch disabled and never calls deploy for a whitespace-padded deployment name', async () => {
     const { fixture, svc, component } = setup();
     await flush();
     fillRequired(component);
     await settleResource(fixture);
 
-    typeText(fixture, 'Deployment name', 'bad name');
+    typeText(fixture, 'Deployment name', 'deployment-validation-paper ');
     fieldControl(fixture, 'Deployment name').dispatchEvent(new Event('blur'));
     fixture.detectChanges();
 
-    expect(component.deploymentNameError()).toBe(
+    expect(fixture.nativeElement.textContent).toContain(
       'Use letters, numbers, periods, underscores, or hyphens.',
     );
     expect(deployButton(fixture).disabled).toBe(true);
@@ -522,6 +522,28 @@ describe('BrokerDeployFormComponent', () => {
     expect(component.commandState().kind).toBe('accepted');
     expect(blockerText(component)).toBeNull();
     expect(deployButton(fixture).disabled).toBe(true);
+  });
+
+  it('formats a code-like start state when the server does not supply a message', async () => {
+    const { fixture, svc, component } = setup();
+    svc.deployInstance.mockResolvedValueOnce({
+      run_id: 'run-started',
+      run_dir: '/runs/run-started',
+      created: true,
+      start: {
+        accepted: true,
+        process: { state: 'running', message: null },
+      },
+    });
+    await flush();
+    fillRequired(component);
+    await settleResource(fixture);
+
+    await component.submit();
+    await flush();
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.textContent).toContain('Start accepted: Running');
   });
 
   // PRD #593 Slice 1E (#598) — query-param-deep-linked redeploy carries
@@ -1050,6 +1072,33 @@ describe('BrokerDeployFormComponent', () => {
     fixture.detectChanges();
 
     expect(component.resolvedSignalStream()).toBe('QQQ');
+  });
+
+  it('clears an auto-filled signal stream when the next approved strategy has no validation symbol', async () => {
+    const noValidationSymbol = {
+      ...DEFAULT_STRATEGY_VALIDATION_CATALOG.strategies[0],
+      strategy_key: 'no_validation_symbol',
+      display_name: 'No Validation Symbol',
+      validation_case_symbol: null,
+    };
+    const { fixture } = setup({
+      strategyValidationCatalog: {
+        strategies: [DEFAULT_STRATEGY_VALIDATION_CATALOG.strategies[0], noValidationSymbol],
+      },
+    });
+    await flush();
+
+    changeSelect(fixture, 'Strategy', 'deployment_validation');
+    await flush();
+    fixture.detectChanges();
+    expect(fieldControl(fixture, 'Signal stream').value).toBe('SPY');
+
+    changeSelect(fixture, 'Strategy', 'no_validation_symbol');
+    await flush();
+    fixture.detectChanges();
+
+    expect(fieldControl(fixture, 'Signal stream').value).toBe('');
+    expect(deployButton(fixture).disabled).toBe(true);
   });
 
   it('starts with paper order submission enabled without an extra modal', async () => {

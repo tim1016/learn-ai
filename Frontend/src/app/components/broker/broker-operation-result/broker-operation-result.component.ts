@@ -16,15 +16,14 @@ import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
   template: `
     @if (error(); as e) {
       <div class="op-result" [class]="'cat-' + e.category" role="alert">
-        <span class="sr-only">{{ alertText(e) }}</span>
-        <div class="op-header" aria-hidden="true">
+        <div class="op-header">
           <p class="op-title">{{ e.title }}</p>
           @if (e.status !== null) {
             <span class="op-status">HTTP {{ e.status }}</span>
           }
         </div>
         @if (e.reason_code || e.gate_id) {
-          <dl class="op-contract" aria-hidden="true">
+          <dl class="op-contract">
             @if (e.reason_code) {
               <div>
                 <dt>Server reason</dt>
@@ -41,10 +40,10 @@ import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
         }
         @if (e.detail) {
           {{ ' ' }}
-          <p class="op-detail" aria-hidden="true">{{ e.detail }}</p>
+          <p class="op-detail">{{ e.detail }}</p>
         }
         {{ ' ' }}
-        <p class="op-remediation" aria-hidden="true"><strong>Next:</strong> {{ e.remediation }}</p>
+        <p class="op-remediation"><strong>Next:</strong> {{ e.remediation }}</p>
       </div>
     }
   `,
@@ -52,8 +51,4 @@ import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 })
 export class BrokerOperationResultComponent {
   readonly error = input<OperationError | null>(null);
-
-  alertText(error: OperationError): string {
-    return [error.title, error.detail, error.remediation].filter(Boolean).join(' ');
-  }
 }

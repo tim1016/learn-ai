@@ -293,6 +293,44 @@ describe('toOperationError', () => {
     expect(e.remediation).not.toContain('Start the live engine');
   });
 
+  it('uses recovery-specific guidance when a typed 404 omits remediation', () => {
+    const err = new HttpErrorResponse({
+      status: 404,
+      error: {
+        detail: {
+          reason_code: 'INSTANCE_RUN_NOT_FOUND',
+          message: 'No deployed run exists for this bot.',
+          gate_id: 'recovery_override.run',
+        },
+      },
+    });
+
+    const e = toOperationError('recovery-override', err);
+
+    expect(e.category).toBe('not-found');
+    expect(e.remediation).toBe('Deploy a run for this bot before recording recovery evidence.');
+    expect(e.reason_code).toBe('INSTANCE_RUN_NOT_FOUND');
+    expect(e.gate_id).toBe('recovery_override.run');
+  });
+
+  it('keeps generic infrastructure guidance for a typed 503 without server remediation', () => {
+    const err = new HttpErrorResponse({
+      status: 503,
+      error: {
+        detail: {
+          reason_code: 'FLEET_CONTAMINATION_UNAVAILABLE',
+          message: 'Fleet contamination status cannot be verified.',
+          gate_id: 'fleet.contamination',
+        },
+      },
+    });
+
+    const e = toOperationError('deploy', err);
+
+    expect(e.remediation).toBe('A required service is unavailable. Check connectivity and retry.');
+    expect(e.remediation).not.toContain('Start the live engine');
+  });
+
   it('falls back to the legacy string-detail path when the 409 body is not OUTCOME_UNKNOWN', () => {
     // A regular precondition 409 (e.g. dirty tree) still uses the canned
     // remediation, NOT the new outcome-unknown branch.

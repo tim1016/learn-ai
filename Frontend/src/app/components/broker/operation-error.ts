@@ -312,6 +312,16 @@ function categoryOf(status: number | null): ErrorCategory {
   return CATEGORY_BY_STATUS[status] ?? 'unknown';
 }
 
+function typedBodyRemediationFallback(operation: OperationKind, status: number | null): string {
+  const category = categoryOf(status);
+  // A typed 409 describes a server-specific gate, so legacy operation advice
+  // can be misleading. A typed 503 can likewise describe an unavailable
+  // dependency other than the live engine. Prefer the server remediation when
+  // present and otherwise retain a truthful category-level fallback.
+  if (status === 409 || status === 503) return GENERIC_REMEDIATION[category];
+  return (status !== null ? REMEDIATION[operation]?.[status] : undefined) ?? GENERIC_REMEDIATION[category];
+}
+
 function isOutcomeUnknownEndpoint(value: unknown): value is OutcomeUnknownEndpoint {
   return typeof value === 'string' && OUTCOME_UNKNOWN_ENDPOINT_SET.has(value);
 }
@@ -494,8 +504,9 @@ export function toOperationError(operation: OperationKind, err: unknown): Operat
       // A typed precondition is a server contract, but not every endpoint
       // supplies an explicit remediation. Do not substitute the legacy
       // deploy-409 advice (which mentions working trees) for a different
-      // gate such as a broker or validation blocker.
-      remediationOverride: precondition.remediation ?? GENERIC_REMEDIATION[categoryOf(status)],
+      // gate such as a broker or validation blocker. Typed 404/400 contracts
+      // still use their precise operation guidance when the server omits it.
+      remediationOverride: precondition.remediation ?? typedBodyRemediationFallback(operation, status),
       reasonCode: precondition.reason_code,
       gateId: precondition.gate_id,
       blockers: precondition.blockers,

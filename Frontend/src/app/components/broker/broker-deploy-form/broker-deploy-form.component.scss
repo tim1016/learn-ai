@@ -473,6 +473,11 @@
   opacity: 0;
 }
 
+.mode label:focus-within span {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .mode span {
   display: grid;
   flex: 1 1 auto;

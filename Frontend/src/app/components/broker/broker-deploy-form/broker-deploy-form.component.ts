@@ -20,6 +20,7 @@ import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { ButtonModule } from 'primeng/button';
 import { InputTextModule } from 'primeng/inputtext';
 import { TagModule } from 'primeng/tag';
+import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import {
   DEFAULT_MAX_ORDERS_PER_DAY,
   type ExposureCoherencePosture,
@@ -123,6 +124,7 @@ interface SettledDeployPreflight {
     ButtonModule,
     InputTextModule,
     TagModule,
+    ReceiptLabelPipe,
     FormField,
     DeployCoherenceCardComponent,
     ExposureLaunchDecisionComponent,
@@ -436,8 +438,8 @@ export class BrokerDeployFormComponent {
   });
 
   readonly deploymentNameError = computed<string | null>(() => {
-    const id = this.instanceId().trim();
-    return id !== '' && !INSTANCE_ID_RE.test(id)
+    const id = this.instanceId();
+    return id.trim() !== '' && !INSTANCE_ID_RE.test(id)
       ? 'Use letters, numbers, periods, underscores, or hyphens.'
       : null;
   });
@@ -557,7 +559,7 @@ export class BrokerDeployFormComponent {
         this.qcAuditCopyPath.set(validation.audit_copy_ref);
       }
       const validationSignal = normalizedSymbol(validation.validation_case_symbol);
-      if (validationSignal && !this.signalStreamManuallyEdited()) {
+      if (!this.signalStreamManuallyEdited()) {
         this.updateTicket({ signalStream: validationSignal });
       }
     });
