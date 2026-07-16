@@ -718,9 +718,10 @@ async def option_surface_stream(
             ge=2,
             le=200,
             description=(
-                "Hard cap on streaming market-data lines. Default 100 "
-                "matches IBKR's documented per-client quota; do not raise "
-                "without confirming the gateway has been granted more."
+                "Local hard cap on streaming market-data lines. Default 100 "
+                "matches IBKR's default user allocation shared across TWS "
+                "and all API clients; do not raise without confirming the "
+                "username has been granted more."
             ),
         ),
     ] = SURFACE_DEFAULT_MAX_LINES,
@@ -999,9 +1000,10 @@ async def bars_5s_snapshot_endpoint(
 ) -> IbkrBarsSnapshot:
     """Return the live raw 5-sec OHLCV buffer for ``symbol``.
 
-    Mirror of ``/bars/snapshot`` for the high-resolution chart. Opens its
-    own ``reqRealTimeBars`` subscription independent of the 1-min one;
-    they share no state. Each bar's ``end_ms - start_ms`` window is 5 000.
+    Mirror of ``/bars/snapshot`` for the high-resolution chart. It owns an
+    independent 5-second buffer, but same-symbol 5-second and 1-minute
+    consumers multiplex onto one public-client ``reqRealTimeBars`` request.
+    Each bar's ``end_ms - start_ms`` window is 5 000.
     """
     _raise_if_disabled()
     sym = symbol.strip().upper()

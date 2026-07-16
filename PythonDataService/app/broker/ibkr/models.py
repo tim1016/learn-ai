@@ -431,7 +431,8 @@ class IbkrSurfaceSnapshot(BaseModel):
         description=(
             "Number of streaming market-data lines this surface holds open "
             "(underlying + every option contract). Surfaced for the client "
-            "so it can warn when nearing IBKR's ~100-line per-client cap."
+            "so it can warn when nearing IBKR's shared user allocation "
+            "(100 lines by default across TWS and all API connections)."
         ),
     )
     as_of_ms: int

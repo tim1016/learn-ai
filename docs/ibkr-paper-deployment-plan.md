@@ -178,8 +178,18 @@ async def stream_minute_bars(
 2. **Closed bars only.** Yield only after the minute boundary has passed. Never yield in-flight aggregates.
 3. **Timestamp normalization.** `int64 ms UTC` at the boundary, per `.claude/rules/numerical-rigor.md`. Convert IB's `datetime` (which is tz-aware UTC in `ib_async`) immediately on receipt. The yielded `IbkrMinuteBar` model carries `start_ms: int64`, `end_ms: int64`.
 4. **Duplicate policy is boundary-specific.** `aggregate_realtime_bar` defaults to `policy="strict"` — any duplicate or non-monotonic timestamp raises `IBKRBarStreamError` (finite-historical-ingestion contract). `stream_minute_bars` passes `policy="live_idempotent"`: IBKR's docs do not promise duplicate-free delivery on an *active* `reqRealTimeBars` subscription, so a redelivery of the most-recently-accepted 5-second bar is absorbed — exact redelivery skipped, different-valued redelivery corrects the still-open minute (OHLCV recomputed, not summed). Both are logged (`extra={action: skipped_duplicate|applied_correction}`) and counted on `LiveBarCounters`, never silenced. A timestamp from an already-emitted minute is `< last_source_ms` and still fails fast as a regression, as does a non-monotonic timestamp within the open minute. This is the one sanctioned deviation from blanket fail-fast — see `.claude/rules/numerical-rigor.md` § "Live subscriptions".
-5. **Cancellation.** `try/finally` calls `client.ib.cancelRealTimeBars(bars_obj)` exactly like `market_data.stream_option_chain` cancels its `reqMktData`. No streaming-line leaks.
-6. **Pacing.** A single 5-second-bar subscription is well under the 50 msg/s and 100-line quotas. Document this; do not add per-call pacing.
+5. **Cancellation.** Each iterator releases its shared-registry lease in
+   `finally`; the last consumer calls `client.ib.cancelRealTimeBars(bars_obj)`.
+   Closing a 5-second chart while the 1-minute engine still consumes the same
+   line does not cancel the engine's source, and the final close does not leak
+   the broker subscription.
+6. **Pacing and multiplexing.** Use the shared registry in `bars.py`: same-client
+   consumers for the same qualified contract share one `reqRealTimeBars` line,
+   and new real-time-bar requests are sliding-window paced at IBKR's 60 per 600
+   seconds ceiling. `IbkrClient` independently pins `ib_async` ordinary socket
+   pacing to 45 requests per 1-second interval. Market-data allocation is
+   user-level (100 lines by default across TWS and all API connections), so a
+   new `clientId` does not create more capacity.
 
 **New Pydantic model** (`app/broker/ibkr/models.py`):
 

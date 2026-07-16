@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
 
+from app.broker.ibkr import bars as bars_mod
 from app.broker.ibkr.bars import (
     IBKRBarStreamError,
     LiveBarCounters,
     aggregate_realtime_bar,
     fetch_historical_minute_bars,
     stream_minute_bars,
+    stream_raw_5s_bars,
 )
 
 
@@ -305,11 +308,14 @@ class _FakeIb:
             ),
         ]
         self.cancelled = False
+        self.realtime_bar_request_count = 0
+        self.realtime_bar_cancel_count = 0
         self.use_rth_seen: bool | None = None
         self.historical_bars = []
         self.historical_use_rth_seen: bool | None = None
 
     def reqRealTimeBars(self, contract, bar_size: int, what_to_show: str, *, useRTH: bool):
+        self.realtime_bar_request_count += 1
         self.use_rth_seen = useRTH
         assert contract.symbol == "SPY"
         assert bar_size == 5
@@ -319,6 +325,7 @@ class _FakeIb:
     def cancelRealTimeBars(self, bars) -> None:
         assert bars is self.bars
         self.cancelled = True
+        self.realtime_bar_cancel_count += 1
 
     async def reqHistoricalDataAsync(self, contract, **kwargs):
         assert contract.symbol == "SPY"
@@ -420,6 +427,146 @@ async def test_stream_minute_bars_cancel_exception_does_not_mask_original() -> N
     # swallowed (logged at debug) rather than masking it.
     with pytest.raises(IBKRBarStreamError, match="connection lost"):
         await stream.__anext__()
+
+
+@pytest.mark.asyncio
+async def test_realtime_bar_request_pacer_waits_at_sliding_window_limit() -> None:
+    now = 0.0
+    waits: list[float] = []
+
+    async def fake_sleep(delay_s: float) -> None:
+        nonlocal now
+        waits.append(delay_s)
+        now += delay_s
+
+    pacer = bars_mod._RealtimeBarRequestPacer(
+        max_requests=2,
+        window_s=10.0,
+        clock=lambda: now,
+        sleep=fake_sleep,
+    )
+
+    await pacer.acquire()
+    await pacer.acquire()
+    await pacer.acquire()
+
+    assert waits == [10.0]
+
+
+@pytest.mark.asyncio
+async def test_same_symbol_5s_and_1m_consumers_share_one_broker_subscription(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One public client + contract must consume one shared market-data line."""
+    client = _FakeClient()
+    client.ib.bars = []
+    registry = bars_mod._RealtimeBarSubscriptionRegistry()
+    original_acquire = registry.acquire
+    both_consumers_attached = asyncio.Event()
+    acquire_count = 0
+
+    async def observed_acquire(*args, **kwargs):
+        nonlocal acquire_count
+        lease = await original_acquire(*args, **kwargs)
+        acquire_count += 1
+        if acquire_count == 2:
+            both_consumers_attached.set()
+        return lease
+
+    monkeypatch.setattr(registry, "acquire", observed_acquire)
+    monkeypatch.setattr(bars_mod, "_REALTIME_BAR_SUBSCRIPTIONS", registry)
+
+    raw_stream = stream_raw_5s_bars(client, "SPY", use_rth=True)
+    minute_stream = stream_minute_bars(client, "SPY", use_rth=True)
+    raw_next = asyncio.create_task(raw_stream.__anext__())
+    minute_next = asyncio.create_task(minute_stream.__anext__())
+
+    await asyncio.wait_for(both_consumers_attached.wait(), timeout=1.0)
+    assert client.ib.realtime_bar_request_count == 1
+
+    client.ib.bars.extend(
+        [
+            _bar(55, "100", "101", "99", "100.5", 10),
+            SimpleNamespace(
+                time=datetime(2026, 5, 4, 14, 31, 0, tzinfo=UTC),
+                open=Decimal("101"),
+                high=Decimal("102"),
+                low=Decimal("100"),
+                close=Decimal("101.5"),
+                volume=20,
+            ),
+        ]
+    )
+
+    raw_bar = await asyncio.wait_for(raw_next, timeout=1.0)
+    minute_bar = await asyncio.wait_for(minute_next, timeout=1.0)
+    assert raw_bar.end_ms - raw_bar.start_ms == 5_000
+    assert minute_bar.end_ms - minute_bar.start_ms == 60_000
+
+    await raw_stream.aclose()
+    assert client.ib.realtime_bar_cancel_count == 0
+    await minute_stream.aclose()
+    assert client.ib.realtime_bar_cancel_count == 1
+
+
+@pytest.mark.asyncio
+async def test_late_shared_consumer_starts_after_existing_list_tail() -> None:
+    """Multiplexing must not turn the mutable IB list into implicit replay."""
+    client = _FakeClient()
+    registry = bars_mod._RealtimeBarSubscriptionRegistry()
+    contract = SimpleNamespace(conId=1, symbol="SPY")
+
+    first = await registry.acquire(
+        client,
+        contract,
+        bar_size=5,
+        what_to_show="TRADES",
+        use_rth=True,
+    )
+    second = await registry.acquire(
+        client,
+        contract,
+        bar_size=5,
+        what_to_show="TRADES",
+        use_rth=True,
+    )
+
+    assert first.start_index == 0
+    assert second.start_index == len(client.ib.bars)
+    assert second.multiplexed is True
+    assert client.ib.realtime_bar_request_count == 1
+
+    first.release()
+    assert client.ib.realtime_bar_cancel_count == 0
+    second.release()
+    assert client.ib.realtime_bar_cancel_count == 1
+
+
+@pytest.mark.asyncio
+async def test_realtime_bar_registry_refuses_new_line_at_local_active_cap() -> None:
+    client = _FakeClient()
+    registry = bars_mod._RealtimeBarSubscriptionRegistry(default_max_active=1)
+    first_contract = SimpleNamespace(conId=1, symbol="SPY")
+    second_contract = SimpleNamespace(conId=2, symbol="SPY")
+
+    first = await registry.acquire(
+        client,
+        first_contract,
+        bar_size=5,
+        what_to_show="TRADES",
+        use_rth=True,
+    )
+    with pytest.raises(IBKRBarStreamError, match="local active-line cap reached"):
+        await registry.acquire(
+            client,
+            second_contract,
+            bar_size=5,
+            what_to_show="TRADES",
+            use_rth=True,
+        )
+
+    assert client.ib.realtime_bar_request_count == 1
+    first.release()
 
 
 def test_aggregate_handles_ib_async_open_underscore_attribute() -> None:

@@ -25,6 +25,7 @@ def test_defaults_are_paper_on_paper_port(monkeypatch: pytest.MonkeyPatch) -> No
     assert s.mode == "paper"
     assert s.port == 4002
     assert s.client_id == 1
+    assert s.realtime_bar_max_active == 100
     assert s.persist_ticks is False
     assert s.account_gate_authority == "account_truth"
 
@@ -34,6 +35,7 @@ def test_uppercase_ibkr_env_vars_are_honored(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setenv("IBKR_HOST", "172.23.176.1")
     monkeypatch.setenv("IBKR_PORT", "7497")
     monkeypatch.setenv("IBKR_CLIENT_ID", "7")
+    monkeypatch.setenv("IBKR_REALTIME_BAR_MAX_ACTIVE", "75")
     monkeypatch.setenv("IBKR_PERSIST_TICKS", "true")
     monkeypatch.setenv("IBKR_ACCOUNT_GATE_AUTHORITY", "observation_lease")
 
@@ -43,6 +45,7 @@ def test_uppercase_ibkr_env_vars_are_honored(monkeypatch: pytest.MonkeyPatch) ->
     assert s.host == "172.23.176.1"
     assert s.port == 7497
     assert s.client_id == 7
+    assert s.realtime_bar_max_active == 75
     assert s.persist_ticks is True
     assert s.account_gate_authority == "observation_lease"
 

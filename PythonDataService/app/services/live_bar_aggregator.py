@@ -24,9 +24,10 @@ Lifecycle:
 
 This module deliberately runs inside the FastAPI process and shares the
 public broker session (client_id 42) via ``app.broker.ibkr.client.get_client``
-— it does NOT spin up a second IBKR socket. Running the engine
-(``host_daemon``) and this aggregator side-by-side gives two independent
-``reqRealTimeBars`` subscriptions on the same contract: IBKR allows that.
+— it does NOT spin up a second IBKR socket. Within that process, 1-minute and
+5-second consumers for the same contract multiplex through the shared
+registry in ``app.broker.ibkr.bars``. Host-runner children remain separate
+processes/IBKR clients because their order identity is intentionally isolated.
 """
 
 from __future__ import annotations
@@ -154,10 +155,11 @@ class LiveBarAggregator:
     async def ensure_subscribed_5s(self, symbol: str) -> _SymbolState:
         """Start the per-symbol raw 5-sec stream task if not already running.
 
-        Independent of ``ensure_subscribed`` (the 1-min path) — they own
-        separate buffers and separate ``reqRealTimeBars`` subscriptions.
-        Preserves ``last_error`` across restart for the same reason
-        documented on ``ensure_subscribed``.
+        Independent buffer and task from ``ensure_subscribed`` (the 1-min
+        path), but the two consumers share one underlying ``reqRealTimeBars``
+        line when they use the same public client and contract. Preserves
+        ``last_error`` across restart for the same reason documented on
+        ``ensure_subscribed``.
         """
         key = self._key(symbol)
         async with self._lock:

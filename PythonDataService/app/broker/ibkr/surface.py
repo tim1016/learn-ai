@@ -19,8 +19,9 @@ Public surface: :func:`stream_option_surface` — yields
 Cancellation: cancels every outstanding ``reqMktData`` on iterator
 exit so we don't leak server-side market-data lines.
 
-Line cap: IBKR's documented per-client streaming-line quota is 100
-(see :mod:`app.broker.ibkr.market_data` module docstring). The surface
+Line cap: IBKR's default user-level streaming-line allocation is 100
+(shared by TWS and every API connection; see
+:mod:`app.broker.ibkr.market_data` module docstring). The surface
 fans more aggressively than the chain — N expiries × M strikes × 2
 sides + 1 underlying — so we enforce a configurable hard cap up front
 and refuse oversubscription rather than letting the gateway start
@@ -80,8 +81,10 @@ async def stream_option_surface(
         expiry_ms_list: expirations to fan over, ``int64`` ms UTC each.
         strikes: strike band applied at every expiry (caller-narrowed).
         debounce_seconds: minimum gap between yielded snapshots.
-        max_lines: hard cap on streaming market-data lines (default 100,
-            matching IBKR's per-client quota). Includes the underlying.
+        max_lines: local hard cap on streaming market-data lines (default
+            100, matching IBKR's default shared user allocation). Includes
+            the underlying; operators must also account for lines open in
+            TWS and sibling API clients.
 
     Yields:
         :class:`IbkrSurfaceSnapshot` per debounce window, with one
@@ -109,7 +112,7 @@ async def stream_option_surface(
 
     # Project the line budget: 1 underlying + N expiries × M strikes × 2 sides.
     # Reject up front rather than letting IBKR's gateway start silently
-    # dropping subscriptions past its 100-line per-client quota.
+    # dropping subscriptions past the default 100-line user allocation.
     projected = 1 + len(sorted_expiries) * len(unique_strikes) * 2
     if projected > max_lines:
         raise BrokerError(

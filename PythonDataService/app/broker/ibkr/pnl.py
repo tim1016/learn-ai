@@ -136,8 +136,10 @@ async def stream_position_pnl(
 
     Caller responsibilities:
     * Pre-resolve ``con_ids`` from ``fetch_positions`` (Phase 2a).
-    * Don't oversubscribe — IBKR's per-client streaming-line quota is
-      shared with market-data subscriptions.
+    * Bound the request set to current positions and cancel on exit. IBKR's
+      published P&L documentation does not identify ``reqPnLSingle`` as a
+      Level-I market-data-line consumer, so do not conflate this set with the
+      user-level market-data allocation.
     """
     client.require_connected()
     account_id = client.connected_account
