@@ -127,38 +127,41 @@ def _mark_open_orders_timed_out(client: IbkrClient) -> None:
     )
 
 
-# Process-level idempotency cache: maps client_order_id → previously-issued
-# IbkrOrderAck. Survives across requests within a single uvicorn worker;
-# does NOT survive container restart. For durable idempotency we'd need a
-# Redis or Postgres-backed cache — Phase 3.5 follow-up.
-_IDEMPOTENCY_CACHE: dict[str, IbkrOrderAck] = {}
+# Process-level idempotency cache: maps the caller-local client_order_id in
+# its immutable order_ref namespace to the previously-issued IbkrOrderAck.
+# Live portfolios restart their local counter at ``live-1``; an account Clerk
+# is shared by multiple bots, so client_order_id alone is not an account-wide
+# identity. Survives across requests within a single process; does NOT survive
+# a restart. For durable idempotency we'd need a Redis or Postgres-backed cache
+# — Phase 3.5 follow-up.
+_IDEMPOTENCY_CACHE: dict[tuple[str, str], IbkrOrderAck] = {}
 
-# Per-client_order_id locks guarding the check→place→store window. The cache
-# read and write straddle the qualify/place awaits, so two concurrent retries
-# carrying the same id could both miss the cache and both place a real order
-# (the idempotency guarantee was sequential-only). Get-or-create below is
-# atomic under asyncio — there is no await between the ``get`` and the ``set``
-# — so concurrent callers for the same id observe the same lock.
-_IDEMPOTENCY_LOCKS: dict[str, asyncio.Lock] = {}
+# Per-idempotency-key locks guard the check→place→store window. The cache read
+# and write straddle the qualify/place awaits, so two concurrent retries for
+# the same immutable order identity could otherwise both place a real order.
+_IDEMPOTENCY_LOCKS: dict[tuple[str, str], asyncio.Lock] = {}
 
 
-def _idempotency_lookup(client_order_id: str | None) -> IbkrOrderAck | None:
-    if client_order_id is None:
+def _idempotency_key(spec: IbkrOrderSpec) -> tuple[str, str] | None:
+    if spec.client_order_id is None or spec.order_ref is None:
         return None
-    return _IDEMPOTENCY_CACHE.get(client_order_id)
+    return (spec.order_ref, spec.client_order_id)
 
 
-def _idempotency_store(client_order_id: str | None, ack: IbkrOrderAck) -> None:
-    if client_order_id is None:
-        return
-    _IDEMPOTENCY_CACHE[client_order_id] = ack
+def _idempotency_lookup(key: tuple[str, str] | None) -> IbkrOrderAck | None:
+    return _IDEMPOTENCY_CACHE.get(key) if key is not None else None
 
 
-def _idempotency_lock(client_order_id: str) -> asyncio.Lock:
-    lock = _IDEMPOTENCY_LOCKS.get(client_order_id)
+def _idempotency_store(key: tuple[str, str] | None, ack: IbkrOrderAck) -> None:
+    if key is not None:
+        _IDEMPOTENCY_CACHE[key] = ack
+
+
+def _idempotency_lock(key: tuple[str, str]) -> asyncio.Lock:
+    lock = _IDEMPOTENCY_LOCKS.get(key)
     if lock is None:
         lock = asyncio.Lock()
-        _IDEMPOTENCY_LOCKS[client_order_id] = lock
+        _IDEMPOTENCY_LOCKS[key] = lock
     return lock
 
 
@@ -452,13 +455,16 @@ async def place_paper_order(
             client, spec, account_id, perm_id_wait_s=perm_id_wait_s
         )
 
-    # Serialize the check→place→store window per client_order_id. The cache
+    idempotency_key = _idempotency_key(spec)
+    assert idempotency_key is not None  # client_order_id and order_ref checked above
+
+    # Serialize the check→place→store window per immutable order identity. The cache
     # read and write straddle the qualify/place awaits below, so without this
     # lock two concurrent retries with the same id would both miss the cache
     # and both place a real order. The lock makes the second caller wait and
     # return the first caller's cached ack instead of placing a duplicate.
-    async with _idempotency_lock(spec.client_order_id):
-        cached = _idempotency_lookup(spec.client_order_id)
+    async with _idempotency_lock(idempotency_key):
+        cached = _idempotency_lookup(idempotency_key)
         if cached is not None:
             logger.info(
                 "[PAPER ORDER] idempotent replay: client_order_id=%s → order_id=%d",
@@ -470,7 +476,7 @@ async def place_paper_order(
         ack = await _place_and_build_ack(
             client, spec, account_id, perm_id_wait_s=perm_id_wait_s
         )
-        _idempotency_store(spec.client_order_id, ack)
+        _idempotency_store(idempotency_key, ack)
         return ack
 
 

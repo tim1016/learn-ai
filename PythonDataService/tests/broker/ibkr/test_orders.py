@@ -376,6 +376,26 @@ async def test_place_paper_order_idempotency_replay_returns_cached_ack() -> None
 
 
 @pytest.mark.asyncio
+async def test_place_paper_order_does_not_dedupe_distinct_bot_order_refs() -> None:
+    """A shared account Clerk must not collapse each bot's ``live-1`` order."""
+    client = _client()
+    first_spec = _spec(
+        client_order_id="live-1",
+        order_ref="learn-ai/bot-a/v1:AAAAAAAAAAAAAAAAAAAAAA",
+    )
+    second_spec = _spec(
+        client_order_id="live-1",
+        order_ref="learn-ai/bot-b/v1:BBBBBBBBBBBBBBBBBBBBBB",
+    )
+
+    with _owner_grant():
+        await place_paper_order(client, first_spec)
+        await place_paper_order(client, second_spec)
+
+    assert client.ib.placeOrder.call_count == 2
+
+
+@pytest.mark.asyncio
 async def test_place_paper_order_no_client_order_id_does_not_dedupe() -> None:
     client = _client()
     with _owner_grant():
