@@ -195,7 +195,23 @@ describe('AccountDeskPageComponent', () => {
     fireEvent.click(operator);
     expect(operator.getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByText('NEEDS_ATTENTION verdict')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Resolve the account posture' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Account recovery' })).toBeTruthy();
     expect(screen.getByText('Account event timeline')).toBeTruthy();
+  });
+
+  it('keeps operator actions and recovery ahead of the audit history', async () => {
+    const { fixture } = await setup({ response: triage('NEEDS_ATTENTION') });
+    fireEvent.click(screen.getByRole('button', { name: 'Operator' }));
+
+    const operatorWorkspace = (fixture.nativeElement as HTMLElement).querySelector<HTMLElement>('.operator-workspace');
+    const recovery = (fixture.nativeElement as HTMLElement).querySelector<HTMLElement>('#account-desk-recovery-controls');
+    const timeline = screen.getByRole('heading', { name: 'Account event timeline' });
+
+    expect(operatorWorkspace).toBeTruthy();
+    expect(recovery).toBeTruthy();
+    if (recovery === null) throw new Error('Expected account recovery controls to render.');
+    expect(recovery.compareDocumentPosition(timeline) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('rekeys the route-scoped surface store when the account route changes', async () => {

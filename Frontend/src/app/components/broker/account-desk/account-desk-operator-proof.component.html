@@ -1,5 +1,5 @@
 <section id="account-desk-operations-proof" class="operations-proof" aria-label="Operations proof" aria-live="polite" tabindex="-1">
-  <header><h2>Operations proof</h2><p>Read-only reconciliation and observation evidence for this account.</p></header>
+  <header><h2>Operations proof</h2><p>Current reconciliation evidence and the server-declared action for this account.</p></header>
   @if (store.loading() && !store.triage()) {
     <p class="state">Loading operations proof…</p>
   } @else if (store.error() && !store.triage()) {
@@ -7,7 +7,7 @@
   } @else if (store.triage(); as triage) {
     <div class="operations-proof__grid">
       <section aria-label="Reconciliation evidence">
-        <h3>Reconciliation</h3>
+        <h3>Reconciliation action &amp; evidence</h3>
         @if (triage.account_reconciliation_receipt; as receipt) {
           <dl>
             <div><dt>State</dt><dd>{{ receipt.state | receiptLabel }}</dd></div>
