@@ -1,10 +1,12 @@
 import { signal } from '@angular/core';
+import { Router } from '@angular/router';
 import { render, screen } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AccountServiceStatusResponse } from '../../../api/account-directory.types';
 import { formatTimestampDisplay } from '../../../shared/timestamp';
 import { AccountDeskDirectoryStore } from './account-desk-directory-store.service';
+import { AccountDeskGuidanceStore } from './account-desk-guidance-store.service';
 import { AccountDeskOperatorServiceComponent } from './account-desk-operator-service.component';
 
 describe('AccountDeskOperatorServiceComponent', () => {
@@ -18,7 +20,11 @@ describe('AccountDeskOperatorServiceComponent', () => {
       retryServiceStatus: vi.fn(),
     };
     await render(AccountDeskOperatorServiceComponent, {
-      providers: [{ provide: AccountDeskDirectoryStore, useValue: directory }],
+      providers: [
+        { provide: AccountDeskDirectoryStore, useValue: directory },
+        { provide: AccountDeskGuidanceStore, useValue: { blockersFor: vi.fn().mockReturnValue([]) } },
+        { provide: Router, useValue: { navigate: vi.fn() } },
+      ],
     });
 
     expect(screen.getByRole('heading', { name: 'Account service' })).toBeTruthy();

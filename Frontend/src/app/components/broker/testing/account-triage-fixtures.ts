@@ -98,6 +98,7 @@ export function makeCleanAccountTriage(
     freeze_banner: options.freezeBanner ?? null,
     clear_freeze_actionable: options.clearFreezeActionable ?? false,
     affected_bots: options.affectedBots ?? [],
+    operator_blockers: [],
   };
 }
 

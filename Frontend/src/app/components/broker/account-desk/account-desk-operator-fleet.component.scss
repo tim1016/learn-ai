@@ -1,0 +1,9 @@
+.fleet-evidence { display: grid; gap: .75rem; }
+header, h2, p, dl, ul { margin: 0; }
+header { display: grid; gap: .2rem; }
+header p, dt { color: var(--text-color-secondary, #556070); }
+dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .6rem; }
+dd { margin: .15rem 0 0; }
+ul { display: grid; gap: .3rem; padding-left: 1.25rem; }
+.state-error { color: #a30000; }
+.state-stale { color: #8a5a00; }

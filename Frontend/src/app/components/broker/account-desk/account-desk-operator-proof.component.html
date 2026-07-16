@@ -1,0 +1,54 @@
+<section class="operations-proof" aria-label="Operations proof" aria-live="polite">
+  <header><h2>Operations proof</h2><p>Read-only reconciliation and observation evidence for this account.</p></header>
+  @if (store.loading() && !store.triage()) {
+    <p class="state">Loading operations proof…</p>
+  } @else if (store.error() && !store.triage()) {
+    <div class="state state-error" role="alert"><p>Account operations proof is unavailable.</p><button type="button" (click)="retry()">Retry</button></div>
+  } @else if (store.triage(); as triage) {
+    <div class="operations-proof__grid">
+      <section aria-label="Reconciliation evidence">
+        <h3>Reconciliation</h3>
+        @if (triage.account_reconciliation_receipt; as receipt) {
+          <dl>
+            <div><dt>State</dt><dd>{{ receipt.state | receiptLabel }}</dd></div>
+            <div><dt>Final gate</dt><dd>{{ receipt.final_gate_result.status | receiptLabel }}</dd></div>
+            <div><dt>Exposure</dt><dd>{{ receipt.exposure_resolution | receiptLabel }}</dd></div>
+            <div><dt>Recorded</dt><dd><app-timestamp-display [value]="receipt.generated_at_ms" mode="local" /></dd></div>
+          </dl>
+          @if (receipt.evidence_refs.length > 0) {
+            <ul aria-label="Reconciliation evidence references">
+              @for (evidence of receipt.evidence_refs; track evidence.source + evidence.ref) {
+                <li><span>{{ evidence.source | receiptLabel }}:</span> <code>{{ evidence.ref }}</code></li>
+              }
+            </ul>
+          }
+        } @else {
+          <p class="state">No reconciliation receipt has been recorded.</p>
+        }
+        <app-account-desk-guidance anchor="reconciliation" lens="operator" ariaLabel="Reconciliation guidance" />
+      </section>
+      <section aria-label="Observation lease evidence">
+        <h3>Observation</h3>
+        <dl>
+          <div><dt>State</dt><dd>{{ triage.account_observation.state | receiptLabel }}</dd></div>
+          <div><dt>Reason</dt><dd>{{ triage.account_observation.reason_line }}</dd></div>
+          <div><dt>Observed</dt><dd><app-timestamp-display [value]="triage.account_observation.observed_at_ms" mode="local" /></dd></div>
+          <div><dt>Valid until</dt><dd><app-timestamp-display [value]="triage.account_observation.valid_until_ms" mode="local" /></dd></div>
+        </dl>
+        @if (triage.account_observation.history.length === 0) {
+          <p class="state">No prior observation events are available.</p>
+        } @else {
+          <ol aria-label="Observation history">
+            @for (event of triage.account_observation.history; track event.recorded_at_ms + event.reason_line) {
+              <li>{{ event.state | receiptLabel }} · <app-timestamp-display [value]="event.recorded_at_ms" mode="local" /> · {{ event.reason_line }}</li>
+            }
+          </ol>
+        }
+        <app-account-desk-guidance anchor="lease" lens="operator" ariaLabel="Observation guidance" />
+      </section>
+    </div>
+    @if (store.showingStaleLastGood()) {
+      <p class="state state-stale">Showing last good operations proof from <app-timestamp-display [value]="triage.generated_at_ms" mode="local" />. Refresh failed.</p>
+    }
+  }
+</section>

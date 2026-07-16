@@ -3,6 +3,7 @@ import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router } from '@angular/router';
 
 import type { AccountTriageVerdictMove } from '../../../api/account-reconciliation.types';
+import type { AccountDeskLens } from '../../../api/operator-blocker.types';
 import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
@@ -13,11 +14,14 @@ import { AccountDeskAccountSwitcherComponent } from './account-desk-account-swit
 import { AccountDeskDirectoryStore } from './account-desk-directory-store.service';
 import { AccountDeskOperatorEventsComponent } from './account-desk-operator-events.component';
 import { AccountDeskOperatorServiceComponent } from './account-desk-operator-service.component';
+import { AccountDeskOperatorProofComponent } from './account-desk-operator-proof.component';
+import { AccountDeskOperatorFleetComponent } from './account-desk-operator-fleet.component';
+import { AccountDeskFleetStore } from './account-desk-fleet-store.service';
+import { AccountDeskGuidanceComponent } from './account-desk-guidance.component';
+import { AccountDeskGuidanceStore } from './account-desk-guidance-store.service';
 import { AccountDeskSurfaceStore } from './account-desk-surface-store.service';
 import { AccountDeskTraderEventsComponent } from './account-desk-trader-events.component';
 import { AccountDeskTraderHoldingsComponent } from './account-desk-trader-holdings.component';
-
-type AccountDeskLens = 'trader' | 'operator';
 
 /** Account-id route host for the shared verdict spine and the later desk lenses. */
 @Component({
@@ -25,10 +29,13 @@ type AccountDeskLens = 'trader' | 'operator';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     AccountDeskAccountSwitcherComponent,
+    AccountDeskGuidanceComponent,
     AccountDeskTraderHoldingsComponent,
     AccountDeskTraderEventsComponent,
     AccountDeskOperatorEventsComponent,
     AccountDeskOperatorServiceComponent,
+    AccountDeskOperatorProofComponent,
+    AccountDeskOperatorFleetComponent,
     PageHeaderComponent,
     ReceiptLabelPipe,
     TimestampDisplayComponent,
@@ -44,6 +51,8 @@ export class AccountDeskPageComponent {
   readonly holdings = inject(AccountDeskHoldingsStore);
   readonly events = inject(AccountDeskEventsStore);
   readonly directory = inject(AccountDeskDirectoryStore);
+  readonly guidance = inject(AccountDeskGuidanceStore);
+  readonly fleet = inject(AccountDeskFleetStore);
   readonly lens = signal<AccountDeskLens>('trader');
   private readonly nowMs = signal(Date.now());
 
@@ -69,6 +78,7 @@ export class AccountDeskPageComponent {
         void this.store.load(accountId);
         void this.holdings.load(accountId);
         void this.events.load(accountId);
+        void this.fleet.load(accountId);
         void this.directory.loadRoster();
         void this.directory.loadServiceStatus(accountId);
       }

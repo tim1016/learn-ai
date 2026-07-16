@@ -77,4 +77,19 @@ describe('OperatorBlockerListComponent', () => {
     expect(el.textContent).toContain('bot-a is blocked');
     expect(el.textContent).toContain('bot-b is blocked');
   });
+
+  it('renders only the moves permitted by the declared disposition', () => {
+    TestBed.configureTestingModule({ providers: [provideZonelessChangeDetection()] });
+    const fixture = TestBed.createComponent(OperatorBlockerListComponent);
+    const secondaryMove = blocker.primary_move;
+    if (secondaryMove === null) throw new Error('Test blocker must include a primary move.');
+    fixture.componentRef.setInput('blockers', [
+      { ...blocker, disposition: 'wait' },
+      { ...blocker, disposition: 'fix_elsewhere', secondary_moves: [secondaryMove] },
+      { ...blocker, disposition: 'terminal', secondary_moves: [secondaryMove] },
+    ]);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelectorAll('.operator-blocker-list__move')).toHaveLength(3);
+  });
 });

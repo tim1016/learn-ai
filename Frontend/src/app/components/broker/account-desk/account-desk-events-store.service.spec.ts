@@ -84,6 +84,23 @@ describe('AccountDeskEventsStore', () => {
     expect(store.operationsShowingStaleLastGood()).toBe(true);
   });
 
+  it('keeps a successfully empty history as last-good data when a refresh fails', async () => {
+    broker.accountEvents
+      .mockImplementationOnce((_accountId: string, request: AccountEventsRequest) => Promise.resolve(emptyPage(request.view)))
+      .mockImplementationOnce((_accountId: string, request: AccountEventsRequest) => Promise.resolve(emptyPage(request.view)))
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockRejectedValueOnce(new Error('offline'));
+    const store = TestBed.inject(AccountDeskEventsStore);
+
+    await store.load('DU1234567');
+    await store.load('DU1234567');
+
+    expect(store.operationRows()).toEqual([]);
+    expect(store.operationsHasLastGood()).toBe(true);
+    expect(store.operationsShowingStaleLastGood()).toBe(true);
+    expect(store.operationsLastGoodAtMs()).not.toBeNull();
+  });
+
   it('clears previous account history rather than blending event identities across routes', async () => {
     broker.accountEvents.mockImplementation((accountId: string, request: AccountEventsRequest) => {
       const rows = accountId === 'DU7654321' ? [traderRow(1, 'DU7654321')] : [traderRow(2)];
@@ -125,6 +142,17 @@ function traderPage(rows = [traderRow(2)], latestSeq = 2): AccountEventsResponse
 
 function operationsPage(rows = [operatorRow(2), operatorRow(1)], latestSeq = 2): AccountEventsResponse {
   return page('operations', 'DU1234567', rows, latestSeq, 1);
+}
+
+function emptyPage(view: AccountEventsResponse['view']): AccountEventsResponse {
+  return {
+    schema_version: 1,
+    account_id: 'DU1234567',
+    view,
+    rows: [],
+    latest_seq: null,
+    next_before_seq: null,
+  };
 }
 
 function page(

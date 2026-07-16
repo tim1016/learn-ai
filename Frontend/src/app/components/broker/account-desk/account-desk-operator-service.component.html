@@ -18,8 +18,11 @@
       }
       <div><dt>Journal watermark</dt><dd>@if (status.journal.last_seq !== null) { #{{ status.journal.last_seq }} @if (status.journal.last_write_ms !== null) { · <app-timestamp-display [value]="status.journal.last_write_ms" mode="local" /> } } @else { No journal entries }</dd></div>
     </dl>
+    <app-account-desk-guidance anchor="clerk" lens="operator" ariaLabel="Account service guidance" />
+  } @else {
+    <p class="state">No Account service status is available for this account.</p>
   }
   @if (directory.serviceStatusShowingStaleLastGood()) {
-    <p class="state state-stale">Showing the last available Account service status. Refresh is unavailable.</p>
+    <p class="state state-stale">Showing the last available Account service status from <app-timestamp-display [value]="directory.serviceStatusLastGoodAtMs()" mode="local" />. Refresh is unavailable.</p>
   }
 </section>

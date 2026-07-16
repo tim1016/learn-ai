@@ -33,6 +33,10 @@
       </header>
       <h2>{{ triage.verdict.headline }}</h2>
       <p>{{ triage.verdict.detail }}</p>
+      <app-account-desk-guidance anchor="verdict" [lens]="lens()" ariaLabel="Verdict guidance" />
+      @if (lens() === 'trader' && guidance.operatorAttentionCount() > 0) {
+        <p class="operator-attention-summary">{{ guidance.operatorAttentionCount() }} items need operator attention.</p>
+      }
       @if (triage.verdict.primary_move; as move) {
         <button type="button" class="primary-move" (click)="followPrimaryMove(move)">{{ move.label }}</button>
       }
@@ -69,9 +73,27 @@
       @if (lens() === 'trader') {
         <app-account-desk-trader-holdings />
         <app-account-desk-trader-events />
+        <section class="recovery-guidance" aria-label="Account guidance">
+          <h2>Account guidance</h2>
+          @if (guidance.blockersFor('cure_tools', null, 'trader').length === 0) {
+            <p class="state">No account guidance is currently declared for this account.</p>
+          } @else {
+            <app-account-desk-guidance anchor="cure_tools" lens="trader" ariaLabel="Account guidance" />
+          }
+        </section>
       } @else {
+        <app-account-desk-operator-proof />
         <app-account-desk-operator-service />
+        <app-account-desk-operator-fleet />
         <app-account-desk-operator-events />
+        <section class="recovery-guidance" aria-label="Recovery guidance">
+          <h2>Recovery guidance</h2>
+          @if (guidance.blockersFor('cure_tools', null, 'operator').length === 0) {
+            <p class="state">No recovery guidance is currently declared for this account.</p>
+          } @else {
+            <app-account-desk-guidance anchor="cure_tools" lens="operator" ariaLabel="Recovery guidance" />
+          }
+        </section>
       }
     }
   </section>

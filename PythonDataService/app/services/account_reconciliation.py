@@ -68,6 +68,7 @@ from app.schemas.artifact_io import (
     read_pydantic_artifact,
 )
 from app.schemas.live_runs import GateResult
+from app.services.account_desk_guidance import author_account_desk_blockers
 from app.services.account_truth_snapshot import AccountTruthSnapshot, assess_account_truth
 from app.utils.timestamps import now_ms_utc
 
@@ -766,6 +767,7 @@ class AccountReconciliationService:
                 )
                 for binding in active_bindings
             ],
+            operator_blockers=author_account_desk_blockers(conditions),
         )
 
 

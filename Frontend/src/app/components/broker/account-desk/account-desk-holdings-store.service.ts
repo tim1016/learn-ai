@@ -79,6 +79,8 @@ export class AccountDeskHoldingsStore {
     (this.errorState() !== null || this.unavailableMessageState() !== null),
   );
   readonly account = computed(() => this.holdingsState()?.account ?? null);
+  /** Shared, backend-authored guidance projections for the current holdings evidence. */
+  readonly operatorBlockers = computed(() => this.holdingsState()?.blockers ?? []);
   readonly headlineMetrics = computed<AccountDeskHeadlineMetrics | null>(() => {
     const holdings = this.holdingsState();
     if (holdings === null) return null;
