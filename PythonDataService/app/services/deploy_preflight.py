@@ -14,6 +14,7 @@ from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import read_account_freeze
 from app.engine.live.account_observation_lease import assess_account_observation_lease
 from app.schemas.operator_blocker import (
+    SURFACE_ANCHOR,
     NavigateAction,
     OperatorBlocker,
     OperatorMove,
@@ -163,22 +164,32 @@ def _nav(label: str, route: str, fragment: str | None = None) -> OperatorMove:
     )
 
 
-def author_fleet_contamination_blocker() -> OperatorBlocker:
-    """Author the one account-monitor remedy for a dirty Clerk verdict."""
+def author_fleet_contamination_blocker(account_id: str | None = None) -> OperatorBlocker:
+    """Author the one Accounts route for a dirty Clerk verdict."""
 
     return OperatorBlocker.for_host(
         condition_id="fleet_contaminated",
         scope="fleet",
         host="deploy_preflight",
+        anchor=SURFACE_ANCHOR,
+        audience="operator",
         disposition="fix_elsewhere",
         headline="Fleet state blocks new deploys",
         detail="Clear the account fleet state before deploying or starting a bot.",
-        primary_move=_nav("Open account monitor", "/broker/account-monitor"),
+        primary_move=_nav(
+            "Open account recovery",
+            _account_recovery_route(account_id),
+            "account-desk-recovery-controls" if account_id is not None else None,
+        ),
         applies_to="both",
     )
 
 
-def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBlocker]:
+def author_deploy_blockers(
+    signals: DeployPreflightSignals,
+    *,
+    account_id: str | None = None,
+) -> list[OperatorBlocker]:
     """Return the deploy blockers standing between the operator and a runnable bot."""
 
     blockers: list[OperatorBlocker] = []
@@ -189,6 +200,8 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
                 condition_id="daemon_down",
                 scope="host",
                 host="deploy_preflight",
+                anchor=SURFACE_ANCHOR,
+                audience="operator",
                 disposition="fix_elsewhere",
                 headline="Live engine unavailable",
                 detail="Start the engine on this machine, then recheck.",
@@ -204,6 +217,8 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
                 condition_id="broker_disconnected",
                 scope="broker",
                 host="deploy_preflight",
+                anchor=SURFACE_ANCHOR,
+                audience="operator",
                 disposition="fix_elsewhere",
                 headline="Broker disconnected",
                 detail="Connect the IBKR session before deploying or starting this bot.",
@@ -217,6 +232,8 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
                 condition_id="broker_soft_lost",
                 scope="broker",
                 host="deploy_preflight",
+                anchor=SURFACE_ANCHOR,
+                audience="operator",
                 disposition="wait",
                 headline="Broker connection temporarily lost",
                 detail="Waiting for the broker session to recover.",
@@ -229,6 +246,8 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
                 condition_id="broker_data_farm_degraded",
                 scope="broker",
                 host="deploy_preflight",
+                anchor=SURFACE_ANCHOR,
+                audience="operator",
                 disposition="wait",
                 headline="IBKR data farm degraded",
                 detail="Waiting for IBKR market-data evidence to recover.",
@@ -241,6 +260,8 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
                 condition_id="broker_subscriptions_stale",
                 scope="broker",
                 host="deploy_preflight",
+                anchor=SURFACE_ANCHOR,
+                audience="operator",
                 disposition="wait",
                 headline="Broker subscriptions stale",
                 detail="Waiting for market-data subscriptions to refresh.",
@@ -254,13 +275,15 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
                 condition_id="account_frozen",
                 scope="account",
                 host="deploy_preflight",
+                anchor=SURFACE_ANCHOR,
+                audience="operator",
                 disposition="fix_elsewhere",
                 headline="Account frozen",
                 detail="Resolve the account sick-bay condition before deploying.",
                 primary_move=_nav(
-                    "Open account monitor",
-                    "/broker/account-monitor",
-                    "account-reconciliation-action",
+                    "Open account recovery",
+                    _account_recovery_route(account_id),
+                    "account-desk-recovery-controls" if account_id is not None else None,
                 ),
                 applies_to="both",
             )
@@ -271,20 +294,22 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
                 condition_id="account_not_proven",
                 scope="account",
                 host="deploy_preflight",
+                anchor=SURFACE_ANCHOR,
+                audience="operator",
                 disposition="fix_elsewhere",
                 headline="Account not proven",
                 detail="Run account reconcile to prove the account is clean before deploying.",
                 primary_move=_nav(
-                    "Open account monitor",
-                    "/broker/account-monitor",
-                    "account-reconciliation-action",
+                    "Open account proof",
+                    _account_recovery_route(account_id),
+                    "account-desk-operations-proof" if account_id is not None else None,
                 ),
                 applies_to="both",
             )
         )
 
     if signals.fleet_blocks_starts:
-        blockers.append(author_fleet_contamination_blocker())
+        blockers.append(author_fleet_contamination_blocker(account_id))
 
     if not signals.strategy_deployable:
         blockers.append(
@@ -292,6 +317,8 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
                 condition_id="strategy_not_validated",
                 scope="strategy",
                 host="deploy_preflight",
+                anchor=SURFACE_ANCHOR,
+                audience="operator",
                 disposition="fix_elsewhere",
                 headline="Strategy not validated",
                 detail="Promote the strategy in Strategy Validation before deploying.",
@@ -306,6 +333,8 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
                 condition_id="instance_already_running",
                 scope="bot",
                 host="deploy_preflight",
+                anchor=SURFACE_ANCHOR,
+                audience="operator",
                 disposition="fix_elsewhere",
                 headline="Deployment name already running",
                 detail="A bot with this name is already live. Go to it, or choose a different name.",
@@ -315,3 +344,7 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
         )
 
     return blockers
+
+
+def _account_recovery_route(account_id: str | None) -> str:
+    return "/broker/accounts" if account_id is None else f"/broker/accounts/{account_id}"

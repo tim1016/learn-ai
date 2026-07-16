@@ -104,7 +104,7 @@ export function exposureLaunchDecision(
       ? `Current risk reports ${posture} posture, ${pending} pending orders, and positions ${evidence.positionsLabel}. Reconcile the account, or confirm these exact values if you intentionally want to deploy and run now.`
       : `Current risk reports ${posture} posture, ${pending} pending orders, and positions ${evidence.positionsLabel}. Confirm these exact values before deploying and running.`,
     confirmAndStartLabel: 'Confirm and deploy & run',
-    reviewLabel: 'Open account monitor',
+    reviewLabel: 'Open Accounts',
   };
 }
 

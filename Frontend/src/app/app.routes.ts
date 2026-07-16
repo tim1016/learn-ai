@@ -1,5 +1,12 @@
 import { Routes } from "@angular/router";
 import { BotSurfaceStore } from "./components/broker/bot-control/bot-surface-store.service";
+import { AccountDeskHoldingsStore } from "./components/broker/account-desk/account-desk-holdings-store.service";
+import { AccountDeskEventsStore } from "./components/broker/account-desk/account-desk-events-store.service";
+import { AccountDeskDirectoryStore } from "./components/broker/account-desk/account-desk-directory-store.service";
+import { AccountDeskFleetStore } from "./components/broker/account-desk/account-desk-fleet-store.service";
+import { AccountDeskGuidanceStore } from "./components/broker/account-desk/account-desk-guidance-store.service";
+import { AccountDeskRecoveryStore } from "./components/broker/account-desk/account-desk-recovery-store.service";
+import { AccountDeskSurfaceStore } from "./components/broker/account-desk/account-desk-surface-store.service";
 import {
   botExistsGuard,
   botSurfaceResolver,
@@ -210,11 +217,27 @@ export const routes: Routes = [
       ).then((m) => m.BrokerOptionsSurfaceComponent),
   },
   {
+    path: "broker/accounts",
+    providers: [AccountDeskDirectoryStore],
+    loadComponent: () =>
+      import(
+        "./components/broker/account-roster/account-roster-page.component"
+      ).then((m) => m.AccountRosterPageComponent),
+  },
+  {
+    path: "broker/accounts/:accountId",
+    providers: [AccountDeskSurfaceStore, AccountDeskHoldingsStore, AccountDeskEventsStore, AccountDeskDirectoryStore, AccountDeskFleetStore, AccountDeskGuidanceStore, AccountDeskRecoveryStore],
+    loadComponent: () =>
+      import(
+        "./components/broker/account-desk/account-desk-page.component"
+      ).then((m) => m.AccountDeskPageComponent),
+  },
+  {
     path: "broker/account-monitor",
     loadComponent: () =>
       import(
-        "./components/broker/broker-account-monitor/broker-account-monitor.component"
-      ).then((m) => m.BrokerAccountMonitorComponent),
+        "./components/broker/account-monitor-redirect/account-monitor-redirect.component"
+      ).then((m) => m.AccountMonitorRedirectComponent),
   },
   {
     path: "broker/orders",

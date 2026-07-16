@@ -51,7 +51,7 @@ export class VerdictCardComponent {
   readonly remediationInvoked = output();
   readonly crashRecoveryRequested = output();
   readonly settingsRequested = output();
-  readonly accountMonitorRequested = output();
+  readonly accountsRequested = output();
   readonly reconcileRequested = output();
   readonly blockerMoveRequested = output<OperatorMove>();
 
@@ -170,7 +170,7 @@ export class VerdictCardComponent {
   invokeConditionCure(): void {
     const condition = this.sickBayCondition();
     if (!condition) {
-      this.accountMonitorRequested.emit();
+      this.accountsRequested.emit();
       return;
     }
     const target = lifecycleConditionCureTarget(condition);
@@ -182,7 +182,7 @@ export class VerdictCardComponent {
       this.reconcileRequested.emit();
       return;
     }
-    this.accountMonitorRequested.emit();
+    this.accountsRequested.emit();
   }
 
   openWhy(): void {

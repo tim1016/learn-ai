@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -18,16 +20,19 @@ from app.broker.ibkr.models import (
     IbkrPositionsSnapshot,
 )
 from app.engine.live.account_artifacts import (
+    AccountClerkLease,
     AccountFreezeEvidence,
     CohortBatchLaunchMemberOutcome,
     CohortBatchLaunchOutcomesReceipt,
     CohortBatchLaunchReceipt,
     account_artifacts_root,
+    advance_account_clerk_generation,
     append_account_event,
     read_account_events,
     read_account_freeze,
     record_cohort_batch_launch_outcomes,
     record_cohort_batch_launch_receipt,
+    write_account_clerk_lease,
     write_account_freeze,
 )
 from app.engine.live.account_clerk_journal import (
@@ -50,6 +55,8 @@ from app.engine.live.run_ledger import LiveRunLedger, write_ledger
 from app.routers import account_reconciliation, cohort_batch_launch
 from app.schemas.journal_cures import JournalCureReceipt, JournalCureRequest
 from app.services import cohort_batch_launch as cohort_batch_launch_service
+from app.services.account_directory import AccountDirectoryService, CurrentBrokerAccount
+from app.services.account_event_journal import AccountEventJournalService
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.cohort_batch_launch import CohortBatchLaunchService
 from app.services.cohort_evidence import CohortEvidenceSample, CohortMemberSample
@@ -509,7 +516,15 @@ async def test_triage_returns_latest_receipt(tmp_path: Path) -> None:
     assert body["account_id"] == "DU1234567"
     assert body["account_reconciliation_receipt"]["receipt_id"] == receipt.receipt_id
     assert body["overall_gate_result"]["status"] == "pass"
+    assert body["verdict"] == {
+        "state": "CLEAN",
+        "headline": "Account is clean",
+        "detail": "The current reconciliation proof and account checks are passing.",
+        "primary_move": None,
+        "operator_attention_count": 0,
+    }
     assert body["conditions"] == []
+    assert body["operator_blockers"] == []
     assert body["reconciliation_automation_policy"]["enabled"] is False
     assert body["account_reconciliation_valid_until_ms"] == receipt.expires_at_ms
 
@@ -1134,3 +1149,384 @@ async def test_operator_recovery_flatten_endpoint_ensures_clerk_and_appends_audi
         "recorded_at_ms": 101,
         "receipt_id": "account-clerk-operator-recovery:intent-operator-recovery:1",
     }
+
+
+async def test_account_events_endpoint_pages_filters_and_preserves_stable_event_identity(
+    tmp_path: Path,
+) -> None:
+    from app.main import app
+
+    append_account_event(
+        tmp_path,
+        "DU1234567",
+        {"event_type": "account_owner_generation_recorded", "recorded_at_ms": 1_710_000_000_000},
+    )
+    append_account_event(
+        tmp_path,
+        "DU1234567",
+        {"event_type": "account_freeze_recorded", "receipt_id": "freeze-receipt", "recorded_at_ms": 1_710_000_001_000},
+    )
+    append_account_event(
+        tmp_path,
+        "DU1234567",
+        {"event_type": "account_reconciliation_receipt_recorded", "recorded_at_ms": 1_710_000_002_000},
+    )
+    service = AccountEventJournalService(artifacts_root=tmp_path, now_ms=lambda: 1_710_000_003_000)
+    app.dependency_overrides[account_reconciliation.get_account_event_journal_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            first_page = await client.get("/api/accounts/DU1234567/events?limit=2")
+            older_page = await client.get("/api/accounts/DU1234567/events?before_seq=2")
+            newer_page = await client.get("/api/accounts/DU1234567/events?after_seq=1")
+            safety = await client.get("/api/accounts/DU1234567/events?kinds=safety")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert first_page.status_code == 200
+    assert first_page.json() == {
+        "schema_version": 1,
+        "account_id": "DU1234567",
+        "view": "operations",
+        "rows": [
+            {
+                "schema_version": 1,
+                "event_id": "DU1234567:3",
+                "seq": 3,
+                "kind": "reconciliation",
+                "occurred_at_ms": 1_710_000_002_000,
+                "trader_narration": "Account reconciliation was recorded.",
+                "operator_detail": "Account reconciliation receipt recorded in the journal.",
+                "evidence_refs": [{"source": "account_event_journal", "ref": "DU1234567:3", "detail": None}],
+            },
+            {
+                "schema_version": 1,
+                "event_id": "DU1234567:2",
+                "seq": 2,
+                "kind": "safety",
+                "occurred_at_ms": 1_710_000_001_000,
+                "trader_narration": "An account safety freeze was recorded.",
+                "operator_detail": "Account safety freeze recorded in the journal.",
+                "evidence_refs": [
+                    {"source": "account_event_journal", "ref": "DU1234567:2", "detail": None},
+                    {"source": "receipt", "ref": "freeze-receipt", "detail": None},
+                ],
+            },
+        ],
+        "latest_seq": 3,
+        "next_before_seq": 2,
+    }
+    assert [row["seq"] for row in older_page.json()["rows"]] == [1]
+    assert [row["seq"] for row in newer_page.json()["rows"]] == [3, 2]
+    assert [row["seq"] for row in safety.json()["rows"]] == [2]
+    assert len({row["event_id"] for row in first_page.json()["rows"]}) == 2
+
+
+async def test_account_events_endpoint_projects_singular_opaque_evidence_refs(tmp_path: Path) -> None:
+    from app.main import app
+
+    append_account_event(
+        tmp_path,
+        "DU1234567",
+        {
+            "event_type": "account_clerk_event_stream_down",
+            "order_id": 17,
+            "exec_id": "exec-17",
+            "order_ref": "learn-ai/bot-a/v1:intent-17",
+            "intent_id": "intent-17",
+            "recorded_at_ms": 1_710_000_000_000,
+        },
+    )
+    service = AccountEventJournalService(artifacts_root=tmp_path, now_ms=lambda: 1_710_000_001_000)
+    app.dependency_overrides[account_reconciliation.get_account_event_journal_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/accounts/DU1234567/events")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    [row] = response.json()["rows"]
+    assert row["kind"] == "safety"
+    assert {(ref["source"], ref["ref"]) for ref in row["evidence_refs"]} == {
+        ("account_event_journal", "DU1234567:1"),
+        ("order", "17"),
+        ("execution", "exec-17"),
+        ("order_ref", "learn-ai/bot-a/v1:intent-17"),
+        ("intent", "intent-17"),
+    }
+
+
+async def test_account_events_endpoint_rejects_invalid_cursors_and_limits(tmp_path: Path) -> None:
+    from app.main import app
+
+    service = AccountEventJournalService(artifacts_root=tmp_path)
+    app.dependency_overrides[account_reconciliation.get_account_event_journal_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            both_cursors = await client.get("/api/accounts/DU1234567/events?before_seq=2&after_seq=1")
+            invalid_limit = await client.get("/api/accounts/DU1234567/events?limit=0")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert both_cursors.status_code == 422
+    assert both_cursors.json()["detail"]["reason_code"] == "ACCOUNT_EVENTS_CURSOR_EXCLUSIVE"
+    assert invalid_limit.status_code == 422
+
+
+async def test_account_events_endpoint_returns_empty_for_missing_journal_and_typed_error_for_corruption(
+    tmp_path: Path,
+) -> None:
+    from app.main import app
+
+    service = AccountEventJournalService(artifacts_root=tmp_path)
+    app.dependency_overrides[account_reconciliation.get_account_event_journal_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            empty = await client.get("/api/accounts/DU1234567/events")
+            journal = tmp_path / "accounts" / "DU1234567" / "account_events.jsonl"
+            journal.parent.mkdir(parents=True)
+            journal.write_text("{malformed json\n", encoding="utf-8")
+            corrupt = await client.get("/api/accounts/DU1234567/events")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert empty.status_code == 200
+    assert empty.json()["rows"] == []
+    assert empty.json()["latest_seq"] is None
+    assert corrupt.status_code == 409
+    assert corrupt.json()["detail"]["reason_code"] == "ACCOUNT_EVENTS_JOURNAL_CORRUPT"
+    assert journal.read_text(encoding="utf-8") == "{malformed json\n"
+
+
+async def test_account_events_endpoint_trader_today_uses_new_york_day_across_dst(tmp_path: Path) -> None:
+    from app.main import app
+
+    ny = ZoneInfo("America/New_York")
+    yesterday = int(datetime(2024, 3, 9, 23, 30, tzinfo=ny).timestamp() * 1_000)
+    today = int(datetime(2024, 3, 10, 0, 30, tzinfo=ny).timestamp() * 1_000)
+    now = int(datetime(2024, 3, 10, 12, 0, tzinfo=ny).timestamp() * 1_000)
+    append_account_event(
+        tmp_path,
+        "DU1234567",
+        {"event_type": "account_freeze_recorded", "recorded_at_ms": yesterday},
+    )
+    append_account_event(
+        tmp_path,
+        "DU1234567",
+        {"event_type": "account_freeze_cleared", "recorded_at_ms": today},
+    )
+    append_account_event(
+        tmp_path,
+        "DU1234567",
+        {"event_type": "account_clerk_generation_recorded", "recorded_at_ms": today},
+    )
+    service = AccountEventJournalService(artifacts_root=tmp_path, now_ms=lambda: now)
+    app.dependency_overrides[account_reconciliation.get_account_event_journal_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/accounts/DU1234567/events?view=trader_today")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    [row] = response.json()["rows"]
+    assert row["seq"] == 2
+    assert row["occurred_at_ms"] == today
+    assert isinstance(row["occurred_at_ms"], int)
+    assert row["trader_narration"] == "An account safety freeze was cleared."
+
+
+async def test_accounts_roster_exposes_the_current_single_account_without_a_service(tmp_path: Path) -> None:
+    from app.main import app
+
+    service = AccountDirectoryService(
+        artifacts_root=tmp_path,
+        current_account=CurrentBrokerAccount(account_id="DU1234567", is_paper=True),
+        now_ms=lambda: 1_780_000_000_000,
+    )
+    expected_triage = AccountReconciliationService(artifacts_root=tmp_path).triage(
+        account_id="DU1234567",
+        now_ms=1_780_000_000_000,
+    )
+    app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            roster = await client.get("/api/accounts")
+            status_response = await client.get("/api/accounts/DU1234567/clerk")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert roster.status_code == 200
+    assert roster.json() == {
+        "schema_version": 1,
+        "rows": [
+            {
+                "account_id": "DU1234567",
+                "broker": "IBKR",
+                "effective_posture": "PAPER_EXECUTION",
+                "service": {"attachment": "UNATTACHED", "phase": None, "generation": None},
+                "latest_verdict_summary": {
+                    "state": expected_triage.verdict.state,
+                    "headline": expected_triage.verdict.headline,
+                    "generated_at_ms": 1_780_000_000_000,
+                },
+                "last_verified_at_ms": None,
+            }
+        ],
+    }
+    assert status_response.status_code == 200
+    assert status_response.json() == {
+        "schema_version": 1,
+        "account_id": "DU1234567",
+        "attachment": "UNATTACHED",
+        "phase": None,
+        "generation": None,
+        "generation_recorded_at_ms": None,
+        "source": None,
+        "binding": {"state": "UNATTACHED", "generation": None, "lease_generation": None},
+        "lease": None,
+        "journal": {"last_seq": None, "last_write_ms": None},
+    }
+    assert not (tmp_path / "accounts" / "DU1234567").exists()
+
+
+def test_directory_fences_an_expired_lease_and_keeps_artifact_only_accounts_visible(tmp_path: Path) -> None:
+    generation = advance_account_clerk_generation(
+        tmp_path,
+        "DU7654321",
+        phase="accepting",
+        recorded_at_ms=100,
+        source="test",
+    )
+    write_account_clerk_lease(
+        tmp_path,
+        AccountClerkLease(
+            account_id="DU7654321",
+            generation=generation.generation,
+            pid=123,
+            ibkr_client_id=80,
+            status="RUNNING",
+            started_at_ms=100,
+            renewed_at_ms=101,
+            valid_until_ms=102,
+        ),
+    )
+
+    service = AccountDirectoryService(artifacts_root=tmp_path, current_account=None, now_ms=lambda: 102)
+
+    assert [row.account_id for row in service.roster().rows] == ["DU7654321"]
+    assert service.service_status(account_id="DU7654321").attachment == "FENCED"
+
+
+async def test_account_service_status_endpoint_projects_durable_service_evidence(tmp_path: Path) -> None:
+    from app.main import app
+
+    account_id = "DU7654321"
+    write_account_instance_binding(
+        tmp_path,
+        AccountInstanceBinding(
+            account_id=account_id,
+            strategy_instance_id="desk-roster",
+            run_id="run-roster",
+            bot_order_namespace="learn-ai/desk-roster/v1",
+            lifecycle_state="ACTIVE",
+            recorded_at_ms=1_780_000_000_000,
+            source="test",
+        ),
+    )
+    generation = advance_account_clerk_generation(
+        tmp_path,
+        account_id,
+        phase="accepting",
+        recorded_at_ms=1_780_000_000_100,
+        source="host_daemon.clerk_spawn",
+    )
+    write_account_clerk_lease(
+        tmp_path,
+        AccountClerkLease(
+            account_id=account_id,
+            generation=generation.generation,
+            pid=123,
+            ibkr_client_id=80,
+            status="RUNNING",
+            started_at_ms=1_780_000_000_101,
+            renewed_at_ms=1_780_000_000_102,
+            valid_until_ms=1_780_000_060_102,
+        ),
+    )
+    intent = AccountOwnerSubmitIntent(
+        trace_id="trace-roster",
+        account_id=account_id,
+        strategy_instance_id="desk-roster",
+        run_id="run-roster",
+        bot_order_namespace="learn-ai/desk-roster/v1",
+        intent_id="intent-roster",
+        order_ref="learn-ai/desk-roster/v1:intent-roster",
+        intent_kind="ORDER",
+        order_spec={},
+        owner_generation=1,
+        created_at_ms=1_780_000_000_103,
+    )
+    AccountClerkJournal(
+        artifacts_root=tmp_path,
+        account_id=account_id,
+        now_ms=lambda: 1_780_000_000_104,
+    ).record_intent(intent, validate_intent=lambda _: None)
+    service = AccountDirectoryService(
+        artifacts_root=tmp_path,
+        current_account=None,
+        now_ms=lambda: 1_780_000_000_200,
+    )
+    app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get(f"/api/accounts/{account_id}/clerk")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "schema_version": 1,
+        "account_id": account_id,
+        "attachment": "ATTACHED",
+        "phase": "accepting",
+        "generation": 1,
+        "generation_recorded_at_ms": 1_780_000_000_100,
+        "source": "host_daemon.clerk_spawn",
+        "binding": {"state": "ATTACHED", "generation": 1, "lease_generation": 1},
+        "lease": {
+            "status": "RUNNING",
+            "generation": 1,
+            "started_at_ms": 1_780_000_000_101,
+            "renewed_at_ms": 1_780_000_000_102,
+            "valid_until_ms": 1_780_000_060_102,
+        },
+        "journal": {"last_seq": 1, "last_write_ms": 1_780_000_000_104},
+    }
+
+
+async def test_account_service_status_endpoint_rejects_unknown_and_corrupt_artifacts_without_repair(
+    tmp_path: Path,
+) -> None:
+    from app.main import app
+
+    service = AccountDirectoryService(
+        artifacts_root=tmp_path,
+        current_account=CurrentBrokerAccount(account_id="DU1234567", is_paper=True),
+    )
+    app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            unknown = await client.get("/api/accounts/DU7654321/clerk")
+            artifact = tmp_path / "accounts" / "DU1234567" / "clerk_generation.json"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_text("{not valid json", encoding="utf-8")
+            corrupt = await client.get("/api/accounts/DU1234567/clerk")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert unknown.status_code == 404
+    assert unknown.json()["detail"]["reason_code"] == "ACCOUNT_UNKNOWN"
+    assert corrupt.status_code == 409
+    assert corrupt.json()["detail"]["reason_code"] == "ACCOUNT_SERVICE_ARTIFACT_CORRUPT"
+    assert artifact.read_text(encoding="utf-8") == "{not valid json"

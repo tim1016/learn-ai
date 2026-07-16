@@ -9,6 +9,8 @@ import type {
   JournalCurePreview,
   JournalCureReceipt,
   JournalCureRequest,
+  OperatorRecoveryFlattenRequest,
+  OperatorRecoveryFlattenResponse,
   LegacyStaleClaimCandidatesResponse,
   LegacyStaleClaimRetireRequest,
   LegacyStaleClaimRetirementReceipt,
@@ -17,6 +19,8 @@ import type {
   AccountReconciliationReceipt,
   AccountTriageResponse,
 } from '../api/account-reconciliation.types';
+import type { AccountsRosterResponse, AccountServiceStatusResponse } from '../api/account-directory.types';
+import type { AccountEventsRequest, AccountEventsResponse } from '../api/account-events.types';
 import type {
   AccountTruthResponse,
   DataPlaneHealth,
@@ -168,6 +172,34 @@ export class BrokerService {
     );
   }
 
+  accounts(): Promise<AccountsRosterResponse> {
+    return firstValueFrom(this.http.get<AccountsRosterResponse>(this.accountsBase));
+  }
+
+  accountServiceStatus(accountId: string): Promise<AccountServiceStatusResponse> {
+    return firstValueFrom(
+      this.http.get<AccountServiceStatusResponse>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/clerk`,
+      ),
+    );
+  }
+
+  accountEvents(accountId: string, request: AccountEventsRequest): Promise<AccountEventsResponse> {
+    const params: Record<string, string | number | readonly (string | number | boolean)[]> = {
+      view: request.view,
+      limit: request.limit ?? 50,
+    };
+    if (request.kinds?.length) params['kinds'] = request.kinds;
+    if (request.beforeSeq !== undefined) params['before_seq'] = request.beforeSeq;
+    if (request.afterSeq !== undefined) params['after_seq'] = request.afterSeq;
+    return firstValueFrom(
+      this.http.get<AccountEventsResponse>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/events`,
+        { params },
+      ),
+    );
+  }
+
   legacyStaleClaimCandidates(accountId: string): Promise<LegacyStaleClaimCandidatesResponse> {
     return firstValueFrom(
       this.http.get<LegacyStaleClaimCandidatesResponse>(
@@ -205,6 +237,18 @@ export class BrokerService {
     return firstValueFrom(
       this.http.post<JournalCureReceipt>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/journal-cures`,
+        payload,
+      ),
+    );
+  }
+
+  submitOperatorRecoveryFlatten(
+    accountId: string,
+    payload: OperatorRecoveryFlattenRequest,
+  ): Promise<OperatorRecoveryFlattenResponse> {
+    return firstValueFrom(
+      this.http.post<OperatorRecoveryFlattenResponse>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/operator-recovery-flatten`,
         payload,
       ),
     );

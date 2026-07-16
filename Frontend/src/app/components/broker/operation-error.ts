@@ -9,12 +9,12 @@
 //   400 validation · 404 not-found · 409 domain/precondition · 503 infra.
 
 import { HttpErrorResponse } from '@angular/common/http';
+import { accountDeskAnchorOrVerdictFallback, isRecord } from '../../api/operator-blocker.types';
 import type {
   OperatorAction,
   OperatorBlocker,
   OperatorConditionScope,
   OperatorConfirmationCopy,
-  OperatorHost,
   OperatorMove,
 } from '../../api/operator-blocker.types';
 
@@ -97,12 +97,20 @@ export interface PreconditionBody {
   blockers?: readonly OperatorBlocker[];
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
 function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
   return typeof value === 'string' && allowed.includes(value as T);
+}
+
+/**
+ * Reads the literal FastAPI error detail without deriving any operator copy.
+ * Both legacy string details and structured server-message contracts are
+ * supported so desk surfaces do not hide actionable server responses.
+ */
+export function extractServerMessage(error: unknown, fallback: string): string {
+  if (!isRecord(error) || !isRecord(error['error'])) return fallback;
+  const detail = error['error']['detail'];
+  if (typeof detail === 'string') return detail;
+  return isRecord(detail) && typeof detail['message'] === 'string' ? detail['message'] : fallback;
 }
 
 function readConfirmation(value: unknown): OperatorConfirmationCopy | null {
@@ -182,6 +190,8 @@ function readOperatorBlocker(value: unknown): OperatorBlocker | null {
   const scope = condition['scope'];
   const evidence = condition['evidence'];
   const host = value['host'];
+  const anchor = accountDeskAnchorOrVerdictFallback(value['anchor']);
+  const audience = value['audience'];
   const disposition = value['disposition'];
   const headline = value['headline'];
   const detail = value['detail'];
@@ -193,7 +203,9 @@ function readOperatorBlocker(value: unknown): OperatorBlocker | null {
     !isOneOf(severity, ['blocking', 'warning'] as const) ||
     !isOneOf(scope, ['bot', 'account', 'broker', 'fleet', 'host', 'strategy'] as const) ||
     !isRecord(evidence) ||
-    !isOneOf(host, ['bot_cockpit', 'deploy_preflight', 'fleet_roster', 'account_monitor'] as const) ||
+    !isOneOf(host, ['bot_cockpit', 'deploy_preflight', 'fleet_roster', 'account_monitor', 'account_desk'] as const) ||
+    anchor === null ||
+    !isOneOf(audience, ['trader', 'operator', 'both'] as const) ||
     !isOneOf(disposition, ['fix_here', 'fix_elsewhere', 'wait', 'terminal'] as const) ||
     typeof headline !== 'string' ||
     (typeof detail !== 'string' && detail !== null) ||
@@ -218,7 +230,9 @@ function readOperatorBlocker(value: unknown): OperatorBlocker | null {
       scope: scope as OperatorConditionScope,
       evidence: evidence as Record<string, string | number | boolean | null>,
     },
-    host: host as OperatorHost,
+    host,
+    anchor,
+    audience,
     disposition,
     headline,
     detail,

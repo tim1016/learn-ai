@@ -1213,8 +1213,8 @@ describe('BrokerDeployFormComponent', () => {
                 headline: 'Broker session needs reconnecting',
                 detail: 'Reconnect through Account Clerk, then retry the launch.',
                 primaryMove: {
-                  label: 'Open broker account',
-                  action: { kind: 'navigate', route: '/broker/account-monitor', fragment: null },
+                  label: 'Open Accounts',
+                  action: { kind: 'navigate', route: '/broker/accounts', fragment: null },
                   target: null,
                 },
               }),
@@ -1233,7 +1233,7 @@ describe('BrokerDeployFormComponent', () => {
     const serverError = fixture.nativeElement.querySelector('.ticket-review .server-launch-error');
     expect(serverError?.textContent).toContain('A launch gate changed after the ticket check.');
     expect(serverError?.textContent).toContain('Broker session needs reconnecting');
-    expect(serverError?.textContent).toContain('Open broker account');
+    expect(serverError?.textContent).toContain('Open Accounts');
   });
 
   it('disables Deploy & run and names the backend preflight blocker', async () => {
@@ -1270,8 +1270,8 @@ describe('BrokerDeployFormComponent', () => {
             headline: 'Fleet state blocks new deploys',
             detail: 'Clear the account fleet state before deploying or starting a bot.',
             primaryMove: {
-              label: 'Open account monitor',
-              action: { kind: 'navigate', route: '/broker/account-monitor', fragment: null },
+              label: 'Open Accounts',
+              action: { kind: 'navigate', route: '/broker/accounts', fragment: null },
               target: null,
             },
           }),
@@ -1284,7 +1284,7 @@ describe('BrokerDeployFormComponent', () => {
 
     expect(deployButton(fixture).disabled).toBe(true);
     expect(fixture.nativeElement.textContent).toContain('Fleet state blocks new deploys');
-    expect(fixture.nativeElement.textContent).toContain('Open account monitor');
+    expect(fixture.nativeElement.textContent).toContain('Open Accounts');
     expect(component.commandStatus()).toBe('Launch blocked: Fleet state blocks new deploys.');
     expect(svc.deployInstance).not.toHaveBeenCalled();
   });

@@ -1,0 +1,93 @@
+<app-page-header title="Account desk" subtitle="Server-owned account posture and evidence freshness.">
+  @if (displayAccountId(); as accountId) {
+    <app-account-desk-account-switcher slot="actions" [accountId]="accountId" (accountChange)="switchAccount($event)" />
+  }
+</app-page-header>
+
+<main class="account-desk" aria-label="Account desk">
+  <section id="account-desk-verdict" class="verdict-card card" aria-live="polite" tabindex="-1">
+    @if (loading() && !triage()) {
+      <p class="state state-loading">Loading account verdict…</p>
+    } @else if (triage(); as triage) {
+      <header class="verdict-header">
+        <div>
+          <p class="eyebrow">Effective posture</p>
+          <strong class="posture">{{ triage.verdict.state | receiptLabel }}</strong>
+        </div>
+        <dl class="freshness">
+          <div>
+            <dt>As of</dt>
+            <dd><app-timestamp-display [value]="triage.generated_at_ms" mode="local" /></dd>
+          </div>
+          <div>
+            <dt>Observation</dt>
+            <dd>{{ triage.account_observation.state | receiptLabel }}</dd>
+          </div>
+          @if (triage.account_observation.valid_until_ms !== null) {
+            <div>
+              <dt>Fresh for</dt>
+              <dd aria-live="off">{{ freshnessCountdown() }}</dd>
+            </div>
+          }
+        </dl>
+      </header>
+      <h2>{{ triage.verdict.headline }}</h2>
+      <p>{{ triage.verdict.detail }}</p>
+      <app-account-desk-guidance anchor="verdict" [lens]="lens()" ariaLabel="Verdict guidance" />
+      @if (lens() === 'trader' && guidance.operatorAttentionCount() > 0) {
+        <p class="operator-attention-summary">{{ guidance.operatorAttentionCount() }} items need operator attention.</p>
+      }
+      @if (triage.verdict.primary_move; as move) {
+        <button type="button" class="primary-move" (click)="followPrimaryMove(move)">{{ move.label }}</button>
+      }
+      <dl class="headline-metrics" aria-label="Headline metrics">
+        <div><dt>Net liquidation</dt><dd>{{ fmtCurrency(headlineMetrics()?.equity) }}</dd></div>
+        <div><dt>Day P&amp;L</dt><dd>{{ fmtSignedCurrency(headlineMetrics()?.dayPnl) }}</dd></div>
+        <div><dt>Open positions</dt><dd>{{ headlineMetrics()?.openPositions ?? '—' }}</dd></div>
+      </dl>
+      @if (showingStaleLastGood()) {
+        <p class="state state-stale">Showing last good account data from <app-timestamp-display [value]="triage.generated_at_ms" mode="local" />. Refresh failed. <button type="button" (click)="retry()">Retry</button></p>
+      }
+    } @else if (error()) {
+      <div class="state state-error" role="alert">
+        <p>We could not load this account verdict.</p>
+        <button type="button" (click)="retry()">Retry</button>
+      </div>
+    }
+  </section>
+
+  <nav class="lens-toggle" aria-label="Account desk lens">
+    <button type="button" [attr.aria-pressed]="lens() === 'trader'" (click)="selectLens('trader')">Trader</button>
+    <button type="button" [attr.aria-pressed]="lens() === 'operator'" (click)="selectLens('operator')">Operator</button>
+  </nav>
+
+  <section class="desk-body card" aria-live="polite">
+    @if (loading() && !triage()) {
+      <p class="state state-loading">Loading desk details…</p>
+    } @else if (error() && !triage()) {
+      <div class="state state-error" role="alert">
+        <p>We could not load account desk details.</p>
+        <button type="button" (click)="retry()">Retry</button>
+      </div>
+    } @else if (triage()) {
+      @if (lens() === 'trader') {
+        <app-account-desk-trader-holdings />
+        <app-account-desk-trader-events />
+        <section class="recovery-guidance" aria-label="Account guidance">
+          <h2>Account guidance</h2>
+          @if (guidance.blockersFor('cure_tools', null, 'trader').length === 0) {
+            <p class="state">No account guidance is currently declared for this account.</p>
+          } @else {
+            <app-account-desk-guidance anchor="cure_tools" lens="trader" ariaLabel="Account guidance" />
+          }
+        </section>
+      } @else {
+        <app-account-desk-operator-proof />
+        <app-account-desk-operator-service />
+        <app-account-desk-operator-fleet />
+        <app-account-desk-operator-events />
+        <app-account-desk-recovery-controls />
+      }
+    }
+  </section>
+</main>

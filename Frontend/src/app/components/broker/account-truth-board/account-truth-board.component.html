@@ -64,10 +64,10 @@
     </section>
   }
 
-  @if (showOperatorBlockers() && accountTruth.operator_blockers.length > 0) {
+  @if (showOperatorBlockers() && accountScopedBlockers().length > 0) {
     <app-operator-blocker-list
-      [blockers]="accountTruth.operator_blockers"
-      ariaLabel="Account Monitor blockers"
+      [blockers]="accountScopedBlockers()"
+      ariaLabel="Account blockers"
       (moveSelected)="operatorBlockerMoveSelected.emit($event)"
     />
   }

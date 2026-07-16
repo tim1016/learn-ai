@@ -81,6 +81,16 @@ export function fmtSignedNumber(
   return formatter.format(value);
 }
 
+/** Display a broker position without rounding fractional shares away. */
+export function fmtSignedQuantity(value: number | null | undefined): string {
+  if (value == null) return '—';
+  return new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 8,
+    signDisplay: 'exceptZero',
+  }).format(value);
+}
+
 export function fmtNumber(
   value: number | null | undefined,
   fractionDigits = 2,

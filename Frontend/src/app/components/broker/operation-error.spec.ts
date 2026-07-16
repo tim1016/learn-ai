@@ -2,10 +2,25 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { describe, expect, it } from 'vitest';
 import {
   describeOperationError,
+  extractServerMessage,
   readOutcomeUnknownBody,
   readPreconditionBody,
   toOperationError,
 } from './operation-error';
+
+describe('extractServerMessage', () => {
+  it('preserves both legacy FastAPI string details and structured server messages', () => {
+    expect(extractServerMessage({ error: { detail: 'Account evidence expired.' } }, 'Fallback.'))
+      .toBe('Account evidence expired.');
+    expect(extractServerMessage({ error: { detail: { message: 'Fresh proof is required.' } } }, 'Fallback.'))
+      .toBe('Fresh proof is required.');
+  });
+
+  it('uses the caller-owned fallback for unrecognised error shapes', () => {
+    expect(extractServerMessage({ error: { detail: { reason: 'opaque' } } }, 'Retry later.'))
+      .toBe('Retry later.');
+  });
+});
 
 describe('describeOperationError', () => {
   it('maps a 409 deploy to a precondition with deploy-specific remediation', () => {
@@ -246,12 +261,14 @@ describe('toOperationError', () => {
                 evidence: { observed: false },
               },
               host: 'deploy_preflight',
+              anchor: { kind: 'surface', subject_key: null },
+              audience: 'operator',
               disposition: 'fix_elsewhere',
               headline: 'Broker session needs reconnecting',
               detail: 'Reconnect through Account Clerk, then retry the launch.',
               primary_move: {
                 label: 'Open broker account',
-                action: { kind: 'navigate', route: '/broker/account-monitor', fragment: null },
+                action: { kind: 'navigate', route: '/broker/accounts', fragment: null },
                 target: null,
               },
               secondary_moves: [],

@@ -1,0 +1,7 @@
+.today-events { display: grid; gap: .6rem; margin-top: 1rem; }
+h2, p, ol { margin: 0; }
+header { display: grid; gap: .2rem; }
+header p { color: var(--text-color-secondary, #556070); }
+ol { display: grid; gap: .45rem; padding-left: 1.25rem; }
+.state-error { color: #a30000; }
+.state-stale { color: #8a5a00; }

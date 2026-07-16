@@ -5,10 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from starlette.concurrency import run_in_threadpool
 
-from app.broker.ibkr.client import BrokerError, IbkrClient
+from app.broker.ibkr.client import BrokerError, IbkrClient, NotConnectedError, _is_paper_account, get_client
 from app.broker.ibkr.config import get_settings
 from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import AccountArtifactError, append_account_event
@@ -20,6 +20,8 @@ from app.engine.live.account_clerk_rpc import (
 from app.engine.live.account_identity import normalize_account_id
 from app.engine.live.account_registry import backfill_false_crash_registry_rows
 from app.routers.broker_dependencies import require_connected_client
+from app.schemas.account_directory import AccountServiceStatusResponse, AccountsRosterResponse
+from app.schemas.account_events import AccountEventKind, AccountEventsResponse, AccountEventView
 from app.schemas.account_reconciliation import (
     AccountAcceptExposureOverrideRequest,
     AccountAcceptExposureOverrideResponse,
@@ -41,6 +43,13 @@ from app.schemas.journal_cures import (
     OperatorRecoveryFlattenRequest,
     OperatorRecoveryFlattenResponse,
 )
+from app.services.account_directory import (
+    AccountDirectoryError,
+    AccountDirectoryService,
+    CurrentBrokerAccount,
+    UnknownAccountError,
+)
+from app.services.account_event_journal import AccountEventJournalError, AccountEventJournalService
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.account_truth_refresh import account_truth_artifacts_root, refresh_account_truth_now
 from app.services.journal_cures import JournalCureError, JournalCureService
@@ -66,6 +75,41 @@ def get_account_reconciliation_service(
     """Build reconciliation service from the overridable artifact-root dependency."""
 
     return AccountReconciliationService(artifacts_root=artifacts_root)
+
+
+def get_account_event_journal_service(
+    artifacts_root: AccountArtifactsRoot,
+) -> AccountEventJournalService:
+    """Build the read-only Account desk journal projection."""
+
+    return AccountEventJournalService(artifacts_root=artifacts_root)
+
+
+def get_current_broker_account() -> CurrentBrokerAccount | None:
+    """Expose the single currently connected broker account, if one exists."""
+
+    try:
+        client = get_client()
+    except NotConnectedError:
+        return None
+    if not client.is_connected():
+        return None
+    account_id = client.connected_account
+    if account_id is None:
+        return None
+    return CurrentBrokerAccount(account_id=account_id, is_paper=_is_paper_account(account_id))
+
+
+CurrentBrokerAccountDependency = Annotated[CurrentBrokerAccount | None, Depends(get_current_broker_account)]
+
+
+def get_account_directory_service(
+    artifacts_root: AccountArtifactsRoot,
+    current_account: CurrentBrokerAccountDependency,
+) -> AccountDirectoryService:
+    """Build the read-only account directory from canonical broker/artifact facts."""
+
+    return AccountDirectoryService(artifacts_root=artifacts_root, current_account=current_account)
 
 
 def get_legacy_stale_claim_retirement_service() -> LegacyStaleClaimRetirementService:
@@ -99,6 +143,43 @@ def _clerk_rpc_http_error(exc: AccountClerkRpcError) -> HTTPException:
         status.HTTP_503_SERVICE_UNAVAILABLE if unavailable else status.HTTP_409_CONFLICT,
         detail={"reason_code": reason_code, "message": "Clerk rejected or could not complete the request."},
     )
+
+
+def _account_directory_http_error(exc: AccountDirectoryError) -> HTTPException:
+    return HTTPException(
+        status.HTTP_409_CONFLICT,
+        detail={
+            "reason_code": "ACCOUNT_SERVICE_ARTIFACT_CORRUPT",
+            "message": "Account service evidence is unavailable because its durable artifacts are invalid.",
+        },
+    )
+
+
+@router.get("", response_model=AccountsRosterResponse)
+async def accounts_roster_endpoint(
+    service: Annotated[AccountDirectoryService, Depends(get_account_directory_service)],
+) -> AccountsRosterResponse:
+    """List configured and durable-known accounts for the Account desk roster."""
+
+    try:
+        return service.roster()
+    except AccountDirectoryError as exc:
+        raise _account_directory_http_error(exc) from exc
+
+
+@router.get("/{account_id}/clerk", response_model=AccountServiceStatusResponse)
+async def account_service_status_endpoint(
+    account_id: str,
+    service: Annotated[AccountDirectoryService, Depends(get_account_directory_service)],
+) -> AccountServiceStatusResponse:
+    """Return the immutable Account service projection for one known account."""
+
+    try:
+        return service.service_status(account_id=_canonical_account_id(account_id))
+    except UnknownAccountError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"reason_code": "ACCOUNT_UNKNOWN"}) from exc
+    except AccountDirectoryError as exc:
+        raise _account_directory_http_error(exc) from exc
 
 
 @router.post("/{account_id}/reconciliation", response_model=AccountReconciliationReceipt)
@@ -372,6 +453,45 @@ async def account_triage_endpoint(
         return service.triage(account_id=_canonical_account_id(account_id))
     except AccountArtifactError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+
+@router.get("/{account_id}/events", response_model=AccountEventsResponse)
+async def account_events_endpoint(
+    account_id: str,
+    service: Annotated[AccountEventJournalService, Depends(get_account_event_journal_service)],
+    view: AccountEventView = "operations",
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    kinds: Annotated[list[AccountEventKind] | None, Query()] = None,
+    before_seq: Annotated[int | None, Query(ge=1)] = None,
+    after_seq: Annotated[int | None, Query(ge=1)] = None,
+) -> AccountEventsResponse:
+    """Read a versioned, cursor-paginated projection of one account journal."""
+
+    if before_seq is not None and after_seq is not None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "reason_code": "ACCOUNT_EVENTS_CURSOR_EXCLUSIVE",
+                "message": "Use either before_seq or after_seq, not both.",
+            },
+        )
+    try:
+        return service.page(
+            account_id=_canonical_account_id(account_id),
+            view=view,
+            limit=limit,
+            kinds=frozenset(kinds or ()),
+            before_seq=before_seq,
+            after_seq=after_seq,
+        )
+    except AccountEventJournalError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "ACCOUNT_EVENTS_JOURNAL_CORRUPT",
+                "message": "Account event history is unavailable because its journal is invalid.",
+            },
+        ) from exc
 
 
 @router.post(

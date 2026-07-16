@@ -145,6 +145,8 @@ def test_preview_reports_the_server_derived_direction_for_a_reducible_claim(tmp_
     assert preview.journal_quantity == 2
     assert preview.required_adjustment_sign == "negative"
     assert preview.can_cure is True
+    assert preview.confirmation is not None
+    assert preview.confirmation.confirm_label == "Append journal cure"
 
 
 def test_apply_refuses_a_claim_from_an_active_namespace(tmp_path: Path) -> None:

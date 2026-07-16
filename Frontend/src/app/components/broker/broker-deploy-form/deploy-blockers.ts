@@ -35,8 +35,8 @@ function openStrategyValidation(): OperatorMove {
 
 function openBrokerAccount(): OperatorMove {
   return {
-    label: 'Open broker account',
-    action: { kind: 'navigate', route: '/broker/account-monitor', fragment: null },
+    label: 'Open Accounts',
+    action: { kind: 'navigate', route: '/broker/accounts', fragment: null },
     target: null,
   };
 }
@@ -53,6 +53,8 @@ function formBlocker(
   return {
     condition: { id, severity, scope, evidence: {} },
     host: 'deploy_preflight',
+    anchor: { kind: 'surface', subject_key: null },
+    audience: 'operator',
     disposition,
     headline,
     detail,

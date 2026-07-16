@@ -1,0 +1,64 @@
+<dialog
+  #dialog
+  class="account-recovery-confirm"
+  aria-labelledby="account-recovery-confirm-title"
+  (cancel)="cancel($event)"
+>
+  @if (confirmation(); as confirmation) {
+    <header>
+      <p class="eyebrow">Account recovery confirmation</p>
+      <h2 id="account-recovery-confirm-title">{{ confirmation.title }}</h2>
+    </header>
+    <p>{{ confirmation.body }}</p>
+    <p class="consequence">{{ confirmation.consequence }}</p>
+    <dl>
+      <div><dt>Account</dt><dd><code>{{ confirmation.accountId }}</code></dd></div>
+      @if (confirmation.command === 'automation') {
+        <div><dt>Requested setting</dt><dd>{{ confirmation.desiredAutomationEnabled ? 'Enabled' : 'Disabled' }}</dd></div>
+      }
+      @if (confirmation.command === 'journal_cure' && confirmation.journalCure; as journalCure) {
+        <div><dt>Namespace</dt><dd><code>{{ journalCure.request.bot_order_namespace }}</code></dd></div>
+        <div><dt>Symbol</dt><dd><code>{{ journalCure.request.symbol }}</code></dd></div>
+        <div><dt>Adjustment</dt><dd>{{ journalCure.request.signed_quantity }}</dd></div>
+        <div><dt>Proven direction</dt><dd>{{ journalCure.preview.required_adjustment_sign | receiptLabel }}</dd></div>
+        <div><dt>Evidence</dt><dd><code>{{ journalCure.request.evidence_refs[0] }}</code></dd></div>
+      }
+      @if (confirmation.command === 'legacy_retire' && confirmation.legacyCandidate; as candidate) {
+        <div><dt>Claim</dt><dd><code>{{ candidate.claim_id }}</code></dd></div>
+        <div><dt>Strategy</dt><dd><code>{{ candidate.strategy_instance_id }}</code></dd></div>
+        <div><dt>Run</dt><dd><code>{{ candidate.run_id }}</code></dd></div>
+        <div><dt>Namespace</dt><dd><code>{{ candidate.bot_order_namespace }}</code></dd></div>
+        <div><dt>Symbol</dt><dd><code>{{ candidate.symbol }}</code></dd></div>
+        <div><dt>Proved</dt><dd><app-timestamp-display [value]="candidate.proved_at_ms" mode="local" /></dd></div>
+      }
+      @if (confirmation.command === 'recovery_flatten' && confirmation.recoveryFlatten; as recoveryFlatten) {
+        <div><dt>Strategy</dt><dd><code>{{ recoveryFlatten.intent.strategy_instance_id }}</code></dd></div>
+        <div><dt>Run</dt><dd><code>{{ recoveryFlatten.intent.run_id }}</code></dd></div>
+        <div><dt>Namespace</dt><dd><code>{{ recoveryFlatten.intent.bot_order_namespace }}</code></dd></div>
+        <div><dt>Order reference</dt><dd><code>{{ recoveryFlatten.intent.order_ref }}</code></dd></div>
+        <div><dt>Order</dt><dd>{{ recoveryFlatten.intent.order_spec.action | receiptLabel }} {{ recoveryFlatten.intent.order_spec.quantity }} <code>{{ recoveryFlatten.intent.order_spec.symbol }}</code></dd></div>
+      }
+    </dl>
+    @if (confirmation.command === 'exposure_override') {
+      <label for="account-exposure-override-reason">Operator reason</label>
+      <textarea
+        id="account-exposure-override-reason"
+        rows="3"
+        [value]="confirmation.reason"
+        (input)="updateReason($event)"
+      ></textarea>
+      @if (confirmation.reason.trim().length === 0) {
+        <p class="validation" role="status">An operator reason is required.</p>
+      }
+    }
+    @if (errorMessage(); as errorMessage) {
+      <p class="error" role="alert">{{ errorMessage }}</p>
+    }
+    <footer>
+      <button type="button" (click)="cancel()" [disabled]="busy()">Cancel</button>
+      <button type="button" class="primary" (click)="confirm()" [disabled]="busy() || !canConfirm()">
+        {{ busy() ? 'Submitting…' : confirmation.confirmLabel }}
+      </button>
+    </footer>
+  }
+</dialog>

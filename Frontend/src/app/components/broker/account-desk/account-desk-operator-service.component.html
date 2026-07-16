@@ -1,0 +1,28 @@
+<section id="account-desk-account-service" class="account-service" aria-label="Account service" aria-live="polite" tabindex="-1">
+  <header><h2>Account service</h2><p>Read-only attachment and durable journal status.</p></header>
+  @if (directory.serviceStatusLoading() && !directory.serviceStatusHasLastGood()) {
+    <p class="state">Loading Account service status…</p>
+  } @else if (directory.serviceStatusErrorMessage() && !directory.serviceStatusHasLastGood()) {
+    <div class="state state-error" role="alert"><p>{{ directory.serviceStatusErrorMessage() }}</p><button type="button" (click)="retry()">Retry</button></div>
+  } @else if (directory.serviceStatus(); as status) {
+    <dl>
+      <div><dt>Attachment</dt><dd>{{ status.attachment | receiptLabel }}</dd></div>
+      <div><dt>Phase</dt><dd>{{ status.phase === null ? '—' : (status.phase | receiptLabel) }}</dd></div>
+      <div><dt>Generation</dt><dd>{{ status.generation ?? '—' }}</dd></div>
+      <div><dt>Generation recorded</dt><dd>@if (status.generation_recorded_at_ms !== null) { <app-timestamp-display [value]="status.generation_recorded_at_ms" mode="local" /> } @else { — }</dd></div>
+      <div><dt>Binding</dt><dd>{{ status.binding.state | receiptLabel }} · generation {{ status.binding.generation ?? '—' }} · lease {{ status.binding.lease_generation ?? '—' }}</dd></div>
+      @if (status.lease; as lease) {
+        <div><dt>Lease</dt><dd>{{ lease.status | receiptLabel }} · generation {{ lease.generation }}</dd></div>
+        <div><dt>Lease renewed</dt><dd><app-timestamp-display [value]="lease.renewed_at_ms" mode="local" /></dd></div>
+        <div><dt>Lease valid until</dt><dd><app-timestamp-display [value]="lease.valid_until_ms" mode="local" /></dd></div>
+      }
+      <div><dt>Journal watermark</dt><dd>@if (status.journal.last_seq !== null) { #{{ status.journal.last_seq }} @if (status.journal.last_write_ms !== null) { · <app-timestamp-display [value]="status.journal.last_write_ms" mode="local" /> } } @else { No journal entries }</dd></div>
+    </dl>
+    <app-account-desk-guidance anchor="clerk" lens="operator" ariaLabel="Account service guidance" />
+  } @else {
+    <p class="state">No Account service status is available for this account.</p>
+  }
+  @if (directory.serviceStatusShowingStaleLastGood()) {
+    <p class="state state-stale">Showing the last available Account service status from <app-timestamp-display [value]="directory.serviceStatusLastGoodAtMs()" mode="local" />. Refresh is unavailable.</p>
+  }
+</section>

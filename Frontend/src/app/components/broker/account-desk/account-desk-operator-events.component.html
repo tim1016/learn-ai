@@ -1,0 +1,38 @@
+<section class="operations-events" aria-label="Account event timeline" aria-live="polite">
+  <header><h2>Account event timeline</h2><p>Read-only journal history for this account.</p></header>
+  <div class="kind-filters" aria-label="Event kind filters">
+    @for (kind of eventKinds; track trackKind($index, kind)) {
+      <button type="button" [attr.aria-pressed]="selected(kind)" (click)="toggleKind(kind)">{{ kind | receiptLabel }}</button>
+    }
+  </div>
+  @if (store.operationsLoading() && !store.operationsHasLastGood()) {
+    <p class="state">Loading account event history…</p>
+  } @else if (store.operationsErrorMessage() && !store.operationsHasLastGood()) {
+    <div class="state state-error" role="alert"><p>{{ store.operationsErrorMessage() }}</p><button type="button" (click)="retry()">Retry</button></div>
+  } @else if (store.operationRows().length === 0) {
+    <p class="state">No account journal events match this view.</p>
+  } @else {
+    <ol>
+      @for (row of store.operationRows(); track trackEvent($index, row)) {
+        <li>
+          <div><strong>{{ row.kind | receiptLabel }}</strong><app-timestamp-display [value]="row.occurred_at_ms" mode="local" /></div>
+          <p>{{ row.operator_detail }}</p>
+          @if (row.evidence_refs.length > 0) {
+            <ul aria-label="Event evidence">
+              @for (evidence of row.evidence_refs; track trackEvidence($index, evidence)) {
+                <li><span>{{ evidence.source | receiptLabel }}:</span> <code>{{ evidence.ref }}</code></li>
+              }
+            </ul>
+          }
+          <app-account-desk-guidance anchor="event" [subjectKey]="row.event_id" lens="operator" ariaLabel="Event guidance" />
+        </li>
+      }
+    </ol>
+  }
+  @if (store.operationsShowingStaleLastGood()) {
+    <p class="state state-stale">Showing the last available event history from <app-timestamp-display [value]="store.operationsLastGoodAtMs()" mode="local" />. Refresh is unavailable.</p>
+  }
+  @if (store.nextBeforeSeq() !== null) {
+    <button type="button" [disabled]="store.operationsLoading()" (click)="loadOlder()">Load older</button>
+  }
+</section>

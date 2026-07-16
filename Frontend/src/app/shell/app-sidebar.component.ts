@@ -83,7 +83,7 @@ const NAV: NavGroup[] = [
     icon: 'pi pi-link',
     items: [
       { label: 'Broker Status', route: '/broker' },
-      { label: 'Account Monitor', route: '/broker/account-monitor' },
+      { label: 'Accounts', route: '/broker/accounts' },
       { label: 'Orders', route: '/broker/orders' },
       { label: 'Reconciliation', route: '/broker/reconciliation' },
       { label: 'Session Mirror', route: '/broker/session-mirror' },

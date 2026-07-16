@@ -2259,6 +2259,29 @@ class OperatorSurface(BaseModel):
     # placement. Frontend consumes this projection verbatim.
     notice_placement: OperatorSurfaceNoticePlacement = Field(default_factory=OperatorSurfaceNoticePlacement)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _upgrade_v2_blockers(cls, value: object) -> object:
+        """Keep persisted v2 ``run_status`` surfaces readable after routing was added."""
+
+        if not isinstance(value, dict) or value.get("schema_version", 2) != 2:
+            return value
+        blockers = value.get("blockers")
+        if not isinstance(blockers, list):
+            return value
+        upgraded = dict(value)
+        upgraded["blockers"] = [
+            {
+                **blocker,
+                "anchor": blocker.get("anchor", {"kind": "surface", "subject_key": None}),
+                "audience": blocker.get("audience", "operator"),
+            }
+            if isinstance(blocker, dict)
+            else blocker
+            for blocker in blockers
+        ]
+        return upgraded
+
 
 LifecycleChartStatus = Literal[
     "passed",

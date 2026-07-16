@@ -1,0 +1,4 @@
+.account-roster { display: grid; gap: 1rem; max-width: 70rem; margin: 0 auto; padding: 1rem; }
+.account-roster header h1, .account-roster header p { margin: 0; }
+.roster-list { display: grid; gap: .75rem; margin: 0; padding: 0; list-style: none; }
+.roster-list button { display: grid; gap: .3rem; width: 100%; padding: 1rem; text-align: left; }

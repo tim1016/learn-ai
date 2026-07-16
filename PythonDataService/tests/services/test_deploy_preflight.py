@@ -151,7 +151,7 @@ def test_fleet_contamination_blocks_deploy() -> None:
     blocker = next(blocker for blocker in blockers if blocker.condition.id == "fleet_contaminated")
 
     assert blocker.primary_move is not None
-    assert blocker.primary_move.action.route == "/broker/account-monitor"
+    assert blocker.primary_move.action.route == "/broker/accounts"
     assert blocker.applies_to == "both"
 
 
@@ -182,6 +182,9 @@ def test_every_blocker_satisfies_pairing_invariant() -> None:
 
     assert len(blockers) >= 6
     for blocker in blockers:
+        assert blocker.anchor.kind == "surface"
+        assert blocker.anchor.subject_key is None
+        assert blocker.audience == "operator"
         if blocker.disposition in ("fix_here", "fix_elsewhere"):
             assert blocker.primary_move is not None
         if blocker.disposition == "wait":

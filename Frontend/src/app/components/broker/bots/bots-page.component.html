@@ -42,8 +42,8 @@
   @if (accountFreezeBanner(); as banner) {
     <app-account-freeze-banner
       [banner]="banner"
-      actionLabel="Open Account Monitor"
-      (actionClicked)="openAccountMonitor()"
+      actionLabel="Open Accounts"
+      (actionClicked)="openAccounts()"
     />
   } @else if (accountTriageError(); as message) {
     <p class="load-error" role="status">{{ message }}</p>

@@ -12,10 +12,13 @@ from app.schemas.account_truth import (
     AccountTruthResponse,
     AccountTruthSeverity,
 )
+from app.schemas.journal_cures import AccountRecoveryFlattenCandidate
 from app.schemas.live_runs import GateResult
+from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCopy
 
 AccountReconciliationState = Literal["CLEAN", "NOT_PROVEN"]
 AccountExposureResolution = Literal["flat", "accepted_override", "unresolved"]
+AccountTriageVerdictState = Literal["FROZEN", "NOT_PROVEN", "NEEDS_ATTENTION", "CLEAN"]
 AccountConditionType = Literal[
     "exposure_freeze",
     "account_freeze",
@@ -178,6 +181,28 @@ class AccountObservationView(BaseModel):
     history: list[AccountObservationHistoryEvent] = Field(default_factory=list)
 
 
+class AccountTriageVerdictMove(BaseModel):
+    """One backend-authored navigation affordance for the Account desk spine."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    label: str = Field(min_length=1, max_length=160)
+    route: str = Field(min_length=1, max_length=256, pattern=r"^/")
+    fragment: str | None = Field(default=None, max_length=128)
+
+
+class AccountTriageVerdict(BaseModel):
+    """Dominant server-owned account state for the Account desk verdict spine."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: AccountTriageVerdictState
+    headline: str = Field(min_length=1, max_length=160)
+    detail: str = Field(min_length=1, max_length=512)
+    primary_move: AccountTriageVerdictMove | None = None
+    operator_attention_count: int = Field(ge=0)
+
+
 class AccountTriageResponse(BaseModel):
     """Thin account-scoped recovery projection over existing authorities."""
 
@@ -190,6 +215,7 @@ class AccountTriageResponse(BaseModel):
     summary_headline: str = Field(min_length=1)
     summary_detail: str = Field(min_length=1)
     overall_gate_result: GateResult
+    verdict: AccountTriageVerdict
     account_reconciliation_receipt: AccountReconciliationReceipt | None = None
     account_reconciliation_valid_until_ms: int | None = Field(default=None, ge=0)
     reconciliation_automation_policy: AccountReconciliationAutomationPolicy
@@ -199,6 +225,8 @@ class AccountTriageResponse(BaseModel):
     freeze_banner: AccountFreezeBanner | None = None
     clear_freeze_actionable: bool = False
     affected_bots: list[AccountTriageBotRef] = Field(default_factory=list)
+    recovery_flatten_candidates: list[AccountRecoveryFlattenCandidate] = Field(default_factory=list)
+    operator_blockers: list[OperatorBlocker] = Field(default_factory=list)
 
 
 class LegacyStaleClaimCandidate(BaseModel):
@@ -214,6 +242,7 @@ class LegacyStaleClaimCandidate(BaseModel):
     claimed_quantity: int
     proof_summary: str = Field(min_length=1, max_length=512)
     proved_at_ms: int = Field(ge=0)
+    confirmation: OperatorConfirmationCopy
 
 
 class LegacyStaleClaimCandidatesResponse(BaseModel):

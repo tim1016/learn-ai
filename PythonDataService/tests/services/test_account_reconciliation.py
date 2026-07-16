@@ -12,6 +12,8 @@ from app.broker.ibkr.account_truth import compose_account_truth
 from app.broker.ibkr.models import (
     IbkrAccountSummary,
     IbkrConnectionHealth,
+    IbkrOrderEvent,
+    IbkrOrderSpec,
     IbkrPosition,
     IbkrPositionsSnapshot,
 )
@@ -21,6 +23,7 @@ from app.engine.live.account_artifacts import (
     AccountClerkLease,
     AccountFreezeEvidence,
     AccountInstanceBinding,
+    AccountOwnerGeneration,
     account_artifacts_root,
     advance_account_clerk_generation,
     append_account_event,
@@ -29,8 +32,11 @@ from app.engine.live.account_artifacts import (
     write_account_clerk_lease,
     write_account_freeze,
     write_account_instance_binding,
+    write_account_owner_generation,
 )
+from app.engine.live.account_clerk_journal import AccountClerkJournal
 from app.engine.live.account_observation_lease import assess_account_observation_lease
+from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.schemas.account_reconciliation import AccountConditionType, AccountCureAction
 from app.schemas.account_truth import (
     AccountTruthEvidenceGap,
@@ -563,6 +569,9 @@ def test_auto_reconcile_replaces_receipt_after_new_bot_execution(tmp_path: Path)
     assert [row.exec_id for row in replacement.account_truth.executions] == ["exec-1"]
     triage = service.triage(account_id="DU1234567", now_ms=1_780_000_003_500)
     assert triage.overall_gate_result.status == "pass"
+    assert triage.verdict.state == "CLEAN"
+    assert triage.verdict.primary_move is None
+    assert triage.verdict.operator_attention_count == 0
     assert triage.account_reconciliation_valid_until_ms == replacement.expires_at_ms
     assert triage.conditions == []
 
@@ -754,11 +763,114 @@ def test_triage_without_receipt_is_unknown(tmp_path: Path) -> None:
     triage = service.triage(account_id="DU1234567", now_ms=1_780_000_002_000)
 
     assert triage.overall_gate_result.status == "unknown"
+    assert triage.verdict.state == "NOT_PROVEN"
+    assert triage.verdict.primary_move is not None
     assert triage.gate_rows[0].gate_id == "account.reconciliation"
     assert triage.gate_rows[0].status == "unknown"
     assert [(row.condition_type, row.cure_action) for row in triage.conditions] == [
         ("evidence_stale", "reconcile_now")
     ]
+
+
+def test_triage_authors_only_an_exact_single_instrument_recovery_flatten_move(tmp_path: Path) -> None:
+    binding = _retired_binding()
+    write_account_instance_binding(tmp_path, binding)
+    write_account_owner_generation(
+        tmp_path,
+        AccountOwnerGeneration(
+            account_id="DU1234567",
+            generation=7,
+            phase="accepting",
+            recorded_at_ms=1_780_000_002_000,
+            source="test",
+        ),
+    )
+    intent_id = "source-intent"
+    order_ref = f"{binding.bot_order_namespace}:{intent_id}"
+    source_intent = AccountOwnerSubmitIntent(
+        trace_id="source-trace",
+        account_id="DU1234567",
+        strategy_instance_id=binding.strategy_instance_id,
+        run_id=binding.run_id,
+        bot_order_namespace=binding.bot_order_namespace,
+        intent_id=intent_id,
+        order_ref=order_ref,
+        intent_kind="ORDER",
+        order_spec=IbkrOrderSpec(
+            symbol="SPY",
+            sec_type="STK",
+            action="BUY",
+            quantity=2,
+            order_type="MKT",
+            confirm_paper=True,
+            client_order_id="source-order",
+            order_ref=order_ref,
+        ).model_dump(mode="json"),
+        owner_generation=7,
+        created_at_ms=1_780_000_002_000,
+    )
+    journal = AccountClerkJournal(artifacts_root=tmp_path, account_id="DU1234567", now_ms=lambda: 1_780_000_002_000)
+    journal.record_intent(source_intent, validate_intent=lambda _: None)
+    journal.record_broker_event(
+        IbkrOrderEvent(
+            account_id="DU1234567",
+            order_id=1,
+            event_type="fill",
+            order_ref=order_ref,
+            symbol="SPY",
+            side="BUY",
+            fill_quantity=2,
+            exec_id="recovery-candidate-fill",
+            ts_ms=1_780_000_002_001,
+        )
+    )
+
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(positions=[_position(quantity=2)]),
+        now_ms=1_780_000_003_000,
+    )
+    triage = service.triage(
+        account_id="DU1234567",
+        now_ms=1_780_000_003_100,
+    )
+
+    [candidate] = triage.recovery_flatten_candidates
+    assert candidate.intent.intent_kind == "RECOVERY_FLATTEN"
+    assert candidate.intent.owner_generation == 7
+    assert candidate.intent.order_spec["action"] == "SELL"
+    assert candidate.intent.order_spec["quantity"] == 2
+    assert candidate.confirmation.confirm_label == "Submit recovery flatten"
+    [blocker] = [
+        value
+        for value in triage.operator_blockers
+        if value.primary_move is not None
+        and value.primary_move.action.kind == "confirm_in_form"
+        and value.primary_move.action.anchor == "account-recovery-flatten-action"
+    ]
+    assert blocker.primary_move is not None
+    assert blocker.primary_move.target == candidate.intent.intent_id
+
+
+def test_triage_verdict_freeze_precedes_missing_proof(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id="DU1234567",
+            freeze_kind="exposure",
+            reason="Unresolved broker exposure requires review.",
+            source="account_reconciliation",
+            recorded_at_ms=1_780_000_002_100,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+
+    triage = service.triage(account_id="DU1234567", now_ms=1_780_000_002_200)
+
+    assert triage.verdict.state == "FROZEN"
+    assert triage.verdict.primary_move is not None
 
 
 def test_triage_marks_corrupt_instance_registry_unknown(tmp_path: Path) -> None:
@@ -820,6 +932,8 @@ def test_triage_freeze_dominates_clean_receipt(tmp_path: Path) -> None:
     triage = service.triage(account_id="DU1234567", now_ms=1_780_000_003_000)
 
     assert triage.overall_gate_result.status == "freeze"
+    assert triage.verdict.state == "FROZEN"
+    assert triage.verdict.primary_move is not None
     assert triage.clear_freeze_actionable is False
     assert [bot.strategy_instance_id for bot in triage.affected_bots] == ["bot-a"]
     assert {row.gate_id for row in triage.gate_rows} == {
@@ -945,6 +1059,19 @@ def test_triage_marks_crashed_and_no_status_retired_bots_for_retire_replace(
     ]
     assert all(row.severity == "critical" for row in triage.conditions)
     assert triage.overall_gate_result.status == "block"
+    assert triage.verdict.state == "NEEDS_ATTENTION"
+    assert triage.verdict.primary_move is not None
+    assert triage.verdict.primary_move.route == "/broker/accounts/DU1234567"
+    assert triage.verdict.primary_move.fragment == "account-desk-recovery-controls"
+    assert triage.verdict.operator_attention_count == 3
+    duplicate_projection = account_reconciliation_module._account_triage_verdict(
+        account_id="DU1234567",
+        reconciliation_gate=triage.gate_rows[0],
+        gate_rows=triage.gate_rows,
+        conditions=[*triage.conditions, *triage.conditions],
+        freeze=None,
+    )
+    assert duplicate_projection.operator_attention_count == 3
     assert triage.summary_headline == "Account recovery needs attention"
     assert "crashed-bot ended from a crash" in triage.summary_detail
 

@@ -1,0 +1,16 @@
+<label class="account-switcher">
+  <span>Account</span>
+  <select [value]="accountId()" aria-label="Account" (change)="choose($event)">
+    @if (!routeAccountIsInRoster()) {
+      <option [value]="accountId()">{{ accountId() }}</option>
+    }
+    @for (row of directory.rosterRows(); track row.account_id) {
+      <option [value]="row.account_id">{{ row.account_id }}</option>
+    }
+  </select>
+</label>
+@if (directory.rosterShowingStaleLastGood()) {
+  <span class="state state-stale">Account list may be stale.</span>
+} @else if (directory.rosterErrorMessage()) {
+  <span class="state state-error">Account list is unavailable.</span>
+}

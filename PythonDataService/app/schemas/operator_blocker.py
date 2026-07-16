@@ -12,8 +12,53 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Disposition = Literal["fix_here", "fix_elsewhere", "wait", "terminal"]
-OperatorHost = Literal["bot_cockpit", "deploy_preflight", "fleet_roster", "account_monitor"]
+OperatorHost = Literal[
+    "bot_cockpit",
+    "deploy_preflight",
+    "fleet_roster",
+    "account_monitor",
+    "account_desk",
+]
 ConditionScope = Literal["bot", "account", "broker", "fleet", "host", "strategy"]
+OperatorBlockerAnchorKind = Literal[
+    "surface",
+    "verdict",
+    "lease",
+    "clerk",
+    "reconciliation",
+    "holdings_row",
+    "event",
+    "cure_tools",
+]
+OperatorBlockerAudience = Literal["trader", "operator", "both"]
+
+_SUBJECT_KEY_ANCHOR_KINDS: frozenset[OperatorBlockerAnchorKind] = frozenset(
+    {"holdings_row", "event"}
+)
+
+
+class OperatorBlockerAnchor(BaseModel):
+    """Semantic Account-desk location for one blocker projection.
+
+    ``subject_key`` is an opaque routing token. It is never display text and
+    must therefore pass through unchanged to the host that owns the anchor.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: OperatorBlockerAnchorKind
+    subject_key: str | None
+
+    @model_validator(mode="after")
+    def _subject_key_matches_anchor_kind(self) -> OperatorBlockerAnchor:
+        if self.kind in _SUBJECT_KEY_ANCHOR_KINDS and not self.subject_key:
+            raise ValueError(f"{self.kind} anchor requires a subject_key")
+        if self.kind not in _SUBJECT_KEY_ANCHOR_KINDS and self.subject_key is not None:
+            raise ValueError(f"{self.kind} anchor must not carry a subject_key")
+        return self
+
+
+SURFACE_ANCHOR = OperatorBlockerAnchor(kind="surface", subject_key=None)
 
 
 class NavigateAction(BaseModel):
@@ -99,10 +144,19 @@ class OperatorCondition(BaseModel):
 
 
 class OperatorBlocker(BaseModel):
+    """Host-scoped, backend-authored guidance for one operator condition.
+
+    Audience is presentational routing and confers no permission. Frontends
+    render this backend-authored guidance and must never infer a cure from a
+    reason code.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     condition: OperatorCondition
     host: OperatorHost
+    anchor: OperatorBlockerAnchor
+    audience: OperatorBlockerAudience
     disposition: Disposition
     headline: str
     detail: str | None = None
@@ -117,6 +171,8 @@ class OperatorBlocker(BaseModel):
         condition_id: str,
         scope: ConditionScope,
         host: OperatorHost,
+        anchor: OperatorBlockerAnchor,
+        audience: OperatorBlockerAudience,
         disposition: Disposition,
         headline: str,
         detail: str | None,
@@ -134,6 +190,8 @@ class OperatorBlocker(BaseModel):
                 evidence=evidence or {},
             ),
             host=host,
+            anchor=anchor,
+            audience=audience,
             disposition=disposition,
             headline=headline,
             detail=detail,

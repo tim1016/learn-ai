@@ -1,0 +1,41 @@
+<section class="journal-cure" aria-labelledby="account-desk-journal-cure-title">
+  <header>
+    <h3 id="account-desk-journal-cure-title">Journal cure</h3>
+    <p>Request a fresh Clerk claim preview before preparing an immutable adjustment.</p>
+  </header>
+  <div class="fields">
+    <label for="account-desk-journal-namespace">Namespace</label>
+    <input id="account-desk-journal-namespace" [value]="namespace()" (input)="update('namespace', $event)" />
+    <label for="account-desk-journal-symbol">Symbol</label>
+    <input id="account-desk-journal-symbol" [value]="symbol()" (input)="update('symbol', $event)" />
+    <button type="button" [disabled]="loading()" (click)="previewCure()">
+      {{ loading() ? 'Loading preview…' : 'Preview claim' }}
+    </button>
+  </div>
+  @if (errorMessage(); as errorMessage) {
+    <p class="error" role="alert">{{ errorMessage }}</p>
+  }
+  @if (preview(); as preview) {
+    <section class="preview" aria-label="Journal cure preview">
+      <p>
+        Server claim <code>{{ preview.bot_order_namespace }}</code> · <code>{{ preview.symbol }}</code> ·
+        {{ preview.journal_quantity }}.
+      </p>
+      <p>Preview state: <span class="mono">{{ preview.reason_code | receiptLabel }}</span>.</p>
+      @if (preview.can_cure) {
+        <p>Required adjustment direction: {{ preview.required_adjustment_sign | receiptLabel }}.</p>
+        <div class="fields">
+          <label for="account-desk-journal-quantity">Signed adjustment</label>
+          <input id="account-desk-journal-quantity" type="number" [value]="quantity()" (input)="update('quantity', $event)" />
+          <label for="account-desk-journal-evidence">Evidence reference</label>
+          <input id="account-desk-journal-evidence" [value]="evidenceRef()" (input)="update('evidenceRef', $event)" />
+          <label for="account-desk-journal-reason">Operator reason</label>
+          <textarea id="account-desk-journal-reason" rows="3" [value]="reason()" (input)="update('reason', $event)"></textarea>
+          <button type="button" [disabled]="recovery.busy()" (click)="requestConfirmation()">Review exact cure</button>
+        </div>
+      } @else {
+        <p class="state">The current server preview does not declare an actionable cure.</p>
+      }
+    </section>
+  }
+</section>

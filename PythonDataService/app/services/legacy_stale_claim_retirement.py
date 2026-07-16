@@ -33,6 +33,7 @@ from app.schemas.account_reconciliation import (
     LegacyStaleClaimRetirementReceipt,
 )
 from app.schemas.account_truth import AccountTruthPositionRow, AccountTruthResponse
+from app.schemas.operator_blocker import OperatorConfirmationCopy
 from app.utils.timestamps import now_ms_utc
 
 LEGACY_STALE_CLAIM_RETIRED_EVENT = "legacy_stale_claim_retired"
@@ -228,6 +229,12 @@ class LegacyStaleClaimRetirementService:
             claimed_quantity=claim.claimed_quantity,
             proof_summary=broker_proof,
             proved_at_ms=self._now_ms(),
+            confirmation=OperatorConfirmationCopy(
+                title="Retire legacy stale claim",
+                body="Retire the exact legacy claim that the backend has freshly proved safe to remove.",
+                consequence="The server will append a durable retirement receipt and exclude only this legacy claim.",
+                confirm_label="Retire stale claim",
+            ),
         )
 
     def _validate_account_truth(self, claim: LegacyStaleClaim, account_truth: AccountTruthResponse) -> None:

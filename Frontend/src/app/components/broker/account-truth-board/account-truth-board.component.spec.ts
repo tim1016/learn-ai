@@ -71,6 +71,8 @@ function truth(overrides: Partial<AccountTruthResponse> = {}): AccountTruthRespo
           evidence: {},
         },
         host: 'account_monitor',
+        anchor: { kind: 'surface', subject_key: null },
+        audience: 'operator',
         disposition: 'fix_here',
         headline: 'Unknown open broker orders',
         detail: 'At least one live IBKR order has no known namespace.',
@@ -163,7 +165,7 @@ describe('AccountTruthBoardComponent', () => {
     expect(text).toContain('One or more live open orders are foreign or unclaimed.');
   });
 
-  it('renders account-monitor scoped blockers through the shared blocker component', () => {
+  it('renders account-scoped blockers through the shared blocker component', () => {
     TestBed.configureTestingModule({});
     const fixture = TestBed.createComponent(AccountTruthBoardComponent);
     fixture.componentRef.setInput('truth', truth());
@@ -173,6 +175,23 @@ describe('AccountTruthBoardComponent', () => {
     const el = fixture.nativeElement as HTMLElement;
     expect(el.querySelector('app-operator-blocker-list')).toBeTruthy();
     expect(el.textContent).toContain('Run account reconcile');
+  });
+
+  it('does not render Account Desk-scoped guidance in the reconciliation board', () => {
+    TestBed.configureTestingModule({});
+    const fixture = TestBed.createComponent(AccountTruthBoardComponent);
+    fixture.componentRef.setInput('truth', truth({
+      operator_blockers: [{
+        ...truth().operator_blockers[0],
+        host: 'account_desk',
+        anchor: { kind: 'holdings_row', subject_key: '756733' },
+        headline: 'Account Desk-only guidance',
+      }],
+    }));
+    fixture.componentRef.setInput('showOperatorBlockers', true);
+    fixture.detectChanges();
+
+    expect((fixture.nativeElement as HTMLElement).textContent).not.toContain('Account Desk-only guidance');
   });
 
   it('renders optional account, owner, and exposure sections', () => {

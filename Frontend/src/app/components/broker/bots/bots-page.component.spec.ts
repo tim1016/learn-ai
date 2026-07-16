@@ -504,9 +504,7 @@ describe('BotsPageComponent', () => {
 
     expect(broker.reconcileAccount).toHaveBeenCalledWith('DU1234567');
     expect(broker.accountTriage).toHaveBeenCalledWith('DU1234567');
-    expect(navigate).not.toHaveBeenCalledWith(['/broker/account-monitor'], {
-      fragment: 'account-reconciliation-action',
-    });
+    expect(navigate).not.toHaveBeenCalledWith(['/broker/accounts']);
     expect(navigate).not.toHaveBeenCalledWith(['/broker/bots', 'live-running-aapl']);
   });
 
@@ -657,6 +655,8 @@ describe('BotsPageComponent', () => {
       blockers: [{
         condition: { id: 'fleet_contaminated', severity: 'blocking', scope: 'fleet', evidence: {} },
         host: 'deploy_preflight',
+        anchor: { kind: 'surface', subject_key: null },
+        audience: 'operator',
         disposition: 'fix_elsewhere',
         headline: 'Fleet contamination blocks starts',
         detail: 'Clear the account fleet state before starting bots.',
@@ -702,14 +702,12 @@ describe('BotsPageComponent', () => {
     expect(broker.accountTriage).toHaveBeenCalledWith('DU1234567');
 
     const button = Array.from(root.querySelectorAll('button')).find((candidate) =>
-      candidate.textContent?.includes('Open Account Monitor'),
+      candidate.textContent?.includes('Open Accounts'),
     );
     expect(button).toBeDefined();
     button?.click();
 
-    expect(navigate).toHaveBeenCalledWith(['/broker/account-monitor'], {
-      fragment: 'account-reconciliation-action',
-    });
+    expect(navigate).toHaveBeenCalledWith(['/broker/accounts']);
   });
 
   it('filters by lifecycle status without rendering banned readiness vocabulary', async () => {

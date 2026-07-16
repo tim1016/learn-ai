@@ -44,6 +44,16 @@ describe('AppSidebarComponent', () => {
     expect(links.get('Bots')).toBe('/broker/bots');
   });
 
+  it('uses Accounts as the Broker account navigation slot', () => {
+    const fixture = setup();
+
+    clickGroup(fixture, 'Broker');
+
+    const links = navLinks(fixture);
+    expect(links.get('Accounts')).toBe('/broker/accounts');
+    expect(links.has('Account Monitor')).toBe(false);
+  });
+
   it('surfaces live options visualizations in the Options menu', () => {
     const fixture = setup();
 

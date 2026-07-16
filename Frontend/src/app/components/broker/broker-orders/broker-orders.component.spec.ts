@@ -640,7 +640,7 @@ describe('BrokerOrdersComponent — broker provenance', () => {
     expect(broker.placeOrder).not.toHaveBeenCalled();
   });
 
-  it('auto-prefills the flatten cure from the account-monitor deep link', async () => {
+  it('auto-prefills the flatten cure from the legacy deep link', async () => {
     const { fixture, broker, component } = setup(
       [],
       [accountTruthResponse([], [], [], [accountTruthPosition()])],

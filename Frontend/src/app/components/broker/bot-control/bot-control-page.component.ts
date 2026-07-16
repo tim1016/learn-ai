@@ -288,7 +288,7 @@ export class BotControlPageComponent {
       case 'focus_action':
         if (remediation.action === 'mark_poisoned') this.openTypedHalt();
         else if (remediation.action === 'stop') void this.dispatchStop();
-        else this.openAccountMonitor();
+        else this.openAccounts();
         break;
       case 'redeploy':
         this.onGateRedeploy();
@@ -493,10 +493,8 @@ export class BotControlPageComponent {
     }
   }
 
-  openAccountMonitor(): void {
-    void this.router.navigate(['/broker/account-monitor'], {
-      fragment: 'account-reconciliation-action',
-    });
+  openAccounts(): void {
+    void this.router.navigate(['/broker/accounts']);
   }
 
   private openWhyForUnavailableMove(): void {

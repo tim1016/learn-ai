@@ -3,9 +3,11 @@ import type {
   AccountFreezeBanner,
   AccountReconciliationAutomationPolicy,
   AccountReconciliationReceipt,
+  AccountRecoveryFlattenCandidate,
   AccountObservationView,
   AccountTriageBotRef,
   AccountTriageResponse,
+  AccountTriageVerdict,
 } from '../../../api/account-reconciliation.types';
 
 interface AccountTriageFixtureOptions {
@@ -18,10 +20,12 @@ interface AccountTriageFixtureOptions {
   summaryHeadline?: string;
   summaryDetail?: string;
   gate?: Partial<AccountTriageResponse['overall_gate_result']>;
+  verdict?: Partial<AccountTriageVerdict>;
   conditions?: AccountConditionRow[];
   freezeBanner?: AccountFreezeBanner | null;
   clearFreezeActionable?: boolean;
   affectedBots?: AccountTriageBotRef[];
+  recoveryFlattenCandidates?: AccountRecoveryFlattenCandidate[];
 }
 
 interface AccountFreezeConditionOptions {
@@ -66,6 +70,14 @@ export function makeCleanAccountTriage(
       evidence_at_ms: generatedAtMs,
       ...options.gate,
     },
+    verdict: {
+      state: 'CLEAN',
+      headline: 'Account is clean',
+      detail: 'The current reconciliation proof and account checks are passing.',
+      primary_move: null,
+      operator_attention_count: 0,
+      ...options.verdict,
+    },
     account_reconciliation_receipt: receipt,
     account_reconciliation_valid_until_ms:
       options.reconciliationValidUntilMs ?? receipt?.expires_at_ms ?? null,
@@ -88,6 +100,8 @@ export function makeCleanAccountTriage(
     freeze_banner: options.freezeBanner ?? null,
     clear_freeze_actionable: options.clearFreezeActionable ?? false,
     affected_bots: options.affectedBots ?? [],
+    recovery_flatten_candidates: options.recoveryFlattenCandidates ?? [],
+    operator_blockers: [],
   };
 }
 
@@ -149,6 +163,18 @@ export function makeFrozenAccountTriage(
       operator_next_step: condition.operator_next_step ?? 'CHECK_IBKR',
       evidence_at_ms: condition.evidence_at_ms,
       ...options.gate,
+    },
+    verdict: {
+      state: 'FROZEN',
+      headline: 'Account is frozen',
+      detail: options.summaryDetail ?? condition.detail,
+      primary_move: {
+        label: 'Open account desk',
+        route: `/broker/accounts/${accountId}`,
+        fragment: 'account-desk-recovery-controls',
+      },
+      operator_attention_count: 1,
+      ...options.verdict,
     },
     conditions: options.conditions ?? [condition],
     freezeBanner: options.freezeBanner ?? {

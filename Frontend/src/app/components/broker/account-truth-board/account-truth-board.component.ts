@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, input, output } from '@angular/core';
 import type {
   AccountTruthInvariant,
   AccountTruthMessage,
@@ -36,6 +36,9 @@ export class AccountTruthBoardComponent {
   readonly showInvariants = input(false);
   readonly showCaveats = input(true);
   readonly showOperatorBlockers = input(false);
+  readonly accountScopedBlockers = computed(() =>
+    this.truth().operator_blockers.filter((blocker) => blocker.host === 'account_monitor'),
+  );
 
   readonly operatorBlockerMoveSelected = output<OperatorBlockerMoveEvent>();
 

@@ -133,6 +133,9 @@ def test_operator_surface_authors_durable_control_write_blocker() -> None:
         if blocker.condition.id == "durable_control_write_failed"
     )
     assert blocker.condition.severity == "blocking"
+    assert blocker.anchor.kind == "surface"
+    assert blocker.anchor.subject_key is None
+    assert blocker.audience == "operator"
     assert blocker.disposition == "fix_elsewhere"
     assert blocker.applies_to == "both"
     assert blocker.primary_move is not None
@@ -549,7 +552,7 @@ def test_operator_surface_authors_fleet_contamination_blocker() -> None:
 
     assert blocker.disposition == "fix_elsewhere"
     assert blocker.primary_move is not None
-    assert blocker.primary_move.label == "Clear fleet state"
+    assert blocker.primary_move.label == "Open Accounts"
     assert blocker.primary_move.action.kind == "navigate"
 
 

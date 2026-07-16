@@ -15,6 +15,7 @@ import pytest
 
 import app.engine.live.account_clerk as account_clerk_module
 import app.engine.live.account_clerk_journal as account_clerk_journal_module
+import app.engine.live.account_clerk_operations as account_clerk_operations_module
 import app.engine.live.account_clerk_reconciler as account_clerk_reconciler_module
 from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
@@ -537,7 +538,11 @@ async def test_cancel_namespace_bounds_callback_drain_with_broker_deadline(
         await never_drained.wait()
 
     clerk.set_callback_drain(drain)
-    monkeypatch.setattr(account_clerk_module, "ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(
+        account_clerk_operations_module,
+        "ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S",
+        0.01,
+    )
 
     with pytest.raises(AccountClerkCancelNamespaceUncertainError):
         await clerk.cancel_namespace(_cancel_intent("bot-a", "run-a", "cancel-drain-timeout"))
@@ -560,7 +565,7 @@ async def test_cancel_reconciler_bounds_a_hung_namespace_probe(
         await clerk.cancel_namespace(_cancel_intent("bot-a", "run-a", "cancel-hung-probe"))
 
     monkeypatch.setattr(
-        account_clerk_module,
+        account_clerk_operations_module,
         "ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S",
         0.01,
     )
@@ -939,7 +944,11 @@ async def test_recovery_bounds_hung_cancel_and_durably_records_uncertainty(
             ts_ms=START_MS + 1,
         )
     )
-    monkeypatch.setattr(account_clerk_module, "ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(
+        account_clerk_operations_module,
+        "ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S",
+        0.01,
+    )
 
     with pytest.raises(TimeoutError):
         await clerk.submit_recovery_flatten(
@@ -1010,7 +1019,11 @@ async def test_recovery_bounds_hung_callback_drain_and_fences_restart(tmp_path: 
         await never_drained.wait()
 
     clerk.set_callback_drain(drain)
-    monkeypatch.setattr(account_clerk_module, "ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S", 0.01)
+    monkeypatch.setattr(
+        account_clerk_operations_module,
+        "ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S",
+        0.01,
+    )
 
     with pytest.raises(TimeoutError):
         await clerk.submit_recovery_flatten(

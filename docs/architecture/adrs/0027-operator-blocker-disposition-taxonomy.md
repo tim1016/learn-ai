@@ -27,9 +27,9 @@ Introduce a two-layer blocker contract:
 1. `OperatorCondition` is the surface-neutral identity authored once from
    evidence. It carries stable `id`, `scope`, `severity`, and evidence facts.
 2. `OperatorBlocker` is the host-scoped projection of that condition for a
-   specific surface (`bot_cockpit`, `deploy_preflight`, `fleet_roster`, or
-   `account_monitor`). It carries the host-relative disposition, copy, and
-   moves.
+   specific surface (`bot_cockpit`, `deploy_preflight`, `fleet_roster`,
+   `account_monitor`, or `account_desk`). It carries the host-relative
+   disposition, copy, moves, semantic anchor, and audience.
 
 `OperatorCondition` is the only home for condition identity and condition
 severity. `OperatorBlocker` does not duplicate `id` or `severity`; consumers
@@ -50,6 +50,17 @@ detail, labels, confirmation copy, and move targets verbatim; it does not derive
 copy or a cure from reason codes. The same `OperatorCondition.id` may project
 as `fix_elsewhere` on one host and `fix_here` on another host; the condition
 identity and severity do not change when the viewing surface changes.
+
+An Account-desk projection carries a required structured anchor. The closed
+anchor kinds are `surface`, `verdict`, `lease`, `clerk`, `reconciliation`,
+`holdings_row`, `event`, and `cure_tools`. Only `holdings_row` and `event`
+carry a required opaque `subject_key`; fixed-card anchors require
+`subject_key=null`. Hosts route the opaque token without displaying or
+normalizing it. Audience is presentational routing and confers no permission.
+`both` is reserved for projections whose full guidance is identical in both
+lenses; differing guidance is represented by separate projections sharing the
+same condition identity.
+The UI must never infer a cure from a reason code.
 
 `blockers[0]` owns the single visible verb on the bot control verdict
 card unless it is terminal. A terminal blocker owns the card completely:

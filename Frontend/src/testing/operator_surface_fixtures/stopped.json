@@ -232,14 +232,19 @@
       "disposition": "fix_elsewhere",
       "headline": "Fleet state blocks starts",
       "host": "bot_cockpit",
+      "anchor": {
+        "kind": "surface",
+        "subject_key": null
+      },
+      "audience": "operator",
       "primary_move": {
         "action": {
-          "fragment": "account-reconciliation-action",
+          "fragment": null,
           "kind": "navigate",
-          "route": "/broker/account-monitor"
+          "route": "/broker/accounts"
         },
         "confirmation": null,
-        "label": "Clear fleet state",
+        "label": "Open Accounts",
         "target": null
       },
       "secondary_moves": []
@@ -256,14 +261,19 @@
       "disposition": "fix_elsewhere",
       "headline": "Account not proven",
       "host": "bot_cockpit",
+      "anchor": {
+        "kind": "surface",
+        "subject_key": null
+      },
+      "audience": "operator",
       "primary_move": {
         "action": {
-          "fragment": "account-reconciliation-action",
+          "fragment": null,
           "kind": "navigate",
-          "route": "/broker/account-monitor"
+          "route": "/broker/accounts"
         },
         "confirmation": null,
-        "label": "Open account monitor",
+        "label": "Open Accounts",
         "target": null
       },
       "secondary_moves": []
