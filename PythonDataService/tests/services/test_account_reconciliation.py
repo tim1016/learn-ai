@@ -576,6 +576,47 @@ def test_auto_reconcile_replaces_receipt_after_new_bot_execution(tmp_path: Path)
     assert triage.conditions == []
 
 
+def test_account_service_enables_and_silently_renews_quiet_flat_account_proof(
+    tmp_path: Path,
+) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path, ttl_ms=60_000)
+    _write_accepting_clerk_generation(tmp_path, generation=1)
+    policy = service.ensure_automatic_reconciliation(
+        account_id="DU1234567",
+        now_ms=1_780_000_001_000,
+    )
+
+    first = service.observe_account_truth(_truth(), now_ms=1_780_000_002_000)
+    renewed = service.observe_account_truth(_truth(), now_ms=1_780_000_040_000)
+
+    assert policy.enabled is True
+    assert first is not None and first.state == "CLEAN"
+    assert renewed is not None and renewed.state == "CLEAN"
+    assert renewed.expires_at_ms == 1_780_000_100_000
+    events = read_account_events(tmp_path, "DU1234567")
+    assert sum(
+        event["event_type"] == "account_reconciliation_receipt_recorded"
+        for event in events
+    ) == 1
+
+
+def test_account_service_does_not_overwrite_explicit_automation_choice(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    disabled = service.update_automation_policy(
+        account_id="DU1234567",
+        enabled=False,
+        updated_by="operator",
+        now_ms=1_780_000_001_000,
+    )
+
+    unchanged = service.ensure_automatic_reconciliation(
+        account_id="DU1234567",
+        now_ms=1_780_000_002_000,
+    )
+
+    assert unchanged == disabled
+
+
 def test_auto_reconcile_does_not_bless_unclaimed_execution(tmp_path: Path) -> None:
     service = AccountReconciliationService(artifacts_root=tmp_path)
     original = service.write_receipt(

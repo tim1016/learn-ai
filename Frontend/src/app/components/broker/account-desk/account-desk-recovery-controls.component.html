@@ -48,7 +48,7 @@
             <dl><div><dt>Override</dt><dd><code>{{ success.receipt.override_id }}</code></dd></div><div><dt>Account</dt><dd><code>{{ success.receipt.account_id }}</code></dd></div></dl>
           }
           @case ('journal_cure') {
-            <p>Clerk journal cure was accepted.</p>
+            <p>Account service journal cure was accepted.</p>
             <dl><div><dt>Namespace</dt><dd><code>{{ success.receipt.bot_order_namespace }}</code></dd></div><div><dt>Symbol</dt><dd><code>{{ success.receipt.symbol }}</code></dd></div><div><dt>Sequence</dt><dd>{{ success.receipt.journal_seq }}</dd></div><div><dt>Evidence</dt><dd><code>{{ success.receipt.evidence_refs[0] }}</code></dd></div><div><dt>Recorded</dt><dd><app-timestamp-display [value]="success.receipt.recorded_at_ms" mode="local" /></dd></div></dl>
           }
           @case ('legacy_retire') {
@@ -56,7 +56,7 @@
             <dl><div><dt>Receipt</dt><dd><code>{{ success.receipt.receipt_id }}</code></dd></div><div><dt>Strategy</dt><dd><code>{{ success.receipt.strategy_instance_id }}</code></dd></div><div><dt>Run</dt><dd><code>{{ success.receipt.run_id }}</code></dd></div><div><dt>Namespace</dt><dd><code>{{ success.receipt.bot_order_namespace }}</code></dd></div><div><dt>Recorded</dt><dd><app-timestamp-display [value]="success.receipt.retired_at_ms" mode="local" /></dd></div></dl>
           }
           @case ('recovery_flatten') {
-            <p>Clerk recovery flatten was accepted.</p>
+            <p>Account service recovery flatten was accepted.</p>
             <dl><div><dt>Intent</dt><dd><code>{{ success.receipt.recovery_flatten.recorded.intent_id }}</code></dd></div><div><dt>Order reference</dt><dd><code>{{ success.receipt.recovery_flatten.recorded.order_ref }}</code></dd></div><div><dt>Order</dt><dd><code>{{ success.receipt.recovery_flatten.broker_acked.order_id }}</code></dd></div><div><dt>Recorded</dt><dd><app-timestamp-display [value]="success.receipt.recovery_flatten.broker_acked.recorded_at_ms" mode="local" /></dd></div></dl>
           }
         }

@@ -127,6 +127,15 @@ def test_build_child_env_sets_daemon_boot_id_env(tmp_path: Path) -> None:
     assert "PYTHONPATH" in env
 
 
+def test_build_child_env_translates_container_gateway_alias_for_host_child(tmp_path: Path) -> None:
+    mgr = _make_manager(tmp_path)
+    request = HostRunnerStartRequest(run_id="run-1", ibkr_host="host.containers.internal")
+
+    env = mgr._build_child_env(request, ibkr_client_id=70)
+
+    assert env["IBKR_HOST"] == "127.0.0.1"
+
+
 def test_build_child_env_propagates_ibkr_live_runs_root(tmp_path: Path) -> None:
     """Regression test: ``IbkrConfig.live_runs_root`` defaults to the
     container bind-mount path ``/app/artifacts/live_runs``. When the

@@ -129,7 +129,18 @@ def installed_fake_client(monkeypatch, reset_settings):
         "_warm_account_evidence_after_connect",
         fake_warm_account_evidence,
     )
+    release_calls: list[str | None] = []
+
+    async def fake_release_account_service(account_id: str | None) -> None:
+        release_calls.append(account_id)
+
+    monkeypatch.setattr(
+        broker_router,
+        "_release_account_service_after_disconnect",
+        fake_release_account_service,
+    )
     fake.warm_calls = warm_calls  # type: ignore[attr-defined]
+    fake.release_calls = release_calls  # type: ignore[attr-defined]
     yield fake
     ibkr_client_module.set_client(None)
 
@@ -240,6 +251,7 @@ async def test_disconnect_when_connected_calls_disconnect(installed_fake_client)
     # state to False so the AutoReconnectMonitor stops auto-reconnecting.
     assert fake.desired_connected is False
     assert False in fake.set_desired_calls
+    assert fake.release_calls == ["DU1234567"]  # type: ignore[attr-defined]
 
 
 async def test_connect_endpoint_sets_desired_connected_true(installed_fake_client):
@@ -302,6 +314,7 @@ async def test_warm_account_evidence_timeout_is_recoverable(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    from app.engine.live import host_daemon_client
     from app.routers import broker as broker_router
     from app.services import account_truth_refresh
 
@@ -309,6 +322,7 @@ async def test_warm_account_evidence_timeout_is_recoverable(
         await asyncio.Event().wait()
 
     monkeypatch.setattr(account_truth_refresh, "refresh_account_truth_now", never_finishes)
+    monkeypatch.setattr(host_daemon_client, "ensure_account_clerk", never_finishes)
     monkeypatch.setattr(broker_router, "_ACCOUNT_EVIDENCE_WARMUP_TIMEOUT_S", 0.001)
 
     with caplog.at_level(logging.WARNING, logger=broker_router.logger.name):
@@ -318,6 +332,39 @@ async def test_warm_account_evidence_timeout_is_recoverable(
         )
 
     assert "broker connect account-evidence warm-up failed" in caplog.text
+
+
+async def test_warm_account_evidence_attaches_service_before_account_truth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live import host_daemon_client
+    from app.services import account_truth_refresh
+
+    order: list[str] = []
+
+    async def ensure(*_args, **_kwargs) -> dict:
+        order.append("ensure")
+        return {}
+
+    async def refresh(*_args, **_kwargs):
+        order.append("refresh")
+        return None
+
+    monkeypatch.setattr(host_daemon_client, "ensure_account_clerk", ensure)
+    monkeypatch.setattr(account_truth_refresh, "refresh_account_truth_now", refresh)
+    monkeypatch.setattr(
+        "app.services.account_reconciliation.AccountReconciliationService.ensure_automatic_reconciliation",
+        lambda self, **_kwargs: None,
+    )
+
+    from app.routers import broker as broker_router
+
+    await broker_router._warm_account_evidence_after_connect(
+        FakeClient(starts_connected=True),  # type: ignore[arg-type]
+        _build_health(connected=True),
+    )
+
+    assert order == ["ensure", "refresh"]
 
 
 # ─── error translation ────────────────────────────────────────────────

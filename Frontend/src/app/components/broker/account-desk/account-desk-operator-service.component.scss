@@ -1,5 +1,8 @@
 .account-service { display: grid; gap: .75rem; }
 .account-service header h2, .account-service header p { margin: 0; }
+.service-verdict { padding: 1rem; border: 1px solid var(--surface-border, #d4d9e1); border-radius: .75rem; background: var(--surface-card, #fff); }
+.service-verdict strong { display: block; font-size: 1.05rem; }
+.service-verdict p { margin: .35rem 0 0; color: var(--text-muted); }
 .account-service dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: .75rem; margin: 0; }
 .account-service dt { color: var(--text-muted); font-size: .875rem; }
 .account-service dd { margin: .2rem 0 0; }

@@ -4,6 +4,7 @@ import type {
   AccountEffectivePosture,
   AccountRosterRow,
   AccountServiceAttachment,
+  AccountServiceOperatingState,
   AccountServicePhase,
   AccountServiceStatusResponse,
   AccountsRosterResponse,
@@ -130,7 +131,7 @@ export class AccountDeskDirectoryStore {
 }
 
 function isAccountsRosterResponse(value: unknown): value is AccountsRosterResponse {
-  return isRecord(value) && value['schema_version'] === 1 && Array.isArray(value['rows']) &&
+  return isRecord(value) && value['schema_version'] === 2 && Array.isArray(value['rows']) &&
     value['rows'].every(isAccountRosterRow);
 }
 
@@ -146,7 +147,7 @@ function isAccountRosterRow(value: unknown): value is AccountRosterRow {
 
 function isAccountServiceStatusResponse(value: unknown, accountId: string): value is AccountServiceStatusResponse {
   return isRecord(value) &&
-    value['schema_version'] === 1 &&
+    value['schema_version'] === 2 &&
     sameAccountId(value['account_id'], accountId) &&
     isAttachment(value['attachment']) &&
     isNullablePhase(value['phase']) &&
@@ -155,7 +156,10 @@ function isAccountServiceStatusResponse(value: unknown, accountId: string): valu
     isNullableString(value['source']) &&
     isBinding(value['binding']) &&
     isNullableLease(value['lease']) &&
-    isJournalWatermark(value['journal']);
+    isJournalWatermark(value['journal']) &&
+    isOperatingState(value['operating_state']) &&
+    typeof value['headline'] === 'string' &&
+    typeof value['detail'] === 'string';
 }
 
 function sameAccountId(value: unknown, accountId: string): boolean {
@@ -166,7 +170,9 @@ function isAccountServiceSummary(value: unknown): boolean {
   return isRecord(value) &&
     isAttachment(value['attachment']) &&
     isNullablePhase(value['phase']) &&
-    isNullableGeneration(value['generation']);
+    isNullableGeneration(value['generation']) &&
+    isOperatingState(value['operating_state']) &&
+    typeof value['headline'] === 'string';
 }
 
 function isRosterVerdictSummary(value: unknown): boolean {
@@ -206,6 +212,10 @@ function isEffectivePosture(value: unknown): value is AccountEffectivePosture {
 
 function isAttachment(value: unknown): value is AccountServiceAttachment {
   return value === 'ATTACHED' || value === 'UNATTACHED' || value === 'FENCED';
+}
+
+function isOperatingState(value: unknown): value is AccountServiceOperatingState {
+  return value === 'READY' || value === 'STANDBY' || value === 'ATTENTION';
 }
 
 function isNullablePhase(value: unknown): value is AccountServicePhase | null {

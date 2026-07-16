@@ -207,9 +207,9 @@ class JournalCureService:
             can_cure=True,
             reason_code="JOURNAL_CURE_CLAIM_REDUCIBLE",
             confirmation=OperatorConfirmationCopy(
-                title="Append Clerk journal cure",
-                body="Append the exact operator adjustment shown from the current Clerk claim preview.",
-                consequence="The Clerk will durably record this immutable adjustment without changing broker truth.",
+                title="Append Account service journal cure",
+                body="Append the exact operator adjustment shown from the current Account service claim preview.",
+                consequence="The Account service will durably record this immutable adjustment without changing broker truth.",
                 confirm_label="Append journal cure",
             ),
         )

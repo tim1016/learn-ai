@@ -77,12 +77,15 @@ describe('AccountDeskDirectoryStore', () => {
 
 function roster(): AccountsRosterResponse {
   return {
-    schema_version: 1,
+    schema_version: 2,
     rows: [{
       account_id: 'DU1234567',
       broker: 'IBKR',
       effective_posture: 'PAPER_EXECUTION',
-      service: { attachment: 'UNATTACHED', phase: null, generation: null },
+      service: {
+        attachment: 'UNATTACHED', phase: null, generation: null,
+        operating_state: 'ATTENTION', headline: 'Account service needs attention',
+      },
       latest_verdict_summary: { state: 'NOT_PROVEN', headline: 'Verification is required.', generated_at_ms: 1_780_000_000_000 },
       last_verified_at_ms: null,
     }],
@@ -91,7 +94,7 @@ function roster(): AccountsRosterResponse {
 
 function status(accountId: string): AccountServiceStatusResponse {
   return {
-    schema_version: 1,
+    schema_version: 2,
     account_id: accountId,
     attachment: 'UNATTACHED',
     phase: null,
@@ -101,6 +104,9 @@ function status(accountId: string): AccountServiceStatusResponse {
     binding: { state: 'UNATTACHED', generation: null, lease_generation: null },
     lease: null,
     journal: { last_seq: null, last_write_ms: null },
+    operating_state: 'ATTENTION',
+    headline: 'Account service needs attention',
+    detail: 'Account verification cannot stay current until the account service is attached.',
   };
 }
 

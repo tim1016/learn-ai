@@ -13,7 +13,7 @@
           <button type="button" (click)="openDesk(row)" [attr.aria-label]="'Open account ' + row.account_id">
             <strong>{{ row.account_id }}</strong><span>{{ row.broker }}</span>
             <span>Posture: {{ row.effective_posture | receiptLabel }}</span>
-            <span>Account service: {{ row.service.attachment | receiptLabel }}</span>
+            <span>Account service: {{ row.service.headline }}</span>
             <span>Verdict: {{ row.latest_verdict_summary.headline }}</span>
             @if (row.last_verified_at_ms !== null) {
               <span>Verified <app-timestamp-display [value]="row.last_verified_at_ms" mode="local" /></span>

@@ -20,7 +20,11 @@ from app.engine.live.account_artifacts import (
 from app.engine.live.account_clerk_journal import inspect_account_clerk_journal
 from app.engine.live.account_clerk_journal_models import AccountClerkJournalCorruptError
 from app.engine.live.account_identity import normalize_account_id
-from app.engine.live.account_registry import read_account_instance_registry
+from app.engine.live.account_registry import (
+    ACTIVE_INSTANCE_BINDING_STATES,
+    index_account_instance_bindings,
+    read_account_instance_registry,
+)
 from app.schemas.account_directory import (
     AccountEffectivePosture,
     AccountRosterRow,
@@ -29,6 +33,7 @@ from app.schemas.account_directory import (
     AccountServiceBinding,
     AccountServiceJournalWatermark,
     AccountServiceLease,
+    AccountServiceOperatingState,
     AccountServiceStatusResponse,
     AccountServiceSummary,
     AccountsRosterResponse,
@@ -101,6 +106,7 @@ class AccountDirectoryService:
             raise AccountDirectoryError(str(exc)) from exc
 
         attachment = _attachment_state(generation, lease, now_ms=self._now_ms())
+        operating_state, headline, detail = self._operating_copy(account_id, attachment)
         return AccountServiceStatusResponse(
             account_id=account_id,
             attachment=attachment,
@@ -124,6 +130,45 @@ class AccountDirectoryService:
                 last_seq=None if not journal else journal[-1].seq,
                 last_write_ms=None if not journal else journal[-1].recorded_at_ms,
             ),
+            operating_state=operating_state,
+            headline=headline,
+            detail=detail,
+        )
+
+    def _operating_copy(
+        self,
+        account_id: str,
+        attachment: AccountServiceAttachmentState,
+    ) -> tuple[AccountServiceOperatingState, str, str]:
+        if attachment != "ATTACHED":
+            return (
+                "ATTENTION",
+                "Account service needs attention",
+                "Account verification cannot stay current until the account service is attached.",
+            )
+        try:
+            bindings = read_account_instance_registry(self._artifacts_root, account_id)
+        except (AccountArtifactError, OSError, ValueError) as exc:
+            raise AccountDirectoryError(str(exc)) from exc
+        latest_bindings = index_account_instance_bindings(
+            bindings,
+            account_id=account_id,
+        ).latest_by_instance.values()
+        active_count = sum(
+            binding.lifecycle_state in ACTIVE_INSTANCE_BINDING_STATES
+            for binding in latest_bindings
+        )
+        if active_count == 0:
+            return (
+                "STANDBY",
+                "Ready — no bots on duty",
+                "Account verification continues in the background and the service is ready for a bot to attach.",
+            )
+        suffix = "bot is" if active_count == 1 else "bots are"
+        return (
+            "READY",
+            f"Ready — {active_count} {suffix} on duty",
+            "The account service is attached and continuously verifying this account.",
         )
 
     def _known_account_ids(self) -> tuple[str, ...]:
@@ -161,6 +206,8 @@ class AccountDirectoryService:
                 attachment=service.attachment,
                 phase=service.phase,
                 generation=service.generation,
+                operating_state=service.operating_state,
+                headline=service.headline,
             ),
             latest_verdict_summary=AccountRosterVerdictSummary(
                 state=triage.verdict.state,

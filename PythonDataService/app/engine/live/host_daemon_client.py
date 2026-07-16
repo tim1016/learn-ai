@@ -244,6 +244,15 @@ async def ensure_account_clerk(
     )
 
 
+async def release_account_clerk(base_url: str, account_id: str) -> dict:
+    """Release the account-scoped Clerk after an explicit broker disconnect."""
+
+    return await _post_action(
+        f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/release",
+        {},
+    )
+
+
 async def _post_action(url: str, payload: dict, *, timeout: httpx.Timeout = _TIMEOUT) -> dict:
     """Typed POST core for the four mutation forwards.
 

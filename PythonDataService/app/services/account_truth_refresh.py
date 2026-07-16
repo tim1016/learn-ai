@@ -203,6 +203,7 @@ class AccountTruthRefreshLoop:
         account_truth_observer: Callable[..., object] | None = None,
         account_truth_failure_observer: Callable[..., object] | None = None,
         account_journal_observer: Callable[[str], object] | None = None,
+        account_service_ensurer: Callable[[str], Awaitable[object]] | None = None,
     ) -> None:
         self._client = client
         self._artifacts_root = artifacts_root
@@ -219,6 +220,7 @@ class AccountTruthRefreshLoop:
         self._account_truth_observer = account_truth_observer
         self._account_truth_failure_observer = account_truth_failure_observer
         self._account_journal_observer = account_journal_observer
+        self._account_service_ensurer = account_service_ensurer
         self._task: asyncio.Task[None] | None = None
         self._stopped = asyncio.Event()
         self._refresh_lock = asyncio.Lock()
@@ -283,6 +285,9 @@ class AccountTruthRefreshLoop:
                     )
                     self._last_refresh_result = "unavailable"
                     return None
+
+                if self._account_service_ensurer is not None:
+                    await self._account_service_ensurer(health.account_id)
 
                 refresh_kwargs: dict[str, object] = {
                     "context": "account truth refresh loop",

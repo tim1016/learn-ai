@@ -194,6 +194,18 @@ async def lifespan(app: FastAPI):
         artifacts_root = account_truth_artifacts_root(ibkr_settings)
         live_runs_root = Path(ibkr_settings.live_runs_root)
         reconciliation_service = AccountReconciliationService(artifacts_root=artifacts_root)
+
+        async def _ensure_connected_account_service(account_id: str) -> object:
+            from app.engine.live import host_daemon_client
+
+            health = await host_daemon_client.ensure_account_clerk(
+                ibkr_settings.live_runner_daemon_url,
+                account_id,
+                ibkr_host=ibkr_settings.host,
+            )
+            reconciliation_service.ensure_automatic_reconciliation(account_id=account_id)
+            return health
+
         account_truth_refresh_loop = AccountTruthRefreshLoop(
             client=ibkr_client,
             artifacts_root=artifacts_root,
@@ -203,6 +215,7 @@ async def lifespan(app: FastAPI):
                 live_runs_root,
                 account_id=account_id,
             ),
+            account_service_ensurer=_ensure_connected_account_service,
         )
         account_truth_refresh_loop.start()
     else:

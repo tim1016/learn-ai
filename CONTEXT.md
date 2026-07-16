@@ -231,7 +231,13 @@ never branch on those strings. This retires `recovery-flatten-*`,
   do not type broker account identifiers into the deploy form.
 - **Broker Account Authority** — the account-scoped safety and audit boundary
   for one broker-reported paper or live trading account. It governs every bot
-  bound to that account; it is a domain seam, not another runtime service.
+  bound to that account; it is a domain seam, not another runtime service. Its
+  Account service remains present while the approved broker account is
+  connected, including when no bots are on duty.
+- **Account service standby** — the healthy idle state of an attached Broker
+  Account Authority with no bots on duty. Observation and reconciliation
+  continue in the background, so standby is ready rather than fenced.
+  _Avoid_: idle Clerk, no active bot, unattached account
 - **Approved-account pin** — durable operator approval of the exact
   broker-reported account this installation may operate. Paper/live mode alone
   is not sufficient account identity.

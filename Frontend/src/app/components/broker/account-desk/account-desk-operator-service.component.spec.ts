@@ -28,6 +28,8 @@ describe('AccountDeskOperatorServiceComponent', () => {
     });
 
     expect(screen.getByRole('heading', { name: 'Account service' })).toBeTruthy();
+    expect(screen.getByText('Ready — no bots on duty')).toBeTruthy();
+    expect(screen.getByText(/verification continues in the background/i)).toBeTruthy();
     expect(screen.getAllByText(formatTimestampDisplay(1_780_000_000_102, { mode: 'local' })).length).toBeGreaterThan(0);
     expect(screen.queryByText(/clerk/i)).toBeNull();
   });
@@ -35,7 +37,7 @@ describe('AccountDeskOperatorServiceComponent', () => {
 
 function status(): AccountServiceStatusResponse {
   return {
-    schema_version: 1,
+    schema_version: 2,
     account_id: 'DU1234567',
     attachment: 'ATTACHED',
     phase: 'accepting',
@@ -51,5 +53,8 @@ function status(): AccountServiceStatusResponse {
       valid_until_ms: 1_780_000_060_102,
     },
     journal: { last_seq: 9, last_write_ms: 1_780_000_000_103 },
+    operating_state: 'STANDBY',
+    headline: 'Ready — no bots on duty',
+    detail: 'Account verification continues in the background and the service is ready for a bot to attach.',
   };
 }
