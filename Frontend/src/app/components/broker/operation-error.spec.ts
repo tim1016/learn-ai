@@ -246,6 +246,8 @@ describe('toOperationError', () => {
                 evidence: { observed: false },
               },
               host: 'deploy_preflight',
+              anchor: { kind: 'surface', subject_key: null },
+              audience: 'operator',
               disposition: 'fix_elsewhere',
               headline: 'Broker session needs reconnecting',
               detail: 'Reconnect through Account Clerk, then retry the launch.',

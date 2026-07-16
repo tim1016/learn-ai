@@ -750,6 +750,8 @@ async def test_live_instance_summary_carries_readiness_verdict(app_with_root, mo
     assert "readiness_as_of_ms" in row
     assert row["blockers"], "non-ready fleet rows must carry host-scoped blockers"
     assert row["blockers"][0]["host"] == "fleet_roster"
+    assert row["blockers"][0]["anchor"] == {"kind": "surface", "subject_key": None}
+    assert row["blockers"][0]["audience"] == "operator"
     assert row["blockers"][0]["condition"]["id"] == "fleet_member_unreachable"
     assert row["blockers"][0]["disposition"] == "fix_elsewhere"
     assert row["blockers"][0]["primary_move"]["action"] == {

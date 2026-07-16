@@ -71,7 +71,12 @@ from app.schemas.account_truth import (
     AccountTruthSourceFreshness,
     AccountTruthSymbolExposure,
 )
-from app.schemas.operator_blocker import ConfirmInFormAction, OperatorBlocker, OperatorMove
+from app.schemas.operator_blocker import (
+    SURFACE_ANCHOR,
+    ConfirmInFormAction,
+    OperatorBlocker,
+    OperatorMove,
+)
 from app.utils.timestamps import now_ms_utc
 
 logger = logging.getLogger(__name__)
@@ -89,6 +94,8 @@ def _account_monitor_blockers(messages: Sequence[AccountTruthMessage]) -> list[O
             condition_id=message.code,
             scope="account",
             host="account_monitor",
+            anchor=SURFACE_ANCHOR,
+            audience="operator",
             disposition="fix_here",
             headline=message.title,
             detail=message.message,

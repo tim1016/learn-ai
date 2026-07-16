@@ -53,6 +53,8 @@ function formBlocker(
   return {
     condition: { id, severity, scope, evidence: {} },
     host: 'deploy_preflight',
+    anchor: { kind: 'surface', subject_key: null },
+    audience: 'operator',
     disposition,
     headline,
     detail,

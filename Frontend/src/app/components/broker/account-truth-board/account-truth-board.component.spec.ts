@@ -71,6 +71,8 @@ function truth(overrides: Partial<AccountTruthResponse> = {}): AccountTruthRespo
           evidence: {},
         },
         host: 'account_monitor',
+        anchor: { kind: 'surface', subject_key: null },
+        audience: 'operator',
         disposition: 'fix_here',
         headline: 'Unknown open broker orders',
         detail: 'At least one live IBKR order has no known namespace.',

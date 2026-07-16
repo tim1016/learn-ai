@@ -13,6 +13,8 @@ const blocker: OperatorBlocker = {
     evidence: {},
   },
   host: 'bot_cockpit',
+  anchor: { kind: 'surface', subject_key: null },
+  audience: 'operator',
   disposition: 'fix_elsewhere',
   headline: 'Broker disconnected',
   detail: 'Connect the IBKR session before starting this bot.',

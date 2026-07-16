@@ -163,6 +163,8 @@ describe('BrokerConnectivityService fleet state', () => {
                   evidence: {},
                 },
                 host: 'fleet_roster',
+                anchor: { kind: 'surface', subject_key: null },
+                audience: 'operator',
                 disposition: 'fix_elsewhere',
                 headline: 'blocked-bot is blocked',
                 detail: 'Open the bot cockpit.',

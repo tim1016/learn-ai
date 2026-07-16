@@ -232,6 +232,11 @@
       "disposition": "fix_elsewhere",
       "headline": "Fleet state blocks starts",
       "host": "bot_cockpit",
+      "anchor": {
+        "kind": "surface",
+        "subject_key": null
+      },
+      "audience": "operator",
       "primary_move": {
         "action": {
           "fragment": "account-reconciliation-action",
@@ -256,6 +261,11 @@
       "disposition": "fix_elsewhere",
       "headline": "Account not proven",
       "host": "bot_cockpit",
+      "anchor": {
+        "kind": "surface",
+        "subject_key": null
+      },
+      "audience": "operator",
       "primary_move": {
         "action": {
           "fragment": "account-reconciliation-action",

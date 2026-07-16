@@ -176,7 +176,13 @@ from app.schemas.live_runs import (
     SignalTone,
     SizingAuditRow,
 )
-from app.schemas.operator_blocker import DeployPreflightResponse, NavigateAction, OperatorBlocker, OperatorMove
+from app.schemas.operator_blocker import (
+    SURFACE_ANCHOR,
+    DeployPreflightResponse,
+    NavigateAction,
+    OperatorBlocker,
+    OperatorMove,
+)
 from app.services import deploy_preflight as deploy_preflight_service
 from app.services import fleet_contamination as fleet_contamination_service
 from app.services.account_crash_recovery import (
@@ -1730,6 +1736,8 @@ def _fleet_roster_blockers(
             condition_id=condition_id,
             scope="fleet",
             host="fleet_roster",
+            anchor=SURFACE_ANCHOR,
+            audience="operator",
             disposition="fix_elsewhere",
             headline=headline,
             detail=detail,

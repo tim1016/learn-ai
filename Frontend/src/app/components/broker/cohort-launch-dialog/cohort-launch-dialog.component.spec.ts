@@ -18,6 +18,8 @@ describe('CohortLaunchDialogComponent', () => {
       blockers: [{
         condition: { id: 'fleet_contaminated', severity: 'blocking', scope: 'fleet', evidence: {} },
         host: 'deploy_preflight',
+        anchor: { kind: 'surface', subject_key: null },
+        audience: 'operator',
         disposition: 'fix_elsewhere',
         headline: 'Fleet contamination blocks starts',
         detail: 'Clear fleet state.',

@@ -7,12 +7,17 @@ from app.schemas.operator_blocker import (
     NavigateAction,
     OpenRunbookAction,
     OperatorBlocker,
+    OperatorBlockerAnchor,
     OperatorCondition,
     OperatorConfirmationCopy,
     OperatorMove,
     RemoveAction,
     RetireReplaceAction,
 )
+
+
+def _surface_anchor() -> OperatorBlockerAnchor:
+    return OperatorBlockerAnchor(kind="surface", subject_key=None)
 
 
 def _nav_move() -> OperatorMove:
@@ -28,6 +33,8 @@ def test_fix_elsewhere_requires_primary_move() -> None:
             condition_id="broker_disconnected",
             scope="broker",
             host="bot_cockpit",
+            anchor=_surface_anchor(),
+            audience="operator",
             disposition="fix_elsewhere",
             headline="Broker disconnected",
             detail=None,
@@ -43,6 +50,8 @@ def test_wait_must_not_carry_a_move() -> None:
             condition_id="broker_reconnecting",
             scope="broker",
             host="bot_cockpit",
+            anchor=_surface_anchor(),
+            audience="operator",
             disposition="wait",
             headline="Waiting for broker to reconnect",
             detail=None,
@@ -58,6 +67,8 @@ def test_terminal_requires_at_least_one_move() -> None:
             condition_id="run_poisoned",
             scope="bot",
             host="bot_cockpit",
+            anchor=_surface_anchor(),
+            audience="operator",
             disposition="terminal",
             headline="Can't recover",
             detail=None,
@@ -72,6 +83,8 @@ def test_valid_fix_elsewhere_blocker_constructs() -> None:
         condition_id="broker_disconnected",
         scope="broker",
         host="bot_cockpit",
+        anchor=_surface_anchor(),
+        audience="operator",
         disposition="fix_elsewhere",
         headline="Broker disconnected",
         detail="Connect the IBKR session before deploying.",
@@ -89,6 +102,8 @@ def test_terminal_blocker_accepts_replace_and_remove_moves() -> None:
         condition_id="run_poisoned",
         scope="bot",
         host="bot_cockpit",
+        anchor=_surface_anchor(),
+        audience="operator",
         disposition="terminal",
         headline="Can't recover",
         detail="This run is poisoned and cannot be restarted safely.",
@@ -136,6 +151,8 @@ def test_fix_elsewhere_accepts_open_runbook_move() -> None:
         condition_id="orphaned_socket",
         scope="broker",
         host="bot_cockpit",
+        anchor=_surface_anchor(),
+        audience="operator",
         disposition="fix_elsewhere",
         headline="Bot socket is orphaned",
         detail="Review the broker session mirror before restarting.",
@@ -158,6 +175,8 @@ def test_same_condition_can_project_to_different_host_dispositions() -> None:
     cockpit = OperatorBlocker(
         condition=condition,
         host="bot_cockpit",
+        anchor=_surface_anchor(),
+        audience="operator",
         disposition="fix_elsewhere",
         headline="Fleet state blocks starts",
         detail="Clear the account fleet state before starting another bot.",
@@ -175,6 +194,8 @@ def test_same_condition_can_project_to_different_host_dispositions() -> None:
     account_monitor = OperatorBlocker(
         condition=condition,
         host="account_monitor",
+        anchor=_surface_anchor(),
+        audience="operator",
         disposition="fix_here",
         headline="Fleet state blocks starts",
         detail="Clear or reconcile the fleet state on this account.",
@@ -195,3 +216,99 @@ def test_same_condition_can_project_to_different_host_dispositions() -> None:
     assert account_monitor.disposition == "fix_here"
     assert cockpit.host == "bot_cockpit"
     assert account_monitor.host == "account_monitor"
+
+
+@pytest.mark.parametrize(
+    ("kind", "subject_key", "error"),
+    [
+        ("holdings_row", None, "requires a subject_key"),
+        ("event", "", "requires a subject_key"),
+        ("verdict", "DU123", "must not carry a subject_key"),
+        ("surface", "account:DU123", "must not carry a subject_key"),
+    ],
+)
+def test_anchor_rejects_invalid_kind_and_subject_key_pairing(
+    kind: str,
+    subject_key: str | None,
+    error: str,
+) -> None:
+    with pytest.raises(ValidationError, match=error):
+        OperatorBlockerAnchor(kind=kind, subject_key=subject_key)
+
+
+def test_anchor_rejects_unknown_kind() -> None:
+    with pytest.raises(ValidationError):
+        OperatorBlockerAnchor(kind="unknown", subject_key=None)
+
+
+def test_anchor_requires_subject_key_field() -> None:
+    with pytest.raises(ValidationError, match="subject_key"):
+        OperatorBlockerAnchor.model_validate({"kind": "surface"})
+
+
+@pytest.mark.parametrize("required_field", ["anchor", "audience"])
+def test_operator_blocker_requires_projection_routing_fields(required_field: str) -> None:
+    blocker = OperatorBlocker.for_host(
+        condition_id="broker_disconnected",
+        scope="broker",
+        host="account_desk",
+        anchor=_surface_anchor(),
+        audience="operator",
+        disposition="fix_elsewhere",
+        headline="Broker disconnected",
+        detail="Connect the IBKR session before deploying.",
+        primary_move=_nav_move(),
+        applies_to="both",
+    )
+    payload = blocker.model_dump()
+    payload.pop(required_field)
+
+    with pytest.raises(ValidationError, match=required_field):
+        OperatorBlocker.model_validate(payload)
+
+
+def test_anchor_preserves_opaque_subject_key() -> None:
+    anchor = OperatorBlockerAnchor(
+        kind="holdings_row",
+        subject_key="DU123|con_id:265598|SPY  260620C00500000",
+    )
+
+    assert anchor.subject_key == "DU123|con_id:265598|SPY  260620C00500000"
+
+
+def test_operator_blocker_wire_contract_pins_anchor_and_audience_fields() -> None:
+    blocker = OperatorBlocker.for_host(
+        condition_id="fleet_contaminated",
+        scope="fleet",
+        host="account_desk",
+        anchor=OperatorBlockerAnchor(kind="reconciliation", subject_key=None),
+        audience="operator",
+        disposition="fix_elsewhere",
+        headline="Fleet state blocks starts",
+        detail="Clear the account fleet state before starting another bot.",
+        primary_move=_nav_move(),
+        applies_to="both",
+    )
+
+    assert blocker.model_dump() == {
+        "condition": {
+            "id": "fleet_contaminated",
+            "severity": "blocking",
+            "scope": "fleet",
+            "evidence": {},
+        },
+        "host": "account_desk",
+        "anchor": {"kind": "reconciliation", "subject_key": None},
+        "audience": "operator",
+        "disposition": "fix_elsewhere",
+        "headline": "Fleet state blocks starts",
+        "detail": "Clear the account fleet state before starting another bot.",
+        "primary_move": {
+            "label": "Connect the broker",
+            "action": {"kind": "navigate", "route": "/broker", "fragment": None},
+            "target": None,
+            "confirmation": None,
+        },
+        "secondary_moves": [],
+        "applies_to": "both",
+    }

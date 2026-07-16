@@ -2,6 +2,8 @@ import type {
   BlockerSeverity,
   Disposition,
   OperatorBlocker,
+  OperatorBlockerAnchor,
+  OperatorBlockerAudience,
   OperatorConditionScope,
   OperatorHost,
   OperatorMove,
@@ -11,6 +13,8 @@ interface OperatorBlockerFixtureOptions {
   readonly id?: string;
   readonly scope?: OperatorConditionScope;
   readonly host?: OperatorHost;
+  readonly anchor?: OperatorBlockerAnchor;
+  readonly audience?: OperatorBlockerAudience;
   readonly severity?: BlockerSeverity;
   readonly disposition?: Disposition;
   readonly headline?: string;
@@ -46,6 +50,8 @@ export function operatorBlockerFixture(
       evidence: {},
     },
     host: options.host ?? 'bot_cockpit',
+    anchor: options.anchor ?? { kind: 'surface', subject_key: null },
+    audience: options.audience ?? 'operator',
     disposition: options.disposition ?? 'fix_elsewhere',
     headline: options.headline ?? 'Broker disconnected',
     detail: hasOwnOption(options, 'detail')
