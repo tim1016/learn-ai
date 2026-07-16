@@ -1,19 +1,32 @@
-<section class="today-events" aria-label="Today at the desk" aria-live="polite">
-  <header><h2>Today at the desk</h2><p>Account activity narrated by the desk.</p></header>
+<p-panel class="today-events" aria-label="Today at the desk" aria-live="polite">
+  <ng-template #header><h2>Today at the desk</h2></ng-template>
+  <p>Account activity narrated by the desk.</p>
   @if (store.traderLoading() && !store.traderHasLastGood()) {
     <p class="state">Loading today’s account activity…</p>
   } @else if (store.traderErrorMessage() && !store.traderHasLastGood()) {
-    <div class="state state-error" role="alert"><p>{{ store.traderErrorMessage() }}</p><button type="button" (click)="retry()">Retry</button></div>
+    <div class="state state-error" role="alert">
+      <p>{{ store.traderErrorMessage() }}</p>
+      <button pButton type="button" severity="secondary" (click)="retry()">
+        <span class="p-button-label">Retry</span>
+      </button>
+    </div>
   } @else if (store.traderRows().length === 0) {
-    <p class="state">No trader-facing account events have been recorded today.</p>
+    <p class="state">
+      No trader-facing account events have been recorded today.
+    </p>
   } @else {
     <ol>
       @for (row of store.traderRows(); track trackEvent($index, row)) {
-        <li><app-timestamp-display [value]="row.occurred_at_ms" mode="local" /> — {{ row.trader_narration }}</li>
+        <li>
+          <app-timestamp-display [value]="row.occurred_at_ms" mode="local" /> —
+          {{ row.trader_narration }}
+        </li>
       }
     </ol>
   }
   @if (store.traderShowingStaleLastGood()) {
-    <p class="state state-stale">Showing the last available event history. Refresh is unavailable.</p>
+    <p class="state state-stale">
+      Showing the last available event history. Refresh is unavailable.
+    </p>
   }
-</section>
+</p-panel>

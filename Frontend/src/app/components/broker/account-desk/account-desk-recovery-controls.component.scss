@@ -1,8 +1,37 @@
-.account-recovery-controls { display: grid; gap: .75rem; }
-header, h2, h3, p, dl { margin: 0; }
-header { display: grid; gap: .2rem; }
-header p, dt { color: var(--text-color-secondary, #556070); }
-.automation, .receipt { display: grid; gap: .5rem; border: 1px solid var(--surface-border, #d4d9e1); border-radius: .5rem; padding: .75rem; }
-dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: .5rem; }
-dd { margin: .15rem 0 0; }
-.state-error { color: #a30000; }
+.account-recovery-controls {
+  display: grid;
+  gap: 0.75rem;
+}
+header,
+h2,
+h3,
+p,
+dl {
+  margin: 0;
+}
+header {
+  display: grid;
+  gap: 0.2rem;
+}
+header p,
+dt {
+  color: var(--text-secondary);
+}
+.automation {
+  display: grid;
+  gap: 0.5rem;
+  border: 1px solid var(--border-light);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+}
+dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.5rem;
+}
+dd {
+  margin: 0.15rem 0 0;
+}
+.state-error {
+  color: var(--bear);
+}

@@ -11,6 +11,8 @@ from app.broker.ibkr.account_recovery import AccountRecoveryState
 from app.broker.ibkr.account_truth import compose_account_truth
 from app.broker.ibkr.models import IbkrAccountSummary, IbkrConnectionHealth, IbkrPositionsSnapshot
 from app.engine.live.account_artifacts import read_account_events
+from app.engine.live.account_clerk_journal import AccountClerkJournal
+from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import AccountInstanceBinding, write_account_instance_binding
 from app.engine.live.daemon_transport import DaemonResult
 from app.engine.live.fleet import compute_fleet_contamination
@@ -150,6 +152,48 @@ async def test_retire_refuses_live_process(tmp_path: Path) -> None:
             account_truth=_truth(),
             fetch_run_process=_live_process,
         )
+
+
+async def test_post_clerk_retired_sidecar_claim_still_has_a_retirement_remedy(
+    tmp_path: Path,
+) -> None:
+    journal_started_at_ms = _NOW_MS - 20_000
+    journal = AccountClerkJournal(
+        artifacts_root=tmp_path,
+        account_id=_ACCOUNT_ID,
+        now_ms=lambda: journal_started_at_ms,
+    )
+    journal.record_intent(
+        AccountOwnerSubmitIntent(
+            trace_id="journal-before-sidecar",
+            account_id=_ACCOUNT_ID,
+            strategy_instance_id="earlier-bot",
+            run_id="earlier-run",
+            bot_order_namespace="learn-ai/earlier-bot/v1",
+            intent_id="journal-before-sidecar",
+            order_ref="learn-ai/earlier-bot/v1:journal-before-sidecar",
+            intent_kind="ORDER",
+            order_spec={},
+            owner_generation=1,
+            created_at_ms=journal_started_at_ms,
+        ),
+        validate_intent=lambda _intent: None,
+    )
+    _seed_claim(tmp_path)
+    service = LegacyStaleClaimRetirementService(
+        artifacts_root=tmp_path,
+        now_ms=lambda: _NOW_MS,
+    )
+
+    candidates = await service.candidates(
+        account_id=_ACCOUNT_ID,
+        account_truth=_truth(),
+        fetch_run_process=_dead_process,
+    )
+
+    assert [(candidate.strategy_instance_id, candidate.symbol) for candidate in candidates] == [
+        (_SID, "SPY")
+    ]
 
 
 @pytest.mark.parametrize(

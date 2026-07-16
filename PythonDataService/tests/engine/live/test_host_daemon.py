@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import shutil
 import signal
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -451,8 +453,28 @@ def test_preexisting_socket_without_lease_cannot_satisfy_readiness_or_be_unlinke
     manager.reconcile_account_clerks_on_boot()
 
     assert socket_path.exists() is True
+    assert manager._release_account_clerk(account_id) is False
     with pytest.raises(OSError, match="socket exists without a lease PID"):
         manager._ensure_account_clerk(account_id)
+
+
+def test_supervision_continues_when_replacing_one_exited_clerk_raises_value_error(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    manager, _ = daemon_context
+    clerk = SimpleNamespace(generation=4)
+
+    def raise_bad_evidence(_account_id: str) -> None:
+        raise ValueError("bad evidence")
+
+    monkeypatch.setattr(manager._clerk_supervisor, "ensure", raise_bad_evidence)
+
+    with caplog.at_level(logging.ERROR):
+        manager._clerk_supervisor._replace_exited_account_service("DU123", clerk)  # type: ignore[arg-type]
+
+    assert "could not replace exited account Clerk" in caplog.text
 
 
 def _add_managed_process(
@@ -605,6 +627,27 @@ async def test_ensure_clerk_endpoint_runs_generation_handshake(
 
     assert response.status_code == 200
     assert ensured == [("DU123", "127.0.0.1")]
+
+
+async def test_release_clerk_endpoint_detaches_account_service(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, _ = daemon_context
+    released: list[str] = []
+
+    def release(account_id: str) -> bool:
+        released.append(account_id)
+        return True
+
+    monkeypatch.setattr(manager, "_release_account_clerk", release)
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
+        response = await client.post("/accounts/DU123/clerk/release", json={})
+
+    assert response.status_code == 200
+    assert released == ["DU123"]
 
 
 def test_instances_prunes_exited_records_by_ttl_and_count(tmp_path: Path) -> None:
@@ -1048,7 +1091,7 @@ async def test_start_allocates_distinct_ibkr_client_ids_for_sibling_instances(
     assert captured_ids == ["80", "82"]
 
 
-def test_account_clerk_starts_before_first_bot_reaps_after_last_and_takeover_advances_generation(
+def test_account_clerk_starts_before_first_bot_stays_ready_after_last_and_takeover_advances_generation(
     daemon_context: tuple[RunnerProcessManager, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1082,12 +1125,13 @@ def test_account_clerk_starts_before_first_bot_reaps_after_last_and_takeover_adv
 
     bot.returncode = 0
     manager.process_status(RUN_ID)
-    assert clerk.signals == [signal.SIGTERM]
+    assert clerk.signals == []
 
-    clerk.returncode = -9
+    clerk.returncode = 1
     replacement = FakeProcess()
     monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: replacement)
-    restarted = manager._ensure_account_clerk("DU111")
+    manager.reap_exited_processes()
+    restarted = manager._clerks["DU111"]
     assert restarted.generation == 2
 
 
@@ -1147,7 +1191,6 @@ def test_start_keeps_account_clerk_alive_until_bot_registration(
 
     assert thread.is_alive() is False
     assert start_errors == []
-    assert manager._starting_bot_accounts == set()
 
 
 def test_reaper_replaces_exited_clerk_for_active_bot_with_new_generation(
@@ -1195,11 +1238,11 @@ def test_reaper_replaces_exited_clerk_for_active_bot_with_new_generation(
     assert sum("app.engine.live.account_clerk" in command for command in spawned) == 2
 
 
-def test_reaper_does_not_respawn_exited_clerk_after_last_bot_exits(
+def test_reaper_respawns_exited_account_service_after_last_bot_exits(
     daemon_context: tuple[RunnerProcessManager, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#1049 trace: no active bot means a dead Clerk is retired, not respawned."""
+    """An attached account remains supervised while its bot fleet is idle."""
 
     manager, run_dir = daemon_context
     (run_dir / "run_ledger.json").write_text(
@@ -1214,11 +1257,17 @@ def test_reaper_does_not_respawn_exited_clerk_after_last_bot_exits(
     )
     clerk = FakeProcess()
     bot = FakeProcess()
+    replacement = FakeProcess()
     spawned: list[list[str]] = []
+    clerk_spawns = 0
 
     def fake_popen(command: list[str], **_kwargs: Any) -> FakeProcess:
+        nonlocal clerk_spawns
         spawned.append(command)
-        return clerk if "app.engine.live.account_clerk" in command else bot
+        if "app.engine.live.account_clerk" in command:
+            clerk_spawns += 1
+            return clerk if clerk_spawns == 1 else replacement
+        return bot
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
     manager.start(RUN_ID, request=HostRunnerStartRequest())
@@ -1227,8 +1276,8 @@ def test_reaper_does_not_respawn_exited_clerk_after_last_bot_exits(
     clerk.returncode = 1
     manager.reap_exited_processes()
 
-    assert "DU111" not in manager._clerks
-    assert sum("app.engine.live.account_clerk" in command for command in spawned) == 1
+    assert manager._clerks["DU111"].process is replacement
+    assert sum("app.engine.live.account_clerk" in command for command in spawned) == 2
 
 
 def test_hung_clerk_reap_escalates_and_quarantines_client_id_until_confirmed_exit(
@@ -1269,7 +1318,7 @@ def test_hung_clerk_reap_escalates_and_quarantines_client_id_until_confirmed_exi
     clerk_client_id = manager._clerks["DU111"].ibkr_client_id
 
     bot.returncode = 0
-    manager.reap_exited_processes()
+    assert manager._release_account_clerk("DU111") is False
 
     assert clerk.signals == [signal.SIGTERM]
     assert clerk.killed is True
@@ -1278,7 +1327,7 @@ def test_hung_clerk_reap_escalates_and_quarantines_client_id_until_confirmed_exi
     assert manager._clerks["DU111"].process is clerk
 
     clerk.returncode = -9
-    manager.reap_exited_processes()
+    assert manager._release_account_clerk("DU111") is True
 
     assert clerk_client_id not in manager._quarantined_account_clerk_client_ids
     assert "DU111" not in manager._clerks
@@ -1310,10 +1359,15 @@ def test_clerk_alone_receives_write_capability_and_bot_environment_is_forced_rea
 
     monkeypatch.setenv("IBKR_READONLY", "false")
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
-    manager.start(RUN_ID, request=HostRunnerStartRequest())
+    manager.start(
+        RUN_ID,
+        request=HostRunnerStartRequest(ibkr_host="host.containers.internal"),
+    )
 
     assert environments["clerk"]["IBKR_READONLY"] == "false"
+    assert environments["clerk"]["IBKR_HOST"] == "127.0.0.1"
     assert environments["bot"]["IBKR_READONLY"] == "true"
+    assert environments["bot"]["IBKR_HOST"] == "127.0.0.1"
 
 
 def test_health_reap_and_parallel_start_do_not_block_on_clerk_socket_readiness(

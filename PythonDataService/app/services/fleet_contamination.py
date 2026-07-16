@@ -231,7 +231,8 @@ def _collect_legacy_fleet_position_explanations(
             positions = {
                 symbol: quantity
                 for symbol, quantity in envelope.expected_position_by_symbol.items()
-                if (sid, envelope.run_id, symbol.upper(), envelope.bot_order_namespace) not in retired
+                if quantity != 0
+                and (sid, envelope.run_id, symbol.upper(), envelope.bot_order_namespace) not in retired
             }
             if positions:
                 explained[sid] = positions

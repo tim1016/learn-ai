@@ -231,6 +231,28 @@ def test_explicit_parity_observer_writes_only_for_requested_account(tmp_path: Pa
     assert event["event_type"] == "account_clerk_sidecar_journal_parity"
 
 
+def test_legacy_shadow_comparator_drops_zero_position_sidecars(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    envelope = type(
+        "Envelope",
+        (),
+        {
+            "run_id": "run-a",
+            "bot_order_namespace": "learn-ai/bot-a/v1",
+            "expected_position_by_symbol": {"SPY": 0},
+        },
+    )()
+    monkeypatch.setattr(fleet_contamination, "scan_runs_by_instance", lambda _root: {"bot-a": []})
+    monkeypatch.setattr(fleet_contamination, "read_instance_live_state", lambda _root, _sid: envelope)
+    monkeypatch.setattr(fleet_contamination, "_retired_claim_keys_for_run", lambda **_kwargs: frozenset())
+
+    assert fleet_contamination._collect_legacy_fleet_position_explanations(
+        tmp_path / "live_runs"
+    ) == {}
+
+
 def test_legacy_cutover_is_invalidated_once_before_new_shadow_observations(tmp_path: Path, monkeypatch) -> None:
     account = "DU123456"
     (tmp_path / "accounts" / account).mkdir(parents=True)

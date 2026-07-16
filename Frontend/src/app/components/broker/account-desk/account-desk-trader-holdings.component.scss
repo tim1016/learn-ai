@@ -1,15 +1,38 @@
-.holdings { display: grid; gap: 1rem; }
-.holdings-header, .balances { display: flex; gap: 1rem; justify-content: space-between; flex-wrap: wrap; }
-.balances { margin: 0; }
-.balances div { display: grid; gap: .2rem; }
-dt, .eyebrow, .muted { color: var(--text-color-secondary, #556070); font-size: .8rem; margin: 0; }
-dd { margin: 0; }
-.table-wrap { overflow-x: auto; }
-.holdings-table { border-collapse: collapse; width: 100%; }
-.holdings-table th, .holdings-table td { border-bottom: 1px solid var(--surface-border, #d4d9e1); padding: .6rem; text-align: left; }
-.holdings-table .num { text-align: right; }
-.holdings-table .has-blocker td { border-bottom: 0; }
-.holding-blocker td { padding-top: 0; }
-.state { margin: 0; }
-.state-unavailable, .state-error { color: #a30000; }
-.state-stale { color: #8a5a00; }
+.holdings {
+  display: grid;
+  gap: 1rem;
+}
+.holdings-header,
+.balances {
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.balances {
+  margin: 0;
+}
+.balances div {
+  display: grid;
+  gap: 0.2rem;
+}
+dt,
+.eyebrow,
+.muted {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  margin: 0;
+}
+dd {
+  margin: 0;
+}
+.state {
+  margin: 0;
+}
+.state-unavailable,
+.state-error {
+  color: var(--bear);
+}
+.state-stale {
+  color: var(--warn);
+}

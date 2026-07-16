@@ -15,6 +15,22 @@ serialized journal, future lease, and future clerk generation live below that
 account's artifact root, rather than in a daemon or a runner artifact tree.
 The daemon supervises a clerk but does not become a broker-write authority.
 
+The Clerk lifecycle follows the approved connected broker account, not bot
+process presence. Broker connect ensures the account service before Account
+Truth is accepted; stopping the last bot leaves it in healthy standby so
+observation and automatic flat-account reconciliation continue. Only an
+explicit broker-account detach releases the Clerk. A Clerk exit while the
+account remains attached is replaced even when the bot fleet is empty. This
+deliberately rejects the earlier bot-scoped reap policy, which made every
+normal idle account lose observation proof and appear fenced after five
+minutes.
+
+The supervising daemon also owns the container-to-host connection boundary.
+When the data plane is configured with `host.containers.internal` or
+`host.docker.internal`, a host-native Clerk or bot child receives
+`127.0.0.1`. Container aliases are valid coordinates from inside the data
+plane but are not assumed to resolve in the host process namespace.
+
 The existing `AccountOwnerSubmitIntent` remains the intake identity on the
 wire: trace id, account id, strategy instance id, run id, namespace, intent
 id, and namespace-qualified order ref are not translated or re-minted. Clerk

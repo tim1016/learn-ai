@@ -85,6 +85,25 @@
   span {
     color: var(--text-secondary);
   }
+
+  button {
+    justify-self: start;
+    min-height: 2.25rem;
+    margin-top: var(--space-2);
+    padding: 0.35rem 0.75rem;
+    border: 1px solid currentcolor;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: var(--fw-semi);
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
 }
 
 .startup-automation[data-phase='blocked'] {

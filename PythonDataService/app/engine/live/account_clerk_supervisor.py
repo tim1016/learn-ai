@@ -23,6 +23,7 @@ from pathlib import Path
 from subprocess import Popen as _RealPopen
 from typing import TextIO
 
+from app.engine.live.host_runner_policy import host_process_ibkr_host
 from app.schemas.live_runs import AccountClerkHealth
 
 logger = logging.getLogger(__name__)
@@ -349,6 +350,16 @@ class AccountClerkSupervisor:
             clerk_client_id = self._reserve_client_id(account_id)
             return self._spawn_locked(account_id, clerk_client_id=clerk_client_id, ibkr_host=ibkr_host)
 
+    def release(self, account_id: str) -> bool:
+        """Detach the Account service after an explicit broker disconnect."""
+
+        with self.account_lock(account_id):
+            clerk = self._resolve_orphan_locked(account_id)
+            if clerk is None:
+                with self._state_lock:
+                    return account_id not in self._start_blockers
+            return self._reap(account_id, clerk, reason="broker account detached")
+
     def health(self) -> list[AccountClerkHealth]:
         """Build a Clerk health snapshot without holding the lifecycle lock for I/O."""
 
@@ -382,8 +393,13 @@ class AccountClerkSupervisor:
             )
         return rows
 
-    def supervise(self, active_accounts: set[str], *, account_ids: set[str] | None = None) -> None:
-        """Reap idle/exited Clerks and replace only those backing active bots."""
+    def supervise(self, *, account_ids: set[str] | None = None) -> None:
+        """Keep every attached Account service alive, including idle accounts.
+
+        Bot presence does not own the Clerk lifecycle: once ensured for a
+        connected account, the Clerk is retained until an explicit account
+        release or host/process teardown.
+        """
 
         with self._state_lock:
             managed_accounts = set(self._clerks)
@@ -398,23 +414,7 @@ class AccountClerkSupervisor:
                     continue
                 if clerk.process.poll() is not None:
                     self._retire(account_id, clerk)
-                    if account_id in active_accounts:
-                        self._replace_exited_for_active_account(account_id, clerk)
-                    continue
-                if account_id not in active_accounts:
-                    self._reap(account_id, clerk)
-
-    def retire(self, account_id: str, clerk: ManagedClerk) -> None:
-        """Remove a confirmed-dead Clerk and release its quarantined identity."""
-
-        with self.account_lock(account_id):
-            self._retire(account_id, clerk)
-
-    def reap(self, account_id: str, clerk: ManagedClerk) -> bool:
-        """Gracefully reap one Clerk while retaining unsafe identities."""
-
-        with self.account_lock(account_id):
-            return self._reap(account_id, clerk)
+                    self._replace_exited_account_service(account_id, clerk)
 
     def terminate(self, process: subprocess.Popen | AdoptedAccountClerkProcess, *, account_id: str) -> bool:
         """Terminate, wait, and escalate a proven Clerk before replacement."""
@@ -477,6 +477,8 @@ class AccountClerkSupervisor:
             if existing is not None:
                 retired = self._clerks.pop(account_id)
         if retired is not None:
+            with self._state_lock:
+                self._quarantined_client_ids.discard(retired.ibkr_client_id)
             retired.log_handle.close()
 
         from app.engine.live.account_artifacts import (
@@ -649,8 +651,9 @@ class AccountClerkSupervisor:
             env["PYTHONPATH"] = (
                 python_path if not existing_python_path else f"{python_path}{os.pathsep}{existing_python_path}"
             )
-            if ibkr_host is not None:
-                env["IBKR_HOST"] = ibkr_host
+            configured_ibkr_host = ibkr_host if ibkr_host is not None else env.get("IBKR_HOST")
+            if configured_ibkr_host is not None:
+                env["IBKR_HOST"] = host_process_ibkr_host(configured_ibkr_host)
             env["IBKR_CLIENT_ID"] = str(clerk_client_id)
             env["IBKR_MODE"] = "paper"
             env["IBKR_READONLY"] = "false"
@@ -749,7 +752,7 @@ class AccountClerkSupervisor:
         if removed:
             clerk.log_handle.close()
 
-    def _reap(self, account_id: str, clerk: ManagedClerk) -> bool:
+    def _reap(self, account_id: str, clerk: ManagedClerk, *, reason: str) -> bool:
         with self._state_lock:
             self._quarantined_client_ids.add(clerk.ibkr_client_id)
         confirmed_exit = self.terminate(clerk.process, account_id=account_id)
@@ -761,15 +764,20 @@ class AccountClerkSupervisor:
             return False
         self._retire(account_id, clerk)
         logger.info(
-            "reaped account Clerk after last bot exited",
-            extra={"account_id": account_id, "pid": clerk.process.pid, "ibkr_client_id": clerk.ibkr_client_id},
+            "reaped account Clerk",
+            extra={
+                "account_id": account_id,
+                "pid": clerk.process.pid,
+                "ibkr_client_id": clerk.ibkr_client_id,
+                "reason": reason,
+            },
         )
         return True
 
-    def _replace_exited_for_active_account(self, account_id: str, clerk: ManagedClerk) -> None:
+    def _replace_exited_account_service(self, account_id: str, clerk: ManagedClerk) -> None:
         try:
             self.ensure(account_id)
-        except OSError:
+        except Exception:
             logger.exception(
                 "could not replace exited account Clerk",
                 extra={"account_id": account_id, "generation": clerk.generation},

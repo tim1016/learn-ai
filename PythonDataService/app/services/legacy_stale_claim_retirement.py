@@ -18,7 +18,6 @@ from app.engine.live.account_artifacts import (
     append_account_event,
     read_account_events,
 )
-from app.engine.live.account_clerk import AccountClerkJournalCorruptError, read_account_clerk_journal
 from app.engine.live.account_identity import normalize_account_id
 from app.engine.live.account_registry import read_account_instance_registry
 from app.engine.live.daemon_transport import DaemonResult
@@ -168,11 +167,16 @@ class LegacyStaleClaimRetirementService:
         return receipt
 
     def claims_for_account(self, account_id: str) -> list[LegacyStaleClaim]:
-        """Read eligible pre-Clerk claims without altering their sidecars."""
+        """Read eligible obsolete sidecar claims without altering their files.
+
+        A sidecar can become stale before or after the Clerk journal begins.
+        The fresh broker, dead-process, and retired-binding proof chain below
+        owns retirement safety; journal age cannot leave a post-Clerk claim
+        without a remedy.
+        """
 
         canonical_account_id = normalize_account_id(account_id)
         retired = retired_legacy_claim_keys(self._artifacts_root, canonical_account_id)
-        journal_started_at_ms = self._clerk_journal_started_at_ms(canonical_account_id)
         claims: list[LegacyStaleClaim] = []
         live_state_root = self._artifacts_root / "live_state"
         if not live_state_root.is_dir():
@@ -189,8 +193,6 @@ class LegacyStaleClaimRetirementService:
                 continue
             ledger = self._read_claim_ledger(envelope.run_id)
             if ledger is None or normalize_account_id(ledger.account_id) != canonical_account_id:
-                continue
-            if journal_started_at_ms is not None and ledger.created_at_ms >= journal_started_at_ms:
                 continue
             for raw_symbol, raw_quantity in envelope.expected_position_by_symbol.items():
                 if raw_quantity == 0:
@@ -350,17 +352,6 @@ class LegacyStaleClaimRetirementService:
             return read_ledger(self._artifacts_root / "live_runs" / run_id / "run_ledger.json")
         except (OSError, ValueError):
             return None
-
-    def _clerk_journal_started_at_ms(self, account_id: str) -> int | None:
-        try:
-            entries = read_account_clerk_journal(self._artifacts_root, account_id)
-        except AccountClerkJournalCorruptError as exc:
-            raise LegacyStaleClaimRetirementError(
-                "LEGACY_CLAIM_CLERK_JOURNAL_UNREADABLE",
-                "The Account Clerk journal is unreadable; legacy age cannot be proven.",
-            ) from exc
-        return min((entry.recorded_at_ms for entry in entries), default=None)
-
 
 def retired_legacy_claim_keys(
     artifacts_root: Path,

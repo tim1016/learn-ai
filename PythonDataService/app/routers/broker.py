@@ -106,7 +106,9 @@ from app.utils.throttle import TokenBucket, TtlCache
 
 router = APIRouter(prefix="/api/broker", tags=["broker"])
 logger = logging.getLogger(__name__)
+_ACCOUNT_SERVICE_ATTACH_TIMEOUT_S = 6.0
 _ACCOUNT_EVIDENCE_WARMUP_TIMEOUT_S = 5.0
+_pending_account_service_release_account_id: str | None = None
 
 # Computed once at module import — stable for the lifetime of the process.
 # Used by DiagnosticReportDisabled.since_ms so each request doesn't generate
@@ -310,12 +312,15 @@ async def disconnect_endpoint() -> IbkrConnectionHealth:
         try:
             client = get_client()
         except NotConnectedError:
+            await _release_account_service_after_disconnect(None)
             return synthetic_disconnected_health()
         # Operator clicked Disconnect — clear intent so the monitor stops
         # auto-reconnecting against the operator's stated wish (the previous
         # design ignored this and re-connected on the next tick).
         client.set_desired_connected(False)
+        detached_account_id = client.health().account_id
         await _disconnect_with_error_mapping(client)
+        await _release_account_service_after_disconnect(detached_account_id)
         return build_broker_health(client, get_monitor())
 
 
@@ -383,6 +388,7 @@ async def _warm_account_evidence_after_connect(
     """
     if not health.connected or health.account_id is None:
         return
+    from app.engine.live import host_daemon_client
     from app.services.account_reconciliation import AccountReconciliationService
     from app.services.account_truth_refresh import (
         account_truth_artifacts_root,
@@ -395,18 +401,54 @@ async def _warm_account_evidence_after_connect(
     reconciliation_service = AccountReconciliationService(
         artifacts_root=account_truth_artifacts_root()
     )
+
+    settings = get_settings()
     try:
         await asyncio.wait_for(
-            refresh_account_truth_now(
-                client,
-                context="broker connect initialization",
-                health=health,
-                account_truth_observer=reconciliation_service.observe_account_truth,
-                account_truth_failure_observer=reconciliation_service.observe_account_truth_failure,
+            host_daemon_client.ensure_account_clerk(
+                settings.live_runner_daemon_url,
+                health.account_id,
+                ibkr_host=settings.host,
             ),
+            timeout=_ACCOUNT_SERVICE_ATTACH_TIMEOUT_S,
+        )
+    except (
+        OSError,
+        TimeoutError,
+        host_daemon_client.HostDaemonError,
+        host_daemon_client.HostDaemonOutcomeUnknownError,
+    ) as exc:
+        logger.warning(
+            "broker connect account-service attach failed; continuing account-evidence warm-up",
+            extra={
+                "account_id": health.account_id,
+                "connection_state": health.connection_state,
+                "exception": repr(exc),
+            },
+        )
+
+    async def initialize_account_evidence() -> None:
+        reconciliation_service.ensure_automatic_reconciliation(account_id=health.account_id)
+        await refresh_account_truth_now(
+            client,
+            context="broker connect initialization",
+            health=health,
+            account_truth_observer=reconciliation_service.observe_account_truth,
+            account_truth_failure_observer=reconciliation_service.observe_account_truth_failure,
+        )
+
+    try:
+        await asyncio.wait_for(
+            initialize_account_evidence(),
             timeout=_ACCOUNT_EVIDENCE_WARMUP_TIMEOUT_S,
         )
-    except (BrokerError, TimeoutError) as exc:
+    except (
+        BrokerError,
+        OSError,
+        TimeoutError,
+        host_daemon_client.HostDaemonError,
+        host_daemon_client.HostDaemonOutcomeUnknownError,
+    ) as exc:
         logger.warning(
             "broker connect account-evidence warm-up failed",
             extra={
@@ -415,6 +457,38 @@ async def _warm_account_evidence_after_connect(
                 "exception": repr(exc),
             },
         )
+
+
+async def _release_account_service_after_disconnect(account_id: str | None) -> None:
+    """Detach the account authority only after an explicit broker disconnect."""
+
+    global _pending_account_service_release_account_id
+
+    if account_id is not None:
+        _pending_account_service_release_account_id = account_id
+    pending_account_id = _pending_account_service_release_account_id
+    if pending_account_id is None:
+        return
+    from app.engine.live import host_daemon_client
+
+    settings = get_settings()
+    try:
+        await host_daemon_client.release_account_clerk(
+            settings.live_runner_daemon_url,
+            pending_account_id,
+        )
+    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "OUTCOME_UNKNOWN",
+                "message": exc.detail or "Account service detach outcome is unknown; refresh before retrying.",
+            },
+        ) from exc
+    except host_daemon_client.HostDaemonError as exc:
+        raise HTTPException(exc.status_code, detail=exc.detail) from exc
+    else:
+        _pending_account_service_release_account_id = None
 
 
 async def _disconnect_with_error_mapping(client: IbkrClient) -> None:

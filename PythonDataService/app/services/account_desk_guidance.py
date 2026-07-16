@@ -134,7 +134,7 @@ def author_account_desk_blockers(
                 anchor=OperatorBlockerAnchor(kind="cure_tools", subject_key=None),
                 audience="operator",
                 disposition="fix_here",
-                headline="Clerk recovery flatten is ready",
+                headline="Account service recovery flatten is ready",
                 detail="The server has prepared one exact recovery request for a retired namespace.",
                 applies_to="both",
                 primary_move=OperatorMove(

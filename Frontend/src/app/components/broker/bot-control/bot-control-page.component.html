@@ -11,7 +11,7 @@
     </p>
   }
 
-  @if (startupAutomation(); as automation) {
+  @if (startupAutomationDisplay(); as automation) {
     @if (automation.phase !== 'idle') {
       <section
         class="startup-automation"
@@ -23,6 +23,13 @@
         <div>
           <strong>{{ automation.label }}</strong>
           <span>{{ automation.detail }}</span>
+          @if (accountReconcileAvailable()) {
+            <button
+              type="button"
+              [disabled]="busyAction() !== null || readOnly()"
+              (click)="dispatchAccountReconcileNow()"
+            >Reconcile now</button>
+          }
         </div>
       </section>
     }

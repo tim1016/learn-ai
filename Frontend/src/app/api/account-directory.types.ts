@@ -5,11 +5,14 @@ import type { AccountTriageVerdictState } from './account-reconciliation.types';
 export type AccountEffectivePosture = 'PAPER_EXECUTION' | 'UNSAFE' | 'UNKNOWN';
 export type AccountServiceAttachment = 'ATTACHED' | 'UNATTACHED' | 'FENCED';
 export type AccountServicePhase = 'accepting' | 'reconnecting' | 'draining' | 'frozen';
+export type AccountServiceOperatingState = 'READY' | 'STANDBY' | 'ATTENTION';
 
 export interface AccountServiceSummary {
   readonly attachment: AccountServiceAttachment;
   readonly phase: AccountServicePhase | null;
   readonly generation: number | null;
+  readonly operating_state: AccountServiceOperatingState;
+  readonly headline: string;
 }
 
 export interface AccountRosterVerdictSummary {
@@ -28,7 +31,7 @@ export interface AccountRosterRow {
 }
 
 export interface AccountsRosterResponse {
-  readonly schema_version: 1;
+  readonly schema_version: 2;
   readonly rows: readonly AccountRosterRow[];
 }
 
@@ -52,7 +55,7 @@ export interface AccountServiceJournalWatermark {
 }
 
 export interface AccountServiceStatusResponse {
-  readonly schema_version: 1;
+  readonly schema_version: 2;
   readonly account_id: string;
   readonly attachment: AccountServiceAttachment;
   readonly phase: AccountServicePhase | null;
@@ -62,4 +65,7 @@ export interface AccountServiceStatusResponse {
   readonly binding: AccountServiceBinding;
   readonly lease: AccountServiceLease | null;
   readonly journal: AccountServiceJournalWatermark;
+  readonly operating_state: AccountServiceOperatingState;
+  readonly headline: string;
+  readonly detail: string;
 }

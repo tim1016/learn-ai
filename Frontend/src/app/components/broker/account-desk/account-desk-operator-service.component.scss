@@ -1,5 +1,35 @@
-.account-service { display: grid; gap: .75rem; }
-.account-service header h2, .account-service header p { margin: 0; }
-.account-service dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: .75rem; margin: 0; }
-.account-service dt { color: var(--text-muted); font-size: .875rem; }
-.account-service dd { margin: .2rem 0 0; }
+.account-service {
+  display: grid;
+  gap: 0.75rem;
+}
+.account-service h2,
+.account-service p {
+  margin: 0;
+}
+.service-verdict {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border-light);
+  border-radius: 0.75rem;
+  background: var(--bg-elevated);
+}
+.service-verdict strong {
+  font-size: 1.05rem;
+}
+.service-verdict p {
+  color: var(--text-secondary);
+}
+.account-service dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+}
+.account-service dt {
+  color: var(--text-subtle);
+  font-size: 0.875rem;
+}
+.account-service dd {
+  margin: 0.2rem 0 0;
+}

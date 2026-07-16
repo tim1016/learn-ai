@@ -381,6 +381,85 @@ def test_host_process_start_capability_enabled_for_waiting_for_host() -> None:
     assert surface.host_process.start_capability.run_id == _START_RUN
 
 
+def test_host_process_start_capability_includes_selected_observation_lease_gate() -> None:
+    observation = OperatorSurfaceAccountObservation(
+        state="VERIFIED",
+        reason_line="Account verified.",
+        observed_at_ms=_NOW_MS - 1_000,
+        valid_until_ms=_NOW_MS + 59_000,
+    )
+
+    surface = _surface(
+        process=_IDLE_PROC,
+        start_run_id=_START_RUN,
+        start_defaults=_defaults(),
+        account_gate_authority="observation_lease",
+        account_observation=observation,
+    )
+
+    capability = surface.host_process.start_capability
+    assert capability.enabled is True
+    assert [gate.gate_id for gate in capability.gate_results] == [
+        "account.observation_lease",
+        "start.daemon_state",
+    ]
+    assert capability.gate_results[0].status == "pass"
+    assert capability.gate_results[0].operator_reason == "Account verified."
+
+
+def test_host_process_start_capability_blocks_on_selected_revoked_observation_lease() -> None:
+    observation = OperatorSurfaceAccountObservation(
+        state="REVOKED",
+        reason_line="Account verification is overdue.",
+        observed_at_ms=_NOW_MS - 61_000,
+        valid_until_ms=_NOW_MS - 1_000,
+    )
+
+    surface = _surface(
+        process=_IDLE_PROC,
+        start_run_id=_START_RUN,
+        start_defaults=_defaults(),
+        account_gate_authority="observation_lease",
+        account_observation=observation,
+    )
+
+    capability = surface.host_process.start_capability
+    assert capability.enabled is False
+    assert capability.disabled_reason_code == "ACCOUNT_EVIDENCE_STALE"
+    assert capability.run_id is None
+    assert capability.request is None
+    assert len(capability.gate_results) == 1
+    gate = capability.gate_results[0]
+    assert gate.gate_id == "account.observation_lease"
+    assert gate.status == "block"
+    assert gate.source == "account_observation_lease"
+    assert gate.operator_reason == "Account verification is overdue."
+    assert gate.operator_next_step == "RECONCILE_NOW"
+    assert gate.evidence_at_ms == _NOW_MS - 61_000
+
+
+def test_host_process_start_capability_ignores_shadow_lease_under_account_truth_authority() -> None:
+    observation = OperatorSurfaceAccountObservation(
+        state="REVOKED",
+        reason_line="Shadow lease is revoked.",
+        observed_at_ms=_NOW_MS - 1_000,
+        valid_until_ms=_NOW_MS - 1,
+    )
+
+    surface = _surface(
+        process=_IDLE_PROC,
+        start_run_id=_START_RUN,
+        start_defaults=_defaults(),
+        account_gate_authority="account_truth",
+        account_observation=observation,
+    )
+
+    assert surface.host_process.start_capability.enabled is True
+    assert [gate.gate_id for gate in surface.host_process.start_capability.gate_results] == [
+        "start.daemon_state"
+    ]
+
+
 @pytest.mark.parametrize(
     ("daemon_state", "want_state", "want_reason"),
     [

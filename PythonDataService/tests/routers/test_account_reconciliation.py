@@ -1256,6 +1256,61 @@ async def test_account_events_endpoint_projects_singular_opaque_evidence_refs(tm
     }
 
 
+async def test_account_events_hide_healthy_comparison_heartbeats_but_advance_cursor(
+    tmp_path: Path,
+) -> None:
+    from app.main import app
+
+    append_account_event(
+        tmp_path,
+        "DU1234567",
+        {
+            "event_type": "account_clerk_sidecar_journal_parity",
+            "status": "clean",
+            "recorded_at_ms": 1_710_000_000_000,
+        },
+    )
+    append_account_event(
+        tmp_path,
+        "DU1234567",
+        {
+            "event_type": "account_clerk_sidecar_journal_parity",
+            "status": "drift",
+            "recorded_at_ms": 1_710_000_001_000,
+        },
+    )
+    append_account_event(
+        tmp_path,
+        "DU1234567",
+        {
+            "event_type": "account_observation_lease_shadow_comparison",
+            "truth_status": "pass",
+            "lease_status": "pass",
+            "recorded_at_ms": 1_710_000_002_000,
+        },
+    )
+    append_account_event(
+        tmp_path,
+        "DU1234567",
+        {
+            "event_type": "account_observation_lease_revoked",
+            "recorded_at_ms": 1_710_000_003_000,
+        },
+    )
+    service = AccountEventJournalService(artifacts_root=tmp_path)
+    app.dependency_overrides[account_reconciliation.get_account_event_journal_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/accounts/DU1234567/events")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["latest_seq"] == 4
+    assert [row["seq"] for row in response.json()["rows"]] == [4]
+    assert response.json()["rows"][0]["kind"] == "safety"
+
+
 async def test_account_events_endpoint_rejects_invalid_cursors_and_limits(tmp_path: Path) -> None:
     from app.main import app
 
@@ -1358,13 +1413,19 @@ async def test_accounts_roster_exposes_the_current_single_account_without_a_serv
 
     assert roster.status_code == 200
     assert roster.json() == {
-        "schema_version": 1,
+        "schema_version": 2,
         "rows": [
             {
                 "account_id": "DU1234567",
                 "broker": "IBKR",
                 "effective_posture": "PAPER_EXECUTION",
-                "service": {"attachment": "UNATTACHED", "phase": None, "generation": None},
+                "service": {
+                    "attachment": "UNATTACHED",
+                    "phase": None,
+                    "generation": None,
+                    "operating_state": "ATTENTION",
+                    "headline": "Account service needs attention",
+                },
                 "latest_verdict_summary": {
                     "state": expected_triage.verdict.state,
                     "headline": expected_triage.verdict.headline,
@@ -1376,7 +1437,7 @@ async def test_accounts_roster_exposes_the_current_single_account_without_a_serv
     }
     assert status_response.status_code == 200
     assert status_response.json() == {
-        "schema_version": 1,
+        "schema_version": 2,
         "account_id": "DU1234567",
         "attachment": "UNATTACHED",
         "phase": None,
@@ -1386,6 +1447,9 @@ async def test_accounts_roster_exposes_the_current_single_account_without_a_serv
         "binding": {"state": "UNATTACHED", "generation": None, "lease_generation": None},
         "lease": None,
         "journal": {"last_seq": None, "last_write_ms": None},
+        "operating_state": "ATTENTION",
+        "headline": "Account service needs attention",
+        "detail": "Account verification cannot stay current until the account service is attached.",
     }
     assert not (tmp_path / "accounts" / "DU1234567").exists()
 
@@ -1416,6 +1480,88 @@ def test_directory_fences_an_expired_lease_and_keeps_artifact_only_accounts_visi
 
     assert [row.account_id for row in service.roster().rows] == ["DU7654321"]
     assert service.service_status(account_id="DU7654321").attachment == "FENCED"
+    assert service.service_status(account_id="DU7654321").operating_state == "ATTENTION"
+
+
+def test_directory_calls_attached_account_without_bots_ready_standby(tmp_path: Path) -> None:
+    generation = advance_account_clerk_generation(
+        tmp_path,
+        "DU7654321",
+        phase="accepting",
+        recorded_at_ms=100,
+        source="test",
+    )
+    write_account_clerk_lease(
+        tmp_path,
+        AccountClerkLease(
+            account_id="DU7654321",
+            generation=generation.generation,
+            pid=123,
+            ibkr_client_id=80,
+            status="RUNNING",
+            started_at_ms=100,
+            renewed_at_ms=101,
+            valid_until_ms=1_000,
+        ),
+    )
+    service = AccountDirectoryService(
+        artifacts_root=tmp_path,
+        current_account=CurrentBrokerAccount(account_id="DU7654321", is_paper=True),
+        now_ms=lambda: 200,
+    )
+
+    status = service.service_status(account_id="DU7654321")
+
+    assert status.attachment == "ATTACHED"
+    assert status.operating_state == "STANDBY"
+    assert status.headline == "Ready — no bots on duty"
+
+
+def test_directory_uses_latest_binding_per_bot_for_standby_count(tmp_path: Path) -> None:
+    account_id = "DU7654321"
+    for lifecycle_state, recorded_at_ms in (("ACTIVE", 90), ("RETIRED", 100)):
+        write_account_instance_binding(
+            tmp_path,
+            AccountInstanceBinding(
+                account_id=account_id,
+                strategy_instance_id="temporary-validation-bot",
+                run_id="run-validation",
+                bot_order_namespace="learn-ai/temporary-validation-bot/v1",
+                lifecycle_state=lifecycle_state,
+                recorded_at_ms=recorded_at_ms,
+                source="test",
+            ),
+        )
+    generation = advance_account_clerk_generation(
+        tmp_path,
+        account_id,
+        phase="accepting",
+        recorded_at_ms=101,
+        source="test",
+    )
+    write_account_clerk_lease(
+        tmp_path,
+        AccountClerkLease(
+            account_id=account_id,
+            generation=generation.generation,
+            pid=123,
+            ibkr_client_id=80,
+            status="RUNNING",
+            started_at_ms=101,
+            renewed_at_ms=102,
+            valid_until_ms=1_000,
+        ),
+    )
+    service = AccountDirectoryService(
+        artifacts_root=tmp_path,
+        current_account=CurrentBrokerAccount(account_id=account_id, is_paper=True),
+        now_ms=lambda: 200,
+    )
+
+    status = service.service_status(account_id=account_id)
+
+    assert status.operating_state == "STANDBY"
+    assert status.headline == "Ready — no bots on duty"
 
 
 async def test_account_service_status_endpoint_projects_durable_service_evidence(tmp_path: Path) -> None:
@@ -1486,7 +1632,7 @@ async def test_account_service_status_endpoint_projects_durable_service_evidence
 
     assert response.status_code == 200
     assert response.json() == {
-        "schema_version": 1,
+        "schema_version": 2,
         "account_id": account_id,
         "attachment": "ATTACHED",
         "phase": "accepting",
@@ -1502,6 +1648,9 @@ async def test_account_service_status_endpoint_projects_durable_service_evidence
             "valid_until_ms": 1_780_000_060_102,
         },
         "journal": {"last_seq": 1, "last_write_ms": 1_780_000_000_104},
+        "operating_state": "READY",
+        "headline": "Ready — 1 bot is on duty",
+        "detail": "The account service is attached and continuously verifying this account.",
     }
 
 

@@ -78,7 +78,11 @@ from app.engine.live.host_daemon_bot_events import (
     redacted_daemon_path,
     should_record_child_launch_failure,
 )
-from app.engine.live.host_runner_policy import load_policy_env_file, validate_ibkr_host_allowed
+from app.engine.live.host_runner_policy import (
+    host_process_ibkr_host,
+    load_policy_env_file,
+    validate_ibkr_host_allowed,
+)
 from app.engine.live.run_ledger import LiveRunStartDefaults
 from app.engine.strategy.spec.schema import load_spec_from_path
 from app.schemas.broker_session import GatewaySocketsSnapshot
@@ -318,11 +322,6 @@ class RunnerProcessManager:
         self._lease_writer: object | None = None
         self._orphan_candidates: list[object] = []
         self._managed: dict[str, ManagedProcess] = {}
-        # An Account Clerk becomes ready before its dependent bot subprocess is
-        # registered below.  Keep that account visible to the reaper during
-        # that hand-off so it cannot mistake the Clerk for idle and drain its
-        # generation out from under the just-spawned bot.
-        self._starting_bot_accounts: set[str] = set()
         # IDs are reserved while a subprocess is being started outside the
         # registry lock.  A reservation closes the gap between allocation and
         # registration without making a socket readiness wait block every
@@ -768,7 +767,6 @@ class RunnerProcessManager:
             env = self._build_child_env(request, ibkr_client_id=ibkr_client_id)
             log_path = run_dir / "host_daemon.log"
             account_id: str | None = None
-            account_start_claimed = False
             active_binding_written = False
             try:
                 log_handle = log_path.open("a", encoding="utf-8")
@@ -797,9 +795,6 @@ class RunnerProcessManager:
                     # ``_ensure_account_clerk`` before the bot is allowed to
                     # reach any submit surface.  A bot must never race ahead
                     # of the account authority it depends on.
-                    with self._managed_lock:
-                        self._starting_bot_accounts.add(account_id)
-                    account_start_claimed = True
                     self._ensure_account_clerk(account_id, ibkr_host=request.ibkr_host)
                 process = subprocess.Popen(
                     command,
@@ -814,8 +809,6 @@ class RunnerProcessManager:
                 log_handle.close()
                 with self._managed_lock:
                     self._reserved_ibkr_client_ids.discard(ibkr_client_id)
-                    if account_start_claimed and account_id is not None:
-                        self._starting_bot_accounts.discard(account_id)
                 if active_binding_written:
                     try:
                         self._write_account_registry_binding(
@@ -835,8 +828,6 @@ class RunnerProcessManager:
                 log_handle.close()
                 with self._managed_lock:
                     self._reserved_ibkr_client_ids.discard(ibkr_client_id)
-                    if account_start_claimed and account_id is not None:
-                        self._starting_bot_accounts.discard(account_id)
                 record_spawn_launch_failure(
                     run_dir,
                     run_id=run_id,
@@ -858,8 +849,6 @@ class RunnerProcessManager:
                         "Failed to retire account registry binding after host runner spawn failure",
                         extra={"run_id": run_id, "strategy_instance_id": key},
                     )
-                if account_id is not None:
-                    self._reap_account_clerk_if_idle(account_id)
                 raise HostRunnerError(
                     status.HTTP_503_SERVICE_UNAVAILABLE, f"Could not start host runner: {exc}"
                 ) from exc
@@ -877,8 +866,6 @@ class RunnerProcessManager:
                     ibkr_client_id=ibkr_client_id,
                 )
                 self._reserved_ibkr_client_ids.discard(ibkr_client_id)
-                if account_start_claimed and account_id is not None:
-                    self._starting_bot_accounts.discard(account_id)
             logger.info(
                 "Started host live runner for run=%s instance=%s with pid=%s ibkr_client_id=%s",
                 run_id,
@@ -1540,7 +1527,7 @@ class RunnerProcessManager:
         python_path = str(self.repo_root / "PythonDataService")
         existing = env.get("PYTHONPATH")
         env["PYTHONPATH"] = python_path if not existing else f"{python_path}{os.pathsep}{existing}"
-        env["IBKR_HOST"] = request.ibkr_host
+        env["IBKR_HOST"] = host_process_ibkr_host(request.ibkr_host)
         env["IBKR_CLIENT_ID"] = str(ibkr_client_id)
         # A bot submits only through the Account Clerk RPC boundary.  Override
         # any write-capable value inherited from the daemon environment.
@@ -1606,6 +1593,11 @@ class RunnerProcessManager:
             ibkr_host=ibkr_host,
         )
 
+    def _release_account_clerk(self, account_id: str) -> bool:
+        """Release account authority after an explicit broker detach."""
+
+        return self._clerk_supervisor.release(account_id)
+
     @staticmethod
     def _verify_account_clerk_generation(
         *,
@@ -1656,49 +1648,10 @@ class RunnerProcessManager:
 
         return self._clerk_supervisor.health()
 
-    def _reap_account_clerk_if_idle(self, account_id: str) -> None:
-        """Reap one now-idle Clerk through the verified supervisor path."""
-
-        self._supervise_account_clerks(account_ids={account_id})
-
-    def _active_bot_accounts(self) -> set[str]:
-        """Return accounts with a currently live managed bot process."""
-
-        with self._managed_lock:
-            managed_processes = tuple(
-                managed for managed in self._managed.values() if managed.process.poll() is None
-            )
-            accounts = set(self._starting_bot_accounts)
-        for managed in managed_processes:
-            try:
-                account_id, _ = self._account_registry_identity(managed.run_dir)
-            except HostRunnerError:
-                logger.exception(
-                    "could not read account identity while supervising Clerk",
-                    extra={"run_id": managed.run_id, "strategy_instance_id": managed.strategy_instance_id},
-                )
-                continue
-            if account_id is not None:
-                accounts.add(account_id)
-        return accounts
-
-    def _retire_account_clerk(self, account_id: str, clerk: ManagedClerk) -> None:
-        """Compatibility delegate for a confirmed-dead Clerk."""
-
-        self._clerk_supervisor.retire(account_id, clerk)
-
-    def _reap_account_clerk(self, account_id: str, clerk: ManagedClerk) -> bool:
-        """Compatibility delegate for graceful Clerk retirement."""
-
-        return self._clerk_supervisor.reap(account_id, clerk)
-
     def _supervise_account_clerks(self, *, account_ids: set[str] | None = None) -> None:
-        """Keep Clerk authority aligned with the active bot-account set."""
+        """Keep every attached Account service healthy."""
 
-        self._clerk_supervisor.supervise(
-            self._active_bot_accounts(),
-            account_ids=account_ids,
-        )
+        self._clerk_supervisor.supervise(account_ids=account_ids)
 
     def _refresh(self, managed: ManagedProcess) -> None:
         """Settle a managed process if it has exited: stamp ``ended_at_ms``
@@ -2033,6 +1986,21 @@ def create_app(
                     "message": str(exc),
                 },
             ) from exc
+        return process_manager.health()
+
+    @app.post("/accounts/{account_id}/clerk/release", response_model=HostRunnerHealth, dependencies=auth)
+    async def release_account_clerk(account_id: str) -> HostRunnerHealth:
+        """Stop the Account service only for an explicit account detach."""
+
+        released = await run_in_threadpool(process_manager._release_account_clerk, account_id)
+        if not released:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "reason_code": "ACCOUNT_CLERK_RELEASE_UNCONFIRMED",
+                    "message": "The Account service process did not confirm shutdown.",
+                },
+            )
         return process_manager.health()
 
     @app.get("/process", response_model=HostRunnerProcessStatus, dependencies=auth)

@@ -33,6 +33,7 @@ from app.engine.live.host_daemon_client import (
     deploy,
     emergency_flatten_run,
     ensure_account_clerk,
+    release_account_clerk,
     start_run,
     stop_run,
 )
@@ -86,6 +87,24 @@ async def test_ensure_account_clerk_sends_host_side_broker_address() -> None:
 
     assert result == {"clerks": []}
     assert route.calls.last.request.content == b'{"ibkr_host":"127.0.0.1"}'
+
+
+@pytest.mark.asyncio
+async def test_release_account_clerk_uses_timeout_beyond_daemon_shutdown_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_timeout: list[httpx.Timeout] = []
+
+    async def post(_url: str, _payload: dict, *, timeout: httpx.Timeout) -> dict:
+        observed_timeout.append(timeout)
+        return {}
+
+    monkeypatch.setattr(host_daemon_client, "_post_action", post)
+
+    await release_account_clerk(BASE, "DU123")
+
+    assert observed_timeout[0].read is not None
+    assert observed_timeout[0].read > 4.0
 
 
 # ---------------------------------------------------------------------------

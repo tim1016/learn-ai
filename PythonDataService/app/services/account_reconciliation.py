@@ -172,6 +172,25 @@ class AccountReconciliationService:
         )
         return policy
 
+    def ensure_automatic_reconciliation(
+        self,
+        *,
+        account_id: str,
+        updated_by: str = "system.account_service",
+        now_ms: int | None = None,
+    ) -> AccountReconciliationAutomationPolicy:
+        """Enable the account default once without rewriting operator choices."""
+
+        current = self.read_automation_policy(account_id)
+        if current.updated_at_ms != 0:
+            return current
+        return self.update_automation_policy(
+            account_id=account_id,
+            enabled=True,
+            updated_by=updated_by,
+            now_ms=now_ms,
+        )
+
     def observe_account_truth(
         self,
         account_truth: AccountTruthResponse,
@@ -209,7 +228,19 @@ class AccountReconciliationService:
             for execution in account_truth.executions
             if execution.exec_id not in receipted_execution_ids
         ]
+        policy = self.read_automation_policy(canonical_account_id)
         if not unreceipted_executions:
+            if policy.enabled and _automatic_receipt_refresh_due(
+                receipt,
+                now_ms=observed_at_ms,
+                ttl_ms=self._ttl_ms,
+            ):
+                return self._write_automatic_clean_receipt(
+                    account_id=canonical_account_id,
+                    account_truth=account_truth,
+                    now_ms=observed_at_ms,
+                    record_event=receipt is None,
+                )
             return None
         new_executions = [
             execution
@@ -230,14 +261,31 @@ class AccountReconciliationService:
                     "recorded_at_ms": observed_at_ms,
                 },
             )
-        policy = self.read_automation_policy(canonical_account_id)
         if policy.enabled and _all_executions_bot_owned(unreceipted_executions):
-            return self.write_receipt(
-                requested_account_id=canonical_account_id,
+            return self._write_automatic_clean_receipt(
+                account_id=canonical_account_id,
                 account_truth=account_truth,
                 now_ms=observed_at_ms,
+                record_event=True,
             )
         return None
+
+    def _write_automatic_clean_receipt(
+        self,
+        *,
+        account_id: str,
+        account_truth: AccountTruthResponse,
+        now_ms: int,
+        record_event: bool,
+    ) -> AccountReconciliationReceipt | None:
+        candidate = self.compose_receipt(
+            requested_account_id=account_id,
+            account_truth=account_truth,
+            generated_at_ms=now_ms,
+        )
+        if candidate.state != "CLEAN":
+            return None
+        return self._persist_receipt(candidate, record_event=record_event)
 
     def observe_account_truth_failure(
         self,
@@ -416,21 +464,32 @@ class AccountReconciliationService:
             account_truth=account_truth,
             generated_at_ms=generated_at_ms,
         )
+        return self._persist_receipt(receipt, record_event=True)
+
+    def _persist_receipt(
+        self,
+        receipt: AccountReconciliationReceipt,
+        *,
+        record_event: bool,
+    ) -> AccountReconciliationReceipt:
+        """Persist latest proof while journaling only meaningful transitions."""
+
         atomic_write_pydantic_artifact(self.receipt_path(receipt.account_id), receipt)
-        append_account_event(
-            self._artifacts_root,
-            receipt.account_id,
-            {
-                "event_type": "account_reconciliation_receipt_recorded",
-                "receipt_id": receipt.receipt_id,
-                "state": receipt.state,
-                "account_truth_verdict": receipt.account_truth_verdict,
-                "account_truth_severity": receipt.account_truth_severity,
-                "final_gate_result": receipt.final_gate_result.model_dump(mode="json"),
-                "recorded_at_ms": receipt.generated_at_ms,
-                "expires_at_ms": receipt.expires_at_ms,
-            },
-        )
+        if record_event:
+            append_account_event(
+                self._artifacts_root,
+                receipt.account_id,
+                {
+                    "event_type": "account_reconciliation_receipt_recorded",
+                    "receipt_id": receipt.receipt_id,
+                    "state": receipt.state,
+                    "account_truth_verdict": receipt.account_truth_verdict,
+                    "account_truth_severity": receipt.account_truth_severity,
+                    "final_gate_result": receipt.final_gate_result.model_dump(mode="json"),
+                    "recorded_at_ms": receipt.generated_at_ms,
+                    "expires_at_ms": receipt.expires_at_ms,
+                },
+            )
         return receipt
 
     def compose_receipt(
@@ -794,6 +853,17 @@ def _normalize_optional_account_id(account_id: str | None) -> str | None:
         return normalize_account_id(account_id)
     except InvalidAccountIdError:
         return None
+
+
+def _automatic_receipt_refresh_due(
+    receipt: AccountReconciliationReceipt | None,
+    *,
+    now_ms: int,
+    ttl_ms: int,
+) -> bool:
+    """Refresh a quiet flat-account proof before it can become stale."""
+
+    return receipt is None or receipt.expires_at_ms - now_ms <= ttl_ms // 2
 
 
 def _account_observation_view(

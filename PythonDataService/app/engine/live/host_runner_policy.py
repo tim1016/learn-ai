@@ -15,6 +15,12 @@ DEFAULT_IBKR_HOST_ALLOWLIST: frozenset[str] = frozenset(
         "host.docker.internal",
     }
 )
+_CONTAINER_HOST_ALIASES: frozenset[str] = frozenset(
+    {
+        "host.containers.internal",
+        "host.docker.internal",
+    }
+)
 IBKR_HOST_POLICY_ENV_KEYS: tuple[str, ...] = (
     "IBKR_HOST_ALLOWLIST",
     "IBKR_HOST",
@@ -99,10 +105,25 @@ def validate_ibkr_host_allowed(
     return host
 
 
+def host_process_ibkr_host(host: str) -> str:
+    """Translate a container-to-host alias for a host-native broker client.
+
+    The data plane reaches the local Gateway through a container alias, but
+    the daemon launches Clerks and bots directly on that same host. Those
+    child processes must use host loopback; the container alias may not exist
+    in host DNS at all (notably with Podman on macOS).
+    """
+
+    if host.strip().lower() in _CONTAINER_HOST_ALIASES | {"auto"}:
+        return "127.0.0.1"
+    return host
+
+
 __all__ = [
     "DEFAULT_IBKR_HOST_ALLOWLIST",
     "IBKR_HOST_POLICY_ENV_KEYS",
     "allowed_ibkr_hosts",
+    "host_process_ibkr_host",
     "load_policy_env_file",
     "validate_ibkr_host_allowed",
 ]

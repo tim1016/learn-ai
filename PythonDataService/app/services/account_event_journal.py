@@ -61,32 +61,32 @@ _EVENT_PRESENTATION: dict[str, tuple[AccountEventKind, str | None, str]] = {
     "account_clerk_reconciliation_resolved": (
         "reconciliation",
         "Account reconciliation completed.",
-        "Account Clerk reconciliation completed.",
+        "Account service reconciliation completed.",
     ),
     "account_clerk_reconciliation_unhealthy": (
         "reconciliation",
         "Account reconciliation needs attention.",
-        "Account Clerk reconciliation reported an unhealthy result.",
+        "Account service reconciliation reported an unhealthy result.",
     ),
     "account_clerk_reconciliation_iteration_failed": (
         "reconciliation",
         "Account reconciliation needs attention.",
-        "Account Clerk reconciliation iteration failed.",
+        "Account service reconciliation iteration failed.",
     ),
     "account_clerk_operator_recovery_flatten": (
         "safety",
         "Account recovery flatten completed.",
-        "Account Clerk recovery flatten event recorded.",
+        "Account service recovery flatten event recorded.",
     ),
     "account_clerk_event_stream_down": (
         "safety",
         "Broker event evidence is unavailable.",
-        "Account Clerk broker event stream is unavailable.",
+        "Account service broker event stream is unavailable.",
     ),
     "account_clerk_unattributed_broker_event": (
         "activity",
         "Unattributed broker activity needs review.",
-        "Account Clerk recorded unattributed broker activity.",
+        "Account service recorded unattributed broker activity.",
     ),
     "account_owner_generation_recorded": (
         "clerk",
@@ -96,7 +96,27 @@ _EVENT_PRESENTATION: dict[str, tuple[AccountEventKind, str | None, str]] = {
     "account_clerk_generation_recorded": (
         "clerk",
         None,
-        "Account Clerk generation recorded.",
+        "Account service generation recorded.",
+    ),
+    "account_observation_lease_verified": (
+        "reconciliation",
+        "Account verification is current.",
+        "Account observation returned to a verified state.",
+    ),
+    "account_observation_lease_revoked": (
+        "safety",
+        "Account verification needs attention.",
+        "Account observation proof was revoked.",
+    ),
+    "account_clerk_event_stream_recovered": (
+        "reconciliation",
+        "Broker event evidence recovered.",
+        "The Account service broker event stream recovered.",
+    ),
+    "account_clerk_journal_authority_drift_detected": (
+        "safety",
+        "Account ledger evidence diverged.",
+        "The account ledger and legacy comparison diverged and require review.",
     ),
     "account_instance_binding_recorded": (
         "configuration",
@@ -170,7 +190,7 @@ class AccountEventJournalService:
         except AccountArtifactError as exc:
             raise AccountEventJournalError(str(exc)) from exc
         rows = self._project_rows(canonical_account_id, raw_events)
-        latest_seq = rows[-1].seq if rows else None
+        latest_seq = len(raw_events) or None
         filtered = self._filter_rows(
             rows,
             view=view,
@@ -205,10 +225,10 @@ class AccountEventJournalService:
                     f"account event row {index} has non-contiguous sequence {record.seq}"
                 )
             expected_seq += 1
-            kind, trader_narration, operator_detail = _EVENT_PRESENTATION.get(
-                record.event_type,
-                ("other", None, "An unclassified account journal event was recorded."),
-            )
+            presentation = _event_presentation(record.event_type, raw_event)
+            if presentation is None:
+                continue
+            kind, trader_narration, operator_detail = presentation
             rows.append(
                 AccountEventRow(
                     event_id=f"{account_id}:{record.seq}",
@@ -262,6 +282,31 @@ def _ny_day(timestamp_ms: int) -> datetime.date:
         return datetime.fromtimestamp(timestamp_ms / 1_000, tz=UTC).astimezone(_NY_TZ).date()
     except (OSError, OverflowError, ValueError) as exc:
         raise AccountEventJournalError("account event timestamp is outside the supported calendar") from exc
+
+
+def _event_presentation(
+    event_type: str,
+    raw_event: Mapping[str, object],
+) -> tuple[AccountEventKind, str | None, str] | None:
+    """Hide steady-state diagnostics while preserving every durable raw row."""
+
+    if event_type == "account_clerk_sidecar_journal_parity":
+        # This is the bounded shadow comparator used to qualify authority, not
+        # an operator transition. Post-cutover drift has its own durable
+        # ``account_clerk_journal_authority_drift_detected`` event and remedy.
+        return None
+    if event_type == "account_observation_lease_shadow_comparison":
+        if raw_event.get("truth_status") == raw_event.get("lease_status"):
+            return None
+        return (
+            "safety",
+            "Account verification comparison diverged.",
+            "The current Account Truth gate and observation proof do not agree.",
+        )
+    return _EVENT_PRESENTATION.get(
+        event_type,
+        ("other", None, "An unclassified account journal event was recorded."),
+    )
 
 
 def _evidence_refs(

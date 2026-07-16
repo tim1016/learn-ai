@@ -22,6 +22,10 @@ from typing import Literal, assert_never
 from pydantic import ValidationError
 
 from app.engine.live.account_artifacts import AccountFreezeEvidence
+from app.engine.live.account_observation_lease import (
+    ACCOUNT_OBSERVATION_LEASE_GATE_ID,
+    ACCOUNT_OBSERVATION_LEASE_GATE_SOURCE,
+)
 from app.engine.live.bot_lifecycle_state import BotLifecyclePhase
 from app.engine.live.daemon_connectivity_monitor import DaemonConnectivityState
 from app.engine.live.daemon_transport import DaemonResultKind
@@ -442,6 +446,8 @@ def _project_host_start_capability(
     now_ms: int,
     account_freeze: AccountFreezeEvidence | None = None,
     crash_recovery_gate: GateResult | None = None,
+    account_gate_authority: Literal["account_truth", "observation_lease"] = "account_truth",
+    account_observation: OperatorSurfaceAccountObservation | None = None,
 ) -> HostProcessStartCapability:
     """Project the per-instance Start-bot-process affordance.
 
@@ -464,6 +470,33 @@ def _project_host_start_capability(
             disabled_reason_code="CRASH_RECOVERY_REQUIRED",
             gate_results=[crash_recovery_gate],
         )
+    account_observation_gate: GateResult | None = None
+    if account_gate_authority == "observation_lease":
+        observation_state = account_observation.state if account_observation is not None else "ABSENT"
+        observation_reason = (
+            account_observation.reason_line
+            if account_observation is not None
+            else "Account verification proof is unavailable."
+        )
+        account_observation_gate = GateResult(
+            gate_id=ACCOUNT_OBSERVATION_LEASE_GATE_ID,
+            status="pass" if observation_state == "VERIFIED" else "block",
+            source=ACCOUNT_OBSERVATION_LEASE_GATE_SOURCE,
+            operator_reason=observation_reason,
+            operator_next_step=None if observation_state == "VERIFIED" else "RECONCILE_NOW",
+            evidence_at_ms=(
+                account_observation.observed_at_ms
+                if account_observation is not None
+                and account_observation.observed_at_ms is not None
+                else now_ms
+            ),
+        )
+        if observation_state != "VERIFIED":
+            return HostProcessStartCapability(
+                enabled=False,
+                disabled_reason_code="ACCOUNT_EVIDENCE_STALE",
+                gate_results=[account_observation_gate],
+            )
     # Poisoned runs are dead and still require redeploy. Durable STOPPED no
     # longer blocks starts; the duty roster is the operator-owned "stay down"
     # control in the daily lifecycle model.
@@ -540,6 +573,7 @@ def _project_host_start_capability(
         run_id=start_run_id,
         request=request,
         gate_results=[
+            *([account_observation_gate] if account_observation_gate is not None else []),
             _start_gate(
                 status="pass",
                 operator_reason="Start settings complete and daemon state is startable.",
@@ -560,6 +594,8 @@ def _project_host_process(
     now_ms: int = 0,
     account_freeze: AccountFreezeEvidence | None = None,
     crash_recovery_gate: GateResult | None = None,
+    account_gate_authority: Literal["account_truth", "observation_lease"] = "account_truth",
+    account_observation: OperatorSurfaceAccountObservation | None = None,
 ) -> OperatorSurfaceHostProcess:
     state = _DAEMON_STATE_TO_HOST_PROCESS_STATE.get(process.state, "UNREACHABLE")
     # WAITING_FOR_HOST: daemon reachable + no tracked subprocess + the
@@ -588,6 +624,8 @@ def _project_host_process(
         now_ms,
         account_freeze,
         crash_recovery_gate,
+        account_gate_authority,
+        account_observation,
     )
     return OperatorSurfaceHostProcess(
         state=state,
@@ -1317,6 +1355,7 @@ def compute_operator_surface(
     crash_recovery_gate: GateResult | None = None,
     account_clerk: OperatorSurfaceAccountClerk | None = None,
     account_observation: OperatorSurfaceAccountObservation | None = None,
+    account_gate_authority: Literal["account_truth", "observation_lease"] = "account_truth",
     # ADR-0008 §5 / PR 1 — cold-start reconciliation projection inputs.
     # All optional: when no live binding is resolved, the router passes
     # ``reconciliation_receipt=None`` and the projection turns into
@@ -1379,6 +1418,8 @@ def compute_operator_surface(
         now_ms=now_ms,
         account_freeze=account_freeze,
         crash_recovery_gate=crash_recovery_gate,
+        account_gate_authority=account_gate_authority,
+        account_observation=account_observation,
     )
     broker_projection = project_broker(
         safety_verdict_final,

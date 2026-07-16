@@ -1,0 +1,23 @@
+.receipt {
+  display: grid;
+  gap: 0.5rem;
+  border: 1px solid var(--border-light);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+}
+h3,
+p,
+dl {
+  margin: 0;
+}
+dl {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.5rem;
+}
+dt {
+  color: var(--text-secondary);
+}
+dd {
+  margin: 0.15rem 0 0;
+}
