@@ -6,8 +6,10 @@ import type { AccountTriageVerdictMove } from '../../../api/account-reconciliati
 import { PageHeaderComponent } from '../../../shared/page-header/page-header.component';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
-import { fmtDurationRemaining } from '../format';
+import { fmtCurrency, fmtDurationRemaining, fmtSignedCurrency } from '../format';
+import { AccountDeskHoldingsStore } from './account-desk-holdings-store.service';
 import { AccountDeskSurfaceStore } from './account-desk-surface-store.service';
+import { AccountDeskTraderHoldingsComponent } from './account-desk-trader-holdings.component';
 
 type AccountDeskLens = 'trader' | 'operator';
 
@@ -15,7 +17,12 @@ type AccountDeskLens = 'trader' | 'operator';
 @Component({
   selector: 'app-account-desk-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [PageHeaderComponent, ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [
+    AccountDeskTraderHoldingsComponent,
+    PageHeaderComponent,
+    ReceiptLabelPipe,
+    TimestampDisplayComponent,
+  ],
   templateUrl: './account-desk-page.component.html',
   styleUrl: './account-desk-page.component.scss',
 })
@@ -24,6 +31,7 @@ export class AccountDeskPageComponent {
   private readonly router = inject(Router);
   private readonly destroyRef = inject(DestroyRef);
   readonly store = inject(AccountDeskSurfaceStore);
+  readonly holdings = inject(AccountDeskHoldingsStore);
   readonly lens = signal<AccountDeskLens>('trader');
   private readonly nowMs = signal(Date.now());
 
@@ -31,6 +39,9 @@ export class AccountDeskPageComponent {
   readonly loading = this.store.loading;
   readonly error = this.store.error;
   readonly showingStaleLastGood = this.store.showingStaleLastGood;
+  readonly headlineMetrics = this.holdings.headlineMetrics;
+  readonly fmtCurrency = fmtCurrency;
+  readonly fmtSignedCurrency = fmtSignedCurrency;
   readonly displayAccountId = computed(() => this.triage()?.account_id ?? this.store.accountId());
   readonly explicitEmpty = computed(() => {
     const triage = this.triage();
@@ -46,7 +57,10 @@ export class AccountDeskPageComponent {
   constructor() {
     this.route.paramMap.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((params) => {
       const accountId = params.get('accountId');
-      if (accountId) void this.store.load(accountId);
+      if (accountId) {
+        void this.store.load(accountId);
+        void this.holdings.load(accountId);
+      }
     });
     const intervalId = window.setInterval(() => this.nowMs.set(Date.now()), 1_000);
     this.destroyRef.onDestroy(() => window.clearInterval(intervalId));

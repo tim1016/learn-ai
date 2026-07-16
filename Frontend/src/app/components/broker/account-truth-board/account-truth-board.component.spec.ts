@@ -177,6 +177,23 @@ describe('AccountTruthBoardComponent', () => {
     expect(el.textContent).toContain('Run account reconcile');
   });
 
+  it('does not render Account Desk-scoped guidance on Account Monitor', () => {
+    TestBed.configureTestingModule({});
+    const fixture = TestBed.createComponent(AccountTruthBoardComponent);
+    fixture.componentRef.setInput('truth', truth({
+      operator_blockers: [{
+        ...truth().operator_blockers[0],
+        host: 'account_desk',
+        anchor: { kind: 'holdings_row', subject_key: '756733' },
+        headline: 'Account Desk-only guidance',
+      }],
+    }));
+    fixture.componentRef.setInput('showOperatorBlockers', true);
+    fixture.detectChanges();
+
+    expect((fixture.nativeElement as HTMLElement).textContent).not.toContain('Account Desk-only guidance');
+  });
+
   it('renders optional account, owner, and exposure sections', () => {
     TestBed.configureTestingModule({});
     const fixture = TestBed.createComponent(AccountTruthBoardComponent);

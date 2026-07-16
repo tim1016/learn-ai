@@ -74,7 +74,9 @@ from app.schemas.account_truth import (
 from app.schemas.operator_blocker import (
     SURFACE_ANCHOR,
     ConfirmInFormAction,
+    NavigateAction,
     OperatorBlocker,
+    OperatorBlockerAnchor,
     OperatorMove,
 )
 from app.utils.timestamps import now_ms_utc
@@ -116,6 +118,44 @@ def _account_monitor_blockers(messages: Sequence[AccountTruthMessage]) -> list[O
         )
         for message in messages
     ]
+
+
+def _account_desk_holdings_blockers(
+    positions: Sequence[AccountTruthPositionRow],
+) -> list[OperatorBlocker]:
+    """Author Account Desk guidance for backend-identified unclaimed holdings.
+
+    The anchor key is the broker contract identity, not user-facing copy.  The
+    desk uses it solely to place this already-authored guidance beside the
+    matching holding row.
+    """
+
+    return [
+        OperatorBlocker.for_host(
+            condition_id="unattributed_holding",
+            scope="account",
+            host="account_desk",
+            anchor=OperatorBlockerAnchor(kind="holdings_row", subject_key=str(position.con_id)),
+            audience="both",
+            disposition="fix_elsewhere",
+            headline=position.headline,
+            detail=position.detail,
+            primary_move=OperatorMove(
+                label="Open IBKR setup guide",
+                action=NavigateAction(
+                    kind="navigate",
+                    route="/docs/ibkr-setup-guide",
+                ),
+            ),
+            applies_to="both",
+            severity="blocking",
+            evidence={"con_id": position.con_id},
+        )
+        for position in positions
+        if position.owner.owner_class == "foreign_or_unclaimed"
+    ]
+
+
 _LIMBO_STATUSES = frozenset({"PendingSubmit", "ApiPending", "PendingCancel", "Unknown"})
 
 
@@ -475,7 +515,10 @@ def compose_account_truth(
         manual_namespaces_observed=manual_namespaces,
         invariants=invariants,
         blockers=blockers,
-        operator_blockers=_account_monitor_blockers(blockers),
+        operator_blockers=[
+            *_account_monitor_blockers(blockers),
+            *_account_desk_holdings_blockers(position_rows),
+        ],
         caveats=caveats,
         owner_summaries=owner_summaries,
         symbol_exposures=symbol_exposures,

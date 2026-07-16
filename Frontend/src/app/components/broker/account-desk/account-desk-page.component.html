@@ -37,9 +37,9 @@
         <button type="button" class="primary-move" (click)="followPrimaryMove(move)">{{ move.label }}</button>
       }
       <dl class="headline-metrics" aria-label="Headline metrics">
-        <div><dt>Net liquidation</dt><dd>—</dd></div>
-        <div><dt>Day P&amp;L</dt><dd>—</dd></div>
-        <div><dt>Open positions</dt><dd>—</dd></div>
+        <div><dt>Net liquidation</dt><dd>{{ fmtCurrency(headlineMetrics()?.equity) }}</dd></div>
+        <div><dt>Day P&amp;L</dt><dd>{{ fmtSignedCurrency(headlineMetrics()?.dayPnl) }}</dd></div>
+        <div><dt>Open positions</dt><dd>{{ headlineMetrics()?.openPositions ?? '—' }}</dd></div>
       </dl>
       @if (showingStaleLastGood()) {
         <p class="state state-stale">Showing last good account data from <app-timestamp-display [value]="triage.generated_at_ms" mode="local" />. Refresh failed.</p>
@@ -66,10 +66,10 @@
         <button type="button" (click)="retry()">Retry</button>
       </div>
     } @else if (triage()) {
-      @if (explicitEmpty()) {
+      @if (lens() === 'trader') {
+        <app-account-desk-trader-holdings />
+      } @else if (explicitEmpty()) {
         <p class="state state-empty">No account rows are available yet.</p>
-      } @else if (lens() === 'trader') {
-        <p>Trader account details arrive in the next desk slice.</p>
       } @else {
         <p>Operator guidance arrives in the operations-lens slice.</p>
       }

@@ -8,12 +8,24 @@ import { BrokerService } from '../../../services/broker.service';
 import { formatReceiptLabel } from '../../../shared/pipes/receipt-label.pipe';
 import { formatTimestampDisplay } from '../../../shared/timestamp';
 import { makeCleanAccountTriage } from '../testing/account-triage-fixtures';
+import { makeAccountSummary, makeAccountTruth, makePositionsSnapshot } from './account-desk-holdings.fixtures';
+import { AccountDeskHoldingsStore } from './account-desk-holdings-store.service';
 import { AccountDeskSurfaceStore } from './account-desk-surface-store.service';
 import { AccountDeskPageComponent } from './account-desk-page.component';
 
 class FakeBrokerService {
   accountTriage = vi.fn<(accountId: string) => Promise<AccountTriageResponse>>();
+  account = vi.fn().mockResolvedValue(makeAccountSummary());
+  positions = vi.fn().mockResolvedValue(makePositionsSnapshot(undefined, []));
+  accountTruth = vi.fn().mockResolvedValue(makeAccountTruth(undefined, []));
 }
+
+class StubEventSource {
+  addEventListener = vi.fn();
+  close = vi.fn();
+}
+
+vi.stubGlobal('EventSource', StubEventSource);
 
 function triage(state: AccountTriageVerdictState = 'CLEAN'): AccountTriageResponse {
   const current = makeCleanAccountTriage({
@@ -43,6 +55,7 @@ async function setup(options: { response?: AccountTriageResponse; route$?: Behav
   const router = { navigate: vi.fn().mockResolvedValue(true) };
   const view = await render(AccountDeskPageComponent, {
     providers: [
+      AccountDeskHoldingsStore,
       AccountDeskSurfaceStore,
       { provide: BrokerService, useValue: broker },
       { provide: ActivatedRoute, useValue: { paramMap: route$.asObservable() } },
@@ -102,8 +115,9 @@ describe('AccountDeskPageComponent', () => {
     broker.accountTriage.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(makeCleanAccountTriage());
     const route$ = new BehaviorSubject(convertToParamMap({ accountId: 'DU1234567' }));
     await render(AccountDeskPageComponent, {
-      providers: [
-        AccountDeskSurfaceStore,
+    providers: [
+      AccountDeskHoldingsStore,
+      AccountDeskSurfaceStore,
         { provide: BrokerService, useValue: broker },
         { provide: ActivatedRoute, useValue: { paramMap: route$.asObservable() } },
         { provide: Router, useValue: { navigate: vi.fn().mockResolvedValue(true) } },
@@ -112,6 +126,6 @@ describe('AccountDeskPageComponent', () => {
 
     const retries = await screen.findAllByRole('button', { name: 'Retry' });
     fireEvent.click(retries[0]);
-    await waitFor(() => expect(screen.getByText('No account rows are available yet.')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('No open holdings are reported for this attested account.')).toBeTruthy());
   });
 });

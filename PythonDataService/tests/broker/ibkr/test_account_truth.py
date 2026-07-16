@@ -347,6 +347,34 @@ def test_account_truth_defaults_unstamped_open_order_to_foreign_and_blocks() -> 
     assert truth.operator_blockers[0].primary_move.action.kind == "confirm_in_form"
 
 
+def test_account_truth_anchors_unattributed_holding_guidance_for_account_desk() -> None:
+    truth = compose_account_truth(
+        health=_health(),
+        account_instance_bindings=[_binding()],
+        account=_account_summary(),
+        positions_snapshot=_positions_snapshot(_position()),
+        open_orders=[],
+        completed_orders=[],
+        executions=[],
+        generated_at_ms=1_780_000_001_000,
+    )
+
+    blocker = next(
+        row
+        for row in truth.operator_blockers
+        if row.host == "account_desk" and row.anchor.kind == "holdings_row"
+    )
+
+    assert blocker.anchor.subject_key == "12345"
+    assert blocker.audience == "both"
+    assert blocker.headline == truth.positions[0].headline
+    assert blocker.detail == truth.positions[0].detail
+    assert blocker.primary_move is not None
+    assert blocker.primary_move.label == "Open IBKR setup guide"
+    assert blocker.primary_move.action.kind == "navigate"
+    assert blocker.primary_move.action.route == "/docs/ibkr-setup-guide"
+
+
 @pytest.mark.parametrize("lifecycle_state", ["DEPLOYED", "ACTIVE"])
 def test_account_truth_active_known_live_order_stays_clean(
     lifecycle_state: Literal["DEPLOYED", "ACTIVE"],
