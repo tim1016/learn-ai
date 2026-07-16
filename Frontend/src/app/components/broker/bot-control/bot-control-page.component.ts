@@ -88,6 +88,7 @@ export class BotControlPageComponent {
   readonly startupAutomation = signal<StartupAutomationState>({ phase: 'idle' });
   readonly typedHaltOpen = signal<boolean>(false);
   private readonly typedHaltInstanceId = signal<string | null>(null);
+  readonly emergencyFlattenConfirmOpen = signal<boolean>(false);
   readonly crashRecoveryConfirmOpen = signal<boolean>(false);
   readonly retireReplaceConfirmOpen = signal<boolean>(false);
   readonly removeBotConfirmOpen = signal<boolean>(false);
@@ -111,6 +112,12 @@ export class BotControlPageComponent {
   );
   readonly removeBotConfirmation = computed(
     () => this.removeBotMoveConfirmation() ?? this.confirmations()?.remove_bot ?? null,
+  );
+  readonly emergencyFlattenAccount = computed(
+    () =>
+      this.status()?.operator_surface.account_clerk?.account_id ??
+      this.status()?.start_defaults?.account_id ??
+      null,
   );
 
   readonly errorMessage = computed<string | null>(
@@ -414,6 +421,35 @@ export class BotControlPageComponent {
         action: 'pause',
         reason: 'Flatten and pause',
         updated_by: 'operator',
+      });
+      this.surface.establishPending(response);
+    } catch (err) {
+      this.mutationError.set(this.operationErrorMessage('flatten', err));
+    } finally {
+      this.busyAction.set(null);
+    }
+  }
+
+  requestEmergencyFlatten(): void {
+    if (!this.instanceId() || !this.emergencyFlattenAccount() || this.mutationsDisabled()) return;
+    this.emergencyFlattenConfirmOpen.set(true);
+  }
+
+  cancelEmergencyFlatten(): void {
+    this.emergencyFlattenConfirmOpen.set(false);
+  }
+
+  async confirmEmergencyFlatten(): Promise<void> {
+    const id = this.instanceId();
+    const account = this.emergencyFlattenAccount();
+    if (!this.emergencyFlattenConfirmOpen() || !id || !account || this.mutationsDisabled()) return;
+    this.emergencyFlattenConfirmOpen.set(false);
+    this.busyAction.set('emergency_flatten');
+    this.mutationError.set(null);
+    try {
+      const response = await this.liveRuns.emergencyFlattenAccount(id, {
+        account,
+        confirm: true,
       });
       this.surface.establishPending(response);
     } catch (err) {

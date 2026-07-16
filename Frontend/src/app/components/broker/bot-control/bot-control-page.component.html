@@ -99,6 +99,23 @@
         (crashRecoveryOverrideRequested)="dispatchCrashRecoveryOverride()"
       />
       <app-trader-guidance-pane [surface]="s.operator_surface" />
+      @if (emergencyFlattenAccount(); as accountId) {
+        <section class="emergency-flatten" aria-label="Emergency account flatten">
+          <div>
+            <h2>Emergency account flatten</h2>
+            <p>Submit an account-wide paper flatten for <span class="audit-token">{{ accountId }}</span>.</p>
+          </div>
+          <button
+            type="button"
+            class="emergency-flatten__action"
+            data-testid="emergency-flatten-action"
+            [disabled]="busyAction() !== null || readOnly()"
+            (click)="requestEmergencyFlatten()"
+          >
+            Emergency flatten
+          </button>
+        </section>
+      }
     }
   } @else if (!errorMessage()) {
     <p class="loading">Loading bot control...</p>
@@ -127,6 +144,19 @@
       [confirmLabel]="copy.confirm_label"
       (confirmed)="confirmCrashRecoveryOverride()"
       (cancelled)="cancelCrashRecoveryConfirm()"
+    />
+  }
+
+  @if (emergencyFlattenAccount(); as accountId) {
+    <app-typed-halt-confirm
+      [open]="emergencyFlattenConfirmOpen()"
+      heading="Emergency account flatten"
+      [message]="'Submit an account-wide paper flatten for ' + accountId + '.'"
+      consequence="This submits market orders to flatten every position in the paper account. Verify the broker account is flat after it completes."
+      requiredToken="FLATTEN"
+      confirmLabel="Emergency flatten account"
+      (confirmed)="confirmEmergencyFlatten()"
+      (cancelled)="cancelEmergencyFlatten()"
     />
   }
 
