@@ -386,6 +386,29 @@ class HostRunnerInstancesStatus(BaseModel):
     exited_records_pruned_total: int = Field(default=0, ge=0)
 
 
+def _validate_bare_ibkr_host(value: str) -> str:
+    """Keep host-side broker destinations free of URL/path syntax."""
+
+    host = value.strip()
+    if host != value or not host:
+        raise ValueError("ibkr_host must not contain surrounding whitespace")
+    lowered = host.lower()
+    if any(token in lowered for token in ("://", "/", "\\", "@")):
+        raise ValueError("ibkr_host must be a bare host name or IP address")
+    return host
+
+
+class HostRunnerClerkEnsureRequest(BaseModel):
+    """Host-side broker destination for starting an account Clerk."""
+
+    ibkr_host: str = Field(default="127.0.0.1", min_length=1, max_length=255)
+
+    @field_validator("ibkr_host")
+    @classmethod
+    def _validate_ibkr_host(cls, value: str) -> str:
+        return _validate_bare_ibkr_host(value)
+
+
 class HostRunnerStartRequest(BaseModel):
     """Request body for starting one existing run from the host daemon."""
 
@@ -400,13 +423,7 @@ class HostRunnerStartRequest(BaseModel):
     @field_validator("ibkr_host")
     @classmethod
     def _validate_ibkr_host(cls, value: str) -> str:
-        host = value.strip()
-        if host != value or not host:
-            raise ValueError("ibkr_host must not contain surrounding whitespace")
-        lowered = host.lower()
-        if any(token in lowered for token in ("://", "/", "\\", "@")):
-            raise ValueError("ibkr_host must be a bare host name or IP address")
-        return host
+        return _validate_bare_ibkr_host(value)
 
 
 class HostRunnerStopRequest(BaseModel):

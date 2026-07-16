@@ -230,10 +230,18 @@ async def renew_control_plane_lease(base_url: str) -> dict:
     return await _post_action(f"{base_url.rstrip('/')}/control-plane/renew-lease", {})
 
 
-async def ensure_account_clerk(base_url: str, account_id: str) -> dict:
+async def ensure_account_clerk(
+    base_url: str,
+    account_id: str,
+    *,
+    ibkr_host: str = "127.0.0.1",
+) -> dict:
     """Ensure one Clerk is live and generation-handshaken for an operator action."""
 
-    return await _post_action(f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/ensure", {})
+    return await _post_action(
+        f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/ensure",
+        {"ibkr_host": ibkr_host},
+    )
 
 
 async def _post_action(url: str, payload: dict, *, timeout: httpx.Timeout = _TIMEOUT) -> dict:

@@ -52,7 +52,7 @@ HEALTH_URL="http://127.0.0.1:${PORT}/health"
 # so this match only finds the daemon launched for THIS checkout. Without the
 # scope, a second checkout's daemon (or any other process whose argv happens to
 # contain `app.engine.live.host_daemon`) would be pgrep'd / pkill'd by mistake.
-DAEMON_MATCH="app.engine.live.host_daemon --repo-root $ROOT_DIR"
+DAEMON_MATCH="app.engine.live.host_daemon .*--repo-root $ROOT_DIR"
 TOKEN_FILE="$ROOT_DIR/PythonDataService/artifacts/.host-daemon-token"
 
 MODE="start"
@@ -92,16 +92,16 @@ daemon_running() {
 # is unreachable, or the token file is absent, return "unknown" so the caller
 # can warn rather than silently assume "no active runs".
 active_run_ids() {
-  if ! curl -fsS -o /dev/null "$HEALTH_URL" 2>/dev/null; then
-    echo "unknown"
-    return 0
-  fi
   if [[ ! -r "$TOKEN_FILE" ]]; then
     echo "unknown"
     return 0
   fi
   local token instances
   token="$(cat "$TOKEN_FILE")"
+  if ! curl -fsS -o /dev/null -H "X-Live-Runner-Token: $token" "$HEALTH_URL" 2>/dev/null; then
+    echo "unknown"
+    return 0
+  fi
   if ! instances="$(curl -fsS -H "X-Live-Runner-Token: $token" "http://127.0.0.1:${PORT}/instances" 2>/dev/null)"; then
     echo "unknown"
     return 0
