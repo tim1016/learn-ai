@@ -1,17 +1,25 @@
 import {
-  afterEveryRender,
   ChangeDetectionStrategy,
   Component,
   computed,
-  DestroyRef,
   ElementRef,
   effect,
   inject,
   resource,
   signal,
 } from '@angular/core';
+import {
+  FormField,
+  form,
+  max,
+  min,
+  pattern,
+  required,
+} from '@angular/forms/signals';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { ButtonModule } from 'primeng/button';
 import { InputTextModule } from 'primeng/inputtext';
+import { TagModule } from 'primeng/tag';
 import {
   DEFAULT_MAX_ORDERS_PER_DAY,
   type ExposureCoherencePosture,
@@ -20,7 +28,6 @@ import {
   type HydratePolicy,
   type SizingPolicy,
   type SizingPreset,
-  type SpecStrategyFixture,
 } from '../../../api/live-runs.types';
 import type { ActionPlan } from '../../../api/action-plan.types';
 import { ActionPlanPickerComponent } from './action-plan-picker/action-plan-picker.component';
@@ -28,7 +35,6 @@ import { BrokerService } from '../../../services/broker.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { StrategyValidationService } from '../../../services/strategy-validation.service';
 import type { StrategyValidationSummary } from '../../../services/strategy-validation.types';
-import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { BrokerConnectivityStripComponent } from '../broker-connectivity-strip/broker-connectivity-strip.component';
 import { BrokerOperationResultComponent } from '../broker-operation-result/broker-operation-result.component';
 import { type OperationError, toOperationError } from '../operation-error';
@@ -77,26 +83,17 @@ import { ExposureLaunchDecisionComponent } from './exposure-launch-decision.comp
 // Mirror the backend single-segment deployment name guard.
 const INSTANCE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 
-type DeployTabKey = 'strategy' | 'signal' | 'sizing' | 'legs' | 'launch';
+interface DeployTicketModel {
+  instanceId: string;
+  strategyKey: string;
+  signalStream: string;
+  maxOrdersPerDay: number;
+  customKind: CustomSizingKind;
+  customValue: string;
+}
+
 type ExecutionMode = 'read_only' | 'paper_orders' | 'live';
 type CoherenceRecoveryKind = 'identity' | 'exposure';
-
-const DEPLOY_ANCHOR_TABS: Record<string, DeployTabKey | null> = {
-  'strategy-section': 'strategy',
-  'identity-coherence-card': null,
-  'signal-section': 'signal',
-  'sizing-section': 'sizing',
-  'action-plan-picker-heading': 'legs',
-  'launch-section': 'launch',
-  'exposure-launch-decision': 'launch',
-};
-
-interface DeployTab {
-  key: DeployTabKey;
-  label: string;
-  target: string;
-  complete: boolean;
-}
 
 interface DeployCommandState {
   kind: 'busy' | 'accepted' | 'blocked' | 'ready';
@@ -123,8 +120,10 @@ interface SettledDeployPreflight {
     BrokerConnectivityStripComponent,
     BrokerOperationResultComponent,
     ActionPlanPickerComponent,
+    ButtonModule,
     InputTextModule,
-    ReceiptLabelPipe,
+    TagModule,
+    FormField,
     DeployCoherenceCardComponent,
     ExposureLaunchDecisionComponent,
     OperatorBlockerListComponent,
@@ -139,11 +138,9 @@ export class BrokerDeployFormComponent {
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly host = inject<ElementRef<HTMLElement>>(ElementRef);
-  private readonly destroyRef = inject(DestroyRef);
 
   readonly strategies = resource({ loader: () => this.svc.getEngineStrategies() });
   readonly strategyValidations = resource({ loader: () => this.strategyValidation.getCatalog() });
-  readonly specFixtures = resource({ loader: () => this.svc.getSpecStrategyFixtures() });
   readonly account = resource({ loader: () => this.broker.account() });
   // ADR 0009 § 9: symbol-scoped all-in coexistence guard.
   readonly positions = resource({ loader: () => this.broker.positions() });
@@ -158,14 +155,37 @@ export class BrokerDeployFormComponent {
   });
   private readonly settledDeployPreflight = signal<SettledDeployPreflight | null>(null);
 
-  readonly strategyKey = signal<string>('');
+  /**
+   * The signal-form model is the sole source of truth for trader-entered
+   * ticket values. Derived signals below preserve the concise domain reads
+   * used by the launch, preflight, and safety-gate code.
+   */
+  readonly ticket = signal<DeployTicketModel>({
+    instanceId: '',
+    strategyKey: '',
+    signalStream: '',
+    maxOrdersPerDay: DEFAULT_MAX_ORDERS_PER_DAY,
+    customKind: 'FixedShares',
+    customValue: '1',
+  });
+  readonly ticketForm = form(this.ticket, (ticket) => {
+    required(ticket.instanceId, { message: 'Enter a deployment name.' });
+    pattern(ticket.instanceId, INSTANCE_ID_RE, {
+      message: 'Use letters, numbers, periods, underscores, or hyphens.',
+    });
+    required(ticket.strategyKey, { message: 'Choose an approved strategy.' });
+    required(ticket.signalStream, { message: 'Enter the market-data stream this strategy should read.' });
+    min(ticket.maxOrdersPerDay, 0);
+    max(ticket.maxOrdersPerDay, 100_000);
+  });
+
+  readonly strategyKey = computed(() => this.ticket().strategyKey);
   readonly specPath = signal<string>('');
-  readonly signalStream = signal<string>('');
-  readonly manualSpecPath = signal<boolean>(false);
+  readonly signalStream = computed(() => this.ticket().signalStream);
   readonly accountId = signal<string>('');
   readonly qcBacktestId = signal<string>('');
   readonly qcAuditCopyPath = signal<string>('');
-  readonly instanceId = signal<string>('');
+  readonly instanceId = computed(() => this.ticket().instanceId);
   readonly inheritedSymbol = signal<string>('');
   readonly inheritedSymbolSource = signal<string>('');
   readonly inheritedExposurePosture = signal<ExposureCoherencePosture | ''>('');
@@ -174,12 +194,13 @@ export class BrokerDeployFormComponent {
   readonly inheritedExposureSource = signal<string>('');
   readonly executionMode = signal<ExecutionMode>('paper_orders');
   readonly hydratePolicy = signal<HydratePolicy>('require');
-  readonly maxOrdersPerDay = signal<number>(DEFAULT_MAX_ORDERS_PER_DAY);
+  readonly maxOrdersPerDay = computed(() => this.ticket().maxOrdersPerDay);
   readonly actionPlan = signal<ActionPlan>({ on_enter: [], on_exit: [] });
   readonly parentRunId = signal<string | null>(null);
   readonly sizingPreset = signal<SizingPreset>('safe_canary');
-  readonly activeDeployTab = signal<DeployTabKey>('strategy');
   private readonly signalStreamManuallyEdited = signal<boolean>(false);
+  private readonly executionModeTouched = signal<boolean>(false);
+  private readonly legsTouched = signal<boolean>(false);
   private readonly activeCoherenceRecovery = signal<CoherenceRecoveryKind | null>(null);
 
   readonly referenceParityGate = resource({
@@ -199,15 +220,9 @@ export class BrokerDeployFormComponent {
     return gate?.verdict === 'proven_match';
   });
 
-  readonly referenceParityBanner = computed<string>(() => {
-    const gate = this.referenceParityGate.value();
-    if (!gate) return 'Pick an audit copy to check Reference parity availability.';
-    return gate.detail;
-  });
-
   // PR4: Custom values stay decimal-string-friendly until submit.
-  readonly customKind = signal<CustomSizingKind>('FixedShares');
-  readonly customValue = signal<string>('1');
+  readonly customKind = computed(() => this.ticket().customKind);
+  readonly customValue = computed(() => this.ticket().customValue);
   readonly busy = signal<boolean>(false);
   readonly error = signal<OperationError | null>(null);
   readonly deployed = signal<HostRunnerDeployResponse | null>(null);
@@ -238,20 +253,20 @@ export class BrokerDeployFormComponent {
   });
   readonly commandState = computed<DeployCommandState>(() => {
     if (this.busy()) {
-      return { kind: 'busy', message: 'Submitting deployment.', canSubmit: false };
+      return { kind: 'busy', message: 'Launching strategy…', canSubmit: false };
     }
     const accepted = this.postSubmitCommandStatus();
     if (accepted !== null) {
       return { kind: 'accepted', message: accepted, canSubmit: false };
     }
     if (this.deployPreflight.isLoading() && this.visibleDeployPreflight() === null) {
-      return { kind: 'blocked', message: 'Checking deploy preflight.', canSubmit: false };
+      return { kind: 'blocked', message: 'Checking server launch gates…', canSubmit: false };
     }
     const top = this.topBlocker();
     if (top !== null) {
-      return { kind: 'blocked', message: `Can't deploy - ${top.headline}.`, canSubmit: false };
+      return { kind: 'blocked', message: `Launch blocked: ${top.headline}.`, canSubmit: false };
     }
-    return { kind: 'ready', message: 'Ready to deploy & run.', canSubmit: true };
+    return { kind: 'ready', message: 'Ready to launch.', canSubmit: true };
   });
   readonly commandStatus = computed<string>(() => this.commandState().message);
 
@@ -273,19 +288,21 @@ export class BrokerDeployFormComponent {
     return this.validatedStrategies().find((strategy) => strategy.strategy_key === key) ?? null;
   });
 
-  readonly selectedFixture = computed<SpecStrategyFixture | null>(
-    () => this.specFixtures.value()?.find((f) => f.path === this.specPath()) ?? null,
-  );
-
-  readonly fixtureSymbols = computed<string[]>(() =>
-    [
-      ...new Set(
-        (this.selectedFixture()?.symbols ?? [])
-          .map((symbol) => normalizedSymbol(symbol))
-          .filter((symbol) => symbol !== ''),
-      ),
-    ],
-  );
+  readonly validatedReceiptIssue = computed<string | null>(() => {
+    const selected = this.selectedValidation();
+    if (this.strategyKey().trim() === '') return null;
+    if (selected === null) {
+      return 'This strategy is not currently approved for deployment. Select a strategy from the approved list.';
+    }
+    if (
+      selected.settings_file_ref?.trim() &&
+      selected.qc_cloud_backtest_id?.trim() &&
+      selected.audit_copy_ref?.trim()
+    ) {
+      return null;
+    }
+    return 'The approved catalog entry is missing deploy evidence. Re-run Strategy Validation before launching it.';
+  });
 
   readonly resolvedSignalStream = computed<string>(() => {
     return normalizedSymbol(this.signalStream());
@@ -309,21 +326,39 @@ export class BrokerDeployFormComponent {
     () => this.account.hasValue() && this.account.value() !== null,
   );
 
+  readonly brokerAccountState = computed<'checking' | 'connected' | 'unavailable'>(() => {
+    if (this.account.isLoading()) return 'checking';
+    return this.brokerAccountAvailable() ? 'connected' : 'unavailable';
+  });
+
   private readonly brokerAccountId = computed<string>(
     () => (this.account.hasValue() ? (this.account.value()?.account_id ?? '') : ''),
   );
 
   readonly readonlyFlag = computed<boolean>(() => this.executionMode() === 'read_only');
   readonly executionCapability = computed<ExecutionMode>(() => this.executionMode());
-  readonly executionCapabilityProof = computed<string>(() => {
-    const mode = this.executionMode();
-    if (mode === 'live') {
-      return 'readonly_at_start: false · submission_capability: LIVE_ORDERS_BLOCKED';
+  readonly dailyOrderLimitError = computed<string | null>(() => {
+    const value = this.maxOrdersPerDay();
+    if (!Number.isInteger(value) || value < 0 || value > 100_000) {
+      return 'Enter a whole number from 0 to 100,000. The server receives this exact daily limit.';
     }
-    return mode === 'read_only'
-      ? 'readonly_at_start: true · submission_capability: READ_ONLY_OBSERVATION'
-      : 'readonly_at_start: false · submission_capability: PAPER_ORDERS_ENABLED';
+    return null;
   });
+
+  readonly dailyOrderLimitLabel = computed<string>(() => {
+    const value = this.maxOrdersPerDay();
+    return Number.isFinite(value) ? `${value.toLocaleString()} orders/day` : 'Invalid limit';
+  });
+
+  readonly sizingSummary = computed<string>(() => {
+    if (this.sizingPreset() === 'safe_canary') return 'One share per signal';
+    if (this.sizingPreset() === 'custom') {
+      return this.customKind() === 'FixedShares' ? 'Fixed shares' : 'Fixed notional';
+    }
+    return 'Reference parity';
+  });
+
+  readonly legCount = computed<number>(() => this.actionPlan().on_enter.length);
 
   readonly actionPlanTradeSymbol = computed<string | null>(() =>
     singleLongStockActionSymbol(this.actionPlan()) || null,
@@ -400,57 +435,55 @@ export class BrokerDeployFormComponent {
     return evidence;
   });
 
-  readonly deployTabs = computed<DeployTab[]>(() => [
-    {
-      key: 'strategy',
-      label: 'Strategy',
-      target: 'strategy-section',
-      complete:
-        this.selectedValidation() !== null &&
-        this.specPath().trim() !== '' &&
-        this.qcBacktestId().trim() !== '' &&
-        this.qcAuditCopyPath().trim() !== '',
-    },
-    {
-      key: 'signal',
-      label: 'Signal stream',
-      target: 'signal-section',
-      complete: this.resolvedSignalStream() !== '',
-    },
-    {
-      key: 'sizing',
-      label: 'Sizing',
-      target: 'sizing-section',
-      complete: this.customSizingError() === null,
-    },
-    {
-      key: 'legs',
-      label: 'Legs',
-      target: 'action-plan-picker-heading',
-      complete: this.actionPlanReadiness().canDeploy,
-    },
-    {
-      key: 'launch',
-      label: 'Launch',
-      target: 'launch-section',
-      complete: this.instanceId().trim() !== '' && !this.instanceIdInvalid(),
-    },
-  ]);
-
-  readonly instanceIdInvalid = computed<boolean>(() => {
+  readonly deploymentNameError = computed<string | null>(() => {
     const id = this.instanceId().trim();
-    return id !== '' && !INSTANCE_ID_RE.test(id);
+    return id !== '' && !INSTANCE_ID_RE.test(id)
+      ? 'Use letters, numbers, periods, underscores, or hyphens.'
+      : null;
   });
 
-  readonly fieldsReady = computed<boolean>(() => this.required());
+  deploymentNameFieldError(): string | null {
+    if (!this.ticketForm.instanceId().touched()) return null;
+    return this.instanceId().trim() === '' ? 'Enter a deployment name.' : this.deploymentNameError();
+  }
+
+  strategyFieldError(): string | null {
+    if (!this.ticketForm.strategyKey().touched()) return null;
+    if (this.strategyKey().trim() === '') return 'Choose an approved strategy.';
+    return this.validatedReceiptIssue();
+  }
+
+  signalStreamFieldError(): string | null {
+    return this.ticketForm.signalStream().touched() && this.resolvedSignalStream() === ''
+      ? 'Enter the market-data stream this strategy should read.'
+      : null;
+  }
+
+  dailyOrderLimitFieldError(): string | null {
+    return this.ticketForm.maxOrdersPerDay().touched() ? this.dailyOrderLimitError() : null;
+  }
+
+  customSizingFieldError(): string | null {
+    if (this.sizingPreset() !== 'custom') return null;
+    return this.ticketForm.customValue().touched() ? this.customSizingError() : null;
+  }
+
+  executionModeFieldError(): string | null {
+    return this.executionModeTouched() && this.executionMode() === 'live'
+      ? 'Live orders are unavailable here. Choose paper orders or read-only.'
+      : null;
+  }
+
+  legsFieldError(): string | null {
+    return this.legsTouched() && !this.actionPlanReadiness().canDeploy
+      ? this.actionPlanReadiness().message
+      : null;
+  }
+
   readonly missingRequiredFields = computed<string[]>(() => {
     const missing: string[] = [];
     if (this.strategyKey().trim() === '') missing.push('Strategy');
-    if (this.specPath().trim() === '') missing.push('Validated deploy binding');
     if (this.resolvedSignalStream() === '') missing.push('Signal stream');
-    if (this.accountId().trim() === '') missing.push('Connected broker account');
-    if (this.qcBacktestId().trim() === '') missing.push('Backtest ID');
-    if (this.qcAuditCopyPath().trim() === '') missing.push('Algorithm audit copy');
     if (this.instanceId().trim() === '') missing.push('Deployment name');
     return missing;
   });
@@ -458,9 +491,13 @@ export class BrokerDeployFormComponent {
   readonly formBlockers = computed<OperatorBlocker[]>(() =>
     buildFormBlockers({
       missingRequiredFields: this.missingRequiredFields(),
+      validationReceiptIssue: this.validatedReceiptIssue(),
+      brokerAccountState: this.brokerAccountState(),
+      deploymentNameError: this.deploymentNameError(),
       identityConflictSummary: this.identityCoherenceBlock()?.summary ?? null,
       exposureConflictSummary: this.exposureCoherenceBlock()?.summary ?? null,
       customSizingError: this.customSizingError(),
+      dailyOrderLimitError: this.dailyOrderLimitError(),
       allInCoexistenceBlock: this.allInCoexistenceBlock(),
       liveExecutionSelected: this.executionMode() === 'live',
       actionPlanReady: this.actionPlanReadiness().canDeploy,
@@ -488,17 +525,11 @@ export class BrokerDeployFormComponent {
     })?.invoke();
   }
   constructor() {
-    // Re-deploy URLs seed operator/runtime fields; validation receipts still win.
+    // Re-deploy URLs seed operator-owned choices; the selected validation
+    // receipt remains the only source of deploy provenance.
     const prefill = deployPrefillParamsFromQuery(this.route.snapshot.queryParamMap);
-    if (prefill.strategyKey) this.strategyKey.set(prefill.strategyKey);
-    if (prefill.specPath) {
-      // Preserved only until the selected strategy's validation receipt loads.
-      this.manualSpecPath.set(true);
-      this.specPath.set(prefill.specPath);
-    }
-    if (prefill.qcBacktestId) this.qcBacktestId.set(prefill.qcBacktestId);
-    if (prefill.qcAuditCopyPath) this.qcAuditCopyPath.set(prefill.qcAuditCopyPath);
-    if (prefill.instanceId) this.instanceId.set(prefill.instanceId);
+    if (prefill.strategyKey) this.updateTicket({ strategyKey: prefill.strategyKey });
+    if (prefill.instanceId) this.updateTicket({ instanceId: prefill.instanceId });
     if (prefill.inheritedSymbol) this.inheritedSymbol.set(prefill.inheritedSymbol);
     if (prefill.inheritedSymbolSource) this.inheritedSymbolSource.set(prefill.inheritedSymbolSource);
     if (prefill.inheritedExposurePosture) this.inheritedExposurePosture.set(prefill.inheritedExposurePosture);
@@ -510,13 +541,12 @@ export class BrokerDeployFormComponent {
     if (prefill.parentRunId) this.parentRunId.set(prefill.parentRunId);
     if (prefill.signalStream) {
       this.signalStreamManuallyEdited.set(true);
-      this.signalStream.set(prefill.signalStream);
+      this.updateTicket({ signalStream: prefill.signalStream });
     }
 
     effect(() => {
       const validation = this.selectedValidation();
       if (!validation) return;
-      this.manualSpecPath.set(false);
       if (validation.settings_file_ref && this.specPath() !== validation.settings_file_ref) {
         this.specPath.set(validation.settings_file_ref);
       }
@@ -528,21 +558,10 @@ export class BrokerDeployFormComponent {
       }
       const validationSignal = normalizedSymbol(validation.validation_case_symbol);
       if (validationSignal && !this.signalStreamManuallyEdited()) {
-        this.signalStream.set(validationSignal);
+        this.updateTicket({ signalStream: validationSignal });
       }
     });
 
-    effect(() => {
-      if (this.manualSpecPath()) return;
-      if (this.selectedValidation() !== null) return;
-      const strategy = this.strategyKey();
-      const fixtures = this.specFixtures.value() ?? [];
-      const match = fixtures.find((f) => f.name === strategy);
-      const nextPath = match?.path;
-      if (nextPath && this.specPath() !== nextPath) {
-        this.specPath.set(nextPath);
-      }
-    });
     effect(() => {
       this.accountId.set(this.brokerAccountId());
     });
@@ -558,14 +577,6 @@ export class BrokerDeployFormComponent {
       if (this.deployPreflight.isLoading() || response === null || params === null) return;
       this.settledDeployPreflight.set({ params, response });
     });
-
-    afterEveryRender(() => {
-      this.syncRenderedFieldValues({ includeEmpty: false, onlyEmptySignals: true });
-    });
-    const restoreSyncHandle = window.setInterval(() => {
-      this.syncRenderedFieldValues({ includeEmpty: false, onlyEmptySignals: true });
-    }, 250);
-    this.destroyRef.onDestroy(() => window.clearInterval(restoreSyncHandle));
   }
 
   private readonly required = computed<boolean>(
@@ -590,16 +601,26 @@ export class BrokerDeployFormComponent {
     if (!own || Number(own.quantity) === 0) return null;
     return (
       `Reference parity blocked: ${symbol} already holds ${own.quantity} share(s) on this account. ` +
-      'Flatten the position, or pick Safe canary / Custom — the capital-sleeve layer that would let ' +
+      'Flatten the position, or choose one share per signal / a fixed size — the capital-sleeve layer that would let ' +
       'two all-in bots coexist on one symbol is not built yet.'
     );
   });
 
-  readonly canSubmit = computed<boolean>(() => this.ready() && this.commandState().canSubmit);
+  readonly canSubmit = computed<boolean>(
+    () => this.ticketForm().valid() && this.ready() && this.commandState().canSubmit,
+  );
 
   async submit(): Promise<void> {
-    this.syncRenderedFieldValues();
-    if (!this.canSubmit()) return;
+    if (!this.canSubmit()) {
+      this.ticketForm.instanceId().markAsTouched();
+      this.ticketForm.strategyKey().markAsTouched();
+      this.ticketForm.signalStream().markAsTouched();
+      this.ticketForm.maxOrdersPerDay().markAsTouched();
+      this.ticketForm.customValue().markAsTouched();
+      this.executionModeTouched.set(true);
+      this.legsTouched.set(true);
+      return;
+    }
     this.busy.set(true);
     this.error.set(null);
     this.activeCoherenceRecovery.set(null);
@@ -649,7 +670,7 @@ export class BrokerDeployFormComponent {
       readonly: this.readonlyFlag(),
       hydrate_policy: this.hydratePolicy(),
       strategy: strategyKey,
-      max_orders_per_day: Number.isFinite(maxOrders) ? maxOrders : DEFAULT_MAX_ORDERS_PER_DAY,
+      max_orders_per_day: maxOrders,
       ibkr_host: '127.0.0.1',
     };
     try {
@@ -660,9 +681,6 @@ export class BrokerDeployFormComponent {
       const identitySeeded = this.seedIdentityCoherenceEvidence(err);
       const exposureSeeded = this.seedExposureCoherenceEvidence(err);
       this.activeCoherenceRecovery.set(exposureSeeded ? 'exposure' : identitySeeded ? 'identity' : null);
-      if (exposureSeeded) {
-        this.activeDeployTab.set('launch');
-      }
       this.error.set(toOperationError('deploy', err));
     } finally {
       this.busy.set(false);
@@ -699,6 +717,10 @@ export class BrokerDeployFormComponent {
       : '';
   }
 
+  updateTicket(patch: Partial<DeployTicketModel>): void {
+    this.ticket.update((current) => ({ ...current, ...patch }));
+  }
+
   private deployPreflightRequest(): DeployPreflightParams | null {
     const strategyKey = this.strategyKey().trim();
     const accountId = this.accountId().trim();
@@ -711,134 +733,20 @@ export class BrokerDeployFormComponent {
     };
   }
 
-  private renderedFieldValue(
-    field:
-      | 'strategyKey'
-      | 'specPath'
-      | 'signalStream'
-      | 'accountId'
-      | 'qcBacktestId'
-      | 'qcAuditCopyPath'
-      | 'instanceId',
-  ): string | null {
-    const control = this.host.nativeElement.querySelector(
-      `[data-deploy-field="${field}"]`,
-    );
-    if (control instanceof HTMLInputElement || control instanceof HTMLSelectElement) {
-      return control.value;
-    }
-    return null;
-  }
-
-  private fixtureSymbolsForPath(path: string): string[] {
-    const fixture = (this.specFixtures.value() ?? []).find((f) => f.path === path);
-    return [
-      ...new Set(
-        (fixture?.symbols ?? [])
-          .map((symbol) => normalizedSymbol(symbol))
-          .filter((symbol) => symbol !== ''),
-      ),
-    ];
-  }
-
-  private seedSignalStreamFromFixturePath(path: string): void {
-    const symbols = this.fixtureSymbolsForPath(path);
-    if (symbols.length === 1) {
-      this.signalStream.set(symbols[0]);
-      return;
-    }
-    const current = normalizedSymbol(this.signalStream());
-    if (symbols.length > 1 && !symbols.includes(current)) {
-      this.signalStream.set('');
-    }
-  }
-
-  private shouldSyncRenderedValue(
-    renderedValue: string | null,
-    signalValue: string,
-    includeEmpty: boolean,
-    onlyEmptySignals: boolean,
-  ): renderedValue is string {
-    return (
-      renderedValue !== null &&
-      (includeEmpty || renderedValue.trim() !== '') &&
-      (!onlyEmptySignals || signalValue.trim() === '') &&
-      renderedValue !== signalValue
-    );
-  }
-
-  syncRenderedFieldValues(options: { includeEmpty?: boolean; onlyEmptySignals?: boolean } = {}): void {
-    const includeEmpty = options.includeEmpty ?? true;
-    const onlyEmptySignals = options.onlyEmptySignals ?? false;
-    const strategyKey = this.renderedFieldValue('strategyKey');
-    if (this.shouldSyncRenderedValue(strategyKey, this.strategyKey(), includeEmpty, onlyEmptySignals)) {
-      this.manualSpecPath.set(false);
-      this.signalStreamManuallyEdited.set(false);
-      this.strategyKey.set(strategyKey);
-    }
-
-    const specPath = this.renderedFieldValue('specPath');
-    if (this.shouldSyncRenderedValue(specPath, this.specPath(), includeEmpty, onlyEmptySignals)) {
-      this.specPath.set(specPath);
-      if (!this.manualSpecPath()) this.seedSignalStreamFromFixturePath(specPath);
-    }
-
-    const signalStream = this.renderedFieldValue('signalStream');
-    if (this.shouldSyncRenderedValue(signalStream, this.signalStream(), includeEmpty, onlyEmptySignals)) {
-      this.signalStream.set(normalizedSymbol(signalStream));
-    }
-
-    const qcBacktestId = this.renderedFieldValue('qcBacktestId');
-    if (this.shouldSyncRenderedValue(qcBacktestId, this.qcBacktestId(), includeEmpty, onlyEmptySignals)) {
-      this.qcBacktestId.set(qcBacktestId);
-    }
-
-    const qcAuditCopyPath = this.renderedFieldValue('qcAuditCopyPath');
-    if (this.shouldSyncRenderedValue(qcAuditCopyPath, this.qcAuditCopyPath(), includeEmpty, onlyEmptySignals)) {
-      this.qcAuditCopyPath.set(qcAuditCopyPath);
-    }
-
-    const instanceId = this.renderedFieldValue('instanceId');
-    if (this.shouldSyncRenderedValue(instanceId, this.instanceId(), includeEmpty, onlyEmptySignals)) {
-      this.instanceId.set(instanceId);
-    }
-  }
-
   setStrategyKey(e: Event): void {
-    this.manualSpecPath.set(false);
     this.signalStreamManuallyEdited.set(false);
-    this.strategyKey.set(this.text(e));
-  }
-  setSpecPath(e: Event): void {
-    this.specPath.set(this.text(e));
-  }
-  setSpecFixturePath(e: Event): void {
-    this.manualSpecPath.set(false);
-    const path = this.text(e);
-    this.specPath.set(path);
-    this.seedSignalStreamFromFixturePath(path);
+    this.updateTicket({ strategyKey: this.text(e) });
   }
   setSignalStream(e: Event): void {
     this.signalStreamManuallyEdited.set(true);
-    this.signalStream.set(normalizedSymbol(this.text(e)));
-  }
-  useManualSpecPath(): void {
-    this.manualSpecPath.set(true);
-  }
-  setAccountId(e: Event): void {
-    void e;
-  }
-  setQcBacktestId(e: Event): void {
-    this.qcBacktestId.set(this.text(e));
-  }
-  setQcAuditCopyPath(e: Event): void {
-    this.qcAuditCopyPath.set(this.text(e));
+    this.updateTicket({ signalStream: normalizedSymbol(this.text(e)) });
   }
   setInstanceId(e: Event): void {
-    this.instanceId.set(this.text(e));
+    this.updateTicket({ instanceId: this.text(e) });
   }
   setExecutionMode(e: Event): void {
     if (e.target instanceof HTMLInputElement) {
+      this.executionModeTouched.set(true);
       this.setExecutionModeValue(e.target.value);
     }
   }
@@ -851,7 +759,12 @@ export class BrokerDeployFormComponent {
     if (v === 'require' || v === 'optional' || v === 'disabled') this.hydratePolicy.set(v);
   }
   setMaxOrders(e: Event): void {
-    if (e.target instanceof HTMLInputElement) this.maxOrdersPerDay.set(e.target.valueAsNumber);
+    if (e.target instanceof HTMLInputElement) {
+      this.updateTicket({ maxOrdersPerDay: e.target.valueAsNumber });
+    }
+  }
+  markLegsTouched(): void {
+    this.legsTouched.set(true);
   }
   confirmIdentityCoherence(): void {
     const evidence = this.identityCoherenceEvidence();
@@ -883,15 +796,7 @@ export class BrokerDeployFormComponent {
     this.error.set(null);
   }
 
-  setActiveDeployTab(key: DeployTabKey): void {
-    this.activeDeployTab.set(key);
-  }
-
   private focusDeployAnchor(anchor: string): void {
-    const tab = DEPLOY_ANCHOR_TABS[anchor];
-    if (tab) {
-      this.setActiveDeployTab(tab);
-    }
     queueMicrotask(() => {
       this.host.nativeElement.querySelector<HTMLElement>(`#${anchor}`)?.scrollIntoView?.({ block: 'center' });
     });
@@ -929,18 +834,15 @@ export class BrokerDeployFormComponent {
   }
 
   setCustomKind(e: Event): void {
-    if (!(e.target instanceof HTMLSelectElement)) return;
+    if (!(e.target instanceof HTMLSelectElement || e.target instanceof HTMLInputElement)) return;
     const v = e.target.value;
     if (v === 'FixedShares' || v === 'FixedNotional') {
-      this.customKind.set(v);
       // Re-default the value to a sane shape for the kind (1 share / 100 dollars).
-      this.customValue.set(v === 'FixedShares' ? '1' : '100');
+      this.updateTicket({ customKind: v, customValue: v === 'FixedShares' ? '1' : '100' });
     }
   }
 
   setCustomValue(e: Event): void {
-    if (e.target instanceof HTMLInputElement) {
-      this.customValue.set(e.target.value);
-    }
+    this.updateTicket({ customValue: this.text(e) });
   }
 }

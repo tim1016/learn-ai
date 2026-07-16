@@ -205,6 +205,92 @@ describe('toOperationError', () => {
     expect(e.detail).toBe('DIagVal6 is durably STOPPED. Resume the bot to clear the stop latch.');
     expect(e.remediation).toBe('Use Resume to set desired_state=RUNNING, then start the bot.');
     expect(e.remediation).not.toContain('working tree is dirty');
+    expect(e.reason_code).toBe('STOPPED_REQUIRES_RESUME');
+    expect(e.gate_id).toBe('desired_state.start');
+  });
+
+  it('does not replace a typed precondition without remediation with legacy deploy advice', () => {
+    const err = new HttpErrorResponse({
+      status: 409,
+      error: {
+        detail: {
+          reason_code: 'DEPLOY_PREFLIGHT_BLOCKED',
+          message: 'A server launch check has not passed.',
+          gate_id: 'broker.connection',
+        },
+      },
+    });
+
+    const e = toOperationError('deploy', err);
+
+    expect(e.remediation).toBe('A precondition is not met. Resolve the conflict and retry.');
+    expect(e.remediation).not.toContain('working tree is dirty');
+    expect(e.reason_code).toBe('DEPLOY_PREFLIGHT_BLOCKED');
+    expect(e.gate_id).toBe('broker.connection');
+  });
+
+  it('preserves typed deployment blockers and their recovery moves from a 409 launch race', () => {
+    const err = new HttpErrorResponse({
+      status: 409,
+      error: {
+        detail: {
+          reason_code: 'DEPLOY_PREFLIGHT_BLOCKED',
+          message: 'A launch gate changed after the ticket check.',
+          gate_id: 'broker.connection',
+          blockers: [
+            {
+              condition: {
+                id: 'broker_disconnected',
+                severity: 'blocking',
+                scope: 'broker',
+                evidence: { observed: false },
+              },
+              host: 'deploy_preflight',
+              disposition: 'fix_elsewhere',
+              headline: 'Broker session needs reconnecting',
+              detail: 'Reconnect through Account Clerk, then retry the launch.',
+              primary_move: {
+                label: 'Open broker account',
+                action: { kind: 'navigate', route: '/broker/account-monitor', fragment: null },
+                target: null,
+              },
+              secondary_moves: [],
+              applies_to: 'deploy',
+            },
+          ],
+        },
+      },
+    });
+
+    const e = toOperationError('deploy', err);
+
+    expect(e.blockers).toHaveLength(1);
+    expect(e.blockers?.[0]).toMatchObject({
+      headline: 'Broker session needs reconnecting',
+      primary_move: { label: 'Open broker account' },
+    });
+  });
+
+  it('keeps typed 503 reason, gate, and server remediation instead of applying deploy-specific advice', () => {
+    const err = new HttpErrorResponse({
+      status: 503,
+      error: {
+        detail: {
+          reason_code: 'FLEET_CONTAMINATION_UNAVAILABLE',
+          message: 'Fleet contamination status cannot be verified.',
+          remediation: 'Restore fleet inspection, then retry launch.',
+          gate_id: 'fleet.contamination',
+        },
+      },
+    });
+
+    const e = toOperationError('deploy', err);
+
+    expect(e.category).toBe('infra');
+    expect(e.reason_code).toBe('FLEET_CONTAMINATION_UNAVAILABLE');
+    expect(e.gate_id).toBe('fleet.contamination');
+    expect(e.remediation).toBe('Restore fleet inspection, then retry launch.');
+    expect(e.remediation).not.toContain('Start the live engine');
   });
 
   it('falls back to the legacy string-detail path when the 409 body is not OUTCOME_UNKNOWN', () => {

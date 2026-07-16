@@ -55,4 +55,19 @@ describe('BrokerOperationResultComponent', () => {
     expect(el.querySelector('.op-detail')).toBeNull();
     expect(el.textContent).toContain('Commit or stash');
   });
+
+  it('renders typed server reason and gate labels beside the next step', () => {
+    const fixture = render({
+      ...ERR,
+      reason_code: 'DEPLOY_PREFLIGHT_BLOCKED',
+      gate_id: 'daily_lifecycle.effective_stop',
+    });
+    const el = fixture.nativeElement as HTMLElement;
+
+    expect(el.textContent).toContain('Server reason');
+    expect(el.textContent).toContain('Deploy Preflight Blocked');
+    expect(el.textContent).toContain('Rejected at');
+    expect(el.textContent).toContain('Daily Lifecycle Effective Stop');
+    expect(el.textContent).toContain('Next:');
+  });
 });
