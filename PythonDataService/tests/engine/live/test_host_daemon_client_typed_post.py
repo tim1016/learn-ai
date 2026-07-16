@@ -32,6 +32,7 @@ from app.engine.live.host_daemon_client import (
     HostDaemonOutcomeUnknownError,
     deploy,
     emergency_flatten_run,
+    ensure_account_clerk,
     start_run,
     stop_run,
 )
@@ -68,6 +69,23 @@ async def test_start_run_returns_parsed_body_on_2xx() -> None:
     result = await start_run(BASE, "run-A", {})
 
     assert result["accepted"] is True
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_ensure_account_clerk_sends_host_side_broker_address() -> None:
+    route = respx.post(f"{BASE}/accounts/DU123/clerk/ensure").mock(
+        return_value=httpx.Response(200, json={"clerks": []})
+    )
+
+    result = await ensure_account_clerk(
+        BASE,
+        "DU123",
+        ibkr_host="127.0.0.1",
+    )
+
+    assert result == {"clerks": []}
+    assert route.calls.last.request.content == b'{"ibkr_host":"127.0.0.1"}'
 
 
 # ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -90,3 +91,39 @@ def test_start_live_daemon_print_launch_env_preserves_process_override(tmp_path:
     allowed_hosts = set(payload["allowed_ibkr_hosts"])
     assert "192.168.1.53" in allowed_hosts
     assert "192.168.1.52" not in allowed_hosts
+
+
+def test_bootstrap_daemon_match_accepts_optional_cli_arguments_before_repo_root() -> None:
+    repo_root = Path(__file__).resolve().parents[4]
+    script = (repo_root / "bootstrap-host-daemon.sh").read_text(encoding="utf-8")
+    match_line = next(
+        line for line in script.splitlines() if line.startswith('DAEMON_MATCH="')
+    )
+    daemon_match = match_line.removeprefix('DAEMON_MATCH="').removesuffix('"')
+    daemon_match = daemon_match.replace("$ROOT_DIR", re.escape(str(repo_root)))
+
+    standard_argv = (
+        "python -m app.engine.live.host_daemon "
+        f"--repo-root {repo_root} --port 8765"
+    )
+    host_first_argv = (
+        "python -m app.engine.live.host_daemon --host 0.0.0.0 "
+        f"--repo-root {repo_root} --env-file {repo_root / '.env'}"
+    )
+
+    assert re.search(daemon_match, standard_argv)
+    assert re.search(daemon_match, host_first_argv)
+
+
+def test_bootstrap_active_run_probe_authenticates_health_request() -> None:
+    repo_root = Path(__file__).resolve().parents[4]
+    script = (repo_root / "bootstrap-host-daemon.sh").read_text(encoding="utf-8")
+    active_run_ids = script.split("active_run_ids() {", maxsplit=1)[1].split(
+        "\n}", maxsplit=1
+    )[0]
+
+    health_request = next(
+        line for line in active_run_ids.splitlines() if '"$HEALTH_URL"' in line
+    )
+
+    assert 'X-Live-Runner-Token: $token' in health_request

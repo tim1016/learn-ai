@@ -87,6 +87,7 @@ from app.schemas.live_runs import (
     AuditCopySizingLookup,
     EmergencyFlattenRequest,
     HostRunnerActionResponse,
+    HostRunnerClerkEnsureRequest,
     HostRunnerDeployRequest,
     HostRunnerDeployResponse,
     HostRunnerHealth,
@@ -788,7 +789,7 @@ class RunnerProcessManager:
                     # ``_ensure_account_clerk`` before the bot is allowed to
                     # reach any submit surface.  A bot must never race ahead
                     # of the account authority it depends on.
-                    self._ensure_account_clerk(account_id, request=request)
+                    self._ensure_account_clerk(account_id, ibkr_host=request.ibkr_host)
                 process = subprocess.Popen(
                     command,
                     cwd=str(self.repo_root),
@@ -1563,13 +1564,13 @@ class RunnerProcessManager:
         self,
         account_id: str,
         *,
-        request: HostRunnerStartRequest | None = None,
+        ibkr_host: str | None = None,
     ) -> ManagedClerk:
         """Ensure account authority through the dedicated Clerk supervisor."""
 
         return self._clerk_supervisor.ensure(
             account_id,
-            ibkr_host=request.ibkr_host if request is not None else None,
+            ibkr_host=ibkr_host,
         )
 
     @staticmethod
@@ -1974,11 +1975,21 @@ def create_app(
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
     @app.post("/accounts/{account_id}/clerk/ensure", response_model=HostRunnerHealth, dependencies=auth)
-    async def ensure_account_clerk(account_id: str) -> HostRunnerHealth:
+    async def ensure_account_clerk(
+        account_id: str,
+        request: HostRunnerClerkEnsureRequest,
+    ) -> HostRunnerHealth:
         """Start and generation-handshake the sole Clerk before an operator cure."""
 
         try:
-            await run_in_threadpool(process_manager._ensure_account_clerk, account_id)
+            validate_ibkr_host_allowed(request.ibkr_host)
+            await run_in_threadpool(
+                process_manager._ensure_account_clerk,
+                account_id,
+                ibkr_host=request.ibkr_host,
+            )
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
         except HostRunnerError as exc:
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
         except OSError as exc:
