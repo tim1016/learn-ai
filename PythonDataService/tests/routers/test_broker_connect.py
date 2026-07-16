@@ -112,6 +112,7 @@ def installed_fake_client(monkeypatch, reset_settings):
     from app.broker.ibkr import client as ibkr_client_module
     from app.routers import broker as broker_router
 
+    broker_router._pending_account_service_release_account_id = None
     fake = FakeClient()
     ibkr_client_module.set_client(fake)  # type: ignore[arg-type]
     # Make the router's factory return THIS fake when get_client() raises.
@@ -142,6 +143,7 @@ def installed_fake_client(monkeypatch, reset_settings):
     fake.warm_calls = warm_calls  # type: ignore[attr-defined]
     fake.release_calls = release_calls  # type: ignore[attr-defined]
     yield fake
+    broker_router._pending_account_service_release_account_id = None
     ibkr_client_module.set_client(None)
 
 
@@ -323,6 +325,7 @@ async def test_warm_account_evidence_timeout_is_recoverable(
 
     monkeypatch.setattr(account_truth_refresh, "refresh_account_truth_now", never_finishes)
     monkeypatch.setattr(host_daemon_client, "ensure_account_clerk", never_finishes)
+    monkeypatch.setattr(broker_router, "_ACCOUNT_SERVICE_ATTACH_TIMEOUT_S", 0.001)
     monkeypatch.setattr(broker_router, "_ACCOUNT_EVIDENCE_WARMUP_TIMEOUT_S", 0.001)
 
     with caplog.at_level(logging.WARNING, logger=broker_router.logger.name):
@@ -365,6 +368,69 @@ async def test_warm_account_evidence_attaches_service_before_account_truth(
     )
 
     assert order == ["ensure", "refresh"]
+
+
+async def test_warm_account_evidence_refreshes_truth_when_account_service_attach_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live import host_daemon_client
+    from app.services import account_truth_refresh
+
+    refreshed: list[str] = []
+
+    async def ensure(*_args, **_kwargs) -> dict:
+        raise host_daemon_client.HostDaemonError(503, "daemon unavailable")
+
+    async def refresh(*_args, **_kwargs):
+        refreshed.append("truth")
+        return None
+
+    monkeypatch.setattr(host_daemon_client, "ensure_account_clerk", ensure)
+    monkeypatch.setattr(account_truth_refresh, "refresh_account_truth_now", refresh)
+    monkeypatch.setattr(
+        "app.services.account_reconciliation.AccountReconciliationService.ensure_automatic_reconciliation",
+        lambda self, **_kwargs: None,
+    )
+
+    from app.routers import broker as broker_router
+
+    await broker_router._warm_account_evidence_after_connect(
+        FakeClient(starts_connected=True),  # type: ignore[arg-type]
+        _build_health(connected=True),
+    )
+
+    assert refreshed == ["truth"]
+
+
+async def test_release_account_service_preserves_detached_account_for_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import HTTPException
+
+    from app.engine.live import host_daemon_client
+    from app.routers import broker as broker_router
+
+    calls: list[str] = []
+
+    async def release(_base_url: str, account_id: str) -> dict:
+        calls.append(account_id)
+        if len(calls) == 1:
+            raise host_daemon_client.HostDaemonError(503, "temporarily unavailable")
+        return {}
+
+    monkeypatch.setattr(host_daemon_client, "release_account_clerk", release)
+    broker_router._pending_account_service_release_account_id = None
+
+    with pytest.raises(HTTPException) as exc_info:
+        await broker_router._release_account_service_after_disconnect("DU1234567")
+
+    assert exc_info.value.status_code == 503
+    assert broker_router._pending_account_service_release_account_id == "DU1234567"
+
+    await broker_router._release_account_service_after_disconnect(None)
+
+    assert calls == ["DU1234567", "DU1234567"]
+    assert broker_router._pending_account_service_release_account_id is None
 
 
 # ─── error translation ────────────────────────────────────────────────

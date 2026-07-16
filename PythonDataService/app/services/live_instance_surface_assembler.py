@@ -295,6 +295,7 @@ class LiveInstanceSurfaceAssembler:
             crash_recovery_gate=crash_recovery_gate,
             account_clerk=account_clerk,
             account_observation=account_observation,
+            account_gate_authority=getattr(settings, "account_gate_authority", "account_truth"),
             reconciliation_receipt=reconciliation_receipt,
             current_wal_seq=current_wal_seq,
             current_run_id=current_run_id,

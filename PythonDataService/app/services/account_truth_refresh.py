@@ -287,7 +287,14 @@ class AccountTruthRefreshLoop:
                     return None
 
                 if self._account_service_ensurer is not None:
-                    await self._account_service_ensurer(health.account_id)
+                    try:
+                        await self._account_service_ensurer(health.account_id)
+                    except Exception:
+                        logger.warning(
+                            "account service attach failed; continuing Account Truth refresh",
+                            extra={"account_id": health.account_id},
+                            exc_info=True,
+                        )
 
                 refresh_kwargs: dict[str, object] = {
                     "context": "account truth refresh loop",

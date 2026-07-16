@@ -356,7 +356,8 @@ class AccountClerkSupervisor:
         with self.account_lock(account_id):
             clerk = self._resolve_orphan_locked(account_id)
             if clerk is None:
-                return True
+                with self._state_lock:
+                    return account_id not in self._start_blockers
             return self._reap(account_id, clerk, reason="broker account detached")
 
     def health(self) -> list[AccountClerkHealth]:
@@ -776,7 +777,7 @@ class AccountClerkSupervisor:
     def _replace_exited_account_service(self, account_id: str, clerk: ManagedClerk) -> None:
         try:
             self.ensure(account_id)
-        except OSError:
+        except Exception:
             logger.exception(
                 "could not replace exited account Clerk",
                 extra={"account_id": account_id, "generation": clerk.generation},

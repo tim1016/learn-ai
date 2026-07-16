@@ -197,6 +197,7 @@ describe('HostProcessNoticeComponent — Start bot process button', () => {
     ['STOPPED_REQUIRES_RESUME', 'run roll call'],
     ['STOPPED_REQUIRES_REDEPLOY', 'dead or retired'],
     ['START_SETTINGS_INCOMPLETE', 'saved start settings are incomplete'],
+    ['ACCOUNT_EVIDENCE_STALE', 'account check is overdue'],
   ] as const)('maps disabled_reason_code %s to trader copy', (code, fragment) => {
     const { el } = render({
       hostProcess: host({

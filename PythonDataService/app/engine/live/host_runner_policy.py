@@ -114,7 +114,7 @@ def host_process_ibkr_host(host: str) -> str:
     in host DNS at all (notably with Podman on macOS).
     """
 
-    if host.strip().lower() in _CONTAINER_HOST_ALIASES:
+    if host.strip().lower() in _CONTAINER_HOST_ALIASES | {"auto"}:
         return "127.0.0.1"
     return host
 

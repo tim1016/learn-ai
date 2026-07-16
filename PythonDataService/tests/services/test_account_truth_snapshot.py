@@ -750,6 +750,33 @@ async def test_refresh_loop_ensures_account_service_before_observing_truth(
 
 
 @pytest.mark.asyncio
+async def test_refresh_loop_continues_truth_refresh_when_account_service_attach_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = AccountTruthSnapshotProvider(hard_ttl_ms=60_000)
+    order: list[str] = []
+    monkeypatch.setattr(account_truth_refresh, "get_monitor", lambda: None)
+
+    async def ensure(_account_id: str) -> object:
+        order.append("ensure")
+        raise OSError("daemon unavailable")
+
+    async def fake_refresh_now(_client, **_kwargs) -> AccountTruthResponse:
+        order.append("refresh")
+        return _truth(generated_at_ms=2_000)
+
+    loop = AccountTruthRefreshLoop(
+        client=_FakeClient(_health(account_id="DU123", fetched_at_ms=2_000)),  # type: ignore[arg-type]
+        snapshot_provider=provider,
+        refresh_now=fake_refresh_now,
+        account_service_ensurer=ensure,
+    )
+
+    assert await loop.refresh_once() is not None
+    assert order == ["ensure", "refresh"]
+
+
+@pytest.mark.asyncio
 async def test_refresh_loop_notifies_account_truth_observer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

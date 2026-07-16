@@ -35,11 +35,15 @@ def test_policy_accepts_configured_ibkr_host() -> None:
 
 
 @pytest.mark.parametrize("alias", ["host.containers.internal", "HOST.DOCKER.INTERNAL"])
-def test_host_process_translates_container_gateway_alias_to_loopback(alias: str) -> None:
+def test_host_process_ibkr_host_translates_container_gateway_alias_to_loopback(alias: str) -> None:
     assert host_process_ibkr_host(alias) == "127.0.0.1"
 
 
-def test_host_process_preserves_remote_gateway_host() -> None:
+def test_host_process_ibkr_host_translates_auto_to_loopback() -> None:
+    assert host_process_ibkr_host("auto") == "127.0.0.1"
+
+
+def test_host_process_ibkr_host_preserves_remote_gateway_host() -> None:
     assert host_process_ibkr_host("gateway.example.com") == "gateway.example.com"
 
 

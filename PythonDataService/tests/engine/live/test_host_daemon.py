@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import shutil
 import signal
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -451,8 +453,28 @@ def test_preexisting_socket_without_lease_cannot_satisfy_readiness_or_be_unlinke
     manager.reconcile_account_clerks_on_boot()
 
     assert socket_path.exists() is True
+    assert manager._release_account_clerk(account_id) is False
     with pytest.raises(OSError, match="socket exists without a lease PID"):
         manager._ensure_account_clerk(account_id)
+
+
+def test_supervision_continues_when_replacing_one_exited_clerk_raises_value_error(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    manager, _ = daemon_context
+    clerk = SimpleNamespace(generation=4)
+
+    def raise_bad_evidence(_account_id: str) -> None:
+        raise ValueError("bad evidence")
+
+    monkeypatch.setattr(manager._clerk_supervisor, "ensure", raise_bad_evidence)
+
+    with caplog.at_level(logging.ERROR):
+        manager._clerk_supervisor._replace_exited_account_service("DU123", clerk)  # type: ignore[arg-type]
+
+    assert "could not replace exited account Clerk" in caplog.text
 
 
 def _add_managed_process(
