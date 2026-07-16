@@ -1,10 +1,16 @@
 .op-result {
-  border-left: 3px solid var(--op-accent, #888);
-  padding: 0.5rem 0.75rem;
+  --op-accent: var(--warn);
+
+  display: grid;
+  gap: 0.55rem;
   margin-top: 0.5rem;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.03);
-  font-size: 0.85rem;
+  padding: 0.8rem;
+  border: 1px solid color-mix(in srgb, var(--border-light) 72%, var(--op-accent));
+  border-left: 0.25rem solid var(--op-accent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-surface) 88%, var(--op-accent));
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
 }
 
 .sr-only {
@@ -19,37 +25,86 @@
   border: 0;
 }
 
-.op-title {
+.op-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.op-title,
+.op-detail,
+.op-remediation {
   margin: 0;
-  font-weight: 600;
+}
+
+.op-title {
+  color: var(--text-primary);
+  font-weight: var(--fw-bold);
+}
+
+.op-status {
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.op-contract {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+}
+
+.op-contract div {
+  display: grid;
+  grid-template-columns: 6.25rem minmax(0, 1fr);
+  gap: 0.5rem;
+}
+
+.op-contract dt {
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+}
+
+.op-contract dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
 }
 
 .op-detail {
-  margin: 0.25rem 0 0;
-  opacity: 0.85;
-  font-family: var(--font-mono, monospace);
-  font-size: 0.8rem;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
   overflow-wrap: break-word;
 }
 
 .op-remediation {
-  margin: 0.35rem 0 0;
+  color: var(--text-secondary);
+  line-height: 1.4;
 }
 
-// Category accents. Color is reinforced by the title text (not color-only),
-// keeping the alert WCAG-AA legible.
+.op-remediation strong {
+  color: var(--text-primary);
+}
+
 .cat-validation {
-  --op-accent: #d6a700;
+  --op-accent: var(--warn);
 }
-.cat-not-found {
-  --op-accent: #8a8a8a;
-}
-.cat-precondition {
-  --op-accent: #d97706;
-}
+
+.cat-not-found,
 .cat-infra {
-  --op-accent: #d73a49;
+  --op-accent: var(--bear);
 }
+
+.cat-precondition,
+.cat-outcome-unknown {
+  --op-accent: var(--warn);
+}
+
 .cat-unknown {
-  --op-accent: #b060d0;
+  --op-accent: var(--info);
 }

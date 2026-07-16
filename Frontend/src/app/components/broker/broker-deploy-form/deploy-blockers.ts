@@ -8,9 +8,13 @@ import type {
 
 export interface FormBlockerInput {
   missingRequiredFields: string[];
+  validationReceiptIssue?: string | null;
+  brokerAccountState?: 'checking' | 'connected' | 'unavailable';
+  deploymentNameError?: string | null;
   identityConflictSummary: string | null;
   exposureConflictSummary: string | null;
   customSizingError: string | null;
+  dailyOrderLimitError?: string | null;
   allInCoexistenceBlock?: string | null;
   liveExecutionSelected?: boolean;
   actionPlanReady: boolean;
@@ -21,12 +25,28 @@ function confirmInForm(label: string, anchor: string): OperatorMove {
   return { label, action: { kind: 'confirm_in_form', anchor }, target: null };
 }
 
+function openStrategyValidation(): OperatorMove {
+  return {
+    label: 'Open Strategy Validation',
+    action: { kind: 'navigate', route: '/strategy-validation', fragment: null },
+    target: null,
+  };
+}
+
+function openBrokerAccount(): OperatorMove {
+  return {
+    label: 'Open broker account',
+    action: { kind: 'navigate', route: '/broker/account-monitor', fragment: null },
+    target: null,
+  };
+}
+
 function formBlocker(
   id: string,
   scope: OperatorConditionScope,
   headline: string,
   detail: string,
-  move: OperatorMove,
+  move: OperatorMove | null,
   severity: BlockerSeverity = 'blocking',
   disposition: Disposition = 'fix_here',
 ): OperatorBlocker {
@@ -45,6 +65,48 @@ function formBlocker(
 export function buildFormBlockers(input: FormBlockerInput): OperatorBlocker[] {
   const blockers: OperatorBlocker[] = [];
 
+  if (input.validationReceiptIssue) {
+    blockers.push(
+      formBlocker(
+        'validated_receipt_unavailable',
+        'strategy',
+        'Validated strategy receipt is unavailable',
+        input.validationReceiptIssue,
+        openStrategyValidation(),
+        'blocking',
+        'fix_elsewhere',
+      ),
+    );
+  }
+
+  if (input.brokerAccountState === 'checking') {
+    blockers.push(
+      formBlocker(
+        'broker_account_checking',
+        'broker',
+        'Checking the connected broker account',
+        'Launch remains disabled until the Account Clerk can prove the connected broker account.',
+        null,
+        'blocking',
+        'wait',
+      ),
+    );
+  }
+
+  if (input.brokerAccountState === 'unavailable') {
+    blockers.push(
+      formBlocker(
+        'broker_account_unavailable',
+        'broker',
+        'Connected broker account unavailable',
+        'Connect the broker session, then return to launch. The server derives the account from that session.',
+        openBrokerAccount(),
+        'blocking',
+        'fix_elsewhere',
+      ),
+    );
+  }
+
   if (input.missingRequiredFields.length > 0) {
     blockers.push(
       formBlocker(
@@ -52,7 +114,19 @@ export function buildFormBlockers(input: FormBlockerInput): OperatorBlocker[] {
         'bot',
         'Deployment details incomplete',
         `Missing: ${input.missingRequiredFields.join(', ')}.`,
-        confirmInForm('Complete the form', 'strategy-section'),
+        confirmInForm('Complete the form', 'ticket-identity'),
+      ),
+    );
+  }
+
+  if (input.deploymentNameError) {
+    blockers.push(
+      formBlocker(
+        'deployment_name_invalid',
+        'bot',
+        'Deployment name is invalid',
+        input.deploymentNameError,
+        confirmInForm('Fix deployment name', 'ticket-identity'),
       ),
     );
   }
@@ -93,6 +167,18 @@ export function buildFormBlockers(input: FormBlockerInput): OperatorBlocker[] {
     );
   }
 
+  if (input.dailyOrderLimitError) {
+    blockers.push(
+      formBlocker(
+        'daily_order_limit_invalid',
+        'bot',
+        'Daily order limit is invalid',
+        input.dailyOrderLimitError,
+        confirmInForm('Fix daily order limit', 'ticket-launch-settings'),
+      ),
+    );
+  }
+
   if (input.allInCoexistenceBlock) {
     blockers.push(
       formBlocker(
@@ -100,7 +186,7 @@ export function buildFormBlockers(input: FormBlockerInput): OperatorBlocker[] {
         'strategy',
         'Reference parity sizing is blocked',
         input.allInCoexistenceBlock,
-        confirmInForm('Pick a different sizing preset', 'sizing-section'),
+        confirmInForm('Pick a different sizing preset', 'ticket-sizing'),
       ),
     );
   }
@@ -112,7 +198,7 @@ export function buildFormBlockers(input: FormBlockerInput): OperatorBlocker[] {
         'broker',
         'Live execution is unavailable from Deploy',
         'Pick read-only observation or paper orders.',
-        confirmInForm('Pick paper or read-only', 'launch-section'),
+        confirmInForm('Pick paper or read-only', 'ticket-launch-settings'),
       ),
     );
   }
@@ -124,7 +210,7 @@ export function buildFormBlockers(input: FormBlockerInput): OperatorBlocker[] {
         'strategy',
         'Entry/exit legs incomplete',
         input.actionPlanMessage ?? 'Add a valid entry leg and a matching close leg before deploying.',
-        confirmInForm('Fix the legs', 'action-plan-picker-heading'),
+        confirmInForm('Fix the legs', 'ticket-legs'),
       ),
     );
   }

@@ -1,425 +1,400 @@
 <section class="deploy">
-  <header class="head">
-    <div>
-      <p class="eyebrow"><i class="pi pi-send" aria-hidden="true"></i> Broker deploy</p>
-      <h1>Deploy a strategy</h1>
-      <p class="subtitle">Create and run one live strategy instance from a validated receipt.</p>
+  <header class="flex flex-wrap items-start justify-between gap-4">
+    <div class="grid gap-1">
+      <h1 class="eyebrow"><i class="pi pi-send" aria-hidden="true"></i> Deploy strategy</h1>
+      <p class="subtitle">Configure the trading decisions. The service binds the approved strategy and routes it through the connected Account Clerk.</p>
     </div>
     <nav class="head-actions" aria-label="Deploy page links">
-      <a routerLink="/strategy-validation" class="validation-link">Validation</a>
+      <a routerLink="/strategy-validation" class="validation-link">Strategy validation</a>
       <a routerLink="/broker/bots" class="back">Bots</a>
     </nav>
   </header>
 
   <app-broker-connectivity-strip />
 
-  @if (deployed(); as d) {
-    <div class="deployed" role="status">
-      @if (d.created) {
-        <h2>Deployment created</h2>
-        <p>Your strategy instance is ready.</p>
-      } @else {
-        <h2>This deployment already exists</h2>
-        <p>Nothing changed; your inputs match the existing deployment.</p>
-      }
-      @if (d.start) {
+  @if (deployed(); as deployment) {
+    <section class="deployed" role="status" aria-live="polite">
+      <div>
+        <h2 class="eyebrow"><i class="pi pi-check-circle" aria-hidden="true"></i>{{ deployment.created ? 'Deployment created' : 'Deployment already exists' }}</h2>
         <p>
-          Start {{ d.start.accepted ? 'accepted' : 'rejected' }}:
-          {{ d.start.process.message ?? d.start.process.state }}
+          {{ deployment.created
+            ? 'The strategy is now registered with the launch settings shown below.'
+            : 'Nothing changed; the existing deployment already matches this ticket.' }}
         </p>
-      }
-      <details>
-        <summary>Run id</summary>
-        <code>{{ d.run_id }}</code>
-      </details>
-      <a [routerLink]="deployedBotControlLink()" class="goto">View deployment</a>
-    </div>
+        @if (deployment.start) {
+          <p>Start {{ deployment.start.accepted ? 'accepted' : 'rejected' }}: {{ deployment.start.process.message ?? (deployment.start.process.state | receiptLabel) }}</p>
+        }
+      </div>
+      <div class="deployed-actions">
+        <code>{{ deployment.run_id }}</code>
+        <a [routerLink]="deployedBotControlLink()" class="goto">Monitor bot</a>
+      </div>
+    </section>
   }
 
-  <section class="deploy-top-strip" aria-label="Deployment setup">
-    <label class="field">
-      <span>Deployment name</span>
-      <input
-        data-deploy-field="instanceId"
-        type="text"
-        [value]="instanceId()"
-        (input)="setInstanceId($event)"
-        required
-        placeholder="deployment-validation-paper"
-        autocomplete="off"
-        spellcheck="false"
-      />
-    </label>
-    <label class="field">
-      <span>Connected broker account</span>
-      <input
-        pInputText
-        data-deploy-field="accountId"
-        type="text"
-        [value]="accountId()"
-        readonly
-        required
-        placeholder="Broker account unavailable"
-        autocomplete="off"
-        aria-readonly="true"
-      />
-      <small>{{ brokerAccountAvailable() ? 'Sourced from the connected broker session.' : 'Connect the broker session before deploying.' }}</small>
-    </label>
-  </section>
-
-  <div class="workspace">
-    <aside class="readiness" aria-label="Deployment command">
-      <section class="command-panel">
-        <p class="eyebrow">Deploy command</p>
-        <h2>Deploy &amp; run</h2>
-        <p>
-          {{ selectedValidation()?.display_name ?? 'Select a validated strategy before deploying.' }}
-        </p>
-        @if (blockers().length > 0) {
-          <app-operator-blocker-list
-            [blockers]="blockers()"
-            ariaLabel="Deploy blockers"
-            (moveSelected)="handleBlockerMove($event)"
-          />
-        }
-        <button type="button" class="primary" [disabled]="!canSubmit()" (click)="submit()">
-          <i class="pi pi-send" aria-hidden="true"></i>
-          Deploy &amp; run
-        </button>
-        <p class="blocked" role="status">{{ commandStatus() }}</p>
-        @if (identityCoherenceEvidence()) {
-          <app-deploy-coherence-card
-            id="identity-coherence-card"
-            title="Run identity"
-            ariaLabel="Run identity confirmation"
-            [facts]="identityCoherenceFacts()"
-            [confirmed]="identityCoherenceConfirmed()"
-            confirmLabel="Confirm new run identity"
-            (confirmationRequested)="confirmIdentityCoherence()"
-          />
-        }
-        @if (exposureCoherenceEvidence()) {
-          <app-deploy-coherence-card
-            id="exposure-coherence-card"
-            title="Inherited exposure"
-            ariaLabel="Exposure confirmation"
-            [facts]="exposureCoherenceFacts()"
-            [confirmed]="exposureCoherenceConfirmed()"
-            confirmLabel="Confirm exposure state"
-            (confirmationRequested)="confirmExposureCoherence()"
-          />
-        }
-      </section>
-    </aside>
-
-    <form class="form" (input)="syncRenderedFieldValues()" (change)="syncRenderedFieldValues()" (submit)="$event.preventDefault(); submit()">
-      <nav class="form-tabs" role="tablist" aria-label="Deploy sections">
-        @for (tab of deployTabs(); track tab.key) {
-          <button
-            type="button"
-            role="tab"
-            [attr.aria-selected]="activeDeployTab() === tab.key"
-            [attr.aria-controls]="tab.target"
-            [class.active]="activeDeployTab() === tab.key"
-            [class.complete]="tab.complete"
-            (click)="setActiveDeployTab(tab.key)"
-          >
-            <span>{{ tab.label }}</span>
-            <small>{{ tab.complete ? 'Complete' : 'Needs input' }}</small>
-          </button>
-        }
-      </nav>
-
-      <section class="group" [class.step-hidden]="activeDeployTab() !== 'strategy'" aria-labelledby="strategy-section">
-        <h2 id="strategy-section">Strategy</h2>
-        <label class="field">
-          <span>Strategy</span>
-          <select data-deploy-field="strategyKey" [value]="strategyKey()" (change)="setStrategyKey($event)" required>
-            <option value="" disabled>Select a strategy…</option>
-            @for (s of validatedStrategies(); track s.strategy_key) {
-              <option [value]="s.strategy_key">{{ s.display_name }}</option>
+  <form class="ticket" novalidate (submit)="$event.preventDefault(); submit()">
+    <div class="ticket-main">
+      <section id="ticket-identity" class="ticket-section" aria-labelledby="ticket-identity-heading">
+        <div class="section-head">
+          <h2 id="ticket-identity-heading" class="section-kicker">Deployment</h2>
+        </div>
+        <div class="field-grid two-columns">
+          <label class="field">
+            <span>Deployment name</span>
+            <input
+              pInputText
+              data-deploy-field="instanceId"
+              type="text"
+              [formField]="ticketForm.instanceId"
+              (input)="setInstanceId($event)"
+              placeholder="spy-open-canary"
+              autocomplete="off"
+              spellcheck="false"
+              [attr.aria-invalid]="deploymentNameFieldError() !== null"
+              [attr.aria-describedby]="deploymentNameFieldError() ? 'deployment-name-help deployment-name-error' : 'deployment-name-help'"
+            />
+            <small id="deployment-name-help">Use letters, numbers, periods, underscores, or hyphens.</small>
+            @if (deploymentNameFieldError(); as error) {
+              <small id="deployment-name-error" class="field-error" role="alert">{{ error }}</small>
             }
-          </select>
-          <small>Only strategies with completed Strategy Validation appear here.</small>
-        </label>
+          </label>
 
-        <label class="field">
-          <span>Validated deploy binding</span>
-          <input
-            data-deploy-field="specPath"
-            type="text"
-            [value]="specPath()"
-            readonly
-            required
-            placeholder="Select a validated strategy first"
-            autocomplete="off"
-            spellcheck="false"
-            aria-readonly="true"
-          />
-          @if (selectedValidation(); as validation) {
-            <small
-              >Locked by validation receipt. SHA-256: <code>{{ validation.settings_file_sha256 }}</code></small
+          <label class="field">
+            <span>Strategy</span>
+            <select
+              data-deploy-field="strategyKey"
+              [formField]="ticketForm.strategyKey"
+              (change)="setStrategyKey($event)"
+              [attr.aria-invalid]="strategyFieldError() !== null"
+              [attr.aria-describedby]="strategyFieldError() ? 'strategy-error' : null"
             >
-          } @else {
-            <small>Promote a Python strategy in Strategy Validation before deploying it.</small>
-          }
-        </label>
+              <option value="" disabled>Select a strategy…</option>
+              @for (strategy of validatedStrategies(); track strategy.strategy_key) {
+                <option [value]="strategy.strategy_key">{{ strategy.display_name }}</option>
+              }
+            </select>
+            @if (strategyFieldError(); as error) {
+              <small id="strategy-error" class="field-error" role="alert">{{ error }}</small>
+            }
+          </label>
+        </div>
       </section>
 
-      <section class="group" [class.step-hidden]="activeDeployTab() !== 'strategy'" aria-labelledby="verification-section">
-        <h2 id="verification-section">Backtest verification</h2>
-        <p class="plain-help">
-          Deploy binds to the QuantConnect backtest and audit source promoted by Strategy Validation. The signal stream below stays independent from the
-          validation-case symbol.
-        </p>
-        @if (selectedValidation(); as validation) {
-          <dl class="validation-summary">
-            <div>
-              <dt>Status</dt>
-              <dd>
-                {{ validation.reconciliation_status ?? validation.validation_state | receiptLabel }}
-              </dd>
-            </div>
-            <div>
-              <dt>Validation case</dt>
-              <dd>{{ validation.validation_case_symbol ?? 'n/a' }}</dd>
-            </div>
-            <div>
-              <dt>Trades validated</dt>
-              <dd>{{ validation.diagnostics?.trades_validated ?? 0 }}</dd>
-            </div>
-          </dl>
-          <a routerLink="/strategy-validation" class="validation-link">View full validation</a>
-        }
+      <section id="ticket-signal" class="ticket-section" aria-labelledby="ticket-signal-heading">
+        <div class="section-head">
+          <h2 id="ticket-signal-heading" class="section-kicker">Signal stream</h2>
+        </div>
         <label class="field">
-          <span
-            >Backtest ID
-            <span
-              class="hint"
-              title="The id QuantConnect assigns to a Cloud backtest. Open the backtest on quantconnect.com and copy the id from the page URL (…/backtests/&lt;id&gt;)."
-              >ⓘ</span
-            ></span
-          >
-          <input
-            data-deploy-field="qcBacktestId"
-            type="text"
-            [value]="qcBacktestId()"
-            readonly
-            required
-            placeholder="e.g. 1a2b3c4d…"
-            autocomplete="off"
-            spellcheck="false"
-          />
-          <small>Locked to the promoted QC Cloud backtest.</small>
-        </label>
-
-        <label class="field">
-          <span
-            >Algorithm audit copy
-            <span
-              class="hint"
-              title="The committed algorithm source you uploaded to QuantConnect, under references/qc-shadow/. It is hashed into the run id to prove the deployed code matches the backtest."
-              >ⓘ</span
-            ></span
-          >
-          <input
-            data-deploy-field="qcAuditCopyPath"
-            type="text"
-            [value]="qcAuditCopyPath()"
-            readonly
-            required
-            placeholder="references/qc-shadow/<Algorithm>.py"
-            autocomplete="off"
-            spellcheck="false"
-          />
-          <small
-            >Committed QC algorithm source, not a results CSV. SHA-256: <code>{{ selectedValidation()?.audit_copy_sha256 ?? 'pending' }}</code></small
-          >
-        </label>
-      </section>
-
-      <section class="group" [class.step-hidden]="activeDeployTab() !== 'signal'" aria-labelledby="signal-section">
-        <h2 id="signal-section">Signal stream</h2>
-        <label class="field" for="signal-stream">
           <span>Signal stream</span>
           <input
-            data-deploy-field="signalStream"
-            id="signal-stream"
-            type="text"
-            [value]="signalStream()"
-            (input)="setSignalStream($event)"
-            required
+              pInputText
+              data-deploy-field="signalStream"
+              type="text"
+              [formField]="ticketForm.signalStream"
+              (input)="setSignalStream($event)"
             placeholder="SPY"
             autocomplete="off"
             spellcheck="false"
-          />
-          <small>Feeds strategy data via <code>live_config.symbol</code>. Validation case, settings symbols, and traded legs stay separate.</small>
-        </label>
+            [attr.aria-invalid]="signalStreamFieldError() !== null"
+            [attr.aria-describedby]="signalStreamFieldError() ? 'signal-stream-help signal-stream-error' : 'signal-stream-help'"
+            />
+            <small id="signal-stream-help">Market data for the strategy. It may differ from the instrument(s) in the legs below.</small>
+            @if (signalStreamFieldError(); as error) {
+              <small id="signal-stream-error" class="field-error" role="alert">{{ error }}</small>
+            }
+          </label>
       </section>
 
-      <section class="group" [class.step-hidden]="activeDeployTab() !== 'sizing'" aria-labelledby="sizing-section">
-        <h2 id="sizing-section">Position sizing</h2>
+      <section id="ticket-sizing" class="ticket-section" aria-labelledby="ticket-sizing-heading">
+        <div class="section-head">
+          <h2 id="ticket-sizing-heading" class="section-kicker">Sizing</h2>
+        </div>
+
         @if (sizingSurfaceIsExplicit()) {
-          <p class="plain-help self-sized" role="status">
-            <strong>Self-sized strategy.</strong> {{ strategyKey() }} supplies its own quantity / contracts (options accounting, explicit market orders).
-            <code>live_config.sizing</code> is recorded as <code>StrategyExplicit</code> — the deploy-form sizing selector below is disabled because no policy
-            can meaningfully reinterpret this strategy's quantity.
-          </p>
-        } @else {
-          <p class="plain-help">
-            How big should each entry be? Safe canary is the default — every signal trades one share, so a misconfigured bot can't surprise your account.
+          <p class="surface-note" role="status">
+            This strategy sizes its own orders. The ticket records <code>StrategyExplicit</code>; no sizing policy can override it.
           </p>
         }
-        <fieldset class="sizing-presets" role="radiogroup" aria-labelledby="sizing-section" [disabled]="sizingSurfaceIsExplicit()">
+
+        <fieldset class="sizing-presets" role="radiogroup" aria-labelledby="ticket-sizing-heading" [disabled]="sizingSurfaceIsExplicit()">
           <label class="sizing-option" [class.selected]="sizingPreset() === 'safe_canary'">
             <input type="radio" name="sizing-preset" value="safe_canary" [checked]="sizingPreset() === 'safe_canary'" (change)="setSizingPreset($event)" />
             <span class="sizing-label">
-              <strong>Safe canary</strong>
-              <small>1 share per signal — proves the wiring without risking capital.</small>
-            </span>
-          </label>
-          <label class="sizing-option" [class.disabled]="!referenceParityAvailable()" [class.selected]="sizingPreset() === 'reference_parity'">
-            <input
-              type="radio"
-              name="sizing-preset"
-              value="reference_parity"
-              [disabled]="!referenceParityAvailable()"
-              [checked]="sizingPreset() === 'reference_parity'"
-              (change)="setSizingPreset($event)"
-            />
-            <span class="sizing-label">
-              <strong>Reference parity</strong>
-              <small>Matches the QC audit copy's all-in target. Routes through LEAN's buffered sizing.</small>
-              <small class="gate" [class.gate-pass]="referenceParityAvailable()">{{ referenceParityBanner() }}</small>
+              <strong>One share per signal</strong>
+              <small>Each entry signal uses one share for the stock leg declared below.</small>
             </span>
           </label>
           <label class="sizing-option" [class.selected]="sizingPreset() === 'custom'">
             <input type="radio" name="sizing-preset" value="custom" [checked]="sizingPreset() === 'custom'" (change)="setSizingPreset($event)" />
             <span class="sizing-label">
-              <strong>Custom</strong>
-              <small>Fixed shares (n &gt; 1) or fixed notional. No reference promise.</small>
+              <strong>Set order size</strong>
+              <small>Choose a fixed share or fixed notional amount.</small>
             </span>
           </label>
         </fieldset>
 
         @if (sizingPreset() === 'custom') {
-          <div class="custom-expansion">
-            <label class="field inline">
-              <span>Kind</span>
-              <select [value]="customKind()" (change)="setCustomKind($event)">
-                <option value="FixedShares">Fixed shares</option>
-                <option value="FixedNotional">Fixed notional ($)</option>
-              </select>
-            </label>
-            <label class="field inline">
+          <div class="field-grid two-columns custom-expansion">
+            <fieldset class="sizing-kind" aria-label="Order size type">
+              <label [class.selected]="customKind() === 'FixedShares'">
+                <input
+                  type="radio"
+                  name="custom-sizing-kind"
+                  value="FixedShares"
+                  [checked]="customKind() === 'FixedShares'"
+                  (change)="setCustomKind($event)"
+                />
+                <span>Fixed shares</span>
+              </label>
+              <label [class.selected]="customKind() === 'FixedNotional'">
+                <input
+                  type="radio"
+                  name="custom-sizing-kind"
+                  value="FixedNotional"
+                  [checked]="customKind() === 'FixedNotional'"
+                  (change)="setCustomKind($event)"
+                />
+                <span>Fixed notional</span>
+              </label>
+            </fieldset>
+            <label class="field">
               <span>{{ customKind() === 'FixedShares' ? 'Shares per signal' : 'Dollars per signal' }}</span>
               <input
+                pInputText
                 type="text"
                 inputmode="decimal"
-                [value]="customValue()"
+                [formField]="ticketForm.customValue"
                 (input)="setCustomValue($event)"
                 [placeholder]="customKind() === 'FixedShares' ? '1' : '100.00'"
+                [attr.aria-invalid]="customSizingFieldError() !== null"
+                [attr.aria-describedby]="customSizingFieldError() ? 'custom-sizing-error' : null"
               />
+              @if (customSizingFieldError(); as error) {
+                <small id="custom-sizing-error" class="field-error" role="alert">{{ error }}</small>
+              }
             </label>
-            <small class="custom-help">
-              FixedNotional floors <code>value / latest price</code> to a whole share. Values that round to zero shares are logged as a sizing skip and never
-              submit a zero order.
-            </small>
           </div>
         }
       </section>
 
-      <section class="group" [class.step-hidden]="activeDeployTab() !== 'launch'" aria-labelledby="launch-section">
-        <div class="group-head">
-          <h2 id="launch-section">Launch options</h2>
+      <section
+        id="ticket-legs"
+        class="ticket-section"
+        aria-labelledby="ticket-legs-heading"
+        [attr.aria-invalid]="legsFieldError() !== null"
+        [attr.aria-describedby]="legsFieldError() ? 'legs-error' : null"
+        (focusout)="markLegsTouched()"
+      >
+        <div class="section-head section-head--with-action">
+          <h2 id="ticket-legs-heading" class="section-kicker">Legs</h2>
+          <p-tag [value]="legCount() + ' entry leg' + (legCount() === 1 ? '' : 's')" severity="info" />
         </div>
+        <p class="section-help">Declare what the strategy opens and how each entry closes.</p>
+        <app-action-plan-picker [(actionPlan)]="actionPlan" />
+        @if (legsFieldError(); as error) {
+          <p id="legs-error" class="field-error" role="alert">{{ error }}</p>
+        }
+      </section>
+    </div>
+
+    <aside class="ticket-review" aria-label="Launch review">
+      <div class="review-head">
+        <h2 class="section-kicker">Launch strategy</h2>
+        @if (executionCapability() === 'paper_orders') {
+          <p-tag value="Paper orders" severity="warn" />
+        } @else if (executionCapability() === 'read_only') {
+          <p-tag value="Read-only" severity="info" />
+        } @else {
+          <p-tag value="Live blocked" severity="danger" />
+        }
+      </div>
+
+      <dl class="review-list">
+        <div>
+          <dt>Strategy</dt>
+          <dd>{{ selectedValidation()?.display_name ?? 'Select strategy' }}</dd>
+        </div>
+        <div>
+          <dt>Signal</dt>
+          <dd>{{ resolvedSignalStream() || 'Add signal stream' }}</dd>
+        </div>
+        <div>
+          <dt>Sizing</dt>
+          <dd>{{ sizingSummary() }}</dd>
+        </div>
+        <div>
+          <dt>Legs</dt>
+          <dd>{{ legCount() }}</dd>
+        </div>
+        <div>
+          <dt>Daily limit</dt>
+          <dd class="num">{{ dailyOrderLimitLabel() }}</dd>
+        </div>
+      </dl>
+
+      <section class="clerk-route" [class.clerk-route--unavailable]="brokerAccountState() === 'unavailable'" aria-live="polite">
+        <i class="pi pi-shield" aria-hidden="true"></i>
+        <div>
+          <strong>Account Clerk route</strong>
+          @switch (brokerAccountState()) {
+            @case ('connected') {
+              <p>The server re-checks the connected broker account at launch. This ticket never supplies an account ID.</p>
+            }
+            @case ('checking') {
+              <p>Waiting for the Account Clerk to prove the connected broker account.</p>
+            }
+            @case ('unavailable') {
+              <p>Connect the broker session before launching.</p>
+            }
+          }
+        </div>
+      </section>
+
+      @if (error(); as launchError) {
+        <section class="server-launch-error" aria-labelledby="server-launch-error-heading">
+          <h3 id="server-launch-error-heading" class="section-kicker">Launch was rejected by the server</h3>
+          <app-broker-operation-result [error]="launchError" />
+          @if (launchError.blockers; as serverBlockers) {
+            @if (serverBlockers.length) {
+              <app-operator-blocker-list
+                [blockers]="serverBlockers"
+                ariaLabel="Server launch recovery actions"
+                (moveSelected)="handleBlockerMove($event)"
+              />
+            }
+          }
+        </section>
+      }
+
+      @if (visibleDeployPreflight(); as preflight) {
+        @if (preflight.blockers.length > 0) {
+          <section class="server-launch-error" aria-labelledby="ticket-server-blockers-heading">
+            <h3 id="ticket-server-blockers-heading" class="section-kicker">Resolve these server gates before launch</h3>
+            <app-operator-blocker-list
+              [blockers]="preflight.blockers"
+              ariaLabel="Server launch blockers"
+              (moveSelected)="handleBlockerMove($event)"
+            />
+          </section>
+        }
+      }
+
+      <section id="ticket-launch-settings" class="launch-settings" aria-labelledby="ticket-launch-settings-heading">
+        <div class="section-head">
+          <h3 id="ticket-launch-settings-heading" class="section-kicker">Launch settings</h3>
+        </div>
+
         <fieldset
           class="mode"
           [class.orders-selected]="executionCapability() === 'paper_orders'"
           [class.live-selected]="executionCapability() === 'live'"
+          [attr.aria-invalid]="executionModeFieldError() !== null"
+          [attr.aria-describedby]="executionModeFieldError() ? 'execution-mode-error' : null"
         >
           <legend>Execution capability</legend>
           <label>
             <input type="radio" name="launch-mode" value="read_only" [checked]="executionCapability() === 'read_only'" (change)="setExecutionMode($event)" />
-            <span>
-              <strong>READ-ONLY OBSERVATION</strong>
-              <small>No broker orders are submitted.</small>
-            </span>
+            <span><strong>Read-only</strong><small>No broker orders.</small></span>
           </label>
           <label>
-            <input
-              type="radio"
-              name="launch-mode"
-              value="paper_orders"
-              [checked]="executionCapability() === 'paper_orders'"
-              (change)="setExecutionMode($event)"
-            />
-            <span>
-              <strong>PAPER ORDERS ENABLED</strong>
-              <small>Sets <code>readonly</code> false for this start.</small>
-            </span>
+            <input type="radio" name="launch-mode" value="paper_orders" [checked]="executionCapability() === 'paper_orders'" (change)="setExecutionMode($event)" />
+            <span><strong>Paper orders</strong><small>Broker orders enabled.</small></span>
           </label>
           <label class="blocked-option">
             <input type="radio" name="launch-mode" value="live" [checked]="executionCapability() === 'live'" (change)="setExecutionMode($event)" />
-            <span>
-              <strong>LIVE ORDERS</strong>
-              <small>Visible for routing, blocked at submit.</small>
-            </span>
+            <span><strong>Live orders</strong><small>Visible, blocked at launch.</small></span>
           </label>
         </fieldset>
-        <p class="capability-proof">
-          {{ executionCapabilityProof() }}
-        </p>
-        @if (executionCapability() === 'paper_orders') {
-          <p class="launch-warning" role="status">
-            Paper orders are enabled for launch. Guardrail limit:
-            {{ maxOrdersPerDay() }} orders/day.
-          </p>
+        @if (executionModeFieldError(); as error) {
+          <p id="execution-mode-error" class="field-error" role="alert">{{ error }}</p>
         }
 
-        @let exposureDecision = exposureLaunchDecision();
-        @if (exposureDecision) {
-          <app-exposure-launch-decision
-            id="exposure-launch-decision"
-            [decision]="exposureDecision"
-            [facts]="exposureCoherenceFacts()"
-            [busy]="busy()"
-            [confirmed]="exposureCoherenceConfirmed()"
-            (confirmStartRequested)="confirmExposureAndDeployStart()"
-          />
-        }
-
-        <div class="launch-fields">
-          <label class="field inline">
+        <div class="field-grid two-columns">
+          <label class="field">
             <span>Daily order limit</span>
-            <input type="number" min="0" max="100000" [value]="maxOrdersPerDay()" (input)="setMaxOrders($event)" />
+            <input
+              pInputText
+              class="num"
+              type="number"
+              step="1"
+              [formField]="ticketForm.maxOrdersPerDay"
+              (input)="setMaxOrders($event)"
+              [attr.aria-invalid]="dailyOrderLimitFieldError() !== null"
+              [attr.aria-describedby]="dailyOrderLimitFieldError() ? 'daily-order-limit-error' : null"
+            />
+            @if (dailyOrderLimitFieldError(); as error) {
+              <small id="daily-order-limit-error" class="field-error" role="alert">{{ error }}</small>
+            }
           </label>
 
-          <label class="field inline">
-            <span>Restore previous state <span class="hint" title="Controls whether the engine must load yesterday's saved indicator state before it starts.">ⓘ</span></span>
-            <select [value]="hydratePolicy()" (change)="setHydratePolicy($event)">
-              <option value="require">Required</option>
-              <option value="optional">Optional</option>
-              <option value="disabled">Off</option>
-            </select>
-          </label>
+          <details class="advanced-settings">
+            <summary>Advanced start settings</summary>
+            <label class="field">
+              <span>Saved strategy state</span>
+              <select [value]="hydratePolicy()" (change)="setHydratePolicy($event)">
+                <option value="require">Require saved state (recommended)</option>
+                <option value="optional">Use saved state when available</option>
+                <option value="disabled">Start fresh</option>
+              </select>
+              <small>Choose how the strategy starts if it has state from an earlier run.</small>
+            </label>
+          </details>
         </div>
       </section>
 
-      <section class="action-plan" [class.step-hidden]="activeDeployTab() !== 'legs'" aria-labelledby="action-plan-picker-heading">
-        <h2 id="action-plan-picker-heading">Action plan</h2>
-        <p class="muted">
-          Declare the instrument(s) the bot opens on entry and closes on exit.
-          Engine consumption lands in Slice 4 — until then the plan is
-          persisted in the ledger but not acted on.
-        </p>
-        <app-action-plan-picker
-          [(actionPlan)]="actionPlan"
-          [prefillUnderlying]="selectedFixture()?.symbols?.[0] ?? null"
+      @if (identityCoherenceEvidence()) {
+        <app-deploy-coherence-card
+          id="identity-coherence-card"
+          title="Run identity"
+          ariaLabel="Run identity confirmation"
+          [facts]="identityCoherenceFacts()"
+          [confirmed]="identityCoherenceConfirmed()"
+          confirmLabel="Confirm new run identity"
+          (confirmationRequested)="confirmIdentityCoherence()"
         />
-      </section>
+      }
 
-      <app-broker-operation-result [error]="error()" />
-    </form>
-  </div>
+      @if (exposureCoherenceEvidence()) {
+        <app-deploy-coherence-card
+          id="exposure-coherence-card"
+          title="Exposure state"
+          ariaLabel="Exposure confirmation"
+          [facts]="exposureCoherenceFacts()"
+          [confirmed]="exposureCoherenceConfirmed()"
+          confirmLabel="Confirm exposure state"
+          (confirmationRequested)="confirmExposureCoherence()"
+        />
+      }
+
+      @if (exposureLaunchDecision(); as decision) {
+        <app-exposure-launch-decision
+          id="exposure-launch-decision"
+          [decision]="decision"
+          [facts]="exposureCoherenceFacts()"
+          [busy]="busy()"
+          [confirmed]="exposureCoherenceConfirmed()"
+          (confirmStartRequested)="confirmExposureAndDeployStart()"
+        />
+      }
+
+      <div class="launch-action">
+        <button
+          pButton
+          type="submit"
+          class="primary"
+          [disabled]="!canSubmit()"
+          [loading]="busy()"
+        >
+          <i class="pi pi-send" aria-hidden="true"></i>
+          <span class="p-button-label">Launch strategy</span>
+        </button>
+        <p
+          class="command-status"
+          [class.command-status--blocked]="commandState().kind === 'blocked'"
+          [class.command-status--accepted]="commandState().kind === 'accepted'"
+          aria-live="polite"
+        >{{ commandStatus() }}</p>
+      </div>
+    </aside>
+  </form>
 </section>

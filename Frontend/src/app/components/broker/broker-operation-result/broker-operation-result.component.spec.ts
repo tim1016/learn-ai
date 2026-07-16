@@ -31,17 +31,22 @@ describe('BrokerOperationResultComponent', () => {
     expect(el.textContent).toContain('Commit or stash');
   });
 
-  it('separates the blocked title from the bot-scoped detail in alert text', () => {
+  it('exposes the complete server diagnostic in the alert', () => {
     const fixture = render({
       ...ERR,
       detail: 'deiagAPPL6 is durably STOPPED. Resume the bot to clear the stop latch.',
+      status: 503,
+      reason_code: 'FLEET_CONTAMINATION_UNAVAILABLE',
+      gate_id: 'fleet.contamination',
     });
     const alert = (fixture.nativeElement as HTMLElement).querySelector<HTMLElement>('[role="alert"]');
-    const announcedCopy = alert?.querySelector<HTMLElement>('.sr-only');
 
-    expect(alert?.textContent).toContain('Deploy — blocked deiagAPPL6');
-    expect(announcedCopy?.textContent).toContain('Deploy — blocked deiagAPPL6');
-    expect(alert?.textContent).not.toContain('Deploy — blockeddeiagAPPL6');
+    expect(alert?.textContent).toContain('Deploy — blocked');
+    expect(alert?.textContent).toContain('HTTP 503');
+    expect(alert?.textContent).toContain('Fleet Contamination Unavailable');
+    expect(alert?.textContent).toContain('Fleet Contamination');
+    expect(alert?.textContent).toContain('deiagAPPL6 is durably STOPPED');
+    expect(alert?.querySelector('[aria-hidden="true"]')).toBeNull();
   });
 
   it('renders nothing when error is null', () => {
@@ -54,5 +59,20 @@ describe('BrokerOperationResultComponent', () => {
     const el = fixture.nativeElement as HTMLElement;
     expect(el.querySelector('.op-detail')).toBeNull();
     expect(el.textContent).toContain('Commit or stash');
+  });
+
+  it('renders typed server reason and gate labels beside the next step', () => {
+    const fixture = render({
+      ...ERR,
+      reason_code: 'DEPLOY_PREFLIGHT_BLOCKED',
+      gate_id: 'daily_lifecycle.effective_stop',
+    });
+    const el = fixture.nativeElement as HTMLElement;
+
+    expect(el.textContent).toContain('Server reason');
+    expect(el.textContent).toContain('Deploy Preflight Blocked');
+    expect(el.textContent).toContain('Rejected at');
+    expect(el.textContent).toContain('Daily Lifecycle Effective Stop');
+    expect(el.textContent).toContain('Next:');
   });
 });
