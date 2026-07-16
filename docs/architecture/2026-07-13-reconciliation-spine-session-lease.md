@@ -123,7 +123,7 @@ Deliverable: the two verdicts are named in code and tests pin today's actual beh
 Pin with tests: build the owned and foreign position cases through `compose_account_truth` using real binding/order-or-execution evidence — do **not** hand-author `final_verdict="clean"`; owned non-zero position + clean verdict → `assess_account_truth` **passes** (the intraday-exposure case rev 1 would have broken); foreign/unattributed activity → blocks with `ACCOUNT_TRUTH_NOT_PROVEN`; `AccountTruthUnavailable` → immediate block; 61 s-old snapshot → `ACCOUNT_TRUTH_STALE`; connected-account mismatch inside the truth payload → blocks.
 
 - [x] Write the tests; local `.venv/bin/python -m pytest tests/services/test_account_truth_snapshot.py -q` passes (32 passed) with zero behavior edits. The prescribed `podman exec polygon-data-service ...` command is presently blocked because that service image has no `pytest`; this is an environment defect, not a test failure.
-- [ ] Commit: `test(account-truth): characterize observation-grade verdict incl. owned-exposure pass`
+- [x] Commit: `test(account-truth): characterize observation-grade verdict incl. owned-exposure pass`
 
 ### Task 1.2: Characterization test for the healed trust leak
 
@@ -133,7 +133,7 @@ Pin with tests: build the owned and foreign position cases through `compose_acco
 One end-to-end-shaped test per mechanism: prior-boot ACTIVE binding + not in `managed_run_ids` → boot reconcile retires it; dead process + persisted ON_DUTY → projection computes OFF_DUTY with `drift_detected=True`. If a residual stale-phase path exists, this task finds it and it becomes a bug fix with its own regression test — not lease work.
 
 - [x] Existing characterization covers both cases: boot retires an unmanaged `ACTIVE` binding and the post-boot reaper demotes an exited managed child without a status read (`test_host_daemon_boot_reconcile.py`). No replacement machinery is needed.
-- [ ] Commit: `test(lifecycle): pin boot-retire and dead-process demotion (trust-leak characterization)`
+- [x] Commit: `test(lifecycle): pin boot-retire and dead-process demotion (trust-leak characterization)`
 
 ### Task 1.3: Name the recovery/observation split in code
 
@@ -142,7 +142,7 @@ One end-to-end-shaped test per mechanism: prior-boot ACTIVE binding + not in `ma
 - Modify: `docs/bot-lifecycle-account-owner-authority.md` (one paragraph naming the split; same-PR update rule)
 
 - [x] Edit and run `ruff check` on the changed Python modules and test; all pass.
-- [ ] Commit: `docs: name observation-proof vs recovery-proof split at their definitions`
+- [x] Commit: `docs: name observation-proof vs recovery-proof split at their definitions`
 
 ---
 
@@ -197,7 +197,7 @@ def account_observation_lease_gate_result(assessment: AccountObservationLeaseAss
 Reader is fail-closed (missing/malformed/expired → not verified); writes use the existing `atomic_write_pydantic_artifact` from `account_artifacts.py`. Renewal validity reuses `DEFAULT_ACCOUNT_TRUTH_READINESS_TTL_MS` — zero new constants. `renew` on a REVOKED lease is legal (a clean sweep cures a revocation); the transition is what gets journaled (Task 2.2).
 
 - [x] Failing tests implemented and passing locally: absent, renew/60 s TTL, immediate revoke, expiry boundary, malformed artifact, current Clerk-generation mismatch, legacy-v1 rejection, and gate mapping.
-- [ ] Commit: `feat(live): account observation lease — durable, fail-closed, immediately revocable`
+- [x] Commit: `feat(live): account observation lease — durable, fail-closed, immediately revocable`
 
 ### Task 2.2: Wire renewal/revocation into the existing observer
 
@@ -209,7 +209,7 @@ Behavior per sweep: a refresh-loop outcome callback drives the writer on success
 
 - [x] Implemented and locally covered: stable clean renewals, owner change during the sweep, transition-only journal behavior, foreign/unattributed revocation, clean recovery, and broker-unavailable callback revocation. The callback is wired for broker-error and unexpected-error paths as well.
 - [x] Focused service and router coverage passes locally (42 tests).
-- [ ] Commit: `feat(live): refresh-loop observer renews/revokes the observation lease on every sweep`
+- [x] Commit: `feat(live): refresh-loop observer renews/revokes the observation lease on every sweep`
 
 ### Task 2.3: Shadow comparison at the submit gate
 
@@ -218,7 +218,7 @@ Behavior per sweep: a refresh-loop outcome callback drives the writer on success
 - Test: live-portfolio submit-gate tests (extend: divergence logs, never blocks)
 
 - [x] Shadow comparison implemented: every paired submit-boundary outcome is durably appended to the existing account event journal with run/instance identity; divergences also log and increment a process-local counter. The existing Account Truth gate remains the sole submit decision; focused test passes.
-- [ ] Commit: `feat(live): observation-lease shadow comparison at the submit gate`
+- [x] Commit: `feat(live): observation-lease shadow comparison at the submit gate`
 
 ### Task 2.4: Surface projection + cockpit proof line + account monitor repoint
 
@@ -229,7 +229,7 @@ Behavior per sweep: a refresh-loop outcome callback drives the writer on success
 - Test: Vitest specs; `npx eslint Frontend/src/ --max-warnings 0`
 
 - [x] Surface projection, verdict proof line, and transition-only Account Monitor history are implemented. Python safety/surface coverage (495 tests) and focused Angular lint/specs (42 tests) pass locally.
-- [ ] Commit: `feat(surface+frontend): account observation lease projection, proof line, transition history`
+- [x] Commit: `feat(surface+frontend): account observation lease projection, proof line, transition history`
 
 ---
 
@@ -240,8 +240,9 @@ Deliverable: Start consumes the lease; the submit chain consumes the lease; the 
 ### Task 3.1: Sequence parity evidence from shadow mode
 
 - [x] The durable replay verifier is implemented in `app/services/observation_lease_parity.py` with `tests/services/test_observation_lease_parity.py`. It reads the canonical account journal, requires three distinct canonical-NYSE session dates, rejects malformed evidence and every truth=`block` / lease=`pass` pair, and lists lease-stricter pairs without failing the gate.
-- [ ] Operational gate: collect version-2, Clerk-keyed submit-boundary rows from ≥ 3 paper-trading sessions with zero lease-weaker divergences, then replay the captured account journal and archive the resulting report before enabling enforcement. **Current replay (2026-07-15):** `comparison_count=0`, `legacy_comparison_count=69`, `observed_session_dates=[]`, and `cutover_ready=false`. The 69 owner-keyed rows are legacy evidence and do not count; there are zero qualifying v2 sessions. This is sequence parity, not a Cartesian table.
-- [ ] Commit: `test(live): sequence-parity replay for observation lease vs raw truth gate`
+- [ ] Operational gate: collect version-2, Clerk-keyed submit-boundary rows from ≥ 3 paper-trading sessions with zero lease-weaker divergences, then replay the captured account journal and archive the resulting report before enabling enforcement. **Current replay (2026-07-16):** `comparison_count=4`, `legacy_comparison_count=69`, `observed_session_dates=["2026-07-16"]`, `invalid_comparisons=[]`, `lease_weaker_comparisons=[]`, and `cutover_ready=false`. The first qualifying v2 session is archived in `docs/audits/observation-lease-paper-session-2026-07-16.md`; two distinct NYSE sessions remain. This is sequence parity, not a Cartesian table.
+- [x] Clerk-restart HITL smoke: generation mismatch returned `REVOKED / ACCOUNT_CLERK_GENERATION_CHANGED`, then the next clean sweep renewed a verified lease for the replacement generation. No bot or order was started. Evidence is in the 2026-07-16 audit.
+- [x] Commit: `test(live): sequence-parity replay for observation lease vs raw truth gate`
 
 ### Task 3.2: Start consumes the lease
 
@@ -264,8 +265,8 @@ Start ordering stays: lease VERIFIED (account proof) → daemon accepts start �
 
 ### Task 3.4: ADR + authority updates
 
-- [ ] ADR-0026 amendment: ON_DUTY = presence; trading permission = observation lease + run receipt + submit chain; the "coarse background tick that reconciles drift" is realized by the existing 15 s observer writing the lease. The current-authority statement belongs in ADR-0030: a v2 lease requires an accepting Clerk generation and matching active `RUNNING` Clerk lease. This historical plan's former AccountOwner wording must not be used as current architecture. Flag the auto-reconciliation-policy retirement question as an open decision.
-- [ ] Commit: `docs: ADR-0026 amendment + authority update for the observation lease`
+- [x] ADR-0026 amendment: ON_DUTY = presence; trading permission = observation lease + run receipt + submit chain; the "coarse background tick that reconciles drift" is realized by the existing 15 s observer writing the lease. ADR-0030 records that a v2 lease requires an accepting Clerk generation and matching active `RUNNING` Clerk lease. Auto-reconciliation-policy retirement remains an explicit later decision.
+- [x] Commit: `docs: ADR-0026 amendment + authority update for the observation lease`
 
 ---
 
@@ -277,7 +278,7 @@ Deliverable: the invisible-when-healthy start experience.
 
 **Files:** `Frontend/.../bot-control-page.component.ts` + spec (phase label between roll-call prep and runtime proof, sourced from the preflight lease gate row; blocked state renders the row's backend-authored reason + Reconcile now routing to the **account** reconciliation endpoint via the account monitor cure path in `condition-cure-actions.ts`)
 
-- [ ] Failing spec (pass-through leaves no residue; revoked lease shows reason + one button) → implement → Vitest + eslint → commit.
+- [x] Start capability projects the selected observation-lease gate; healthy Start shows `Verifying account`, while a revoked lease renders the backend reason and one `Reconcile now` action routed to `POST /api/accounts/{id}/reconciliation` rather than the run-scoped reconcile endpoint. Backend and Vitest regressions cover both paths.
 
 ### Task 4.2: End-to-end verification pass
 

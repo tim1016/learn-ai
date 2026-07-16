@@ -15,6 +15,7 @@ import type {
   BotLifecycleAction,
   BotLifecycleActionId,
   BotRollCallOffer,
+  GateResult,
   LiveInstanceStatus,
   OperatorSurfaceConfirmations,
   TraderPrimaryRemediation,
@@ -22,6 +23,7 @@ import type {
 import type { OperatorConfirmationCopy, OperatorMove } from '../../../api/operator-blocker.types';
 import type { HostRunnerStartRequest } from '../../../api/live-runs.types';
 import { LiveRunsService } from '../../../services/live-runs.service';
+import { BrokerService } from '../../../services/broker.service';
 import { formatReceiptLabel } from '../../../shared/pipes/receipt-label.pipe';
 import { ActiveBotSidebarNoticeService } from '../../../shell/active-bot-sidebar-notice.service';
 import type { ActiveBotSidebarNotice } from '../../../shell/active-bot-sidebar-notice.service';
@@ -72,6 +74,7 @@ interface StartReadyCapability {
 })
 export class BotControlPageComponent {
   private readonly liveRuns = inject(LiveRunsService);
+  private readonly broker = inject(BrokerService);
   private readonly surface = inject(BotSurfaceStore);
   private readonly router = inject(Router);
   private readonly destroyRef = inject(DestroyRef);
@@ -86,6 +89,27 @@ export class BotControlPageComponent {
   readonly busyAction = signal<string | null>(null);
   readonly activeLens = signal<'trader' | 'operations'>('trader');
   readonly startupAutomation = signal<StartupAutomationState>({ phase: 'idle' });
+  readonly accountStartGate = computed<GateResult | null>(() =>
+    this.status()?.operator_surface.host_process.start_capability.gate_results.find(
+      (gate) => gate.gate_id === 'account.observation_lease',
+    ) ?? null,
+  );
+  readonly startupAutomationDisplay = computed<StartupAutomationState>(() => {
+    const gate = this.accountStartGate();
+    if (gate?.status === 'block') {
+      return {
+        phase: 'blocked',
+        label: 'Account verification blocked',
+        detail: gate.operator_reason,
+      };
+    }
+    return this.startupAutomation();
+  });
+  readonly accountReconcileAvailable = computed(
+    () =>
+      this.accountStartGate()?.status === 'block' &&
+      this.boundAccountId() !== null,
+  );
   readonly typedHaltOpen = signal<boolean>(false);
   private readonly typedHaltInstanceId = signal<string | null>(null);
   readonly crashRecoveryConfirmOpen = signal<boolean>(false);
@@ -456,6 +480,25 @@ export class BotControlPageComponent {
     }
   }
 
+  async dispatchAccountReconcileNow(): Promise<void> {
+    const accountId = this.boundAccountId();
+    if (!accountId || this.mutationsDisabled()) return;
+    this.busyAction.set('account_reconcile_now');
+    this.mutationError.set(null);
+    try {
+      await this.broker.reconcileAccount(accountId);
+      this.startupAutomation.set({
+        phase: 'ready',
+        label: 'Account check requested',
+        detail: 'Waiting for the current account proof to appear in the cockpit.',
+      });
+    } catch (err) {
+      this.mutationError.set(this.humanError(err));
+    } finally {
+      this.busyAction.set(null);
+    }
+  }
+
   onGateRedeploy(): void {
     void this.router.navigate(['/broker/deploy'], { queryParams: this.redeployQueryParams() });
   }
@@ -698,8 +741,8 @@ export class BotControlPageComponent {
     this.mutationError.set(null);
     this.startupAutomation.set({
       phase: 'running',
-      label: 'Preparing start offer',
-      detail: 'Running roll call for this bot before start.',
+      label: 'Verifying account',
+      detail: this.accountStartGate()?.operator_reason ?? 'Checking current account proof before roll call.',
     });
     try {
       const response = await this.liveRuns.runRollCall();
@@ -738,6 +781,11 @@ export class BotControlPageComponent {
   private async startHostProcess(runId: string, request: HostRunnerStartRequest): Promise<void> {
     this.busyAction.set('start_process');
     this.mutationError.set(null);
+    this.startupAutomation.set({
+      phase: 'running',
+      label: 'Verifying account',
+      detail: this.accountStartGate()?.operator_reason ?? 'Checking current account proof before start.',
+    });
     try {
       const response = await this.liveRuns.startHostRunner(runId, request);
       this.surface.establishPending(response);
@@ -807,6 +855,14 @@ export class BotControlPageComponent {
     }
     if (err instanceof Error && err.message) return err.message;
     return 'Could not load bot control data.';
+  }
+
+  private boundAccountId(): string | null {
+    const accountId =
+      this.status()?.operator_surface.account_clerk?.account_id ??
+      this.status()?.start_defaults?.account_id ??
+      null;
+    return accountId?.trim() || null;
   }
 
   private mutationsDisabled(): boolean {

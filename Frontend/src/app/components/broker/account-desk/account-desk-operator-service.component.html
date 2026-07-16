@@ -5,6 +5,10 @@
   } @else if (directory.serviceStatusErrorMessage() && !directory.serviceStatusHasLastGood()) {
     <div class="state state-error" role="alert"><p>{{ directory.serviceStatusErrorMessage() }}</p><button type="button" (click)="retry()">Retry</button></div>
   } @else if (directory.serviceStatus(); as status) {
+    <div class="service-verdict" [attr.data-state]="status.operating_state">
+      <strong>{{ status.headline }}</strong>
+      <p>{{ status.detail }}</p>
+    </div>
     <dl>
       <div><dt>Attachment</dt><dd>{{ status.attachment | receiptLabel }}</dd></div>
       <div><dt>Phase</dt><dd>{{ status.phase === null ? '—' : (status.phase | receiptLabel) }}</dd></div>

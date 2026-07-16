@@ -30,6 +30,7 @@ import type {
   ReconcileAckResponse,
 } from '../../../api/live-runs.types';
 import { BrokerHealthService } from '../../../services/broker-health.service';
+import { BrokerService } from '../../../services/broker.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { BrokerBannerComponent } from '../../../shell/broker-banner.component';
 import { ActivityTabComponent } from './tabs/activity-tab.component';
@@ -104,6 +105,10 @@ export class FakeLiveRunsService {
   deleteBot = vi.fn<LiveRunsService['deleteBot']>();
 }
 
+export class FakeBrokerService {
+  reconcileAccount = vi.fn<(accountId: string) => Promise<unknown>>();
+}
+
 export class FakeBotSurfaceStore {
   readonly instanceId = signal<string | null>(null);
   readonly status = signal<LiveInstanceStatus | null>(null);
@@ -139,9 +144,9 @@ export function allowRunRollCallCall(
 
 export function allowStartHostRunnerCall(
   liveRuns: FakeLiveRunsService,
-  response: HostRunnerActionResponse,
+  response: HostRunnerActionResponse | Promise<HostRunnerActionResponse>,
 ): void {
-  liveRuns.startHostRunner.mockResolvedValue(response);
+  liveRuns.startHostRunner.mockImplementation(() => Promise.resolve(response));
 }
 
 export function allowSetDesiredStateCall(
@@ -266,7 +271,7 @@ type AsyncMockValue<T> = T | Promise<T>;
 interface BotControlMutationResponses {
   renewControlPlaneLease?: HostRunnerHealth;
   runRollCall?: BotRollCallResponse;
-  startHostRunner?: HostRunnerActionResponse;
+  startHostRunner?: AsyncMockValue<HostRunnerActionResponse>;
   endDayNow?: HostRunnerActionResponse;
   botLifecycleMutation?: BotLifecycleMutationResponse;
   setInstanceDesiredState?: SetInstanceDesiredStateResponse;
@@ -314,6 +319,7 @@ export interface BotControlPageHarness {
   component: BotControlPageComponent;
   element: HTMLElement;
   liveRuns: FakeLiveRunsService;
+  broker: FakeBrokerService;
   surface: FakeBotSurfaceStore;
 }
 
@@ -451,6 +457,10 @@ export async function setupBotControlPage(
 ): Promise<BotControlPageHarness> {
   const routeId = options.routeId ?? 'sid-x';
   const liveRuns = makeFailClosedLiveRuns(options);
+  const broker = new FakeBrokerService();
+  broker.reconcileAccount.mockRejectedValue(
+    unexpectedMutation('BrokerService.reconcileAccount'),
+  );
   const surface = new FakeBotSurfaceStore();
   surface.configure(
     routeId,
@@ -471,6 +481,7 @@ export async function setupBotControlPage(
         },
       },
       { provide: LiveRunsService, useValue: liveRuns },
+      { provide: BrokerService, useValue: broker },
       { provide: BotSurfaceStore, useValue: surface },
     ],
   });
@@ -483,6 +494,7 @@ export async function setupBotControlPage(
     component: fixture.componentInstance,
     element: fixture.nativeElement as HTMLElement,
     liveRuns,
+    broker,
     surface,
   };
 }

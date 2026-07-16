@@ -42,6 +42,9 @@ _SOCKET_PROBE_TIMEOUT = httpx.Timeout(10.0)
 # Deploy runs git + file hashing on the host; allow more headroom than the
 # liveness GETs, but still bounded so a wedged daemon surfaces as 503.
 _DEPLOY_TIMEOUT = httpx.Timeout(15.0)
+# Clerk release can legitimately wait two seconds for TERM and another two
+# seconds after KILL. Let the daemon author the bounded-shutdown outcome.
+_CLERK_RELEASE_TIMEOUT = httpx.Timeout(6.0)
 # Emergency flatten round-trips to the broker synchronously (the daemon caps the
 # CLI at 120s); give the HTTP hop a little more so the daemon's own timeout wins.
 _FLATTEN_TIMEOUT = httpx.Timeout(130.0)
@@ -241,6 +244,16 @@ async def ensure_account_clerk(
     return await _post_action(
         f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/ensure",
         {"ibkr_host": ibkr_host},
+    )
+
+
+async def release_account_clerk(base_url: str, account_id: str) -> dict:
+    """Release the account-scoped Clerk after an explicit broker disconnect."""
+
+    return await _post_action(
+        f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/release",
+        {},
+        timeout=_CLERK_RELEASE_TIMEOUT,
     )
 
 

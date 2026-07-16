@@ -300,7 +300,10 @@ function accountRow(accountId: string): AccountRosterRow {
     account_id: accountId,
     broker: 'IBKR',
     effective_posture: 'PAPER_EXECUTION',
-    service: { attachment: 'UNATTACHED', phase: null, generation: null },
+    service: {
+      attachment: 'UNATTACHED', phase: null, generation: null,
+      operating_state: 'ATTENTION', headline: 'Account service needs attention',
+    },
     latest_verdict_summary: {
       state: 'NOT_PROVEN',
       headline: 'Verification is required.',

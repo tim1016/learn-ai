@@ -11,6 +11,7 @@ from app.schemas.account_reconciliation import AccountTriageVerdictState
 AccountEffectivePosture = Literal["PAPER_EXECUTION", "UNSAFE", "UNKNOWN"]
 AccountServiceAttachmentState = Literal["ATTACHED", "UNATTACHED", "FENCED"]
 AccountServicePhase = Literal["accepting", "reconnecting", "draining", "frozen"]
+AccountServiceOperatingState = Literal["READY", "STANDBY", "ATTENTION"]
 
 
 class AccountServiceSummary(BaseModel):
@@ -21,6 +22,8 @@ class AccountServiceSummary(BaseModel):
     attachment: AccountServiceAttachmentState
     phase: AccountServicePhase | None = None
     generation: int | None = Field(default=None, ge=1)
+    operating_state: AccountServiceOperatingState
+    headline: str = Field(min_length=1, max_length=160)
 
 
 class AccountRosterVerdictSummary(BaseModel):
@@ -51,7 +54,7 @@ class AccountsRosterResponse(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     rows: list[AccountRosterRow] = Field(default_factory=list)
 
 
@@ -91,7 +94,7 @@ class AccountServiceStatusResponse(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     account_id: str = Field(min_length=1, max_length=64)
     attachment: AccountServiceAttachmentState
     phase: AccountServicePhase | None = None
@@ -101,3 +104,6 @@ class AccountServiceStatusResponse(BaseModel):
     binding: AccountServiceBinding
     lease: AccountServiceLease | None = None
     journal: AccountServiceJournalWatermark
+    operating_state: AccountServiceOperatingState
+    headline: str = Field(min_length=1, max_length=160)
+    detail: str = Field(min_length=1, max_length=512)

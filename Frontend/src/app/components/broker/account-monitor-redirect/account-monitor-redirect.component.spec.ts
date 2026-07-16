@@ -70,12 +70,15 @@ describe('AccountMonitorRedirectComponent', () => {
 
 function roster(accountIds: readonly string[]): AccountsRosterResponse {
   return {
-    schema_version: 1,
+    schema_version: 2,
     rows: accountIds.map((account_id) => ({
       account_id,
       broker: 'IBKR',
       effective_posture: 'UNKNOWN',
-      service: { attachment: 'UNATTACHED', phase: null, generation: null },
+      service: {
+        attachment: 'UNATTACHED', phase: null, generation: null,
+        operating_state: 'ATTENTION', headline: 'Account service needs attention',
+      },
       latest_verdict_summary: {
         state: 'NOT_PROVEN',
         headline: 'No live account observation is available.',

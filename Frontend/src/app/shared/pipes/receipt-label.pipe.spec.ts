@@ -19,6 +19,11 @@ describe('formatReceiptLabel', () => {
     expect(formatReceiptLabel('RTH')).toBe('RTH');
   });
 
+  it('renders the internal clerk event kind as Account service language', () => {
+    expect(formatReceiptLabel('clerk')).toBe('Account service');
+    expect(formatReceiptLabel('account_clerk')).toBe('Account service');
+  });
+
   it('formats comma-separated code lists', () => {
     expect(formatReceiptLabel('COMMAND_LOOP_STALE, CONTROL_PLANE_LEASE_STALE')).toBe(
       'Command Loop Stale, Control Plane Lease Stale',

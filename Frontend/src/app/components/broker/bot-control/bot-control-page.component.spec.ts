@@ -14,6 +14,7 @@ import {
 } from './bot-control-page.fixtures';
 import { operatorBlockerFixture } from '../../../testing/operator-blocker-fixtures';
 import {
+  deferred,
   flush,
   installBotControlPageTestStubs,
   setupBotControlPage,
@@ -48,6 +49,48 @@ function startableStatusWithoutOffer(): LiveInstanceStatus {
     offer_id: null,
     expires_at_ms: null,
   };
+  return status;
+}
+
+function observationLeaseBlockedStatus(): LiveInstanceStatus {
+  const status = startableReadyStatus();
+  status.start_defaults = {
+    strategy: 'deployment_validation',
+    readonly: false,
+    hydrate_policy: 'require',
+    max_orders_per_day: 2,
+    ibkr_host: '127.0.0.1',
+    account_id: 'DU1234567',
+  };
+  status.operator_surface.host_process.start_capability = {
+    enabled: false,
+    run_id: null,
+    request: null,
+    disabled_reason_code: 'ACCOUNT_EVIDENCE_STALE',
+    gate_results: [
+      {
+        gate_id: 'account.observation_lease',
+        status: 'block',
+        source: 'account_observation_lease',
+        operator_reason: 'Account verification is overdue.',
+        operator_next_step: 'RECONCILE_NOW',
+        evidence_at_ms: 1_700_000_000_000,
+      },
+    ],
+  };
+  return status;
+}
+
+function observationLeaseReadyStatus(): LiveInstanceStatus {
+  const status = startableReadyStatus();
+  status.operator_surface.host_process.start_capability.gate_results.unshift({
+    gate_id: 'account.observation_lease',
+    status: 'pass',
+    source: 'account_observation_lease',
+    operator_reason: 'Account verified.',
+    operator_next_step: null,
+    evidence_at_ms: 1_700_000_000_000,
+  });
   return status;
 }
 
@@ -274,6 +317,51 @@ describe('BotControlPageComponent', () => {
       ibkr_host: '127.0.0.1',
       roll_call_offer_id: 'offer-from-roll-call',
     });
+  });
+
+  it('shows account verification while the start boundary is being checked', async () => {
+    const startResponse = {
+      accepted: true as const,
+      process: makeHostRunnerHealth().process,
+    };
+    const pendingStart = deferred<typeof startResponse>();
+    const { fixture, component, element } = await setupBotControlPage({
+      status: observationLeaseReadyStatus(),
+      mutationResponses: { startHostRunner: pendingStart.promise },
+    });
+
+    const start = component.dispatchStartProcess();
+    fixture.detectChanges();
+
+    expect(element.textContent).toContain('Verifying account');
+    expect(element.textContent).toContain('Account verified.');
+
+    pendingStart.resolve(startResponse);
+    await start;
+    await flush(fixture);
+    expect(element.textContent).toContain('Startup request sent');
+  });
+
+  it('renders one account remedy and reconciles the bound account when observation blocks Start', async () => {
+    const { fixture, element, broker, liveRuns } = await setupBotControlPage({
+      status: observationLeaseBlockedStatus(),
+    });
+    broker.reconcileAccount.mockResolvedValue({});
+
+    expect(element.textContent).toContain('Account verification blocked');
+    expect(element.textContent).toContain('Account verification is overdue.');
+    const buttons = Array.from(
+      element.querySelectorAll<HTMLButtonElement>('.startup-automation button'),
+    );
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]?.textContent?.trim()).toBe('Reconcile now');
+
+    buttons[0]?.click();
+    await flush(fixture);
+
+    expect(broker.reconcileAccount).toHaveBeenCalledWith('DU1234567');
+    expect(liveRuns.reconcileInstance).not.toHaveBeenCalled();
+    expect(element.textContent).toContain('Account verification is overdue.');
   });
 
   it('surfaces the crash-recovery verb and records the override after confirmation', async () => {

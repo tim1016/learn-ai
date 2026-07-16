@@ -78,7 +78,10 @@ function row(): AccountRosterRow {
     account_id: 'DU1234567',
     broker: 'IBKR',
     effective_posture: 'PAPER_EXECUTION',
-    service: { attachment: 'ATTACHED', phase: 'accepting', generation: 3 },
+    service: {
+      attachment: 'ATTACHED', phase: 'accepting', generation: 3,
+      operating_state: 'STANDBY', headline: 'Ready — no bots on duty',
+    },
     latest_verdict_summary: {
       state: 'NOT_PROVEN',
       headline: 'Verification is required.',

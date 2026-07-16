@@ -20,7 +20,12 @@ from app.engine.live.account_artifacts import (
 from app.engine.live.account_clerk_journal import inspect_account_clerk_journal
 from app.engine.live.account_clerk_journal_models import AccountClerkJournalCorruptError
 from app.engine.live.account_identity import normalize_account_id
-from app.engine.live.account_registry import read_account_instance_registry
+from app.engine.live.account_registry import (
+    ACTIVE_INSTANCE_BINDING_STATES,
+    AccountInstanceBinding,
+    index_account_instance_bindings,
+    read_account_instance_registry,
+)
 from app.schemas.account_directory import (
     AccountEffectivePosture,
     AccountRosterRow,
@@ -29,6 +34,7 @@ from app.schemas.account_directory import (
     AccountServiceBinding,
     AccountServiceJournalWatermark,
     AccountServiceLease,
+    AccountServiceOperatingState,
     AccountServiceStatusResponse,
     AccountServiceSummary,
     AccountsRosterResponse,
@@ -71,19 +77,31 @@ class AccountDirectoryService:
     def roster(self) -> AccountsRosterResponse:
         """List configured and durably-known accounts in stable account-id order."""
 
-        known_account_ids = self._known_account_ids()
-        rows = [self._roster_row(account_id) for account_id in known_account_ids]
+        known_accounts = self._known_accounts()
+        rows = [
+            self._roster_row(account_id, bindings)
+            for account_id, bindings in known_accounts.items()
+        ]
         return AccountsRosterResponse(rows=rows)
 
     def service_status(self, *, account_id: str) -> AccountServiceStatusResponse:
         """Return full Account service evidence for exactly one known account."""
 
         canonical_account_id = normalize_account_id(account_id)
-        if canonical_account_id not in self._known_account_ids():
+        known_accounts = self._known_accounts()
+        if canonical_account_id not in known_accounts:
             raise UnknownAccountError(f"unknown account: {canonical_account_id}")
-        return self._service_status_for_known_account(canonical_account_id)
+        return self._service_status_for_known_account(
+            canonical_account_id,
+            bindings=known_accounts[canonical_account_id],
+        )
 
-    def _service_status_for_known_account(self, account_id: str) -> AccountServiceStatusResponse:
+    def _service_status_for_known_account(
+        self,
+        account_id: str,
+        *,
+        bindings: list[AccountInstanceBinding] | None = None,
+    ) -> AccountServiceStatusResponse:
         """Project service artifacts after the account-key membership boundary has passed."""
 
         try:
@@ -101,6 +119,11 @@ class AccountDirectoryService:
             raise AccountDirectoryError(str(exc)) from exc
 
         attachment = _attachment_state(generation, lease, now_ms=self._now_ms())
+        operating_state, headline, detail = self._operating_copy(
+            account_id,
+            attachment,
+            bindings=bindings,
+        )
         return AccountServiceStatusResponse(
             account_id=account_id,
             attachment=attachment,
@@ -124,11 +147,53 @@ class AccountDirectoryService:
                 last_seq=None if not journal else journal[-1].seq,
                 last_write_ms=None if not journal else journal[-1].recorded_at_ms,
             ),
+            operating_state=operating_state,
+            headline=headline,
+            detail=detail,
         )
 
-    def _known_account_ids(self) -> tuple[str, ...]:
+    def _operating_copy(
+        self,
+        account_id: str,
+        attachment: AccountServiceAttachmentState,
+        *,
+        bindings: list[AccountInstanceBinding] | None = None,
+    ) -> tuple[AccountServiceOperatingState, str, str]:
+        if attachment != "ATTACHED":
+            return (
+                "ATTENTION",
+                "Account service needs attention",
+                "Account verification cannot stay current until the account service is attached.",
+            )
+        if bindings is None:
+            try:
+                bindings = read_account_instance_registry(self._artifacts_root, account_id)
+            except (AccountArtifactError, OSError, ValueError) as exc:
+                raise AccountDirectoryError(str(exc)) from exc
+        latest_bindings = index_account_instance_bindings(
+            bindings,
+            account_id=account_id,
+        ).latest_by_instance.values()
+        active_count = sum(
+            binding.lifecycle_state in ACTIVE_INSTANCE_BINDING_STATES
+            for binding in latest_bindings
+        )
+        if active_count == 0:
+            return (
+                "STANDBY",
+                "Ready — no bots on duty",
+                "Account verification continues in the background and the service is ready for a bot to attach.",
+            )
+        suffix = "bot is" if active_count == 1 else "bots are"
+        return (
+            "READY",
+            f"Ready — {active_count} {suffix} on duty",
+            "The account service is attached and continuously verifying this account.",
+        )
+
+    def _known_accounts(self) -> dict[str, list[AccountInstanceBinding]]:
         try:
-            durable_ids: set[str] = set()
+            known_accounts: dict[str, list[AccountInstanceBinding]] = {}
             for directory_account_id in list_account_artifact_ids(self._artifacts_root):
                 bindings = read_account_instance_registry(self._artifacts_root, directory_account_id)
                 if bindings:
@@ -141,16 +206,21 @@ class AccountDirectoryService:
                             "account binding identity does not match its durable directory: "
                             f"{directory_account_id}"
                         )
-                durable_ids.add(directory_account_id)
+                known_accounts[directory_account_id] = bindings
         except (AccountArtifactError, OSError, ValueError) as exc:
             raise AccountDirectoryError(str(exc)) from exc
         if self._current_account is not None:
-            durable_ids.add(normalize_account_id(self._current_account.account_id))
-        return tuple(sorted(durable_ids))
+            current_account_id = normalize_account_id(self._current_account.account_id)
+            known_accounts.setdefault(current_account_id, [])
+        return dict(sorted(known_accounts.items()))
 
-    def _roster_row(self, account_id: str) -> AccountRosterRow:
+    def _roster_row(
+        self,
+        account_id: str,
+        bindings: list[AccountInstanceBinding],
+    ) -> AccountRosterRow:
         try:
-            service = self._service_status_for_known_account(account_id)
+            service = self._service_status_for_known_account(account_id, bindings=bindings)
             triage = self._reconciliation.triage(account_id=account_id, now_ms=self._now_ms())
         except (AccountArtifactError, OSError, ValidationError, ValueError) as exc:
             raise AccountDirectoryError(str(exc)) from exc
@@ -161,6 +231,8 @@ class AccountDirectoryService:
                 attachment=service.attachment,
                 phase=service.phase,
                 generation=service.generation,
+                operating_state=service.operating_state,
+                headline=service.headline,
             ),
             latest_verdict_summary=AccountRosterVerdictSummary(
                 state=triage.verdict.state,

@@ -16,6 +16,10 @@ const ACRONYMS = new Map<string, string>([
 
 const CODE_SEGMENT_PATTERN = /^[A-Za-z0-9_.-]+$/;
 const OPAQUE_RECEIPT_VALUE_LABEL_TOKENS = new Set(['id', 'hash', 'path', 'ref', 'url']);
+const LABEL_OVERRIDES = new Map<string, string>([
+  ['clerk', 'Account service'],
+  ['account_clerk', 'Account service'],
+]);
 
 function isCodeLikeSegment(segment: string): boolean {
   const trimmed = segment.trim();
@@ -44,6 +48,8 @@ export function formatReceiptLabel(value: string | null | undefined): string {
   if (value === null || value === undefined) return '';
   const trimmed = value.trim();
   if (!trimmed) return '';
+  const override = LABEL_OVERRIDES.get(trimmed.toLowerCase());
+  if (override) return override;
 
   const segments = trimmed.split(/\s*,\s*/);
   if (segments.every(isCodeLikeSegment)) {

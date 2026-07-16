@@ -179,9 +179,9 @@ def _candidate_for_residual(
     return AccountRecoveryFlattenCandidate(
         intent=intent,
         confirmation=OperatorConfirmationCopy(
-            title="Submit Clerk recovery flatten",
+            title="Submit Account service recovery flatten",
             body="Submit the server-projected recovery flatten for the retired bot namespace.",
-            consequence="The Clerk will cancel namespace orders and submit the exact paper recovery order shown below.",
+            consequence="The Account service will cancel namespace orders and submit the exact paper recovery order shown below.",
             confirm_label="Submit recovery flatten",
         ),
     )
