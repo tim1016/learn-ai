@@ -121,18 +121,18 @@ def match_identity(
 ) -> str | None:
     """Return the engine ``intent_id`` for this event, or ``None`` if foreign.
 
-    Prefer the broker-echoed ``order_ref`` when present. For order-scoped
-    error callbacks that arrive before a cached Trade exists, fall back to
-    the ADR-0024 identity ladder's req_id/order_id/perm_id rungs against
-    the submitted-order projection. Namespace checks remain exact
+    Prefer the broker-echoed ``order_ref`` when present.  An exact matching
+    namespace is the durable ownership proof for Account-Clerk submissions:
+    that submit lane deliberately has no legacy per-run intent-WAL entry at
+    sweep time.  For order-scoped error callbacks that carry no order ref,
+    fall back to the ADR-0024 identity ladder's req_id/order_id/perm_id rungs
+    against the submitted-order projection. Namespace checks remain exact
     equality (ADR-0008 §1 — never startswith).
     """
     parsed = parse_order_ref(event.order_ref)
     if parsed is not None:
         namespace, intent_id = parsed
         if namespace != bot_order_namespace:
-            return None
-        if intent_id not in submitted_orders:
             return None
         return intent_id
     if event.event_type != "error":
@@ -165,9 +165,7 @@ def _match_submitted_order_identity(
     return None
 
 
-def _submitted_order_belongs_to_namespace(
-    submitted: Mapping[str, Any], bot_order_namespace: str
-) -> bool:
+def _submitted_order_belongs_to_namespace(submitted: Mapping[str, Any], bot_order_namespace: str) -> bool:
     namespace = submitted.get("bot_order_namespace")
     if isinstance(namespace, str) and namespace:
         return namespace == bot_order_namespace
@@ -204,9 +202,7 @@ def event_with_submitted_order_facts(
     order_type = submitted_order.get("order_type")
     if event.order_type is None and isinstance(order_type, str) and order_type:
         updates["order_type"] = order_type
-    quantity = _submitted_float(
-        submitted_order.get("quantity") or submitted_order.get("requested_qty")
-    )
+    quantity = _submitted_float(submitted_order.get("quantity") or submitted_order.get("requested_qty"))
     if quantity is not None:
         if event.fill_quantity is None:
             updates["fill_quantity"] = 0.0
@@ -351,11 +347,7 @@ def classify_verdict(
             # broker is still working on, not a qty divergence. A
             # smaller fill on a terminal order, or a larger fill, is
             # the unexpected case.
-            if (
-                event.remaining is not None
-                and event.remaining > 1e-9
-                and delta < 0
-            ):
+            if event.remaining is not None and event.remaining > 1e-9 and delta < 0:
                 reasons.append(ReasonCode.PARTIAL_FILL)
             else:
                 reasons.append(ReasonCode.QUANTITY_DIVERGENCE)
@@ -516,12 +508,8 @@ def author_row_from_event(
     up the intent itself because the publisher already has the
     ``submitted_orders`` dict in hand.
     """
-    lag = compute_lag_breakdown(
-        event=event, intent=intent, observed_ms=ctx.ts_ms
-    )
-    verdict, reasons, divergence_facts = classify_verdict(
-        event=event, intent=intent, lag=lag, ctx=ctx
-    )
+    lag = compute_lag_breakdown(event=event, intent=intent, observed_ms=ctx.ts_ms)
+    verdict, reasons, divergence_facts = classify_verdict(event=event, intent=intent, lag=lag, ctx=ctx)
     template_key, template_version = select_template(reasons)
 
     facts = _facts_for_template(
@@ -672,9 +660,7 @@ def _facts_for_template(
     return facts
 
 
-def _engine_overlay_or_none(
-    intent: EngineIntent | None, lag: LagBreakdown
-) -> EngineOverlay | None:
+def _engine_overlay_or_none(intent: EngineIntent | None, lag: LagBreakdown) -> EngineOverlay | None:
     if intent is None:
         return None
     return EngineOverlay(
@@ -716,8 +702,7 @@ class UnauthorableEventError(ValueError):
 def _require_side(event: IbkrOrderEvent) -> str:
     if event.side is None:
         raise UnauthorableEventError(
-            f"event {event.exec_id or event.order_id} has no side; "
-            "cannot author a truthful broker-activity row"
+            f"event {event.exec_id or event.order_id} has no side; cannot author a truthful broker-activity row"
         )
     return event.side
 
@@ -725,8 +710,7 @@ def _require_side(event: IbkrOrderEvent) -> str:
 def _require_symbol(event: IbkrOrderEvent) -> str:
     if not event.symbol:
         raise UnauthorableEventError(
-            f"event {event.exec_id or event.order_id} has no symbol; "
-            "cannot author a truthful broker-activity row"
+            f"event {event.exec_id or event.order_id} has no symbol; cannot author a truthful broker-activity row"
         )
     return event.symbol
 
@@ -734,8 +718,7 @@ def _require_symbol(event: IbkrOrderEvent) -> str:
 def _require_order_type(event: IbkrOrderEvent) -> str:
     if not event.order_type:
         raise UnauthorableEventError(
-            f"event {event.exec_id or event.order_id} has no order_type; "
-            "cannot author a truthful broker-activity row"
+            f"event {event.exec_id or event.order_id} has no order_type; cannot author a truthful broker-activity row"
         )
     return event.order_type
 
@@ -750,11 +733,7 @@ def _compute_net_amount(event: IbkrOrderEvent) -> float | None:
     symbol-enrichment step will provide the contract multiplier when the
     row is for a derivative.
     """
-    if (
-        event.last_fill_price is None
-        or event.fill_quantity is None
-        or event.side is None
-    ):
+    if event.last_fill_price is None or event.fill_quantity is None or event.side is None:
         return None
     gross = event.last_fill_price * event.fill_quantity
     fee = event.fee or 0.0

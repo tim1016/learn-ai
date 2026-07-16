@@ -58,8 +58,11 @@ def _seed_envelope(
         ib_client_id=42,
         last_processed_bar_ms=1,
         last_artifact_flush_ms=1,
-        submitted_orders=submitted_orders
-        or {INTENT_ID: {"perm_id": 999, "order_id": 42, "status": "Submitted", "symbol": "SPY"}},
+        submitted_orders=(
+            submitted_orders
+            if submitted_orders is not None
+            else {INTENT_ID: {"perm_id": 999, "order_id": 42, "status": "Submitted", "symbol": "SPY"}}
+        ),
     )
     repo = LiveStateSidecarRepo(stable_live_state_path(artifacts_root, SID))
     repo._path.parent.mkdir(parents=True, exist_ok=True)
@@ -169,17 +172,12 @@ async def test_periodic_sweep_runs_immediately_then_at_interval(
         await publisher.stop()
         BrokerActivityPublisher._run_periodic_sweep = original_run  # type: ignore[method-assign]
 
-    assert len(sweep_call_times) >= 2, (
-        f"expected >= 2 sweeps, got {len(sweep_call_times)}"
-    )
+    assert len(sweep_call_times) >= 2, f"expected >= 2 sweeps, got {len(sweep_call_times)}"
     # First sweep within 1 s.
     elapsed_to_first = sweep_call_times[0] - (sweep_call_times[0] - 0)
     assert elapsed_to_first >= 0
     # Subsequent sweeps are at least 100 ms apart.
-    gaps = [
-        sweep_call_times[i + 1] - sweep_call_times[i]
-        for i in range(len(sweep_call_times) - 1)
-    ]
+    gaps = [sweep_call_times[i + 1] - sweep_call_times[i] for i in range(len(sweep_call_times) - 1)]
     assert all(g >= 0.08 for g in gaps), f"sweep gaps too short: {gaps}"
 
 
@@ -232,6 +230,30 @@ async def test_matched_exec_does_not_emit_incident(tmp_path: Path) -> None:
     assert rows[0].exec_id == "matched-sweep-1"
 
 
+async def test_own_namespace_exec_without_legacy_wal_does_not_emit_incident(
+    tmp_path: Path,
+) -> None:
+    """Account-Clerk submissions are owned by their broker order reference.
+
+    The Clerk durable lane intentionally does not write the legacy per-run
+    intent WAL.  A sweep must still recognize a fill carrying this instance's
+    exact namespace rather than recording a false foreign-execution incident.
+    """
+    incident_store = IncidentStore(tmp_path / "run-dir")
+    own_fill = _fill_event(exec_id="clerk-owned-sweep-1", order_ref=ORDER_REF)
+
+    publisher, _run_dir, _artifacts = _build_publisher(
+        tmp_path,
+        recovery_events=[own_fill],
+        incident_store=incident_store,
+        submitted_orders={},
+    )
+    count = await publisher._run_periodic_sweep()
+
+    assert count == 1
+    assert incident_store.list_unresolved() == []
+
+
 async def test_sweep_dedupes_by_exec_id(tmp_path: Path) -> None:
     """The same exec_id appearing in two consecutive sweeps produces only
     one incident (the second sweep sees the exec_id in ``_seen_exec_ids``
@@ -279,9 +301,7 @@ async def test_sweep_does_not_silently_correct_positions(tmp_path: Path) -> None
     # persist path advances (that is expected behaviour — WAL cursor).
     after = repo.read()
     assert after is not None
-    assert after.submitted_orders == before.submitted_orders, (
-        "sweep must not modify submitted_orders"
-    )
+    assert after.submitted_orders == before.submitted_orders, "sweep must not modify submitted_orders"
 
 
 async def test_lookback_bound_clamps_request_window(tmp_path: Path) -> None:
@@ -370,9 +390,7 @@ def _seed_bootstrap_env(artifacts_root: Path) -> None:
     repo.write(envelope)
 
 
-async def test_bootstrap_passes_incident_store(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_bootstrap_passes_incident_store(tmp_path: Path, monkeypatch) -> None:
     """Finding (PR #665 P1): production bootstrap MUST pass an IncidentStore
     so cross-client incidents are persisted, not just logged.
 
@@ -446,9 +464,7 @@ async def test_bootstrap_passes_incident_store(
         await publisher.stop()
 
 
-async def test_sweep_persists_incident_via_bootstrapped_store(
-    tmp_path: Path, monkeypatch
-) -> None:
+async def test_sweep_persists_incident_via_bootstrapped_store(tmp_path: Path, monkeypatch) -> None:
     """End-to-end: bootstrap a publisher (with its real IncidentStore),
     run the sweep with a foreign exec, assert the incident JSON appears
     in the run_dir/operator_incidents/ directory.
@@ -475,9 +491,7 @@ async def test_sweep_persists_incident_via_bootstrapped_store(
 
     import app.engine.live.run_lookup as run_lookup_module
 
-    monkeypatch.setattr(
-        run_lookup_module, "latest_run_dir_for_instance", lambda _art, _sid: run_dir
-    )
+    monkeypatch.setattr(run_lookup_module, "latest_run_dir_for_instance", lambda _art, _sid: run_dir)
 
     from app.broker.ibkr.models import IbkrOrderEvent
 
@@ -536,15 +550,11 @@ async def test_sweep_persists_incident_via_bootstrapped_store(
 
         incident_dir = run_dir / "operator_incidents"
         incident_files = list(incident_dir.glob("*.json"))
-        assert len(incident_files) >= 1, (
-            f"expected at least 1 incident file in {incident_dir}; found none"
-        )
+        assert len(incident_files) >= 1, f"expected at least 1 incident file in {incident_dir}; found none"
 
         from app.operator.notices.schema import OperatorIncident
 
-        incident = OperatorIncident.model_validate_json(
-            incident_files[0].read_text(encoding="utf-8")
-        )
+        incident = OperatorIncident.model_validate_json(incident_files[0].read_text(encoding="utf-8"))
         assert incident.notice.code == "reconciliation.discovered_execution_not_in_engine_state"
         assert incident.notice.tier == "critical"
     finally:
