@@ -1,6 +1,6 @@
 <app-page-header title="Account desk" subtitle="Server-owned account posture and evidence freshness.">
   @if (displayAccountId(); as accountId) {
-    <span slot="actions" class="account-identity">Account <code>{{ accountId }}</code></span>
+    <app-account-desk-account-switcher slot="actions" [accountId]="accountId" (accountChange)="switchAccount($event)" />
   }
 </app-page-header>
 
@@ -70,6 +70,7 @@
         <app-account-desk-trader-holdings />
         <app-account-desk-trader-events />
       } @else {
+        <app-account-desk-operator-service />
         <app-account-desk-operator-events />
       }
     }

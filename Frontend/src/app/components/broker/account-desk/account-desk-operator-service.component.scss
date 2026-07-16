@@ -1,0 +1,5 @@
+.account-service { display: grid; gap: .75rem; }
+.account-service header h2, .account-service header p { margin: 0; }
+.account-service dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: .75rem; margin: 0; }
+.account-service dt { color: var(--text-muted); font-size: .875rem; }
+.account-service dd { margin: .2rem 0 0; }

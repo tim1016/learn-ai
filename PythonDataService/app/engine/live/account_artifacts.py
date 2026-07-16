@@ -322,6 +322,29 @@ def account_artifacts_root(artifacts_root: Path, account_id: str) -> Path:
     return Path(resolved)
 
 
+def list_account_artifact_ids(artifacts_root: Path) -> tuple[str, ...]:
+    """Return the strict durable-account directory inventory without repairing it."""
+
+    accounts_root = Path(
+        os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts"))
+    )
+    try:
+        children = tuple(sorted(accounts_root.iterdir(), key=lambda path: path.name))
+    except FileNotFoundError:
+        return ()
+    except OSError as exc:
+        raise AccountArtifactError(f"cannot read account artifact directory: {exc}") from exc
+
+    account_ids: list[str] = []
+    for child in children:
+        if child.is_symlink():
+            raise AccountArtifactError(f"account artifact directory must not be a symlink: {child.name!r}")
+        if not child.is_dir():
+            continue
+        account_ids.append(_safe_account_path_segment(child.name))
+    return tuple(account_ids)
+
+
 def _account_artifact_file_path(
     artifacts_root: Path,
     account_id: str,
@@ -1267,6 +1290,7 @@ _LOCAL_EXPORTS = [
     "AccountRecoveryProof",
     "RestartIntensityPolicy",
     "account_artifacts_root",
+    "list_account_artifact_ids",
     "advance_account_clerk_generation",
     "append_account_event",
     "clear_account_freeze",

@@ -20,16 +20,19 @@ from app.broker.ibkr.models import (
     IbkrPositionsSnapshot,
 )
 from app.engine.live.account_artifacts import (
+    AccountClerkLease,
     AccountFreezeEvidence,
     CohortBatchLaunchMemberOutcome,
     CohortBatchLaunchOutcomesReceipt,
     CohortBatchLaunchReceipt,
     account_artifacts_root,
+    advance_account_clerk_generation,
     append_account_event,
     read_account_events,
     read_account_freeze,
     record_cohort_batch_launch_outcomes,
     record_cohort_batch_launch_receipt,
+    write_account_clerk_lease,
     write_account_freeze,
 )
 from app.engine.live.account_clerk_journal import (
@@ -52,6 +55,7 @@ from app.engine.live.run_ledger import LiveRunLedger, write_ledger
 from app.routers import account_reconciliation, cohort_batch_launch
 from app.schemas.journal_cures import JournalCureReceipt, JournalCureRequest
 from app.services import cohort_batch_launch as cohort_batch_launch_service
+from app.services.account_directory import AccountDirectoryService, CurrentBrokerAccount
 from app.services.account_event_journal import AccountEventJournalService
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.cohort_batch_launch import CohortBatchLaunchService
@@ -1294,3 +1298,171 @@ async def test_account_events_endpoint_trader_today_uses_new_york_day_across_dst
     assert row["occurred_at_ms"] == today
     assert isinstance(row["occurred_at_ms"], int)
     assert row["trader_narration"] == "An account safety freeze was cleared."
+
+
+async def test_accounts_roster_exposes_the_current_single_account_without_a_service(tmp_path: Path) -> None:
+    from app.main import app
+
+    service = AccountDirectoryService(
+        artifacts_root=tmp_path,
+        current_account=CurrentBrokerAccount(account_id="DU1234567", is_paper=True),
+        now_ms=lambda: 1_780_000_000_000,
+    )
+    expected_triage = AccountReconciliationService(artifacts_root=tmp_path).triage(
+        account_id="DU1234567",
+        now_ms=1_780_000_000_000,
+    )
+    app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            roster = await client.get("/api/accounts")
+            status_response = await client.get("/api/accounts/DU1234567/clerk")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert roster.status_code == 200
+    assert roster.json() == {
+        "schema_version": 1,
+        "rows": [
+            {
+                "account_id": "DU1234567",
+                "broker": "IBKR",
+                "effective_posture": "PAPER_EXECUTION",
+                "service": {"attachment": "UNATTACHED", "phase": None, "generation": None},
+                "latest_verdict_summary": {
+                    "state": expected_triage.verdict.state,
+                    "headline": expected_triage.verdict.headline,
+                    "generated_at_ms": 1_780_000_000_000,
+                },
+                "last_verified_at_ms": None,
+            }
+        ],
+    }
+    assert status_response.status_code == 200
+    assert status_response.json() == {
+        "schema_version": 1,
+        "account_id": "DU1234567",
+        "attachment": "UNATTACHED",
+        "phase": None,
+        "generation": None,
+        "generation_recorded_at_ms": None,
+        "source": None,
+        "binding": {"state": "UNATTACHED", "generation": None, "lease_generation": None},
+        "lease": None,
+        "journal": {"last_seq": None, "last_write_ms": None},
+    }
+    assert not (tmp_path / "accounts" / "DU1234567").exists()
+
+
+async def test_account_service_status_endpoint_projects_durable_service_evidence(tmp_path: Path) -> None:
+    from app.main import app
+
+    account_id = "DU7654321"
+    write_account_instance_binding(
+        tmp_path,
+        AccountInstanceBinding(
+            account_id=account_id,
+            strategy_instance_id="desk-roster",
+            run_id="run-roster",
+            bot_order_namespace="learn-ai/desk-roster/v1",
+            lifecycle_state="ACTIVE",
+            recorded_at_ms=1_780_000_000_000,
+            source="test",
+        ),
+    )
+    generation = advance_account_clerk_generation(
+        tmp_path,
+        account_id,
+        phase="accepting",
+        recorded_at_ms=1_780_000_000_100,
+        source="host_daemon.clerk_spawn",
+    )
+    write_account_clerk_lease(
+        tmp_path,
+        AccountClerkLease(
+            account_id=account_id,
+            generation=generation.generation,
+            pid=123,
+            ibkr_client_id=80,
+            status="RUNNING",
+            started_at_ms=1_780_000_000_101,
+            renewed_at_ms=1_780_000_000_102,
+            valid_until_ms=1_780_000_060_102,
+        ),
+    )
+    intent = AccountOwnerSubmitIntent(
+        trace_id="trace-roster",
+        account_id=account_id,
+        strategy_instance_id="desk-roster",
+        run_id="run-roster",
+        bot_order_namespace="learn-ai/desk-roster/v1",
+        intent_id="intent-roster",
+        order_ref="learn-ai/desk-roster/v1:intent-roster",
+        intent_kind="ORDER",
+        order_spec={},
+        owner_generation=1,
+        created_at_ms=1_780_000_000_103,
+    )
+    AccountClerkJournal(
+        artifacts_root=tmp_path,
+        account_id=account_id,
+        now_ms=lambda: 1_780_000_000_104,
+    ).record_intent(intent, validate_intent=lambda _: None)
+    service = AccountDirectoryService(
+        artifacts_root=tmp_path,
+        current_account=None,
+        now_ms=lambda: 1_780_000_000_200,
+    )
+    app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get(f"/api/accounts/{account_id}/clerk")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "schema_version": 1,
+        "account_id": account_id,
+        "attachment": "ATTACHED",
+        "phase": "accepting",
+        "generation": 1,
+        "generation_recorded_at_ms": 1_780_000_000_100,
+        "source": "host_daemon.clerk_spawn",
+        "binding": {"state": "ATTACHED", "generation": 1, "lease_generation": 1},
+        "lease": {
+            "status": "RUNNING",
+            "generation": 1,
+            "started_at_ms": 1_780_000_000_101,
+            "renewed_at_ms": 1_780_000_000_102,
+            "valid_until_ms": 1_780_000_060_102,
+        },
+        "journal": {"last_seq": 1, "last_write_ms": 1_780_000_000_104},
+    }
+
+
+async def test_account_service_status_endpoint_rejects_unknown_and_corrupt_artifacts_without_repair(
+    tmp_path: Path,
+) -> None:
+    from app.main import app
+
+    service = AccountDirectoryService(
+        artifacts_root=tmp_path,
+        current_account=CurrentBrokerAccount(account_id="DU1234567", is_paper=True),
+    )
+    app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            unknown = await client.get("/api/accounts/DU7654321/clerk")
+            artifact = tmp_path / "accounts" / "DU1234567" / "clerk_generation.json"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_text("{not valid json", encoding="utf-8")
+            corrupt = await client.get("/api/accounts/DU1234567/clerk")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert unknown.status_code == 404
+    assert unknown.json()["detail"]["reason_code"] == "ACCOUNT_UNKNOWN"
+    assert corrupt.status_code == 409
+    assert corrupt.json()["detail"]["reason_code"] == "ACCOUNT_SERVICE_ARTIFACT_CORRUPT"
+    assert artifact.read_text(encoding="utf-8") == "{not valid json"

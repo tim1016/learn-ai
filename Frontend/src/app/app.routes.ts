@@ -2,6 +2,7 @@ import { Routes } from "@angular/router";
 import { BotSurfaceStore } from "./components/broker/bot-control/bot-surface-store.service";
 import { AccountDeskHoldingsStore } from "./components/broker/account-desk/account-desk-holdings-store.service";
 import { AccountDeskEventsStore } from "./components/broker/account-desk/account-desk-events-store.service";
+import { AccountDeskDirectoryStore } from "./components/broker/account-desk/account-desk-directory-store.service";
 import { AccountDeskSurfaceStore } from "./components/broker/account-desk/account-desk-surface-store.service";
 import {
   botExistsGuard,
@@ -213,8 +214,16 @@ export const routes: Routes = [
       ).then((m) => m.BrokerOptionsSurfaceComponent),
   },
   {
+    path: "broker/accounts",
+    providers: [AccountDeskDirectoryStore],
+    loadComponent: () =>
+      import(
+        "./components/broker/account-roster/account-roster-page.component"
+      ).then((m) => m.AccountRosterPageComponent),
+  },
+  {
     path: "broker/accounts/:accountId",
-    providers: [AccountDeskSurfaceStore, AccountDeskHoldingsStore, AccountDeskEventsStore],
+    providers: [AccountDeskSurfaceStore, AccountDeskHoldingsStore, AccountDeskEventsStore, AccountDeskDirectoryStore],
     loadComponent: () =>
       import(
         "./components/broker/account-desk/account-desk-page.component"

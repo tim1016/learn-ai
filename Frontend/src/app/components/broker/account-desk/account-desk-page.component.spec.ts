@@ -5,6 +5,7 @@ import { BehaviorSubject } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AccountTriageResponse, AccountTriageVerdictState } from '../../../api/account-reconciliation.types';
+import type { AccountRosterRow, AccountServiceStatusResponse } from '../../../api/account-directory.types';
 import { BrokerService } from '../../../services/broker.service';
 import { formatReceiptLabel } from '../../../shared/pipes/receipt-label.pipe';
 import { formatTimestampDisplay } from '../../../shared/timestamp';
@@ -12,6 +13,7 @@ import { makeCleanAccountTriage } from '../testing/account-triage-fixtures';
 import { makeAccountSummary, makeAccountTruth, makePositionsSnapshot } from './account-desk-holdings.fixtures';
 import { AccountDeskHoldingsStore } from './account-desk-holdings-store.service';
 import { AccountDeskEventsStore } from './account-desk-events-store.service';
+import { AccountDeskDirectoryStore } from './account-desk-directory-store.service';
 import { AccountDeskSurfaceStore } from './account-desk-surface-store.service';
 import { AccountDeskPageComponent } from './account-desk-page.component';
 
@@ -50,6 +52,27 @@ function makeEventsStore() {
   };
 }
 
+function makeDirectoryStore(rows: readonly AccountRosterRow[] = []) {
+  return {
+    loadRoster: vi.fn().mockResolvedValue(undefined),
+    loadServiceStatus: vi.fn().mockResolvedValue(undefined),
+    retryRoster: vi.fn(),
+    retryServiceStatus: vi.fn(),
+    rosterRows: signal(rows),
+    rosterLoading: signal(false),
+    rosterErrorMessage: signal<string | null>(null),
+    rosterHasLastGood: signal(rows.length > 0),
+    rosterShowingStaleLastGood: signal(false),
+    rosterEmpty: signal(rows.length === 0),
+    statusAccountId: signal<string | null>(null),
+    serviceStatus: signal<AccountServiceStatusResponse | null>(null),
+    serviceStatusLoading: signal(false),
+    serviceStatusErrorMessage: signal<string | null>(null),
+    serviceStatusHasLastGood: signal(false),
+    serviceStatusShowingStaleLastGood: signal(false),
+  };
+}
+
 function triage(state: AccountTriageVerdictState = 'CLEAN'): AccountTriageResponse {
   const current = makeCleanAccountTriage({
     generatedAtMs: 1_780_000_002_000,
@@ -77,18 +100,23 @@ async function setup(options: { response?: AccountTriageResponse; route$?: Behav
   const route$ = options.route$ ?? new BehaviorSubject(convertToParamMap({ accountId: 'DU1234567' }));
   const router = { navigate: vi.fn().mockResolvedValue(true) };
   const events = makeEventsStore();
+  const directory = makeDirectoryStore([
+    accountRow('DU1234567'),
+    accountRow('DU7654321'),
+  ]);
   const view = await render(AccountDeskPageComponent, {
     providers: [
       AccountDeskHoldingsStore,
       AccountDeskSurfaceStore,
       { provide: AccountDeskEventsStore, useValue: events },
+      { provide: AccountDeskDirectoryStore, useValue: directory },
       { provide: BrokerService, useValue: broker },
       { provide: ActivatedRoute, useValue: { paramMap: route$.asObservable() } },
       { provide: Router, useValue: router },
     ],
   });
   await screen.findByText((options.response ?? triage()).verdict.headline);
-  return { ...view, broker, events, route$, router };
+  return { ...view, broker, directory, events, route$, router };
 }
 
 describe('AccountDeskPageComponent', () => {
@@ -117,13 +145,28 @@ describe('AccountDeskPageComponent', () => {
 
   it('rekeys the route-scoped surface store when the account route changes', async () => {
     const route$ = new BehaviorSubject(convertToParamMap({ accountId: 'DU1234567' }));
-    const { broker, events } = await setup({ route$ });
+    const { broker, directory, events } = await setup({ route$ });
     broker.accountTriage.mockResolvedValueOnce(makeCleanAccountTriage({ accountId: 'DU7654321' }));
 
     route$.next(convertToParamMap({ accountId: 'DU7654321' }));
     await waitFor(() => expect(broker.accountTriage).toHaveBeenCalledWith('DU7654321'));
     expect(events.load).toHaveBeenCalledWith('DU7654321');
+    expect(directory.loadServiceStatus).toHaveBeenCalledWith('DU7654321');
     expect(await screen.findByText('DU7654321')).toBeTruthy();
+  });
+
+  it('switches accounts without leaving the current lens', async () => {
+    const route$ = new BehaviorSubject(convertToParamMap({ accountId: 'DU1234567' }));
+    const { broker, router } = await setup({ route$ });
+    broker.accountTriage.mockResolvedValueOnce(makeCleanAccountTriage({ accountId: 'DU7654321' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Operator' }));
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Account' }), { target: { value: 'DU7654321' } });
+    expect(router.navigate).toHaveBeenCalledWith(['/broker/accounts', 'DU7654321']);
+
+    route$.next(convertToParamMap({ accountId: 'DU7654321' }));
+    await waitFor(() => expect(broker.accountTriage).toHaveBeenCalledWith('DU7654321'));
+    expect(screen.getByRole('button', { name: 'Operator' }).getAttribute('aria-pressed')).toBe('true');
   });
 
   it('uses the shared viewer-local timestamp display and preserves stale last-good data with retry', async () => {
@@ -141,11 +184,13 @@ describe('AccountDeskPageComponent', () => {
     broker.accountTriage.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(makeCleanAccountTriage());
     const route$ = new BehaviorSubject(convertToParamMap({ accountId: 'DU1234567' }));
     const events = makeEventsStore();
+    const directory = makeDirectoryStore();
     await render(AccountDeskPageComponent, {
     providers: [
       AccountDeskHoldingsStore,
       AccountDeskSurfaceStore,
         { provide: AccountDeskEventsStore, useValue: events },
+        { provide: AccountDeskDirectoryStore, useValue: directory },
         { provide: BrokerService, useValue: broker },
         { provide: ActivatedRoute, useValue: { paramMap: route$.asObservable() } },
         { provide: Router, useValue: { navigate: vi.fn().mockResolvedValue(true) } },
@@ -157,3 +202,18 @@ describe('AccountDeskPageComponent', () => {
     await waitFor(() => expect(screen.getByText('No open holdings are reported for this attested account.')).toBeTruthy());
   });
 });
+
+function accountRow(accountId: string): AccountRosterRow {
+  return {
+    account_id: accountId,
+    broker: 'IBKR',
+    effective_posture: 'PAPER_EXECUTION',
+    service: { attachment: 'UNATTACHED', phase: null, generation: null },
+    latest_verdict_summary: {
+      state: 'NOT_PROVEN',
+      headline: 'Verification is required.',
+      generated_at_ms: 1_780_000_000_000,
+    },
+    last_verified_at_ms: null,
+  };
+}

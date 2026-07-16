@@ -9,7 +9,10 @@ import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import { fmtCurrency, fmtDurationRemaining, fmtSignedCurrency } from '../format';
 import { AccountDeskHoldingsStore } from './account-desk-holdings-store.service';
 import { AccountDeskEventsStore } from './account-desk-events-store.service';
+import { AccountDeskAccountSwitcherComponent } from './account-desk-account-switcher.component';
+import { AccountDeskDirectoryStore } from './account-desk-directory-store.service';
 import { AccountDeskOperatorEventsComponent } from './account-desk-operator-events.component';
+import { AccountDeskOperatorServiceComponent } from './account-desk-operator-service.component';
 import { AccountDeskSurfaceStore } from './account-desk-surface-store.service';
 import { AccountDeskTraderEventsComponent } from './account-desk-trader-events.component';
 import { AccountDeskTraderHoldingsComponent } from './account-desk-trader-holdings.component';
@@ -21,9 +24,11 @@ type AccountDeskLens = 'trader' | 'operator';
   selector: 'app-account-desk-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
+    AccountDeskAccountSwitcherComponent,
     AccountDeskTraderHoldingsComponent,
     AccountDeskTraderEventsComponent,
     AccountDeskOperatorEventsComponent,
+    AccountDeskOperatorServiceComponent,
     PageHeaderComponent,
     ReceiptLabelPipe,
     TimestampDisplayComponent,
@@ -38,6 +43,7 @@ export class AccountDeskPageComponent {
   readonly store = inject(AccountDeskSurfaceStore);
   readonly holdings = inject(AccountDeskHoldingsStore);
   readonly events = inject(AccountDeskEventsStore);
+  readonly directory = inject(AccountDeskDirectoryStore);
   readonly lens = signal<AccountDeskLens>('trader');
   private readonly nowMs = signal(Date.now());
 
@@ -63,6 +69,8 @@ export class AccountDeskPageComponent {
         void this.store.load(accountId);
         void this.holdings.load(accountId);
         void this.events.load(accountId);
+        void this.directory.loadRoster();
+        void this.directory.loadServiceStatus(accountId);
       }
     });
     const intervalId = window.setInterval(() => this.nowMs.set(Date.now()), 1_000);
@@ -75,6 +83,12 @@ export class AccountDeskPageComponent {
 
   retry(): void {
     this.store.retry();
+  }
+
+  switchAccount(accountId: string): void {
+    if (accountId !== this.store.accountId()) {
+      void this.router.navigate(['/broker/accounts', accountId]);
+    }
   }
 
   followPrimaryMove(move: AccountTriageVerdictMove): void {

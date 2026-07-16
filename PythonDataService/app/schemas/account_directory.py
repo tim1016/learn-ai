@@ -1,0 +1,103 @@
+"""Read-only Account desk roster and Account service projections."""
+
+from __future__ import annotations
+
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.schemas.account_reconciliation import AccountTriageVerdictState
+
+AccountEffectivePosture = Literal["PAPER_EXECUTION", "UNSAFE", "UNKNOWN"]
+AccountServiceAttachmentState = Literal["ATTACHED", "UNATTACHED", "FENCED"]
+AccountServicePhase = Literal["accepting", "reconnecting", "draining", "frozen"]
+
+
+class AccountServiceSummary(BaseModel):
+    """Small Account service state for roster rows."""
+
+    model_config = ConfigDict(frozen=True)
+
+    attachment: AccountServiceAttachmentState
+    phase: AccountServicePhase | None = None
+    generation: int | None = Field(default=None, ge=1)
+
+
+class AccountRosterVerdictSummary(BaseModel):
+    """The exact dominant account-triage state, authored by the backend."""
+
+    model_config = ConfigDict(frozen=True)
+
+    state: AccountTriageVerdictState
+    headline: str = Field(min_length=1, max_length=160)
+    generated_at_ms: int = Field(ge=0, le=9_223_372_036_854_775_807)
+
+
+class AccountRosterRow(BaseModel):
+    """One configured or durably-known account available to the desk."""
+
+    model_config = ConfigDict(frozen=True)
+
+    account_id: str = Field(min_length=1, max_length=64)
+    broker: Literal["IBKR"] = "IBKR"
+    effective_posture: AccountEffectivePosture
+    service: AccountServiceSummary
+    latest_verdict_summary: AccountRosterVerdictSummary
+    last_verified_at_ms: int | None = Field(default=None, ge=0, le=9_223_372_036_854_775_807)
+
+
+class AccountsRosterResponse(BaseModel):
+    """Versioned roster; an empty list means no account is configured or known."""
+
+    model_config = ConfigDict(frozen=True)
+
+    schema_version: Literal[1] = 1
+    rows: list[AccountRosterRow] = Field(default_factory=list)
+
+
+class AccountServiceBinding(BaseModel):
+    """Backend-owned attachment decision; the client never derives it from lease fields."""
+
+    model_config = ConfigDict(frozen=True)
+
+    state: AccountServiceAttachmentState
+    generation: int | None = Field(default=None, ge=1)
+    lease_generation: int | None = Field(default=None, ge=1)
+
+
+class AccountServiceLease(BaseModel):
+    """Durable Account Clerk lease projected under Account-service vocabulary."""
+
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["RUNNING", "DRAINING"]
+    generation: int = Field(ge=1)
+    started_at_ms: int = Field(ge=0, le=9_223_372_036_854_775_807)
+    renewed_at_ms: int = Field(ge=0, le=9_223_372_036_854_775_807)
+    valid_until_ms: int = Field(ge=0, le=9_223_372_036_854_775_807)
+
+
+class AccountServiceJournalWatermark(BaseModel):
+    """Newest durable Account Clerk journal entry, if any."""
+
+    model_config = ConfigDict(frozen=True)
+
+    last_seq: int | None = Field(default=None, ge=1)
+    last_write_ms: int | None = Field(default=None, ge=0, le=9_223_372_036_854_775_807)
+
+
+class AccountServiceStatusResponse(BaseModel):
+    """Full read-only Account service status for one known account."""
+
+    model_config = ConfigDict(frozen=True)
+
+    schema_version: Literal[1] = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    attachment: AccountServiceAttachmentState
+    phase: AccountServicePhase | None = None
+    generation: int | None = Field(default=None, ge=1)
+    generation_recorded_at_ms: int | None = Field(default=None, ge=0, le=9_223_372_036_854_775_807)
+    source: str | None = Field(default=None, max_length=256)
+    binding: AccountServiceBinding
+    lease: AccountServiceLease | None = None
+    journal: AccountServiceJournalWatermark

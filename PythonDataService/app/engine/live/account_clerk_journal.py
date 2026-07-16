@@ -657,6 +657,23 @@ def read_account_clerk_journal(
         return _read_journal_jsonl(path)
 
 
+def inspect_account_clerk_journal(
+    artifacts_root: Path,
+    account_id: str,
+) -> list[AccountClerkJournalEntry]:
+    """Strictly inspect a journal without creating a lock or account directory.
+
+    Desk projections must remain observational even for a previously unseen
+    account. The normal reader coordinates writers via a sibling lock file,
+    which is appropriate for lifecycle code but would mutate this read path.
+    """
+
+    path = account_clerk_journal_path(artifacts_root, account_id)
+    if not path.exists():
+        return []
+    return _read_journal_jsonl(path)
+
+
 @overload
 def _read_jsonl(path: Path, model_type: type[AccountClerkInboxEntry]) -> list[AccountClerkInboxEntry]: ...
 
