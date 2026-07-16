@@ -2485,7 +2485,10 @@ async def deploy_preflight(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except StrategyValidationManifestError as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
-    blockers = deploy_preflight_service.author_deploy_blockers(signals)
+    blockers = deploy_preflight_service.author_deploy_blockers(
+        signals,
+        account_id=account_id.strip(),
+    )
     return DeployPreflightResponse(
         ready=not any(blocker.condition.severity == "blocking" for blocker in blockers),
         blockers=blockers,
@@ -3984,7 +3987,7 @@ async def get_account_fleet() -> FleetContamination:
 
 
 @router.get("/account-summary", response_model=FleetAccountSummary)
-async def get_account_summary() -> FleetAccountSummary:
+async def get_account_summary(account_id: str | None = Query(default=None)) -> FleetAccountSummary:
     """PRD #616 — server-authored account row.
 
     Composes position contamination with account-identity verification
@@ -3994,21 +3997,35 @@ async def get_account_summary() -> FleetAccountSummary:
     """
     settings = get_settings()
     root = Path(settings.live_runs_root)
+    try:
+        requested_account_id = normalize_account_id(account_id) if account_id is not None else None
+    except InvalidAccountIdError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     account_ids: dict[str, str | None] = {}
     for sid in _scan_runs_by_instance(root):
-        account_ids[sid] = _instance_ledger_account_id(root, sid)
-    net = await _fetch_net_positions()
+        instance_account_id = _instance_ledger_account_id(root, sid)
+        if requested_account_id is None or instance_account_id == requested_account_id:
+            account_ids[sid] = instance_account_id
     data_plane_snapshot = snapshot_data_plane_broker()
     broker_account, broker_known = await _fetch_broker_connected_account(data_plane_snapshot)
+    explained_by_instance = collect_fleet_position_explanations(root, account_id=requested_account_id)
+    net_positions = None if requested_account_id is not None else await _fetch_net_positions()
     payload = compute_fleet_account_summary(
-        net_positions=net,
-        explained_by_instance=collect_fleet_position_explanations(root),
+        net_positions=net_positions,
+        explained_by_instance=explained_by_instance,
         instance_account_ids=account_ids,
         broker_connected_account=broker_account,
         broker_account_known=broker_known,
         policy_blocks_starts=True,
     )
-    payload["contamination"] = FleetContamination(**payload["contamination"])
+    if requested_account_id is not None:
+        payload["account_id"] = requested_account_id
+        payload["contamination"] = await _compute_account_fleet_contamination(
+            root,
+            account_id=requested_account_id,
+        )
+    else:
+        payload["contamination"] = FleetContamination(**payload["contamination"])
     return FleetAccountSummary(**payload)
 
 

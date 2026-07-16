@@ -1221,6 +1221,41 @@ async def test_account_events_endpoint_pages_filters_and_preserves_stable_event_
     assert len({row["event_id"] for row in first_page.json()["rows"]}) == 2
 
 
+async def test_account_events_endpoint_projects_singular_opaque_evidence_refs(tmp_path: Path) -> None:
+    from app.main import app
+
+    append_account_event(
+        tmp_path,
+        "DU1234567",
+        {
+            "event_type": "account_clerk_event_stream_down",
+            "order_id": 17,
+            "exec_id": "exec-17",
+            "order_ref": "learn-ai/bot-a/v1:intent-17",
+            "intent_id": "intent-17",
+            "recorded_at_ms": 1_710_000_000_000,
+        },
+    )
+    service = AccountEventJournalService(artifacts_root=tmp_path, now_ms=lambda: 1_710_000_001_000)
+    app.dependency_overrides[account_reconciliation.get_account_event_journal_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/accounts/DU1234567/events")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    [row] = response.json()["rows"]
+    assert row["kind"] == "safety"
+    assert {(ref["source"], ref["ref"]) for ref in row["evidence_refs"]} == {
+        ("account_event_journal", "DU1234567:1"),
+        ("order", "17"),
+        ("execution", "exec-17"),
+        ("order_ref", "learn-ai/bot-a/v1:intent-17"),
+        ("intent", "intent-17"),
+    }
+
+
 async def test_account_events_endpoint_rejects_invalid_cursors_and_limits(tmp_path: Path) -> None:
     from app.main import app
 
@@ -1353,6 +1388,34 @@ async def test_accounts_roster_exposes_the_current_single_account_without_a_serv
         "journal": {"last_seq": None, "last_write_ms": None},
     }
     assert not (tmp_path / "accounts" / "DU1234567").exists()
+
+
+def test_directory_fences_an_expired_lease_and_keeps_artifact_only_accounts_visible(tmp_path: Path) -> None:
+    generation = advance_account_clerk_generation(
+        tmp_path,
+        "DU7654321",
+        phase="accepting",
+        recorded_at_ms=100,
+        source="test",
+    )
+    write_account_clerk_lease(
+        tmp_path,
+        AccountClerkLease(
+            account_id="DU7654321",
+            generation=generation.generation,
+            pid=123,
+            ibkr_client_id=80,
+            status="RUNNING",
+            started_at_ms=100,
+            renewed_at_ms=101,
+            valid_until_ms=102,
+        ),
+    )
+
+    service = AccountDirectoryService(artifacts_root=tmp_path, current_account=None, now_ms=lambda: 102)
+
+    assert [row.account_id for row in service.roster().rows] == ["DU7654321"]
+    assert service.service_status(account_id="DU7654321").attachment == "FENCED"
 
 
 async def test_account_service_status_endpoint_projects_durable_service_evidence(tmp_path: Path) -> None:

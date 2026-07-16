@@ -4,7 +4,7 @@ import { Router } from '@angular/router';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import type { OperatorBlockerMoveEvent } from '../shared/operator-blocker-list/operator-blocker-list.component';
 import { OperatorBlockerListComponent } from '../shared/operator-blocker-list/operator-blocker-list.component';
-import { fmtCurrency, fmtSignedCurrency, fmtSignedNumber } from '../format';
+import { fmtCurrency, fmtSignedCurrency, fmtSignedQuantity } from '../format';
 import { AccountDeskHoldingsStore, type AccountDeskHoldingRow } from './account-desk-holdings-store.service';
 
 /** Trader-facing holdings body for an already-attested Account Desk route. */
@@ -20,7 +20,7 @@ export class AccountDeskTraderHoldingsComponent {
   readonly store = inject(AccountDeskHoldingsStore);
   readonly fmtCurrency = fmtCurrency;
   readonly fmtSignedCurrency = fmtSignedCurrency;
-  readonly fmtSignedNumber = fmtSignedNumber;
+  readonly fmtSignedQuantity = fmtSignedQuantity;
 
   trackHolding = (_: number, row: AccountDeskHoldingRow): number => row.position.con_id;
 

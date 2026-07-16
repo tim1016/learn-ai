@@ -13,7 +13,7 @@ from app.services.account_desk_guidance import author_account_desk_blockers
     ("cure_action", "clear_freeze_actionable", "anchor", "audience", "disposition", "action_kind"),
     [
         ("reconcile_now", False, "reconciliation", "operator", "fix_here", "confirm_in_form"),
-        ("prove_evidence", False, "lease", "operator", "wait", None),
+        ("prove_evidence", False, "reconciliation", "operator", "fix_here", "confirm_in_form"),
         ("clear_freeze", False, "cure_tools", "operator", "wait", None),
         ("clear_freeze", True, "cure_tools", "operator", "fix_here", "confirm_in_form"),
         ("resolve_exposure", False, "cure_tools", "operator", "fix_here", "confirm_in_form"),

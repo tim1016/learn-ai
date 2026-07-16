@@ -4,7 +4,7 @@ export interface OperatorRunbookRoute {
 }
 
 const RUNBOOK_ROUTES: Readonly<Record<string, OperatorRunbookRoute>> = {
-  'broker-reconnect': { commands: ['/broker/accounts'] },
+  'broker-reconnect': { commands: ['/broker'] },
   'cross-client-execution': {
     commands: ['/broker/accounts'],
   },

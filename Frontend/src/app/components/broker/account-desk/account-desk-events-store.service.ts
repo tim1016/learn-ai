@@ -113,7 +113,9 @@ export class AccountDeskEventsStore {
   private async refreshTrader(): Promise<void> {
     const accountId = this.accountKey();
     if (accountId === null || this.traderState().loading) return;
-    await this.fetchTrader(accountId, { afterSeq: this.traderState().latestSeq ?? undefined });
+    // The server, not the browser clock, owns New York "today" membership.
+    // Replace the bounded view so yesterday's rows cannot survive midnight.
+    await this.fetchTrader(accountId);
   }
 
   private async refreshOperations(): Promise<void> {
@@ -122,18 +124,17 @@ export class AccountDeskEventsStore {
     await this.fetchOperations(accountId, { afterSeq: this.operationsState().latestSeq ?? undefined });
   }
 
-  private async fetchTrader(accountId: string, cursor: Pick<AccountEventsRequest, 'afterSeq'>): Promise<void> {
+  private async fetchTrader(accountId: string): Promise<void> {
     const generation = this.routeGeneration;
     this.traderState.update((state) => ({ ...state, loading: true, errorMessage: null }));
     try {
       const response = await this.broker.accountEvents(accountId, {
         view: 'trader_today',
         limit: 100,
-        ...cursor,
       });
       if (!this.isCurrentRequest(accountId, generation)) return;
       const page = validatePage(response, accountId, 'trader_today');
-      this.traderState.update((state) => applyPage(state, page, cursor, Date.now()));
+      this.traderState.update((state) => replacePage(state, page, Date.now()));
     } catch (error) {
       if (this.isCurrentRequest(accountId, generation)) {
         this.traderState.update((state) => ({ ...state, errorMessage: serverMessage(error) }));
@@ -196,9 +197,26 @@ function applyPage(
 ): EventViewState {
   return {
     rows: mergeRows(state.rows, page.rows),
-    latestSeq: Math.max(state.latestSeq ?? 0, page.latest_seq ?? 0) || null,
+    latestSeq: cursor.beforeSeq === undefined
+      ? Math.max(state.latestSeq ?? 0, page.latest_seq ?? 0) || null
+      : state.latestSeq,
     nextBeforeSeq: cursor.beforeSeq === undefined ? state.nextBeforeSeq ?? page.next_before_seq : page.next_before_seq,
     loading: state.loading,
+    errorMessage: null,
+    lastGoodAtMs,
+  };
+}
+
+function replacePage(
+  state: EventViewState,
+  page: AccountEventsResponse,
+  lastGoodAtMs: number,
+): EventViewState {
+  return {
+    ...state,
+    rows: page.rows,
+    latestSeq: page.latest_seq,
+    nextBeforeSeq: page.next_before_seq,
     errorMessage: null,
     lastGoodAtMs,
   };

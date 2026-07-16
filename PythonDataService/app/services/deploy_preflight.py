@@ -164,7 +164,7 @@ def _nav(label: str, route: str, fragment: str | None = None) -> OperatorMove:
     )
 
 
-def author_fleet_contamination_blocker() -> OperatorBlocker:
+def author_fleet_contamination_blocker(account_id: str | None = None) -> OperatorBlocker:
     """Author the one Accounts route for a dirty Clerk verdict."""
 
     return OperatorBlocker.for_host(
@@ -176,12 +176,20 @@ def author_fleet_contamination_blocker() -> OperatorBlocker:
         disposition="fix_elsewhere",
         headline="Fleet state blocks new deploys",
         detail="Clear the account fleet state before deploying or starting a bot.",
-        primary_move=_nav("Open Accounts", "/broker/accounts"),
+        primary_move=_nav(
+            "Open account recovery",
+            _account_recovery_route(account_id),
+            "account-desk-recovery-controls" if account_id is not None else None,
+        ),
         applies_to="both",
     )
 
 
-def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBlocker]:
+def author_deploy_blockers(
+    signals: DeployPreflightSignals,
+    *,
+    account_id: str | None = None,
+) -> list[OperatorBlocker]:
     """Return the deploy blockers standing between the operator and a runnable bot."""
 
     blockers: list[OperatorBlocker] = []
@@ -273,8 +281,9 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
                 headline="Account frozen",
                 detail="Resolve the account sick-bay condition before deploying.",
                 primary_move=_nav(
-                    "Open Accounts",
-                    "/broker/accounts",
+                    "Open account recovery",
+                    _account_recovery_route(account_id),
+                    "account-desk-recovery-controls" if account_id is not None else None,
                 ),
                 applies_to="both",
             )
@@ -291,15 +300,16 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
                 headline="Account not proven",
                 detail="Run account reconcile to prove the account is clean before deploying.",
                 primary_move=_nav(
-                    "Open Accounts",
-                    "/broker/accounts",
+                    "Open account proof",
+                    _account_recovery_route(account_id),
+                    "account-desk-operations-proof" if account_id is not None else None,
                 ),
                 applies_to="both",
             )
         )
 
     if signals.fleet_blocks_starts:
-        blockers.append(author_fleet_contamination_blocker())
+        blockers.append(author_fleet_contamination_blocker(account_id))
 
     if not signals.strategy_deployable:
         blockers.append(
@@ -334,3 +344,7 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
         )
 
     return blockers
+
+
+def _account_recovery_route(account_id: str | None) -> str:
+    return "/broker/accounts" if account_id is None else f"/broker/accounts/{account_id}"

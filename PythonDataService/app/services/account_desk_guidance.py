@@ -47,9 +47,20 @@ _CURE_ACTION_GUIDANCE: dict[AccountCureAction, _GuidanceSpec] = {
         ),
     ),
     "prove_evidence": _GuidanceSpec(
-        anchor=OperatorBlockerAnchor(kind="lease", subject_key=None),
+        anchor=OperatorBlockerAnchor(kind="reconciliation", subject_key=None),
         audience="operator",
-        disposition="wait",
+        disposition="fix_here",
+        move_label="Run account reconcile",
+        move_action=ConfirmInFormAction(
+            kind="confirm_in_form",
+            anchor="account-reconciliation-action",
+        ),
+        confirmation=OperatorConfirmationCopy(
+            title="Run account reconciliation",
+            body="Request a fresh account reconciliation for this account.",
+            consequence="The returned reconciliation receipt will replace the current proof on this desk.",
+            confirm_label="Run account reconcile",
+        ),
     ),
     "clear_freeze": _GuidanceSpec(
         anchor=OperatorBlockerAnchor(kind="cure_tools", subject_key=None),
@@ -82,13 +93,6 @@ _CURE_ACTION_GUIDANCE: dict[AccountCureAction, _GuidanceSpec] = {
             consequence="The server will re-evaluate the account freeze using the submitted operator reason.",
             confirm_label="Accept exposure",
         ),
-    ),
-    "retire_replace": _GuidanceSpec(
-        anchor=OperatorBlockerAnchor(kind="reconciliation", subject_key=None),
-        audience="operator",
-        disposition="fix_elsewhere",
-        move_label="Open bot controls",
-        move_action=NavigateAction(kind="navigate", route="/broker/bots"),
     ),
 }
 
@@ -169,7 +173,24 @@ def _guidance_spec_for_condition(
     *,
     clear_freeze_actionable: bool,
 ) -> _GuidanceSpec:
+    if condition.cure_action == "retire_replace":
+        return _GuidanceSpec(
+            anchor=OperatorBlockerAnchor(kind="reconciliation", subject_key=None),
+            audience="operator",
+            disposition="fix_elsewhere",
+            move_label="Open bot controls",
+            move_action=NavigateAction(
+                kind="navigate",
+                route=f"/broker/bots/{condition.owner.owner_id}",
+            ),
+        )
     spec = _CURE_ACTION_GUIDANCE[condition.cure_action]
     if condition.cure_action == "clear_freeze" and not clear_freeze_actionable:
         return replace(spec, disposition="wait", move_label=None, move_action=None, confirmation=None)
+    if (
+        condition.cure_action == "resolve_exposure"
+        and condition.condition_type == "exposure_freeze"
+        and clear_freeze_actionable
+    ):
+        return _CURE_ACTION_GUIDANCE["clear_freeze"]
     return spec

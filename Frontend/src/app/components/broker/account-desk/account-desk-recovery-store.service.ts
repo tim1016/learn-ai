@@ -211,20 +211,28 @@ export class AccountDeskRecoveryStore {
     if (confirmation === null || this.busyState() || !this.canConfirm()) return;
     this.busyState.set(true);
     this.errorMessageState.set(null);
+    let success: AccountDeskRecoverySuccess;
     try {
-      const success = await this.execute(confirmation);
-      if (!this.isCurrent(confirmation.accountId, generation)) return;
-      this.successState.set(success);
-      this.confirmationState.set(null);
+      success = await this.execute(confirmation);
+    } catch (error) {
+      if (this.isCurrent(confirmation.accountId, generation)) {
+        this.errorMessageState.set(recoveryErrorMessage(error));
+        this.busyState.set(false);
+      }
+      return;
+    }
+    if (!this.isCurrent(confirmation.accountId, generation)) return;
+    this.successState.set(success);
+    this.confirmationState.set(null);
+    try {
       await Promise.all([
         this.surface.load(confirmation.accountId),
         this.events.load(confirmation.accountId),
         this.loadLegacyCandidates(confirmation.accountId, generation),
       ]);
-    } catch (error) {
-      if (this.isCurrent(confirmation.accountId, generation)) {
-        this.errorMessageState.set(recoveryErrorMessage(error));
-      }
+    } catch {
+      if (!this.isCurrent(confirmation.accountId, generation)) return;
+      this.errorMessageState.set('Account recovery was accepted, but fresh desk evidence is unavailable. Retry to refresh it.');
     } finally {
       if (this.isCurrent(confirmation.accountId, generation)) this.busyState.set(false);
     }
@@ -351,10 +359,13 @@ function recoveryCommandForAnchor(anchor: string): Exclude<AccountDeskRecoveryCo
 }
 
 function recoveryErrorMessage(error: unknown): string {
-  if (!isRecord(error) || !isRecord(error['error']) || !isRecord(error['error']['detail'])) {
+  if (!isRecord(error) || !isRecord(error['error'])) {
     return 'Account recovery was not accepted. Review the current proof and try again.';
   }
-  const message = error['error']['detail']['message'];
+  const detail = error['error']['detail'];
+  if (typeof detail === 'string') return detail;
+  if (!isRecord(detail)) return 'Account recovery was not accepted. Review the current proof and try again.';
+  const message = detail['message'];
   if (typeof message === 'string') return message;
   return 'Account recovery was not accepted. Review the current proof and try again.';
 }

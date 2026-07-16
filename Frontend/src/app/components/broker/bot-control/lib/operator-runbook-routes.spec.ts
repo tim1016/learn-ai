@@ -5,7 +5,7 @@ import { resolveOperatorRunbookRoute } from './operator-runbook-routes';
 describe('resolveOperatorRunbookRoute', () => {
   it('maps known runbook slugs to explicit operator surfaces', () => {
     expect(resolveOperatorRunbookRoute('broker-reconnect')).toEqual({
-      commands: ['/broker/accounts'],
+      commands: ['/broker'],
     });
     expect(resolveOperatorRunbookRoute('cross-client-execution')).toEqual({
       commands: ['/broker/accounts'],

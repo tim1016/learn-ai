@@ -1,12 +1,11 @@
 <label class="account-switcher">
   <span>Account</span>
   <select [value]="accountId()" aria-label="Account" (change)="choose($event)">
-    @if (directory.rosterRows().length === 0) {
+    @if (!routeAccountIsInRoster()) {
       <option [value]="accountId()">{{ accountId() }}</option>
-    } @else {
-      @for (row of directory.rosterRows(); track row.account_id) {
-        <option [value]="row.account_id">{{ row.account_id }}</option>
-      }
+    }
+    @for (row of directory.rosterRows(); track row.account_id) {
+      <option [value]="row.account_id">{{ row.account_id }}</option>
     }
   </select>
 </label>

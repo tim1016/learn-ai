@@ -161,9 +161,11 @@ export class AccountDeskHoldingsStore {
       const [positions, truth] = await Promise.all([this.broker.positions(), this.broker.accountTruth()]);
       if (generation !== this.requestGeneration) return;
       const truthByConId = attestedTruthPositions(accountId, positions, truth);
-      if (positions.account_id !== accountId || truthByConId === null) {
+      if (positions.account_id !== accountId || positions.used_cache_fallback || truthByConId === null) {
         this.clearForIdentityFailure(
-          'Broker account evidence did not attest this route. Live holdings are unavailable.',
+          positions.used_cache_fallback
+            ? 'Broker positions are a cache fallback. Live holdings are unavailable until a fresh broker snapshot is available.'
+            : 'Broker account evidence did not attest this route. Live holdings are unavailable.',
         );
         return;
       }
@@ -285,6 +287,7 @@ function attestedTruthPositions(
 ): ReadonlyMap<number, AccountTruthPositionRow> | null {
   if (truth.account_id !== accountId) return null;
   const truthByConId = new Map(truth.positions.map((position) => [position.con_id, position]));
+  if (truthByConId.size !== truth.positions.length || truthByConId.size !== positions.positions.length) return null;
   for (const position of positions.positions) {
     const truthPosition = truthByConId.get(position.con_id);
     if (

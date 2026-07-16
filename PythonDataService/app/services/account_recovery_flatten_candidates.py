@@ -12,9 +12,12 @@ from pydantic import ValidationError
 from app.broker.ibkr.models import IbkrOrderSpec
 from app.engine.live.account_artifacts import read_account_owner_generation
 from app.engine.live.account_clerk import AccountClerkJournalCorruptError, read_account_clerk_journal
+from app.engine.live.account_clerk_journal import recovery_operation_started_for_namespace
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import AccountInstanceBinding
 from app.engine.live.journal_exposure import normalize_journal_broker_event, project_journal_exposure
+from app.engine.live.order_identity import OrderRefTooLongError, build_order_ref
+from app.schemas.account_truth import AccountTruthResponse
 from app.schemas.journal_cures import AccountRecoveryFlattenCandidate
 from app.schemas.operator_blocker import OperatorConfirmationCopy
 
@@ -24,6 +27,8 @@ def recovery_flatten_candidates(
     artifacts_root: Path,
     account_id: str,
     bindings: list[AccountInstanceBinding],
+    account_truth: AccountTruthResponse | None,
+    account_truth_expires_at_ms: int | None,
     generated_at_ms: int,
 ) -> list[AccountRecoveryFlattenCandidate]:
     """Author only exact, single-instrument Clerk recovery requests.
@@ -43,6 +48,20 @@ def recovery_flatten_candidates(
     except AccountClerkJournalCorruptError:
         return []
 
+    if (
+        account_truth is None
+        or account_truth_expires_at_ms is None
+        or account_truth_expires_at_ms <= generated_at_ms
+        or account_truth.account_id != account_id
+    ):
+        return []
+    broker_quantity_by_symbol: dict[str, float] = {}
+    for position in account_truth.positions:
+        if position.account_id != account_id or not math.isfinite(position.quantity):
+            return []
+        symbol = position.symbol.upper()
+        broker_quantity_by_symbol[symbol] = broker_quantity_by_symbol.get(symbol, 0.0) + position.quantity
+
     source_intents: dict[tuple[str, str], dict[str, AccountOwnerSubmitIntent]] = {}
     for entry in entries:
         event = normalize_journal_broker_event(entry)
@@ -60,11 +79,22 @@ def recovery_flatten_candidates(
         )[intent.order_ref] = intent
 
     latest_by_namespace = {binding.bot_order_namespace: binding for binding in bindings}
+    exposures = project_journal_exposure(entries, account_id=account_id, group_by="namespace")
+    symbols_per_namespace: dict[str, set[str]] = {}
+    for exposure in exposures:
+        symbols_per_namespace.setdefault(exposure.group_id, set()).add(exposure.symbol)
     candidates: list[AccountRecoveryFlattenCandidate] = []
-    for exposure in project_journal_exposure(entries, account_id=account_id, group_by="namespace"):
+    for exposure in exposures:
         binding = latest_by_namespace.get(exposure.group_id)
         sources = source_intents.get((exposure.group_id, exposure.symbol), {})
-        if binding is None or binding.lifecycle_state != "RETIRED" or len(sources) != 1:
+        if (
+            binding is None
+            or binding.lifecycle_state != "RETIRED"
+            or len(sources) != 1
+            or len(symbols_per_namespace[exposure.group_id]) != 1
+            or not math.isclose(broker_quantity_by_symbol.get(exposure.symbol, 0.0), exposure.quantity)
+            or recovery_operation_started_for_namespace(entries, exposure.group_id)
+        ):
             continue
         source_intent = next(iter(sources.values()))
         candidate = _candidate_for_residual(
@@ -99,7 +129,10 @@ def _candidate_for_residual(
         source_order = IbkrOrderSpec.model_validate(source_intent.order_spec)
     except ValidationError:
         return None
-    if source_order.order_ref is None or source_order.symbol.upper() != symbol:
+    if (
+        source_order.order_ref != source_intent.order_ref
+        or source_order.symbol.upper() != symbol
+    ):
         return None
     digest_payload = json.dumps(
         {
@@ -113,8 +146,11 @@ def _candidate_for_residual(
         separators=(",", ":"),
     ).encode("utf-8")
     digest = hashlib.sha256(digest_payload).hexdigest()[:24]
-    intent_id = f"account-desk-recovery-{digest}"
-    order_ref = f"{binding.bot_order_namespace}:{intent_id}"
+    intent_id = f"adrf-{digest}"
+    try:
+        order_ref = build_order_ref(binding.bot_order_namespace, intent_id, max_length=60)
+    except OrderRefTooLongError:
+        return None
     recovery_order = source_order.model_copy(
         update={
             "action": "SELL" if signed_quantity > 0 else "BUY",

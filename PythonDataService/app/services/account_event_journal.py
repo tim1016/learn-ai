@@ -78,6 +78,11 @@ _EVENT_PRESENTATION: dict[str, tuple[AccountEventKind, str | None, str]] = {
         "Account recovery flatten completed.",
         "Account Clerk recovery flatten event recorded.",
     ),
+    "account_clerk_event_stream_down": (
+        "safety",
+        "Broker event evidence is unavailable.",
+        "Account Clerk broker event stream is unavailable.",
+    ),
     "account_clerk_unattributed_broker_event": (
         "activity",
         "Unattributed broker activity needs review.",
@@ -118,6 +123,14 @@ _EVIDENCE_FIELDS: tuple[tuple[str, str], ...] = (
     ("bot_order_namespace", "bot_order_namespace"),
     ("execution_ids", "execution"),
     ("order_ids", "order"),
+    ("order_id", "order"),
+    ("perm_id", "order"),
+    ("exec_id", "execution"),
+    ("execution_id", "execution"),
+    ("order_ref", "order_ref"),
+    ("client_order_id", "order"),
+    ("intent_id", "intent"),
+    ("intent_ids", "intent"),
 )
 
 
@@ -262,8 +275,14 @@ def _evidence_refs(
 def _string_values(value: object) -> Iterable[str]:
     if isinstance(value, str) and value:
         return (value,)
+    if isinstance(value, int) and not isinstance(value, bool):
+        return (str(value),)
     if isinstance(value, list):
-        return tuple(item for item in value if isinstance(item, str) and item)
+        return tuple(
+            item if isinstance(item, str) else str(item)
+            for item in value
+            if (isinstance(item, str) and item) or (isinstance(item, int) and not isinstance(item, bool))
+        )
     return ()
 
 

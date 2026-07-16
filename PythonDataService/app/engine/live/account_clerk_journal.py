@@ -198,7 +198,7 @@ class AccountClerkJournal:
         inbox_path, journal_path = self._paths()
         with _file_lock(journal_path):
             entries = self._load_tail_locked(inbox_path, journal_path)
-            if self._recovery_operation_started_for_namespace_entries(entries, intent):
+            if recovery_operation_started_for_namespace(entries, intent.bot_order_namespace):
                 return
             entry = AccountClerkJournalEntry(
                 seq=_next_seq(entries),
@@ -222,27 +222,7 @@ class AccountClerkJournal:
         inbox_path, journal_path = self._paths()
         with _file_lock(journal_path):
             entries = self._load_tail_locked(inbox_path, journal_path)
-            return self._recovery_operation_started_for_namespace_entries(entries, intent)
-
-    @staticmethod
-    def _recovery_operation_started_for_namespace_entries(
-        entries: list[AccountClerkJournalEntry],
-        intent: AccountOwnerSubmitIntent,
-    ) -> bool:
-        terminal_intent_ids = {
-            entry.intent.intent_id
-            for entry in entries
-            if entry.intent is not None
-            and entry.entry_kind == "broker_acked"
-        }
-        return any(
-            entry.intent is not None
-            and entry.intent.bot_order_namespace == intent.bot_order_namespace
-            and entry.intent.intent_id not in terminal_intent_ids
-            and entry.entry_kind
-            in {"recovery_cancelling", "recovery_cancelled", "broker_submitting", "broker_uncertain"}
-            for entry in entries
-        )
+            return recovery_operation_started_for_namespace(entries, intent.bot_order_namespace)
 
     @staticmethod
     def _recovery_cancelled_for_intent_entries(
@@ -661,17 +641,42 @@ def inspect_account_clerk_journal(
     artifacts_root: Path,
     account_id: str,
 ) -> list[AccountClerkJournalEntry]:
-    """Strictly inspect a journal without creating a lock or account directory.
+    """Strictly inspect an existing journal without creating an account directory.
 
-    Desk projections must remain observational even for a previously unseen
-    account. The normal reader coordinates writers via a sibling lock file,
-    which is appropriate for lifecycle code but would mutate this read path.
+    Desk projections remain observational for a previously unseen account.
+    Once a journal exists, coordinate with its writer lock so a projection
+    never parses a partially appended JSONL row.
     """
 
     path = account_clerk_journal_path(artifacts_root, account_id)
     if not path.exists():
         return []
-    return _read_journal_jsonl(path)
+    # The sibling lock already exists for an established journal; taking it
+    # keeps this observational projection from parsing a partially appended
+    # JSONL row while still avoiding directory creation for unseen accounts.
+    with _file_lock(path):
+        return _read_journal_jsonl(path)
+
+
+def recovery_operation_started_for_namespace(
+    entries: list[AccountClerkJournalEntry],
+    namespace: str,
+) -> bool:
+    """Whether a namespace has crossed an unresolved recovery broker boundary."""
+
+    terminal_intent_ids = {
+        entry.intent.intent_id
+        for entry in entries
+        if entry.intent is not None and entry.entry_kind == "broker_acked"
+    }
+    return any(
+        entry.intent is not None
+        and entry.intent.bot_order_namespace == namespace
+        and entry.intent.intent_id not in terminal_intent_ids
+        and entry.entry_kind
+        in {"recovery_cancelling", "recovery_cancelled", "broker_submitting", "broker_uncertain"}
+        for entry in entries
+    )
 
 
 @overload

@@ -26,6 +26,7 @@ describe('AccountDeskFleetStore', () => {
     const store = TestBed.inject(AccountDeskFleetStore);
     liveRuns.getAccountSummary.mockResolvedValue(summary('DU1234567'));
     await store.load('DU1234567');
+    expect(liveRuns.getAccountSummary).toHaveBeenCalledWith('DU1234567');
     liveRuns.getAccountSummary.mockRejectedValueOnce(new Error('offline'));
     await store.load('DU1234567');
 

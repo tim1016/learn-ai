@@ -825,9 +825,15 @@ def test_triage_authors_only_an_exact_single_instrument_recovery_flatten_move(tm
         )
     )
 
-    triage = AccountReconciliationService(artifacts_root=tmp_path).triage(
-        account_id="DU1234567",
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(positions=[_position(quantity=2)]),
         now_ms=1_780_000_003_000,
+    )
+    triage = service.triage(
+        account_id="DU1234567",
+        now_ms=1_780_000_003_100,
     )
 
     [candidate] = triage.recovery_flatten_candidates

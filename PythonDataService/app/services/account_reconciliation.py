@@ -739,6 +739,8 @@ class AccountReconciliationService:
             artifacts_root=self._artifacts_root,
             account_id=canonical_account_id,
             bindings=latest_bindings,
+            account_truth=receipt.account_truth if receipt is not None else None,
+            account_truth_expires_at_ms=receipt.expires_at_ms if receipt is not None else None,
             generated_at_ms=generated_at_ms,
         )
         return AccountTriageResponse(
@@ -1566,27 +1568,30 @@ def _account_triage_verdict(
             for condition in conditions
         }
     )
-    move = AccountTriageVerdictMove(
-        label="Open account desk",
-        route=f"/broker/accounts/{account_id}",
-        fragment="account-desk-recovery-controls",
-    )
     frozen_row = next((row for row in gate_rows if row.status == "freeze"), None)
     if freeze is not None or frozen_row is not None:
-        detail = freeze.reason if freeze is not None else frozen_row.detail
+        detail = _evidence_detail(freeze.reason if freeze is not None else frozen_row.detail)
         return AccountTriageVerdict(
             state="FROZEN",
             headline="Account is frozen",
             detail=detail,
-            primary_move=move,
+            primary_move=AccountTriageVerdictMove(
+                label="Open recovery controls",
+                route=f"/broker/accounts/{account_id}",
+                fragment="account-desk-recovery-controls",
+            ),
             operator_attention_count=attention_count,
         )
     if reconciliation_gate.status != "pass":
         return AccountTriageVerdict(
             state="NOT_PROVEN",
             headline="Account proof is not current",
-            detail=reconciliation_gate.detail,
-            primary_move=move,
+            detail=_evidence_detail(reconciliation_gate.detail),
+            primary_move=AccountTriageVerdictMove(
+                label="Open operations proof",
+                route=f"/broker/accounts/{account_id}",
+                fragment="account-desk-operations-proof",
+            ),
             operator_attention_count=attention_count,
         )
     attention_row = next((row for row in gate_rows if row.status != "pass"), None)
@@ -1594,8 +1599,12 @@ def _account_triage_verdict(
         return AccountTriageVerdict(
             state="NEEDS_ATTENTION",
             headline="Account needs attention",
-            detail=attention_row.detail if attention_row is not None else conditions[0].detail,
-            primary_move=move,
+            detail=_evidence_detail(attention_row.detail if attention_row is not None else conditions[0].detail),
+            primary_move=AccountTriageVerdictMove(
+                label="Open account desk",
+                route=f"/broker/accounts/{account_id}",
+                fragment="account-desk-recovery-controls",
+            ),
             operator_attention_count=attention_count,
         )
     return AccountTriageVerdict(

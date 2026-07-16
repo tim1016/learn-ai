@@ -145,7 +145,7 @@ function isAccountRosterRow(value: unknown): value is AccountRosterRow {
 function isAccountServiceStatusResponse(value: unknown, accountId: string): value is AccountServiceStatusResponse {
   return isRecord(value) &&
     value['schema_version'] === 1 &&
-    value['account_id'] === accountId &&
+    sameAccountId(value['account_id'], accountId) &&
     isAttachment(value['attachment']) &&
     isNullablePhase(value['phase']) &&
     isNullableGeneration(value['generation']) &&
@@ -154,6 +154,10 @@ function isAccountServiceStatusResponse(value: unknown, accountId: string): valu
     isBinding(value['binding']) &&
     isNullableLease(value['lease']) &&
     isJournalWatermark(value['journal']);
+}
+
+function sameAccountId(value: unknown, accountId: string): boolean {
+  return typeof value === 'string' && value.trim().toUpperCase() === accountId.trim().toUpperCase();
 }
 
 function isAccountServiceSummary(value: unknown): boolean {

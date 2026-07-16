@@ -92,6 +92,8 @@ def get_current_broker_account() -> CurrentBrokerAccount | None:
         client = get_client()
     except NotConnectedError:
         return None
+    if not client.is_connected():
+        return None
     account_id = client.connected_account
     if account_id is None:
         return None

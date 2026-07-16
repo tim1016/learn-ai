@@ -102,5 +102,9 @@ describe('OperatorBlocker contract mirror', () => {
       { ...operatorProjection, anchor: { kind: 'verdict', subject_key: null } },
       bothProjection,
     ])).toBe(1);
+    expect(operatorAttentionConditionCount([
+      operatorProjection,
+      { ...operatorProjection, audience: 'trader' },
+    ])).toBe(0);
   });
 });

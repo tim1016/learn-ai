@@ -26,7 +26,7 @@
           @if (triage.account_observation.valid_until_ms !== null) {
             <div>
               <dt>Fresh for</dt>
-              <dd>{{ freshnessCountdown() }}</dd>
+              <dd aria-live="off">{{ freshnessCountdown() }}</dd>
             </div>
           }
         </dl>
@@ -46,7 +46,7 @@
         <div><dt>Open positions</dt><dd>{{ headlineMetrics()?.openPositions ?? '—' }}</dd></div>
       </dl>
       @if (showingStaleLastGood()) {
-        <p class="state state-stale">Showing last good account data from <app-timestamp-display [value]="triage.generated_at_ms" mode="local" />. Refresh failed.</p>
+        <p class="state state-stale">Showing last good account data from <app-timestamp-display [value]="triage.generated_at_ms" mode="local" />. Refresh failed. <button type="button" (click)="retry()">Retry</button></p>
       }
     } @else if (error()) {
       <div class="state state-error" role="alert">

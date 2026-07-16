@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, inject } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 
 import { BrokerService } from '../../../services/broker.service';
@@ -14,14 +14,18 @@ export class AccountMonitorRedirectComponent {
   private readonly broker = inject(BrokerService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
+  private readonly destroyRef = inject(DestroyRef);
+  private destroyed = false;
 
   constructor() {
+    this.destroyRef.onDestroy(() => { this.destroyed = true; });
     void this.redirect();
   }
 
   private async redirect(): Promise<void> {
     try {
       const roster = await this.broker.accounts();
+      if (this.destroyed) return;
       const account = roster.rows.length === 1 ? roster.rows[0] : null;
       if (account === null) {
         await this.router.navigate(['/broker/accounts'], { replaceUrl: true });
@@ -36,6 +40,7 @@ export class AccountMonitorRedirectComponent {
           : { fragment: target.anchor, replaceUrl: true },
       );
     } catch {
+      if (this.destroyed) return;
       await this.router.navigate(['/broker/accounts'], { replaceUrl: true });
     }
   }

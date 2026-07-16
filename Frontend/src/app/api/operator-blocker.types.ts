@@ -145,9 +145,14 @@ export function operatorBlockersForAccountDeskLens(
  * Multiple host projections of one condition remain one item.
  */
 export function operatorAttentionConditionCount(blockers: readonly OperatorBlocker[]): number {
+  const traderVisibleConditionIds = new Set(
+    blockers
+      .filter((blocker) => blocker.audience === 'trader' || blocker.audience === 'both')
+      .map((blocker) => blocker.condition.id),
+  );
   return new Set(
     blockers
-      .filter((blocker) => blocker.audience === 'operator')
+      .filter((blocker) => blocker.audience === 'operator' && !traderVisibleConditionIds.has(blocker.condition.id))
       .map((blocker) => blocker.condition.id),
   ).size;
 }

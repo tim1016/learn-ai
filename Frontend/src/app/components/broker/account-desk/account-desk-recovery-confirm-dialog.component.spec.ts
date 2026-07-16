@@ -21,10 +21,10 @@ describe('AccountDeskRecoveryConfirmDialogComponent', () => {
     view.fixture.componentInstance.exposureReasonChanged.subscribe(reasonChanged);
 
     expect(await screen.findByText('Backend consequence.')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Accept exposure' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: 'Accept exposure', hidden: true }).hasAttribute('disabled')).toBe(true);
     fireEvent.input(screen.getByLabelText('Operator reason'), { target: { value: 'Operator reason.' } });
     expect(reasonChanged).toHaveBeenCalledWith('Operator reason.');
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel', hidden: true }));
     expect(cancelled).toHaveBeenCalledOnce();
     expect(document.querySelector('dialog.account-recovery-confirm')).not.toBeNull();
   });

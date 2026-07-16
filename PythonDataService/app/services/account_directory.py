@@ -100,7 +100,7 @@ class AccountDirectoryService:
         ) as exc:
             raise AccountDirectoryError(str(exc)) from exc
 
-        attachment = _attachment_state(generation, lease)
+        attachment = _attachment_state(generation, lease, now_ms=self._now_ms())
         return AccountServiceStatusResponse(
             account_id=account_id,
             attachment=attachment,
@@ -131,17 +131,16 @@ class AccountDirectoryService:
             durable_ids: set[str] = set()
             for directory_account_id in list_account_artifact_ids(self._artifacts_root):
                 bindings = read_account_instance_registry(self._artifacts_root, directory_account_id)
-                if not bindings:
-                    continue
-                binding_account_ids = {
-                    normalize_account_id(binding.account_id)
-                    for binding in bindings
-                }
-                if binding_account_ids != {directory_account_id}:
-                    raise AccountDirectoryError(
-                        "account binding identity does not match its durable directory: "
-                        f"{directory_account_id}"
-                    )
+                if bindings:
+                    binding_account_ids = {
+                        normalize_account_id(binding.account_id)
+                        for binding in bindings
+                    }
+                    if binding_account_ids != {directory_account_id}:
+                        raise AccountDirectoryError(
+                            "account binding identity does not match its durable directory: "
+                            f"{directory_account_id}"
+                        )
                 durable_ids.add(directory_account_id)
         except (AccountArtifactError, OSError, ValueError) as exc:
             raise AccountDirectoryError(str(exc)) from exc
@@ -180,9 +179,15 @@ class AccountDirectoryService:
 def _attachment_state(
     generation: AccountClerkGeneration | None,
     lease: AccountClerkLease | None,
+    *,
+    now_ms: int,
 ) -> AccountServiceAttachmentState:
     if generation is None:
         return "UNATTACHED"
     if lease is None:
         return "FENCED"
-    return "ATTACHED" if generation.generation == lease.generation and lease.status == "RUNNING" else "FENCED"
+    return "ATTACHED" if (
+        generation.generation == lease.generation
+        and lease.status == "RUNNING"
+        and lease.valid_until_ms > now_ms
+    ) else "FENCED"

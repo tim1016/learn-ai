@@ -45,7 +45,7 @@
               <tr [class.has-blocker]="row.blockers.length > 0">
                 <td class="mono">{{ row.position.symbol }}</td>
                 <td class="mono">{{ row.position.sec_type }}</td>
-                <td class="num mono">{{ fmtSignedNumber(row.pnl?.position ?? row.position.quantity, 0) }}</td>
+                <td class="num mono">{{ fmtSignedQuantity(row.pnl?.position ?? row.position.quantity) }}</td>
                 <td class="num mono">{{ fmtCurrency(row.pnl?.market_value ?? row.position.market_value) }}</td>
                 <td class="num mono">{{ fmtSignedCurrency(row.pnl?.unrealized_pnl) }}</td>
                 <td>{{ row.owner.owner_label }}</td>
