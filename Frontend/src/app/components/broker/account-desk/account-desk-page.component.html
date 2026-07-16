@@ -57,8 +57,14 @@
   </section>
 
   <nav class="lens-toggle" aria-label="Account desk lens">
-    <button type="button" [attr.aria-pressed]="lens() === 'trader'" (click)="selectLens('trader')">Trader</button>
-    <button type="button" [attr.aria-pressed]="lens() === 'operator'" (click)="selectLens('operator')">Operator</button>
+    <button type="button" aria-label="Trader" [attr.aria-pressed]="lens() === 'trader'" (click)="selectLens('trader')">
+      <span>Trader</span>
+      <small aria-hidden="true">Positions and activity</small>
+    </button>
+    <button type="button" aria-label="Operator" [attr.aria-pressed]="lens() === 'operator'" (click)="selectLens('operator')">
+      <span>Operator</span>
+      <small aria-hidden="true">Proof and account actions</small>
+    </button>
   </nav>
 
   <section class="desk-body card" aria-live="polite">
@@ -82,11 +88,26 @@
           }
         </section>
       } @else {
-        <app-account-desk-operator-proof />
-        <app-account-desk-operator-service />
-        <app-account-desk-operator-fleet />
-        <app-account-desk-operator-events />
-        <app-account-desk-recovery-controls />
+        <section class="operator-workspace" aria-label="Operator workspace">
+          <header class="operator-workspace__header">
+            <p class="eyebrow">Operator workspace</p>
+            <h2>Resolve the account posture</h2>
+            <p>Start with the current proof and server-declared actions. Audit history stays available below.</p>
+          </header>
+          <div class="operator-workspace__actions">
+            <div class="operator-workspace__proof">
+              <app-account-desk-operator-proof />
+            </div>
+            <div class="operator-workspace__recovery">
+              <app-account-desk-recovery-controls />
+            </div>
+          </div>
+          <app-account-desk-operator-service />
+          <app-account-desk-operator-fleet />
+          <div class="operator-workspace__history">
+            <app-account-desk-operator-events />
+          </div>
+        </section>
       }
     }
   </section>

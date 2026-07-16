@@ -26,7 +26,7 @@ describe('AccountDeskRecoveryControlsComponent', () => {
       ],
     });
 
-    expect(await screen.findByRole('heading', { name: 'Cure tools' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Account recovery' })).toBeTruthy();
     expect(screen.getByText('No account recovery action is currently declared safe.')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Enable auto-reconcile' }));
     expect(recovery.requestAutomationChange).toHaveBeenCalledWith(triage.reconciliation_automation_policy);
