@@ -435,6 +435,7 @@ export type HostProcessStartDisabledReasonCode =
   | 'STOPPED_REQUIRES_REDEPLOY'
   | 'START_SETTINGS_INCOMPLETE'
   | 'ACCOUNT_FROZEN'
+  | 'ACCOUNT_EVIDENCE_STALE'
   | 'CRASH_RECOVERY_REQUIRED';
 
 export interface CrashRecoveryOverrideRequest {
