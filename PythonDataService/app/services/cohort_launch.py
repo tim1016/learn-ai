@@ -18,6 +18,7 @@ from app.engine.live.account_artifacts import (
     CohortBatchLaunchOutcomesReceipt,
     CohortBatchLaunchReceipt,
     CohortBatchLaunchRequestProvenance,
+    project_restart_intensity_gate,
     read_account_events,
     record_cohort_batch_launch_outcomes,
     record_cohort_batch_launch_receipt,
@@ -224,6 +225,24 @@ class CohortLaunchCoordinator:
                 detail={
                     "reason_code": "COHORT_THREE_BOT_PROFILE_REQUIRES_EXACTLY_THREE",
                     "message": "The paper validation profile requires exactly three current ready bots.",
+                },
+            )
+        restart_gate = await asyncio.to_thread(
+            project_restart_intensity_gate,
+            self._artifacts_root,
+            account_id=account_id,
+            now_ms=now_ms,
+        )
+        if restart_gate.status == "freeze":
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": "COHORT_RESTART_INTENSITY_WOULD_FREEZE",
+                    "message": (
+                        "This three-bot cohort would breach the account restart-intensity gate. "
+                        "No cohort authorization or start was recorded."
+                    ),
+                    "gate_result": restart_gate.model_dump(mode="json"),
                 },
             )
         schedule = tuple(
@@ -445,11 +464,16 @@ class CohortLaunchCoordinator:
             )
         except HTTPException as exc:
             reason = exc.detail.get("reason_code") if isinstance(exc.detail, dict) else None
+            next_safe_action = "Refresh roll call and resolve the backend blocker before authorizing a new cohort."
+            if isinstance(exc.detail, dict) and isinstance(exc.detail.get("message"), str):
+                next_safe_action = exc.detail["message"]
+            elif isinstance(exc.detail, str) and exc.detail:
+                next_safe_action = exc.detail
             return CohortBatchLaunchMemberOutcome(
                 strategy_instance_id=member.pin.strategy_instance_id,
                 state="blocked",
                 reason=reason if isinstance(reason, str) else "COHORT_START_REJECTED",
-                next_safe_action="Refresh roll call and resolve the backend blocker before authorizing a new cohort.",
+                next_safe_action=next_safe_action,
             )
         except Exception:
             logger.exception(

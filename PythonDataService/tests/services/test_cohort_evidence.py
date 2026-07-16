@@ -4,18 +4,26 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+from fastapi import HTTPException
+
 from app.engine.live.account_artifacts import (
     CohortBatchLaunchMemberPin,
     CohortBatchLaunchReceipt,
+    read_account_events,
     record_cohort_batch_launch_receipt,
 )
+from app.engine.live.account_registry import (
+    AccountInstanceBinding,
+    write_account_instance_binding,
+)
+from app.engine.live.live_state_sidecar import LiveStateEnvelope
 from app.schemas.live_runs import (
     BotRollCallOffer,
     BotRollCallResponse,
     BotRollCallSummary,
     HostRunnerStartRequest,
 )
-from app.engine.live.live_state_sidecar import LiveStateEnvelope
 from app.services.cohort_batch_launch import CohortBatchLaunchService, parse_cohort_evidence_sample
 from app.services.cohort_evidence import (
     CohortEvidenceSample,
@@ -293,6 +301,73 @@ def test_three_bot_stagger_dispatches_from_durable_schedule(tmp_path: Path) -> N
     )
     assert status is not None
     assert [outcome.state for outcome in status.outcomes] == ["accepted", "accepted", "accepted"]
+
+
+def test_three_bot_stagger_refuses_before_authorization_when_restart_budget_is_exhausted(tmp_path: Path) -> None:
+    for index, recorded_at_ms in enumerate((1_000, 2_000), start=1):
+        write_account_instance_binding(
+            tmp_path,
+            AccountInstanceBinding(
+                account_id="DU123456",
+                strategy_instance_id=f"prior-{index}",
+                run_id=f"prior-run-{index}",
+                bot_order_namespace=f"learn-ai/prior-{index}/v1",
+                lifecycle_state="ACTIVE",
+                recorded_at_ms=recorded_at_ms,
+                source="test",
+            ),
+        )
+    offers = [
+        BotRollCallOffer(
+            offer_id=f"offer-{member}",
+            strategy_instance_id=f"bot-{member}",
+            run_id=f"run-{member}",
+            session_date="2026-07-16",
+            issued_at_ms=10_000,
+            expires_at_ms=9_999_999,
+        )
+        for member in ("a", "b", "c")
+    ]
+
+    async def roll_call() -> BotRollCallResponse:
+        return BotRollCallResponse(summary=BotRollCallSummary(ready=3), offers=offers)
+
+    async def start_run(_run_id: str, _request: HostRunnerStartRequest) -> SimpleNamespace:
+        raise AssertionError("restart admission must reject before a start")
+
+    coordinator = CohortLaunchCoordinator(
+        artifacts_root=tmp_path,
+        live_runs_root=tmp_path / "runs",
+        run_roll_call=roll_call,
+        start_run=start_run,
+        visible_runs_by_instance=lambda _root: {
+            f"bot-{member}": [{"run_id": f"run-{member}", "run_dir": str(tmp_path / f"run-{member}")}]
+            for member in ("a", "b", "c")
+        },
+        run_account_id=lambda _run_dir: "DU123456",
+        start_request_for_run=lambda _run_dir: HostRunnerStartRequest(strategy="spy_ema_crossover"),
+        now_ms=lambda: 10_000,
+        evidence_samplers=CohortEvidenceSamplerRegistry(),
+        launch_schedulers=CohortLaunchSchedulerRegistry(),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            coordinator.launch(
+                account_id="DU123456",
+                requested_members=("bot-a", "bot-b", "bot-c"),
+                operator_identity="operator.alice",
+                identity_header_present=True,
+                client_host="127.0.0.1",
+                launch_profile="paper_three_bot_stagger_v2",
+            )
+        )
+
+    assert exc_info.value.detail["reason_code"] == "COHORT_RESTART_INTENSITY_WOULD_FREEZE"
+    assert not any(
+        event["event_type"] == "cohort_batch_launch_authorized"
+        for event in read_account_events(tmp_path, "DU123456")
+    )
 
 
 def test_cohort_evidence_parser_rejects_booleans_for_integral_fields() -> None:

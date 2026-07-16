@@ -1804,6 +1804,9 @@ async def test_start_blocks_when_restart_intensity_freezes_account(
     freeze = read_account_freeze(manager.artifacts_root, "DU111")
     assert freeze is not None
     assert freeze.source == "account_restart_intensity"
+    latest_binding = read_account_instance_registry(manager.artifacts_root, "DU111")[-1]
+    assert latest_binding.lifecycle_state == "RETIRED"
+    assert latest_binding.source == "host_daemon.start_rejected_before_spawn"
 
 
 async def test_start_rejects_second_active_run(

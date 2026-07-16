@@ -763,6 +763,7 @@ class RunnerProcessManager:
             env = self._build_child_env(request, ibkr_client_id=ibkr_client_id)
             log_path = run_dir / "host_daemon.log"
             account_id: str | None = None
+            active_binding_written = False
             try:
                 log_handle = log_path.open("a", encoding="utf-8")
             except OSError:
@@ -778,6 +779,7 @@ class RunnerProcessManager:
                     source="host_daemon.start",
                     cohort_id=request.cohort_id,
                 )
+                active_binding_written = True
                 if account_freeze is not None:
                     raise HostRunnerError(
                         status.HTTP_409_CONFLICT,
@@ -803,6 +805,20 @@ class RunnerProcessManager:
                 log_handle.close()
                 with self._managed_lock:
                     self._reserved_ibkr_client_ids.discard(ibkr_client_id)
+                if active_binding_written:
+                    try:
+                        self._write_account_registry_binding(
+                            run_dir,
+                            run_id=run_id,
+                            lifecycle_state="RETIRED",
+                            source="host_daemon.start_rejected_before_spawn",
+                            cohort_id=request.cohort_id,
+                        )
+                    except HostRunnerError:
+                        logger.exception(
+                            "Failed to retire account registry binding after rejected pre-spawn start",
+                            extra={"run_id": run_id, "strategy_instance_id": key},
+                        )
                 raise
             except OSError as exc:
                 log_handle.close()

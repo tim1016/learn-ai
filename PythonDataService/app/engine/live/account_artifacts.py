@@ -979,6 +979,59 @@ def evaluate_restart_intensity(
     return gate
 
 
+def project_restart_intensity_gate(
+    artifacts_root: Path,
+    *,
+    account_id: str,
+    now_ms: int,
+    additional_start_groups: int = 1,
+    policy: RestartIntensityPolicy | None = None,
+) -> GateResult:
+    """Project whether a proposed authorized start would breach the restart gate.
+
+    Admission paths use this before persisting an authorization or attempting a
+    start.  The projection is deliberately read-only: only an actual accepted
+    activation may create the durable account freeze.
+    """
+    if additional_start_groups < 1:
+        raise ValueError("additional_start_groups must be at least one")
+    policy = policy or RestartIntensityPolicy()
+    events = read_account_events(artifacts_root, account_id)
+    window_start_ms = max(now_ms - policy.window_ms, _latest_restart_intensity_clear_ms(events) or 0)
+    restart_events = [
+        event
+        for event in events
+        if event.get("event_type") == "account_instance_binding_recorded"
+        and event.get("lifecycle_state") == "ACTIVE"
+        and window_start_ms <= int(event.get("recorded_at_ms") or -1) <= now_ms
+    ]
+    projected_count = len(_restart_intensity_groups(events, restart_events)) + additional_start_groups
+    reason = _restart_intensity_reason(
+        observed_count=projected_count,
+        threshold=policy.threshold,
+        window_ms=policy.window_ms,
+        window_start_ms=window_start_ms,
+        window_end_ms=now_ms,
+    )
+    if projected_count < policy.threshold:
+        return GateResult(
+            gate_id="account.restart_intensity",
+            status="pass",
+            source=policy.source,
+            operator_reason=reason,
+            operator_next_step="GATE_PASSING",
+            evidence_at_ms=now_ms,
+        )
+    return GateResult(
+        gate_id="account.restart_intensity",
+        status="freeze",
+        source=policy.source,
+        operator_reason=reason,
+        operator_next_step="WAIT_OR_RECOVER_ACCOUNT_BEFORE_AUTHORIZING_COHORT",
+        evidence_at_ms=now_ms,
+    )
+
+
 def _restart_intensity_reason(
     *,
     observed_count: int,
@@ -1328,6 +1381,7 @@ _LOCAL_EXPORTS = [
     "append_account_event",
     "clear_account_freeze",
     "evaluate_restart_intensity",
+    "project_restart_intensity_gate",
     "read_account_events",
     "read_account_events_with_snapshot",
     "read_account_clerk_generation",

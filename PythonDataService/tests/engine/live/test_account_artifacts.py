@@ -20,6 +20,7 @@ from app.engine.live.account_artifacts import (
     advance_account_clerk_generation,
     clear_account_freeze,
     evaluate_restart_intensity,
+    project_restart_intensity_gate,
     read_account_clerk_generation,
     read_account_clerk_lease,
     read_account_events,
@@ -599,6 +600,31 @@ def test_restart_intensity_passes_below_threshold_from_durable_account_events(tm
     assert gate.status == "pass"
     assert "observed=2" in gate.operator_reason
     assert "threshold=3" in gate.operator_reason
+    assert read_account_freeze(tmp_path, "DU123456") is None
+
+
+def test_restart_intensity_projection_refuses_a_cohort_that_would_breach_without_freezing(tmp_path: Path) -> None:
+    policy = RestartIntensityPolicy(threshold=3, window_ms=60_000)
+    for index, recorded_at_ms in enumerate((1_700_000_000_000, 1_700_000_010_000), start=1):
+        write_account_instance_binding(
+            tmp_path,
+            _binding(
+                sid=f"spy-{index}",
+                run_id=f"run-{index}",
+                namespace=f"learn-ai/spy-{index}/v1",
+                recorded_at_ms=recorded_at_ms,
+            ),
+        )
+
+    gate = project_restart_intensity_gate(
+        tmp_path,
+        account_id="DU123456",
+        now_ms=1_700_000_020_000,
+        policy=policy,
+    )
+
+    assert gate.status == "freeze"
+    assert "observed=3" in gate.operator_reason
     assert read_account_freeze(tmp_path, "DU123456") is None
 
 
