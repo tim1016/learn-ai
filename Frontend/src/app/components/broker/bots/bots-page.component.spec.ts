@@ -645,7 +645,45 @@ describe('BotsPageComponent', () => {
     await settle(fixture);
 
     expect(root.querySelector('[role="alertdialog"]')?.textContent).toContain('Authorize ready bots');
+    expect(root.querySelector('[role="alertdialog"]')?.textContent).toContain('Target account: DU1234567');
+    expect(root.querySelector('[role="alertdialog"]')?.textContent).toContain('Paper Execution');
     expect(service.launchCohort).not.toHaveBeenCalled();
+  });
+
+  it('uses the 3-bot stagger preset only for three selected, preflight-ready bots', async () => {
+    const { fixture, service } = await setup();
+    const additionalReadyBots = ['qqq', 'iwm'].map((symbol) => bot({
+      strategy_instance_id: `live-idle-${symbol}`,
+      name: `live-idle-${symbol}`,
+      symbols: [symbol.toUpperCase()],
+      daily_lifecycle: lifecycle({
+        latest_run_id: `run-live-idle-${symbol}`,
+        primary_action: action({
+          id: 'confirm_start',
+          label: 'Start',
+          offer_id: `offer-live-idle-${symbol}`,
+          expires_at_ms: OFFER_EXPIRES_AT,
+        }),
+      }),
+    }));
+    service.getBotCatalog.mockResolvedValue(catalog([bot(), ...additionalReadyBots]));
+    await fixture.componentInstance.refresh();
+    await settle(fixture);
+
+    await fixture.componentInstance.requestCohortStart();
+    await settle(fixture);
+    fixture.componentInstance.selectThreeBotCohortPreset();
+
+    const selected = [...fixture.componentInstance.cohortSelectedIds()];
+    expect(selected).toEqual(['live-idle-iwm', 'live-idle-qqq', 'live-idle-spy']);
+
+    await fixture.componentInstance.confirmCohortStart(selected);
+    await settle(fixture);
+
+    expect(service.launchCohort).toHaveBeenCalledWith('DU1234567', {
+      member_strategy_instance_ids: ['live-idle-iwm', 'live-idle-qqq', 'live-idle-spy'],
+      launch_profile: 'paper_three_bot_stagger_v2',
+    });
   });
 
   it('lists hard cohort preflight blockers and disables authorization', async () => {
@@ -671,7 +709,7 @@ describe('BotsPageComponent', () => {
 
     expect(root.textContent).toContain('Fleet contamination blocks starts');
     const authorize = Array.from(root.querySelectorAll<HTMLButtonElement>('button'))
-      .find((button) => button.textContent?.includes('Authorize 1 bots'));
+      .find((button) => button.textContent?.includes('Authorize 0 selected bots'));
     expect(authorize?.disabled).toBe(true);
   });
 

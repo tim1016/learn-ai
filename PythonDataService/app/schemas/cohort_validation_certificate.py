@@ -30,6 +30,7 @@ class CohortCertificateRoundTrip(BaseModel):
     perm_ids: list[int]
     exec_ids: list[str]
     saw_nonzero_exposure: bool
+    round_trip_count: int = Field(ge=0, default=0)
     closed: bool
 
 
@@ -38,7 +39,8 @@ class CohortValidationCertificate(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[1] = 1
+    # V1 artifacts remain readable; V2 adds the two-round-trip proof count.
+    schema_version: Literal[1, 2] = 2
     account_id: str
     cohort_id: str
     member_strategy_instance_ids: list[str]

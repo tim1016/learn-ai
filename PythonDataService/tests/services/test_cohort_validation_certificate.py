@@ -81,18 +81,29 @@ def _journal_entry(
         order_id=17,
         perm_id=23,
         exec_id=exec_id,
+        symbol=symbol,
     )
 
 
 def _fill_event(entry: SimpleNamespace) -> SimpleNamespace:
     return SimpleNamespace(
         event_type="fill",
-        side="BUY" if entry.exec_id == "exec-entry" else "SELL",
+        side="BUY" if "entry" in entry.exec_id else "SELL",
         fill_quantity=1.0,
+        symbol=entry.symbol,
         order_id=entry.order_id,
         perm_id=entry.perm_id,
         exec_id=entry.exec_id,
     )
+
+
+def _two_closed_round_trips(*, run_id: str = "run-a") -> list[SimpleNamespace]:
+    return [
+        _journal_entry("exec-entry-1", run_id=run_id),
+        _journal_entry("exec-exit-1", run_id=run_id),
+        _journal_entry("exec-entry-2", run_id=run_id),
+        _journal_entry("exec-exit-2", run_id=run_id),
+    ]
 
 
 async def test_certificate_is_deterministic_and_refuses_overwrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -100,7 +111,7 @@ async def test_certificate_is_deterministic_and_refuses_overwrite(tmp_path: Path
     monkeypatch.setattr(
         certificate_module,
         "read_account_clerk_journal",
-        lambda *_args: [_journal_entry("exec-entry"), _journal_entry("exec-exit")],
+        lambda *_args: _two_closed_round_trips(),
     )
     monkeypatch.setattr(certificate_module, "project_journal_exposure", lambda *_args, **_kwargs: ())
     monkeypatch.setattr(certificate_module, "normalize_journal_broker_event", _fill_event)
@@ -110,7 +121,8 @@ async def test_certificate_is_deterministic_and_refuses_overwrite(tmp_path: Path
 
     assert first.model_dump_json() == second.model_dump_json()
     assert first.verdict == "passed"
-    assert first.round_trips[0].exec_ids == ["exec-entry", "exec-exit"]
+    assert first.round_trips[0].exec_ids == ["exec-entry-1", "exec-entry-2", "exec-exit-1", "exec-exit-2"]
+    assert first.round_trips[0].round_trip_count == 2
     fsynced_paths: list[Path] = []
     monkeypatch.setattr(certificate_module, "_fsync_parent_dir", fsynced_paths.append)
     path = service.write_once(first)
@@ -128,7 +140,7 @@ async def test_certificate_projects_status_from_its_loaded_events_snapshot(
     monkeypatch.setattr(
         certificate_module,
         "read_account_clerk_journal",
-        lambda *_args: [_journal_entry("exec-entry"), _journal_entry("exec-exit")],
+        lambda *_args: _two_closed_round_trips(),
     )
     monkeypatch.setattr(certificate_module, "project_journal_exposure", lambda *_args, **_kwargs: ())
     monkeypatch.setattr(certificate_module, "normalize_journal_broker_event", _fill_event)
@@ -187,7 +199,7 @@ async def test_certificate_passes_for_a_complete_window_at_production_clock(
     monkeypatch.setattr(
         certificate_module,
         "read_account_clerk_journal",
-        lambda *_args: [_journal_entry("exec-entry"), _journal_entry("exec-exit")],
+        lambda *_args: _two_closed_round_trips(),
     )
     monkeypatch.setattr(certificate_module, "project_journal_exposure", lambda *_args, **_kwargs: ())
     monkeypatch.setattr(certificate_module, "normalize_journal_broker_event", _fill_event)
@@ -212,6 +224,51 @@ async def test_certificate_is_incomplete_without_linked_round_trip_identity(tmp_
     assert "INCOMPLETE_MEMBER_NAMESPACE_IDENTITY" in certificate.reasons
 
 
+async def test_certificate_requires_two_closed_round_trips_per_member(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, receipt = await _seed_evidence(tmp_path)
+    monkeypatch.setattr(
+        certificate_module,
+        "read_account_clerk_journal",
+        lambda *_args: [_journal_entry("exec-entry-1"), _journal_entry("exec-exit-1")],
+    )
+    monkeypatch.setattr(certificate_module, "project_journal_exposure", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(certificate_module, "normalize_journal_broker_event", _fill_event)
+
+    certificate = await service.generate(account_id=receipt.account_id, cohort_id=receipt.cohort_id)
+
+    assert certificate.verdict == "incomplete"
+    assert certificate.round_trips[0].round_trip_count == 1
+    assert "INCOMPLETE_ROUND_TRIP_COUNT" in certificate.reasons
+
+
+async def test_certificate_counts_multi_leg_flattening_as_one_bot_round_trip(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, receipt = await _seed_evidence(tmp_path)
+    monkeypatch.setattr(
+        certificate_module,
+        "read_account_clerk_journal",
+        lambda *_args: [
+            _journal_entry("exec-entry-spy", symbol="SPY"),
+            _journal_entry("exec-entry-qqq", symbol="QQQ"),
+            _journal_entry("exec-exit-spy", symbol="SPY"),
+            _journal_entry("exec-exit-qqq", symbol="QQQ"),
+        ],
+    )
+    monkeypatch.setattr(certificate_module, "project_journal_exposure", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(certificate_module, "normalize_journal_broker_event", _fill_event)
+
+    certificate = await service.generate(account_id=receipt.account_id, cohort_id=receipt.cohort_id)
+
+    assert certificate.verdict == "incomplete"
+    assert certificate.round_trips[0].round_trip_count == 1
+    assert "INCOMPLETE_ROUND_TRIP_COUNT" in certificate.reasons
+
+
 async def test_certificate_refuses_generation_before_its_validation_window_ends(tmp_path: Path) -> None:
     """A one-time certificate cannot be written from an unfinished window."""
 
@@ -233,8 +290,7 @@ async def test_certificate_round_trips_exclude_prior_runs_in_the_same_namespace(
         lambda *_args: [
             _journal_entry("old-entry", run_id="old-run"),
             _journal_entry("old-exit", run_id="old-run"),
-            _journal_entry("exec-entry"),
-            _journal_entry("exec-exit"),
+            *_two_closed_round_trips(),
         ],
     )
     monkeypatch.setattr(certificate_module, "project_journal_exposure", lambda *_args, **_kwargs: ())
@@ -242,7 +298,7 @@ async def test_certificate_round_trips_exclude_prior_runs_in_the_same_namespace(
 
     certificate = await service.generate(account_id=receipt.account_id, cohort_id=receipt.cohort_id)
 
-    assert certificate.round_trips[0].exec_ids == ["exec-entry", "exec-exit"]
+    assert certificate.round_trips[0].exec_ids == ["exec-entry-1", "exec-entry-2", "exec-exit-1", "exec-exit-2"]
 
 
 async def test_certificate_preserves_every_final_exposure_symbol_per_namespace(
@@ -253,7 +309,7 @@ async def test_certificate_preserves_every_final_exposure_symbol_per_namespace(
     monkeypatch.setattr(
         certificate_module,
         "read_account_clerk_journal",
-        lambda *_args: [_journal_entry("exec-entry"), _journal_entry("exec-exit")],
+        lambda *_args: _two_closed_round_trips(),
     )
     monkeypatch.setattr(certificate_module, "normalize_journal_broker_event", _fill_event)
     monkeypatch.setattr(
@@ -296,7 +352,7 @@ async def test_certificate_is_incomplete_when_no_five_second_sample_exists(tmp_p
     monkeypatch.setattr(
         certificate_module,
         "read_account_clerk_journal",
-        lambda *_args: [_journal_entry("exec-entry"), _journal_entry("exec-exit")],
+        lambda *_args: _two_closed_round_trips(),
     )
     monkeypatch.setattr(certificate_module, "normalize_journal_broker_event", _fill_event)
     monkeypatch.setattr(certificate_module, "project_journal_exposure", lambda *_args, **_kwargs: ())
@@ -344,7 +400,7 @@ async def test_certificate_ignores_incidents_after_its_validation_window(
     monkeypatch.setattr(
         certificate_module,
         "read_account_clerk_journal",
-        lambda *_args: [_journal_entry("exec-entry"), _journal_entry("exec-exit")],
+        lambda *_args: _two_closed_round_trips(),
     )
     monkeypatch.setattr(certificate_module, "project_journal_exposure", lambda *_args, **_kwargs: ())
     monkeypatch.setattr(certificate_module, "normalize_journal_broker_event", _fill_event)
@@ -371,7 +427,7 @@ async def test_certificate_api_reads_the_immutable_artifact(tmp_path: Path, monk
     monkeypatch.setattr(
         certificate_module,
         "read_account_clerk_journal",
-        lambda *_args: [_journal_entry("exec-entry"), _journal_entry("exec-exit")],
+        lambda *_args: _two_closed_round_trips(),
     )
     monkeypatch.setattr(certificate_module, "project_journal_exposure", lambda *_args, **_kwargs: ())
     monkeypatch.setattr(certificate_module, "normalize_journal_broker_event", _fill_event)

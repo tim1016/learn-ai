@@ -161,16 +161,18 @@ def test_match_identity_rejects_startswith_match() -> None:
     )
 
 
-def test_match_identity_rejects_missing_intent_in_submitted_orders() -> None:
+def test_match_identity_accepts_exact_namespace_without_local_intent_snapshot() -> None:
+    """Account-Clerk submissions are proven by the durable broker order ref.
+
+    The clerk intake has no per-run submitted-order row at sweep time, so an
+    exact namespace plus intent ID from the broker must remain sufficient.
+    """
     event = _fill_event()
-    assert (
-        match_identity(
-            event,
-            submitted_orders={"other-intent": {}},
-            bot_order_namespace=NS,
-        )
-        is None
-    )
+    assert match_identity(
+        event,
+        submitted_orders={"other-intent": {}},
+        bot_order_namespace=NS,
+    ) == INTENT_ID
 
 
 def test_match_identity_joins_req_id_when_order_ref_missing() -> None:

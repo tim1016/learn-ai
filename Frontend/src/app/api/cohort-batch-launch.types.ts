@@ -31,7 +31,7 @@ export interface CohortEvidenceSummary {
 }
 
 export interface CohortValidationCertificate {
-  schema_version: 1;
+  schema_version: 1 | 2;
   account_id: string;
   cohort_id: string;
   member_strategy_instance_ids: string[];
@@ -68,6 +68,7 @@ export interface CohortValidationCertificateRoundTrip {
   perm_ids: number[];
   exec_ids: string[];
   saw_nonzero_exposure: boolean;
+  round_trip_count: number;
   closed: boolean;
 }
 

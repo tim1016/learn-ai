@@ -46,6 +46,13 @@
         <div><dt>Certificate</dt><dd class="mono">{{ certificate.verdict | receiptLabel }}</dd></div>
         <div><dt>Certificate overlap</dt><dd>{{ certificate.healthy_overlap_ms / 1000 | number: '1.0-0' }} s</dd></div>
       </dl>
+      @for (roundTrip of certificate.round_trips; track roundTrip.bot_order_namespace) {
+        <p class="pending">
+          <span class="mono">{{ roundTrip.bot_order_namespace | receiptLabel }}</span>:
+          {{ roundTrip.round_trip_count }} closed round trip{{ roundTrip.round_trip_count === 1 ? '' : 's' }}
+          · {{ roundTrip.closed ? 'flat' : 'not flat' }}
+        </p>
+      }
       @for (reason of certificate.reasons; track reason) {
         <p class="pending mono">{{ reason | receiptLabel }}</p>
       }

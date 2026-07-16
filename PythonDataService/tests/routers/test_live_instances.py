@@ -19,6 +19,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.broker.ibkr.api_evidence import evidence_request, evidence_response, get_ibkr_api_evidence_recorder
+from app.broker.runtime_snapshot import BrokerRuntimeSnapshot
 from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import (
     AccountClerkLease,
@@ -604,6 +605,11 @@ def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
     monkeypatch.setattr(live_instances, "get_settings", lambda: stub)
 
+    async def paper_target_account_posture(_account_id: str) -> str:
+        return "PAPER_EXECUTION"
+
+    monkeypatch.setattr(live_instances, "_cohort_target_account_posture", paper_target_account_posture)
+
     async def connected_broker_account() -> tuple[str | None, bool]:
         return "DU111", True
 
@@ -666,6 +672,53 @@ def _set_daemon(monkeypatch: pytest.MonkeyPatch, *, instances: dict | None = Non
 
     monkeypatch.setattr(host_daemon_client, "fetch_instances", fake_instances)
     monkeypatch.setattr(host_daemon_client, "fetch_instance_process", fake_process)
+
+
+@pytest.mark.asyncio
+async def test_cohort_target_posture_requires_the_exact_connected_paper_account(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paper_snapshot = BrokerRuntimeSnapshot(
+        client_available=True,
+        connected=True,
+        configured_mode="paper",
+        readonly=False,
+        port=4002,
+        connected_account="DU123",
+        connection_state="connected",
+    )
+    monkeypatch.setattr(live_instances, "snapshot_data_plane_broker", lambda: paper_snapshot)
+
+    assert await live_instances._cohort_target_account_posture("DU123") == "PAPER_EXECUTION"
+    assert await live_instances._cohort_target_account_posture("DU999") == "UNKNOWN"
+
+    live_snapshot = paper_snapshot.model_copy(update={"configured_mode": "live"})
+    monkeypatch.setattr(live_instances, "snapshot_data_plane_broker", lambda: live_snapshot)
+
+    assert await live_instances._cohort_target_account_posture("DU123") == "UNSAFE"
+
+
+@pytest.mark.asyncio
+async def test_server_cohort_launch_refuses_an_unknown_or_unsafe_target_posture(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+
+    async def unknown_target_account_posture(_account_id: str) -> str:
+        return "UNKNOWN"
+
+    monkeypatch.setattr(live_instances, "_cohort_target_account_posture", unknown_target_account_posture)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/accounts/DU123/cohort-launch",
+            json={"member_strategy_instance_ids": ["bot-a"]},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "COHORT_POSTURE_MISMATCH"
+    assert read_account_events(root.parent, "DU123") == []
 
 
 @pytest.mark.asyncio
@@ -870,7 +923,7 @@ async def test_server_three_bot_stagger_refuses_when_window_crosses_effective_st
     detail = response.json()["detail"]
     assert detail["reason_code"] == "COHORT_WINDOW_EXCEEDS_SESSION_STOP"
     assert detail["effective_stop_ms"] == int(datetime(2026, 7, 8, 19, 55, tzinfo=UTC).timestamp() * 1_000)
-    assert detail["required_window_end_ms"] == detail["effective_stop_ms"] + 5_000
+    assert detail["required_window_end_ms"] == now_ms + (2 * 15 * 60 * 1_000) + 5_000 + (60 * 60 * 1_000)
     assert read_account_events(root.parent, account_id) == []
 
 

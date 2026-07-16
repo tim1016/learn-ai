@@ -54,6 +54,10 @@ def _sample(at_ms: int, *members: str) -> CohortEvidenceSample:
     )
 
 
+async def _paper_target_account_posture(_account_id: str) -> str:
+    return "PAPER_EXECUTION"
+
+
 def test_healthy_overlap_requires_exact_concurrent_members() -> None:
     evidence = evaluate_healthy_overlap(
         (_sample(0, "a", "b", "c"), _sample(5_000, "a", "b", "c")),
@@ -224,9 +228,10 @@ def test_resume_open_cohort_sampling_uses_next_durable_cadence(tmp_path: Path, m
 def test_three_bot_stagger_dispatches_from_durable_schedule(tmp_path: Path) -> None:
     """The V2 scheduler owns all three slots after receipt persistence."""
 
-    initial_now_ms = int(datetime(2026, 7, 8, 19, 0, tzinfo=UTC).timestamp() * 1_000)
+    initial_now_ms = int(datetime(2026, 7, 8, 18, 0, tzinfo=UTC).timestamp() * 1_000)
     clock = {"ms": initial_now_ms}
     starts: list[tuple[str, str | None]] = []
+    posture_checks: list[str] = []
     offers = [
         BotRollCallOffer(
             offer_id=f"offer-{member}",
@@ -246,6 +251,10 @@ def test_three_bot_stagger_dispatches_from_durable_schedule(tmp_path: Path) -> N
         starts.append((run_id, request.roll_call_offer_id))
         return SimpleNamespace(accepted=True)
 
+    async def paper_target_account_posture(account_id: str) -> str:
+        posture_checks.append(account_id)
+        return "PAPER_EXECUTION"
+
     coordinator = CohortLaunchCoordinator(
         artifacts_root=tmp_path,
         live_runs_root=tmp_path / "runs",
@@ -258,6 +267,7 @@ def test_three_bot_stagger_dispatches_from_durable_schedule(tmp_path: Path) -> N
         run_account_id=lambda _run_dir: "DU123456",
         run_live_config=lambda _run_dir: {},
         start_request_for_run=lambda _run_dir: HostRunnerStartRequest(strategy="spy_ema_crossover"),
+        target_account_posture=paper_target_account_posture,
         now_ms=lambda: clock["ms"],
         evidence_samplers=CohortEvidenceSamplerRegistry(),
         launch_schedulers=CohortLaunchSchedulerRegistry(),
@@ -285,6 +295,7 @@ def test_three_bot_stagger_dispatches_from_durable_schedule(tmp_path: Path) -> N
             "bot-b": initial_now_ms + 900_000,
             "bot-c": initial_now_ms + 1_800_000,
         }
+        assert status.window_end_ms - status.window_start_ms == 60 * 60 * 1_000
         clock["ms"] = initial_now_ms + 2_000_000
         for _ in range(8):
             await asyncio.sleep(0.01)
@@ -296,6 +307,7 @@ def test_three_bot_stagger_dispatches_from_durable_schedule(tmp_path: Path) -> N
         ("run-b", "offer-b"),
         ("run-c", "offer-c"),
     ]
+    assert posture_checks == ["DU123456", "DU123456", "DU123456", "DU123456"]
     status = asyncio.run(
         CohortBatchLaunchService(artifacts_root=tmp_path).get_status(
             account_id="DU123456",
@@ -350,6 +362,7 @@ def test_three_bot_stagger_refuses_before_authorization_when_restart_budget_is_e
         run_account_id=lambda _run_dir: "DU123456",
         run_live_config=lambda _run_dir: {},
         start_request_for_run=lambda _run_dir: HostRunnerStartRequest(strategy="spy_ema_crossover"),
+        target_account_posture=_paper_target_account_posture,
         now_ms=lambda: 10_000,
         evidence_samplers=CohortEvidenceSamplerRegistry(),
         launch_schedulers=CohortLaunchSchedulerRegistry(),
@@ -406,6 +419,7 @@ def test_three_bot_stagger_refuses_before_authorization_when_window_crosses_stop
         run_account_id=lambda _run_dir: "DU123456",
         run_live_config=lambda _run_dir: {"force_flat_at": "15:55"},
         start_request_for_run=lambda _run_dir: HostRunnerStartRequest(strategy="spy_ema_crossover"),
+        target_account_posture=_paper_target_account_posture,
         now_ms=lambda: now_ms,
         evidence_samplers=CohortEvidenceSamplerRegistry(),
         launch_schedulers=CohortLaunchSchedulerRegistry(),

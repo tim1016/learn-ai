@@ -7,6 +7,7 @@ import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 from uuid import uuid4
 
 from fastapi import HTTPException, status
@@ -45,6 +46,8 @@ RunAccountId = Callable[[Path], str | None]
 RunLiveConfig = Callable[[Path], Mapping[str, object] | None]
 StartRequestForRun = Callable[[Path], HostRunnerStartRequest | None]
 NowMs = Callable[[], int]
+CohortTargetPosture = Literal["PAPER_EXECUTION", "UNSAFE", "UNKNOWN"]
+TargetAccountPosture = Callable[[str], Awaitable[CohortTargetPosture]]
 logger = logging.getLogger(__name__)
 
 
@@ -59,7 +62,10 @@ class _PinnedCohortMember:
 _COHORT_EVIDENCE_CADENCE_MS = 5_000
 _COHORT_VALIDATION_WINDOW_MS = 60 * 60 * 1_000
 _THREE_BOT_STAGGER_MS = 15 * 60 * 1_000
-_THREE_BOT_OVERLAP_MS = 15 * 60 * 1_000
+# The acceptance protocol requires a full hour after the third member has
+# started. The two preceding stagger slots and first sampler cadence are
+# included separately in the admission window below.
+_THREE_BOT_OVERLAP_MS = 60 * 60 * 1_000
 
 
 class CohortLaunchSchedulerRegistry:
@@ -123,6 +129,7 @@ class CohortLaunchCoordinator:
         run_account_id: RunAccountId,
         run_live_config: RunLiveConfig,
         start_request_for_run: StartRequestForRun,
+        target_account_posture: TargetAccountPosture,
         now_ms: NowMs,
         evidence_samplers: CohortEvidenceSamplerRegistry,
         launch_schedulers: CohortLaunchSchedulerRegistry,
@@ -135,6 +142,7 @@ class CohortLaunchCoordinator:
         self._run_account_id = run_account_id
         self._run_live_config = run_live_config
         self._start_request_for_run = start_request_for_run
+        self._target_account_posture = target_account_posture
         self._now_ms = now_ms
         self._evidence_samplers = evidence_samplers
         self._launch_schedulers = launch_schedulers
@@ -151,6 +159,7 @@ class CohortLaunchCoordinator:
     ) -> CohortBatchLaunchStatusResponse:
         """Refresh, pin, record, then start without rolling back siblings."""
 
+        await self._assert_target_account_posture(account_id)
         roll_call = await self._run_roll_call()
         members = await asyncio.to_thread(
             self._pins,
@@ -346,7 +355,23 @@ class CohortLaunchCoordinator:
                     next_safe_action="Inspect the recorded member blocker before authorizing a new cohort.",
                 )
             else:
-                outcome = await self._start_scheduled_member(receipt, slot)
+                try:
+                    await self._assert_target_account_posture(receipt.account_id)
+                except HTTPException as exc:
+                    detail = exc.detail if isinstance(exc.detail, dict) else {}
+                    outcome = CohortBatchLaunchMemberOutcome(
+                        strategy_instance_id=slot.strategy_instance_id,
+                        state="blocked",
+                        reason=str(detail.get("reason_code", "COHORT_POSTURE_MISMATCH")),
+                        next_safe_action=str(
+                            detail.get(
+                                "message",
+                                "Refresh broker connection evidence before authorizing a new cohort.",
+                            )
+                        ),
+                    )
+                else:
+                    outcome = await self._start_scheduled_member(receipt, slot)
             await service.record_scheduled_member_outcome(
                 account_id=receipt.account_id,
                 cohort_id=receipt.cohort_id,
@@ -541,6 +566,28 @@ class CohortLaunchCoordinator:
             next_safe_action="Review the backend start response before authorizing a new cohort.",
         )
 
+    async def _assert_target_account_posture(self, account_id: str) -> None:
+        """Require the target account's server-observed paper posture.
+
+        Membership already proves every run ledger belongs to the exact target
+        account. The current broker snapshot is the canonical authority for
+        whether that account is safe for paper execution; no second per-run
+        mode artifact is introduced here.
+        """
+
+        if await self._target_account_posture(account_id) == "PAPER_EXECUTION":
+            return
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "COHORT_POSTURE_MISMATCH",
+                "message": (
+                    "The target account does not currently have a proven paper-execution posture. "
+                    "Refresh broker connection evidence before authorizing a cohort."
+                ),
+            },
+        )
+
 
 async def resume_open_cohort_launch_schedulers(
     *,
@@ -552,6 +599,7 @@ async def resume_open_cohort_launch_schedulers(
     run_account_id: RunAccountId,
     run_live_config: RunLiveConfig,
     start_request_for_run: StartRequestForRun,
+    target_account_posture: TargetAccountPosture,
     now_ms: NowMs,
     evidence_samplers: CohortEvidenceSamplerRegistry,
     launch_schedulers: CohortLaunchSchedulerRegistry,
@@ -567,6 +615,7 @@ async def resume_open_cohort_launch_schedulers(
         run_account_id=run_account_id,
         run_live_config=run_live_config,
         start_request_for_run=start_request_for_run,
+        target_account_posture=target_account_posture,
         now_ms=now_ms,
         evidence_samplers=evidence_samplers,
         launch_schedulers=launch_schedulers,

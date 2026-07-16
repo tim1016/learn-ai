@@ -229,6 +229,7 @@ export class BrokerDeployFormComponent {
   readonly error = signal<OperationError | null>(null);
   readonly deployed = signal<HostRunnerDeployResponse | null>(null);
   readonly deployedInstanceId = signal<string | null>(null);
+  readonly preparedForCohort = signal<boolean>(false);
   readonly deployedBotControlLink = computed(() => {
     const id = this.deployedInstanceId();
     return id ? ['/broker/bots', id] : ['/broker/bots'];
@@ -613,7 +614,7 @@ export class BrokerDeployFormComponent {
     () => this.ticketForm().valid() && this.ready() && this.commandState().canSubmit,
   );
 
-  async submit(): Promise<void> {
+  async submit(start = true): Promise<void> {
     if (!this.canSubmit()) {
       this.ticketForm.instanceId().markAsTouched();
       this.ticketForm.strategyKey().markAsTouched();
@@ -629,6 +630,7 @@ export class BrokerDeployFormComponent {
     this.activeCoherenceRecovery.set(null);
     this.deployed.set(null);
     this.deployedInstanceId.set(null);
+    this.preparedForCohort.set(false);
     const strategyKey = this.strategyKey().trim();
     const request: HostRunnerDeployRequest = {
       strategy_spec_path: this.specPath().trim(),
@@ -642,7 +644,7 @@ export class BrokerDeployFormComponent {
         sizing: this.resolveSizingPolicy(),
         action: this.actionPlan(),
       },
-      start: true,
+      start,
     };
     const parent = this.parentRunId();
     if (parent) request.parent_run_id = parent;
@@ -680,6 +682,7 @@ export class BrokerDeployFormComponent {
       const response = await this.svc.deployInstance(request);
       this.deployed.set(response);
       this.deployedInstanceId.set(request.strategy_instance_id);
+      this.preparedForCohort.set(!start);
     } catch (err) {
       const identitySeeded = this.seedIdentityCoherenceEvidence(err);
       const exposureSeeded = this.seedExposureCoherenceEvidence(err);
@@ -688,6 +691,10 @@ export class BrokerDeployFormComponent {
     } finally {
       this.busy.set(false);
     }
+  }
+
+  async prepareForCohort(): Promise<void> {
+    await this.submit(false);
   }
 
   private seedIdentityCoherenceEvidence(err: unknown): boolean {

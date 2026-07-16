@@ -250,7 +250,11 @@ from app.services.broker_activity_publisher_registry import get_publisher_regist
 from app.services.broker_activity_wal import BrokerActivityWal, instance_broker_activity_wal_path
 from app.services.broker_capability_service import get_broker_capability_service
 from app.services.cohort_evidence import get_cohort_evidence_sampler_registry
-from app.services.cohort_launch import CohortLaunchCoordinator, get_cohort_launch_scheduler_registry
+from app.services.cohort_launch import (
+    CohortLaunchCoordinator,
+    CohortTargetPosture,
+    get_cohort_launch_scheduler_registry,
+)
 from app.services.daemon_diagnostics import (
     get_daemon_diagnostics_service,
     project_daemon_diagnostic_report,
@@ -3298,7 +3302,6 @@ async def launch_cohort(
         identity_header = request.headers.get("X-Operator-Identity")
         settings = get_settings()
         readonly_default = _resolve_readonly_default(settings)
-
         coordinator = CohortLaunchCoordinator(
             artifacts_root=Path(settings.live_runs_root).parent,
             live_runs_root=Path(settings.live_runs_root),
@@ -3311,6 +3314,7 @@ async def launch_cohort(
                 run_dir,
                 readonly_default=readonly_default,
             ),
+            target_account_posture=_cohort_target_account_posture,
             now_ms=_now_ms,
             evidence_samplers=get_cohort_evidence_sampler_registry(),
             launch_schedulers=get_cohort_launch_scheduler_registry(),
@@ -3886,6 +3890,34 @@ async def _fetch_broker_connected_account(
     if isinstance(account, str) and account.strip():
         return account.strip(), True
     return None, True
+
+
+async def _cohort_target_account_posture(account_id: str) -> CohortTargetPosture:
+    """Return the current broker-authored posture for one cohort target.
+
+    A run ledger already pins the account identity, while the data-plane
+    broker snapshot owns whether that exact account is currently connected in
+    paper mode.  Keep this derivation at the existing broker boundary rather
+    than writing another mode value into every run ledger.
+    """
+
+    snapshot = snapshot_data_plane_broker()
+    broker_account, broker_known = await _fetch_broker_connected_account(snapshot)
+    if not broker_known or broker_account is None:
+        return "UNKNOWN"
+    try:
+        connected_account_id = normalize_account_id(broker_account)
+    except InvalidAccountIdError:
+        return "UNKNOWN"
+    if connected_account_id != account_id:
+        return "UNKNOWN"
+    if (
+        snapshot.connected
+        and snapshot.connection_state == "connected"
+        and snapshot.configured_mode == "paper"
+    ):
+        return "PAPER_EXECUTION"
+    return "UNSAFE"
 
 
 async def _compute_account_fleet_contamination(

@@ -34,6 +34,7 @@ import {
   CohortLaunchDialogComponent,
   type CohortLaunchCandidate,
   type CohortLaunchPreflightCandidate,
+  type CohortTargetPosture,
 } from '../cohort-launch-dialog/cohort-launch-dialog.component';
 import { CohortLaunchMonitorComponent } from '../cohort-launch-monitor/cohort-launch-monitor.component';
 import { fmtInteger, fmtSignedCurrency, fmtTimestampLocal } from '../format';
@@ -163,6 +164,7 @@ export class BotsPageComponent {
   readonly cohortPreflightLoading = signal<boolean>(false);
   readonly cohortPreflightError = signal<string | null>(null);
   readonly cohortPreflight = signal<readonly CohortLaunchPreflightCandidate[]>([]);
+  readonly cohortSelectedIds = signal<ReadonlySet<string>>(new Set<string>());
   readonly cohortMonitorReloadVersion = signal(0);
   readonly deleteConfirmationOpen = signal<boolean>(false);
   readonly isDeleting = signal<boolean>(false);
@@ -210,6 +212,13 @@ export class BotsPageComponent {
 
   readonly activeTabCount = computed(() => this.activeRows().length);
   readonly connectedAccountId = computed(() => this.health.health()?.account_id ?? null);
+  readonly cohortTargetPosture = computed<CohortTargetPosture>(() => {
+    const broker = this.health.health();
+    const accountId = this.connectedAccountId();
+    if (broker === null || accountId === null || broker.account_id !== accountId) return 'UNKNOWN';
+    if (!broker.connected || broker.connection_state !== 'connected') return 'UNKNOWN';
+    return broker.is_paper === true ? 'PAPER_EXECUTION' : 'UNSAFE';
+  });
   readonly readyRows = computed<BotTableRow[]>(() =>
     this.visibleBots().filter((row) => {
       return (
@@ -314,9 +323,10 @@ export class BotsPageComponent {
     }
   }
 
-  async startReadyBots(): Promise<void> {
-    const rows = this.readyRows();
-    if (rows.length === 0 || this.isStartingReady()) return;
+  async startReadyBots(requestedMemberIds: readonly string[] = this.readyRows().map((row) => row.id)): Promise<void> {
+    const requestedIds = new Set(requestedMemberIds);
+    const rows = this.readyRows().filter((row) => requestedIds.has(row.id));
+    if (rows.length === 0 || rows.length !== requestedIds.size || this.isStartingReady()) return;
     this.isStartingReady.set(true);
     this.startAllErrorMessage.set(null);
     this.errorMessage.set(null);
@@ -349,12 +359,12 @@ export class BotsPageComponent {
       this.rollCall.set(rollCall.summary);
       await this.refresh();
 
-      const refreshedRows = this.readyRows();
-      if (refreshedRows.length === 0) {
+      const refreshedRows = this.readyRows().filter((row) => requestedIds.has(row.id));
+      if (refreshedRows.length !== requestedIds.size) {
         this.launchProgress.set({
-          phase: 'complete',
-          title: 'No ready bots after roll call',
-          detail: 'Roll call completed, but no bot has a current start offer.',
+          phase: 'blocked',
+          title: 'Selected cohort changed after roll call',
+          detail: 'At least one selected bot no longer has a current start offer. Refresh and select the cohort again.',
           activeBotId: null,
           rows: [],
         });
@@ -459,6 +469,7 @@ export class BotsPageComponent {
     this.cohortConfirmationOpen.set(true);
     this.cohortPreflightError.set(null);
     this.cohortPreflight.set([]);
+    this.cohortSelectedIds.set(new Set<string>());
     const accountId = this.accountId();
     if (accountId === null) {
       this.cohortPreflightError.set('No paper broker account is connected for cohort preflight.');
@@ -489,14 +500,50 @@ export class BotsPageComponent {
 
   cancelCohortStart(): void {
     this.cohortConfirmationOpen.set(false);
+    this.cohortSelectedIds.set(new Set<string>());
   }
 
-  confirmCohortStart(): void {
-    if (this.cohortPreflightLoading() || this.cohortPreflightError() !== null || this.cohortPreflight().some((row) => row.error !== null || row.blockers.length > 0)) {
+  toggleCohortCandidate(strategyInstanceId: string): void {
+    const candidate = this.cohortPreflight().find(
+      (row) => row.candidate.strategyInstanceId === strategyInstanceId,
+    );
+    if (candidate === undefined || candidate.error !== null || candidate.blockers.length > 0) return;
+    this.cohortSelectedIds.update((selected) => {
+      const next = new Set(selected);
+      if (next.has(strategyInstanceId)) next.delete(strategyInstanceId);
+      else next.add(strategyInstanceId);
+      return next;
+    });
+  }
+
+  selectThreeBotCohortPreset(): void {
+    const eligibleIds = this.cohortPreflight()
+      .filter((row) => row.error === null && row.blockers.length === 0)
+      .slice(0, 3)
+      .map((row) => row.candidate.strategyInstanceId);
+    if (eligibleIds.length === 3) this.cohortSelectedIds.set(new Set(eligibleIds));
+  }
+
+  async confirmCohortStart(selectedMemberIds: readonly string[]): Promise<void> {
+    const selectedIds = new Set(selectedMemberIds);
+    const preflightById = new Map(
+      this.cohortPreflight().map((row) => [row.candidate.strategyInstanceId, row]),
+    );
+    if (
+      this.cohortPreflightLoading()
+      || this.cohortPreflightError() !== null
+      || selectedIds.size < 2
+      || selectedIds.size !== selectedMemberIds.length
+      || [...selectedIds].some((id) => {
+        const row = preflightById.get(id);
+        return row === undefined || row.error !== null || row.blockers.length > 0;
+      })
+    ) {
       return;
     }
     this.cohortConfirmationOpen.set(false);
-    void this.startReadyBots();
+    this.cohortSelectedIds.set(new Set(selectedIds));
+    await this.startReadyBots([...selectedIds]);
   }
 
   setSearchQuery(event: Event): void {
