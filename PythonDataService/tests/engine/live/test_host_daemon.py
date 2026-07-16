@@ -2537,6 +2537,25 @@ def test_build_start_command_omits_sibling_all_in_when_empty(
     assert "--sibling-all-in-symbols" not in command
 
 
+def test_build_start_command_uses_daemon_artifacts_root(
+    daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    """A detached host checkout must still share the Clerk's artifacts."""
+
+    from app.schemas.live_runs import HostRunnerStartRequest
+
+    manager, run_dir = daemon_context
+    command = manager._build_start_command(
+        run_dir,
+        HostRunnerStartRequest(strategy="spy_ema_crossover"),
+        managed_symbols=set(),
+        sibling_all_in_symbols=set(),
+    )
+
+    index = command.index("--artifacts-root")
+    assert command[index + 1] == str(manager.artifacts_root)
+
+
 def test_start_rejects_unallowlisted_ibkr_host_at_daemon_boundary(
     daemon_context: tuple[RunnerProcessManager, Path],
     monkeypatch: pytest.MonkeyPatch,

@@ -1393,6 +1393,8 @@ class RunnerProcessManager:
             "start",
             "--run-dir",
             str(run_dir),
+            "--artifacts-root",
+            str(self.artifacts_root),
             "--strategy",
             request.strategy,
             "--max-orders-per-day",
