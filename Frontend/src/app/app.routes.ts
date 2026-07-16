@@ -1,5 +1,6 @@
 import { Routes } from "@angular/router";
 import { BotSurfaceStore } from "./components/broker/bot-control/bot-surface-store.service";
+import { AccountDeskSurfaceStore } from "./components/broker/account-desk/account-desk-surface-store.service";
 import {
   botExistsGuard,
   botSurfaceResolver,
@@ -208,6 +209,14 @@ export const routes: Routes = [
       import(
         "./components/broker/broker-options-surface/broker-options-surface.component"
       ).then((m) => m.BrokerOptionsSurfaceComponent),
+  },
+  {
+    path: "broker/accounts/:accountId",
+    providers: [AccountDeskSurfaceStore],
+    loadComponent: () =>
+      import(
+        "./components/broker/account-desk/account-desk-page.component"
+      ).then((m) => m.AccountDeskPageComponent),
   },
   {
     path: "broker/account-monitor",

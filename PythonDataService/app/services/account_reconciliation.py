@@ -55,6 +55,8 @@ from app.schemas.account_reconciliation import (
     AccountTriageBotRef,
     AccountTriageGateRow,
     AccountTriageResponse,
+    AccountTriageVerdict,
+    AccountTriageVerdictMove,
 )
 from app.schemas.account_truth import (
     AccountTruthExecutionRow,
@@ -718,6 +720,12 @@ class AccountReconciliationService:
             account_id=canonical_account_id,
             generated_at_ms=generated_at_ms,
         )
+        verdict = _account_triage_verdict(
+            reconciliation_gate=reconciliation_gate,
+            gate_rows=gate_rows,
+            conditions=conditions,
+            freeze=freeze,
+        )
         return AccountTriageResponse(
             generated_at_ms=generated_at_ms,
             account_id=canonical_account_id,
@@ -727,6 +735,7 @@ class AccountReconciliationService:
             else "Account recovery needs attention",
             summary_detail=overall.operator_reason,
             overall_gate_result=overall,
+            verdict=verdict,
             account_reconciliation_receipt=receipt,
             account_reconciliation_valid_until_ms=_receipt_valid_until_ms(
                 receipt,
@@ -1517,4 +1526,65 @@ def _overall_gate(
         operator_reason=f"Account {account_id} has no blocking account triage rows.",
         operator_next_step="ACCOUNT_TRIAGE_PASSING",
         evidence_at_ms=generated_at_ms,
+    )
+
+
+def _account_triage_verdict(
+    *,
+    reconciliation_gate: AccountTriageGateRow,
+    gate_rows: list[AccountTriageGateRow],
+    conditions: list[AccountConditionRow],
+    freeze: AccountFreezeEvidence | None,
+) -> AccountTriageVerdict:
+    """Project the Account desk's one dominant state without exposing a second authority.
+
+    A clean verdict requires the existing reconciliation proof gate to pass. The
+    desk renders the returned move verbatim; it never derives a cure from a
+    gate, condition, or reason token.
+    """
+
+    attention_count = len(
+        {
+            (condition.condition_type, condition.scope, condition.owner.owner_type, condition.owner.owner_id)
+            for condition in conditions
+        }
+    )
+    move = AccountTriageVerdictMove(
+        label="Open Account Monitor",
+        route="/broker/account-monitor",
+        fragment="account-reconciliation-action",
+    )
+    frozen_row = next((row for row in gate_rows if row.status == "freeze"), None)
+    if freeze is not None or frozen_row is not None:
+        detail = freeze.reason if freeze is not None else frozen_row.detail
+        return AccountTriageVerdict(
+            state="FROZEN",
+            headline="Account is frozen",
+            detail=detail,
+            primary_move=move,
+            operator_attention_count=attention_count,
+        )
+    if reconciliation_gate.status != "pass":
+        return AccountTriageVerdict(
+            state="NOT_PROVEN",
+            headline="Account proof is not current",
+            detail=reconciliation_gate.detail,
+            primary_move=move,
+            operator_attention_count=attention_count,
+        )
+    attention_row = next((row for row in gate_rows if row.status != "pass"), None)
+    if attention_row is not None or conditions:
+        return AccountTriageVerdict(
+            state="NEEDS_ATTENTION",
+            headline="Account needs attention",
+            detail=attention_row.detail if attention_row is not None else conditions[0].detail,
+            primary_move=move,
+            operator_attention_count=attention_count,
+        )
+    return AccountTriageVerdict(
+        state="CLEAN",
+        headline="Account is clean",
+        detail="The current reconciliation proof and account checks are passing.",
+        primary_move=None,
+        operator_attention_count=0,
     )

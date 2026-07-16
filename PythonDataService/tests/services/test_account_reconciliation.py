@@ -563,6 +563,9 @@ def test_auto_reconcile_replaces_receipt_after_new_bot_execution(tmp_path: Path)
     assert [row.exec_id for row in replacement.account_truth.executions] == ["exec-1"]
     triage = service.triage(account_id="DU1234567", now_ms=1_780_000_003_500)
     assert triage.overall_gate_result.status == "pass"
+    assert triage.verdict.state == "CLEAN"
+    assert triage.verdict.primary_move is None
+    assert triage.verdict.operator_attention_count == 0
     assert triage.account_reconciliation_valid_until_ms == replacement.expires_at_ms
     assert triage.conditions == []
 
@@ -754,11 +757,33 @@ def test_triage_without_receipt_is_unknown(tmp_path: Path) -> None:
     triage = service.triage(account_id="DU1234567", now_ms=1_780_000_002_000)
 
     assert triage.overall_gate_result.status == "unknown"
+    assert triage.verdict.state == "NOT_PROVEN"
+    assert triage.verdict.primary_move is not None
     assert triage.gate_rows[0].gate_id == "account.reconciliation"
     assert triage.gate_rows[0].status == "unknown"
     assert [(row.condition_type, row.cure_action) for row in triage.conditions] == [
         ("evidence_stale", "reconcile_now")
     ]
+
+
+def test_triage_verdict_freeze_precedes_missing_proof(tmp_path: Path) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id="DU1234567",
+            freeze_kind="exposure",
+            reason="Unresolved broker exposure requires review.",
+            source="account_reconciliation",
+            recorded_at_ms=1_780_000_002_100,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+
+    triage = service.triage(account_id="DU1234567", now_ms=1_780_000_002_200)
+
+    assert triage.verdict.state == "FROZEN"
+    assert triage.verdict.primary_move is not None
 
 
 def test_triage_marks_corrupt_instance_registry_unknown(tmp_path: Path) -> None:
@@ -820,6 +845,8 @@ def test_triage_freeze_dominates_clean_receipt(tmp_path: Path) -> None:
     triage = service.triage(account_id="DU1234567", now_ms=1_780_000_003_000)
 
     assert triage.overall_gate_result.status == "freeze"
+    assert triage.verdict.state == "FROZEN"
+    assert triage.verdict.primary_move is not None
     assert triage.clear_freeze_actionable is False
     assert [bot.strategy_instance_id for bot in triage.affected_bots] == ["bot-a"]
     assert {row.gate_id for row in triage.gate_rows} == {
@@ -945,6 +972,16 @@ def test_triage_marks_crashed_and_no_status_retired_bots_for_retire_replace(
     ]
     assert all(row.severity == "critical" for row in triage.conditions)
     assert triage.overall_gate_result.status == "block"
+    assert triage.verdict.state == "NEEDS_ATTENTION"
+    assert triage.verdict.primary_move is not None
+    assert triage.verdict.operator_attention_count == 3
+    duplicate_projection = account_reconciliation_module._account_triage_verdict(
+        reconciliation_gate=triage.gate_rows[0],
+        gate_rows=triage.gate_rows,
+        conditions=[*triage.conditions, *triage.conditions],
+        freeze=None,
+    )
+    assert duplicate_projection.operator_attention_count == 3
     assert triage.summary_headline == "Account recovery needs attention"
     assert "crashed-bot ended from a crash" in triage.summary_detail
 

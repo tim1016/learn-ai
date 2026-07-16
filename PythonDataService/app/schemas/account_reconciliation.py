@@ -16,6 +16,7 @@ from app.schemas.live_runs import GateResult
 
 AccountReconciliationState = Literal["CLEAN", "NOT_PROVEN"]
 AccountExposureResolution = Literal["flat", "accepted_override", "unresolved"]
+AccountTriageVerdictState = Literal["FROZEN", "NOT_PROVEN", "NEEDS_ATTENTION", "CLEAN"]
 AccountConditionType = Literal[
     "exposure_freeze",
     "account_freeze",
@@ -178,6 +179,28 @@ class AccountObservationView(BaseModel):
     history: list[AccountObservationHistoryEvent] = Field(default_factory=list)
 
 
+class AccountTriageVerdictMove(BaseModel):
+    """One backend-authored navigation affordance for the Account desk spine."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    label: str = Field(min_length=1, max_length=160)
+    route: str = Field(min_length=1, max_length=256, pattern=r"^/")
+    fragment: str | None = Field(default=None, max_length=128)
+
+
+class AccountTriageVerdict(BaseModel):
+    """Dominant server-owned account state for the Account desk verdict spine."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    state: AccountTriageVerdictState
+    headline: str = Field(min_length=1, max_length=160)
+    detail: str = Field(min_length=1, max_length=512)
+    primary_move: AccountTriageVerdictMove | None = None
+    operator_attention_count: int = Field(ge=0)
+
+
 class AccountTriageResponse(BaseModel):
     """Thin account-scoped recovery projection over existing authorities."""
 
@@ -190,6 +213,7 @@ class AccountTriageResponse(BaseModel):
     summary_headline: str = Field(min_length=1)
     summary_detail: str = Field(min_length=1)
     overall_gate_result: GateResult
+    verdict: AccountTriageVerdict
     account_reconciliation_receipt: AccountReconciliationReceipt | None = None
     account_reconciliation_valid_until_ms: int | None = Field(default=None, ge=0)
     reconciliation_automation_policy: AccountReconciliationAutomationPolicy

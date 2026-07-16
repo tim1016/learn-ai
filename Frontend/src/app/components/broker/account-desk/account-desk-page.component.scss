@@ -1,0 +1,15 @@
+.account-desk { display: grid; gap: 1rem; }
+.card { border: 1px solid var(--surface-border, #d4d9e1); border-radius: .75rem; padding: 1rem; background: var(--surface-card, #fff); }
+.verdict-header, .headline-metrics { display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.freshness, .headline-metrics { display: flex; gap: 1rem; margin: 0; }
+.freshness div, .headline-metrics div { display: grid; gap: .2rem; }
+dt, .eyebrow { color: var(--text-color-secondary, #556070); font-size: .8rem; margin: 0; }
+dd { margin: 0; }
+.posture { font-size: 1.1rem; }
+.lens-toggle { display: flex; gap: .5rem; }
+.lens-toggle button[aria-pressed='true'] { font-weight: 700; text-decoration: underline; }
+.state { margin: 0; }
+.state-stale { margin-top: 1rem; color: #8a5a00; }
+.state-error { color: #a30000; }
+.primary-move { margin-top: .5rem; }
+.account-identity code { white-space: nowrap; }

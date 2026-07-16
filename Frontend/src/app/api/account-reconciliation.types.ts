@@ -2,6 +2,7 @@ import type { AccountTruthResponse } from './broker-models';
 import type { GateResult } from './live-instances.types';
 
 export type AccountReconciliationState = 'CLEAN' | 'NOT_PROVEN';
+export type AccountTriageVerdictState = 'FROZEN' | 'NOT_PROVEN' | 'NEEDS_ATTENTION' | 'CLEAN';
 export type AccountExposureResolution = 'flat' | 'intended' | 'accepted_override' | 'unresolved';
 export type AccountConditionType =
   | 'exposure_freeze'
@@ -103,6 +104,21 @@ export interface AccountObservationView {
   history: AccountObservationHistoryEvent[];
 }
 
+export interface AccountTriageVerdictMove {
+  label: string;
+  route: string;
+  fragment: string | null;
+}
+
+/** Server-owned Account desk posture; the client must not recalculate it. */
+export interface AccountTriageVerdict {
+  state: AccountTriageVerdictState;
+  headline: string;
+  detail: string;
+  primary_move: AccountTriageVerdictMove | null;
+  operator_attention_count: number;
+}
+
 export interface AccountTriageBotRef {
   strategy_instance_id: string;
   run_id: string;
@@ -133,6 +149,7 @@ export interface AccountTriageResponse {
   summary_headline: string;
   summary_detail: string;
   overall_gate_result: GateResult;
+  verdict: AccountTriageVerdict;
   account_reconciliation_receipt: AccountReconciliationReceipt | null;
   account_reconciliation_valid_until_ms: number | null;
   reconciliation_automation_policy: AccountReconciliationAutomationPolicy;

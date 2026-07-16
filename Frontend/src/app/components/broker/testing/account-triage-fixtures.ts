@@ -6,6 +6,7 @@ import type {
   AccountObservationView,
   AccountTriageBotRef,
   AccountTriageResponse,
+  AccountTriageVerdict,
 } from '../../../api/account-reconciliation.types';
 
 interface AccountTriageFixtureOptions {
@@ -18,6 +19,7 @@ interface AccountTriageFixtureOptions {
   summaryHeadline?: string;
   summaryDetail?: string;
   gate?: Partial<AccountTriageResponse['overall_gate_result']>;
+  verdict?: Partial<AccountTriageVerdict>;
   conditions?: AccountConditionRow[];
   freezeBanner?: AccountFreezeBanner | null;
   clearFreezeActionable?: boolean;
@@ -65,6 +67,14 @@ export function makeCleanAccountTriage(
       operator_next_step: 'ACCOUNT_TRIAGE_PASSING',
       evidence_at_ms: generatedAtMs,
       ...options.gate,
+    },
+    verdict: {
+      state: 'CLEAN',
+      headline: 'Account is clean',
+      detail: 'The current reconciliation proof and account checks are passing.',
+      primary_move: null,
+      operator_attention_count: 0,
+      ...options.verdict,
     },
     account_reconciliation_receipt: receipt,
     account_reconciliation_valid_until_ms:
@@ -149,6 +159,18 @@ export function makeFrozenAccountTriage(
       operator_next_step: condition.operator_next_step ?? 'CHECK_IBKR',
       evidence_at_ms: condition.evidence_at_ms,
       ...options.gate,
+    },
+    verdict: {
+      state: 'FROZEN',
+      headline: 'Account is frozen',
+      detail: options.summaryDetail ?? condition.detail,
+      primary_move: {
+        label: 'Open Account Monitor',
+        route: '/broker/account-monitor',
+        fragment: 'account-reconciliation-action',
+      },
+      operator_attention_count: 1,
+      ...options.verdict,
     },
     conditions: options.conditions ?? [condition],
     freezeBanner: options.freezeBanner ?? {

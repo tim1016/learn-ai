@@ -509,6 +509,13 @@ async def test_triage_returns_latest_receipt(tmp_path: Path) -> None:
     assert body["account_id"] == "DU1234567"
     assert body["account_reconciliation_receipt"]["receipt_id"] == receipt.receipt_id
     assert body["overall_gate_result"]["status"] == "pass"
+    assert body["verdict"] == {
+        "state": "CLEAN",
+        "headline": "Account is clean",
+        "detail": "The current reconciliation proof and account checks are passing.",
+        "primary_move": None,
+        "operator_attention_count": 0,
+    }
     assert body["conditions"] == []
     assert body["reconciliation_automation_policy"]["enabled"] is False
     assert body["account_reconciliation_valid_until_ms"] == receipt.expires_at_ms
