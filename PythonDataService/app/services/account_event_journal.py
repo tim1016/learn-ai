@@ -113,6 +113,11 @@ _EVENT_PRESENTATION: dict[str, tuple[AccountEventKind, str | None, str]] = {
         "Account launch outcomes were recorded.",
         "Cohort batch launch outcomes recorded.",
     ),
+    "cohort_batch_launch_member_start_recorded": (
+        "activity",
+        "A scheduled cohort start outcome was recorded.",
+        "Cohort scheduled member start recorded.",
+    ),
 }
 
 _EVIDENCE_FIELDS: tuple[tuple[str, str], ...] = (

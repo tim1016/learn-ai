@@ -1,6 +1,7 @@
 /** Browser compare token for the server-owned cohort launch command. */
 export interface CohortBatchLaunchCommandRequest {
   member_strategy_instance_ids: string[];
+  launch_profile?: 'paper_three_bot_stagger_v2';
 }
 
 export interface CohortBatchLaunchMemberOutcome {
@@ -72,6 +73,7 @@ export interface CohortValidationCertificateRoundTrip {
 
 export interface CohortBatchLaunchStatus {
   schema_version: number;
+  launch_profile?: 'paper_three_bot_stagger_v2' | null;
   account_id: string;
   cohort_id: string;
   member_strategy_instance_ids: string[];
@@ -84,4 +86,5 @@ export interface CohortBatchLaunchStatus {
   outcomes_recorded_at_ms: number | null;
   outcomes_error: string | null;
   evidence: CohortEvidenceSummary;
+  member_scheduled_start_at_ms?: Record<string, number>;
 }

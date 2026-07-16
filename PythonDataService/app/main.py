@@ -254,7 +254,29 @@ async def lifespan(app: FastAPI):
     await live_instances_router.start_surface_hubs()
 
     from app.services.cohort_evidence import get_cohort_evidence_sampler_registry
-    from app.services.cohort_launch import resume_open_cohort_evidence_samplers
+    from app.services.cohort_launch import (
+        get_cohort_launch_scheduler_registry,
+        resume_open_cohort_evidence_samplers,
+        resume_open_cohort_launch_schedulers,
+    )
+
+    readonly_default = live_instances_router._resolve_readonly_default(ibkr_settings)
+
+    await resume_open_cohort_launch_schedulers(
+        artifacts_root=account_truth_artifacts_root(ibkr_settings),
+        live_runs_root=Path(ibkr_settings.live_runs_root),
+        run_roll_call=live_instances_router.run_roll_call,
+        start_run=live_instances_router.start_run,
+        visible_runs_by_instance=live_instances_router._visible_runs_by_instance,
+        run_account_id=live_instances_router._run_dir_account_id,
+        start_request_for_run=lambda run_dir: live_instances_router._cohort_start_request_for_run(
+            run_dir,
+            readonly_default=readonly_default,
+        ),
+        now_ms=lambda: int(time.time() * 1_000),
+        evidence_samplers=get_cohort_evidence_sampler_registry(),
+        launch_schedulers=get_cohort_launch_scheduler_registry(),
+    )
 
     await resume_open_cohort_evidence_samplers(
         artifacts_root=account_truth_artifacts_root(ibkr_settings),
@@ -267,6 +289,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        await get_cohort_launch_scheduler_registry().stop_all()
         await get_cohort_evidence_sampler_registry().stop_all()
         await live_instances_router.stop_surface_hubs()
         await bot_events.get_bot_event_stream_service().stop_all()

@@ -382,6 +382,7 @@ export class BotsPageComponent {
       });
       const cohort = await this.liveRuns.launchCohort(accountId, {
         member_strategy_instance_ids: refreshedRows.map((row) => row.id),
+        ...(refreshedRows.length === 3 ? { launch_profile: 'paper_three_bot_stagger_v2' as const } : {}),
       });
       this.cohortMonitorReloadVersion.update((version) => version + 1);
       await this.refresh();

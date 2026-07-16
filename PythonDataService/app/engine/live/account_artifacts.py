@@ -219,12 +219,23 @@ class RestartIntensityPolicy(BaseModel):
     source: str = RESTART_INTENSITY_SOURCE
 
 
+class CohortBatchLaunchMemberSchedule(BaseModel):
+    """One immutable server-owned start slot in a V2 paper cohort."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    strategy_instance_id: str = Field(min_length=1, max_length=128)
+    run_id: str = Field(min_length=1, max_length=128)
+    scheduled_start_at_ms: int = Field(ge=0)
+    start_request: dict[str, object]
+
+
 class CohortBatchLaunchReceipt(BaseModel):
     """Operator authorization for one deliberate multi-bot launch window."""
 
     model_config = ConfigDict(frozen=True, extra="ignore")
 
-    schema_version: int = 1
+    schema_version: Literal[1, 2] = 1
     account_id: str = Field(min_length=1, max_length=64)
     cohort_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
     member_strategy_instance_ids: tuple[str, ...] = Field(min_length=1, max_length=128)
@@ -234,6 +245,8 @@ class CohortBatchLaunchReceipt(BaseModel):
     recorded_at_ms: int = Field(ge=0)
     member_pins: tuple[CohortBatchLaunchMemberPin, ...] = ()
     request_provenance: CohortBatchLaunchRequestProvenance | None = None
+    launch_profile: Literal["paper_three_bot_stagger_v2"] | None = None
+    member_schedule: tuple[CohortBatchLaunchMemberSchedule, ...] = ()
 
     @model_validator(mode="after")
     def validate_window_and_members(self) -> CohortBatchLaunchReceipt:
@@ -246,6 +259,26 @@ class CohortBatchLaunchReceipt(BaseModel):
             pin.strategy_instance_id for pin in self.member_pins
         } != set(self.member_strategy_instance_ids):
             raise ValueError("member_pins must cover exactly the authorized cohort members")
+        if self.schema_version == 1:
+            if self.launch_profile is not None or self.member_schedule:
+                raise ValueError("V1 cohort receipts cannot contain a V2 launch profile or schedule")
+            return self
+        if self.launch_profile != "paper_three_bot_stagger_v2":
+            raise ValueError("V2 cohort receipt must use the fixed paper three-bot stagger profile")
+        if len(self.member_strategy_instance_ids) != 3:
+            raise ValueError("paper three-bot stagger requires exactly three members")
+        if len(self.member_schedule) != 3:
+            raise ValueError("paper three-bot stagger requires exactly three schedule slots")
+        if {slot.strategy_instance_id for slot in self.member_schedule} != set(self.member_strategy_instance_ids):
+            raise ValueError("member_schedule must cover exactly the authorized cohort members")
+        ordered_slots = tuple(sorted(self.member_schedule, key=lambda slot: slot.scheduled_start_at_ms))
+        first_start = ordered_slots[0].scheduled_start_at_ms
+        if tuple(slot.scheduled_start_at_ms - first_start for slot in ordered_slots) != (0, 900_000, 1_800_000):
+            raise ValueError("paper three-bot stagger slots must be T+0, T+15m, and T+30m")
+        if self.window_start_ms != ordered_slots[-1].scheduled_start_at_ms + 5_000:
+            raise ValueError("V2 validation window must begin one evidence cadence after the final start")
+        if self.window_end_ms - self.window_start_ms != 900_000:
+            raise ValueError("V2 validation window must require fifteen minutes of healthy overlap")
         return self
 
 

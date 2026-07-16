@@ -9,6 +9,12 @@ from app.engine.live.account_artifacts import (
     CohortBatchLaunchReceipt,
     record_cohort_batch_launch_receipt,
 )
+from app.schemas.live_runs import (
+    BotRollCallOffer,
+    BotRollCallResponse,
+    BotRollCallSummary,
+    HostRunnerStartRequest,
+)
 from app.engine.live.live_state_sidecar import LiveStateEnvelope
 from app.services.cohort_batch_launch import CohortBatchLaunchService, parse_cohort_evidence_sample
 from app.services.cohort_evidence import (
@@ -19,7 +25,11 @@ from app.services.cohort_evidence import (
     evaluate_healthy_overlap,
 )
 from app.services.cohort_evidence_runtime import CohortEvidenceRuntimeObserver
-from app.services.cohort_launch import resume_open_cohort_evidence_samplers
+from app.services.cohort_launch import (
+    CohortLaunchCoordinator,
+    CohortLaunchSchedulerRegistry,
+    resume_open_cohort_evidence_samplers,
+)
 
 
 def _sample(at_ms: int, *members: str) -> CohortEvidenceSample:
@@ -200,6 +210,89 @@ def test_resume_open_cohort_sampling_uses_next_durable_cadence(tmp_path: Path, m
     )
 
     assert first_expected == [15_000]
+
+
+def test_three_bot_stagger_dispatches_from_durable_schedule(tmp_path: Path) -> None:
+    """The V2 scheduler owns all three slots after receipt persistence."""
+
+    clock = {"ms": 0}
+    starts: list[tuple[str, str | None]] = []
+    offers = [
+        BotRollCallOffer(
+            offer_id=f"offer-{member}",
+            strategy_instance_id=f"bot-{member}",
+            run_id=f"run-{member}",
+            session_date="2026-07-16",
+            issued_at_ms=0,
+            expires_at_ms=9_999_999,
+        )
+        for member in ("a", "b", "c")
+    ]
+
+    async def roll_call() -> BotRollCallResponse:
+        return BotRollCallResponse(summary=BotRollCallSummary(ready=3), offers=offers)
+
+    async def start_run(run_id: str, request: HostRunnerStartRequest) -> SimpleNamespace:
+        starts.append((run_id, request.roll_call_offer_id))
+        return SimpleNamespace(accepted=True)
+
+    coordinator = CohortLaunchCoordinator(
+        artifacts_root=tmp_path,
+        live_runs_root=tmp_path / "runs",
+        run_roll_call=roll_call,
+        start_run=start_run,
+        visible_runs_by_instance=lambda _root: {
+            f"bot-{member}": [{"run_id": f"run-{member}", "run_dir": str(tmp_path / f"run-{member}")}]
+            for member in ("a", "b", "c")
+        },
+        run_account_id=lambda _run_dir: "DU123456",
+        start_request_for_run=lambda _run_dir: HostRunnerStartRequest(strategy="spy_ema_crossover"),
+        now_ms=lambda: clock["ms"],
+        evidence_samplers=CohortEvidenceSamplerRegistry(),
+        launch_schedulers=CohortLaunchSchedulerRegistry(),
+    )
+
+    async def no_evidence(_receipt: CohortBatchLaunchReceipt) -> None:
+        return None
+
+    coordinator._start_evidence_sampler = no_evidence  # type: ignore[method-assign]
+
+    async def exercise() -> None:
+        status = await coordinator.launch(
+            account_id="DU123456",
+            requested_members=("bot-a", "bot-b", "bot-c"),
+            operator_identity="operator.alice",
+            identity_header_present=True,
+            client_host="127.0.0.1",
+            launch_profile="paper_three_bot_stagger_v2",
+        )
+        assert status.schema_version == 2
+        assert status.launch_profile == "paper_three_bot_stagger_v2"
+        assert status.outcomes_state == "pending"
+        assert status.member_scheduled_start_at_ms == {
+            "bot-a": 0,
+            "bot-b": 900_000,
+            "bot-c": 1_800_000,
+        }
+        clock["ms"] = 2_000_000
+        for _ in range(8):
+            await asyncio.sleep(0.01)
+
+    asyncio.run(exercise())
+
+    assert starts == [
+        ("run-a", "offer-a"),
+        ("run-b", "offer-b"),
+        ("run-c", "offer-c"),
+    ]
+    status = asyncio.run(
+        CohortBatchLaunchService(artifacts_root=tmp_path).get_status(
+            account_id="DU123456",
+            cohort_id=None,
+        )
+    )
+    assert status is not None
+    assert [outcome.state for outcome in status.outcomes] == ["accepted", "accepted", "accepted"]
 
 
 def test_cohort_evidence_parser_rejects_booleans_for_integral_fields() -> None:

@@ -38,6 +38,7 @@ class CohortBatchLaunchCommandRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     member_strategy_instance_ids: tuple[str, ...] = Field(min_length=1, max_length=128)
+    launch_profile: Literal["paper_three_bot_stagger_v2"] | None = None
 
     @model_validator(mode="after")
     def validate_members(self) -> CohortBatchLaunchCommandRequest:
@@ -45,6 +46,8 @@ class CohortBatchLaunchCommandRequest(BaseModel):
             raise ValueError("member_strategy_instance_ids must not contain blank values")
         if len(set(self.member_strategy_instance_ids)) != len(self.member_strategy_instance_ids):
             raise ValueError("member_strategy_instance_ids must be unique")
+        if self.launch_profile == "paper_three_bot_stagger_v2" and len(self.member_strategy_instance_ids) != 3:
+            raise ValueError("paper three-bot stagger requires exactly three selected bots")
         return self
 
 
@@ -106,6 +109,7 @@ class CohortBatchLaunchStatusResponse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version: int = 1
+    launch_profile: Literal["paper_three_bot_stagger_v2"] | None = None
     account_id: str = Field(min_length=1, max_length=64)
     cohort_id: str = Field(min_length=1, max_length=128)
     member_strategy_instance_ids: list[str] = Field(min_length=1, max_length=128)
@@ -118,6 +122,7 @@ class CohortBatchLaunchStatusResponse(BaseModel):
     outcomes_recorded_at_ms: int | None = Field(default=None, ge=0)
     outcomes_error: str | None = None
     evidence: CohortEvidenceSummaryResponse = Field(default_factory=unknown_cohort_evidence_summary)
+    member_scheduled_start_at_ms: dict[str, int] = Field(default_factory=dict)
 
     @classmethod
     def from_receipts(
@@ -130,6 +135,8 @@ class CohortBatchLaunchStatusResponse(BaseModel):
     ) -> CohortBatchLaunchStatusResponse:
         return cls(
             account_id=receipt.account_id,
+            schema_version=receipt.schema_version,
+            launch_profile=receipt.launch_profile,
             cohort_id=receipt.cohort_id,
             member_strategy_instance_ids=list(receipt.member_strategy_instance_ids),
             window_start_ms=receipt.window_start_ms,
@@ -156,4 +163,8 @@ class CohortBatchLaunchStatusResponse(BaseModel):
             ),
             outcomes_error=outcomes_error,
             evidence=evidence if evidence is not None else unknown_cohort_evidence_summary(),
+            member_scheduled_start_at_ms={
+                slot.strategy_instance_id: slot.scheduled_start_at_ms
+                for slot in receipt.member_schedule
+            },
         )

@@ -18,6 +18,7 @@ interface CohortMonitorRow {
   outcome: CohortBatchLaunchMemberOutcome | null;
   evidence: CohortEvidenceMember | null;
   receiptState: string;
+  scheduledStartAtMs: number | null;
 }
 
 @Component({
@@ -49,6 +50,7 @@ export class CohortLaunchMonitorComponent {
       outcome: outcomes.get(strategyInstanceId) ?? null,
       evidence: evidence.get(strategyInstanceId) ?? null,
       receiptState: outcomes.get(strategyInstanceId)?.state ?? cohort.outcomes_state,
+      scheduledStartAtMs: cohort.member_scheduled_start_at_ms?.[strategyInstanceId] ?? null,
     }));
   });
 

@@ -73,6 +73,8 @@
                 <span class="mono">{{ row.receiptState | receiptLabel }}</span>
                 @if (row.outcome; as outcome) {
                   <p class="mono">{{ outcome.reason | receiptLabel }}</p>
+                } @else if (row.scheduledStartAtMs !== null) {
+                  <p>Scheduled <app-timestamp-display [value]="row.scheduledStartAtMs" mode="local" /></p>
                 }
               </td>
               <td>

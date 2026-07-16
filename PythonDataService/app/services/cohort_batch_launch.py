@@ -8,6 +8,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from app.engine.live.account_artifacts import (
+    CohortBatchLaunchMemberOutcome,
     CohortBatchLaunchOutcomesReceipt,
     CohortBatchLaunchReceipt,
     append_account_event,
@@ -96,6 +97,54 @@ class CohortBatchLaunchService:
             },
         )
 
+    async def record_scheduled_member_outcome(
+        self,
+        *,
+        account_id: str,
+        cohort_id: str,
+        outcome: CohortBatchLaunchMemberOutcome,
+        recorded_at_ms: int,
+    ) -> None:
+        """Append one immutable V2 staggered-start outcome."""
+
+        await asyncio.to_thread(
+            append_account_event,
+            self._artifacts_root,
+            account_id,
+            {
+                "event_type": "cohort_batch_launch_member_start_recorded",
+                "cohort_id": cohort_id,
+                "recorded_at_ms": recorded_at_ms,
+                **outcome.model_dump(mode="json"),
+            },
+        )
+
+    async def scheduled_member_outcomes(
+        self,
+        *,
+        account_id: str,
+        cohort_id: str,
+    ) -> dict[str, CohortBatchLaunchMemberOutcome]:
+        """Read the V2 per-slot outcomes without pretending a partial cohort is complete."""
+
+        events = await asyncio.to_thread(read_account_events, self._artifacts_root, account_id)
+        outcomes: dict[str, CohortBatchLaunchMemberOutcome] = {}
+        for event in events:
+            if event.get("event_type") != "cohort_batch_launch_member_start_recorded" or event.get("cohort_id") != cohort_id:
+                continue
+            outcome = CohortBatchLaunchMemberOutcome.model_validate(
+                {
+                    "strategy_instance_id": event.get("strategy_instance_id"),
+                    "state": event.get("state"),
+                    "reason": event.get("reason"),
+                    "next_safe_action": event.get("next_safe_action"),
+                }
+            )
+            if outcome.strategy_instance_id in outcomes:
+                raise ValueError("duplicate staggered cohort member outcome")
+            outcomes[outcome.strategy_instance_id] = outcome
+        return outcomes
+
     @staticmethod
     def _evidence_summary(
         events: list[dict],
@@ -174,6 +223,12 @@ class CohortBatchLaunchService:
         receipt: CohortBatchLaunchReceipt,
     ) -> tuple[CohortBatchLaunchOutcomesReceipt | None, str | None]:
         expected_members = set(receipt.member_strategy_instance_ids)
+        if receipt.schema_version == 2:
+            return CohortBatchLaunchService._scheduled_outcomes_after_authorization(
+                events,
+                authorization_seq=authorization_seq,
+                receipt=receipt,
+            )
         for event in reversed(events):
             if event.get("event_type") != "cohort_batch_launch_outcomes_recorded":
                 continue
@@ -190,6 +245,61 @@ class CohortBatchLaunchService:
             except (KeyError, TypeError, ValueError, ValidationError):
                 return None, "The persisted cohort outcomes are unreadable."
         return None, None
+
+    @staticmethod
+    def _scheduled_outcomes_after_authorization(
+        events: list[dict],
+        *,
+        authorization_seq: int,
+        receipt: CohortBatchLaunchReceipt,
+    ) -> tuple[CohortBatchLaunchOutcomesReceipt | None, str | None]:
+        """Project immutable per-slot V2 outcomes into the shared status shape."""
+
+        outcomes_by_member: dict[str, CohortBatchLaunchMemberOutcome] = {}
+        recorded_at_ms = 0
+        for event in events:
+            if event.get("event_type") != "cohort_batch_launch_member_start_recorded":
+                continue
+            if event.get("cohort_id") != receipt.cohort_id:
+                continue
+            try:
+                if int(event["seq"]) <= authorization_seq:
+                    continue
+                recorded_at = event["recorded_at_ms"]
+                if not _is_int_not_bool(recorded_at):
+                    return None, "A persisted staggered cohort outcome has no valid timestamp."
+                outcome = CohortBatchLaunchMemberOutcome.model_validate(
+                    {
+                        "strategy_instance_id": event.get("strategy_instance_id"),
+                        "state": event.get("state"),
+                        "reason": event.get("reason"),
+                        "next_safe_action": event.get("next_safe_action"),
+                    }
+                )
+            except (KeyError, TypeError, ValueError, ValidationError):
+                return None, "A persisted staggered cohort outcome is unreadable."
+            member_id = outcome.strategy_instance_id
+            if member_id not in set(receipt.member_strategy_instance_ids) or member_id in outcomes_by_member:
+                return None, "The persisted staggered cohort outcomes do not match this authorization receipt."
+            outcomes_by_member[member_id] = outcome
+            recorded_at_ms = max(recorded_at_ms, recorded_at)
+        if not outcomes_by_member:
+            return None, None
+        if set(outcomes_by_member) != set(receipt.member_strategy_instance_ids):
+            return None, None
+        return (
+            CohortBatchLaunchOutcomesReceipt(
+                schema_version=2,
+                account_id=receipt.account_id,
+                cohort_id=receipt.cohort_id,
+                outcomes=tuple(
+                    outcomes_by_member[member_id]
+                    for member_id in receipt.member_strategy_instance_ids
+                ),
+                recorded_at_ms=recorded_at_ms,
+            ),
+            None,
+        )
 
 
 def parse_cohort_evidence_sample(event: dict) -> CohortEvidenceSample | None:

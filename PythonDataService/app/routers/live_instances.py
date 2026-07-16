@@ -250,7 +250,7 @@ from app.services.broker_activity_publisher_registry import get_publisher_regist
 from app.services.broker_activity_wal import BrokerActivityWal, instance_broker_activity_wal_path
 from app.services.broker_capability_service import get_broker_capability_service
 from app.services.cohort_evidence import get_cohort_evidence_sampler_registry
-from app.services.cohort_launch import CohortLaunchCoordinator
+from app.services.cohort_launch import CohortLaunchCoordinator, get_cohort_launch_scheduler_registry
 from app.services.daemon_diagnostics import (
     get_daemon_diagnostics_service,
     project_daemon_diagnostic_report,
@@ -1215,6 +1215,36 @@ def _start_defaults(
         if isinstance(captured_readonly, bool):
             start_default_payload["readonly"] = readonly_default or captured_readonly
     return InstanceStartDefaults(**start_default_payload)
+
+
+def _cohort_start_request_for_run(
+    run_dir: Path,
+    *,
+    readonly_default: bool,
+) -> HostRunnerStartRequest | None:
+    """Recover the exact safe start settings for a durable cohort slot."""
+
+    try:
+        defaults = _start_defaults(
+            run_dir.parent,
+            None,
+            [{"run_dir": str(run_dir)}],
+            readonly_default=readonly_default,
+        )
+    except ValidationError:
+        return None
+    if defaults is None or not defaults.strategy:
+        return None
+    try:
+        return HostRunnerStartRequest(
+            readonly=defaults.readonly,
+            hydrate_policy=defaults.hydrate_policy,
+            strategy=defaults.strategy,
+            max_orders_per_day=defaults.max_orders_per_day,
+            ibkr_host=defaults.ibkr_host,
+        )
+    except ValidationError:
+        return None
 
 
 def _resolve_symbol_resolution(
@@ -3259,29 +3289,6 @@ async def launch_cohort(
         settings = get_settings()
         readonly_default = _resolve_readonly_default(settings)
 
-        def start_request_for_run(run_dir: Path) -> HostRunnerStartRequest | None:
-            try:
-                defaults = _start_defaults(
-                    run_dir.parent,
-                    None,
-                    [{"run_dir": str(run_dir)}],
-                    readonly_default=readonly_default,
-                )
-            except ValidationError:
-                return None
-            if defaults is None or not defaults.strategy:
-                return None
-            try:
-                return HostRunnerStartRequest(
-                    readonly=defaults.readonly,
-                    hydrate_policy=defaults.hydrate_policy,
-                    strategy=defaults.strategy,
-                    max_orders_per_day=defaults.max_orders_per_day,
-                    ibkr_host=defaults.ibkr_host,
-                )
-            except ValidationError:
-                return None
-
         coordinator = CohortLaunchCoordinator(
             artifacts_root=Path(settings.live_runs_root).parent,
             live_runs_root=Path(settings.live_runs_root),
@@ -3289,9 +3296,13 @@ async def launch_cohort(
             start_run=start_run,
             visible_runs_by_instance=_visible_runs_by_instance,
             run_account_id=_run_dir_account_id,
-            start_request_for_run=start_request_for_run,
+            start_request_for_run=lambda run_dir: _cohort_start_request_for_run(
+                run_dir,
+                readonly_default=readonly_default,
+            ),
             now_ms=_now_ms,
             evidence_samplers=get_cohort_evidence_sampler_registry(),
+            launch_schedulers=get_cohort_launch_scheduler_registry(),
         )
         return await coordinator.launch(
             account_id=normalized_account_id,
@@ -3299,6 +3310,7 @@ async def launch_cohort(
             operator_identity=(identity_header.strip() if identity_header and identity_header.strip() else "local-operator"),
             identity_header_present=bool(identity_header),
             client_host=request.client.host if request.client is not None else None,
+            launch_profile=body.launch_profile,
         )
 
 
