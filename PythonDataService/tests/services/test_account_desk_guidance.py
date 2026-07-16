@@ -10,17 +10,19 @@ from app.services.account_desk_guidance import author_account_desk_blockers
 
 
 @pytest.mark.parametrize(
-    ("cure_action", "anchor", "audience", "disposition", "action_kind"),
+    ("cure_action", "clear_freeze_actionable", "anchor", "audience", "disposition", "action_kind"),
     [
-        ("reconcile_now", "reconciliation", "operator", "fix_elsewhere", "navigate"),
-        ("prove_evidence", "lease", "operator", "wait", None),
-        ("clear_freeze", "cure_tools", "both", "fix_elsewhere", "navigate"),
-        ("resolve_exposure", "cure_tools", "both", "fix_elsewhere", "navigate"),
-        ("retire_replace", "reconciliation", "operator", "fix_elsewhere", "navigate"),
+        ("reconcile_now", False, "reconciliation", "operator", "fix_here", "confirm_in_form"),
+        ("prove_evidence", False, "lease", "operator", "wait", None),
+        ("clear_freeze", False, "cure_tools", "operator", "wait", None),
+        ("clear_freeze", True, "cure_tools", "operator", "fix_here", "confirm_in_form"),
+        ("resolve_exposure", False, "cure_tools", "operator", "fix_here", "confirm_in_form"),
+        ("retire_replace", False, "reconciliation", "operator", "fix_elsewhere", "navigate"),
     ],
 )
 def test_author_account_desk_blockers_preserves_condition_copy_and_declared_guidance(
     cure_action: AccountCureAction,
+    clear_freeze_actionable: bool,
     anchor: str,
     audience: str,
     disposition: str,
@@ -42,7 +44,10 @@ def test_author_account_desk_blockers_preserves_condition_copy_and_declared_guid
         cure_action=cure_action,
     )
 
-    [blocker] = author_account_desk_blockers([condition])
+    [blocker] = author_account_desk_blockers(
+        [condition],
+        clear_freeze_actionable=clear_freeze_actionable,
+    )
 
     assert blocker.condition.id == "account-condition:evidence_stale:DU1234567"
     assert blocker.headline == condition.title
@@ -55,3 +60,5 @@ def test_author_account_desk_blockers_preserves_condition_copy_and_declared_guid
     else:
         assert blocker.primary_move is not None
         assert blocker.primary_move.action.kind == action_kind
+        if action_kind == "confirm_in_form":
+            assert blocker.primary_move.confirmation is not None

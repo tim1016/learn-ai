@@ -1,0 +1,52 @@
+import { fireEvent, render, screen } from '@testing-library/angular';
+import { describe, expect, it, vi } from 'vitest';
+
+import { AccountDeskRecoveryConfirmDialogComponent } from './account-desk-recovery-confirm-dialog.component';
+
+describe('AccountDeskRecoveryConfirmDialogComponent', () => {
+  it('renders the exact confirmation, requires an exposure reason, and supports cancellation', async () => {
+    const view = await render(AccountDeskRecoveryConfirmDialogComponent, {
+      inputs: {
+        confirmation: {
+          command: 'exposure_override', accountId: 'DU1234567', title: 'Accept account exposure', body: 'Backend body.',
+          consequence: 'Backend consequence.', confirmLabel: 'Accept exposure', desiredAutomationEnabled: null, reason: '',
+        },
+        busy: false,
+        errorMessage: null,
+      },
+    });
+    const cancelled = vi.fn();
+    const reasonChanged = vi.fn();
+    view.fixture.componentInstance.cancelled.subscribe(cancelled);
+    view.fixture.componentInstance.exposureReasonChanged.subscribe(reasonChanged);
+
+    expect(await screen.findByText('Backend consequence.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Accept exposure' }).hasAttribute('disabled')).toBe(true);
+    fireEvent.input(screen.getByLabelText('Operator reason'), { target: { value: 'Operator reason.' } });
+    expect(reasonChanged).toHaveBeenCalledWith('Operator reason.');
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(cancelled).toHaveBeenCalledOnce();
+    expect(document.querySelector('dialog.account-recovery-confirm')).not.toBeNull();
+  });
+
+  it('treats the native dialog cancel event as cancellation', async () => {
+    const view = await render(AccountDeskRecoveryConfirmDialogComponent, {
+      inputs: {
+        confirmation: {
+          command: 'reconcile', accountId: 'DU1234567', title: 'Run account reconciliation', body: 'Backend body.',
+          consequence: 'Backend consequence.', confirmLabel: 'Run account reconcile', desiredAutomationEnabled: null, reason: '',
+        },
+        busy: false,
+        errorMessage: null,
+      },
+    });
+    const cancelled = vi.fn();
+    view.fixture.componentInstance.cancelled.subscribe(cancelled);
+    const dialog = document.querySelector<HTMLDialogElement>('dialog.account-recovery-confirm');
+    if (dialog === null) throw new Error('Expected recovery confirmation dialog.');
+
+    fireEvent(dialog, new Event('cancel', { cancelable: true }));
+
+    expect(cancelled).toHaveBeenCalledOnce();
+  });
+});

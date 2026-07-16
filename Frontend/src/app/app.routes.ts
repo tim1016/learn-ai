@@ -5,6 +5,7 @@ import { AccountDeskEventsStore } from "./components/broker/account-desk/account
 import { AccountDeskDirectoryStore } from "./components/broker/account-desk/account-desk-directory-store.service";
 import { AccountDeskFleetStore } from "./components/broker/account-desk/account-desk-fleet-store.service";
 import { AccountDeskGuidanceStore } from "./components/broker/account-desk/account-desk-guidance-store.service";
+import { AccountDeskRecoveryStore } from "./components/broker/account-desk/account-desk-recovery-store.service";
 import { AccountDeskSurfaceStore } from "./components/broker/account-desk/account-desk-surface-store.service";
 import {
   botExistsGuard,
@@ -225,7 +226,7 @@ export const routes: Routes = [
   },
   {
     path: "broker/accounts/:accountId",
-    providers: [AccountDeskSurfaceStore, AccountDeskHoldingsStore, AccountDeskEventsStore, AccountDeskDirectoryStore, AccountDeskFleetStore, AccountDeskGuidanceStore],
+    providers: [AccountDeskSurfaceStore, AccountDeskHoldingsStore, AccountDeskEventsStore, AccountDeskDirectoryStore, AccountDeskFleetStore, AccountDeskGuidanceStore, AccountDeskRecoveryStore],
     loadComponent: () =>
       import(
         "./components/broker/account-desk/account-desk-page.component"

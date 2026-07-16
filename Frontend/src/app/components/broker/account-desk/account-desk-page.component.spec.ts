@@ -16,6 +16,7 @@ import { AccountDeskEventsStore } from './account-desk-events-store.service';
 import { AccountDeskDirectoryStore } from './account-desk-directory-store.service';
 import { AccountDeskFleetStore } from './account-desk-fleet-store.service';
 import { AccountDeskGuidanceStore } from './account-desk-guidance-store.service';
+import { AccountDeskRecoveryStore } from './account-desk-recovery-store.service';
 import { AccountDeskSurfaceStore } from './account-desk-surface-store.service';
 import { AccountDeskPageComponent } from './account-desk-page.component';
 
@@ -95,6 +96,21 @@ function makeFleetStore() {
   };
 }
 
+function makeRecoveryStore() {
+  return {
+    load: vi.fn(),
+    requestDeclaredMove: vi.fn(),
+    requestAutomationChange: vi.fn(),
+    setExposureOverrideReason: vi.fn(),
+    cancelConfirmation: vi.fn(),
+    confirm: vi.fn(),
+    confirmation: signal(null),
+    busy: signal(false),
+    errorMessage: signal<string | null>(null),
+    success: signal(null),
+  };
+}
+
 function triage(state: AccountTriageVerdictState = 'CLEAN'): AccountTriageResponse {
   const current = makeCleanAccountTriage({
     generatedAtMs: 1_780_000_002_000,
@@ -124,6 +140,7 @@ async function setup(options: { response?: AccountTriageResponse; route$?: Behav
   const events = makeEventsStore();
   const fleet = makeFleetStore();
   const guidance = makeGuidanceStore();
+  const recovery = makeRecoveryStore();
   const directory = makeDirectoryStore([
     accountRow('DU1234567'),
     accountRow('DU7654321'),
@@ -136,13 +153,14 @@ async function setup(options: { response?: AccountTriageResponse; route$?: Behav
       { provide: AccountDeskDirectoryStore, useValue: directory },
       { provide: AccountDeskFleetStore, useValue: fleet },
       { provide: AccountDeskGuidanceStore, useValue: guidance },
+      { provide: AccountDeskRecoveryStore, useValue: recovery },
       { provide: BrokerService, useValue: broker },
       { provide: ActivatedRoute, useValue: { paramMap: route$.asObservable() } },
       { provide: Router, useValue: router },
     ],
   });
   await screen.findByText((options.response ?? triage()).verdict.headline);
-  return { ...view, broker, directory, events, fleet, guidance, route$, router };
+  return { ...view, broker, directory, events, fleet, guidance, recovery, route$, router };
 }
 
 describe('AccountDeskPageComponent', () => {
@@ -171,12 +189,13 @@ describe('AccountDeskPageComponent', () => {
 
   it('rekeys the route-scoped surface store when the account route changes', async () => {
     const route$ = new BehaviorSubject(convertToParamMap({ accountId: 'DU1234567' }));
-    const { broker, directory, events } = await setup({ route$ });
+    const { broker, directory, events, recovery } = await setup({ route$ });
     broker.accountTriage.mockResolvedValueOnce(makeCleanAccountTriage({ accountId: 'DU7654321' }));
 
     route$.next(convertToParamMap({ accountId: 'DU7654321' }));
     await waitFor(() => expect(broker.accountTriage).toHaveBeenCalledWith('DU7654321'));
     expect(events.load).toHaveBeenCalledWith('DU7654321');
+    expect(recovery.load).toHaveBeenCalledWith('DU7654321');
     expect(directory.loadServiceStatus).toHaveBeenCalledWith('DU7654321');
     expect(await screen.findByText('DU7654321')).toBeTruthy();
   });
@@ -213,6 +232,7 @@ describe('AccountDeskPageComponent', () => {
     const directory = makeDirectoryStore();
     const fleet = makeFleetStore();
     const guidance = makeGuidanceStore();
+    const recovery = makeRecoveryStore();
     await render(AccountDeskPageComponent, {
     providers: [
       AccountDeskHoldingsStore,
@@ -221,6 +241,7 @@ describe('AccountDeskPageComponent', () => {
         { provide: AccountDeskDirectoryStore, useValue: directory },
         { provide: AccountDeskFleetStore, useValue: fleet },
         { provide: AccountDeskGuidanceStore, useValue: guidance },
+        { provide: AccountDeskRecoveryStore, useValue: recovery },
         { provide: BrokerService, useValue: broker },
         { provide: ActivatedRoute, useValue: { paramMap: route$.asObservable() } },
         { provide: Router, useValue: { navigate: vi.fn().mockResolvedValue(true) } },

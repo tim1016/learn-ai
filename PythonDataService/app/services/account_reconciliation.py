@@ -727,6 +727,12 @@ class AccountReconciliationService:
             conditions=conditions,
             freeze=freeze,
         )
+        clear_freeze_actionable = _clear_freeze_actionable(
+            receipt=receipt,
+            freeze=freeze,
+            now_ms=generated_at_ms,
+            receipt_invalidation=receipt_invalidation,
+        )
         return AccountTriageResponse(
             generated_at_ms=generated_at_ms,
             account_id=canonical_account_id,
@@ -752,12 +758,7 @@ class AccountReconciliationService:
             gate_rows=gate_rows,
             conditions=conditions,
             freeze_banner=_freeze_banner(freeze),
-            clear_freeze_actionable=_clear_freeze_actionable(
-                receipt=receipt,
-                freeze=freeze,
-                now_ms=generated_at_ms,
-                receipt_invalidation=receipt_invalidation,
-            ),
+            clear_freeze_actionable=clear_freeze_actionable,
             affected_bots=[
                 AccountTriageBotRef(
                     strategy_instance_id=binding.strategy_instance_id,
@@ -767,7 +768,10 @@ class AccountReconciliationService:
                 )
                 for binding in active_bindings
             ],
-            operator_blockers=author_account_desk_blockers(conditions),
+            operator_blockers=author_account_desk_blockers(
+                conditions,
+                clear_freeze_actionable=clear_freeze_actionable,
+            ),
         )
 
 

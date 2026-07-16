@@ -10,6 +10,7 @@ import {
   type OperatorBlockerMoveEvent,
 } from '../shared/operator-blocker-list/operator-blocker-list.component';
 import { AccountDeskGuidanceStore } from './account-desk-guidance-store.service';
+import { AccountDeskRecoveryStore } from './account-desk-recovery-store.service';
 
 /** Renders the server-provided guidance assigned to one semantic desk anchor. */
 @Component({
@@ -27,6 +28,7 @@ import { AccountDeskGuidanceStore } from './account-desk-guidance-store.service'
 export class AccountDeskGuidanceComponent {
   private readonly router = inject(Router);
   private readonly guidance = inject(AccountDeskGuidanceStore);
+  private readonly recovery = inject(AccountDeskRecoveryStore, { optional: true });
 
   readonly anchor = input.required<OperatorBlockerAnchorKind>();
   readonly subjectKey = input<string | null>(null);
@@ -41,7 +43,11 @@ export class AccountDeskGuidanceComponent {
     if (action.kind === 'navigate') {
       void this.router.navigate([action.route], { fragment: action.fragment ?? undefined });
     } else if (action.kind === 'confirm_in_form') {
-      void this.router.navigate([], { fragment: action.anchor });
+      if (this.recovery !== null) {
+        this.recovery.requestDeclaredMove(event);
+      } else {
+        void this.router.navigate([], { fragment: action.anchor });
+      }
     }
   }
 }

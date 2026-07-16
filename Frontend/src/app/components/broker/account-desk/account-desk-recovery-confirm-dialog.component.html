@@ -1,0 +1,42 @@
+<dialog
+  #dialog
+  class="account-recovery-confirm"
+  aria-labelledby="account-recovery-confirm-title"
+  (cancel)="cancel($event)"
+>
+  @if (confirmation(); as confirmation) {
+    <header>
+      <p class="eyebrow">Account recovery confirmation</p>
+      <h2 id="account-recovery-confirm-title">{{ confirmation.title }}</h2>
+    </header>
+    <p>{{ confirmation.body }}</p>
+    <p class="consequence">{{ confirmation.consequence }}</p>
+    <dl>
+      <div><dt>Account</dt><dd><code>{{ confirmation.accountId }}</code></dd></div>
+      @if (confirmation.command === 'automation') {
+        <div><dt>Requested setting</dt><dd>{{ confirmation.desiredAutomationEnabled ? 'Enabled' : 'Disabled' }}</dd></div>
+      }
+    </dl>
+    @if (confirmation.command === 'exposure_override') {
+      <label for="account-exposure-override-reason">Operator reason</label>
+      <textarea
+        id="account-exposure-override-reason"
+        rows="3"
+        [value]="confirmation.reason"
+        (input)="updateReason($event)"
+      ></textarea>
+      @if (confirmation.reason.trim().length === 0) {
+        <p class="validation" role="status">An operator reason is required.</p>
+      }
+    }
+    @if (errorMessage(); as errorMessage) {
+      <p class="error" role="alert">{{ errorMessage }}</p>
+    }
+    <footer>
+      <button type="button" (click)="cancel()" [disabled]="busy()">Cancel</button>
+      <button type="button" class="primary" (click)="confirm()" [disabled]="busy() || !canConfirm()">
+        {{ busy() ? 'Submitting…' : confirmation.confirmLabel }}
+      </button>
+    </footer>
+  }
+</dialog>

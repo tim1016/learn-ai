@@ -19,6 +19,8 @@ import { AccountDeskOperatorFleetComponent } from './account-desk-operator-fleet
 import { AccountDeskFleetStore } from './account-desk-fleet-store.service';
 import { AccountDeskGuidanceComponent } from './account-desk-guidance.component';
 import { AccountDeskGuidanceStore } from './account-desk-guidance-store.service';
+import { AccountDeskRecoveryControlsComponent } from './account-desk-recovery-controls.component';
+import { AccountDeskRecoveryStore } from './account-desk-recovery-store.service';
 import { AccountDeskSurfaceStore } from './account-desk-surface-store.service';
 import { AccountDeskTraderEventsComponent } from './account-desk-trader-events.component';
 import { AccountDeskTraderHoldingsComponent } from './account-desk-trader-holdings.component';
@@ -30,6 +32,7 @@ import { AccountDeskTraderHoldingsComponent } from './account-desk-trader-holdin
   imports: [
     AccountDeskAccountSwitcherComponent,
     AccountDeskGuidanceComponent,
+    AccountDeskRecoveryControlsComponent,
     AccountDeskTraderHoldingsComponent,
     AccountDeskTraderEventsComponent,
     AccountDeskOperatorEventsComponent,
@@ -53,6 +56,7 @@ export class AccountDeskPageComponent {
   readonly directory = inject(AccountDeskDirectoryStore);
   readonly guidance = inject(AccountDeskGuidanceStore);
   readonly fleet = inject(AccountDeskFleetStore);
+  readonly recovery = inject(AccountDeskRecoveryStore);
   readonly lens = signal<AccountDeskLens>('trader');
   private readonly nowMs = signal(Date.now());
 
@@ -79,6 +83,7 @@ export class AccountDeskPageComponent {
         void this.holdings.load(accountId);
         void this.events.load(accountId);
         void this.fleet.load(accountId);
+        this.recovery.load(accountId);
         void this.directory.loadRoster();
         void this.directory.loadServiceStatus(accountId);
       }

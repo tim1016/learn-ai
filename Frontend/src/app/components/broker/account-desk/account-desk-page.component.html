@@ -86,14 +86,7 @@
         <app-account-desk-operator-service />
         <app-account-desk-operator-fleet />
         <app-account-desk-operator-events />
-        <section class="recovery-guidance" aria-label="Recovery guidance">
-          <h2>Recovery guidance</h2>
-          @if (guidance.blockersFor('cure_tools', null, 'operator').length === 0) {
-            <p class="state">No recovery guidance is currently declared for this account.</p>
-          } @else {
-            <app-account-desk-guidance anchor="cure_tools" lens="operator" ariaLabel="Recovery guidance" />
-          }
-        </section>
+        <app-account-desk-recovery-controls />
       }
     }
   </section>
