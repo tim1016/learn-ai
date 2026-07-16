@@ -1,3 +1,4 @@
+import { signal } from '@angular/core';
 import { ActivatedRoute, Router, convertToParamMap } from '@angular/router';
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
 import { BehaviorSubject } from 'rxjs';
@@ -10,6 +11,7 @@ import { formatTimestampDisplay } from '../../../shared/timestamp';
 import { makeCleanAccountTriage } from '../testing/account-triage-fixtures';
 import { makeAccountSummary, makeAccountTruth, makePositionsSnapshot } from './account-desk-holdings.fixtures';
 import { AccountDeskHoldingsStore } from './account-desk-holdings-store.service';
+import { AccountDeskEventsStore } from './account-desk-events-store.service';
 import { AccountDeskSurfaceStore } from './account-desk-surface-store.service';
 import { AccountDeskPageComponent } from './account-desk-page.component';
 
@@ -26,6 +28,27 @@ class StubEventSource {
 }
 
 vi.stubGlobal('EventSource', StubEventSource);
+
+function makeEventsStore() {
+  return {
+    load: vi.fn().mockResolvedValue(undefined),
+    traderRows: signal([]),
+    traderLoading: signal(false),
+    traderErrorMessage: signal<string | null>(null),
+    traderHasLastGood: signal(false),
+    traderShowingStaleLastGood: signal(false),
+    operationRows: signal([]),
+    operationsLoading: signal(false),
+    operationsErrorMessage: signal<string | null>(null),
+    operationsHasLastGood: signal(false),
+    operationsShowingStaleLastGood: signal(false),
+    nextBeforeSeq: signal<number | null>(null),
+    operationKinds: signal<readonly string[]>([]),
+    toggleOperationKind: vi.fn(),
+    retry: vi.fn(),
+    loadOlder: vi.fn(),
+  };
+}
 
 function triage(state: AccountTriageVerdictState = 'CLEAN'): AccountTriageResponse {
   const current = makeCleanAccountTriage({
@@ -53,17 +76,19 @@ async function setup(options: { response?: AccountTriageResponse; route$?: Behav
   broker.accountTriage.mockResolvedValue(options.response ?? triage());
   const route$ = options.route$ ?? new BehaviorSubject(convertToParamMap({ accountId: 'DU1234567' }));
   const router = { navigate: vi.fn().mockResolvedValue(true) };
+  const events = makeEventsStore();
   const view = await render(AccountDeskPageComponent, {
     providers: [
       AccountDeskHoldingsStore,
       AccountDeskSurfaceStore,
+      { provide: AccountDeskEventsStore, useValue: events },
       { provide: BrokerService, useValue: broker },
       { provide: ActivatedRoute, useValue: { paramMap: route$.asObservable() } },
       { provide: Router, useValue: router },
     ],
   });
   await screen.findByText((options.response ?? triage()).verdict.headline);
-  return { ...view, broker, route$, router };
+  return { ...view, broker, events, route$, router };
 }
 
 describe('AccountDeskPageComponent', () => {
@@ -87,16 +112,17 @@ describe('AccountDeskPageComponent', () => {
     fireEvent.click(operator);
     expect(operator.getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByText('NEEDS_ATTENTION verdict')).toBeTruthy();
-    expect(screen.getByText('Operator guidance arrives in the operations-lens slice.')).toBeTruthy();
+    expect(screen.getByText('Account event timeline')).toBeTruthy();
   });
 
   it('rekeys the route-scoped surface store when the account route changes', async () => {
     const route$ = new BehaviorSubject(convertToParamMap({ accountId: 'DU1234567' }));
-    const { broker } = await setup({ route$ });
+    const { broker, events } = await setup({ route$ });
     broker.accountTriage.mockResolvedValueOnce(makeCleanAccountTriage({ accountId: 'DU7654321' }));
 
     route$.next(convertToParamMap({ accountId: 'DU7654321' }));
     await waitFor(() => expect(broker.accountTriage).toHaveBeenCalledWith('DU7654321'));
+    expect(events.load).toHaveBeenCalledWith('DU7654321');
     expect(await screen.findByText('DU7654321')).toBeTruthy();
   });
 
@@ -114,10 +140,12 @@ describe('AccountDeskPageComponent', () => {
     const broker = new FakeBrokerService();
     broker.accountTriage.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(makeCleanAccountTriage());
     const route$ = new BehaviorSubject(convertToParamMap({ accountId: 'DU1234567' }));
+    const events = makeEventsStore();
     await render(AccountDeskPageComponent, {
     providers: [
       AccountDeskHoldingsStore,
       AccountDeskSurfaceStore,
+        { provide: AccountDeskEventsStore, useValue: events },
         { provide: BrokerService, useValue: broker },
         { provide: ActivatedRoute, useValue: { paramMap: route$.asObservable() } },
         { provide: Router, useValue: { navigate: vi.fn().mockResolvedValue(true) } },

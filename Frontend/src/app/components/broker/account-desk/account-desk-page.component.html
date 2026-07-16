@@ -68,10 +68,9 @@
     } @else if (triage()) {
       @if (lens() === 'trader') {
         <app-account-desk-trader-holdings />
-      } @else if (explicitEmpty()) {
-        <p class="state state-empty">No account rows are available yet.</p>
+        <app-account-desk-trader-events />
       } @else {
-        <p>Operator guidance arrives in the operations-lens slice.</p>
+        <app-account-desk-operator-events />
       }
     }
   </section>

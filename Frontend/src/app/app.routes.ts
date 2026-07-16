@@ -1,6 +1,7 @@
 import { Routes } from "@angular/router";
 import { BotSurfaceStore } from "./components/broker/bot-control/bot-surface-store.service";
 import { AccountDeskHoldingsStore } from "./components/broker/account-desk/account-desk-holdings-store.service";
+import { AccountDeskEventsStore } from "./components/broker/account-desk/account-desk-events-store.service";
 import { AccountDeskSurfaceStore } from "./components/broker/account-desk/account-desk-surface-store.service";
 import {
   botExistsGuard,
@@ -213,7 +214,7 @@ export const routes: Routes = [
   },
   {
     path: "broker/accounts/:accountId",
-    providers: [AccountDeskSurfaceStore, AccountDeskHoldingsStore],
+    providers: [AccountDeskSurfaceStore, AccountDeskHoldingsStore, AccountDeskEventsStore],
     loadComponent: () =>
       import(
         "./components/broker/account-desk/account-desk-page.component"

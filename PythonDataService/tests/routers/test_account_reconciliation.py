@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -50,6 +52,7 @@ from app.engine.live.run_ledger import LiveRunLedger, write_ledger
 from app.routers import account_reconciliation, cohort_batch_launch
 from app.schemas.journal_cures import JournalCureReceipt, JournalCureRequest
 from app.services import cohort_batch_launch as cohort_batch_launch_service
+from app.services.account_event_journal import AccountEventJournalService
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.cohort_batch_launch import CohortBatchLaunchService
 from app.services.cohort_evidence import CohortEvidenceSample, CohortMemberSample
@@ -1141,3 +1144,153 @@ async def test_operator_recovery_flatten_endpoint_ensures_clerk_and_appends_audi
         "recorded_at_ms": 101,
         "receipt_id": "account-clerk-operator-recovery:intent-operator-recovery:1",
     }
+
+
+async def test_account_events_endpoint_pages_filters_and_preserves_stable_event_identity(
+    tmp_path: Path,
+) -> None:
+    from app.main import app
+
+    append_account_event(
+        tmp_path,
+        "DU1234567",
+        {"event_type": "account_owner_generation_recorded", "recorded_at_ms": 1_710_000_000_000},
+    )
+    append_account_event(
+        tmp_path,
+        "DU1234567",
+        {"event_type": "account_freeze_recorded", "receipt_id": "freeze-receipt", "recorded_at_ms": 1_710_000_001_000},
+    )
+    append_account_event(
+        tmp_path,
+        "DU1234567",
+        {"event_type": "account_reconciliation_receipt_recorded", "recorded_at_ms": 1_710_000_002_000},
+    )
+    service = AccountEventJournalService(artifacts_root=tmp_path, now_ms=lambda: 1_710_000_003_000)
+    app.dependency_overrides[account_reconciliation.get_account_event_journal_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            first_page = await client.get("/api/accounts/DU1234567/events?limit=2")
+            older_page = await client.get("/api/accounts/DU1234567/events?before_seq=2")
+            newer_page = await client.get("/api/accounts/DU1234567/events?after_seq=1")
+            safety = await client.get("/api/accounts/DU1234567/events?kinds=safety")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert first_page.status_code == 200
+    assert first_page.json() == {
+        "schema_version": 1,
+        "account_id": "DU1234567",
+        "view": "operations",
+        "rows": [
+            {
+                "schema_version": 1,
+                "event_id": "DU1234567:3",
+                "seq": 3,
+                "kind": "reconciliation",
+                "occurred_at_ms": 1_710_000_002_000,
+                "trader_narration": "Account reconciliation was recorded.",
+                "operator_detail": "Account reconciliation receipt recorded in the journal.",
+                "evidence_refs": [{"source": "account_event_journal", "ref": "DU1234567:3", "detail": None}],
+            },
+            {
+                "schema_version": 1,
+                "event_id": "DU1234567:2",
+                "seq": 2,
+                "kind": "safety",
+                "occurred_at_ms": 1_710_000_001_000,
+                "trader_narration": "An account safety freeze was recorded.",
+                "operator_detail": "Account safety freeze recorded in the journal.",
+                "evidence_refs": [
+                    {"source": "account_event_journal", "ref": "DU1234567:2", "detail": None},
+                    {"source": "receipt", "ref": "freeze-receipt", "detail": None},
+                ],
+            },
+        ],
+        "latest_seq": 3,
+        "next_before_seq": 2,
+    }
+    assert [row["seq"] for row in older_page.json()["rows"]] == [1]
+    assert [row["seq"] for row in newer_page.json()["rows"]] == [3, 2]
+    assert [row["seq"] for row in safety.json()["rows"]] == [2]
+    assert len({row["event_id"] for row in first_page.json()["rows"]}) == 2
+
+
+async def test_account_events_endpoint_rejects_invalid_cursors_and_limits(tmp_path: Path) -> None:
+    from app.main import app
+
+    service = AccountEventJournalService(artifacts_root=tmp_path)
+    app.dependency_overrides[account_reconciliation.get_account_event_journal_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            both_cursors = await client.get("/api/accounts/DU1234567/events?before_seq=2&after_seq=1")
+            invalid_limit = await client.get("/api/accounts/DU1234567/events?limit=0")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert both_cursors.status_code == 422
+    assert both_cursors.json()["detail"]["reason_code"] == "ACCOUNT_EVENTS_CURSOR_EXCLUSIVE"
+    assert invalid_limit.status_code == 422
+
+
+async def test_account_events_endpoint_returns_empty_for_missing_journal_and_typed_error_for_corruption(
+    tmp_path: Path,
+) -> None:
+    from app.main import app
+
+    service = AccountEventJournalService(artifacts_root=tmp_path)
+    app.dependency_overrides[account_reconciliation.get_account_event_journal_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            empty = await client.get("/api/accounts/DU1234567/events")
+            journal = tmp_path / "accounts" / "DU1234567" / "account_events.jsonl"
+            journal.parent.mkdir(parents=True)
+            journal.write_text("{malformed json\n", encoding="utf-8")
+            corrupt = await client.get("/api/accounts/DU1234567/events")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert empty.status_code == 200
+    assert empty.json()["rows"] == []
+    assert empty.json()["latest_seq"] is None
+    assert corrupt.status_code == 409
+    assert corrupt.json()["detail"]["reason_code"] == "ACCOUNT_EVENTS_JOURNAL_CORRUPT"
+    assert journal.read_text(encoding="utf-8") == "{malformed json\n"
+
+
+async def test_account_events_endpoint_trader_today_uses_new_york_day_across_dst(tmp_path: Path) -> None:
+    from app.main import app
+
+    ny = ZoneInfo("America/New_York")
+    yesterday = int(datetime(2024, 3, 9, 23, 30, tzinfo=ny).timestamp() * 1_000)
+    today = int(datetime(2024, 3, 10, 0, 30, tzinfo=ny).timestamp() * 1_000)
+    now = int(datetime(2024, 3, 10, 12, 0, tzinfo=ny).timestamp() * 1_000)
+    append_account_event(
+        tmp_path,
+        "DU1234567",
+        {"event_type": "account_freeze_recorded", "recorded_at_ms": yesterday},
+    )
+    append_account_event(
+        tmp_path,
+        "DU1234567",
+        {"event_type": "account_freeze_cleared", "recorded_at_ms": today},
+    )
+    append_account_event(
+        tmp_path,
+        "DU1234567",
+        {"event_type": "account_clerk_generation_recorded", "recorded_at_ms": today},
+    )
+    service = AccountEventJournalService(artifacts_root=tmp_path, now_ms=lambda: now)
+    app.dependency_overrides[account_reconciliation.get_account_event_journal_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/accounts/DU1234567/events?view=trader_today")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    [row] = response.json()["rows"]
+    assert row["seq"] == 2
+    assert row["occurred_at_ms"] == today
+    assert isinstance(row["occurred_at_ms"], int)
+    assert row["trader_narration"] == "An account safety freeze was cleared."

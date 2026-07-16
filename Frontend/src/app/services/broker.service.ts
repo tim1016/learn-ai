@@ -17,6 +17,7 @@ import type {
   AccountReconciliationReceipt,
   AccountTriageResponse,
 } from '../api/account-reconciliation.types';
+import type { AccountEventsRequest, AccountEventsResponse } from '../api/account-events.types';
 import type {
   AccountTruthResponse,
   DataPlaneHealth,
@@ -164,6 +165,22 @@ export class BrokerService {
     return firstValueFrom(
       this.http.get<AccountTriageResponse>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/triage`,
+      ),
+    );
+  }
+
+  accountEvents(accountId: string, request: AccountEventsRequest): Promise<AccountEventsResponse> {
+    const params: Record<string, string | number | readonly (string | number | boolean)[]> = {
+      view: request.view,
+      limit: request.limit ?? 50,
+    };
+    if (request.kinds?.length) params['kinds'] = request.kinds;
+    if (request.beforeSeq !== undefined) params['before_seq'] = request.beforeSeq;
+    if (request.afterSeq !== undefined) params['after_seq'] = request.afterSeq;
+    return firstValueFrom(
+      this.http.get<AccountEventsResponse>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/events`,
+        { params },
       ),
     );
   }

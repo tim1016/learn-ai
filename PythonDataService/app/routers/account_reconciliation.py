@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from starlette.concurrency import run_in_threadpool
 
 from app.broker.ibkr.client import BrokerError, IbkrClient
@@ -20,6 +20,7 @@ from app.engine.live.account_clerk_rpc import (
 from app.engine.live.account_identity import normalize_account_id
 from app.engine.live.account_registry import backfill_false_crash_registry_rows
 from app.routers.broker_dependencies import require_connected_client
+from app.schemas.account_events import AccountEventKind, AccountEventsResponse, AccountEventView
 from app.schemas.account_reconciliation import (
     AccountAcceptExposureOverrideRequest,
     AccountAcceptExposureOverrideResponse,
@@ -41,6 +42,7 @@ from app.schemas.journal_cures import (
     OperatorRecoveryFlattenRequest,
     OperatorRecoveryFlattenResponse,
 )
+from app.services.account_event_journal import AccountEventJournalError, AccountEventJournalService
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.account_truth_refresh import account_truth_artifacts_root, refresh_account_truth_now
 from app.services.journal_cures import JournalCureError, JournalCureService
@@ -66,6 +68,14 @@ def get_account_reconciliation_service(
     """Build reconciliation service from the overridable artifact-root dependency."""
 
     return AccountReconciliationService(artifacts_root=artifacts_root)
+
+
+def get_account_event_journal_service(
+    artifacts_root: AccountArtifactsRoot,
+) -> AccountEventJournalService:
+    """Build the read-only Account desk journal projection."""
+
+    return AccountEventJournalService(artifacts_root=artifacts_root)
 
 
 def get_legacy_stale_claim_retirement_service() -> LegacyStaleClaimRetirementService:
@@ -372,6 +382,45 @@ async def account_triage_endpoint(
         return service.triage(account_id=_canonical_account_id(account_id))
     except AccountArtifactError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+
+@router.get("/{account_id}/events", response_model=AccountEventsResponse)
+async def account_events_endpoint(
+    account_id: str,
+    service: Annotated[AccountEventJournalService, Depends(get_account_event_journal_service)],
+    view: AccountEventView = "operations",
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    kinds: Annotated[list[AccountEventKind] | None, Query()] = None,
+    before_seq: Annotated[int | None, Query(ge=1)] = None,
+    after_seq: Annotated[int | None, Query(ge=1)] = None,
+) -> AccountEventsResponse:
+    """Read a versioned, cursor-paginated projection of one account journal."""
+
+    if before_seq is not None and after_seq is not None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "reason_code": "ACCOUNT_EVENTS_CURSOR_EXCLUSIVE",
+                "message": "Use either before_seq or after_seq, not both.",
+            },
+        )
+    try:
+        return service.page(
+            account_id=_canonical_account_id(account_id),
+            view=view,
+            limit=limit,
+            kinds=frozenset(kinds or ()),
+            before_seq=before_seq,
+            after_seq=after_seq,
+        )
+    except AccountEventJournalError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "ACCOUNT_EVENTS_JOURNAL_CORRUPT",
+                "message": "Account event history is unavailable because its journal is invalid.",
+            },
+        ) from exc
 
 
 @router.post(

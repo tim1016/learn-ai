@@ -1,0 +1,12 @@
+.operations-events { display: grid; gap: .75rem; }
+h2, p, ol, ul { margin: 0; }
+header { display: grid; gap: .2rem; }
+header p { color: var(--text-color-secondary, #556070); }
+.kind-filters { display: flex; flex-wrap: wrap; gap: .5rem; }
+.kind-filters button[aria-pressed='true'] { font-weight: 700; text-decoration: underline; }
+ol { display: grid; gap: .75rem; padding-left: 1.25rem; }
+ol > li { display: grid; gap: .35rem; }
+ol > li > div { display: flex; gap: .75rem; flex-wrap: wrap; }
+ul { display: grid; gap: .2rem; padding-left: 1rem; }
+.state-error { color: #a30000; }
+.state-stale { color: #8a5a00; }

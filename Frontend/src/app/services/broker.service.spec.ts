@@ -93,6 +93,35 @@ describe('BrokerService diagnostics endpoints', () => {
     });
   });
 
+  it('loads account events with an explicit view, cursor, and repeated kind filters', async () => {
+    const promise = service.accountEvents('DU 123', {
+      view: 'operations',
+      limit: 25,
+      kinds: ['safety', 'clerk'],
+      beforeSeq: 42,
+    });
+    const req = http.expectOne(
+      (request) =>
+        request.url === '/api/accounts/DU%20123/events' &&
+        request.params.get('view') === 'operations' &&
+        request.params.get('limit') === '25' &&
+        request.params.getAll('kinds')?.join(',') === 'safety,clerk' &&
+        request.params.get('before_seq') === '42',
+    );
+
+    expect(req.request.method).toBe('GET');
+    req.flush({
+      schema_version: 1,
+      account_id: 'DU 123',
+      view: 'operations',
+      rows: [],
+      latest_seq: 41,
+      next_before_seq: null,
+    });
+
+    await expect(promise).resolves.toMatchObject({ latest_seq: 41 });
+  });
+
   it('loads completed orders from the completed-order endpoint', async () => {
     const promise = service.completedOrders();
     const req = http.expectOne('/api/broker/orders/completed');

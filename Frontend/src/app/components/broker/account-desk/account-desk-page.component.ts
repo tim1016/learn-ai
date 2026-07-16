@@ -8,7 +8,10 @@ import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import { fmtCurrency, fmtDurationRemaining, fmtSignedCurrency } from '../format';
 import { AccountDeskHoldingsStore } from './account-desk-holdings-store.service';
+import { AccountDeskEventsStore } from './account-desk-events-store.service';
+import { AccountDeskOperatorEventsComponent } from './account-desk-operator-events.component';
 import { AccountDeskSurfaceStore } from './account-desk-surface-store.service';
+import { AccountDeskTraderEventsComponent } from './account-desk-trader-events.component';
 import { AccountDeskTraderHoldingsComponent } from './account-desk-trader-holdings.component';
 
 type AccountDeskLens = 'trader' | 'operator';
@@ -19,6 +22,8 @@ type AccountDeskLens = 'trader' | 'operator';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     AccountDeskTraderHoldingsComponent,
+    AccountDeskTraderEventsComponent,
+    AccountDeskOperatorEventsComponent,
     PageHeaderComponent,
     ReceiptLabelPipe,
     TimestampDisplayComponent,
@@ -32,6 +37,7 @@ export class AccountDeskPageComponent {
   private readonly destroyRef = inject(DestroyRef);
   readonly store = inject(AccountDeskSurfaceStore);
   readonly holdings = inject(AccountDeskHoldingsStore);
+  readonly events = inject(AccountDeskEventsStore);
   readonly lens = signal<AccountDeskLens>('trader');
   private readonly nowMs = signal(Date.now());
 
@@ -43,10 +49,6 @@ export class AccountDeskPageComponent {
   readonly fmtCurrency = fmtCurrency;
   readonly fmtSignedCurrency = fmtSignedCurrency;
   readonly displayAccountId = computed(() => this.triage()?.account_id ?? this.store.accountId());
-  readonly explicitEmpty = computed(() => {
-    const triage = this.triage();
-    return triage !== null && triage.affected_bots.length === 0 && triage.conditions.length === 0;
-  });
   readonly freshnessCountdown = computed(() => {
     const validUntilMs = this.triage()?.account_observation.valid_until_ms;
     return validUntilMs === null || validUntilMs === undefined
@@ -60,6 +62,7 @@ export class AccountDeskPageComponent {
       if (accountId) {
         void this.store.load(accountId);
         void this.holdings.load(accountId);
+        void this.events.load(accountId);
       }
     });
     const intervalId = window.setInterval(() => this.nowMs.set(Date.now()), 1_000);
