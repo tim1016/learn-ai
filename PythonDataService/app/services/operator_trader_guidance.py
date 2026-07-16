@@ -535,7 +535,7 @@ def _account_truth_findings(assessment: AccountTruthAssessment) -> list[SubmitRe
             assessment.headline,
             assessment.explanation,
             assessment.operator_next_step
-            or "Open Account Monitor and refresh Account Truth before treating submit readiness as safe.",
+            or "Open Accounts and refresh Account Truth before treating submit readiness as safe.",
             OpenRunbookAction(kind="open_runbook", slug="broker-instance-operator-surface"),
         )
         for reason_code in assessment.reason_codes

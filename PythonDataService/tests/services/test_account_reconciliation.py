@@ -1055,8 +1055,11 @@ def test_triage_marks_crashed_and_no_status_retired_bots_for_retire_replace(
     assert triage.overall_gate_result.status == "block"
     assert triage.verdict.state == "NEEDS_ATTENTION"
     assert triage.verdict.primary_move is not None
+    assert triage.verdict.primary_move.route == "/broker/accounts/DU1234567"
+    assert triage.verdict.primary_move.fragment == "account-desk-recovery-controls"
     assert triage.verdict.operator_attention_count == 3
     duplicate_projection = account_reconciliation_module._account_triage_verdict(
+        account_id="DU1234567",
         reconciliation_gate=triage.gate_rows[0],
         gate_rows=triage.gate_rows,
         conditions=[*triage.conditions, *triage.conditions],

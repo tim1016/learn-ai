@@ -5,15 +5,13 @@ import { resolveOperatorRunbookRoute } from './operator-runbook-routes';
 describe('resolveOperatorRunbookRoute', () => {
   it('maps known runbook slugs to explicit operator surfaces', () => {
     expect(resolveOperatorRunbookRoute('broker-reconnect')).toEqual({
-      commands: ['/broker/account-monitor'],
+      commands: ['/broker/accounts'],
     });
     expect(resolveOperatorRunbookRoute('cross-client-execution')).toEqual({
-      commands: ['/broker/account-monitor'],
-      fragment: 'account-reconciliation-action',
+      commands: ['/broker/accounts'],
     });
     expect(resolveOperatorRunbookRoute('live-trade-reconciliation')).toEqual({
-      commands: ['/broker/account-monitor'],
-      fragment: 'account-reconciliation-action',
+      commands: ['/broker/accounts'],
     });
     expect(resolveOperatorRunbookRoute('broker-session-orphaned-socket')).toEqual({
       commands: ['/broker/session-mirror'],

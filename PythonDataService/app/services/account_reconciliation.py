@@ -723,6 +723,7 @@ class AccountReconciliationService:
             generated_at_ms=generated_at_ms,
         )
         verdict = _account_triage_verdict(
+            account_id=canonical_account_id,
             reconciliation_gate=reconciliation_gate,
             gate_rows=gate_rows,
             conditions=conditions,
@@ -1546,6 +1547,7 @@ def _overall_gate(
 
 def _account_triage_verdict(
     *,
+    account_id: str,
     reconciliation_gate: AccountTriageGateRow,
     gate_rows: list[AccountTriageGateRow],
     conditions: list[AccountConditionRow],
@@ -1565,9 +1567,9 @@ def _account_triage_verdict(
         }
     )
     move = AccountTriageVerdictMove(
-        label="Open Account Monitor",
-        route="/broker/account-monitor",
-        fragment="account-reconciliation-action",
+        label="Open account desk",
+        route=f"/broker/accounts/{account_id}",
+        fragment="account-desk-recovery-controls",
     )
     frozen_row = next((row for row in gate_rows if row.status == "freeze"), None)
     if freeze is not None or frozen_row is not None:

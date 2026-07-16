@@ -552,7 +552,7 @@ def test_operator_surface_authors_fleet_contamination_blocker() -> None:
 
     assert blocker.disposition == "fix_elsewhere"
     assert blocker.primary_move is not None
-    assert blocker.primary_move.label == "Clear fleet state"
+    assert blocker.primary_move.label == "Open Accounts"
     assert blocker.primary_move.action.kind == "navigate"
 
 

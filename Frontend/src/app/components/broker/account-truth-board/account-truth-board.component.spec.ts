@@ -165,7 +165,7 @@ describe('AccountTruthBoardComponent', () => {
     expect(text).toContain('One or more live open orders are foreign or unclaimed.');
   });
 
-  it('renders account-monitor scoped blockers through the shared blocker component', () => {
+  it('renders account-scoped blockers through the shared blocker component', () => {
     TestBed.configureTestingModule({});
     const fixture = TestBed.createComponent(AccountTruthBoardComponent);
     fixture.componentRef.setInput('truth', truth());
@@ -177,7 +177,7 @@ describe('AccountTruthBoardComponent', () => {
     expect(el.textContent).toContain('Run account reconcile');
   });
 
-  it('does not render Account Desk-scoped guidance on Account Monitor', () => {
+  it('does not render Account Desk-scoped guidance in the reconciliation board', () => {
     TestBed.configureTestingModule({});
     const fixture = TestBed.createComponent(AccountTruthBoardComponent);
     fixture.componentRef.setInput('truth', truth({

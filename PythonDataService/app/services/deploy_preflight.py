@@ -165,7 +165,7 @@ def _nav(label: str, route: str, fragment: str | None = None) -> OperatorMove:
 
 
 def author_fleet_contamination_blocker() -> OperatorBlocker:
-    """Author the one account-monitor remedy for a dirty Clerk verdict."""
+    """Author the one Accounts route for a dirty Clerk verdict."""
 
     return OperatorBlocker.for_host(
         condition_id="fleet_contaminated",
@@ -176,7 +176,7 @@ def author_fleet_contamination_blocker() -> OperatorBlocker:
         disposition="fix_elsewhere",
         headline="Fleet state blocks new deploys",
         detail="Clear the account fleet state before deploying or starting a bot.",
-        primary_move=_nav("Open account monitor", "/broker/account-monitor"),
+        primary_move=_nav("Open Accounts", "/broker/accounts"),
         applies_to="both",
     )
 
@@ -273,9 +273,8 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
                 headline="Account frozen",
                 detail="Resolve the account sick-bay condition before deploying.",
                 primary_move=_nav(
-                    "Open account monitor",
-                    "/broker/account-monitor",
-                    "account-reconciliation-action",
+                    "Open Accounts",
+                    "/broker/accounts",
                 ),
                 applies_to="both",
             )
@@ -292,9 +291,8 @@ def author_deploy_blockers(signals: DeployPreflightSignals) -> list[OperatorBloc
                 headline="Account not proven",
                 detail="Run account reconcile to prove the account is clean before deploying.",
                 primary_move=_nav(
-                    "Open account monitor",
-                    "/broker/account-monitor",
-                    "account-reconciliation-action",
+                    "Open Accounts",
+                    "/broker/accounts",
                 ),
                 applies_to="both",
             )

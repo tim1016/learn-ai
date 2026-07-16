@@ -131,17 +131,22 @@ function triage(state: AccountTriageVerdictState = 'CLEAN'): AccountTriageRespon
       headline: `${state} verdict`,
       detail: `${state} detail`,
       primary_move: state === 'CLEAN' ? null : {
-        label: 'Open Account Monitor', route: '/broker/account-monitor', fragment: 'account-reconciliation-action',
+        label: 'Open account desk', route: '/broker/accounts/DU1234567', fragment: 'account-desk-recovery-controls',
       },
       operator_attention_count: state === 'NEEDS_ATTENTION' ? 2 : 0,
     },
   };
 }
 
-async function setup(options: { response?: AccountTriageResponse; route$?: BehaviorSubject<ReturnType<typeof convertToParamMap>> } = {}) {
+async function setup(options: {
+  response?: AccountTriageResponse;
+  route$?: BehaviorSubject<ReturnType<typeof convertToParamMap>>;
+  fragment$?: BehaviorSubject<string | null>;
+} = {}) {
   const broker = new FakeBrokerService();
   broker.accountTriage.mockResolvedValue(options.response ?? triage());
   const route$ = options.route$ ?? new BehaviorSubject(convertToParamMap({ accountId: 'DU1234567' }));
+  const fragment$ = options.fragment$ ?? new BehaviorSubject<string | null>(null);
   const router = { navigate: vi.fn().mockResolvedValue(true) };
   const events = makeEventsStore();
   const fleet = makeFleetStore();
@@ -161,12 +166,12 @@ async function setup(options: { response?: AccountTriageResponse; route$?: Behav
       { provide: AccountDeskGuidanceStore, useValue: guidance },
       { provide: AccountDeskRecoveryStore, useValue: recovery },
       { provide: BrokerService, useValue: broker },
-      { provide: ActivatedRoute, useValue: { paramMap: route$.asObservable() } },
+      { provide: ActivatedRoute, useValue: { paramMap: route$.asObservable(), fragment: fragment$.asObservable() } },
       { provide: Router, useValue: router },
     ],
   });
   await screen.findByText((options.response ?? triage()).verdict.headline);
-  return { ...view, broker, directory, events, fleet, guidance, recovery, route$, router };
+  return { ...view, broker, directory, events, fleet, guidance, recovery, route$, fragment$, router };
 }
 
 describe('AccountDeskPageComponent', () => {
@@ -220,6 +225,20 @@ describe('AccountDeskPageComponent', () => {
     expect(screen.getByRole('button', { name: 'Operator' }).getAttribute('aria-pressed')).toBe('true');
   });
 
+  it('consumes a legacy operations anchor once, selects the operator lens, and focuses its semantic target', async () => {
+    const fragment$ = new BehaviorSubject<string | null>('account-desk-recovery-controls');
+    const { fixture, router } = await setup({ fragment$ });
+
+    const operator = screen.getByRole('button', { name: 'Operator' });
+    await waitFor(() => expect(operator.getAttribute('aria-pressed')).toBe('true'));
+    const target = (fixture.nativeElement as HTMLElement).querySelector<HTMLElement>('#account-desk-recovery-controls');
+    await waitFor(() => expect(document.activeElement).toBe(target));
+    expect(router.navigate).toHaveBeenCalledWith(
+      [],
+      expect.objectContaining({ fragment: undefined, queryParamsHandling: 'preserve', replaceUrl: true }),
+    );
+  });
+
   it('uses the shared viewer-local timestamp display and preserves stale last-good data with retry', async () => {
     const { broker, fixture } = await setup({ response: triage() });
     expect(screen.getByText(formatTimestampDisplay(1_780_000_002_000, { mode: 'local' }))).toBeTruthy();
@@ -249,7 +268,7 @@ describe('AccountDeskPageComponent', () => {
         { provide: AccountDeskGuidanceStore, useValue: guidance },
         { provide: AccountDeskRecoveryStore, useValue: recovery },
         { provide: BrokerService, useValue: broker },
-        { provide: ActivatedRoute, useValue: { paramMap: route$.asObservable() } },
+        { provide: ActivatedRoute, useValue: { paramMap: route$.asObservable(), fragment: new BehaviorSubject<string | null>(null).asObservable() } },
         { provide: Router, useValue: { navigate: vi.fn().mockResolvedValue(true) } },
       ],
     });

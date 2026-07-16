@@ -35,8 +35,8 @@ function openStrategyValidation(): OperatorMove {
 
 function openBrokerAccount(): OperatorMove {
   return {
-    label: 'Open broker account',
-    action: { kind: 'navigate', route: '/broker/account-monitor', fragment: null },
+    label: 'Open Accounts',
+    action: { kind: 'navigate', route: '/broker/accounts', fragment: null },
     target: null,
   };
 }

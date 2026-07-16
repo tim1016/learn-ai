@@ -236,8 +236,8 @@ export const routes: Routes = [
     path: "broker/account-monitor",
     loadComponent: () =>
       import(
-        "./components/broker/broker-account-monitor/broker-account-monitor.component"
-      ).then((m) => m.BrokerAccountMonitorComponent),
+        "./components/broker/account-monitor-redirect/account-monitor-redirect.component"
+      ).then((m) => m.AccountMonitorRedirectComponent),
   },
   {
     path: "broker/orders",

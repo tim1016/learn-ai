@@ -22,8 +22,8 @@ const CONTRACT_BLOCKER: OperatorBlocker = {
   headline: 'Fleet state blocks starts',
   detail: 'Clear the account fleet state before starting another bot.',
   primary_move: {
-    label: 'Open account monitor',
-    action: { kind: 'navigate', route: '/broker/account-monitor', fragment: null },
+    label: 'Open Accounts',
+    action: { kind: 'navigate', route: '/broker/accounts', fragment: null },
     target: null,
   },
   secondary_moves: [],

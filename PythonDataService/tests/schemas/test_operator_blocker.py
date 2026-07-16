@@ -181,19 +181,19 @@ def test_same_condition_can_project_to_different_host_dispositions() -> None:
         headline="Fleet state blocks starts",
         detail="Clear the account fleet state before starting another bot.",
         primary_move=OperatorMove(
-            label="Open account monitor",
+            label="Open Accounts",
             action=NavigateAction(
                 kind="navigate",
-                route="/broker/account-monitor",
-                fragment="account-reconciliation-action",
+                route="/broker/accounts",
+                fragment=None,
             ),
         ),
         secondary_moves=[],
         applies_to="both",
     )
-    account_monitor = OperatorBlocker(
+    account_desk = OperatorBlocker(
         condition=condition,
-        host="account_monitor",
+        host="account_desk",
         anchor=_surface_anchor(),
         audience="operator",
         disposition="fix_here",
@@ -203,19 +203,19 @@ def test_same_condition_can_project_to_different_host_dispositions() -> None:
             label="Reconcile account",
             action=NavigateAction(
                 kind="navigate",
-                route="/broker/account-monitor",
-                fragment="account-reconciliation-action",
+                route="/broker/accounts/DU123456",
+                fragment="account-desk-recovery-controls",
             ),
         ),
         secondary_moves=[],
         applies_to="both",
     )
 
-    assert cockpit.condition.id == account_monitor.condition.id
+    assert cockpit.condition.id == account_desk.condition.id
     assert cockpit.disposition == "fix_elsewhere"
-    assert account_monitor.disposition == "fix_here"
+    assert account_desk.disposition == "fix_here"
     assert cockpit.host == "bot_cockpit"
-    assert account_monitor.host == "account_monitor"
+    assert account_desk.host == "account_desk"
 
 
 @pytest.mark.parametrize(

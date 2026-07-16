@@ -169,9 +169,9 @@ export function makeFrozenAccountTriage(
       headline: 'Account is frozen',
       detail: options.summaryDetail ?? condition.detail,
       primary_move: {
-        label: 'Open Account Monitor',
-        route: '/broker/account-monitor',
-        fragment: 'account-reconciliation-action',
+        label: 'Open account desk',
+        route: `/broker/accounts/${accountId}`,
+        fragment: 'account-desk-recovery-controls',
       },
       operator_attention_count: 1,
       ...options.verdict,

@@ -36,7 +36,7 @@ export class AccountTruthBoardComponent {
   readonly showInvariants = input(false);
   readonly showCaveats = input(true);
   readonly showOperatorBlockers = input(false);
-  readonly accountMonitorBlockers = computed(() =>
+  readonly accountScopedBlockers = computed(() =>
     this.truth().operator_blockers.filter((blocker) => blocker.host === 'account_monitor'),
   );
 

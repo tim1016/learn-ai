@@ -5,7 +5,7 @@
 </app-page-header>
 
 <main class="account-desk" aria-label="Account desk">
-  <section class="verdict-card card" aria-live="polite">
+  <section id="account-desk-verdict" class="verdict-card card" aria-live="polite" tabindex="-1">
     @if (loading() && !triage()) {
       <p class="state state-loading">Loading account verdict…</p>
     } @else if (triage(); as triage) {

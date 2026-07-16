@@ -253,7 +253,7 @@ describe('toOperationError', () => {
               detail: 'Reconnect through Account Clerk, then retry the launch.',
               primary_move: {
                 label: 'Open broker account',
-                action: { kind: 'navigate', route: '/broker/account-monitor', fragment: null },
+                action: { kind: 'navigate', route: '/broker/accounts', fragment: null },
                 target: null,
               },
               secondary_moves: [],

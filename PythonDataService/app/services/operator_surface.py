@@ -404,9 +404,8 @@ def _author_operator_blockers(
                 headline="Fleet state blocks starts",
                 detail="Clear the account fleet state before starting another bot.",
                 primary_move=_navigate_move(
-                    "Clear fleet state",
-                    "/broker/account-monitor",
-                    "account-reconciliation-action",
+                    "Open Accounts",
+                    "/broker/accounts",
                 ),
                 applies_to="both",
             )
@@ -424,9 +423,8 @@ def _author_operator_blockers(
                 headline="Account not proven",
                 detail=account_truth.explanation,
                 primary_move=_navigate_move(
-                    "Open account monitor",
-                    "/broker/account-monitor",
-                    "account-reconciliation-action",
+                    "Open Accounts",
+                    "/broker/accounts",
                 ),
                 applies_to="both",
             )

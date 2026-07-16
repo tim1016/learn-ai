@@ -151,7 +151,7 @@ def test_fleet_contamination_blocks_deploy() -> None:
     blocker = next(blocker for blocker in blockers if blocker.condition.id == "fleet_contaminated")
 
     assert blocker.primary_move is not None
-    assert blocker.primary_move.action.route == "/broker/account-monitor"
+    assert blocker.primary_move.action.route == "/broker/accounts"
     assert blocker.applies_to == "both"
 
 

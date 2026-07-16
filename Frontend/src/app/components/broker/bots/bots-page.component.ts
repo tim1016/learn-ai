@@ -525,11 +525,9 @@ export class BotsPageComponent {
     this.lifecycleFilter.set('all');
   }
 
-  openAccountMonitor(event?: Event): void {
+  openAccounts(event?: Event): void {
     event?.stopPropagation();
-    void this.router.navigate(['/broker/account-monitor'], {
-      fragment: 'account-reconciliation-action',
-    });
+    void this.router.navigate(['/broker/accounts']);
   }
 
   async runConditionCure(row: BotTableRow, event: Event): Promise<void> {
@@ -549,7 +547,7 @@ export class BotsPageComponent {
       await this.reconcileAccountFromRow(row);
       return;
     }
-    this.openAccountMonitor();
+    this.openAccounts();
   }
 
   isSelected(id: string): boolean {

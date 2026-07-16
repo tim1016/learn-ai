@@ -4,14 +4,12 @@ export interface OperatorRunbookRoute {
 }
 
 const RUNBOOK_ROUTES: Readonly<Record<string, OperatorRunbookRoute>> = {
-  'broker-reconnect': { commands: ['/broker/account-monitor'] },
+  'broker-reconnect': { commands: ['/broker/accounts'] },
   'cross-client-execution': {
-    commands: ['/broker/account-monitor'],
-    fragment: 'account-reconciliation-action',
+    commands: ['/broker/accounts'],
   },
   'live-trade-reconciliation': {
-    commands: ['/broker/account-monitor'],
-    fragment: 'account-reconciliation-action',
+    commands: ['/broker/accounts'],
   },
   'broker-instance-operator-surface': { commands: ['/broker/reconciliation'] },
   'watchdog-halt': { commands: ['/broker/bots'] },

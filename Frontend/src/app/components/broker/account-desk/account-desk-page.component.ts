@@ -1,4 +1,15 @@
-import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, signal } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  DestroyRef,
+  ElementRef,
+  Injector,
+  afterNextRender,
+  computed,
+  effect,
+  inject,
+  signal,
+} from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { ActivatedRoute, Router } from '@angular/router';
 
@@ -24,6 +35,7 @@ import { AccountDeskRecoveryStore } from './account-desk-recovery-store.service'
 import { AccountDeskSurfaceStore } from './account-desk-surface-store.service';
 import { AccountDeskTraderEventsComponent } from './account-desk-trader-events.component';
 import { AccountDeskTraderHoldingsComponent } from './account-desk-trader-holdings.component';
+import { accountDeskFragmentTarget } from './account-desk-legacy-fragments';
 
 /** Account-id route host for the shared verdict spine and the later desk lenses. */
 @Component({
@@ -50,6 +62,8 @@ export class AccountDeskPageComponent {
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly destroyRef = inject(DestroyRef);
+  private readonly host = inject(ElementRef<HTMLElement>);
+  private readonly injector = inject(Injector);
   readonly store = inject(AccountDeskSurfaceStore);
   readonly holdings = inject(AccountDeskHoldingsStore);
   readonly events = inject(AccountDeskEventsStore);
@@ -59,6 +73,7 @@ export class AccountDeskPageComponent {
   readonly recovery = inject(AccountDeskRecoveryStore);
   readonly lens = signal<AccountDeskLens>('trader');
   private readonly nowMs = signal(Date.now());
+  private readonly pendingFocusAnchor = signal<string | null>(null);
 
   readonly triage = this.store.triage;
   readonly loading = this.store.loading;
@@ -76,6 +91,18 @@ export class AccountDeskPageComponent {
   });
 
   constructor() {
+    effect(() => {
+      const anchor = this.pendingFocusAnchor();
+      if (anchor === null || this.triage() === null) return;
+      afterNextRender({
+        write: () => {
+          const target = (this.host.nativeElement as HTMLElement).querySelector<HTMLElement>(`#${anchor}`);
+          if (target === null) return;
+          target.focus();
+          this.pendingFocusAnchor.set(null);
+        },
+      }, { injector: this.injector });
+    });
     this.route.paramMap.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((params) => {
       const accountId = params.get('accountId');
       if (accountId) {
@@ -87,6 +114,18 @@ export class AccountDeskPageComponent {
         void this.directory.loadRoster();
         void this.directory.loadServiceStatus(accountId);
       }
+    });
+    this.route.fragment.pipe(takeUntilDestroyed(this.destroyRef)).subscribe((fragment) => {
+      const target = accountDeskFragmentTarget(fragment);
+      if (target === null) return;
+      this.lens.set(target.lens);
+      this.pendingFocusAnchor.set(target.anchor);
+      void this.router.navigate([], {
+        relativeTo: this.route,
+        fragment: undefined,
+        queryParamsHandling: 'preserve',
+        replaceUrl: true,
+      });
     });
     const intervalId = window.setInterval(() => this.nowMs.set(Date.now()), 1_000);
     this.destroyRef.onDestroy(() => window.clearInterval(intervalId));

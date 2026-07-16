@@ -1,6 +1,6 @@
 <app-page-header
   title="Broker Status"
-  subtitle="The control room for your IBKR paper-trading session. Confirm the connection here before using Options Chain, Account Monitor, or Orders."
+  subtitle="The control room for your IBKR paper-trading session. Confirm the connection here before using Options Chain, Accounts, or Orders."
 >
   <button
     slot="actions"
@@ -128,12 +128,12 @@
     [steps]="[
       'Check that Mode is PAPER and Sentinel reads DU prefix matches paper.',
       'If the data-plane broker session is disconnected, start IB Gateway against the paper account and click Connect or Reconnect.',
-      'Once green, navigate to Options Chain, Account Monitor, or Orders.',
+      'Once green, navigate to Options Chain, Accounts, or Orders.',
     ]"
     [related]="[
       { label: 'Options Chain (live)', route: '/broker/options-chain' },
       { label: 'Options Surface (3D)', route: '/broker/options-surface' },
-      { label: 'Account Monitor', route: '/broker/account-monitor' },
+      { label: 'Accounts', route: '/broker/accounts' },
       { label: 'IBKR setup guide', route: '/docs/ibkr-setup-guide' },
       { label: 'Orders', route: '/broker/orders' },
     ]"
