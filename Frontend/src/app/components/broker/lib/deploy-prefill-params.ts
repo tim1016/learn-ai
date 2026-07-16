@@ -18,6 +18,7 @@ export interface DeployPrefillParams {
   inheritedExposureSource: string;
   parentRunId: string | null;
   signalStream: string;
+  actionPlan: ActionPlan | null;
 }
 
 const NON_NEGATIVE_INTEGER_RE = /^\d+$/;
@@ -64,6 +65,48 @@ export function parseExposurePositions(value: string | null): Record<string, num
   try {
     const parsed: unknown = JSON.parse(value);
     return normalizeExposurePositionsRecord(parsed);
+  } catch {
+    return null;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isActionPlan(value: unknown): value is ActionPlan {
+  if (!isRecord(value) || !Array.isArray(value['on_enter']) || !Array.isArray(value['on_exit'])) {
+    return false;
+  }
+
+  const entryLegsValid = value['on_enter'].every((leg) => {
+    if (!isRecord(leg) || typeof leg['leg_id'] !== 'string' || typeof leg['position'] !== 'string' ||
+      typeof leg['qty_ratio'] !== 'number' || !isRecord(leg['instrument']) ||
+      typeof leg['instrument']['underlying'] !== 'string') {
+      return false;
+    }
+    if (leg['instrument']['kind'] === 'stock') {
+      return leg['position'] === 'long' || leg['position'] === 'short';
+    }
+    if (leg['instrument']['kind'] !== 'option' ||
+      (leg['position'] !== 'long' && leg['position'] !== 'short') ||
+      (leg['right'] !== 'call' && leg['right'] !== 'put') ||
+      !isRecord(leg['strike']) || !isRecord(leg['expiry'])) {
+      return false;
+    }
+    return true;
+  });
+  const exitsValid = value['on_exit'].every(
+    (exit) => isRecord(exit) && exit['kind'] === 'close_leg' && typeof exit['entry_leg_id'] === 'string',
+  );
+  return entryLegsValid && exitsValid;
+}
+
+export function parseActionPlan(value: string | null): ActionPlan | null {
+  if (value === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isActionPlan(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -118,6 +161,9 @@ export function redeployQueryParamsForStatus(
   if (status.start_defaults?.strategy) {
     params['strategy_key'] = status.start_defaults.strategy;
   }
+  if (status.action_plan) {
+    params['action_plan'] = JSON.stringify(status.action_plan);
+  }
   const currentRisk = status.operator_surface?.current_risk;
   if (currentRisk) {
     params['inherited_exposure_posture'] = currentRisk.posture;
@@ -151,5 +197,6 @@ export function deployPrefillParamsFromQuery(queryParamMap: ParamMap): DeployPre
     inheritedExposureSource: queryParamMap.get('inherited_exposure_source')?.trim() ?? '',
     parentRunId: queryParamMap.get('parent_run_id') || null,
     signalStream: normalizedSymbol(queryParamMap.get('signal_stream')),
+    actionPlan: parseActionPlan(queryParamMap.get('action_plan')),
   };
 }

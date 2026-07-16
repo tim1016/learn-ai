@@ -541,6 +541,7 @@ export class BrokerDeployFormComponent {
     this.inheritedExposurePositions.set(prefill.inheritedExposurePositions);
     if (prefill.inheritedExposureSource) this.inheritedExposureSource.set(prefill.inheritedExposureSource);
     if (prefill.parentRunId) this.parentRunId.set(prefill.parentRunId);
+    if (prefill.actionPlan) this.actionPlan.set(prefill.actionPlan);
     if (prefill.signalStream) {
       this.signalStreamManuallyEdited.set(true);
       this.updateTicket({ signalStream: prefill.signalStream });

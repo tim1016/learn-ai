@@ -70,6 +70,7 @@ describe('redeployQueryParamsForStatus', () => {
       inherited_symbol: 'MU',
       inherited_symbol_source: 'run_ledger.live_config.action stock target',
       signal_stream: 'SPY',
+      action_plan: JSON.stringify(status.action_plan),
     });
   });
 

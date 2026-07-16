@@ -1772,7 +1772,8 @@ describe('BrokerDeployFormComponent', () => {
       '/broker/deploy?strategy_key=deployment_validation&spec_path=spec%2Fpath.json' +
         '&signal_stream=aapl&account_id=DU777&qc_backtest_id=bt-redeploy' +
         '&qc_audit_copy_path=audit%2Fcopy.py&instance_id=recovered_inst' +
-        '&inherited_symbol=mu&inherited_symbol_source=run_ledger.live_config.action%20stock%20target',
+        '&inherited_symbol=mu&inherited_symbol_source=run_ledger.live_config.action%20stock%20target' +
+        '&action_plan=%7B%22on_enter%22%3A%5B%7B%22leg_id%22%3A%22spy_long%22%2C%22instrument%22%3A%7B%22kind%22%3A%22stock%22%2C%22underlying%22%3A%22SPY%22%7D%2C%22position%22%3A%22long%22%2C%22qty_ratio%22%3A1%7D%5D%2C%22on_exit%22%3A%5B%7B%22kind%22%3A%22close_leg%22%2C%22entry_leg_id%22%3A%22spy_long%22%7D%5D%7D',
       BrokerDeployFormComponent,
     );
     activeFixture = harness.fixture;
@@ -1787,6 +1788,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(component.qcBacktestId()).toBe(DEPLOYMENT_VALIDATION_QC_BACKTEST_ID);
     expect(component.qcAuditCopyPath()).toBe(DEPLOYMENT_VALIDATION_AUDIT_COPY);
     expect(component.instanceId()).toBe('recovered_inst');
+    expect(component.actionPlan()).toEqual(validDeploymentValidationActionPlan());
     // Account is no longer sourced from the redeploy URL; Deploy requires the
     // currently connected broker session to provide it.
     expect(component.accountId()).toBe('');
