@@ -318,6 +318,11 @@ class RunnerProcessManager:
         self._lease_writer: object | None = None
         self._orphan_candidates: list[object] = []
         self._managed: dict[str, ManagedProcess] = {}
+        # An Account Clerk becomes ready before its dependent bot subprocess is
+        # registered below.  Keep that account visible to the reaper during
+        # that hand-off so it cannot mistake the Clerk for idle and drain its
+        # generation out from under the just-spawned bot.
+        self._starting_bot_accounts: set[str] = set()
         # IDs are reserved while a subprocess is being started outside the
         # registry lock.  A reservation closes the gap between allocation and
         # registration without making a socket readiness wait block every
@@ -763,6 +768,7 @@ class RunnerProcessManager:
             env = self._build_child_env(request, ibkr_client_id=ibkr_client_id)
             log_path = run_dir / "host_daemon.log"
             account_id: str | None = None
+            account_start_claimed = False
             active_binding_written = False
             try:
                 log_handle = log_path.open("a", encoding="utf-8")
@@ -791,6 +797,9 @@ class RunnerProcessManager:
                     # ``_ensure_account_clerk`` before the bot is allowed to
                     # reach any submit surface.  A bot must never race ahead
                     # of the account authority it depends on.
+                    with self._managed_lock:
+                        self._starting_bot_accounts.add(account_id)
+                    account_start_claimed = True
                     self._ensure_account_clerk(account_id, ibkr_host=request.ibkr_host)
                 process = subprocess.Popen(
                     command,
@@ -805,6 +814,8 @@ class RunnerProcessManager:
                 log_handle.close()
                 with self._managed_lock:
                     self._reserved_ibkr_client_ids.discard(ibkr_client_id)
+                    if account_start_claimed and account_id is not None:
+                        self._starting_bot_accounts.discard(account_id)
                 if active_binding_written:
                     try:
                         self._write_account_registry_binding(
@@ -824,6 +835,8 @@ class RunnerProcessManager:
                 log_handle.close()
                 with self._managed_lock:
                     self._reserved_ibkr_client_ids.discard(ibkr_client_id)
+                    if account_start_claimed and account_id is not None:
+                        self._starting_bot_accounts.discard(account_id)
                 record_spawn_launch_failure(
                     run_dir,
                     run_id=run_id,
@@ -864,6 +877,8 @@ class RunnerProcessManager:
                     ibkr_client_id=ibkr_client_id,
                 )
                 self._reserved_ibkr_client_ids.discard(ibkr_client_id)
+                if account_start_claimed and account_id is not None:
+                    self._starting_bot_accounts.discard(account_id)
             logger.info(
                 "Started host live runner for run=%s instance=%s with pid=%s ibkr_client_id=%s",
                 run_id,
@@ -1651,7 +1666,7 @@ class RunnerProcessManager:
             managed_processes = tuple(
                 managed for managed in self._managed.values() if managed.process.poll() is None
             )
-        accounts: set[str] = set()
+            accounts = set(self._starting_bot_accounts)
         for managed in managed_processes:
             try:
                 account_id, _ = self._account_registry_identity(managed.run_dir)

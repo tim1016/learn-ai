@@ -1091,6 +1091,65 @@ def test_account_clerk_starts_before_first_bot_reaps_after_last_and_takeover_adv
     assert restarted.generation == 2
 
 
+def test_start_keeps_account_clerk_alive_until_bot_registration(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A concurrent reaper must not drain a Clerk in start's registration gap."""
+
+    manager, run_dir = daemon_context
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": RUN_ID,
+                "strategy_instance_id": "spy_ema_paper",
+                "account_id": "DU111",
+            }
+        ),
+        encoding="utf-8",
+    )
+    clerk = FakeProcess()
+    bot = FakeProcess()
+    clerk_ready = threading.Event()
+    release_start = threading.Event()
+    start_errors: list[BaseException] = []
+
+    def fake_popen(command: list[str], **_kwargs: Any) -> FakeProcess:
+        return clerk if "app.engine.live.account_clerk" in command else bot
+
+    original_ensure = manager._ensure_account_clerk
+
+    def pause_after_clerk_ready(account_id: str, *, ibkr_host: str | None = None) -> Any:
+        managed = original_ensure(account_id, ibkr_host=ibkr_host)
+        clerk_ready.set()
+        assert release_start.wait(timeout=2.0)
+        return managed
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(manager, "_ensure_account_clerk", pause_after_clerk_ready)
+
+    def start_bot() -> None:
+        try:
+            manager.start(RUN_ID, request=HostRunnerStartRequest())
+        except BaseException as exc:  # pragma: no cover - surfaced after join
+            start_errors.append(exc)
+
+    thread = threading.Thread(target=start_bot)
+    thread.start()
+    assert clerk_ready.wait(timeout=2.0)
+
+    manager.reap_exited_processes()
+
+    assert clerk.signals == []
+    assert clerk.returncode is None
+    release_start.set()
+    thread.join(timeout=2.0)
+
+    assert thread.is_alive() is False
+    assert start_errors == []
+    assert manager._starting_bot_accounts == set()
+
+
 def test_reaper_replaces_exited_clerk_for_active_bot_with_new_generation(
     daemon_context: tuple[RunnerProcessManager, Path],
     monkeypatch: pytest.MonkeyPatch,
