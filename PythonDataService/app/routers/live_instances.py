@@ -1247,6 +1247,16 @@ def _cohort_start_request_for_run(
         return None
 
 
+def _cohort_live_config_for_run(run_dir: Path) -> dict[str, object] | None:
+    """Recover the immutable session policy that constrains a cohort window."""
+
+    try:
+        live_config = _read_ledger(run_dir).get("live_config")
+    except (OSError, ValueError, KeyError):
+        return None
+    return live_config if isinstance(live_config, dict) else None
+
+
 def _resolve_symbol_resolution(
     root: Path,
     live_binding: LiveBinding | None,
@@ -3296,6 +3306,7 @@ async def launch_cohort(
             start_run=start_run,
             visible_runs_by_instance=_visible_runs_by_instance,
             run_account_id=_run_dir_account_id,
+            run_live_config=_cohort_live_config_for_run,
             start_request_for_run=lambda run_dir: _cohort_start_request_for_run(
                 run_dir,
                 readonly_default=readonly_default,

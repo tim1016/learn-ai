@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 
 from app.services.daily_session_schedule import (
+    cohort_window_verdict,
     effective_stop_ms_for_date,
     start_boundary_verdict,
 )
@@ -76,3 +77,27 @@ def test_start_boundary_allows_before_effective_stop() -> None:
 
     assert verdict.allowed is True
     assert verdict.session_date == "2026-07-08"
+
+
+def test_cohort_window_refuses_when_staggered_validation_ends_after_stop() -> None:
+    verdict = cohort_window_verdict(
+        _ms_utc(2026, 7, 8, 19, 10),
+        live_configs=({"force_flat_at": "15:55"},) * 3,
+        required_window_ms=45 * 60 * 1_000 + 5_000,
+    )
+
+    assert verdict.allowed is False
+    assert verdict.reason_code == "COHORT_WINDOW_EXCEEDS_SESSION_STOP"
+    assert verdict.effective_stop_ms == _ms_utc(2026, 7, 8, 19, 55)
+    assert verdict.required_window_end_ms == _ms_utc(2026, 7, 8, 19, 55) + 5_000
+
+
+def test_cohort_window_allows_validation_that_ends_at_stop_boundary() -> None:
+    verdict = cohort_window_verdict(
+        _ms_utc(2026, 7, 8, 19, 9) + 55_000,
+        live_configs=({"force_flat_at": "15:55"},) * 3,
+        required_window_ms=45 * 60 * 1_000 + 5_000,
+    )
+
+    assert verdict.allowed is True
+    assert verdict.effective_stop_ms == _ms_utc(2026, 7, 8, 19, 55)

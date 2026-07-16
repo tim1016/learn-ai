@@ -134,6 +134,7 @@ def _write_ledger(
     account_id: str | None = "DU111",
     strategy_key: str | None = None,
     start_defaults: dict | None = None,
+    live_config: dict | None = None,
 ) -> None:
     run_dir = root / run_id
     run_dir.mkdir(parents=True)
@@ -146,6 +147,8 @@ def _write_ledger(
         payload["strategy_key"] = strategy_key
     if start_defaults is not None:
         payload["start_defaults"] = start_defaults
+    if live_config is not None:
+        payload["live_config"] = live_config
     (run_dir / "run_ledger.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -812,6 +815,63 @@ async def test_server_cohort_launch_allows_displayed_subset_and_forwards_persist
         assert request.strategy == "qqq_ema_crossover"
         assert request.max_orders_per_day == 7
         assert request.ibkr_host == "paper-gateway.internal"
+
+
+@pytest.mark.asyncio
+async def test_server_three_bot_stagger_refuses_when_window_crosses_effective_stop(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    account_id = "DU123"
+    now_ms = int(datetime(2026, 7, 8, 19, 10, tzinfo=UTC).timestamp() * 1_000)
+    for member in ("a", "b", "c"):
+        _write_ledger(
+            root,
+            f"run-{member}",
+            f"bot-{member}",
+            1,
+            account_id=account_id,
+            strategy_key="spy_ema_crossover",
+            live_config={"force_flat_at": "15:55"},
+        )
+    offers = [
+        BotRollCallOffer(
+            offer_id=f"offer-{member}",
+            strategy_instance_id=f"bot-{member}",
+            run_id=f"run-{member}",
+            session_date="2026-07-08",
+            issued_at_ms=now_ms,
+            expires_at_ms=now_ms + 60_000,
+        )
+        for member in ("a", "b", "c")
+    ]
+
+    async def fake_roll_call() -> BotRollCallResponse:
+        return BotRollCallResponse(summary=BotRollCallSummary(ready=3), offers=offers)
+
+    async def fake_start(_run_id: str, _body):
+        raise AssertionError("the cohort must reject before any member starts")
+
+    monkeypatch.setattr(live_instances, "_now_ms", lambda: now_ms)
+    monkeypatch.setattr(live_instances, "run_roll_call", fake_roll_call)
+    monkeypatch.setattr(live_instances, "start_run", fake_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            f"/api/live-instances/accounts/{account_id}/cohort-launch",
+            json={
+                "member_strategy_instance_ids": ["bot-a", "bot-b", "bot-c"],
+                "launch_profile": "paper_three_bot_stagger_v2",
+            },
+        )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "COHORT_WINDOW_EXCEEDS_SESSION_STOP"
+    assert detail["effective_stop_ms"] == int(datetime(2026, 7, 8, 19, 55, tzinfo=UTC).timestamp() * 1_000)
+    assert detail["required_window_end_ms"] == detail["effective_stop_ms"] + 5_000
+    assert read_account_events(root.parent, account_id) == []
 
 
 @pytest.mark.asyncio

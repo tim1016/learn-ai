@@ -269,6 +269,7 @@ async def lifespan(app: FastAPI):
         start_run=live_instances_router.start_run,
         visible_runs_by_instance=live_instances_router._visible_runs_by_instance,
         run_account_id=live_instances_router._run_dir_account_id,
+        run_live_config=live_instances_router._cohort_live_config_for_run,
         start_request_for_run=lambda run_dir: live_instances_router._cohort_start_request_for_run(
             run_dir,
             readonly_default=readonly_default,

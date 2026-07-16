@@ -1,6 +1,7 @@
 """Tests for server-authored cohort evidence evaluation."""
 
 import asyncio
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -223,7 +224,8 @@ def test_resume_open_cohort_sampling_uses_next_durable_cadence(tmp_path: Path, m
 def test_three_bot_stagger_dispatches_from_durable_schedule(tmp_path: Path) -> None:
     """The V2 scheduler owns all three slots after receipt persistence."""
 
-    clock = {"ms": 0}
+    initial_now_ms = int(datetime(2026, 7, 8, 19, 0, tzinfo=UTC).timestamp() * 1_000)
+    clock = {"ms": initial_now_ms}
     starts: list[tuple[str, str | None]] = []
     offers = [
         BotRollCallOffer(
@@ -254,6 +256,7 @@ def test_three_bot_stagger_dispatches_from_durable_schedule(tmp_path: Path) -> N
             for member in ("a", "b", "c")
         },
         run_account_id=lambda _run_dir: "DU123456",
+        run_live_config=lambda _run_dir: {},
         start_request_for_run=lambda _run_dir: HostRunnerStartRequest(strategy="spy_ema_crossover"),
         now_ms=lambda: clock["ms"],
         evidence_samplers=CohortEvidenceSamplerRegistry(),
@@ -278,11 +281,11 @@ def test_three_bot_stagger_dispatches_from_durable_schedule(tmp_path: Path) -> N
         assert status.launch_profile == "paper_three_bot_stagger_v2"
         assert status.outcomes_state == "pending"
         assert status.member_scheduled_start_at_ms == {
-            "bot-a": 0,
-            "bot-b": 900_000,
-            "bot-c": 1_800_000,
+            "bot-a": initial_now_ms,
+            "bot-b": initial_now_ms + 900_000,
+            "bot-c": initial_now_ms + 1_800_000,
         }
-        clock["ms"] = 2_000_000
+        clock["ms"] = initial_now_ms + 2_000_000
         for _ in range(8):
             await asyncio.sleep(0.01)
 
@@ -345,6 +348,7 @@ def test_three_bot_stagger_refuses_before_authorization_when_restart_budget_is_e
             for member in ("a", "b", "c")
         },
         run_account_id=lambda _run_dir: "DU123456",
+        run_live_config=lambda _run_dir: {},
         start_request_for_run=lambda _run_dir: HostRunnerStartRequest(strategy="spy_ema_crossover"),
         now_ms=lambda: 10_000,
         evidence_samplers=CohortEvidenceSamplerRegistry(),
@@ -364,6 +368,62 @@ def test_three_bot_stagger_refuses_before_authorization_when_restart_budget_is_e
         )
 
     assert exc_info.value.detail["reason_code"] == "COHORT_RESTART_INTENSITY_WOULD_FREEZE"
+    assert not any(
+        event["event_type"] == "cohort_batch_launch_authorized"
+        for event in read_account_events(tmp_path, "DU123456")
+    )
+
+
+def test_three_bot_stagger_refuses_before_authorization_when_window_crosses_stop(tmp_path: Path) -> None:
+    now_ms = int(datetime(2026, 7, 8, 19, 10, tzinfo=UTC).timestamp() * 1_000)
+    offers = [
+        BotRollCallOffer(
+            offer_id=f"offer-{member}",
+            strategy_instance_id=f"bot-{member}",
+            run_id=f"run-{member}",
+            session_date="2026-07-08",
+            issued_at_ms=now_ms,
+            expires_at_ms=now_ms + 60_000,
+        )
+        for member in ("a", "b", "c")
+    ]
+
+    async def roll_call() -> BotRollCallResponse:
+        return BotRollCallResponse(summary=BotRollCallSummary(ready=3), offers=offers)
+
+    async def start_run(_run_id: str, _request: HostRunnerStartRequest) -> SimpleNamespace:
+        raise AssertionError("the cohort must reject before any member starts")
+
+    coordinator = CohortLaunchCoordinator(
+        artifacts_root=tmp_path,
+        live_runs_root=tmp_path / "runs",
+        run_roll_call=roll_call,
+        start_run=start_run,
+        visible_runs_by_instance=lambda _root: {
+            f"bot-{member}": [{"run_id": f"run-{member}", "run_dir": str(tmp_path / f"run-{member}")}]
+            for member in ("a", "b", "c")
+        },
+        run_account_id=lambda _run_dir: "DU123456",
+        run_live_config=lambda _run_dir: {"force_flat_at": "15:55"},
+        start_request_for_run=lambda _run_dir: HostRunnerStartRequest(strategy="spy_ema_crossover"),
+        now_ms=lambda: now_ms,
+        evidence_samplers=CohortEvidenceSamplerRegistry(),
+        launch_schedulers=CohortLaunchSchedulerRegistry(),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            coordinator.launch(
+                account_id="DU123456",
+                requested_members=("bot-a", "bot-b", "bot-c"),
+                operator_identity="operator.alice",
+                identity_header_present=True,
+                client_host="127.0.0.1",
+                launch_profile="paper_three_bot_stagger_v2",
+            )
+        )
+
+    assert exc_info.value.detail["reason_code"] == "COHORT_WINDOW_EXCEEDS_SESSION_STOP"
     assert not any(
         event["event_type"] == "cohort_batch_launch_authorized"
         for event in read_account_events(tmp_path, "DU123456")

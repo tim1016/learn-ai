@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -36,11 +36,13 @@ from app.services.cohort_evidence import (
     CohortEvidenceSamplerRegistry,
 )
 from app.services.cohort_evidence_runtime import CohortEvidenceRuntimeObserver
+from app.services.daily_session_schedule import cohort_window_verdict
 
 RollCall = Callable[[], Awaitable[BotRollCallResponse]]
 StartRun = Callable[[str, HostRunnerStartRequest], Awaitable[HostRunnerActionResponse]]
 VisibleRuns = Callable[[Path], dict[str, list[dict[str, object]]]]
 RunAccountId = Callable[[Path], str | None]
+RunLiveConfig = Callable[[Path], Mapping[str, object] | None]
 StartRequestForRun = Callable[[Path], HostRunnerStartRequest | None]
 NowMs = Callable[[], int]
 logger = logging.getLogger(__name__)
@@ -52,6 +54,7 @@ class _PinnedCohortMember:
 
     pin: CohortBatchLaunchMemberPin
     start_request: HostRunnerStartRequest
+    live_config: Mapping[str, object] | None
 
 _COHORT_EVIDENCE_CADENCE_MS = 5_000
 _COHORT_VALIDATION_WINDOW_MS = 60 * 60 * 1_000
@@ -118,6 +121,7 @@ class CohortLaunchCoordinator:
         start_run: StartRun,
         visible_runs_by_instance: VisibleRuns,
         run_account_id: RunAccountId,
+        run_live_config: RunLiveConfig,
         start_request_for_run: StartRequestForRun,
         now_ms: NowMs,
         evidence_samplers: CohortEvidenceSamplerRegistry,
@@ -129,6 +133,7 @@ class CohortLaunchCoordinator:
         self._start_run = start_run
         self._visible_runs_by_instance = visible_runs_by_instance
         self._run_account_id = run_account_id
+        self._run_live_config = run_live_config
         self._start_request_for_run = start_request_for_run
         self._now_ms = now_ms
         self._evidence_samplers = evidence_samplers
@@ -243,6 +248,31 @@ class CohortLaunchCoordinator:
                         "No cohort authorization or start was recorded."
                     ),
                     "gate_result": restart_gate.model_dump(mode="json"),
+                },
+            )
+        if any(member.live_config is None for member in members):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": "COHORT_SESSION_POLICY_UNREADABLE",
+                    "message": "A displayed cohort member has no readable persisted session policy.",
+                },
+            )
+        schedule_window = cohort_window_verdict(
+            now_ms,
+            live_configs=tuple(member.live_config for member in members if member.live_config is not None),
+            required_window_ms=(
+                2 * _THREE_BOT_STAGGER_MS + _COHORT_EVIDENCE_CADENCE_MS + _THREE_BOT_OVERLAP_MS
+            ),
+        )
+        if not schedule_window.allowed:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": schedule_window.reason_code,
+                    "message": schedule_window.message,
+                    "effective_stop_ms": schedule_window.effective_stop_ms,
+                    "required_window_end_ms": schedule_window.required_window_end_ms,
                 },
             )
         schedule = tuple(
@@ -374,6 +404,10 @@ class CohortLaunchCoordinator:
                     roll_call_offer_id=offer.offer_id,
                 ),
                 start_request=start_request,
+                # Admission already proved the persisted policy can support
+                # the entire cohort window. A scheduled retry refreshes only
+                # the ephemeral roll-call offer and does not re-admit it.
+                live_config={},
             ),
             cohort_id=receipt.cohort_id,
         )
@@ -425,7 +459,8 @@ class CohortLaunchCoordinator:
         members: list[_PinnedCohortMember] = []
         for member_id in sorted(requested_member_ids):
             offer, run = pinned[member_id]
-            request = self._start_request_for_run(Path(str(run["run_dir"])))
+            run_dir = Path(str(run["run_dir"]))
+            request = self._start_request_for_run(run_dir)
             if request is None:
                 raise HTTPException(
                     status.HTTP_409_CONFLICT,
@@ -434,6 +469,7 @@ class CohortLaunchCoordinator:
                         "message": "A displayed cohort member has no safe persisted start settings.",
                     },
                 )
+            live_config = self._run_live_config(run_dir)
             members.append(
                 _PinnedCohortMember(
                     pin=CohortBatchLaunchMemberPin(
@@ -442,6 +478,7 @@ class CohortLaunchCoordinator:
                         roll_call_offer_id=offer.offer_id,
                     ),
                     start_request=request,
+                    live_config=live_config,
                 )
             )
         return tuple(members)
@@ -513,6 +550,7 @@ async def resume_open_cohort_launch_schedulers(
     start_run: StartRun,
     visible_runs_by_instance: VisibleRuns,
     run_account_id: RunAccountId,
+    run_live_config: RunLiveConfig,
     start_request_for_run: StartRequestForRun,
     now_ms: NowMs,
     evidence_samplers: CohortEvidenceSamplerRegistry,
@@ -527,6 +565,7 @@ async def resume_open_cohort_launch_schedulers(
         start_run=start_run,
         visible_runs_by_instance=visible_runs_by_instance,
         run_account_id=run_account_id,
+        run_live_config=run_live_config,
         start_request_for_run=start_request_for_run,
         now_ms=now_ms,
         evidence_samplers=evidence_samplers,
