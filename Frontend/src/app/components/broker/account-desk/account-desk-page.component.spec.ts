@@ -1,27 +1,38 @@
-import { signal } from '@angular/core';
-import { ActivatedRoute, Router, convertToParamMap } from '@angular/router';
-import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
-import { BehaviorSubject } from 'rxjs';
-import { describe, expect, it, vi } from 'vitest';
+import { signal } from "@angular/core";
+import { ActivatedRoute, Router, convertToParamMap } from "@angular/router";
+import { fireEvent, render, screen, waitFor } from "@testing-library/angular";
+import { BehaviorSubject } from "rxjs";
+import { describe, expect, it, vi } from "vitest";
 
-import type { AccountTriageResponse, AccountTriageVerdictState } from '../../../api/account-reconciliation.types';
-import type { AccountRosterRow, AccountServiceStatusResponse } from '../../../api/account-directory.types';
-import { BrokerService } from '../../../services/broker.service';
-import { formatReceiptLabel } from '../../../shared/pipes/receipt-label.pipe';
-import { formatTimestampDisplay } from '../../../shared/timestamp';
-import { makeCleanAccountTriage } from '../testing/account-triage-fixtures';
-import { makeAccountSummary, makeAccountTruth, makePositionsSnapshot } from './account-desk-holdings.fixtures';
-import { AccountDeskHoldingsStore } from './account-desk-holdings-store.service';
-import { AccountDeskEventsStore } from './account-desk-events-store.service';
-import { AccountDeskDirectoryStore } from './account-desk-directory-store.service';
-import { AccountDeskFleetStore } from './account-desk-fleet-store.service';
-import { AccountDeskGuidanceStore } from './account-desk-guidance-store.service';
-import { AccountDeskRecoveryStore } from './account-desk-recovery-store.service';
-import { AccountDeskSurfaceStore } from './account-desk-surface-store.service';
-import { AccountDeskPageComponent } from './account-desk-page.component';
+import type {
+  AccountTriageResponse,
+  AccountTriageVerdictState,
+} from "../../../api/account-reconciliation.types";
+import type {
+  AccountRosterRow,
+  AccountServiceStatusResponse,
+} from "../../../api/account-directory.types";
+import { BrokerService } from "../../../services/broker.service";
+import { formatReceiptLabel } from "../../../shared/pipes/receipt-label.pipe";
+import { formatTimestampDisplay } from "../../../shared/timestamp";
+import { makeCleanAccountTriage } from "../testing/account-triage-fixtures";
+import {
+  makeAccountSummary,
+  makeAccountTruth,
+  makePositionsSnapshot,
+} from "./account-desk-holdings.fixtures";
+import { AccountDeskHoldingsStore } from "./account-desk-holdings-store.service";
+import { AccountDeskEventsStore } from "./account-desk-events-store.service";
+import { AccountDeskDirectoryStore } from "./account-desk-directory-store.service";
+import { AccountDeskFleetStore } from "./account-desk-fleet-store.service";
+import { AccountDeskGuidanceStore } from "./account-desk-guidance-store.service";
+import { AccountDeskRecoveryStore } from "./account-desk-recovery-store.service";
+import { AccountDeskSurfaceStore } from "./account-desk-surface-store.service";
+import { AccountDeskPageComponent } from "./account-desk-page.component";
 
 class FakeBrokerService {
-  accountTriage = vi.fn<(accountId: string) => Promise<AccountTriageResponse>>();
+  accountTriage =
+    vi.fn<(accountId: string) => Promise<AccountTriageResponse>>();
   account = vi.fn().mockResolvedValue(makeAccountSummary());
   positions = vi.fn().mockResolvedValue(makePositionsSnapshot(undefined, []));
   accountTruth = vi.fn().mockResolvedValue(makeAccountTruth(undefined, []));
@@ -32,7 +43,7 @@ class StubEventSource {
   close = vi.fn();
 }
 
-vi.stubGlobal('EventSource', StubEventSource);
+vi.stubGlobal("EventSource", StubEventSource);
 
 function makeEventsStore() {
   return {
@@ -117,12 +128,19 @@ function makeRecoveryStore() {
   };
 }
 
-function triage(state: AccountTriageVerdictState = 'CLEAN'): AccountTriageResponse {
+function triage(
+  state: AccountTriageVerdictState = "CLEAN",
+): AccountTriageResponse {
   const current = makeCleanAccountTriage({
     generatedAtMs: 1_780_000_002_000,
-    affectedBots: [{
-      strategy_instance_id: 'bot-a', run_id: 'run-a', bot_order_namespace: 'learn-ai/bot-a', lifecycle_state: 'ACTIVE',
-    }],
+    affectedBots: [
+      {
+        strategy_instance_id: "bot-a",
+        run_id: "run-a",
+        bot_order_namespace: "learn-ai/bot-a",
+        lifecycle_state: "ACTIVE",
+      },
+    ],
   });
   return {
     ...current,
@@ -130,31 +148,41 @@ function triage(state: AccountTriageVerdictState = 'CLEAN'): AccountTriageRespon
       state,
       headline: `${state} verdict`,
       detail: `${state} detail`,
-      primary_move: state === 'CLEAN' ? null : {
-        label: 'Open account desk', route: '/broker/accounts/DU1234567', fragment: 'account-desk-recovery-controls',
-      },
-      operator_attention_count: state === 'NEEDS_ATTENTION' ? 2 : 0,
+      primary_move:
+        state === "CLEAN"
+          ? null
+          : {
+              label: "Open account desk",
+              route: "/broker/accounts/DU1234567",
+              fragment: "account-desk-recovery-controls",
+            },
+      operator_attention_count: state === "NEEDS_ATTENTION" ? 2 : 0,
     },
   };
 }
 
-async function setup(options: {
-  response?: AccountTriageResponse;
-  route$?: BehaviorSubject<ReturnType<typeof convertToParamMap>>;
-  fragment$?: BehaviorSubject<string | null>;
-} = {}) {
+async function setup(
+  options: {
+    response?: AccountTriageResponse;
+    route$?: BehaviorSubject<ReturnType<typeof convertToParamMap>>;
+    fragment$?: BehaviorSubject<string | null>;
+  } = {},
+) {
   const broker = new FakeBrokerService();
   broker.accountTriage.mockResolvedValue(options.response ?? triage());
-  const route$ = options.route$ ?? new BehaviorSubject(convertToParamMap({ accountId: 'DU1234567' }));
-  const fragment$ = options.fragment$ ?? new BehaviorSubject<string | null>(null);
+  const route$ =
+    options.route$ ??
+    new BehaviorSubject(convertToParamMap({ accountId: "DU1234567" }));
+  const fragment$ =
+    options.fragment$ ?? new BehaviorSubject<string | null>(null);
   const router = { navigate: vi.fn().mockResolvedValue(true) };
   const events = makeEventsStore();
   const fleet = makeFleetStore();
   const guidance = makeGuidanceStore();
   const recovery = makeRecoveryStore();
   const directory = makeDirectoryStore([
-    accountRow('DU1234567'),
-    accountRow('DU7654321'),
+    accountRow("DU1234567"),
+    accountRow("DU7654321"),
   ]);
   const view = await render(AccountDeskPageComponent, {
     providers: [
@@ -166,17 +194,34 @@ async function setup(options: {
       { provide: AccountDeskGuidanceStore, useValue: guidance },
       { provide: AccountDeskRecoveryStore, useValue: recovery },
       { provide: BrokerService, useValue: broker },
-      { provide: ActivatedRoute, useValue: { paramMap: route$.asObservable(), fragment: fragment$.asObservable() } },
+      {
+        provide: ActivatedRoute,
+        useValue: {
+          paramMap: route$.asObservable(),
+          fragment: fragment$.asObservable(),
+        },
+      },
       { provide: Router, useValue: router },
     ],
   });
   await screen.findByText((options.response ?? triage()).verdict.headline);
-  return { ...view, broker, directory, events, fleet, guidance, recovery, route$, fragment$, router };
+  return {
+    ...view,
+    broker,
+    directory,
+    events,
+    fleet,
+    guidance,
+    recovery,
+    route$,
+    fragment$,
+    router,
+  };
 }
 
-describe('AccountDeskPageComponent', () => {
-  it.each(['FROZEN', 'NOT_PROVEN', 'NEEDS_ATTENTION', 'CLEAN'] as const)(
-    'renders the server-owned %s verdict without recomputing posture',
+describe("AccountDeskPageComponent", () => {
+  it.each(["FROZEN", "NOT_PROVEN", "NEEDS_ATTENTION", "CLEAN"] as const)(
+    "renders the server-owned %s verdict without recomputing posture",
     async (state) => {
       await setup({ response: triage(state) });
 
@@ -185,128 +230,203 @@ describe('AccountDeskPageComponent', () => {
     },
   );
 
-  it('defaults to the trader lens, keeps the verdict visible, and exposes pressed toggle state', async () => {
-    await setup({ response: triage('NEEDS_ATTENTION') });
+  it("defaults to the trader lens, keeps the verdict visible, and exposes pressed toggle state", async () => {
+    await setup({ response: triage("NEEDS_ATTENTION") });
 
-    const trader = screen.getByRole('button', { name: 'Trader' });
-    const operator = screen.getByRole('button', { name: 'Operator' });
-    expect(trader.getAttribute('aria-pressed')).toBe('true');
-    expect(operator.getAttribute('aria-pressed')).toBe('false');
+    const trader = screen.getByRole("button", { name: "Trader" });
+    const operator = screen.getByRole("button", { name: "Operator" });
+    await waitFor(() =>
+      expect(trader.getAttribute("aria-pressed")).toBe("true"),
+    );
+    expect(operator.getAttribute("aria-pressed")).toBe("false");
     fireEvent.click(operator);
-    expect(operator.getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByText('NEEDS_ATTENTION verdict')).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Resolve the account posture' })).toBeTruthy();
-    expect(screen.getByRole('heading', { name: 'Account recovery' })).toBeTruthy();
-    expect(screen.getByText('Account event timeline')).toBeTruthy();
+    await waitFor(() =>
+      expect(operator.getAttribute("aria-pressed")).toBe("true"),
+    );
+    expect(screen.getByText("NEEDS_ATTENTION verdict")).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: "Resolve the account posture" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("heading", { name: "Account recovery" }),
+    ).toBeTruthy();
+    expect(screen.getByText("Account event timeline")).toBeTruthy();
   });
 
-  it('keeps operator actions and recovery ahead of the audit history', async () => {
-    const { fixture } = await setup({ response: triage('NEEDS_ATTENTION') });
-    fireEvent.click(screen.getByRole('button', { name: 'Operator' }));
+  it("keeps operator actions and recovery ahead of the audit history", async () => {
+    const { fixture } = await setup({ response: triage("NEEDS_ATTENTION") });
+    fireEvent.click(screen.getByRole("button", { name: "Operator" }));
 
-    const operatorWorkspace = (fixture.nativeElement as HTMLElement).querySelector<HTMLElement>('.operator-workspace');
-    const recovery = (fixture.nativeElement as HTMLElement).querySelector<HTMLElement>('#account-desk-recovery-controls');
-    const timeline = screen.getByRole('heading', { name: 'Account event timeline' });
+    const operatorWorkspace = (
+      fixture.nativeElement as HTMLElement
+    ).querySelector<HTMLElement>(".operator-workspace");
+    const recovery = (
+      fixture.nativeElement as HTMLElement
+    ).querySelector<HTMLElement>("#account-desk-recovery-controls");
+    const timeline = screen.getByRole("heading", {
+      name: "Account event timeline",
+    });
 
     expect(operatorWorkspace).toBeTruthy();
     expect(recovery).toBeTruthy();
-    if (recovery === null) throw new Error('Expected account recovery controls to render.');
-    expect(recovery.compareDocumentPosition(timeline) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    if (recovery === null)
+      throw new Error("Expected account recovery controls to render.");
+    expect(
+      recovery.compareDocumentPosition(timeline) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
-  it('rekeys the route-scoped surface store when the account route changes', async () => {
-    const route$ = new BehaviorSubject(convertToParamMap({ accountId: 'DU1234567' }));
+  it("rekeys the route-scoped surface store when the account route changes", async () => {
+    const route$ = new BehaviorSubject(
+      convertToParamMap({ accountId: "DU1234567" }),
+    );
     const { broker, directory, events, recovery } = await setup({ route$ });
-    broker.accountTriage.mockResolvedValueOnce(makeCleanAccountTriage({ accountId: 'DU7654321' }));
+    broker.accountTriage.mockResolvedValueOnce(
+      makeCleanAccountTriage({ accountId: "DU7654321" }),
+    );
 
-    route$.next(convertToParamMap({ accountId: 'DU7654321' }));
-    await waitFor(() => expect(broker.accountTriage).toHaveBeenCalledWith('DU7654321'));
-    expect(events.load).toHaveBeenCalledWith('DU7654321');
-    expect(recovery.load).toHaveBeenCalledWith('DU7654321');
-    expect(directory.loadServiceStatus).toHaveBeenCalledWith('DU7654321');
-    expect(await screen.findByText('DU7654321')).toBeTruthy();
+    route$.next(convertToParamMap({ accountId: "DU7654321" }));
+    await waitFor(() =>
+      expect(broker.accountTriage).toHaveBeenCalledWith("DU7654321"),
+    );
+    expect(events.load).toHaveBeenCalledWith("DU7654321");
+    expect(recovery.load).toHaveBeenCalledWith("DU7654321");
+    expect(directory.loadServiceStatus).toHaveBeenCalledWith("DU7654321");
+    expect(await screen.findByText("DU7654321")).toBeTruthy();
   });
 
-  it('switches accounts without leaving the current lens', async () => {
-    const route$ = new BehaviorSubject(convertToParamMap({ accountId: 'DU1234567' }));
+  it("switches accounts without leaving the current lens", async () => {
+    const route$ = new BehaviorSubject(
+      convertToParamMap({ accountId: "DU1234567" }),
+    );
     const { broker, router } = await setup({ route$ });
-    broker.accountTriage.mockResolvedValueOnce(makeCleanAccountTriage({ accountId: 'DU7654321' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Operator' }));
+    broker.accountTriage.mockResolvedValueOnce(
+      makeCleanAccountTriage({ accountId: "DU7654321" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Operator" }));
 
-    fireEvent.change(screen.getByRole('combobox', { name: 'Account' }), { target: { value: 'DU7654321' } });
-    expect(router.navigate).toHaveBeenCalledWith(['/broker/accounts', 'DU7654321']);
+    fireEvent.change(screen.getByRole("combobox", { name: "Account" }), {
+      target: { value: "DU7654321" },
+    });
+    expect(router.navigate).toHaveBeenCalledWith([
+      "/broker/accounts",
+      "DU7654321",
+    ]);
 
-    route$.next(convertToParamMap({ accountId: 'DU7654321' }));
-    await waitFor(() => expect(broker.accountTriage).toHaveBeenCalledWith('DU7654321'));
-    expect(screen.getByRole('button', { name: 'Operator' }).getAttribute('aria-pressed')).toBe('true');
+    route$.next(convertToParamMap({ accountId: "DU7654321" }));
+    await waitFor(() =>
+      expect(broker.accountTriage).toHaveBeenCalledWith("DU7654321"),
+    );
+    expect(
+      screen
+        .getByRole("button", { name: "Operator" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
   });
 
-  it('consumes a legacy operations anchor once, selects the operator lens, and focuses its semantic target', async () => {
-    const fragment$ = new BehaviorSubject<string | null>('account-desk-recovery-controls');
+  it("consumes a legacy operations anchor once, selects the operator lens, and focuses its semantic target", async () => {
+    const fragment$ = new BehaviorSubject<string | null>(
+      "account-desk-recovery-controls",
+    );
     const { fixture, router } = await setup({ fragment$ });
 
-    const operator = screen.getByRole('button', { name: 'Operator' });
-    await waitFor(() => expect(operator.getAttribute('aria-pressed')).toBe('true'));
-    const target = (fixture.nativeElement as HTMLElement).querySelector<HTMLElement>('#account-desk-recovery-controls');
+    const operator = screen.getByRole("button", { name: "Operator" });
+    await waitFor(() =>
+      expect(operator.getAttribute("aria-pressed")).toBe("true"),
+    );
+    const target = (
+      fixture.nativeElement as HTMLElement
+    ).querySelector<HTMLElement>("#account-desk-recovery-controls");
     await waitFor(() => expect(document.activeElement).toBe(target));
     expect(router.navigate).toHaveBeenCalledWith(
       [],
-      expect.objectContaining({ fragment: undefined, queryParamsHandling: 'preserve', replaceUrl: true }),
+      expect.objectContaining({
+        fragment: undefined,
+        queryParamsHandling: "preserve",
+        replaceUrl: true,
+      }),
     );
   });
 
-  it('uses the shared viewer-local timestamp display and preserves stale last-good data with retry', async () => {
+  it("uses the shared viewer-local timestamp display and preserves stale last-good data with retry", async () => {
     const { broker, fixture } = await setup({ response: triage() });
-    expect(screen.getByText(formatTimestampDisplay(1_780_000_002_000, { mode: 'local' }))).toBeTruthy();
+    expect(
+      screen.getByText(
+        formatTimestampDisplay(1_780_000_002_000, { mode: "local" }),
+      ),
+    ).toBeTruthy();
 
-    broker.accountTriage.mockRejectedValueOnce(new Error('offline'));
+    broker.accountTriage.mockRejectedValueOnce(new Error("offline"));
     fixture.componentInstance.retry();
     await screen.findByText(/Showing last good account data/);
-    expect(screen.getByText('CLEAN verdict')).toBeTruthy();
+    expect(screen.getByText("CLEAN verdict")).toBeTruthy();
   });
 
-  it('shows an explicit empty state and retries an initial fetch failure', async () => {
+  it("shows an explicit empty state and retries an initial fetch failure", async () => {
     const broker = new FakeBrokerService();
-    broker.accountTriage.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce(makeCleanAccountTriage());
-    const route$ = new BehaviorSubject(convertToParamMap({ accountId: 'DU1234567' }));
+    broker.accountTriage
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(makeCleanAccountTriage());
+    const route$ = new BehaviorSubject(
+      convertToParamMap({ accountId: "DU1234567" }),
+    );
     const events = makeEventsStore();
     const directory = makeDirectoryStore();
     const fleet = makeFleetStore();
     const guidance = makeGuidanceStore();
     const recovery = makeRecoveryStore();
     await render(AccountDeskPageComponent, {
-    providers: [
-      AccountDeskHoldingsStore,
-      AccountDeskSurfaceStore,
+      providers: [
+        AccountDeskHoldingsStore,
+        AccountDeskSurfaceStore,
         { provide: AccountDeskEventsStore, useValue: events },
         { provide: AccountDeskDirectoryStore, useValue: directory },
         { provide: AccountDeskFleetStore, useValue: fleet },
         { provide: AccountDeskGuidanceStore, useValue: guidance },
         { provide: AccountDeskRecoveryStore, useValue: recovery },
         { provide: BrokerService, useValue: broker },
-        { provide: ActivatedRoute, useValue: { paramMap: route$.asObservable(), fragment: new BehaviorSubject<string | null>(null).asObservable() } },
-        { provide: Router, useValue: { navigate: vi.fn().mockResolvedValue(true) } },
+        {
+          provide: ActivatedRoute,
+          useValue: {
+            paramMap: route$.asObservable(),
+            fragment: new BehaviorSubject<string | null>(null).asObservable(),
+          },
+        },
+        {
+          provide: Router,
+          useValue: { navigate: vi.fn().mockResolvedValue(true) },
+        },
       ],
     });
 
-    const retries = await screen.findAllByRole('button', { name: 'Retry' });
+    const retries = await screen.findAllByRole("button", { name: "Retry" });
     fireEvent.click(retries[0]);
-    await waitFor(() => expect(screen.getByText('No open holdings are reported for this attested account.')).toBeTruthy());
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "No open holdings are reported for this attested account.",
+        ),
+      ).toBeTruthy(),
+    );
   });
 });
 
 function accountRow(accountId: string): AccountRosterRow {
   return {
     account_id: accountId,
-    broker: 'IBKR',
-    effective_posture: 'PAPER_EXECUTION',
+    broker: "IBKR",
+    effective_posture: "PAPER_EXECUTION",
     service: {
-      attachment: 'UNATTACHED', phase: null, generation: null,
-      operating_state: 'ATTENTION', headline: 'Account service needs attention',
+      attachment: "UNATTACHED",
+      phase: null,
+      generation: null,
+      operating_state: "ATTENTION",
+      headline: "Account service needs attention",
     },
     latest_verdict_summary: {
-      state: 'NOT_PROVEN',
-      headline: 'Verification is required.',
+      state: "NOT_PROVEN",
+      headline: "Verification is required.",
       generated_at_ms: 1_780_000_000_000,
     },
     last_verified_at_ms: null,

@@ -1,76 +1,305 @@
-<section id="account-desk-recovery-controls" class="account-recovery-controls" aria-label="Account recovery" aria-live="polite" tabindex="-1">
-  <header><h2>Account recovery</h2><p>Available actions are server-declared for this account and confirmed before they are sent. Additional recovery controls appear when their proof conditions are satisfied.</p></header>
-  @if (surface.loading() && !surface.triage()) {
-    <p class="state">Loading recovery controls…</p>
-  } @else if (surface.error() && !surface.triage()) {
-    <div class="state state-error" role="alert"><p>Recovery controls are unavailable.</p><button type="button" (click)="surface.retry()">Retry</button></div>
-  } @else if (surface.triage(); as triage) {
-    <section class="automation" aria-label="Auto-reconcile policy">
-      <h3>Auto-reconcile after bot trades</h3>
-      <p>Currently {{ triage.reconciliation_automation_policy.enabled ? 'enabled' : 'disabled' }}.</p>
-      <button
-        id="account-reconciliation-automation-action"
-        type="button"
-        [disabled]="recovery.busy()"
-        (click)="requestAutomationChange()"
-      >
-        {{ triage.reconciliation_automation_policy.enabled ? 'Disable auto-reconcile' : 'Enable auto-reconcile' }}
-      </button>
-    </section>
-    <app-account-desk-journal-cure />
-    <app-account-desk-legacy-claim-cure />
-    @if (cureBlockers().length === 0) {
-      <p class="state">No account recovery action is currently declared safe.</p>
-    } @else {
-      <app-account-desk-guidance anchor="cure_tools" lens="operator" ariaLabel="Account recovery actions" />
-      @if (!hasActionableCure()) {
-        <p class="state">No account recovery action is currently declared safe.</p>
-      }
-    }
-    @if (recovery.success(); as success) {
-      <section class="receipt" aria-label="Recovery receipt">
-        <h3>Latest recovery result</h3>
-        @switch (success.kind) {
-          @case ('reconcile') {
-            <p>Account reconciliation returned a receipt.</p>
-            <dl><div><dt>Receipt</dt><dd><code>{{ success.receipt.receipt_id }}</code></dd></div><div><dt>Recorded</dt><dd><app-timestamp-display [value]="success.receipt.generated_at_ms" mode="local" /></dd></div><div><dt>Gate</dt><dd>{{ success.receipt.final_gate_result.status | receiptLabel }}</dd></div></dl>
-          }
-          @case ('automation') {
-            <p>Auto-reconcile policy was updated.</p>
-            <dl><div><dt>Setting</dt><dd>{{ success.policy.enabled ? 'Enabled' : 'Disabled' }}</dd></div><div><dt>Recorded</dt><dd><app-timestamp-display [value]="success.policy.updated_at_ms" mode="local" /></dd></div><div><dt>Operator</dt><dd><code>{{ success.policy.updated_by }}</code></dd></div></dl>
-          }
-          @case ('clear_freeze') {
-            <p>Account freeze clear was accepted.</p>
-            <dl><div><dt>Recovery</dt><dd><code>{{ success.receipt.recovery_id }}</code></dd></div><div><dt>Receipt</dt><dd><code>{{ success.receipt.receipt_id }}</code></dd></div><div><dt>Gate</dt><dd>{{ success.receipt.gate_result.status | receiptLabel }}</dd></div></dl>
-          }
-          @case ('exposure_override') {
-            <p>Account exposure override was accepted.</p>
-            <dl><div><dt>Override</dt><dd><code>{{ success.receipt.override_id }}</code></dd></div><div><dt>Account</dt><dd><code>{{ success.receipt.account_id }}</code></dd></div></dl>
-          }
-          @case ('journal_cure') {
-            <p>Account service journal cure was accepted.</p>
-            <dl><div><dt>Namespace</dt><dd><code>{{ success.receipt.bot_order_namespace }}</code></dd></div><div><dt>Symbol</dt><dd><code>{{ success.receipt.symbol }}</code></dd></div><div><dt>Sequence</dt><dd>{{ success.receipt.journal_seq }}</dd></div><div><dt>Evidence</dt><dd><code>{{ success.receipt.evidence_refs[0] }}</code></dd></div><div><dt>Recorded</dt><dd><app-timestamp-display [value]="success.receipt.recorded_at_ms" mode="local" /></dd></div></dl>
-          }
-          @case ('legacy_retire') {
-            <p>Legacy stale claim retirement was accepted.</p>
-            <dl><div><dt>Receipt</dt><dd><code>{{ success.receipt.receipt_id }}</code></dd></div><div><dt>Strategy</dt><dd><code>{{ success.receipt.strategy_instance_id }}</code></dd></div><div><dt>Run</dt><dd><code>{{ success.receipt.run_id }}</code></dd></div><div><dt>Namespace</dt><dd><code>{{ success.receipt.bot_order_namespace }}</code></dd></div><div><dt>Recorded</dt><dd><app-timestamp-display [value]="success.receipt.retired_at_ms" mode="local" /></dd></div></dl>
-          }
-          @case ('recovery_flatten') {
-            <p>Account service recovery flatten was accepted.</p>
-            <dl><div><dt>Intent</dt><dd><code>{{ success.receipt.recovery_flatten.recorded.intent_id }}</code></dd></div><div><dt>Order reference</dt><dd><code>{{ success.receipt.recovery_flatten.recorded.order_ref }}</code></dd></div><div><dt>Order</dt><dd><code>{{ success.receipt.recovery_flatten.broker_acked.order_id }}</code></dd></div><div><dt>Recorded</dt><dd><app-timestamp-display [value]="success.receipt.recovery_flatten.broker_acked.recorded_at_ms" mode="local" /></dd></div></dl>
-          }
-        }
+<p-card>
+  <section
+    id="account-desk-recovery-controls"
+    class="account-recovery-controls"
+    aria-label="Account recovery"
+    aria-live="polite"
+    tabindex="-1"
+  >
+    <header>
+      <h2>Account recovery</h2>
+      <p>
+        Available actions are server-declared for this account and confirmed
+        before they are sent. Additional recovery controls appear when their
+        proof conditions are satisfied.
+      </p>
+    </header>
+    @if (surface.loading() && !surface.triage()) {
+      <p class="state">Loading recovery controls…</p>
+    } @else if (surface.error() && !surface.triage()) {
+      <div class="state state-error" role="alert">
+        <p>Recovery controls are unavailable.</p>
+        <button
+          pButton
+          type="button"
+          severity="secondary"
+          (click)="surface.retry()"
+        >
+          <span class="p-button-label">Retry</span>
+        </button>
+      </div>
+    } @else if (surface.triage(); as triage) {
+      <section class="automation" aria-label="Auto-reconcile policy">
+        <h3>Auto-reconcile after bot trades</h3>
+        <p>
+          Currently
+          {{
+            triage.reconciliation_automation_policy.enabled
+              ? "enabled"
+              : "disabled"
+          }}.
+        </p>
+        <button
+          pButton
+          id="account-reconciliation-automation-action"
+          type="button"
+          [severity]="
+            triage.reconciliation_automation_policy.enabled
+              ? 'danger'
+              : undefined
+          "
+          [disabled]="recovery.busy()"
+          (click)="requestAutomationChange()"
+        >
+          <span class="p-button-label">{{
+            triage.reconciliation_automation_policy.enabled
+              ? "Disable auto-reconcile"
+              : "Enable auto-reconcile"
+          }}</span>
+        </button>
       </section>
+      <app-account-desk-journal-cure />
+      <app-account-desk-legacy-claim-cure />
+      @if (cureBlockers().length === 0) {
+        <p class="state">
+          No account recovery action is currently declared safe.
+        </p>
+      } @else {
+        <app-account-desk-guidance
+          anchor="cure_tools"
+          lens="operator"
+          ariaLabel="Account recovery actions"
+        />
+        @if (!hasActionableCure()) {
+          <p class="state">
+            No account recovery action is currently declared safe.
+          </p>
+        }
+      }
+      @if (recovery.success(); as success) {
+        <section class="receipt" aria-label="Recovery receipt">
+          <h3>Latest recovery result</h3>
+          @switch (success.kind) {
+            @case ("reconcile") {
+              <p>Account reconciliation returned a receipt.</p>
+              <dl>
+                <div>
+                  <dt>Receipt</dt>
+                  <dd>
+                    <code>{{ success.receipt.receipt_id }}</code>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Recorded</dt>
+                  <dd>
+                    <app-timestamp-display
+                      [value]="success.receipt.generated_at_ms"
+                      mode="local"
+                    />
+                  </dd>
+                </div>
+                <div>
+                  <dt>Gate</dt>
+                  <dd>
+                    {{
+                      success.receipt.final_gate_result.status | receiptLabel
+                    }}
+                  </dd>
+                </div>
+              </dl>
+            }
+            @case ("automation") {
+              <p>Auto-reconcile policy was updated.</p>
+              <dl>
+                <div>
+                  <dt>Setting</dt>
+                  <dd>{{ success.policy.enabled ? "Enabled" : "Disabled" }}</dd>
+                </div>
+                <div>
+                  <dt>Recorded</dt>
+                  <dd>
+                    <app-timestamp-display
+                      [value]="success.policy.updated_at_ms"
+                      mode="local"
+                    />
+                  </dd>
+                </div>
+                <div>
+                  <dt>Operator</dt>
+                  <dd>
+                    <code>{{ success.policy.updated_by }}</code>
+                  </dd>
+                </div>
+              </dl>
+            }
+            @case ("clear_freeze") {
+              <p>Account freeze clear was accepted.</p>
+              <dl>
+                <div>
+                  <dt>Recovery</dt>
+                  <dd>
+                    <code>{{ success.receipt.recovery_id }}</code>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Receipt</dt>
+                  <dd>
+                    <code>{{ success.receipt.receipt_id }}</code>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Gate</dt>
+                  <dd>
+                    {{ success.receipt.gate_result.status | receiptLabel }}
+                  </dd>
+                </div>
+              </dl>
+            }
+            @case ("exposure_override") {
+              <p>Account exposure override was accepted.</p>
+              <dl>
+                <div>
+                  <dt>Override</dt>
+                  <dd>
+                    <code>{{ success.receipt.override_id }}</code>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Account</dt>
+                  <dd>
+                    <code>{{ success.receipt.account_id }}</code>
+                  </dd>
+                </div>
+              </dl>
+            }
+            @case ("journal_cure") {
+              <p>Clerk journal cure was accepted.</p>
+              <dl>
+                <div>
+                  <dt>Namespace</dt>
+                  <dd>
+                    <code>{{ success.receipt.bot_order_namespace }}</code>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Symbol</dt>
+                  <dd>
+                    <code>{{ success.receipt.symbol }}</code>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Sequence</dt>
+                  <dd>{{ success.receipt.journal_seq }}</dd>
+                </div>
+                <div>
+                  <dt>Evidence</dt>
+                  <dd>
+                    <code>{{ success.receipt.evidence_refs[0] }}</code>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Recorded</dt>
+                  <dd>
+                    <app-timestamp-display
+                      [value]="success.receipt.recorded_at_ms"
+                      mode="local"
+                    />
+                  </dd>
+                </div>
+              </dl>
+            }
+            @case ("legacy_retire") {
+              <p>Legacy stale claim retirement was accepted.</p>
+              <dl>
+                <div>
+                  <dt>Receipt</dt>
+                  <dd>
+                    <code>{{ success.receipt.receipt_id }}</code>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Strategy</dt>
+                  <dd>
+                    <code>{{ success.receipt.strategy_instance_id }}</code>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Run</dt>
+                  <dd>
+                    <code>{{ success.receipt.run_id }}</code>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Namespace</dt>
+                  <dd>
+                    <code>{{ success.receipt.bot_order_namespace }}</code>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Recorded</dt>
+                  <dd>
+                    <app-timestamp-display
+                      [value]="success.receipt.retired_at_ms"
+                      mode="local"
+                    />
+                  </dd>
+                </div>
+              </dl>
+            }
+            @case ("recovery_flatten") {
+              <p>Clerk recovery flatten was accepted.</p>
+              <dl>
+                <div>
+                  <dt>Intent</dt>
+                  <dd>
+                    <code>{{
+                      success.receipt.recovery_flatten.recorded.intent_id
+                    }}</code>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Order reference</dt>
+                  <dd>
+                    <code>{{
+                      success.receipt.recovery_flatten.recorded.order_ref
+                    }}</code>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Order</dt>
+                  <dd>
+                    <code>{{
+                      success.receipt.recovery_flatten.broker_acked.order_id
+                    }}</code>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Recorded</dt>
+                  <dd>
+                    <app-timestamp-display
+                      [value]="
+                        success.receipt.recovery_flatten.broker_acked
+                          .recorded_at_ms
+                      "
+                      mode="local"
+                    />
+                  </dd>
+                </div>
+              </dl>
+            }
+          }
+        </section>
+      }
+    } @else {
+      <p class="state">No recovery projection is available for this account.</p>
     }
-  } @else {
-    <p class="state">No recovery projection is available for this account.</p>
-  }
-  <app-account-desk-recovery-confirm-dialog
-    [confirmation]="recovery.confirmation()"
-    [busy]="recovery.busy()"
-    [errorMessage]="recovery.errorMessage()"
-    (cancelled)="recovery.cancelConfirmation()"
-    (confirmed)="recovery.confirm()"
-    (exposureReasonChanged)="recovery.setExposureOverrideReason($event)"
-  />
-</section>
+    <app-account-desk-recovery-confirm-dialog
+      [confirmation]="recovery.confirmation()"
+      [busy]="recovery.busy()"
+      [errorMessage]="recovery.errorMessage()"
+      (cancelled)="recovery.cancelConfirmation()"
+      (confirmed)="recovery.confirm()"
+      (exposureReasonChanged)="recovery.setExposureOverrideReason($event)"
+    />
+  </section>
+</p-card>

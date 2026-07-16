@@ -1,29 +1,110 @@
 <main class="account-roster" aria-label="Accounts">
-  <header><h1>Accounts</h1><p>Read-only account posture, verdict, and Account service status.</p></header>
+  <header class="flex flex-wrap items-start justify-between gap-4">
+    <div class="grid gap-1">
+      <h1>Accounts</h1>
+      <p>Read-only account posture, verdict, and Account service status.</p>
+    </div>
+    <button
+      pButton
+      type="button"
+      severity="secondary"
+      icon="pi pi-refresh"
+      [rounded]="true"
+      [text]="true"
+      aria-label="Refresh accounts"
+      (click)="retry()"
+    ></button>
+  </header>
   @if (directory.rosterLoading() && !directory.rosterHasLastGood()) {
-    <p class="state">Loading accounts…</p>
-  } @else if (directory.rosterErrorMessage() && !directory.rosterHasLastGood()) {
-    <div class="state state-error" role="alert"><p>{{ directory.rosterErrorMessage() }}</p><button type="button" (click)="retry()">Retry</button></div>
+    <p-table [value]="skeletonRows" aria-label="Loading accounts">
+      <ng-template #header>
+        <tr>
+          <th>Account ID</th>
+          <th>Broker</th>
+          <th>Posture</th>
+          <th>Account service</th>
+          <th>Verdict</th>
+          <th>Last verified</th>
+        </tr>
+      </ng-template>
+      <ng-template #body>
+        <tr>
+          @for (column of skeletonRows; track column) {
+            <td><p-skeleton width="80%" /></td>
+          }
+        </tr>
+      </ng-template>
+    </p-table>
+  } @else if (
+    directory.rosterErrorMessage() && !directory.rosterHasLastGood()
+  ) {
+    <p-message severity="error">
+      <div class="flex flex-wrap items-center gap-3">
+        <span>{{ directory.rosterErrorMessage() }}</span>
+        <button pButton type="button" severity="secondary" (click)="retry()">
+          <span class="p-button-label">Retry</span>
+        </button>
+      </div>
+    </p-message>
   } @else if (directory.rosterEmpty()) {
-    <p class="state">No configured accounts are available.</p>
+    <p-message severity="info">No configured accounts are available.</p-message>
   } @else {
-    <ol class="roster-list">
-      @for (row of directory.rosterRows(); track row.account_id) {
-        <li>
-          <button type="button" (click)="openDesk(row)" [attr.aria-label]="'Open account ' + row.account_id">
-            <strong>{{ row.account_id }}</strong><span>{{ row.broker }}</span>
-            <span>Posture: {{ row.effective_posture | receiptLabel }}</span>
-            <span>Account service: {{ row.service.headline }}</span>
-            <span>Verdict: {{ row.latest_verdict_summary.headline }}</span>
+    <p-table
+      dataKey="account_id"
+      [value]="rosterRows()"
+      [selectionMode]="'single'"
+      [rowHover]="true"
+      aria-label="Account roster"
+    >
+      <ng-template #header>
+        <tr>
+          <th>Account ID</th>
+          <th>Broker</th>
+          <th>Posture</th>
+          <th>Account service</th>
+          <th>Verdict</th>
+          <th>Last verified</th>
+        </tr>
+      </ng-template>
+      <ng-template #body let-row>
+        <tr
+          [pSelectableRow]="row"
+          [attr.aria-label]="'Open account ' + row.account_id"
+          (click)="openDesk(row)"
+        >
+          <td class="font-mono">{{ row.account_id }}</td>
+          <td>{{ row.broker }}</td>
+          <td>
+            <p-tag
+              [severity]="postureSeverity(row.effective_posture)"
+              [value]="row.effective_posture | receiptLabel"
+            />
+          </td>
+          <td>{{ row.service.headline }}</td>
+          <td>
+            <p-tag
+              [severity]="postureSeverity(row.latest_verdict_summary.state)"
+              [value]="row.latest_verdict_summary.headline"
+            />
+          </td>
+          <td>
             @if (row.last_verified_at_ms !== null) {
-              <span>Verified <app-timestamp-display [value]="row.last_verified_at_ms" mode="local" /></span>
+              <app-timestamp-display
+                [value]="row.last_verified_at_ms"
+                mode="local"
+              />
+            } @else {
+              —
             }
-          </button>
-        </li>
-      }
-    </ol>
+          </td>
+        </tr>
+      </ng-template>
+    </p-table>
   }
   @if (directory.rosterShowingStaleLastGood()) {
-    <p class="state state-stale">Showing the last available account roster. Refresh is unavailable.</p>
+    <p-message severity="warn"
+      >Showing the last available account roster. Refresh is
+      unavailable.</p-message
+    >
   }
 </main>
