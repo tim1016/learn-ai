@@ -33,7 +33,8 @@ export interface OperatorBlockerAnchor {
   subject_key: string | null;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+/** Narrows an untrusted API value before reading named wire fields. */
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 

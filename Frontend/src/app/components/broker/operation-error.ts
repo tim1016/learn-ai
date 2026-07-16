@@ -9,7 +9,7 @@
 //   400 validation · 404 not-found · 409 domain/precondition · 503 infra.
 
 import { HttpErrorResponse } from '@angular/common/http';
-import { accountDeskAnchorOrVerdictFallback } from '../../api/operator-blocker.types';
+import { accountDeskAnchorOrVerdictFallback, isRecord } from '../../api/operator-blocker.types';
 import type {
   OperatorAction,
   OperatorBlocker,
@@ -97,12 +97,20 @@ export interface PreconditionBody {
   blockers?: readonly OperatorBlocker[];
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
 function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
   return typeof value === 'string' && allowed.includes(value as T);
+}
+
+/**
+ * Reads the literal FastAPI error detail without deriving any operator copy.
+ * Both legacy string details and structured server-message contracts are
+ * supported so desk surfaces do not hide actionable server responses.
+ */
+export function extractServerMessage(error: unknown, fallback: string): string {
+  if (!isRecord(error) || !isRecord(error['error'])) return fallback;
+  const detail = error['error']['detail'];
+  if (typeof detail === 'string') return detail;
+  return isRecord(detail) && typeof detail['message'] === 'string' ? detail['message'] : fallback;
 }
 
 function readConfirmation(value: unknown): OperatorConfirmationCopy | null {

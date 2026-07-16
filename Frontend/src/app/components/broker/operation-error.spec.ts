@@ -2,10 +2,25 @@ import { HttpErrorResponse } from '@angular/common/http';
 import { describe, expect, it } from 'vitest';
 import {
   describeOperationError,
+  extractServerMessage,
   readOutcomeUnknownBody,
   readPreconditionBody,
   toOperationError,
 } from './operation-error';
+
+describe('extractServerMessage', () => {
+  it('preserves both legacy FastAPI string details and structured server messages', () => {
+    expect(extractServerMessage({ error: { detail: 'Account evidence expired.' } }, 'Fallback.'))
+      .toBe('Account evidence expired.');
+    expect(extractServerMessage({ error: { detail: { message: 'Fresh proof is required.' } } }, 'Fallback.'))
+      .toBe('Fresh proof is required.');
+  });
+
+  it('uses the caller-owned fallback for unrecognised error shapes', () => {
+    expect(extractServerMessage({ error: { detail: { reason: 'opaque' } } }, 'Retry later.'))
+      .toBe('Retry later.');
+  });
+});
 
 describe('describeOperationError', () => {
   it('maps a 409 deploy to a precondition with deploy-specific remediation', () => {

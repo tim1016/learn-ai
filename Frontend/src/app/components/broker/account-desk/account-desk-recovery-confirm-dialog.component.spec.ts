@@ -9,7 +9,7 @@ describe('AccountDeskRecoveryConfirmDialogComponent', () => {
       inputs: {
         confirmation: {
           command: 'exposure_override', accountId: 'DU1234567', title: 'Accept account exposure', body: 'Backend body.',
-          consequence: 'Backend consequence.', confirmLabel: 'Accept exposure', desiredAutomationEnabled: null, reason: '', journalCure: null, legacyCandidate: null, recoveryFlatten: null,
+          consequence: 'Backend consequence.', confirmLabel: 'Accept exposure', requiredToken: '', desiredAutomationEnabled: null, reason: '', journalCure: null, legacyCandidate: null, recoveryFlatten: null,
         },
         busy: false,
         errorMessage: null,
@@ -34,7 +34,7 @@ describe('AccountDeskRecoveryConfirmDialogComponent', () => {
       inputs: {
         confirmation: {
           command: 'reconcile', accountId: 'DU1234567', title: 'Run account reconciliation', body: 'Backend body.',
-          consequence: 'Backend consequence.', confirmLabel: 'Run account reconcile', desiredAutomationEnabled: null, reason: '', journalCure: null, legacyCandidate: null, recoveryFlatten: null,
+          consequence: 'Backend consequence.', confirmLabel: 'Run account reconcile', requiredToken: '', desiredAutomationEnabled: null, reason: '', journalCure: null, legacyCandidate: null, recoveryFlatten: null,
         },
         busy: false,
         errorMessage: null,
@@ -48,5 +48,24 @@ describe('AccountDeskRecoveryConfirmDialogComponent', () => {
     fireEvent(dialog, new Event('cancel', { cancelable: true }));
 
     expect(cancelled).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed if a future backend confirmation requires a token', async () => {
+    const view = await render(AccountDeskRecoveryConfirmDialogComponent, {
+      inputs: {
+        confirmation: {
+          command: 'reconcile', accountId: 'DU1234567', title: 'Run account reconciliation', body: 'Backend body.',
+          consequence: 'Backend consequence.', confirmLabel: 'Run account reconcile', requiredToken: 'HALT', desiredAutomationEnabled: null, reason: '', journalCure: null, legacyCandidate: null, recoveryFlatten: null,
+        },
+        busy: false,
+        errorMessage: null,
+      },
+    });
+    const confirmed = vi.fn();
+    view.fixture.componentInstance.confirmed.subscribe(confirmed);
+
+    expect(screen.getByRole('button', { name: 'Run account reconcile', hidden: true }).hasAttribute('disabled')).toBe(true);
+    expect(() => view.fixture.componentInstance.confirm()).toThrow('Account Desk confirmations do not support required tokens.');
+    expect(confirmed).not.toHaveBeenCalled();
   });
 });

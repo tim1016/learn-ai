@@ -19,6 +19,7 @@ import type {
   IbkrPositionsSnapshot,
 } from '../../../api/broker-models';
 import {
+  isRecord,
   operatorBlockersForAccountDeskLens,
   type OperatorBlocker,
 } from '../../../api/operator-blocker.types';
@@ -319,8 +320,4 @@ function isPnlTickForAccount(
 
 function isNullableFiniteNumber(value: unknown): value is number | null {
   return value === null || (typeof value === 'number' && Number.isFinite(value));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

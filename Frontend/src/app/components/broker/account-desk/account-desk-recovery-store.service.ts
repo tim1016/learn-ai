@@ -15,6 +15,7 @@ import type {
 } from '../../../api/account-reconciliation.types';
 import type { OperatorConfirmationCopy } from '../../../api/operator-blocker.types';
 import { BrokerService } from '../../../services/broker.service';
+import { extractServerMessage } from '../operation-error';
 import type { OperatorBlockerMoveEvent } from '../shared/operator-blocker-list/operator-blocker-list.component';
 import { AccountDeskEventsStore } from './account-desk-events-store.service';
 import { AccountDeskSurfaceStore } from './account-desk-surface-store.service';
@@ -35,6 +36,8 @@ export interface AccountDeskRecoveryConfirmation {
   readonly body: string;
   readonly consequence: string;
   readonly confirmLabel: string;
+  /** Account Desk deliberately supports only untokenized confirmations. */
+  readonly requiredToken: string;
   readonly desiredAutomationEnabled: boolean | null;
   readonly reason: string;
   readonly journalCure: { readonly preview: JournalCurePreview; readonly request: JournalCureRequest } | null;
@@ -81,6 +84,7 @@ export class AccountDeskRecoveryStore {
   readonly canConfirm = computed(() => {
     const confirmation = this.confirmationState();
     return confirmation !== null &&
+      confirmation.requiredToken === '' &&
       (confirmation.command !== 'exposure_override' || confirmation.reason.trim().length > 0);
   });
 
@@ -134,6 +138,7 @@ export class AccountDeskRecoveryStore {
       body: `Change auto-reconcile after bot trades to ${desiredEnabled ? 'enabled' : 'disabled'}.`,
       consequence: 'The server will record the policy change in the account event journal.',
       confirmLabel: desiredEnabled ? 'Enable auto-reconcile' : 'Disable auto-reconcile',
+      requiredToken: '',
       desiredAutomationEnabled: desiredEnabled,
       reason: '',
       journalCure: null,
@@ -208,7 +213,11 @@ export class AccountDeskRecoveryStore {
   async confirm(): Promise<void> {
     const confirmation = this.confirmationState();
     const generation = this.requestGeneration;
-    if (confirmation === null || this.busyState() || !this.canConfirm()) return;
+    if (confirmation === null || this.busyState()) return;
+    if (confirmation.requiredToken !== '') {
+      throw new Error('Account Desk confirmations do not support required tokens.');
+    }
+    if (!this.canConfirm()) return;
     this.busyState.set(true);
     this.errorMessageState.set(null);
     let success: AccountDeskRecoverySuccess;
@@ -216,7 +225,9 @@ export class AccountDeskRecoveryStore {
       success = await this.execute(confirmation);
     } catch (error) {
       if (this.isCurrent(confirmation.accountId, generation)) {
-        this.errorMessageState.set(recoveryErrorMessage(error));
+        this.errorMessageState.set(
+          extractServerMessage(error, 'Account recovery was not accepted. Review the current proof and try again.'),
+        );
         this.busyState.set(false);
       }
       return;
@@ -255,6 +266,7 @@ export class AccountDeskRecoveryStore {
       body: confirmation.body,
       consequence: confirmation.consequence,
       confirmLabel: confirmation.confirm_label,
+      requiredToken: confirmation.required_token,
       desiredAutomationEnabled: null,
       reason: '',
       journalCure: details.journalCure ?? null,
@@ -331,7 +343,9 @@ export class AccountDeskRecoveryStore {
     } catch (error) {
       if (this.isCurrent(accountId, generation)) {
         this.legacyCandidatesState.set([]);
-        this.legacyErrorMessageState.set(recoveryErrorMessage(error));
+        this.legacyErrorMessageState.set(
+          extractServerMessage(error, 'Account recovery was not accepted. Review the current proof and try again.'),
+        );
       }
     } finally {
       if (this.isCurrent(accountId, generation)) this.legacyLoadingState.set(false);
@@ -356,20 +370,4 @@ function recoveryCommandForAnchor(anchor: string): Exclude<AccountDeskRecoveryCo
     default:
       return null;
   }
-}
-
-function recoveryErrorMessage(error: unknown): string {
-  if (!isRecord(error) || !isRecord(error['error'])) {
-    return 'Account recovery was not accepted. Review the current proof and try again.';
-  }
-  const detail = error['error']['detail'];
-  if (typeof detail === 'string') return detail;
-  if (!isRecord(detail)) return 'Account recovery was not accepted. Review the current proof and try again.';
-  const message = detail['message'];
-  if (typeof message === 'string') return message;
-  return 'Account recovery was not accepted. Review the current proof and try again.';
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }

@@ -64,6 +64,15 @@ describe('AccountDeskDirectoryStore', () => {
     expect(store.rosterEmpty()).toBe(false);
     expect(store.rosterErrorMessage()).toBe('Account roster is unavailable. Retry to request it again.');
   });
+
+  it('preserves a plain FastAPI error detail instead of hiding it behind the roster fallback', async () => {
+    const store = TestBed.inject(AccountDeskDirectoryStore);
+    broker.accounts.mockRejectedValueOnce({ error: { detail: 'The configured account roster is unavailable.' } });
+
+    await store.loadRoster();
+
+    expect(store.rosterErrorMessage()).toBe('The configured account roster is unavailable.');
+  });
 });
 
 function roster(): AccountsRosterResponse {

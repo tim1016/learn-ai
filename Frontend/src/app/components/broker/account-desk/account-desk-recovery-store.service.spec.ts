@@ -115,14 +115,14 @@ describe('AccountDeskRecoveryStore', () => {
 
   it('keeps a rejected recovery visibly distinct from success without refreshing the verdict', async () => {
     const store = TestBed.inject(AccountDeskRecoveryStore);
-    broker.clearAccountFreeze.mockRejectedValue(new Error('rejected'));
+    broker.clearAccountFreeze.mockRejectedValue({ error: { detail: 'The reconciliation receipt has expired.' } });
     store.load('DU1234567');
     store.requestDeclaredMove(move('account-clear-freeze-action'));
 
     await store.confirm();
 
     expect(store.success()).toBeNull();
-    expect(store.errorMessage()).toBe('Account recovery was not accepted. Review the current proof and try again.');
+    expect(store.errorMessage()).toBe('The reconciliation receipt has expired.');
     expect(surface.load).not.toHaveBeenCalled();
     expect(events.load).not.toHaveBeenCalled();
   });
@@ -140,6 +140,16 @@ describe('AccountDeskRecoveryStore', () => {
 
     expect(store.success()).toBeNull();
     expect(surface.load).not.toHaveBeenCalledWith('DU7654321');
+  });
+
+  it('fails closed when a future backend confirmation requires a token', async () => {
+    const store = TestBed.inject(AccountDeskRecoveryStore);
+    store.load('DU1234567');
+    store.requestDeclaredMove(move('account-reconciliation-action', null, 'HALT'));
+
+    expect(store.canConfirm()).toBe(false);
+    await expect(store.confirm()).rejects.toThrow('Account Desk confirmations do not support required tokens.');
+    expect(broker.reconcileAccount).not.toHaveBeenCalled();
   });
 
   it('confirms the exact fresh journal preview, preserves its receipt, and refreshes shared proof', async () => {
@@ -233,7 +243,7 @@ describe('AccountDeskRecoveryStore', () => {
   });
 });
 
-function move(anchor: string, target: string | null = null): OperatorBlockerMoveEvent {
+function move(anchor: string, target: string | null = null, requiredToken = ''): OperatorBlockerMoveEvent {
   return {
     blocker: {
       condition: { id: 'condition-1', severity: 'blocking', scope: 'account', evidence: {} },
@@ -243,7 +253,7 @@ function move(anchor: string, target: string | null = null): OperatorBlockerMove
     move: {
       label: 'Backend authored move', action: { kind: 'confirm_in_form', anchor }, target,
       confirmation: {
-        title: 'Backend authored title', body: 'Backend authored body', consequence: 'Backend authored consequence', confirm_label: 'Confirm', required_token: '',
+        title: 'Backend authored title', body: 'Backend authored body', consequence: 'Backend authored consequence', confirm_label: 'Confirm', required_token: requiredToken,
       },
     },
   };

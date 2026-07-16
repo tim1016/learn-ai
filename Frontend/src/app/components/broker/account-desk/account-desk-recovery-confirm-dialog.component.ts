@@ -23,6 +23,7 @@ export class AccountDeskRecoveryConfirmDialogComponent {
   readonly canConfirm = computed(() => {
     const confirmation = this.confirmation();
     return confirmation !== null &&
+      confirmation.requiredToken === '' &&
       (confirmation.command !== 'exposure_override' || confirmation.reason.trim().length > 0);
   });
 
@@ -44,7 +45,12 @@ export class AccountDeskRecoveryConfirmDialogComponent {
   }
 
   confirm(): void {
-    if (this.canConfirm() && !this.busy()) this.confirmed.emit();
+    const confirmation = this.confirmation();
+    if (confirmation === null || this.busy()) return;
+    if (confirmation.requiredToken !== '') {
+      throw new Error('Account Desk confirmations do not support required tokens.');
+    }
+    if (this.canConfirm()) this.confirmed.emit();
   }
 
   updateReason(event: Event): void {

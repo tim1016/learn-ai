@@ -84,6 +84,16 @@ describe('AccountDeskEventsStore', () => {
     expect(store.operationsShowingStaleLastGood()).toBe(true);
   });
 
+  it('preserves a plain FastAPI error detail for both event views', async () => {
+    broker.accountEvents.mockRejectedValue({ error: { detail: 'The account event journal is unavailable.' } });
+    const store = TestBed.inject(AccountDeskEventsStore);
+
+    await store.load('DU1234567');
+
+    expect(store.traderErrorMessage()).toBe('The account event journal is unavailable.');
+    expect(store.operationsErrorMessage()).toBe('The account event journal is unavailable.');
+  });
+
   it('keeps a successfully empty history as last-good data when a refresh fails', async () => {
     broker.accountEvents
       .mockImplementationOnce((_accountId: string, request: AccountEventsRequest) => Promise.resolve(emptyPage(request.view)))

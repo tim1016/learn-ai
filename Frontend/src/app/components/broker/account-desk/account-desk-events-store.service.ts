@@ -7,7 +7,9 @@ import type {
   AccountEventsResponse,
   AccountEventView,
 } from '../../../api/account-events.types';
+import { isRecord } from '../../../api/operator-blocker.types';
 import { BrokerService } from '../../../services/broker.service';
+import { extractServerMessage } from '../operation-error';
 
 const POLL_INTERVAL_MS = 15_000;
 
@@ -137,7 +139,10 @@ export class AccountDeskEventsStore {
       this.traderState.update((state) => replacePage(state, page, Date.now()));
     } catch (error) {
       if (this.isCurrentRequest(accountId, generation)) {
-        this.traderState.update((state) => ({ ...state, errorMessage: serverMessage(error) }));
+        this.traderState.update((state) => ({
+          ...state,
+          errorMessage: extractServerMessage(error, 'Account event history is unavailable. Retry to request it again.'),
+        }));
       }
     } finally {
       if (this.isCurrentRequest(accountId, generation)) {
@@ -166,7 +171,10 @@ export class AccountDeskEventsStore {
       this.operationsState.update((state) => applyPage(state, page, cursor, Date.now()));
     } catch (error) {
       if (this.isCurrentOperationsRequest(accountId, generation, filterGeneration)) {
-        this.operationsState.update((state) => ({ ...state, errorMessage: serverMessage(error) }));
+        this.operationsState.update((state) => ({
+          ...state,
+          errorMessage: extractServerMessage(error, 'Account event history is unavailable. Retry to request it again.'),
+        }));
       }
     } finally {
       if (this.isCurrentOperationsRequest(accountId, generation, filterGeneration)) {
@@ -290,18 +298,4 @@ function isSequence(value: unknown): value is number {
 
 function isInt64Ms(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function serverMessage(error: unknown): string {
-  if (!isRecord(error)) return 'Account event history is unavailable. Retry to request it again.';
-  const body = error['error'];
-  if (isRecord(body)) {
-    const detail = body['detail'];
-    if (isRecord(detail) && typeof detail['message'] === 'string') return detail['message'];
-  }
-  return 'Account event history is unavailable. Retry to request it again.';
 }

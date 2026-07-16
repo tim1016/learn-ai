@@ -29,39 +29,27 @@ class _GuidanceSpec:
     confirmation: OperatorConfirmationCopy | None = None
 
 
+_RECONCILE_SPEC = _GuidanceSpec(
+    anchor=OperatorBlockerAnchor(kind="reconciliation", subject_key=None),
+    audience="operator",
+    disposition="fix_here",
+    move_label="Run account reconcile",
+    move_action=ConfirmInFormAction(
+        kind="confirm_in_form",
+        anchor="account-reconciliation-action",
+    ),
+    confirmation=OperatorConfirmationCopy(
+        title="Run account reconciliation",
+        body="Request a fresh account reconciliation for this account.",
+        consequence="The returned reconciliation receipt will replace the current proof on this desk.",
+        confirm_label="Run account reconcile",
+    ),
+)
+
+
 _CURE_ACTION_GUIDANCE: dict[AccountCureAction, _GuidanceSpec] = {
-    "reconcile_now": _GuidanceSpec(
-        anchor=OperatorBlockerAnchor(kind="reconciliation", subject_key=None),
-        audience="operator",
-        disposition="fix_here",
-        move_label="Run account reconcile",
-        move_action=ConfirmInFormAction(
-            kind="confirm_in_form",
-            anchor="account-reconciliation-action",
-        ),
-        confirmation=OperatorConfirmationCopy(
-            title="Run account reconciliation",
-            body="Request a fresh account reconciliation for this account.",
-            consequence="The returned reconciliation receipt will replace the current proof on this desk.",
-            confirm_label="Run account reconcile",
-        ),
-    ),
-    "prove_evidence": _GuidanceSpec(
-        anchor=OperatorBlockerAnchor(kind="reconciliation", subject_key=None),
-        audience="operator",
-        disposition="fix_here",
-        move_label="Run account reconcile",
-        move_action=ConfirmInFormAction(
-            kind="confirm_in_form",
-            anchor="account-reconciliation-action",
-        ),
-        confirmation=OperatorConfirmationCopy(
-            title="Run account reconciliation",
-            body="Request a fresh account reconciliation for this account.",
-            consequence="The returned reconciliation receipt will replace the current proof on this desk.",
-            confirm_label="Run account reconcile",
-        ),
-    ),
+    "reconcile_now": _RECONCILE_SPEC,
+    "prove_evidence": _RECONCILE_SPEC,
     "clear_freeze": _GuidanceSpec(
         anchor=OperatorBlockerAnchor(kind="cure_tools", subject_key=None),
         audience="operator",

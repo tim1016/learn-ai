@@ -9,7 +9,9 @@ import type {
   AccountsRosterResponse,
 } from '../../../api/account-directory.types';
 import type { AccountTriageVerdictState } from '../../../api/account-reconciliation.types';
+import { isRecord } from '../../../api/operator-blocker.types';
 import { BrokerService } from '../../../services/broker.service';
+import { extractServerMessage } from '../operation-error';
 
 interface RosterState {
   readonly response: AccountsRosterResponse | null;
@@ -81,7 +83,7 @@ export class AccountDeskDirectoryStore {
         this.rosterState.update((state) => ({
           ...state,
           loading: false,
-          errorMessage: serverMessage(error, 'Account roster is unavailable. Retry to request it again.'),
+          errorMessage: extractServerMessage(error, 'Account roster is unavailable. Retry to request it again.'),
         }));
       }
     }
@@ -107,7 +109,7 @@ export class AccountDeskDirectoryStore {
         this.statusState.update((state) => ({
           ...state,
           loading: false,
-          errorMessage: serverMessage(error, 'Account service status is unavailable. Retry to request it again.'),
+          errorMessage: extractServerMessage(error, 'Account service status is unavailable. Retry to request it again.'),
         }));
       }
     }
@@ -233,16 +235,4 @@ function isInt64Ms(value: unknown): boolean {
 
 function isNullableString(value: unknown): boolean {
   return value === null || typeof value === 'string';
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function serverMessage(error: unknown, fallback: string): string {
-  if (!isRecord(error)) return fallback;
-  const body = error['error'];
-  if (!isRecord(body)) return fallback;
-  const detail = body['detail'];
-  return isRecord(detail) && typeof detail['message'] === 'string' ? detail['message'] : fallback;
 }
