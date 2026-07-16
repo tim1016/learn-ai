@@ -19,7 +19,7 @@ describe('AccountDeskRecoveryControlsComponent', () => {
     });
     await render(AccountDeskRecoveryControlsComponent, {
       providers: [
-        { provide: AccountDeskSurfaceStore, useValue: { triage: signal(triage), loading: signal(false), error: signal(null), retry: vi.fn() } },
+        { provide: AccountDeskSurfaceStore, useValue: { accountId: signal('DU1234567'), triage: signal(triage), loading: signal(false), error: signal(null), retry: vi.fn() } },
         { provide: AccountDeskGuidanceStore, useValue: { blockersFor: vi.fn().mockReturnValue([]) } },
         { provide: AccountDeskRecoveryStore, useValue: recovery },
         { provide: Router, useValue: { navigate: vi.fn() } },
@@ -44,7 +44,29 @@ describe('AccountDeskRecoveryControlsComponent', () => {
     });
     await render(AccountDeskRecoveryControlsComponent, {
       providers: [
-        { provide: AccountDeskSurfaceStore, useValue: { triage: signal(makeCleanAccountTriage()), loading: signal(false), error: signal(null), retry: vi.fn() } },
+        { provide: AccountDeskSurfaceStore, useValue: { accountId: signal('DU1234567'), triage: signal(makeCleanAccountTriage()), loading: signal(false), error: signal(null), retry: vi.fn() } },
+        { provide: AccountDeskGuidanceStore, useValue: { blockersFor: vi.fn().mockReturnValue([]) } },
+        { provide: AccountDeskRecoveryStore, useValue: recovery },
+        { provide: Router, useValue: { navigate: vi.fn() } },
+      ],
+    });
+
+    expect(await screen.findByText('receipt:opaque/1')).toBeTruthy();
+  });
+
+  it('renders a returned journal receipt with its opaque evidence token unchanged', async () => {
+    const recovery = recoveryStore({
+      success: signal({
+        kind: 'journal_cure',
+        receipt: {
+          bot_order_namespace: 'learn-ai/retired-bot/v1', symbol: 'SPY', journal_seq: 9,
+          evidence_refs: ['receipt:opaque/1'], recorded_at_ms: 1_780_000_000_000,
+        },
+      }),
+    });
+    await render(AccountDeskRecoveryControlsComponent, {
+      providers: [
+        { provide: AccountDeskSurfaceStore, useValue: { accountId: signal('DU1234567'), triage: signal(makeCleanAccountTriage()), loading: signal(false), error: signal(null), retry: vi.fn() } },
         { provide: AccountDeskGuidanceStore, useValue: { blockersFor: vi.fn().mockReturnValue([]) } },
         { provide: AccountDeskRecoveryStore, useValue: recovery },
         { provide: Router, useValue: { navigate: vi.fn() } },
@@ -58,6 +80,9 @@ describe('AccountDeskRecoveryControlsComponent', () => {
 function recoveryStore(overrides: Record<string, unknown> = {}) {
   return {
     requestAutomationChange: vi.fn(),
+    requestJournalCure: vi.fn(),
+    requestLegacyRetirement: vi.fn(),
+    refreshLegacyCandidates: vi.fn(),
     cancelConfirmation: vi.fn(),
     confirm: vi.fn(),
     setExposureOverrideReason: vi.fn(),
@@ -65,6 +90,9 @@ function recoveryStore(overrides: Record<string, unknown> = {}) {
     busy: signal(false),
     errorMessage: signal<string | null>(null),
     success: signal(null),
+    legacyCandidates: signal([]),
+    legacyLoading: signal(false),
+    legacyErrorMessage: signal<string | null>(null),
     ...overrides,
   };
 }

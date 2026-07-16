@@ -1,0 +1,25 @@
+<section class="legacy-claim-cure" aria-labelledby="account-desk-legacy-claim-title">
+  <header>
+    <h3 id="account-desk-legacy-claim-title">Legacy stale claims</h3>
+    <p>Only candidates freshly returned by the backend can be retired.</p>
+  </header>
+  @if (recovery.legacyLoading()) {
+    <p class="state">Loading legacy claim candidates…</p>
+  } @else if (recovery.legacyErrorMessage(); as errorMessage) {
+    <p class="error" role="alert">{{ errorMessage }}</p>
+    <button type="button" [disabled]="recovery.busy()" (click)="recovery.refreshLegacyCandidates()">Retry candidates</button>
+  } @else if (recovery.legacyCandidates().length === 0) {
+    <p class="state">No legacy stale claim is currently eligible for retirement.</p>
+    <button type="button" [disabled]="recovery.busy()" (click)="recovery.refreshLegacyCandidates()">Refresh candidates</button>
+  } @else {
+    @for (candidate of recovery.legacyCandidates(); track candidate.claim_id) {
+      <article class="candidate">
+        <p><code>{{ candidate.strategy_instance_id }}</code> · <code>{{ candidate.symbol }}</code></p>
+        <p>Claim ID <code>{{ candidate.claim_id }}</code></p>
+        <p>Claim {{ candidate.claimed_quantity }} · <span class="mono">{{ candidate.proof_summary | receiptLabel }}</span></p>
+        <p>Run <code>{{ candidate.run_id }}</code> · proved <app-timestamp-display [value]="candidate.proved_at_ms" mode="local" /></p>
+        <button type="button" [disabled]="recovery.busy()" (click)="requestRetirement(candidate)">Review retirement</button>
+      </article>
+    }
+  }
+</section>

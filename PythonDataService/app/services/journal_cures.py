@@ -16,6 +16,7 @@ from app.engine.live.account_clerk_journal import (
 from app.engine.live.account_registry import index_account_instance_bindings, read_account_instance_registry
 from app.engine.live.journal_exposure import project_journal_exposure
 from app.schemas.journal_cures import JournalCurePreview, JournalCureReceipt, JournalCureRequest
+from app.schemas.operator_blocker import OperatorConfirmationCopy
 from app.utils.timestamps import now_ms_utc
 
 
@@ -205,6 +206,12 @@ class JournalCureService:
             required_adjustment_sign="negative" if quantity > 0 else "positive",
             can_cure=True,
             reason_code="JOURNAL_CURE_CLAIM_REDUCIBLE",
+            confirmation=OperatorConfirmationCopy(
+                title="Append Clerk journal cure",
+                body="Append the exact operator adjustment shown from the current Clerk claim preview.",
+                consequence="The Clerk will durably record this immutable adjustment without changing broker truth.",
+                confirm_label="Append journal cure",
+            ),
         )
 
 

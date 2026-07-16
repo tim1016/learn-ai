@@ -12,6 +12,8 @@ from app.broker.ibkr.account_truth import compose_account_truth
 from app.broker.ibkr.models import (
     IbkrAccountSummary,
     IbkrConnectionHealth,
+    IbkrOrderEvent,
+    IbkrOrderSpec,
     IbkrPosition,
     IbkrPositionsSnapshot,
 )
@@ -21,6 +23,7 @@ from app.engine.live.account_artifacts import (
     AccountClerkLease,
     AccountFreezeEvidence,
     AccountInstanceBinding,
+    AccountOwnerGeneration,
     account_artifacts_root,
     advance_account_clerk_generation,
     append_account_event,
@@ -29,8 +32,11 @@ from app.engine.live.account_artifacts import (
     write_account_clerk_lease,
     write_account_freeze,
     write_account_instance_binding,
+    write_account_owner_generation,
 )
+from app.engine.live.account_clerk_journal import AccountClerkJournal
 from app.engine.live.account_observation_lease import assess_account_observation_lease
+from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.schemas.account_reconciliation import AccountConditionType, AccountCureAction
 from app.schemas.account_truth import (
     AccountTruthEvidenceGap,
@@ -764,6 +770,81 @@ def test_triage_without_receipt_is_unknown(tmp_path: Path) -> None:
     assert [(row.condition_type, row.cure_action) for row in triage.conditions] == [
         ("evidence_stale", "reconcile_now")
     ]
+
+
+def test_triage_authors_only_an_exact_single_instrument_recovery_flatten_move(tmp_path: Path) -> None:
+    binding = _retired_binding()
+    write_account_instance_binding(tmp_path, binding)
+    write_account_owner_generation(
+        tmp_path,
+        AccountOwnerGeneration(
+            account_id="DU1234567",
+            generation=7,
+            phase="accepting",
+            recorded_at_ms=1_780_000_002_000,
+            source="test",
+        ),
+    )
+    intent_id = "source-intent"
+    order_ref = f"{binding.bot_order_namespace}:{intent_id}"
+    source_intent = AccountOwnerSubmitIntent(
+        trace_id="source-trace",
+        account_id="DU1234567",
+        strategy_instance_id=binding.strategy_instance_id,
+        run_id=binding.run_id,
+        bot_order_namespace=binding.bot_order_namespace,
+        intent_id=intent_id,
+        order_ref=order_ref,
+        intent_kind="ORDER",
+        order_spec=IbkrOrderSpec(
+            symbol="SPY",
+            sec_type="STK",
+            action="BUY",
+            quantity=2,
+            order_type="MKT",
+            confirm_paper=True,
+            client_order_id="source-order",
+            order_ref=order_ref,
+        ).model_dump(mode="json"),
+        owner_generation=7,
+        created_at_ms=1_780_000_002_000,
+    )
+    journal = AccountClerkJournal(artifacts_root=tmp_path, account_id="DU1234567", now_ms=lambda: 1_780_000_002_000)
+    journal.record_intent(source_intent, validate_intent=lambda _: None)
+    journal.record_broker_event(
+        IbkrOrderEvent(
+            account_id="DU1234567",
+            order_id=1,
+            event_type="fill",
+            order_ref=order_ref,
+            symbol="SPY",
+            side="BUY",
+            fill_quantity=2,
+            exec_id="recovery-candidate-fill",
+            ts_ms=1_780_000_002_001,
+        )
+    )
+
+    triage = AccountReconciliationService(artifacts_root=tmp_path).triage(
+        account_id="DU1234567",
+        now_ms=1_780_000_003_000,
+    )
+
+    [candidate] = triage.recovery_flatten_candidates
+    assert candidate.intent.intent_kind == "RECOVERY_FLATTEN"
+    assert candidate.intent.owner_generation == 7
+    assert candidate.intent.order_spec["action"] == "SELL"
+    assert candidate.intent.order_spec["quantity"] == 2
+    assert candidate.confirmation.confirm_label == "Submit recovery flatten"
+    [blocker] = [
+        value
+        for value in triage.operator_blockers
+        if value.primary_move is not None
+        and value.primary_move.action.kind == "confirm_in_form"
+        and value.primary_move.action.anchor == "account-recovery-flatten-action"
+    ]
+    assert blocker.primary_move is not None
+    assert blocker.primary_move.target == candidate.intent.intent_id
 
 
 def test_triage_verdict_freeze_precedes_missing_proof(tmp_path: Path) -> None:

@@ -3,8 +3,15 @@ import { Injectable, computed, inject, signal } from '@angular/core';
 import type {
   AccountAcceptExposureOverrideResponse,
   AccountClearFreezeResponse,
+  AccountRecoveryFlattenCandidate,
   AccountReconciliationAutomationPolicy,
   AccountReconciliationReceipt,
+  JournalCurePreview,
+  JournalCureReceipt,
+  JournalCureRequest,
+  LegacyStaleClaimCandidate,
+  LegacyStaleClaimRetirementReceipt,
+  OperatorRecoveryFlattenResponse,
 } from '../../../api/account-reconciliation.types';
 import type { OperatorConfirmationCopy } from '../../../api/operator-blocker.types';
 import { BrokerService } from '../../../services/broker.service';
@@ -16,7 +23,10 @@ export type AccountDeskRecoveryCommand =
   | 'reconcile'
   | 'automation'
   | 'clear_freeze'
-  | 'exposure_override';
+  | 'exposure_override'
+  | 'journal_cure'
+  | 'legacy_retire'
+  | 'recovery_flatten';
 
 export interface AccountDeskRecoveryConfirmation {
   readonly command: AccountDeskRecoveryCommand;
@@ -27,18 +37,24 @@ export interface AccountDeskRecoveryConfirmation {
   readonly confirmLabel: string;
   readonly desiredAutomationEnabled: boolean | null;
   readonly reason: string;
+  readonly journalCure: { readonly preview: JournalCurePreview; readonly request: JournalCureRequest } | null;
+  readonly legacyCandidate: LegacyStaleClaimCandidate | null;
+  readonly recoveryFlatten: AccountRecoveryFlattenCandidate | null;
 }
 
 export type AccountDeskRecoverySuccess =
   | { readonly kind: 'reconcile'; readonly receipt: AccountReconciliationReceipt }
   | { readonly kind: 'automation'; readonly policy: AccountReconciliationAutomationPolicy }
   | { readonly kind: 'clear_freeze'; readonly receipt: AccountClearFreezeResponse }
-  | { readonly kind: 'exposure_override'; readonly receipt: AccountAcceptExposureOverrideResponse };
+  | { readonly kind: 'exposure_override'; readonly receipt: AccountAcceptExposureOverrideResponse }
+  | { readonly kind: 'journal_cure'; readonly receipt: JournalCureReceipt }
+  | { readonly kind: 'legacy_retire'; readonly receipt: LegacyStaleClaimRetirementReceipt }
+  | { readonly kind: 'recovery_flatten'; readonly receipt: OperatorRecoveryFlattenResponse };
 
 /**
- * Executes only account-desk actions explicitly declared by backend moves or
- * the current backend policy projection. It preserves returned receipts while
- * refreshing the route-scoped proof and event timeline after a success.
+ * Executes only exact account-desk requests declared by backend projections.
+ * It preserves returned receipts while refreshing route-scoped proof, event
+ * history, and cure candidates after a success.
  */
 @Injectable()
 export class AccountDeskRecoveryStore {
@@ -51,11 +67,17 @@ export class AccountDeskRecoveryStore {
   private readonly busyState = signal(false);
   private readonly errorMessageState = signal<string | null>(null);
   private readonly successState = signal<AccountDeskRecoverySuccess | null>(null);
+  private readonly legacyCandidatesState = signal<readonly LegacyStaleClaimCandidate[]>([]);
+  private readonly legacyLoadingState = signal(false);
+  private readonly legacyErrorMessageState = signal<string | null>(null);
 
   readonly confirmation = this.confirmationState.asReadonly();
   readonly busy = this.busyState.asReadonly();
   readonly errorMessage = this.errorMessageState.asReadonly();
   readonly success = this.successState.asReadonly();
+  readonly legacyCandidates = this.legacyCandidatesState.asReadonly();
+  readonly legacyLoading = this.legacyLoadingState.asReadonly();
+  readonly legacyErrorMessage = this.legacyErrorMessageState.asReadonly();
   readonly canConfirm = computed(() => {
     const confirmation = this.confirmationState();
     return confirmation !== null &&
@@ -65,11 +87,16 @@ export class AccountDeskRecoveryStore {
   load(accountId: string): void {
     if (this.accountKey() === accountId) return;
     this.requestGeneration += 1;
+    const generation = this.requestGeneration;
     this.accountKey.set(accountId);
     this.confirmationState.set(null);
     this.busyState.set(false);
     this.errorMessageState.set(null);
     this.successState.set(null);
+    this.legacyCandidatesState.set([]);
+    this.legacyLoadingState.set(false);
+    this.legacyErrorMessageState.set(null);
+    void this.loadLegacyCandidates(accountId, generation);
   }
 
   requestDeclaredMove(event: OperatorBlockerMoveEvent): void {
@@ -85,6 +112,14 @@ export class AccountDeskRecoveryStore {
       confirmation === null ||
       accountId === null
     ) return;
+    if (command === 'recovery_flatten') {
+      const candidate = this.surface.triage()?.recovery_flatten_candidates.find(
+        (value) => value.intent.intent_id === event.move.target && value.intent.account_id === accountId,
+      );
+      if (candidate === undefined) return;
+      this.openConfirmation(accountId, command, candidate.confirmation, { recoveryFlatten: candidate });
+      return;
+    }
     this.openConfirmation(accountId, command, confirmation);
   }
 
@@ -101,8 +136,61 @@ export class AccountDeskRecoveryStore {
       confirmLabel: desiredEnabled ? 'Enable auto-reconcile' : 'Disable auto-reconcile',
       desiredAutomationEnabled: desiredEnabled,
       reason: '',
+      journalCure: null,
+      legacyCandidate: null,
+      recoveryFlatten: null,
     });
     this.errorMessageState.set(null);
+  }
+
+  requestJournalCure(
+    preview: JournalCurePreview,
+    signedQuantity: number,
+    reason: string,
+    evidenceRef: string,
+  ): void {
+    const accountId = this.accountKey();
+    const confirmation = preview.confirmation;
+    if (
+      this.busyState() ||
+      accountId === null ||
+      preview.account_id !== accountId ||
+      !preview.can_cure ||
+      confirmation === null ||
+      !Number.isFinite(signedQuantity) ||
+      signedQuantity === 0 ||
+      reason.trim().length === 0 ||
+      evidenceRef.trim().length === 0
+    ) return;
+    this.openConfirmation(accountId, 'journal_cure', confirmation, {
+      journalCure: {
+        preview,
+        request: {
+          bot_order_namespace: preview.bot_order_namespace,
+          symbol: preview.symbol,
+          signed_quantity: signedQuantity,
+          reason: reason.trim(),
+          evidence_refs: [evidenceRef.trim()],
+          request_provenance: 'account-desk/journal-cure',
+          idempotency_key: crypto.randomUUID(),
+        },
+      },
+    });
+  }
+
+  requestLegacyRetirement(candidate: LegacyStaleClaimCandidate): void {
+    const accountId = this.accountKey();
+    if (
+      this.busyState() ||
+      accountId === null ||
+      !this.legacyCandidatesState().includes(candidate)
+    ) return;
+    this.openConfirmation(accountId, 'legacy_retire', candidate.confirmation, { legacyCandidate: candidate });
+  }
+
+  refreshLegacyCandidates(): void {
+    const accountId = this.accountKey();
+    if (accountId !== null && !this.busyState()) void this.loadLegacyCandidates(accountId, this.requestGeneration);
   }
 
   setExposureOverrideReason(reason: string): void {
@@ -131,6 +219,7 @@ export class AccountDeskRecoveryStore {
       await Promise.all([
         this.surface.load(confirmation.accountId),
         this.events.load(confirmation.accountId),
+        this.loadLegacyCandidates(confirmation.accountId, generation),
       ]);
     } catch (error) {
       if (this.isCurrent(confirmation.accountId, generation)) {
@@ -145,6 +234,11 @@ export class AccountDeskRecoveryStore {
     accountId: string,
     command: Exclude<AccountDeskRecoveryCommand, 'automation'>,
     confirmation: OperatorConfirmationCopy,
+    details: {
+      readonly journalCure?: { readonly preview: JournalCurePreview; readonly request: JournalCureRequest };
+      readonly legacyCandidate?: LegacyStaleClaimCandidate;
+      readonly recoveryFlatten?: AccountRecoveryFlattenCandidate;
+    } = {},
   ): void {
     this.confirmationState.set({
       command,
@@ -155,6 +249,9 @@ export class AccountDeskRecoveryStore {
       confirmLabel: confirmation.confirm_label,
       desiredAutomationEnabled: null,
       reason: '',
+      journalCure: details.journalCure ?? null,
+      legacyCandidate: details.legacyCandidate ?? null,
+      recoveryFlatten: details.recoveryFlatten ?? null,
     });
     this.errorMessageState.set(null);
   }
@@ -186,6 +283,50 @@ export class AccountDeskRecoveryStore {
             reason: confirmation.reason.trim(),
           }),
         };
+      case 'journal_cure':
+        if (confirmation.journalCure === null) throw new Error('Journal cure confirmation is incomplete.');
+        return {
+          kind: 'journal_cure',
+          receipt: await this.broker.applyJournalCure(confirmation.accountId, confirmation.journalCure.request),
+        };
+      case 'legacy_retire':
+        if (confirmation.legacyCandidate === null) throw new Error('Legacy retirement confirmation is incomplete.');
+        return {
+          kind: 'legacy_retire',
+          receipt: await this.broker.retireLegacyStaleClaim(confirmation.accountId, {
+            strategy_instance_id: confirmation.legacyCandidate.strategy_instance_id,
+            run_id: confirmation.legacyCandidate.run_id,
+            symbol: confirmation.legacyCandidate.symbol,
+            requested_by: 'account-desk.operator',
+          }),
+        };
+      case 'recovery_flatten':
+        if (confirmation.recoveryFlatten === null) throw new Error('Recovery flatten confirmation is incomplete.');
+        return {
+          kind: 'recovery_flatten',
+          receipt: await this.broker.submitOperatorRecoveryFlatten(confirmation.accountId, {
+            intent: confirmation.recoveryFlatten.intent,
+            request_provenance: 'account-desk/recovery-flatten',
+          }),
+        };
+    }
+  }
+
+  private async loadLegacyCandidates(accountId: string, generation: number): Promise<void> {
+    if (!this.isCurrent(accountId, generation)) return;
+    this.legacyLoadingState.set(true);
+    this.legacyErrorMessageState.set(null);
+    try {
+      const response = await this.broker.legacyStaleClaimCandidates(accountId);
+      if (!this.isCurrent(accountId, generation)) return;
+      this.legacyCandidatesState.set(response.account_id === accountId ? response.candidates : []);
+    } catch (error) {
+      if (this.isCurrent(accountId, generation)) {
+        this.legacyCandidatesState.set([]);
+        this.legacyErrorMessageState.set(recoveryErrorMessage(error));
+      }
+    } finally {
+      if (this.isCurrent(accountId, generation)) this.legacyLoadingState.set(false);
     }
   }
 
@@ -202,6 +343,8 @@ function recoveryCommandForAnchor(anchor: string): Exclude<AccountDeskRecoveryCo
       return 'clear_freeze';
     case 'account-exposure-override-action':
       return 'exposure_override';
+    case 'account-recovery-flatten-action':
+      return 'recovery_flatten';
     default:
       return null;
   }

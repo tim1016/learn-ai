@@ -3,6 +3,7 @@ import type {
   AccountFreezeBanner,
   AccountReconciliationAutomationPolicy,
   AccountReconciliationReceipt,
+  AccountRecoveryFlattenCandidate,
   AccountObservationView,
   AccountTriageBotRef,
   AccountTriageResponse,
@@ -24,6 +25,7 @@ interface AccountTriageFixtureOptions {
   freezeBanner?: AccountFreezeBanner | null;
   clearFreezeActionable?: boolean;
   affectedBots?: AccountTriageBotRef[];
+  recoveryFlattenCandidates?: AccountRecoveryFlattenCandidate[];
 }
 
 interface AccountFreezeConditionOptions {
@@ -98,6 +100,7 @@ export function makeCleanAccountTriage(
     freeze_banner: options.freezeBanner ?? null,
     clear_freeze_actionable: options.clearFreezeActionable ?? false,
     affected_bots: options.affectedBots ?? [],
+    recovery_flatten_candidates: options.recoveryFlattenCandidates ?? [],
     operator_blockers: [],
   };
 }

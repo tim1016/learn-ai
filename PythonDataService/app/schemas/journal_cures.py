@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.engine.live.account_clerk_journal import AccountClerkRecoveryFlattenReceipt
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
+from app.schemas.operator_blocker import OperatorConfirmationCopy
 
 
 class JournalCureRequest(BaseModel):
@@ -95,6 +96,16 @@ class JournalCurePreview(BaseModel):
     required_adjustment_sign: Literal["positive", "negative"] | None = None
     can_cure: bool
     reason_code: str
+    confirmation: OperatorConfirmationCopy | None = None
+
+
+class AccountRecoveryFlattenCandidate(BaseModel):
+    """One server-authored, exact Clerk recovery request safe to confirm."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    intent: AccountOwnerSubmitIntent
+    confirmation: OperatorConfirmationCopy
 
 
 class OperatorRecoveryFlattenRequest(BaseModel):

@@ -1,11 +1,14 @@
 import { ChangeDetectionStrategy, Component, ElementRef, computed, effect, input, output, viewChild } from '@angular/core';
 
+import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
+import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import type { AccountDeskRecoveryConfirmation } from './account-desk-recovery-store.service';
 
 /** Native-dialog confirmation surface for the existing account recovery endpoints. */
 @Component({
   selector: 'app-account-desk-recovery-confirm-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [ReceiptLabelPipe, TimestampDisplayComponent],
   templateUrl: './account-desk-recovery-confirm-dialog.component.html',
   styleUrl: './account-desk-recovery-confirm-dialog.component.scss',
 })

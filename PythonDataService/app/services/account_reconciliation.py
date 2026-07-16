@@ -69,6 +69,7 @@ from app.schemas.artifact_io import (
 )
 from app.schemas.live_runs import GateResult
 from app.services.account_desk_guidance import author_account_desk_blockers
+from app.services.account_recovery_flatten_candidates import recovery_flatten_candidates
 from app.services.account_truth_snapshot import AccountTruthSnapshot, assess_account_truth
 from app.utils.timestamps import now_ms_utc
 
@@ -733,6 +734,12 @@ class AccountReconciliationService:
             now_ms=generated_at_ms,
             receipt_invalidation=receipt_invalidation,
         )
+        recovery_candidates = recovery_flatten_candidates(
+            artifacts_root=self._artifacts_root,
+            account_id=canonical_account_id,
+            bindings=latest_bindings,
+            generated_at_ms=generated_at_ms,
+        )
         return AccountTriageResponse(
             generated_at_ms=generated_at_ms,
             account_id=canonical_account_id,
@@ -768,9 +775,11 @@ class AccountReconciliationService:
                 )
                 for binding in active_bindings
             ],
+            recovery_flatten_candidates=recovery_candidates,
             operator_blockers=author_account_desk_blockers(
                 conditions,
                 clear_freeze_actionable=clear_freeze_actionable,
+                recovery_flatten_candidates=recovery_candidates,
             ),
         )
 

@@ -1,10 +1,17 @@
-import { provideZonelessChangeDetection } from '@angular/core';
+import { provideZonelessChangeDetection, signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { AccountReconciliationReceipt } from '../../../api/account-reconciliation.types';
+import type {
+  AccountRecoveryFlattenCandidate,
+  AccountReconciliationReceipt,
+  AccountTriageResponse,
+  JournalCurePreview,
+  LegacyStaleClaimCandidate,
+} from '../../../api/account-reconciliation.types';
 import type { OperatorBlockerMoveEvent } from '../shared/operator-blocker-list/operator-blocker-list.component';
 import { BrokerService } from '../../../services/broker.service';
+import { makeCleanAccountTriage } from '../testing/account-triage-fixtures';
 import { AccountDeskEventsStore } from './account-desk-events-store.service';
 import { AccountDeskRecoveryStore } from './account-desk-recovery-store.service';
 import { AccountDeskSurfaceStore } from './account-desk-surface-store.service';
@@ -15,13 +22,20 @@ describe('AccountDeskRecoveryStore', () => {
     updateAccountReconciliationAutomation: vi.fn(),
     clearAccountFreeze: vi.fn(),
     acceptExposureOverride: vi.fn(),
+    previewJournalCure: vi.fn(),
+    applyJournalCure: vi.fn(),
+    legacyStaleClaimCandidates: vi.fn(),
+    retireLegacyStaleClaim: vi.fn(),
+    submitOperatorRecoveryFlatten: vi.fn(),
   };
-  const surface = { load: vi.fn() };
+  const surface = { load: vi.fn(), triage: signal<AccountTriageResponse | null>(null) };
   const events = { load: vi.fn() };
 
   beforeEach(() => {
     Object.values(broker).forEach((method) => method.mockReset());
+    broker.legacyStaleClaimCandidates.mockResolvedValue({ account_id: 'DU1234567', candidates: [] });
     surface.load.mockReset().mockResolvedValue(undefined);
+    surface.triage = signal(null);
     events.load.mockReset().mockResolvedValue(undefined);
     TestBed.configureTestingModule({
       providers: [
@@ -127,9 +141,99 @@ describe('AccountDeskRecoveryStore', () => {
     expect(store.success()).toBeNull();
     expect(surface.load).not.toHaveBeenCalledWith('DU7654321');
   });
+
+  it('confirms the exact fresh journal preview, preserves its receipt, and refreshes shared proof', async () => {
+    const store = TestBed.inject(AccountDeskRecoveryStore);
+    const preview = journalPreview();
+    broker.applyJournalCure.mockResolvedValue({
+      schema_version: 1,
+      account_id: 'DU1234567',
+      bot_order_namespace: preview.bot_order_namespace,
+      symbol: preview.symbol,
+      signed_quantity: -2,
+      operator_attribution: 'local-operator',
+      request_provenance: 'account-desk/journal-cure',
+      reason: 'Operator reviewed the fresh claim.',
+      evidence_refs: ['receipt:opaque/1'],
+      idempotency_key: 'journal-key',
+      recorded_at_ms: 1_780_000_000_000,
+      journal_seq: 9,
+    });
+    store.load('DU1234567');
+
+    store.requestJournalCure(preview, -2, 'Operator reviewed the fresh claim.', 'receipt:opaque/1');
+    await store.confirm();
+
+    expect(broker.applyJournalCure).toHaveBeenCalledWith('DU1234567', expect.objectContaining({
+      bot_order_namespace: preview.bot_order_namespace,
+      symbol: preview.symbol,
+      signed_quantity: -2,
+      evidence_refs: ['receipt:opaque/1'],
+    }));
+    expect(store.success()?.kind).toBe('journal_cure');
+    expect(surface.load).toHaveBeenCalledWith('DU1234567');
+    expect(events.load).toHaveBeenCalledWith('DU1234567');
+  });
+
+  it('keeps a preview-to-confirm drift rejection distinct from a journal-cure success', async () => {
+    const store = TestBed.inject(AccountDeskRecoveryStore);
+    broker.applyJournalCure.mockRejectedValue({ error: { detail: { message: 'The Clerk preview is stale.' } } });
+    store.load('DU1234567');
+    store.requestJournalCure(journalPreview(), -2, 'Operator reviewed the fresh claim.', 'receipt:opaque/1');
+
+    await store.confirm();
+
+    expect(store.success()).toBeNull();
+    expect(store.errorMessage()).toBe('The Clerk preview is stale.');
+    expect(surface.load).not.toHaveBeenCalled();
+    expect(events.load).not.toHaveBeenCalled();
+  });
+
+  it('requires a currently returned legacy candidate and allows cancellation without a mutation', async () => {
+    const candidate = legacyCandidate();
+    broker.legacyStaleClaimCandidates.mockResolvedValue({
+      account_id: 'DU1234567', generated_at_ms: 1_780_000_000_000, candidates: [candidate],
+    });
+    const store = TestBed.inject(AccountDeskRecoveryStore);
+    store.load('DU1234567');
+    await Promise.resolve();
+
+    store.requestLegacyRetirement(candidate);
+    expect(store.confirmation()?.legacyCandidate?.claim_id).toBe(candidate.claim_id);
+    store.cancelConfirmation();
+
+    expect(broker.retireLegacyStaleClaim).not.toHaveBeenCalled();
+  });
+
+  it('submits recovery flatten only when its backend action target matches a current exact candidate', async () => {
+    const candidate = recoveryFlattenCandidate();
+    surface.triage.set(makeCleanAccountTriage({
+      accountId: 'DU1234567',
+      recoveryFlattenCandidates: [candidate],
+    }));
+    broker.submitOperatorRecoveryFlatten.mockResolvedValue({
+      recovery_flatten: {
+        status: 'recovery_flattened',
+        recorded: { intent_id: candidate.intent.intent_id, order_ref: candidate.intent.order_ref, journal_seq: 4, recorded_at_ms: 1_780_000_000_000 },
+        broker_acked: { intent_id: candidate.intent.intent_id, order_ref: candidate.intent.order_ref, journal_seq: 5, recorded_at_ms: 1_780_000_000_001, order_id: 12, perm_id: null, exec_id: null },
+        cancelled_order_ids: [],
+      },
+    });
+    const store = TestBed.inject(AccountDeskRecoveryStore);
+    store.load('DU1234567');
+    store.requestDeclaredMove(move('account-recovery-flatten-action', candidate.intent.intent_id));
+
+    expect(store.confirmation()?.command).toBe('recovery_flatten');
+    await store.confirm();
+
+    expect(broker.submitOperatorRecoveryFlatten).toHaveBeenCalledWith('DU1234567', {
+      intent: candidate.intent,
+      request_provenance: 'account-desk/recovery-flatten',
+    });
+  });
 });
 
-function move(anchor: string): OperatorBlockerMoveEvent {
+function move(anchor: string, target: string | null = null): OperatorBlockerMoveEvent {
   return {
     blocker: {
       condition: { id: 'condition-1', severity: 'blocking', scope: 'account', evidence: {} },
@@ -137,10 +241,52 @@ function move(anchor: string): OperatorBlockerMoveEvent {
       headline: 'Backend authored headline', detail: 'Backend authored detail', primary_move: null, secondary_moves: [], applies_to: 'both',
     },
     move: {
-      label: 'Backend authored move', action: { kind: 'confirm_in_form', anchor }, target: null,
+      label: 'Backend authored move', action: { kind: 'confirm_in_form', anchor }, target,
       confirmation: {
         title: 'Backend authored title', body: 'Backend authored body', consequence: 'Backend authored consequence', confirm_label: 'Confirm', required_token: '',
       },
+    },
+  };
+}
+
+function journalPreview(): JournalCurePreview {
+  return {
+    account_id: 'DU1234567', bot_order_namespace: 'learn-ai/retired-bot/v1', symbol: 'SPY', journal_quantity: 2,
+    required_adjustment_sign: 'negative', can_cure: true, reason_code: 'JOURNAL_CURE_CLAIM_REDUCIBLE',
+    confirmation: {
+      title: 'Append Clerk journal cure', body: 'Backend preview body.', consequence: 'Backend consequence.',
+      confirm_label: 'Append journal cure', required_token: '',
+    },
+  };
+}
+
+function legacyCandidate(): LegacyStaleClaimCandidate {
+  return {
+    claim_id: 'legacy:opaque/1', strategy_instance_id: 'retired-bot', run_id: 'run-retired',
+    bot_order_namespace: 'learn-ai/retired-bot/v1', symbol: 'SPY', claimed_quantity: 2,
+    proof_summary: 'LEGACY_CLAIM_BROKER_FLAT:SPY', proved_at_ms: 1_780_000_000_000,
+    confirmation: {
+      title: 'Retire legacy stale claim', body: 'Backend candidate body.', consequence: 'Backend consequence.',
+      confirm_label: 'Retire stale claim', required_token: '',
+    },
+  };
+}
+
+function recoveryFlattenCandidate(): AccountRecoveryFlattenCandidate {
+  return {
+    intent: {
+      trace_id: 'trace:opaque/1', account_id: 'DU1234567', strategy_instance_id: 'retired-bot', run_id: 'run-retired',
+      bot_order_namespace: 'learn-ai/retired-bot/v1', intent_id: 'flatten:opaque/1', order_ref: 'learn-ai/retired-bot/v1:flatten:opaque/1',
+      intent_kind: 'RECOVERY_FLATTEN', owner_generation: 7, created_at_ms: 1_780_000_000_000,
+      order_spec: {
+        symbol: 'SPY', sec_type: 'STK', action: 'SELL', quantity: 2, order_type: 'MKT', limit_price: null,
+        time_in_force: 'DAY', outside_rth: false, expiry_ms: null, strike: null, right: null, multiplier: 100,
+        confirm_paper: true, client_order_id: 'recovery:opaque/1', order_ref: 'learn-ai/retired-bot/v1:flatten:opaque/1', manual_order: false,
+      },
+    },
+    confirmation: {
+      title: 'Submit Clerk recovery flatten', body: 'Backend candidate body.', consequence: 'Backend consequence.',
+      confirm_label: 'Submit recovery flatten', required_token: '',
     },
   };
 }

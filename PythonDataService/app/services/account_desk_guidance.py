@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 
 from app.schemas.account_condition_actions import AccountCureAction
 from app.schemas.account_reconciliation import AccountConditionRow
+from app.schemas.journal_cures import AccountRecoveryFlattenCandidate
 from app.schemas.operator_blocker import (
     ConfirmInFormAction,
     Disposition,
@@ -96,6 +97,7 @@ def author_account_desk_blockers(
     conditions: list[AccountConditionRow],
     *,
     clear_freeze_actionable: bool,
+    recovery_flatten_candidates: list[AccountRecoveryFlattenCandidate] | None = None,
 ) -> list[OperatorBlocker]:
     """Attach declared guidance to triage conditions without client inference."""
 
@@ -128,6 +130,34 @@ def author_account_desk_blockers(
                 evidence={
                     "source": condition.source,
                     "evidence_at_ms": condition.evidence_at_ms,
+                },
+            )
+        )
+    for candidate in recovery_flatten_candidates or []:
+        blockers.append(
+            OperatorBlocker.for_host(
+                condition_id=f"account-recovery-flatten:{candidate.intent.intent_id}",
+                scope="bot",
+                host="account_desk",
+                anchor=OperatorBlockerAnchor(kind="cure_tools", subject_key=None),
+                audience="operator",
+                disposition="fix_here",
+                headline="Clerk recovery flatten is ready",
+                detail="The server has prepared one exact recovery request for a retired namespace.",
+                applies_to="both",
+                primary_move=OperatorMove(
+                    label="Review recovery flatten",
+                    target=candidate.intent.intent_id,
+                    action=ConfirmInFormAction(
+                        kind="confirm_in_form",
+                        anchor="account-recovery-flatten-action",
+                    ),
+                    confirmation=candidate.confirmation,
+                ),
+                severity="blocking",
+                evidence={
+                    "source": "account_clerk_journal",
+                    "evidence_at_ms": candidate.intent.created_at_ms,
                 },
             )
         )

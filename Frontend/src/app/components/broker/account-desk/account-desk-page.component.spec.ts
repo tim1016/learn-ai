@@ -101,6 +101,9 @@ function makeRecoveryStore() {
     load: vi.fn(),
     requestDeclaredMove: vi.fn(),
     requestAutomationChange: vi.fn(),
+    requestJournalCure: vi.fn(),
+    requestLegacyRetirement: vi.fn(),
+    refreshLegacyCandidates: vi.fn(),
     setExposureOverrideReason: vi.fn(),
     cancelConfirmation: vi.fn(),
     confirm: vi.fn(),
@@ -108,6 +111,9 @@ function makeRecoveryStore() {
     busy: signal(false),
     errorMessage: signal<string | null>(null),
     success: signal(null),
+    legacyCandidates: signal([]),
+    legacyLoading: signal(false),
+    legacyErrorMessage: signal<string | null>(null),
   };
 }
 

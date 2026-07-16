@@ -5,6 +5,8 @@ import { TimestampDisplayComponent } from '../../../shared/timestamp';
 import { AccountDeskGuidanceComponent } from './account-desk-guidance.component';
 import { AccountDeskGuidanceStore } from './account-desk-guidance-store.service';
 import { AccountDeskRecoveryConfirmDialogComponent } from './account-desk-recovery-confirm-dialog.component';
+import { AccountDeskJournalCureComponent } from './account-desk-journal-cure.component';
+import { AccountDeskLegacyClaimCureComponent } from './account-desk-legacy-claim-cure.component';
 import { AccountDeskRecoveryStore } from './account-desk-recovery-store.service';
 import { AccountDeskSurfaceStore } from './account-desk-surface-store.service';
 
@@ -14,6 +16,8 @@ import { AccountDeskSurfaceStore } from './account-desk-surface-store.service';
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     AccountDeskGuidanceComponent,
+    AccountDeskJournalCureComponent,
+    AccountDeskLegacyClaimCureComponent,
     AccountDeskRecoveryConfirmDialogComponent,
     ReceiptLabelPipe,
     TimestampDisplayComponent,

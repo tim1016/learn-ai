@@ -12,8 +12,9 @@ from app.schemas.account_truth import (
     AccountTruthResponse,
     AccountTruthSeverity,
 )
+from app.schemas.journal_cures import AccountRecoveryFlattenCandidate
 from app.schemas.live_runs import GateResult
-from app.schemas.operator_blocker import OperatorBlocker
+from app.schemas.operator_blocker import OperatorBlocker, OperatorConfirmationCopy
 
 AccountReconciliationState = Literal["CLEAN", "NOT_PROVEN"]
 AccountExposureResolution = Literal["flat", "accepted_override", "unresolved"]
@@ -224,6 +225,7 @@ class AccountTriageResponse(BaseModel):
     freeze_banner: AccountFreezeBanner | None = None
     clear_freeze_actionable: bool = False
     affected_bots: list[AccountTriageBotRef] = Field(default_factory=list)
+    recovery_flatten_candidates: list[AccountRecoveryFlattenCandidate] = Field(default_factory=list)
     operator_blockers: list[OperatorBlocker] = Field(default_factory=list)
 
 
@@ -240,6 +242,7 @@ class LegacyStaleClaimCandidate(BaseModel):
     claimed_quantity: int
     proof_summary: str = Field(min_length=1, max_length=512)
     proved_at_ms: int = Field(ge=0)
+    confirmation: OperatorConfirmationCopy
 
 
 class LegacyStaleClaimCandidatesResponse(BaseModel):

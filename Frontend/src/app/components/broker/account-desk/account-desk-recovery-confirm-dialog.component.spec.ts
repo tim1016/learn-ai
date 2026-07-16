@@ -9,7 +9,7 @@ describe('AccountDeskRecoveryConfirmDialogComponent', () => {
       inputs: {
         confirmation: {
           command: 'exposure_override', accountId: 'DU1234567', title: 'Accept account exposure', body: 'Backend body.',
-          consequence: 'Backend consequence.', confirmLabel: 'Accept exposure', desiredAutomationEnabled: null, reason: '',
+          consequence: 'Backend consequence.', confirmLabel: 'Accept exposure', desiredAutomationEnabled: null, reason: '', journalCure: null, legacyCandidate: null, recoveryFlatten: null,
         },
         busy: false,
         errorMessage: null,
@@ -34,7 +34,7 @@ describe('AccountDeskRecoveryConfirmDialogComponent', () => {
       inputs: {
         confirmation: {
           command: 'reconcile', accountId: 'DU1234567', title: 'Run account reconciliation', body: 'Backend body.',
-          consequence: 'Backend consequence.', confirmLabel: 'Run account reconcile', desiredAutomationEnabled: null, reason: '',
+          consequence: 'Backend consequence.', confirmLabel: 'Run account reconcile', desiredAutomationEnabled: null, reason: '', journalCure: null, legacyCandidate: null, recoveryFlatten: null,
         },
         busy: false,
         errorMessage: null,

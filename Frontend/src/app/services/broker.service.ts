@@ -9,6 +9,8 @@ import type {
   JournalCurePreview,
   JournalCureReceipt,
   JournalCureRequest,
+  OperatorRecoveryFlattenRequest,
+  OperatorRecoveryFlattenResponse,
   LegacyStaleClaimCandidatesResponse,
   LegacyStaleClaimRetireRequest,
   LegacyStaleClaimRetirementReceipt,
@@ -235,6 +237,18 @@ export class BrokerService {
     return firstValueFrom(
       this.http.post<JournalCureReceipt>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/journal-cures`,
+        payload,
+      ),
+    );
+  }
+
+  submitOperatorRecoveryFlatten(
+    accountId: string,
+    payload: OperatorRecoveryFlattenRequest,
+  ): Promise<OperatorRecoveryFlattenResponse> {
+    return firstValueFrom(
+      this.http.post<OperatorRecoveryFlattenResponse>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/operator-recovery-flatten`,
         payload,
       ),
     );
