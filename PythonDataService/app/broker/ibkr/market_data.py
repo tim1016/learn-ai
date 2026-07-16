@@ -18,10 +18,12 @@ Cancellation: when the consumer breaks out of the iterator, the
 ``finally`` clause cancels every outstanding ``reqMktData`` so we don't
 leak server-side market-data lines.
 
-Pacing: IBKR's documented limits cap us at ~50 messages/sec and a
-hardcoded 100 streaming-line quota per client. Callers are expected to
-pre-narrow strikes to the ATM band; this module does not prevent
-oversubscription on its own.
+Pacing: at the default 100-line allocation IBKR permits 50 requests/sec
+per client connection; ``IbkrClient`` conservatively pins the transport to
+45. Active lines are a user-level allocation shared by TWS and every API
+client, not 100 fresh lines per connection. Callers are expected to pre-narrow
+strikes to the ATM band; this module does not know the username's remaining
+shared capacity.
 """
 
 from __future__ import annotations
@@ -212,9 +214,9 @@ async def stream_option_chain(
     client.require_connected()
 
     # Resolve and qualify everything before opening any market-data
-    # subscriptions. IBKR caps streaming-line quota per client, so a
-    # leaked ``reqMktData`` from a setup that fails partway through
-    # consumes a slot until the client reconnects.
+    # subscriptions. A leaked ``reqMktData`` from a setup that fails
+    # partway through consumes one of the username's shared market-data
+    # lines until the owning client reconnects.
     stock = await qualify_underlying(client, symbol)
     contracts = await build_chain_contracts(client, symbol, expiry_ms, strikes)
 

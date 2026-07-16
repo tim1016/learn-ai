@@ -13,7 +13,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/broker/ibkr/*` or `PythonDataService/app/engine/live/*`. Same-PR rule: if you touch those files, update the matching section here and bump **Last reviewed**.
 >
-> **Last reviewed:** 2026-07-12 (Issue #1005 Slices 0-5 — read-only capability probe, centralized session authority, session-policy submit gate, explicit extended-hours limit-order mechanism, bar provenance/session metadata, and continuous extended-session lifecycle.).
+> **Last reviewed:** 2026-07-15 (IBKR market-data capacity correction — same-process real-time-bar multiplexing, 60-new-requests/600-second pacing, and user-level line-budget documentation).
 
 ---
 
@@ -21,6 +21,7 @@
 
 - [1. Scope and authority](#1-scope-and-authority)
 - [2. Architecture map](#2-architecture-map)
+  - [2.1 Connection and market-data capacity contract](#21-connection-and-market-data-capacity-contract)
 - [3. Configuration and four-layer paper safety](#3-configuration-and-four-layer-paper-safety)
 - [4. Broker module surface (`app/broker/ibkr/`)](#4-broker-module-surface-appbrokeribkr)
 - [5. REST + SSE endpoints (`/api/broker/*`)](#5-rest--sse-endpoints-apibroker)
@@ -86,6 +87,47 @@ It does **not** answer:
 
 **Boundary invariant** (do not violate without updating this section): `app/broker/ibkr/` is the **only** place in the repo that imports `ib_async`. Routers, the live engine, and the frontend talk to IBKR through the broker module's curated Python surface or its REST/SSE endpoints. Verified by `git grep -l "import ib_async"` across the repo.
 
+### 2.1 Connection and market-data capacity contract
+
+These limits have different scopes. Treating every number as a global
+Gateway limit—or every number as a per-client limit—produces the wrong
+architecture.
+
+| Concern | Current IBKR contract | learn-ai policy |
+|---|---|---|
+| API connections | One TWS/IB Gateway instance accepts up to **32 simultaneous API connections**. A `clientId` must be unique among active connections and **may be any integer**; `0..31` is not the valid-ID range. | Never open one client per ticker. learn-ai deliberately accepts the non-negative ID subset. The public FastAPI data plane reuses its lifespan-owned `IbkrClient`. Host-runner children still use distinct clients because client/order identity and failure isolation are safety contracts, not market-data scaling tricks. |
+| Per-second request pacing | IBKR Campus defines the rate per **client connection** as maximum market-data lines ÷ 2 per second: 50 requests/s at the default 100-line allocation. | `IbkrClient` explicitly pins `ib_async` to 45 requests per 1-second interval, leaving headroom below the default allocation. Do not add another ticker client to evade this pace. |
+| User market-data lines | The default is **100 active lines shared by TWS and every API connection** for that username. The allocation can rise with commissions, equity, or quote boosters. | Local stream caps are conservative admission checks, not proof of remaining user capacity: this process cannot see TWS watchlists or sibling processes. IBKR error 101 remains the authoritative refusal when the shared pool is exhausted. |
+| `reqRealTimeBars` | Emits only 5-second bars. Each active subscription consumes a Level-I market-data line. No more than **60 new real-time-bar requests per 600 seconds**. | `_RealtimeBarSubscriptionRegistry` keys by `(client, conId, bar size, whatToShow, useRTH)`, reference-counts consumers, enforces the component-local `IBKR_REALTIME_BAR_MAX_ACTIVE` admission cap (100 by default), and cancels only after the final consumer exits. `_RealtimeBarRequestPacer` enforces the 60/600 sliding window before a new broker request. `ib_async` owns the internal unique reqId and callback routing. |
+| `reqHistoricalData` | At most **50 simultaneous open historical requests**. Small-bar historical requests also have duplicate/same-contract/60-per-10-minute pacing rules. With `keepUpToDate=True`, IBKR updates the in-flight bar approximately every 4–6 seconds and can emit the same bar timestamp repeatedly. | Historical backfill remains finite (`keepUpToDate=False`). The 50-open-request ceiling is not documented as the active `reqRealTimeBars` ceiling and must not be applied to that path. |
+
+The public 5-second snapshot buffer and public 1-minute consolidator are
+separate consumers but share one underlying real-time-bar line for the same
+symbol. A late consumer starts with the next broker delivery instead of
+replaying the shared `RealTimeBarList`; persisted bar replay remains the
+historical recovery authority.
+
+The registry is intentionally process-local. A host-runner child cannot share
+its in-memory list with the FastAPI process or another bot. A future truly
+central data plane would need a host-owned publisher with explicit liveness,
+backpressure, timestamp, and failure-propagation contracts; silently coupling
+order-owning children to an ad-hoc IPC feed is not acceptable.
+
+**Scaling rule:** switching from `reqRealTimeBars` to `reqMktData` and building
+bars locally does **not** create more market-data lines—both draw from the same
+user allocation. `reqMktData` is also watchlist/top-of-book data sampled at
+IBKR-defined intervals, not a raw exchange tick stream. Actual
+`reqTickByTickData` has a much smaller specialized allocation (approximately
+5% of market-data lines) and does not provide real-time options ticks. Local
+aggregation is justified only when those different semantics are required.
+When the symbol universe exceeds the available allocation, narrow the active
+universe, increase the IBKR allocation, or use a specialized external
+market-data provider. Multiple `clientId` values are not a capacity multiplier.
+
+Official sources: [TWS API documentation](https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-doc/),
+[TWS API reference](https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-ref/),
+and [market-data line allocation](https://www.interactivebrokers.com/campus/ibkr-api-page/market-data-subscriptions/).
+
 ---
 
 ## 3. Configuration and four-layer paper safety
@@ -107,6 +149,7 @@ runner while avoiding shell-sourcing the full env file.
 | `host` | `auto` | `auto` resolves the container default gateway via `/proc/net/route`; literal IP or hostname accepted. |
 | `port` | `4002` | Paper Gateway. Validated against `mode` — see Layer 2 below. |
 | `client_id` | `1` | Reserved for the FastAPI lifespan client; later phases (recorder, etc.) get higher IDs. |
+| `realtime_bar_max_active` | `100` | Component-local `reqRealTimeBars` cap. It does not prove user-level headroom because TWS and sibling clients share the allocation. Override with `IBKR_REALTIME_BAR_MAX_ACTIVE` only when the username's allocation supports it. |
 | `connect_attempts` | `3` | Each attempt wraps `ib_async.connectAsync` with a 5s timeout. |
 | `readonly` | `True` | Defense-in-depth at order placement time (Layer 0). Must be `false` in `.env` for Phase 3 endpoints. |
 | `persist_ticks` | `False` | Tick stream → Parquet. Off by default; flip when forensic queries are needed. |
@@ -136,10 +179,10 @@ Public surface only — private helpers (prefix `_`) and support modules are omi
 
 | Module | Public surface | Purpose |
 |---|---|---|
-| `client.py` | `IbkrClient`, `get_client`, `set_client`, `BrokerError`, `ConnectionRefusedDueToSentinelError`, `NotConnectedError` | `ib_async.IB` lifecycle wrapper. Owns the singleton client. Layers 1+3 of paper safety. |
+| `client.py` | `IbkrClient`, `get_client`, `set_client`, `BrokerError`, `ConnectionRefusedDueToSentinelError`, `NotConnectedError` | `ib_async.IB` lifecycle wrapper. Owns the singleton client, pins transport pacing to 45 requests per 1-second interval, and implements Layers 1+3 of paper safety. |
 | `config.py` | `IbkrSettings`, `get_settings`, `reset_settings_for_testing`, `PAPER_PORTS`, `LIVE_PORTS` | Env-var-backed settings + Layer 2. |
 | `contracts.py` | `qualify_underlying`, `list_expirations`, `list_strikes`, `build_option_contract`, `list_qualified_strikes`, `build_chain_contracts`, `expiry_ms_to_yyyymmdd`, `yyyymmdd_to_expiry_ms` | Stock + Option contract resolution. SMART/USD only. |
-| `bars.py` | `aggregate_realtime_bar`, `stream_minute_bars`, `fetch_historical_minute_bars`, `LiveBarCounters`, `IBKRBarStreamError`, `IbkrMinuteBar` (model) | 5-second TRADES → closed 1-minute bar aggregation. Two duplicate policies: `strict` (default) fails fast on any duplicate/non-monotonic timestamp; `live_idempotent` (used by `stream_minute_bars`) absorbs IBKR redelivery of the most recent 5-second bar — exact redelivery skipped, different-valued redelivery corrects the still-open minute, both logged + counted on `LiveBarCounters`. A timestamp from an already-emitted minute is `< last_source_ms` and still fails fast as a regression. Issue #1005 Slice 4 adds per-bar provenance fields: `provenance`, `venue`, `session_phase`, and `use_rth`; IBKR live bars stamp `ibkr_realtime`, qualified contract venue, session phase, and the requested `useRTH` flag. Historical IBKR bars use read-only `reqHistoricalDataAsync`, timeout, monotonicity guard, and `ibkr_historical` provenance. |
+| `bars.py` | `aggregate_realtime_bar`, `stream_raw_5s_bars`, `stream_minute_bars`, `fetch_historical_minute_bars`, `LiveBarCounters`, `IBKRBarStreamError`, `IbkrMinuteBar` (model) | One IBKR 5-second TRADES source supports raw 5-second consumers and closed 1-minute aggregation. Same-process/same-contract consumers multiplex through one reference-counted `reqRealTimeBars` list; the final release cancels the broker line. New broker subscriptions are sliding-window paced at 60 per 600 seconds. Two duplicate policies remain: `strict` (default) fails fast on duplicate/non-monotonic timestamps; `live_idempotent` absorbs or corrects the most recent active-subscription redelivery and surfaces counters/logs. Per-bar provenance fields are `provenance`, `venue`, `session_phase`, and `use_rth`. Historical IBKR bars use finite `reqHistoricalDataAsync` (`keepUpToDate=False`), timeout, monotonicity guard, and `ibkr_historical` provenance. |
 | `capability.py` | `probe_session_data_capability`, `parse_ibkr_schedule`, `classify_entitlement` | Issue #1005 Slice 0 read-only capability probe. Uses `reqContractDetailsAsync` to retain `tradingHours` / `liquidHours` / `timeZoneId` / `validExchanges`, requests a brief market-data line after `reqMarketDataType(1)` to classify live/delayed/frozen/none, cancels the line promptly, and calls `whatIfOrderAsync` with `whatIf=True` plus `outsideRth=True`. It never calls `placeOrder`. Schedule windows are parsed through IBKR's instrument timezone and serialized as `int64 ms UTC`; malformed schedule strings fail loudly. |
 | `services/session_authority.py` | `session_state_at_ms` | Issue #1005 Slice 1/2 session authority. Consumes persisted `SessionDataCapability` windows when available, falls back to the canonical NYSE calendar otherwise, and emits PRE/RTH/POST/OVERNIGHT/CLOSED with next-transition ms. Strategy activity permission is evaluated from `allowed_sessions`, defaulting to RTH-only. Operator surface reads this authority instead of deriving PRE/POST locally. Authority split ratified in ADR 0029. |
 | `market_data.py` | `stream_option_chain` | `reqMktData` with generic ticks `100,101,106` → debounced `IbkrChainSnapshot` SSE. Greeks selection: `model > bid > ask > last > none`. |
@@ -447,6 +490,7 @@ If any of these fails, fix it before running. The diagnostic endpoint will tell 
 
 | Date | Reviewer | Notes |
 |---|---|---|
+| 2026-07-15 | Codex GPT-5 | Corrected IBKR capacity scopes from current primary documentation: 32 is a simultaneous-connection count rather than a `clientId` range; the default 100 market-data lines are shared across TWS and API clients; per-second request pacing is per connection; 50 simultaneous open requests belongs to historical data; and `reqRealTimeBars` uses the shared line allocation plus 60-new-requests/600-second pacing. Added same-process real-time-bar multiplexing, reference-counted cancellation, configurable local active-line admission, and an explicit 45 requests/second transport pin. |
 | 2026-07-12 | Codex GPT-5 | Issue #1005 Slice 0 capability probe landed: `capability.py`, `/api/broker/capability/probe`, `/api/broker/capability`, persisted `SessionDataCapability` JSON snapshots, schedule parsing through instrument timezone, market-data entitlement classification, non-submitting `whatIf=True` outside-RTH preview, and Broker Status capability panel. |
 | 2026-07-12 | Codex GPT-5 | Issue #1005 Slice 1 session authority landed: `services/session_authority.py`, operator-surface trading session now consumes capability snapshots when present and falls back to NYSE calendar otherwise, `OVERNIGHT` was added to the trading-session phase contract, and ADR 0029 records the calendar-vs-IBKR authority split. |
 | 2026-07-12 | Codex GPT-5 | Issue #1005 Slice 2 session-gated execution landed: `LiveConfig.allowed_sessions` defaults to RTH-only and round-trips through deploy/ledger validation; real-broker `LiveEngine` submit paths consult centralized session authority using persisted capability snapshots when available; `LivePortfolio.submit_pending_orders` drops and WAL-marks pending intents with `session_policy_block` before any broker call when the phase is closed, not strategy-permitted, or not yet supported by the order mechanism. PRE/POST/OVERNIGHT placement remains blocked until Slice 3. |

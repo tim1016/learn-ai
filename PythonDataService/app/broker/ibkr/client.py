@@ -53,6 +53,11 @@ from app.utils.timestamps import now_ms_utc
 logger = logging.getLogger(__name__)
 
 _ORDER_ERROR_BUFFER_LIMIT = 512
+# Conservative headroom below IBKR's default 50 requests/second connection
+# pace. Pin the ib_async transport explicitly so a dependency-default change
+# cannot silently turn startup fan-out into broker error 100/disconnect risk.
+_API_MAX_REQUESTS_PER_SECOND = 45
+_API_REQUEST_INTERVAL_SECONDS = 1
 
 
 # Sentinel value for ``IBKR_HOST`` that triggers host auto-resolution.
@@ -255,6 +260,8 @@ class IbkrClient:
 
         self._settings = settings or get_settings()
         self._ib: IB = IB()
+        self._ib.client.MaxRequests = _API_MAX_REQUESTS_PER_SECOND
+        self._ib.client.RequestsInterval = _API_REQUEST_INTERVAL_SECONDS
         self._connected_account: str | None = None
         # Tracks whether TWS error 326 ("client id already in use") has
         # surfaced during the current connect attempt. ib_async logs this

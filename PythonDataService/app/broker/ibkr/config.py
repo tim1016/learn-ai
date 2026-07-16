@@ -66,10 +66,18 @@ class IbkrSettings(BaseSettings):
     # 4002 = Gateway paper, 4001 = Gateway live, 7497 = TWS paper, 7496 = TWS live.
     port: int = Field(default=4002, ge=1, le=65535)
 
-    # Each client connecting to one Gateway instance must use a unique
-    # ``client_id``. Reserve 1 for the FastAPI lifespan client; later
-    # phases (e.g. background recorder) get higher IDs.
+    # Each connection to one Gateway/TWS instance must use a unique
+    # ``client_id``. IBKR permits up to 32 simultaneous API connections, but
+    # 0..31 is not the valid-ID range. IBKR accepts any integer; learn-ai uses
+    # a non-negative subset for predictable config/schema behavior. Reserve 1
+    # for the FastAPI lifespan client; later phases get higher IDs.
     client_id: int = Field(default=1, ge=0, le=2**31 - 1)
+
+    # Component-local admission cap for active reqRealTimeBars lines on this
+    # client. IBKR grants 100 user-level market-data lines by default, shared
+    # across TWS and every API client. This cap cannot observe those external
+    # consumers; keep it at or below the username's actual allocation.
+    realtime_bar_max_active: int = Field(default=100, ge=1, le=10_000)
 
     # Connect attempts before the lifespan event surfaces a startup
     # failure. Each attempt is a 5-second timeout inside ib_async.

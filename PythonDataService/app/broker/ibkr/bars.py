@@ -5,6 +5,14 @@ aggregates those into closed 1-minute bars for the live engine, enforcing
 the repo's timestamp policy at the ingestion boundary: every yielded model
 uses ``int64`` ms UTC.
 
+All same-process consumers for the same ``(client, contract, whatToShow,
+useRTH)`` tuple share one underlying ``reqRealTimeBars`` subscription. The
+registry reference-counts consumers and cancels the broker subscription only
+when the last consumer leaves. New subscriptions are paced at IBKR's
+documented ceiling of 60 requests per 600 seconds. ``ib_async`` separately
+throttles ordinary socket messages at the 45-per-second rate pinned by
+``IbkrClient``, below the default 50 requests/second connection limit.
+
 Two duplicate policies govern how a repeated source timestamp is treated
 (see ``DuplicatePolicy``):
 
@@ -26,7 +34,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections import deque
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -51,10 +60,219 @@ NO_BAR_WARNING_INITIAL_INTERVAL_S = 30.0
 NO_BAR_WARNING_MAX_INTERVAL_S = 300.0
 _HISTORICAL_BARS_TIMEOUT_S = 15.0
 _NY_TZ = ZoneInfo("America/New_York")
+_REALTIME_BAR_MAX_NEW_REQUESTS = 60
+_REALTIME_BAR_REQUEST_WINDOW_S = 600.0
+_REALTIME_BAR_DEFAULT_MAX_ACTIVE = 100
 
 
 class IBKRBarStreamError(Exception):
     """Raised when IBKR real-time bars violate timestamp invariants."""
+
+
+class _RealtimeBarRequestPacer:
+    """Sliding-window guard for *new* ``reqRealTimeBars`` requests.
+
+    IBKR permits at most 60 new real-time-bar subscriptions in 600 seconds.
+    Receiving bars on an already-open subscription does not consume this
+    request budget. The pacer intentionally waits instead of surfacing a
+    broker pacing violation; callers remain cancellable while waiting.
+
+    Reference: https://www.interactivebrokers.com/campus/ibkr-api-page/twsapi-doc/
+      ("Request Real Time Bars").
+    """
+
+    def __init__(
+        self,
+        *,
+        max_requests: int = _REALTIME_BAR_MAX_NEW_REQUESTS,
+        window_s: float = _REALTIME_BAR_REQUEST_WINDOW_S,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
+        if max_requests < 1:
+            raise ValueError("max_requests must be positive")
+        if window_s <= 0:
+            raise ValueError("window_s must be positive")
+        self._max_requests = max_requests
+        self._window_s = window_s
+        self._clock = clock
+        self._sleep = sleep
+        self._request_times: deque[float] = deque()
+
+    async def acquire(self) -> None:
+        delayed = False
+        while True:
+            now = self._clock()
+            cutoff = now - self._window_s
+            while self._request_times and self._request_times[0] <= cutoff:
+                self._request_times.popleft()
+            if len(self._request_times) < self._max_requests:
+                self._request_times.append(now)
+                return
+
+            wait_s = max(0.0, self._request_times[0] + self._window_s - now)
+            if not delayed:
+                logger.warning(
+                    "Pacing new IBKR real-time-bar subscription",
+                    extra={
+                        "action": "ibkr_realtime_bar_paced",
+                        "max_new_requests": self._max_requests,
+                        "window_s": self._window_s,
+                        "wait_s": wait_s,
+                    },
+                )
+                delayed = True
+            await self._sleep(wait_s)
+
+
+_SubscriptionKey = tuple[int, int, int, str, bool]
+
+
+@dataclass
+class _RealtimeBarSubscription:
+    client: IbkrClient
+    bars: list[object]
+    consumer_count: int = 1
+
+
+@dataclass
+class _RealtimeBarLease:
+    """One consumer's reference to a shared broker subscription."""
+
+    registry: _RealtimeBarSubscriptionRegistry
+    key: _SubscriptionKey
+    bars: list[object]
+    start_index: int
+    multiplexed: bool
+    consumer_count: int
+    _released: bool = False
+
+    def release(self) -> bool:
+        """Release this consumer; return whether the broker line was cancelled."""
+        if self._released:
+            return False
+        self._released = True
+        return self.registry.release(self.key)
+
+
+class _RealtimeBarSubscriptionRegistry:
+    """Multiplex real-time bars over one request per qualified contract.
+
+    ``IbkrClient`` is single-event-loop owned, so registry state mutations are
+    deliberately synchronous between await points. A per-key pending future
+    prevents concurrent first consumers from opening duplicate subscriptions.
+    The scope is one Python process; separate host-runner processes still own
+    separate IBKR clients for order-identity isolation.
+    """
+
+    def __init__(
+        self,
+        pacer: _RealtimeBarRequestPacer | None = None,
+        *,
+        default_max_active: int = _REALTIME_BAR_DEFAULT_MAX_ACTIVE,
+    ) -> None:
+        if default_max_active < 1:
+            raise ValueError("default_max_active must be positive")
+        self._pacer = pacer or _RealtimeBarRequestPacer()
+        self._default_max_active = default_max_active
+        self._subscriptions: dict[_SubscriptionKey, _RealtimeBarSubscription] = {}
+        self._pending: dict[_SubscriptionKey, asyncio.Future[None]] = {}
+
+    async def acquire(
+        self,
+        client: IbkrClient,
+        contract: object,
+        *,
+        bar_size: int,
+        what_to_show: str,
+        use_rth: bool,
+    ) -> _RealtimeBarLease:
+        con_id = int(getattr(contract, "conId", 0))
+        if con_id <= 0:
+            raise IBKRBarStreamError(
+                "reqRealTimeBars requires a qualified contract with a positive conId."
+            )
+        key = (id(client), con_id, bar_size, what_to_show, use_rth)
+
+        while True:
+            existing = self._subscriptions.get(key)
+            if existing is not None:
+                start_index = len(existing.bars)
+                existing.consumer_count += 1
+                return _RealtimeBarLease(
+                    registry=self,
+                    key=key,
+                    bars=existing.bars,
+                    start_index=start_index,
+                    multiplexed=True,
+                    consumer_count=existing.consumer_count,
+                )
+
+            pending = self._pending.get(key)
+            if pending is None:
+                max_active = self._max_active_for_client(client)
+                client_key = id(client)
+                reserved = sum(
+                    existing_key[0] == client_key
+                    for existing_key in (*self._subscriptions, *self._pending)
+                )
+                if reserved >= max_active:
+                    raise IBKRBarStreamError(
+                        "IBKR real-time-bar local active-line cap reached: "
+                        f"{reserved}/{max_active}. Reuse or release a subscription, "
+                        "raise IBKR_REALTIME_BAR_MAX_ACTIVE only when the username's "
+                        "market-data allocation supports it, or use an external data provider."
+                    )
+                pending = asyncio.get_running_loop().create_future()
+                self._pending[key] = pending
+                break
+            await asyncio.shield(pending)
+
+        try:
+            await self._pacer.acquire()
+            bars = client.ib.reqRealTimeBars(
+                contract,
+                bar_size,
+                what_to_show,
+                useRTH=use_rth,
+            )
+            subscription = _RealtimeBarSubscription(client=client, bars=bars)
+            self._subscriptions[key] = subscription
+            return _RealtimeBarLease(
+                registry=self,
+                key=key,
+                bars=bars,
+                start_index=0,
+                multiplexed=False,
+                consumer_count=1,
+            )
+        finally:
+            self._pending.pop(key, None)
+            if not pending.done():
+                pending.set_result(None)
+
+    def _max_active_for_client(self, client: IbkrClient) -> int:
+        settings = getattr(client, "settings", None)
+        configured = getattr(settings, "realtime_bar_max_active", self._default_max_active)
+        return int(configured)
+
+    def release(self, key: _SubscriptionKey) -> bool:
+        subscription = self._subscriptions.get(key)
+        if subscription is None:
+            return False
+        subscription.consumer_count -= 1
+        if subscription.consumer_count > 0:
+            return False
+
+        self._subscriptions.pop(key, None)
+        try:
+            subscription.client.ib.cancelRealTimeBars(subscription.bars)
+        except Exception as exc:
+            logger.debug("cancelRealTimeBars raised on shared-subscription shutdown: %s", exc)
+        return True
+
+
+_REALTIME_BAR_SUBSCRIPTIONS = _RealtimeBarSubscriptionRegistry()
 
 
 @dataclass
@@ -85,9 +303,15 @@ class _BarDeliveryLogger:
     def __post_init__(self) -> None:
         self.next_no_bar_log_at = self.subscribed_at + self.warning_interval_s
 
-    def log_subscribed(self, *, initial_bar_count: int) -> None:
+    def log_subscribed(
+        self,
+        *,
+        initial_bar_count: int,
+        multiplexed: bool,
+        consumer_count: int,
+    ) -> None:
         logger.info(
-            "IBKR reqRealTimeBars subscribed",
+            "IBKR reqRealTimeBars consumer attached",
             extra={
                 "symbol": self.symbol,
                 "con_id": self.con_id,
@@ -95,6 +319,8 @@ class _BarDeliveryLogger:
                 "what_to_show": "TRADES",
                 "use_rth": self.use_rth,
                 "initial_bar_count": initial_bar_count,
+                "multiplexed": multiplexed,
+                "consumer_count": consumer_count,
             },
         )
 
@@ -528,16 +754,21 @@ async def stream_raw_5s_bars(
     consumers distinguish 1-min vs 5-sec by the ``end_ms - start_ms``
     window or by which endpoint sourced the data.
 
-    Note on concurrent subscriptions: this opens a SECOND ``reqRealTimeBars``
-    subscription on the same contract when ``stream_minute_bars`` is also
-    running for that symbol. IBKR accepts that within the per-session
-    subscription cap (50 simultaneous real-time-bar subs); each one gets
-    its own reqId. If the cap becomes a real concern at scale, the two
-    paths can be unified onto a single source iterator that bifurcates.
+    Concurrent same-process consumers multiplex onto the same broker request.
+    ``ib_async`` owns the reqId-to-list routing; this module reference-counts
+    that list so a 5-second chart and a 1-minute consolidator consume one
+    shared market-data line rather than opening duplicate lines.
     """
     client.require_connected()
     contract = await qualify_underlying(client, symbol)
-    bars = client.ib.reqRealTimeBars(contract, 5, "TRADES", useRTH=use_rth)
+    lease = await _REALTIME_BAR_SUBSCRIPTIONS.acquire(
+        client,
+        contract,
+        bar_size=5,
+        what_to_show="TRADES",
+        use_rth=use_rth,
+    )
+    bars = lease.bars
     sym = symbol.upper()
     venue = _contract_venue(contract)
     delivery_logger = _BarDeliveryLogger(
@@ -545,7 +776,11 @@ async def stream_raw_5s_bars(
         con_id=int(contract.conId),
         use_rth=use_rth,
     )
-    delivery_logger.log_subscribed(initial_bar_count=len(bars))
+    delivery_logger.log_subscribed(
+        initial_bar_count=len(bars),
+        multiplexed=lease.multiplexed,
+        consumer_count=lease.consumer_count,
+    )
     recorder = get_ibkr_api_evidence_recorder()
     recorder.record(
         source="bars.stream_raw_5s_bars.subscribe",
@@ -557,10 +792,16 @@ async def stream_raw_5s_bars(
             whatToShow="TRADES",
             useRTH=use_rth,
             realTimeBarsOptions=[],
+            requestIssued=not lease.multiplexed,
+            multiplexed=lease.multiplexed,
+            consumerCount=lease.consumer_count,
         ),
-        response=evidence_response("realTimeBarList", fields={"bar_count": len(bars)}),
+        response=evidence_response(
+            "realTimeBarList",
+            fields={"bar_count": len(bars), "start_index": lease.start_index},
+        ),
     )
-    index = 0
+    index = lease.start_index
     try:
         while True:
             if index >= len(bars):
@@ -609,10 +850,12 @@ async def stream_raw_5s_bars(
                 use_rth=use_rth,
             )
     finally:
-        try:
-            client.ib.cancelRealTimeBars(bars)
-        except Exception as exc:
-            logger.debug("cancelRealTimeBars(%s, raw5s) raised on shutdown: %s", symbol, exc)
+        cancelled = lease.release()
+        logger.debug(
+            "Released raw 5-second bar consumer for %s (broker_subscription_cancelled=%s)",
+            symbol,
+            cancelled,
+        )
 
 
 async def stream_minute_bars(
@@ -631,7 +874,14 @@ async def stream_minute_bars(
     """
     client.require_connected()
     contract = await qualify_underlying(client, symbol)
-    bars = client.ib.reqRealTimeBars(contract, 5, "TRADES", useRTH=use_rth)
+    lease = await _REALTIME_BAR_SUBSCRIPTIONS.acquire(
+        client,
+        contract,
+        bar_size=5,
+        what_to_show="TRADES",
+        use_rth=use_rth,
+    )
+    bars = lease.bars
     sym = symbol.upper()
     venue = _contract_venue(contract)
     delivery_logger = _BarDeliveryLogger(
@@ -639,7 +889,11 @@ async def stream_minute_bars(
         con_id=int(contract.conId),
         use_rth=use_rth,
     )
-    delivery_logger.log_subscribed(initial_bar_count=len(bars))
+    delivery_logger.log_subscribed(
+        initial_bar_count=len(bars),
+        multiplexed=lease.multiplexed,
+        consumer_count=lease.consumer_count,
+    )
     recorder = get_ibkr_api_evidence_recorder()
     recorder.record(
         source="bars.stream_minute_bars.subscribe",
@@ -651,10 +905,16 @@ async def stream_minute_bars(
             whatToShow="TRADES",
             useRTH=use_rth,
             realTimeBarsOptions=[],
+            requestIssued=not lease.multiplexed,
+            multiplexed=lease.multiplexed,
+            consumerCount=lease.consumer_count,
         ),
-        response=evidence_response("realTimeBarList", fields={"bar_count": len(bars)}),
+        response=evidence_response(
+            "realTimeBarList",
+            fields={"bar_count": len(bars), "start_index": lease.start_index},
+        ),
     )
-    index = 0
+    index = lease.start_index
     current: _MinuteAccumulator | None = None
     last_source_ms: int | None = None
     counters = LiveBarCounters()
@@ -707,18 +967,12 @@ async def stream_minute_bars(
             if emitted is not None:
                 yield emitted
     finally:
-        # Guard the cancel like every other subscription-cancel path in this
-        # package (market_data, pnl): if the stream is unwinding because the
-        # connection dropped, cancelRealTimeBars itself can raise — and as the
-        # first statement of ``finally`` that would mask the original exception
-        # the operator needs to see, and skip the counters log below.
-        try:
-            client.ib.cancelRealTimeBars(bars)
-        except Exception as exc:
-            logger.debug("cancelRealTimeBars(%s) raised on shutdown: %s", symbol, exc)
+        cancelled = lease.release()
         logger.debug(
-            "Cancelled reqRealTimeBars for %s (skipped_duplicate=%d, applied_correction=%d)",
+            "Released minute-bar consumer for %s (broker_subscription_cancelled=%s, "
+            "skipped_duplicate=%d, applied_correction=%d)",
             symbol,
+            cancelled,
             counters.skipped_duplicate,
             counters.applied_correction,
         )

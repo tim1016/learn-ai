@@ -64,6 +64,18 @@ def test_paper_account_sentinel_predicate() -> None:
     assert not _is_paper_account("F1234567")
 
 
+def test_client_pins_conservative_per_connection_request_pace(
+    settings_paper: IbkrSettings,
+) -> None:
+    fake_ib, fake_class = _patched_ib_class()
+
+    with patch("ib_async.IB", fake_class):
+        IbkrClient(settings_paper)
+
+    assert fake_ib.client.MaxRequests == 45
+    assert fake_ib.client.RequestsInterval == 1
+
+
 def test_error_1101_marks_subscriptions_stale(settings_paper: IbkrSettings) -> None:
     _fake_ib, fake_class = _patched_ib_class()
 
@@ -480,6 +492,9 @@ async def test_disconnect_calls_sync_ib_disconnect_when_connected(
     # IbkrClient.__init__ subscribes a handler via "errorEvent +=
     # handler" so the attribute must exist on the spec'd mock.
     fake_ib.errorEvent = MagicMock()
+    # ``IB.client`` is also initialized on each instance rather than declared
+    # on the class; IbkrClient pins its transport pacing during construction.
+    fake_ib.client = MagicMock()
     fake_ib.isConnected.return_value = True
     fake_ib.disconnect.return_value = "Disconnected"
     fake_class = MagicMock(return_value=fake_ib)

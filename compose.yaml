@@ -159,6 +159,7 @@ services:
       - IBKR_HOST=${IBKR_HOST:-auto}
       - IBKR_PORT=${IBKR_PORT:-4002}
       - IBKR_CLIENT_ID=${IBKR_CLIENT_ID:-1}
+      - IBKR_REALTIME_BAR_MAX_ACTIVE=${IBKR_REALTIME_BAR_MAX_ACTIVE:-100}
       - IBKR_PERSIST_TICKS=${IBKR_PERSIST_TICKS:-false}
       # Operator kill switch for order placement. Default true (matches
       # IbkrSettings.readonly). Must be surfaced through compose because

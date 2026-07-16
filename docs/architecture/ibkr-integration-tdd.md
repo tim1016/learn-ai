@@ -217,8 +217,8 @@ Order event stream uses **polling against `IB.trades()`** rather than ib_async's
 
 | Risk | Where it bites | Mitigation |
 |---|---|---|
-| Streaming-line quota exhaustion (100/client) | option chain over-subscription | callers pre-narrow strikes; `market_data.py` fail-fasts on partial qualification |
-| Pacing violations (50 msg/s, 1 historical req per 2s) | Phase 1.5 historical fetch | not relevant Phase 1-3; Phase 2.5 will add explicit pacing |
+| Shared market-data-line exhaustion (100/user by default across TWS + APIs) | option chain / real-time-bar over-subscription | callers pre-narrow strikes; option surfaces use a local cap; real-time bars deduplicate same-contract consumers and enforce a configurable local active-line cap |
+| Pacing violations (market-data-lines ÷ 2 requests/s per client; separate historical/small-bar windows) | startup fan-out and historical fetch | `IbkrClient` pins `ib_async` ordinary socket messages to 45/s; the real-time-bar registry separately enforces 60 new requests per 600 seconds |
 | Gateway nightly auto-restart | session expiry | reconnect loop in `IbkrClient.connect` with backoff; lifespan event re-tries on next request |
 | 2FA mid-session | manual re-auth required | user requested IB to relax 2FA for API; otherwise daily Gateway login |
 | IBKR Greeks model returns NaN/-1 sentinel | option chain rendering | `models._coerce_iv` and `_coerce_optional_float` translate to `None`; `greeks_source` records which block was used |
@@ -431,7 +431,10 @@ Mark each diff column green if within tolerance, yellow if drifting, red if pers
 
 Use **SPY only** initially. Pick the nearest weekly expiry from `GET /api/broker/expirations/SPY`. Strike band: spot ± $20. That's about 40 strikes × 2 (call/put) = 80 contracts, well under the 100-line market-data quota.
 
-Don't subscribe multiple expiries at once until you've added the quota-management code. The streaming-line quota is per-client; oversubscribe and the chain stream silently degrades.
+Don't subscribe multiple expiries at once until the process can reserve from a
+shared line ledger. The allocation is user-level, not per-client: TWS and all
+API connections draw from the same pool. This stream's local cap cannot see
+lines already held by TWS or sibling host-runner processes.
 
 ### 10.10 Generating types from the OpenAPI schema
 
