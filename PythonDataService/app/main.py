@@ -287,6 +287,8 @@ async def lifespan(app: FastAPI):
             run_dir,
             readonly_default=readonly_default,
         ),
+        # Re-check the broker-owned posture before every resumed start slot.
+        target_account_posture=live_instances_router._cohort_target_account_posture,
         now_ms=lambda: int(time.time() * 1_000),
         evidence_samplers=get_cohort_evidence_sampler_registry(),
         launch_schedulers=get_cohort_launch_scheduler_registry(),

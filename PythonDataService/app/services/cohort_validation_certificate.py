@@ -173,8 +173,10 @@ class _RoundTripFold(TypedDict):
     order_ids: set[int]
     perm_ids: set[int]
     exec_ids: set[str]
-    exposure: float
+    seen_fill_exec_ids: set[str]
+    exposure_by_symbol: dict[str, float]
     saw_nonzero: bool
+    round_trip_count: int
 
 
 def _round_trips(
@@ -196,8 +198,10 @@ def _round_trips(
                 "order_ids": set(),
                 "perm_ids": set(),
                 "exec_ids": set(),
-                "exposure": 0.0,
+                "seen_fill_exec_ids": set(),
+                "exposure_by_symbol": {},
                 "saw_nonzero": False,
+                "round_trip_count": 0,
             },
         )
         row["refs"].add(entry.intent.order_ref)
@@ -219,12 +223,37 @@ def _round_trips(
                 broker_event.event_type == "fill"
                 and broker_event.side in {"BUY", "SELL"}
                 and broker_event.fill_quantity is not None
+                and broker_event.exec_id
+                and broker_event.symbol
                 and math.isfinite(float(broker_event.fill_quantity))
             ):
-                current = row["exposure"]
-                current += float(broker_event.fill_quantity) * (1 if broker_event.side == "BUY" else -1)
-                row["exposure"] = current
-                row["saw_nonzero"] = row["saw_nonzero"] or current != 0.0
+                # The Clerk journal may replay a callback. An execution ID is
+                # the broker-owned identity for its economic effect, so a
+                # replay cannot manufacture additional round trips.
+                if broker_event.exec_id in row["seen_fill_exec_ids"]:
+                    continue
+                row["seen_fill_exec_ids"].add(broker_event.exec_id)
+                symbol = broker_event.symbol.upper()
+                namespace_was_open = any(
+                    not _is_flat(quantity) for quantity in row["exposure_by_symbol"].values()
+                )
+                current = row["exposure_by_symbol"].get(symbol, 0.0)
+                next_quantity = current + float(broker_event.fill_quantity) * (
+                    1 if broker_event.side == "BUY" else -1
+                )
+                if _is_flat(next_quantity):
+                    next_quantity = 0.0
+                row["exposure_by_symbol"][symbol] = next_quantity
+                namespace_is_open = any(
+                    not _is_flat(quantity) for quantity in row["exposure_by_symbol"].values()
+                )
+                row["saw_nonzero"] = row["saw_nonzero"] or namespace_is_open
+                # A bot-level round trip completes only when its entire
+                # namespace is flat. Counting individual leg closures would
+                # let a multi-leg strategy satisfy the two-trip requirement
+                # after one strategy-level trade.
+                if namespace_was_open and not namespace_is_open:
+                    row["round_trip_count"] += 1
     return [
         CohortCertificateRoundTrip(
             bot_order_namespace=namespace,
@@ -233,10 +262,21 @@ def _round_trips(
             perm_ids=sorted(row["perm_ids"]),
             exec_ids=sorted(row["exec_ids"]),
             saw_nonzero_exposure=row["saw_nonzero"],
-            closed=row["saw_nonzero"] and row["exposure"] == 0.0 and namespace not in exposure,
+            round_trip_count=row["round_trip_count"],
+            closed=(
+                row["saw_nonzero"]
+                and all(_is_flat(quantity) for quantity in row["exposure_by_symbol"].values())
+                and namespace not in exposure
+            ),
         )
         for namespace, row in sorted(rows.items())
     ]
+
+
+def _is_flat(quantity: float) -> bool:
+    """Match the canonical journal exposure projection's exact flatness."""
+
+    return quantity == 0.0
 
 
 def _incidents(
@@ -300,6 +340,8 @@ def _certificate_reasons(
         for row in round_trips
     ):
         reasons.append("INCOMPLETE_ROUND_TRIP_IDENTITY")
+    if any(row.round_trip_count < 2 for row in round_trips):
+        reasons.append("INCOMPLETE_ROUND_TRIP_COUNT")
     if exposure:
         reasons.append("FAILED_NAMESPACE_EXPOSURE_NONZERO")
     latest = samples[-1] if samples else None

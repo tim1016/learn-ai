@@ -126,8 +126,8 @@ def cohort_window_verdict(
             allowed=False,
             reason_code="COHORT_WINDOW_EXCEEDS_SESSION_STOP",
             message=(
-                "Start refused because the T+0/T+15m/T+30m schedule and its 15-minute "
-                "validation window will not finish before the earliest effective stop."
+                "Start refused because the cohort schedule and validation window will not "
+                "finish before the earliest effective stop."
             ),
             session_date=session_date.isoformat(),
             effective_stop_ms=effective_stop_ms,

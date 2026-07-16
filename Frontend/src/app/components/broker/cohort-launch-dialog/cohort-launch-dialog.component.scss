@@ -35,7 +35,8 @@ h3 {
 .mono,
 .status,
 .ready,
-.error {
+.error,
+.target-account {
   color: var(--text-secondary, #b2b5be);
   font-size: 0.85rem;
 }
@@ -77,6 +78,17 @@ header {
   padding: 0.75rem;
   border: 1px solid var(--border-light, #2a2e39);
   border-radius: 6px;
+}
+
+.candidate-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.candidate-heading input {
+  inline-size: 1rem;
+  block-size: 1rem;
 }
 
 footer {

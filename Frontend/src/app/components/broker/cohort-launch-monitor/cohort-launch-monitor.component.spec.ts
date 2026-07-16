@@ -128,7 +128,18 @@ describe('CohortLaunchMonitorComponent', () => {
       evidence_verdict: 'failed',
       evidence_reason: 'COHORT_MEMBER_HALTED',
       samples: [],
-      round_trips: [],
+      round_trips: [
+        {
+          bot_order_namespace: 'learn-ai/spy-a/v1',
+          order_refs: [],
+          order_ids: [],
+          perm_ids: [],
+          exec_ids: [],
+          saw_nonzero_exposure: true,
+          round_trip_count: 2,
+          closed: true,
+        },
+      ],
       incidents: [],
       final_broker_net_positions: null,
       final_broker_residual: null,
@@ -154,6 +165,7 @@ describe('CohortLaunchMonitorComponent', () => {
     expect(root.textContent).toContain('run-spy-a');
     expect(root.textContent).toContain('Cohort Member Halted');
     expect(root.textContent).toContain('Certificate overlap');
+    expect(root.textContent).toContain('2 closed round trips');
     expect(root.textContent).toContain('Failed Namespace Exposure Nonzero');
     expect(root.querySelector('table caption')?.textContent).toContain('latest server observation');
     expect(root.querySelectorAll('th[scope="col"]').length).toBe(5);

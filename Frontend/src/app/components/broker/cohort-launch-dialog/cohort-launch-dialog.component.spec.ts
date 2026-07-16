@@ -13,6 +13,7 @@ describe('CohortLaunchDialogComponent', () => {
     const fixture = TestBed.createComponent(CohortLaunchDialogComponent);
     fixture.componentRef.setInput('open', true);
     fixture.componentRef.setInput('loading', false);
+    fixture.componentRef.setInput('selectedIds', new Set<string>());
     fixture.componentRef.setInput('candidates', [{
       candidate: { strategyInstanceId: 'spy-a', name: 'SPY validation', strategyKey: 'spy_ema' },
       blockers: [{
@@ -33,7 +34,7 @@ describe('CohortLaunchDialogComponent', () => {
 
     const root = fixture.nativeElement as HTMLElement;
     expect(root.textContent).toContain('Fleet contamination blocks starts');
-    expect(root.querySelector<HTMLButtonElement>('button[disabled]')?.textContent).toContain('Authorize 1 bots');
+    expect(root.querySelector<HTMLButtonElement>('button[disabled]')?.textContent).toContain('Authorize 0 selected bots');
     expect(root.querySelector('[role="alertdialog"]')?.getAttribute('aria-modal')).toBe('true');
   });
 
@@ -45,6 +46,7 @@ describe('CohortLaunchDialogComponent', () => {
     const fixture = TestBed.createComponent(CohortLaunchDialogComponent);
     fixture.componentRef.setInput('open', true);
     fixture.componentRef.setInput('loading', false);
+    fixture.componentRef.setInput('selectedIds', new Set<string>());
     fixture.componentRef.setInput('candidates', [{
       candidate: { strategyInstanceId: 'spy-a', name: 'SPY validation', strategyKey: 'spy_ema' },
       blockers: [],
@@ -54,6 +56,6 @@ describe('CohortLaunchDialogComponent', () => {
 
     const root = fixture.nativeElement as HTMLElement;
     expect(root.textContent).toContain('The deploy preflight is unavailable.');
-    expect(root.querySelector<HTMLButtonElement>('button[disabled]')?.textContent).toContain('Authorize 1 bots');
+    expect(root.querySelector<HTMLButtonElement>('button[disabled]')?.textContent).toContain('Authorize 0 selected bots');
   });
 });

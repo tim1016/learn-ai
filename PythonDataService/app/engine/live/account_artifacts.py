@@ -277,8 +277,8 @@ class CohortBatchLaunchReceipt(BaseModel):
             raise ValueError("paper three-bot stagger slots must be T+0, T+15m, and T+30m")
         if self.window_start_ms != ordered_slots[-1].scheduled_start_at_ms + 5_000:
             raise ValueError("V2 validation window must begin one evidence cadence after the final start")
-        if self.window_end_ms - self.window_start_ms != 900_000:
-            raise ValueError("V2 validation window must require fifteen minutes of healthy overlap")
+        if self.window_end_ms - self.window_start_ms != 3_600_000:
+            raise ValueError("V2 validation window must require sixty minutes of healthy overlap")
         return self
 
 

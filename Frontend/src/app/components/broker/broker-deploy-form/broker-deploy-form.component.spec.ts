@@ -495,6 +495,28 @@ describe('BrokerDeployFormComponent', () => {
     );
   });
 
+  it('prepares a fresh run for a cohort without starting its runner', async () => {
+    const { fixture, svc, component } = setup();
+    await flush();
+    fillRequired(component);
+    await settleResource(fixture);
+
+    await component.prepareForCohort();
+    fixture.detectChanges();
+
+    expect(svc.deployInstance).toHaveBeenCalledTimes(1);
+    expect(svc.deployInstance.mock.calls[0][0]).toMatchObject({
+      strategy_instance_id: 'deployment-validation-paper',
+      start: false,
+      start_options: {
+        readonly: false,
+        hydrate_policy: 'require',
+        strategy: 'deployment_validation',
+      },
+    });
+    expect(fixture.nativeElement.textContent).toContain('Prepared for cohort; no runner was started.');
+  });
+
   it('shows a coherent accepted-start state after the submitted instance becomes running', async () => {
     const { fixture, svc, component } = setup();
     svc.deployInstance.mockResolvedValueOnce({
