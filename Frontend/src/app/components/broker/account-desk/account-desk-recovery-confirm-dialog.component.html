@@ -40,16 +40,26 @@
       }
     </dl>
     @if (confirmation.command === 'exposure_override') {
-      <label for="account-exposure-override-reason">Operator reason</label>
-      <textarea
-        id="account-exposure-override-reason"
-        rows="3"
-        [value]="confirmation.reason"
-        (input)="updateReason($event)"
-      ></textarea>
-      @if (confirmation.reason.trim().length === 0) {
-        <p class="validation" role="status">An operator reason is required.</p>
-      }
+      <section class="exposure-reason">
+        <label id="account-exposure-override-reason-label" for="account-exposure-override-reason">
+          Why are you accepting this account exposure?
+        </label>
+        <p id="account-exposure-override-reason-help">
+          Required. This explanation becomes part of the audited recovery record.
+        </p>
+        <textarea
+          id="account-exposure-override-reason"
+          rows="4"
+          aria-required="true"
+          aria-describedby="account-exposure-override-reason-help"
+          [attr.aria-invalid]="confirmation.reason.trim().length === 0"
+          [value]="confirmation.reason"
+          (input)="updateReason($event)"
+        ></textarea>
+        @if (confirmation.reason.trim().length === 0) {
+          <p class="validation" role="status">Enter an operator reason to enable Accept exposure.</p>
+        }
+      </section>
     }
     @if (errorMessage(); as errorMessage) {
       <p class="error" role="alert">{{ errorMessage }}</p>

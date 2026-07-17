@@ -52,7 +52,7 @@ src/app/
 - **PrimeNG** for UI components + **Tailwind CSS** for utility styling
 - **TradingView lightweight-charts v5** for OHLCV candlestick charts (`chart.addSeries(CandlestickSeries, options)`)
 - Modern control flow: `@if`, `@for` (with `track`), `@switch`, `@let`
-- API proxy: `/graphql` proxied to backend container via `proxy.conf.js`
+- API proxy: `/graphql` proxied via the canonical `proxy.conf.js`; it defaults to host loopback targets and Compose overrides those targets with service names.
 - Receipt/evidence identifiers render through the shared `receiptLabel` pipe. Preserve opaque audit tokens such as intent/order IDs, paths, hashes, refs, and URLs exactly. Backend-authored trader/operator prose stays unpiped.
 
 ## Testing
@@ -64,6 +64,6 @@ src/app/
 
 ## Gotchas
 
-- `proxy.conf.js` routes `/graphql` to `http://backend:8080` inside the container network. It attaches the Python data-plane control header from `DATA_PLANE_CONTROL_SECRET` only for Angular-marked unsafe control mutations and protected broker-session reads with positive same-origin local-dev browser provenance; metadata-absent local clients are intentionally not given the proxy secret.
+- `proxy.conf.js` is the only approved dev proxy configuration. It routes host development to loopback ports by default; Compose sets `BACKEND_PROXY_TARGET` and `DATA_PLANE_PROXY_TARGET` to container service names. Do not replace it with a target-only JSON proxy: that bypasses the data-plane control-header hook. It attaches the Python data-plane control header from `DATA_PLANE_CONTROL_SECRET` only for Angular-marked unsafe control mutations and protected broker-session reads with positive same-origin local-dev browser provenance; metadata-absent local clients are intentionally not given the proxy secret.
 - Some components are large (options-strategy-lab, strategy-builder) — consider extracting child components
 - `tsconfig.json` excludes spec files; `tsconfig.spec.json` includes them for test builds

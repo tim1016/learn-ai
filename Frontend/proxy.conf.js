@@ -3,6 +3,12 @@ const DATA_PLANE_CONTROL_INTENT_HEADER = 'X-Data-Plane-Control-Intent';
 const DATA_PLANE_CONTROL_INTENT_QUERY = 'control_intent';
 const DATA_PLANE_CONTROL_INTENT_VALUE = 'learn-ai-browser-control';
 const dataPlaneControlSurfaces = require('../contracts/data-plane-control-surfaces.json');
+// Host development reaches the compose services through their loopback ports.
+// Containers override these targets with their compose-network service names.
+// Keeping the control-header hook in this one configuration prevents a local
+// target override from accidentally bypassing data-plane authorization.
+const backendProxyTarget = process.env.BACKEND_PROXY_TARGET ?? 'http://127.0.0.1:5000';
+const dataPlaneProxyTarget = process.env.DATA_PLANE_PROXY_TARGET ?? 'http://127.0.0.1:8000';
 const dataPlaneControlSecret = process.env.DATA_PLANE_CONTROL_SECRET ?? 'local-dev-control-secret';
 const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const SAFE_READ_METHODS = new Set(['GET', 'HEAD']);
@@ -109,17 +115,17 @@ function configureDataPlaneProxy(proxy) {
 
 const proxyConfig = {
   '/graphql': {
-    target: 'http://backend:8080',
+    target: backendProxyTarget,
     secure: false,
     changeOrigin: true,
   },
   '/api/jobs': {
-    target: 'http://backend:8080',
+    target: backendProxyTarget,
     secure: false,
     changeOrigin: true,
   },
   '/api': {
-    target: 'http://python-service:8000',
+    target: dataPlaneProxyTarget,
     secure: false,
     changeOrigin: true,
     configure: configureDataPlaneProxy,
@@ -133,6 +139,8 @@ Object.defineProperty(proxyConfig, '__test', {
     DATA_PLANE_CONTROL_INTENT_HEADER,
     DATA_PLANE_CONTROL_INTENT_QUERY,
     DATA_PLANE_CONTROL_INTENT_VALUE,
+    backendProxyTarget,
+    dataPlaneProxyTarget,
     CONTROL_PREFIXES,
     PROTECTED_READ_PREFIXES,
     attachDataPlaneSecret,

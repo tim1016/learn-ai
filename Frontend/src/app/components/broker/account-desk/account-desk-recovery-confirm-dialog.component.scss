@@ -1,5 +1,8 @@
 .account-recovery-confirm {
   width: min(34rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+  padding: 1.25rem;
   border: 1px solid var(--border-light);
   border-radius: 0.75rem;
   color: var(--text-primary);
@@ -34,13 +37,37 @@ dl {
 dd {
   margin: 0.15rem 0 0;
 }
-label {
+.exposure-reason {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.85rem;
+  border: 1px solid var(--border-light);
+  border-radius: 0.5rem;
+  background: var(--bg-sunken);
+}
+.exposure-reason label {
   font-weight: 600;
 }
-textarea {
+.exposure-reason > p {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+.exposure-reason textarea {
   width: 100%;
+  min-height: 6rem;
   box-sizing: border-box;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border-light);
+  border-radius: 0.35rem;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
   font: inherit;
+  resize: vertical;
+}
+.exposure-reason textarea:focus {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .consequence {
   font-weight: 600;
@@ -48,6 +75,10 @@ textarea {
 .validation,
 .error {
   color: var(--bear);
+}
+.exposure-reason .validation {
+  color: var(--bear);
+  font-weight: 600;
 }
 footer {
   display: flex;

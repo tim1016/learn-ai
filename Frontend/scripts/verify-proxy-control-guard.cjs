@@ -86,6 +86,16 @@ for (const prefix of CONTROL_PREFIXES) {
   assert.equal(requiresDataPlaneControlSecret(req), true);
 }
 
+{
+  const req = request({
+    url: '/api/accounts/DU1234567/freeze/accept-exposure-override',
+  });
+  const proxyReq = proxyReqRecorder();
+  attachDataPlaneSecret(proxyReq, req);
+  assert.equal(isControlMutation(req), true);
+  assert.equal(proxyReq.headers.get(DATA_PLANE_CONTROL_SECRET_HEADER), 'local-dev-control-secret');
+}
+
 for (const prefix of PROTECTED_READ_PREFIXES) {
   const req = request({
     method: 'GET',

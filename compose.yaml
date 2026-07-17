@@ -322,6 +322,10 @@ services:
       - NODE_OPTIONS=--max-old-space-size=3584
       # Keep Angular's dev proxy secret in lockstep with the Python data plane.
       - DATA_PLANE_CONTROL_SECRET=${DATA_PLANE_CONTROL_SECRET:-local-dev-control-secret}
+      # Container networking needs service names; host `ng serve` defaults to
+      # loopback ports in the same canonical proxy configuration.
+      - BACKEND_PROXY_TARGET=http://backend:8080
+      - DATA_PLANE_PROXY_TARGET=http://python-service:8000
     command: ["npx", "ng", "serve", "--host", "0.0.0.0", "--poll", "2000", "--proxy-config", "proxy.conf.js"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4200"]

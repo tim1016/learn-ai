@@ -22,7 +22,11 @@ describe('AccountDeskRecoveryConfirmDialogComponent', () => {
 
     expect(await screen.findByText('Backend consequence.')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Accept exposure', hidden: true }).hasAttribute('disabled')).toBe(true);
-    fireEvent.input(screen.getByLabelText('Operator reason'), { target: { value: 'Operator reason.' } });
+    const reason = screen.getByLabelText('Why are you accepting this account exposure?');
+    expect(reason.getAttribute('aria-required')).toBe('true');
+    expect(reason.getAttribute('aria-describedby')).toBe('account-exposure-override-reason-help');
+    expect(screen.getByText('Enter an operator reason to enable Accept exposure.')).toBeTruthy();
+    fireEvent.input(reason, { target: { value: 'Operator reason.' } });
     expect(reasonChanged).toHaveBeenCalledWith('Operator reason.');
     fireEvent.click(screen.getByRole('button', { name: 'Cancel', hidden: true }));
     expect(cancelled).toHaveBeenCalledOnce();
