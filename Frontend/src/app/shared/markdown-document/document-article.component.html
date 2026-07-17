@@ -1,0 +1,27 @@
+<article #article class="document-article" aria-label="Canonical operator manual">
+  <aside class="document-sidebar">
+    <app-document-toc
+      [sections]="document().sections"
+      [route]="route()"
+      [activeSection]="activeSection()"
+    />
+  </aside>
+
+  <div class="document-content">
+    @if (document().title; as title) {
+      <p class="document-source-title">{{ title }}</p>
+    }
+
+    @if (document().preamble.length) {
+      <div class="document-preamble">
+        @for (block of document().preamble; track block.id) {
+          <app-document-block [block]="block" [route]="route()" />
+        }
+      </div>
+    }
+
+    @for (section of document().sections; track section.id) {
+      <app-document-section [section]="section" [route]="route()" />
+    }
+  </div>
+</article>

@@ -1,0 +1,18 @@
+<nav class="document-toc" aria-label="Manual contents">
+  <p class="document-toc-kicker">In this manual</p>
+  <ol>
+    @for (section of sections(); track section.id) {
+      <li>
+        <a
+          [routerLink]="route()"
+          [fragment]="section.id"
+          [class.is-active]="activeSection() === section.id"
+          [attr.aria-current]="activeSection() === section.id ? 'location' : null"
+        >
+          <span class="toc-ordinal mono">{{ section.ordinal.toString().padStart(2, '0') }}</span>
+          <span>{{ section.title }}</span>
+        </a>
+      </li>
+    }
+  </ol>
+</nav>

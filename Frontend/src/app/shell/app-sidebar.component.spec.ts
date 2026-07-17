@@ -1,6 +1,6 @@
 import { signal } from '@angular/core';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
-import { RouterModule } from '@angular/router';
+import { Router, RouterModule } from '@angular/router';
 import { describe, expect, it, vi } from 'vitest';
 
 import { BrokerHealthService } from '../services/broker-health.service';
@@ -34,7 +34,7 @@ describe('AppSidebarComponent', () => {
     expect(link?.getAttribute('href')).toBe('/broker/session-mirror');
   });
 
-  it('surfaces deploy beside bots in the Broker menu', () => {
+  it('surfaces deploy and the operator manual beside bots in the Broker menu', () => {
     const fixture = setup();
 
     clickGroup(fixture, 'Broker');
@@ -42,6 +42,22 @@ describe('AppSidebarComponent', () => {
     const links = navLinks(fixture);
     expect(links.get('Deploy')).toBe('/broker/deploy');
     expect(links.get('Bots')).toBe('/broker/bots');
+    expect(links.get('Bot Manual')).toBe('/broker/bot-manual');
+  });
+
+  it('marks the most specific Broker route active when the URL has a manual fragment', async () => {
+    const fixture = setup();
+    const router = TestBed.inject(Router);
+    router.resetConfig([{ path: 'broker/bot-manual', component: AppSidebarComponent }]);
+
+    await router.navigateByUrl('/broker/bot-manual#document-5-the-bot-lifecycle');
+    fixture.detectChanges();
+
+    const activeLabels = Array.from(
+      (fixture.nativeElement as HTMLElement).querySelectorAll<HTMLAnchorElement>('a.nav-link.active'),
+    ).map((link) => link.textContent?.trim());
+
+    expect(activeLabels).toEqual(['Bot Manual']);
   });
 
   it('uses Accounts as the Broker account navigation slot', () => {

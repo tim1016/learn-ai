@@ -89,6 +89,7 @@ const NAV: NavGroup[] = [
       { label: 'Session Mirror', route: '/broker/session-mirror' },
       { label: 'Deploy', route: '/broker/deploy' },
       { label: 'Bots', route: '/broker/bots' },
+      { label: 'Bot Manual', route: '/broker/bot-manual' },
     ],
   },
   {
@@ -125,6 +126,10 @@ const NAV: NavGroup[] = [
     ],
   },
 ];
+
+const NAV_ROUTES = NAV.flatMap((group) => group.items.map((item) => item.route)).sort(
+  (left, right) => right.length - left.length,
+);
 
 @Component({
   selector: 'app-sidebar',
@@ -228,6 +233,12 @@ export class AppSidebarComponent {
   /** Current route URL — updated on NavigationEnd. Signal so child bindings refresh. */
   private currentUrl = signal<string>(this.router.url);
 
+  /** Only the longest route match is active, so `/broker` does not shadow its children. */
+  private activeRoute = computed<string | null>(() => {
+    const url = this.navigationPath(this.currentUrl());
+    return NAV_ROUTES.find((route) => url === route || url.startsWith(route + '/')) ?? null;
+  });
+
   /** Open/closed state per group. Groups containing the active route auto-open. */
   openGroups = signal<Record<string, boolean>>(this.computeInitialOpenState());
 
@@ -293,9 +304,7 @@ export class AppSidebarComponent {
   }
 
   isActive(route: string): boolean {
-    const url = this.currentUrl();
-    // Exact match, or URL starts with route + '/' (so /research-lab/signal-report/:id highlights Research Lab).
-    return url === route || url.startsWith(route + '/');
+    return this.activeRoute() === route;
   }
 
   groupHasActive(g: NavGroup): boolean {
@@ -303,7 +312,12 @@ export class AppSidebarComponent {
   }
 
   private groupContainsUrl(g: NavGroup, url: string): boolean {
-    return g.items.some(it => url === it.route || url.startsWith(it.route + '/'));
+    const path = this.navigationPath(url);
+    return g.items.some(it => path === it.route || path.startsWith(it.route + '/'));
+  }
+
+  private navigationPath(url: string): string {
+    return url.split(/[?#]/, 1)[0] ?? '';
   }
 
   private computeInitialOpenState(): Record<string, boolean> {

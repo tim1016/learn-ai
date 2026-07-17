@@ -1,0 +1,240 @@
+:host {
+  display: block;
+}
+
+.procedure-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.procedure-card {
+  --procedure-tone: var(--accent);
+  --procedure-soft: var(--accent-faint);
+
+  align-self: start;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  overflow: hidden;
+
+  &.tone-go {
+    --procedure-tone: var(--bull);
+    --procedure-soft: var(--bull-soft);
+  }
+
+  &.tone-calm {
+    --procedure-tone: var(--info);
+    --procedure-soft: var(--info-soft);
+  }
+
+  &.tone-recover {
+    --procedure-tone: var(--warn);
+    --procedure-soft: var(--warn-soft);
+  }
+
+  &.tone-scale {
+    --procedure-tone: var(--ind-cat-momentum);
+    --procedure-soft: var(--ind-cat-momentum-soft);
+  }
+
+  &[open] {
+    grid-column: 1 / -1;
+    border-color: var(--procedure-tone);
+    background: linear-gradient(110deg, var(--procedure-soft), var(--bg-surface) 36%);
+  }
+
+  > summary {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: var(--space-4);
+    align-items: center;
+    min-height: 112px;
+    padding: var(--space-4) var(--space-5);
+    cursor: pointer;
+    list-style: none;
+
+    &::-webkit-details-marker {
+      display: none;
+    }
+
+    &:hover {
+      background: var(--bg-elevated);
+    }
+
+    &:focus-visible {
+      outline-offset: -3px;
+    }
+  }
+
+  &[open] > summary {
+    border-bottom: 1px solid var(--border-light);
+  }
+}
+
+.procedure-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid var(--procedure-tone);
+  border-radius: var(--radius-md);
+  background: var(--procedure-soft);
+  color: var(--procedure-tone);
+  font-size: var(--fs-lg);
+}
+
+.procedure-heading {
+  display: grid;
+  gap: 3px;
+
+  strong {
+    color: var(--text-primary);
+    font-size: var(--fs-lg);
+    line-height: 1.2;
+  }
+
+  > span:last-child {
+    color: var(--text-secondary);
+    font-size: var(--fs-sm);
+    line-height: 1.4;
+  }
+}
+
+.procedure-eyebrow {
+  color: var(--procedure-tone);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.procedure-chevron {
+  color: var(--text-subtle);
+  font-size: var(--fs-xs);
+  transition: transform var(--t-ui);
+}
+
+.procedure-card[open] .procedure-chevron {
+  transform: rotate(180deg);
+}
+
+.procedure-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-6);
+  padding: var(--space-5);
+
+  ol {
+    display: grid;
+    gap: var(--space-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  li {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: var(--space-3);
+    align-items: start;
+    color: var(--text-secondary);
+    font-size: var(--fs-sm);
+    line-height: 1.55;
+  }
+}
+
+.step-number {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  color: var(--text-subtle);
+  font-size: var(--fs-xxs);
+}
+
+.procedure-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  align-items: stretch;
+  justify-content: end;
+  min-width: 160px;
+
+  a {
+    display: inline-flex;
+    gap: var(--space-2);
+    align-items: center;
+    justify-content: center;
+    min-height: 38px;
+    padding: 0 var(--space-4);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: var(--fs-xs);
+    font-weight: var(--fw-semi);
+    text-decoration: none;
+    cursor: pointer;
+
+    &:hover {
+      border-color: var(--procedure-tone);
+      background: var(--bg-hover);
+    }
+  }
+
+  a:first-child {
+    border-color: var(--procedure-tone);
+    background: var(--procedure-tone);
+    color: var(--bg-sunken);
+  }
+}
+
+@media (max-width: 760px) {
+  .procedure-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .procedure-card[open] {
+    grid-column: auto;
+  }
+
+  .procedure-body {
+    grid-template-columns: 1fr;
+  }
+
+  .procedure-actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+    min-width: 0;
+
+    a {
+      flex: 1 1 180px;
+    }
+  }
+}
+
+@media (max-width: 480px) {
+  .procedure-card > summary {
+    grid-template-columns: auto minmax(0, 1fr);
+    padding: var(--space-4);
+  }
+
+  .procedure-chevron {
+    display: none;
+  }
+
+  .procedure-body {
+    padding: var(--space-4);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .procedure-chevron {
+    transition: none;
+  }
+}

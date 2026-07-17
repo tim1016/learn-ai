@@ -16,6 +16,7 @@ audit, and handoff in the repository.
 - `docs/architecture/numerical-authority-migration-plan.md` — active math-authority migration sequence.
 - `.claude/rules/numerical-rigor.md` — tolerances, golden fixtures, timestamp rules, reconciliation taxonomy.
 - `docs/known-gaps.md` — living open-defect backlog: what is still broken or deferred.
+- `docs/bot-control-operator-manual.md` — comprehensive operator manual for the bot control system + Account Clerk: the three planes, lifecycle, every admission gate + reason code, freezes/recovery, and the operational blindspots.
 
 ## Current Cleanup Notes
 

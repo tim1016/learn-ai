@@ -1,0 +1,21 @@
+@let currentSection = section();
+<section class="document-section" [id]="currentSection.id" data-document-section>
+  <header class="document-section-header">
+    <span class="section-ordinal mono">{{ currentSection.ordinal.toString().padStart(2, '0') }}</span>
+    <h2>{{ currentSection.title }}</h2>
+    <a
+      class="heading-link"
+      [routerLink]="route()"
+      [fragment]="currentSection.id"
+      [attr.aria-label]="'Link to ' + currentSection.title"
+    >
+      <i class="pi pi-link" aria-hidden="true"></i>
+    </a>
+  </header>
+
+  <div class="document-section-body">
+    @for (block of currentSection.blocks; track block.id) {
+      <app-document-block [block]="block" [route]="route()" />
+    }
+  </div>
+</section>

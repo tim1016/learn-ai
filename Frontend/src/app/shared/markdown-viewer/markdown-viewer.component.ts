@@ -17,6 +17,8 @@ import { Marked } from 'marked';
 import DOMPurify from 'dompurify';
 import katex from 'katex';
 
+import { markdownSlug } from '../markdown/markdown-slug';
+
 /**
  * Renders a markdown file from a URL with:
  *   - GitHub-style heading anchors (`1.` → `#1-...`),
@@ -331,7 +333,7 @@ export class MarkdownViewerComponent {
       (_m, tag: string, inner: string) => {
         // Strip inline tags to get plain text for slug generation.
         const plain = inner.replace(/<[^>]+>/g, '');
-        const id = this.slugify(plain);
+        const id = markdownSlug(plain);
         return `<${tag} id="${id}">${inner}</${tag}>`;
       },
     );
@@ -354,19 +356,6 @@ export class MarkdownViewerComponent {
       gfm: true,
       breaks: false,
     });
-  }
-
-  /**
-   * Matches the anchor format already used in the doc's table of contents.
-   * E.g. "3.1 Daily Information Coefficient" → "31-daily-information-coefficient".
-   */
-  private slugify(text: string): string {
-    return text
-      .toLowerCase()
-      .replace(/[^\w\s-]/g, '')
-      .trim()
-      .replace(/\s+/g, '-')
-      .replace(/^-+|-+$/g, '');
   }
 
   private escape(s: string): string {
