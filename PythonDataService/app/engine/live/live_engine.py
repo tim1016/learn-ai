@@ -78,6 +78,7 @@ from app.engine.live.live_portfolio import (
     IbkrBrokerAdapter,
     LiveBrokerEventStreamError,
     LivePortfolio,
+    TransientAccountFreezePauseError,
 )
 from app.engine.live.order_identity import mint_intent_id
 from app.engine.live.readiness import build_live_readiness_emission
@@ -2082,7 +2083,23 @@ class LiveEngine:
                 )
             portfolio.pending_orders.clear()
             return []
-        acks = await portfolio.submit_pending_orders()
+        try:
+            acks = await portfolio.submit_pending_orders()
+        except TransientAccountFreezePauseError as pause:
+            # A transient (auto-expiring restart-intensity) account freeze paused
+            # submits this bar. Pending orders were already dropped at the gate,
+            # so nothing was submitted; keep the run alive and re-evaluate next
+            # bar once the freeze clears — do NOT halt a healthy bot. Mirrors the
+            # force-flat / reconcile-inhibit drop-and-continue branches above.
+            logger.warning(
+                "[FREEZE_PAUSE] strategy=%s pending=%d — submits paused this bar; "
+                "transient account freeze active (%s); run stays alive and resumes "
+                "when the freeze clears",
+                self._strategy_key,
+                len(pending_snapshot),
+                pause.reason,
+            )
+            return []
         submitted_at_ms = now_ms_utc()
         for order, ack in zip(pending_snapshot, acks, strict=True):
             bot_event_identity = bot_event_spine.submitted_bot_event_identity(
