@@ -1,6 +1,6 @@
 import { provideRouter } from '@angular/router';
 import { render, screen } from '@testing-library/angular';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { MarkdownDocument } from './markdown-document.model';
 import { DocumentArticleComponent } from './document-article.component';
@@ -28,6 +28,35 @@ describe('DocumentArticleComponent', () => {
 
     const anchors = screen.getAllByRole('link', { name: 'Link to Start safely' });
     expect(anchors[0]?.getAttribute('href')).toBe('/broker/bot-manual#start-safely');
+  });
+
+  it('follows chapter fragments that begin with a number', async () => {
+    const scrollIntoView = vi.fn();
+    const originalScrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    try {
+      await render(DocumentArticleComponent, {
+        inputs: {
+          document: { ...documentFixture, sections: [{ ...documentFixture.sections[0], id: '1-start-safely' }] },
+          route: '/broker/bot-manual',
+          fragment: '1-start-safely',
+        },
+        providers: [provideRouter([])],
+      });
+
+      await Promise.resolve();
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' });
+    } finally {
+      if (originalScrollIntoView) {
+        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', originalScrollIntoView);
+      } else {
+        Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView');
+      }
+    }
   });
 });
 

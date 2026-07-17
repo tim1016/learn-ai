@@ -235,7 +235,7 @@ export class AppSidebarComponent {
 
   /** Only the longest route match is active, so `/broker` does not shadow its children. */
   private activeRoute = computed<string | null>(() => {
-    const url = this.currentUrl();
+    const url = this.navigationPath(this.currentUrl());
     return NAV_ROUTES.find((route) => url === route || url.startsWith(route + '/')) ?? null;
   });
 
@@ -312,7 +312,12 @@ export class AppSidebarComponent {
   }
 
   private groupContainsUrl(g: NavGroup, url: string): boolean {
-    return g.items.some(it => url === it.route || url.startsWith(it.route + '/'));
+    const path = this.navigationPath(url);
+    return g.items.some(it => path === it.route || path.startsWith(it.route + '/'));
+  }
+
+  private navigationPath(url: string): string {
+    return url.split(/[?#]/, 1)[0] ?? '';
   }
 
   private computeInitialOpenState(): Record<string, boolean> {

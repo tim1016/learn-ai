@@ -49,7 +49,11 @@ export class DocumentArticleComponent {
 
   private scrollTo(fragment: string): void {
     const root = this.article()?.nativeElement;
-    const target = root?.querySelector<HTMLElement>('#' + CSS.escape(fragment));
+    if (!root) return;
+
+    const target = Array.from(root.querySelectorAll<HTMLElement>('[id]')).find(
+      element => element.id === fragment,
+    );
     if (!target) return;
 
     target.scrollIntoView({ behavior: 'smooth', block: 'start' });

@@ -45,12 +45,12 @@ describe('AppSidebarComponent', () => {
     expect(links.get('Bot Manual')).toBe('/broker/bot-manual');
   });
 
-  it('marks only the most specific Broker route active', async () => {
+  it('marks the most specific Broker route active when the URL has a manual fragment', async () => {
     const fixture = setup();
     const router = TestBed.inject(Router);
     router.resetConfig([{ path: 'broker/bot-manual', component: AppSidebarComponent }]);
 
-    await router.navigateByUrl('/broker/bot-manual');
+    await router.navigateByUrl('/broker/bot-manual#5-the-bot-lifecycle');
     fixture.detectChanges();
 
     const activeLabels = Array.from(

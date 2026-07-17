@@ -6,7 +6,7 @@
       [class.tone-calm]="procedure.tone === 'calm'"
       [class.tone-recover]="procedure.tone === 'recover'"
       [class.tone-scale]="procedure.tone === 'scale'"
-      [open]="procedure.featured"
+      [attr.open]="procedure.featured ? '' : null"
     >
       <summary>
         <span class="procedure-icon"><i [class]="procedure.icon" aria-hidden="true"></i></span>
