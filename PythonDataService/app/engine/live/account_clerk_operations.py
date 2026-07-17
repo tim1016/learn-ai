@@ -1,10 +1,9 @@
-"""Cancellation and recovery coordination for one :class:`AccountClerk`.
+"""Exceptional-operation coordination for one :class:`AccountClerk`.
 
 The Clerk owns durable intake and the broker-write fence.  This module owns
-the higher-level operations which intentionally hold the account-wide cancel
-grant across callback draining and recovery liquidation.  Keeping that state
-machine here makes its dependency boundary explicit without creating an import
-cycle back to the Clerk façade.
+emergency registration, cancellation, recovery, and reconciliation operations.
+Keeping those state machines here makes their dependency boundary explicit
+without creating an import cycle back to the Clerk façade.
 """
 
 from __future__ import annotations
@@ -33,6 +32,10 @@ from app.engine.live.account_registry import (
     AccountInstanceBinding,
     latest_account_instance_binding,
     read_account_instance_registry,
+)
+from app.engine.live.order_identity import (
+    build_bot_order_namespace,
+    emergency_flatten_strategy_instance_id,
 )
 
 logger = logging.getLogger(__name__)
@@ -105,8 +108,8 @@ class AccountClerkOperationDependencies:
     ]
 
 
-class AccountClerkCancellationRecoveryCoordinator:
-    """Serialize namespace cancellation, recovery liquidation, and retry decisions."""
+class AccountClerkOperationCoordinator:
+    """Coordinate exceptional Clerk intake, cancellation, recovery, and retry operations."""
 
     def __init__(self, dependencies: AccountClerkOperationDependencies) -> None:
         self._deps = dependencies
@@ -115,6 +118,25 @@ class AccountClerkCancellationRecoveryCoordinator:
     @property
     def recovery_flatten_in_progress(self) -> bool:
         return self.state.recovery_flatten_namespace is not None
+
+    async def register_emergency_flatten_intent(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountClerkRecordedReceipt:
+        """Record an external emergency order without letting the Clerk submit it."""
+
+        deps = self._deps
+        if intent.intent_kind != "EMERGENCY_FLATTEN":
+            deps.reject(intent, "CLERK_EMERGENCY_FLATTEN_INTENT_KIND_REQUIRED")
+        expected_strategy_instance_id = emergency_flatten_strategy_instance_id(deps.account_id)
+        if intent.strategy_instance_id != expected_strategy_instance_id:
+            deps.reject(intent, "CLERK_EMERGENCY_FLATTEN_INSTANCE_MISMATCH")
+        expected_namespace = build_bot_order_namespace(expected_strategy_instance_id)
+        if intent.bot_order_namespace != expected_namespace:
+            deps.reject(intent, "CLERK_EMERGENCY_FLATTEN_NAMESPACE_MISMATCH")
+        async with deps.intake_lock:
+            deps.require_rpc_write_intake(intent)
+            return await asyncio.to_thread(deps.record_intent_locked, intent)
 
     async def submit_recovery_flatten(
         self,

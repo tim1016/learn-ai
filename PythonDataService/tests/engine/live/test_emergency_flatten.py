@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+import app.engine.live.account_artifacts as account_artifacts
 from app.broker.ibkr.models import (
     IbkrAccountSummary,
     IbkrOrderAck,
@@ -503,6 +505,29 @@ def test_emergency_flatten_registers_clerk_ownership_before_broker_submit(tmp_pa
     assert binding.source == "emergency_flatten.complete"
 
 
+def test_emergency_flatten_uses_one_generation_for_attribution_and_broker_submit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reads = 0
+
+    def read_generation(*_args: object) -> SimpleNamespace:
+        nonlocal reads
+        reads += 1
+        return SimpleNamespace(generation=7)
+
+    monkeypatch.setattr(account_artifacts, "read_account_owner_generation", read_generation)
+    broker = _FakeFlattenBroker(positions=[_pos("SPY", 200)])
+    clerk = _RecordingEmergencyClerk()
+
+    rc = cmd_emergency_flatten(_args(run_dir=tmp_path, broker=broker, clerk_client=clerk))
+
+    assert rc == 0
+    assert reads == 2  # One cancel grant, then one shared liquidation generation.
+    [intent] = clerk.intents
+    assert intent.owner_generation == 7
+
+
 def test_emergency_flatten_refuses_broker_submit_without_clerk_receipt(tmp_path: Path) -> None:
     class _RejectingClerk:
         async def register_emergency_flatten(self, _intent: object) -> None:
@@ -572,6 +597,54 @@ def test_adopt_emergency_flatten_audit_registers_completed_legacy_order(tmp_path
     binding = read_account_instance_registry(tmp_path, "DU123")[-1]
     assert binding.lifecycle_state == "RETIRED"
     assert binding.source == "emergency_flatten.audit_adoption_complete"
+
+
+def test_adopt_emergency_flatten_audit_requires_submission_after_pending_evidence(tmp_path: Path) -> None:
+    strategy_instance_id = "eflat-DU123"
+    namespace = build_bot_order_namespace(strategy_instance_id)
+    intent_id = "legacy-out-of-order"
+    order_ref = build_order_ref(namespace, intent_id)
+    spec = IbkrOrderSpec(
+        symbol="SPY",
+        sec_type="STK",
+        action="SELL",
+        quantity=1,
+        order_type="MKT",
+        confirm_paper=True,
+        client_order_id="legacy-out-of-order",
+        order_ref=order_ref,
+    )
+    audit_wal = IntentWal(tmp_path / "emergency_flatten_audit.jsonl")
+    audit_wal.append(
+        event_type=IntentEventType.SUBMITTED,
+        intent_id=intent_id,
+        bot_order_namespace=namespace,
+        order_ref=order_ref,
+        intent_kind=IntentKind.EMERGENCY_FLATTEN,
+        order_id=501,
+    )
+    audit_wal.append(
+        event_type=IntentEventType.PENDING_INTENT,
+        intent_id=intent_id,
+        bot_order_namespace=namespace,
+        order_ref=order_ref,
+        intent_kind=IntentKind.EMERGENCY_FLATTEN,
+        order_spec=spec.model_dump(mode="json"),
+    )
+    clerk = _RecordingEmergencyClerk()
+
+    rc = cmd_adopt_emergency_flatten_audit(
+        argparse.Namespace(
+            run_dir=tmp_path,
+            account="DU123",
+            confirm=True,
+            artifacts_root=tmp_path,
+            clerk_client=clerk,
+        )
+    )
+
+    assert rc == 2
+    assert clerk.intents == []
 
 
 # ──────────────────────────── Failure path ───────────────────────────

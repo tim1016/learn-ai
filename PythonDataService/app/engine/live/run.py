@@ -3077,6 +3077,7 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
                 if not emergency_binding_recorded:
                     _record_emergency_binding("ACTIVE", "emergency_flatten.pre_submit")
                     emergency_binding_recorded = True
+                owner_generation = _emergency_owner_generation_provider()
                 intent = AccountOwnerSubmitIntent(
                     trace_id=intent_id,
                     account_id=args.account,
@@ -3087,7 +3088,7 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
                     order_ref=order_ref,
                     intent_kind=IntentKind.EMERGENCY_FLATTEN.value,
                     order_spec=spec.model_dump(mode="json"),
-                    owner_generation=_emergency_owner_generation_provider(),
+                    owner_generation=owner_generation,
                     created_at_ms=_time_ns() // 1_000_000,
                 )
                 # This receipt is the hard ownership boundary. Do not submit
@@ -3097,7 +3098,7 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
                 await clerk_client.register_emergency_flatten(intent)
                 with account_owner_write_grant(
                     account_id=args.account,
-                    owner_generation=_emergency_owner_generation_provider(),
+                    owner_generation=owner_generation,
                     boundary="broker.place_order",
                     owner_generation_provider=_emergency_owner_generation_provider,
                 ):
@@ -3153,7 +3154,7 @@ def cmd_adopt_emergency_flatten_audit(args: argparse.Namespace) -> int:
         AccountInstanceBinding,
         write_account_instance_binding,
     )
-    from app.engine.live.intent_events import IntentEventType, IntentKind
+    from app.engine.live.intent_events import IntentEvent, IntentEventType, IntentKind
     from app.engine.live.intent_wal import IntentWal
     from app.engine.live.order_identity import (
         build_bot_order_namespace,
@@ -3179,20 +3180,24 @@ def cmd_adopt_emergency_flatten_audit(args: argparse.Namespace) -> int:
         )
         return 2
 
-    submitted_ids = {
-        event.intent_id
-        for event in events
-        if event.event_type is IntentEventType.SUBMITTED
-        and event.intent_kind is IntentKind.EMERGENCY_FLATTEN
-        and event.bot_order_namespace == namespace
-    }
-    pending_events = [
-        event
-        for event in events
-        if event.event_type is IntentEventType.PENDING_INTENT
-        and event.intent_kind is IntentKind.EMERGENCY_FLATTEN
-        and event.bot_order_namespace == namespace
-    ]
+    submitted_event_keys: set[tuple[str, str]] = set()
+    pending_events: list[tuple[IntentEvent, bool]] = []
+    for event in reversed(events):
+        if (
+            event.event_type is IntentEventType.SUBMITTED
+            and event.intent_kind is IntentKind.EMERGENCY_FLATTEN
+            and event.bot_order_namespace == namespace
+        ):
+            submitted_event_keys.add((event.intent_id, event.order_ref))
+        elif (
+            event.event_type is IntentEventType.PENDING_INTENT
+            and event.intent_kind is IntentKind.EMERGENCY_FLATTEN
+            and event.bot_order_namespace == namespace
+        ):
+            pending_events.append(
+                (event, (event.intent_id, event.order_ref) in submitted_event_keys)
+            )
+    pending_events.reverse()
     if not pending_events:
         logger.error(
             "Emergency-flatten audit adoption found no matching pending intent",
@@ -3203,8 +3208,8 @@ def cmd_adopt_emergency_flatten_audit(args: argparse.Namespace) -> int:
     intents: list[AccountOwnerSubmitIntent] = []
     generation = read_account_owner_generation(artifacts_root, args.account)
     owner_generation = generation.generation if generation is not None else 0
-    for event in pending_events:
-        if event.intent_id not in submitted_ids or event.order_spec is None:
+    for event, has_later_submission in pending_events:
+        if not has_later_submission or event.order_spec is None:
             logger.error(
                 "Emergency-flatten audit adoption refused incomplete intent evidence",
                 extra={"account_id": args.account, "intent_id": event.intent_id},

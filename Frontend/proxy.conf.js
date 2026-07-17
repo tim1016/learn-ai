@@ -8,7 +8,8 @@ const dataPlaneControlSurfaces = require('../contracts/data-plane-control-surfac
 // Keeping the control-header hook in this one configuration prevents a local
 // target override from accidentally bypassing data-plane authorization.
 const backendProxyTarget = process.env.BACKEND_PROXY_TARGET ?? 'http://127.0.0.1:5000';
-const dataPlaneProxyTarget = process.env.DATA_PLANE_PROXY_TARGET ?? 'http://127.0.0.1:8000';
+const DEFAULT_DATA_PLANE_PROXY_TARGET = 'http://127.0.0.1:8000';
+const TRUSTED_DATA_PLANE_PROXY_HOSTS = new Set(['127.0.0.1', 'localhost', 'python-service']);
 const dataPlaneControlSecret = process.env.DATA_PLANE_CONTROL_SECRET ?? 'local-dev-control-secret';
 const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 const SAFE_READ_METHODS = new Set(['GET', 'HEAD']);
@@ -18,6 +19,35 @@ const LOCAL_DEV_ORIGINS = new Set([
   'http://localhost:4200',
   'http://127.0.0.1:4200',
 ]);
+
+function resolveDataPlaneProxyTarget(value) {
+  const target = value?.trim();
+  if (!target) {
+    throw new Error('DATA_PLANE_PROXY_TARGET must be a trusted local or Compose service URL.');
+  }
+  let parsed;
+  try {
+    parsed = new URL(target);
+  } catch {
+    throw new Error('DATA_PLANE_PROXY_TARGET must be a valid trusted local or Compose service URL.');
+  }
+  if (
+    parsed.protocol !== 'http:'
+    || !TRUSTED_DATA_PLANE_PROXY_HOSTS.has(parsed.hostname)
+    || parsed.username
+    || parsed.password
+    || parsed.pathname !== '/'
+    || parsed.search
+    || parsed.hash
+  ) {
+    throw new Error('DATA_PLANE_PROXY_TARGET must be a trusted local or Compose service URL.');
+  }
+  return parsed.origin;
+}
+
+const dataPlaneProxyTarget = resolveDataPlaneProxyTarget(
+  process.env.DATA_PLANE_PROXY_TARGET ?? DEFAULT_DATA_PLANE_PROXY_TARGET,
+);
 
 function requestHeader(req, name) {
   const value = req.headers[name.toLowerCase()];
@@ -141,6 +171,7 @@ Object.defineProperty(proxyConfig, '__test', {
     DATA_PLANE_CONTROL_INTENT_VALUE,
     backendProxyTarget,
     dataPlaneProxyTarget,
+    dataPlaneControlSecret,
     CONTROL_PREFIXES,
     PROTECTED_READ_PREFIXES,
     attachDataPlaneSecret,

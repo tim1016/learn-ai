@@ -29,13 +29,11 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
-    AccountClerkLease,
     AccountFreezeEvidence,
     account_artifacts_root,
     append_account_event,
     read_account_clerk_generation,
     read_account_freeze,
-    write_account_clerk_lease,
     write_account_freeze,
 )
 from app.engine.live.account_clerk_journal import (
@@ -58,11 +56,12 @@ from app.engine.live.account_clerk_journal import (
     read_account_clerk_inbox,
     read_account_clerk_journal,
 )
+from app.engine.live.account_clerk_lease import AccountClerkLeaseWriter
 from app.engine.live.account_clerk_operations import (
     ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S,
-    AccountClerkCancellationRecoveryCoordinator,
     AccountClerkCancelNamespaceUncertainError,
     AccountClerkGenerationFencedError,
+    AccountClerkOperationCoordinator,
     AccountClerkOperationDependencies,
     AccountClerkReconciliationOutcome,
 )
@@ -77,17 +76,12 @@ from app.engine.live.account_registry import (
     read_account_instance_registry,
 )
 from app.engine.live.broker_callbacks import broker_callback_idempotency_key
-from app.engine.live.order_identity import (
-    build_bot_order_namespace,
-    emergency_flatten_strategy_instance_id,
-)
 from app.utils.advisory_lock import advisory_file_lock
 
 if TYPE_CHECKING:
     from app.engine.live.account_clerk_rpc import AccountClerkRpcClient, AccountClerkRpcServer
 
 ACCOUNT_CLERK_AUTHORITY_LOCK_TARGET_FILENAME = "clerk_authority"
-_CLERK_LEASE_TTL_MS = 5_000
 # The Clerk must release its account-wide intake lock before the bot-side RPC
 # budget expires.  A timed-out broker write is ambiguous, so its durable
 # ``broker_uncertain`` row is deliberately left for reconciliation.
@@ -132,7 +126,7 @@ class AccountClerk:
         self._normal_submit_intake_reason: str | None = None
         self._cancel_operation_lock = asyncio.Lock()
         self._callback_drain: Callable[[], Awaitable[None]] | None = None
-        self._operations = AccountClerkCancellationRecoveryCoordinator(
+        self._operations = AccountClerkOperationCoordinator(
             AccountClerkOperationDependencies(
                 artifacts_root=artifacts_root,
                 account_id=account_id,
@@ -194,17 +188,7 @@ class AccountClerk:
         exist before that independent connection can place an order.
         """
 
-        if intent.intent_kind != "EMERGENCY_FLATTEN":
-            self._reject(intent, "CLERK_EMERGENCY_FLATTEN_INTENT_KIND_REQUIRED")
-        expected_strategy_instance_id = emergency_flatten_strategy_instance_id(self._account_id)
-        if intent.strategy_instance_id != expected_strategy_instance_id:
-            self._reject(intent, "CLERK_EMERGENCY_FLATTEN_INSTANCE_MISMATCH")
-        expected_namespace = build_bot_order_namespace(expected_strategy_instance_id)
-        if intent.bot_order_namespace != expected_namespace:
-            self._reject(intent, "CLERK_EMERGENCY_FLATTEN_NAMESPACE_MISMATCH")
-        async with self._intake_lock:
-            self._require_rpc_write_intake(intent)
-            return await asyncio.to_thread(self._record_intent_locked, intent)
+        return await self._operations.register_emergency_flatten_intent(intent)
 
     async def submit_intent(
         self,
@@ -748,43 +732,6 @@ def account_clerk_socket_path(artifacts_root: Path, account_id: str) -> Path:
         f"{account_artifacts_root(artifacts_root, account_id)}\0{account_id}".encode()
     ).hexdigest()[:32]
     return Path(tempfile.gettempdir()) / "learn-ai-clerk" / f"{digest}.sock"
-
-
-class AccountClerkLeaseWriter:
-    """Renew one supervised clerk lease until the daemon reaps the process."""
-
-    def __init__(
-        self,
-        *,
-        artifacts_root: Path,
-        account_id: str,
-        generation: int,
-        pid: int,
-        ibkr_client_id: int | None = None,
-        now_ms: Callable[[], int] = _now_ms,
-    ) -> None:
-        self._artifacts_root = artifacts_root
-        self._account_id = account_id
-        self._generation = generation
-        self._pid = pid
-        self._ibkr_client_id = ibkr_client_id
-        self._now_ms = now_ms
-        self._started_at_ms = now_ms()
-
-    def renew(self, *, draining: bool = False) -> AccountClerkLease:
-        now_ms = self._now_ms()
-        lease = AccountClerkLease(
-            account_id=self._account_id,
-            generation=self._generation,
-            pid=self._pid,
-            ibkr_client_id=self._ibkr_client_id,
-            status="DRAINING" if draining else "RUNNING",
-            started_at_ms=self._started_at_ms,
-            renewed_at_ms=now_ms,
-            valid_until_ms=now_ms if draining else now_ms + _CLERK_LEASE_TTL_MS,
-        )
-        write_account_clerk_lease(self._artifacts_root, lease)
-        return lease
 
 
 def _active_durable_clerk_generation(artifacts_root: Path, account_id: str) -> int | None:
