@@ -33,3 +33,13 @@
 .account-service dd {
   margin: 0.2rem 0 0;
 }
+.technical-details {
+  display: grid;
+  gap: 0.65rem;
+}
+.technical-details summary {
+  width: fit-content;
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 600;
+}

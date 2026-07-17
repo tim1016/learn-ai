@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, ElementRef, computed, effect, input, output, viewChild } from '@angular/core';
+import { Textarea } from 'primeng/textarea';
 
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { TimestampDisplayComponent } from '../../../shared/timestamp';
@@ -8,7 +9,7 @@ import type { AccountDeskRecoveryConfirmation } from './account-desk-recovery-st
 @Component({
   selector: 'app-account-desk-recovery-confirm-dialog',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ReceiptLabelPipe, TimestampDisplayComponent],
+  imports: [ReceiptLabelPipe, Textarea, TimestampDisplayComponent],
   templateUrl: './account-desk-recovery-confirm-dialog.component.html',
   styleUrl: './account-desk-recovery-confirm-dialog.component.scss',
 })

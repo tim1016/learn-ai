@@ -233,6 +233,35 @@ def _recovery_intent(instance_id: str, run_id: str, intent_id: str) -> AccountOw
     )
 
 
+def _emergency_flatten_intent(intent_id: str) -> AccountOwnerSubmitIntent:
+    instance_id = f"eflat-{ACCOUNT}"
+    namespace = bot_order_namespace_for_instance(instance_id)
+    order_ref = build_order_ref(namespace, intent_id)
+    return AccountOwnerSubmitIntent(
+        trace_id=f"trace-{intent_id}",
+        account_id=ACCOUNT,
+        strategy_instance_id=instance_id,
+        run_id="emergency-run",
+        bot_order_namespace=namespace,
+        intent_id=intent_id,
+        order_ref=order_ref,
+        intent_kind="EMERGENCY_FLATTEN",
+        order_spec=IbkrOrderSpec(
+            symbol="SPY",
+            sec_type="STK",
+            action="SELL",
+            quantity=1,
+            order_type="MKT",
+            time_in_force="DAY",
+            confirm_paper=True,
+            client_order_id=f"emergency-{intent_id}",
+            order_ref=order_ref,
+        ).model_dump(),
+        owner_generation=99,
+        created_at_ms=START_MS,
+    )
+
+
 async def _record_owned_fill(
     clerk: AccountClerk,
     *,
@@ -1439,6 +1468,20 @@ async def test_submit_reconciler_never_retries_a_recovery_intent(tmp_path: Path)
     await clerk.record_intent(_recovery_intent("bot-a", "run-a", "recovery-reconcile"))
 
     assert await AccountClerkReconciler(clerk).reconcile_once() == ()
+
+
+@pytest.mark.asyncio
+async def test_submit_reconciler_never_retries_an_externally_owned_emergency_intent(tmp_path: Path) -> None:
+    """The Clerk receipt attributes emergency callbacks but cannot place its order."""
+
+    _write_active_binding(tmp_path, f"eflat-{ACCOUNT}", "emergency-run")
+    broker = _ReconciliationBroker("PROVABLY_ABSENT")
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+
+    await clerk.register_emergency_flatten_intent(_emergency_flatten_intent("emergency-reconcile"))
+
+    assert await AccountClerkReconciler(clerk).reconcile_once() == ()
+    assert broker.calls == []
 
 
 @pytest.mark.asyncio

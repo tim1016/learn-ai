@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, inject } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, inject } from "@angular/core";
 import { ButtonModule } from "primeng/button";
 import { PanelModule } from "primeng/panel";
 
@@ -23,6 +23,12 @@ import { AccountDeskSurfaceStore } from "./account-desk-surface-store.service";
 })
 export class AccountDeskOperatorProofComponent {
   readonly store = inject(AccountDeskSurfaceStore);
+  readonly recentVerificationHistory = computed(() =>
+    this.store.triage()?.account_observation.history.slice(0, 3) ?? [],
+  );
+  readonly earlierVerificationHistory = computed(() =>
+    this.store.triage()?.account_observation.history.slice(3) ?? [],
+  );
 
   retry(): void {
     this.store.retry();

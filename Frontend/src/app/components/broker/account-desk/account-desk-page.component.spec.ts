@@ -166,6 +166,7 @@ async function setup(
     response?: AccountTriageResponse;
     route$?: BehaviorSubject<ReturnType<typeof convertToParamMap>>;
     fragment$?: BehaviorSubject<string | null>;
+    waitForVerdict?: boolean;
   } = {},
 ) {
   const broker = new FakeBrokerService();
@@ -204,7 +205,9 @@ async function setup(
       { provide: Router, useValue: router },
     ],
   });
-  await screen.findByText((options.response ?? triage()).verdict.headline);
+  if (options.waitForVerdict !== false) {
+    await screen.findByText((options.response ?? triage()).verdict.headline);
+  }
   return {
     ...view,
     broker,
@@ -314,6 +317,37 @@ describe("AccountDeskPageComponent", () => {
     expect(fleet.load).toHaveBeenCalledWith("");
     expect(recovery.load).toHaveBeenCalledWith("");
     expect(directory.loadServiceStatus).toHaveBeenCalledWith("");
+  });
+
+  it('fails closed instead of showing one account under another account route', async () => {
+    const route$ = new BehaviorSubject(
+      convertToParamMap({ accountId: 'DUM284968' }),
+    );
+    const mismatched = makeCleanAccountTriage({ accountId: 'DU1234567' });
+    await setup({ response: mismatched, route$, waitForVerdict: false });
+
+    expect(await screen.findByText('We could not load this account verdict.')).toBeTruthy();
+    expect(screen.queryByText(mismatched.verdict.headline)).toBeNull();
+    expect((screen.getByRole('combobox', { name: 'Account' }) as HTMLSelectElement).value).toBe('DUM284968');
+  });
+
+  it('keeps the route account selected after the roster gains that account', async () => {
+    const route$ = new BehaviorSubject(
+      convertToParamMap({ accountId: 'DUM284968' }),
+    );
+    const { directory } = await setup({
+      response: makeCleanAccountTriage({ accountId: 'DUM284968' }),
+      route$,
+    });
+
+    directory.rosterRows.set([
+      accountRow('DU1234567'),
+      accountRow('DUM284968'),
+    ]);
+
+    await waitFor(() =>
+      expect((screen.getByRole('combobox', { name: 'Account' }) as HTMLSelectElement).value).toBe('DUM284968'),
+    );
   });
 
   it("switches accounts without leaving the current lens", async () => {

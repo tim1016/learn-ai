@@ -377,6 +377,11 @@ npx ng serve
 
 Open [http://localhost:4200](http://localhost:4200) in your browser.
 
+The repository proxy configuration is required for protected broker actions.
+For a non-default service location, set `BACKEND_PROXY_TARGET` or
+`DATA_PLANE_PROXY_TARGET`; do not replace `proxy.conf.js` with a target-only
+proxy configuration.
+
 ### 4. Fetch your first data
 
 1. Navigate to **Market Data**

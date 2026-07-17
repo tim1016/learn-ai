@@ -27,7 +27,7 @@ describe('AccountDeskOperatorServiceComponent', () => {
       ],
     });
 
-    expect(screen.getByRole('heading', { name: 'Account service' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Account service health' })).toBeTruthy();
     expect(screen.getByText('Ready — no bots on duty')).toBeTruthy();
     expect(screen.getByText(/verification continues in the background/i)).toBeTruthy();
     expect(screen.getAllByText(formatTimestampDisplay(1_780_000_000_102, { mode: 'local' })).length).toBeGreaterThan(0);

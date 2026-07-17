@@ -5,8 +5,8 @@
   aria-live="polite"
   tabindex="-1"
 >
-  <ng-template #header><h2>Account service</h2></ng-template>
-  <p>Read-only attachment and durable journal status.</p>
+  <ng-template #header><h2>Account service health</h2></ng-template>
+  <p>Shows whether the background account service is attached and keeping its verification record current.</p>
   @if (
     directory.serviceStatusLoading() && !directory.serviceStatusHasLastGood()
   ) {
@@ -28,17 +28,17 @@
     </div>
     <dl>
       <div>
-        <dt>Attachment</dt>
+        <dt>Connection</dt>
         <dd>{{ status.attachment | receiptLabel }}</dd>
       </div>
       <div>
-        <dt>Phase</dt>
+        <dt>Current mode</dt>
         <dd>
           {{ status.phase === null ? "—" : (status.phase | receiptLabel) }}
         </dd>
       </div>
       <div>
-        <dt>Generation</dt>
+        <dt>Service generation</dt>
         <dd>{{ status.generation ?? "—" }}</dd>
       </div>
       <div>
@@ -54,17 +54,9 @@
           }
         </dd>
       </div>
-      <div>
-        <dt>Binding</dt>
-        <dd>
-          {{ status.binding.state | receiptLabel }} · generation
-          {{ status.binding.generation ?? "—" }} · lease
-          {{ status.binding.lease_generation ?? "—" }}
-        </dd>
-      </div>
       @if (status.lease; as lease) {
         <div>
-          <dt>Lease</dt>
+          <dt>Service lease</dt>
           <dd>
             {{ lease.status | receiptLabel }} · generation
             {{ lease.generation }}
@@ -87,7 +79,7 @@
         </div>
       }
       <div>
-        <dt>Journal watermark</dt>
+        <dt>Journal checkpoint</dt>
         <dd>
           @if (status.journal.last_seq !== null) {
             #{{ status.journal.last_seq }}
@@ -104,6 +96,19 @@
         </dd>
       </div>
     </dl>
+    <details class="technical-details">
+      <summary>Show technical service details</summary>
+      <dl>
+        <div>
+          <dt>Binding</dt>
+          <dd>
+            {{ status.binding.state | receiptLabel }} · generation
+            {{ status.binding.generation ?? "—" }} · lease
+            {{ status.binding.lease_generation ?? "—" }}
+          </dd>
+        </div>
+      </dl>
+    </details>
     <app-account-desk-guidance
       anchor="clerk"
       lens="operator"

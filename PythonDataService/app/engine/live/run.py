@@ -2866,20 +2866,31 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
     broker calls so a poisoned LiveEngine state has no influence on
     the flatten path. Unlike ``start``, it does NOT read the run
     ledger; the operator names the account directly so a corrupted
-    ledger doesn't block the flatten.
+    ledger doesn't block the flatten. It does require the account
+    Clerk to durably register every external order before submission,
+    so later callback replay cannot misclassify a legitimate panic
+    order as foreign account flow.
     """
     import asyncio as _asyncio
     from datetime import UTC
     from datetime import datetime as _datetime
+    from time import time_ns as _time_ns
 
     from app.broker.ibkr.models import IbkrOrderSpec
     from app.engine.live.account_artifacts import read_account_owner_generation
+    from app.engine.live.account_clerk_rpc import AccountClerkRpcClient
+    from app.engine.live.account_owner import AccountOwnerSubmitIntent
     from app.engine.live.account_owner_fence import account_owner_write_grant
+    from app.engine.live.account_registry import (
+        AccountInstanceBinding,
+        write_account_instance_binding,
+    )
     from app.engine.live.intent_events import IntentEventType, IntentKind
     from app.engine.live.intent_wal import IntentWal
     from app.engine.live.order_identity import (
         build_bot_order_namespace,
         build_order_ref,
+        emergency_flatten_strategy_instance_id,
         mint_intent_id,
     )
 
@@ -2898,12 +2909,19 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
     # short prefix keeps the 60-char ``order_ref`` cap intact even for
     # 8-char DU* accounts. Using ``build_bot_order_namespace`` keeps the
     # ``learn-ai/{sid}/v1`` shape downstream parsers expect.
-    emergency_namespace = build_bot_order_namespace(f"eflat-{args.account}")
+    emergency_strategy_instance_id = emergency_flatten_strategy_instance_id(args.account)
+    emergency_namespace = build_bot_order_namespace(emergency_strategy_instance_id)
 
     log_path = args.run_dir / "emergency_flatten.log"
     audit_wal = IntentWal(args.run_dir / "emergency_flatten_audit.jsonl")
     args.run_dir.mkdir(parents=True, exist_ok=True)
     artifacts_root = getattr(args, "artifacts_root", Path("PythonDataService/artifacts"))
+    clerk_client = getattr(args, "clerk_client", None) or AccountClerkRpcClient(
+        artifacts_root=artifacts_root,
+        account_id=args.account,
+    )
+    emergency_binding_recorded = False
+    emergency_run_id = args.run_dir.name
 
     def _emergency_owner_generation_provider() -> int:
         generation = read_account_owner_generation(artifacts_root, args.account)
@@ -2932,6 +2950,22 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
         broker = IbkrBrokerAdapter(client)
 
     async def _flatten() -> int:
+        nonlocal emergency_binding_recorded
+
+        def _record_emergency_binding(lifecycle_state: str, source: str) -> None:
+            write_account_instance_binding(
+                artifacts_root,
+                AccountInstanceBinding(
+                    account_id=args.account,
+                    strategy_instance_id=emergency_strategy_instance_id,
+                    run_id=emergency_run_id,
+                    bot_order_namespace=emergency_namespace,
+                    lifecycle_state=lifecycle_state,
+                    recorded_at_ms=_time_ns() // 1_000_000,
+                    source=source,
+                ),
+            )
+
         # Connect the IBKR client before any broker call. ``fetch_positions``
         # → ``account.fetch_account_summary`` calls ``client.require_connected()``
         # which raises if the client never connected, so without this
@@ -3040,9 +3074,31 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
                     reason="emergency_flatten_liquidation",
                     order_spec=spec.model_dump(mode="json"),
                 )
+                if not emergency_binding_recorded:
+                    _record_emergency_binding("ACTIVE", "emergency_flatten.pre_submit")
+                    emergency_binding_recorded = True
+                owner_generation = _emergency_owner_generation_provider()
+                intent = AccountOwnerSubmitIntent(
+                    trace_id=intent_id,
+                    account_id=args.account,
+                    strategy_instance_id=emergency_strategy_instance_id,
+                    run_id=emergency_run_id,
+                    bot_order_namespace=emergency_namespace,
+                    intent_id=intent_id,
+                    order_ref=order_ref,
+                    intent_kind=IntentKind.EMERGENCY_FLATTEN.value,
+                    order_spec=spec.model_dump(mode="json"),
+                    owner_generation=owner_generation,
+                    created_at_ms=_time_ns() // 1_000_000,
+                )
+                # This receipt is the hard ownership boundary. Do not submit
+                # through the emergency broker connection unless the live
+                # Clerk has fsynced the exact intent it will use to attribute
+                # callbacks after a restart.
+                await clerk_client.register_emergency_flatten(intent)
                 with account_owner_write_grant(
                     account_id=args.account,
-                    owner_generation=_emergency_owner_generation_provider(),
+                    owner_generation=owner_generation,
                     boundary="broker.place_order",
                     owner_generation_provider=_emergency_owner_generation_provider,
                 ):
@@ -3062,6 +3118,8 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
             _log(f"complete: liquidated={liquidated}")
             return 0
         finally:
+            if emergency_binding_recorded:
+                _record_emergency_binding("RETIRED", "emergency_flatten.complete")
             if client is not None:
                 try:
                     await client.disconnect()
@@ -3075,6 +3133,170 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
         print(f"[EMERGENCY-FLATTEN] runtime error: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 3
     return rc
+
+
+def cmd_adopt_emergency_flatten_audit(args: argparse.Namespace) -> int:
+    """Adopt completed legacy emergency-flatten attempts into the live Clerk.
+
+    This command is deliberately broker-free. It repairs an old emergency
+    command that wrote its standalone audit WAL before the Clerk ownership
+    boundary existed, so a later Clerk restart can attribute its callbacks
+    without treating the account as contaminated.
+    """
+    import asyncio as _asyncio
+    from time import time_ns as _time_ns
+
+    from app.broker.ibkr.models import IbkrOrderSpec
+    from app.engine.live.account_artifacts import read_account_owner_generation
+    from app.engine.live.account_clerk_rpc import AccountClerkRpcClient
+    from app.engine.live.account_owner import AccountOwnerSubmitIntent
+    from app.engine.live.account_registry import (
+        AccountInstanceBinding,
+        write_account_instance_binding,
+    )
+    from app.engine.live.intent_events import IntentEvent, IntentEventType, IntentKind
+    from app.engine.live.intent_wal import IntentWal
+    from app.engine.live.order_identity import (
+        build_bot_order_namespace,
+        build_order_ref,
+        emergency_flatten_strategy_instance_id,
+    )
+
+    if not args.confirm:
+        logger.error("Emergency-flatten audit adoption refused without operator confirmation")
+        return 2
+
+    artifacts_root = args.artifacts_root
+    strategy_instance_id = emergency_flatten_strategy_instance_id(args.account)
+    namespace = build_bot_order_namespace(strategy_instance_id)
+    run_id = args.run_dir.name
+    audit_wal = IntentWal(args.run_dir / "emergency_flatten_audit.jsonl")
+    try:
+        events = audit_wal.read_tail()
+    except Exception as exc:
+        logger.error(
+            "Emergency-flatten audit adoption could not read the audit WAL",
+            extra={"account_id": args.account, "error_type": type(exc).__name__},
+        )
+        return 2
+
+    submitted_event_keys: set[tuple[str, str]] = set()
+    pending_events: list[tuple[IntentEvent, bool]] = []
+    for event in reversed(events):
+        if (
+            event.event_type is IntentEventType.SUBMITTED
+            and event.intent_kind is IntentKind.EMERGENCY_FLATTEN
+            and event.bot_order_namespace == namespace
+        ):
+            submitted_event_keys.add((event.intent_id, event.order_ref))
+        elif (
+            event.event_type is IntentEventType.PENDING_INTENT
+            and event.intent_kind is IntentKind.EMERGENCY_FLATTEN
+            and event.bot_order_namespace == namespace
+        ):
+            pending_events.append(
+                (event, (event.intent_id, event.order_ref) in submitted_event_keys)
+            )
+    pending_events.reverse()
+    if not pending_events:
+        logger.error(
+            "Emergency-flatten audit adoption found no matching pending intent",
+            extra={"account_id": args.account, "run_id": run_id},
+        )
+        return 2
+
+    intents: list[AccountOwnerSubmitIntent] = []
+    generation = read_account_owner_generation(artifacts_root, args.account)
+    owner_generation = generation.generation if generation is not None else 0
+    for event, has_later_submission in pending_events:
+        if not has_later_submission or event.order_spec is None:
+            logger.error(
+                "Emergency-flatten audit adoption refused incomplete intent evidence",
+                extra={"account_id": args.account, "intent_id": event.intent_id},
+            )
+            return 2
+        expected_order_ref = build_order_ref(namespace, event.intent_id)
+        if event.order_ref != expected_order_ref:
+            logger.error(
+                "Emergency-flatten audit adoption refused inconsistent order reference",
+                extra={"account_id": args.account, "intent_id": event.intent_id},
+            )
+            return 2
+        try:
+            spec = IbkrOrderSpec.model_validate(event.order_spec)
+        except ValueError as exc:
+            logger.error(
+                "Emergency-flatten audit adoption refused invalid order specification",
+                extra={"account_id": args.account, "intent_id": event.intent_id, "error": str(exc)},
+            )
+            return 2
+        if spec.order_ref != expected_order_ref:
+            logger.error(
+                "Emergency-flatten audit adoption refused order-spec reference mismatch",
+                extra={"account_id": args.account, "intent_id": event.intent_id},
+            )
+            return 2
+        intents.append(
+            AccountOwnerSubmitIntent(
+                trace_id=event.intent_id,
+                account_id=args.account,
+                strategy_instance_id=strategy_instance_id,
+                run_id=run_id,
+                bot_order_namespace=namespace,
+                intent_id=event.intent_id,
+                order_ref=event.order_ref,
+                intent_kind=IntentKind.EMERGENCY_FLATTEN.value,
+                order_spec=spec.model_dump(mode="json"),
+                owner_generation=owner_generation,
+                created_at_ms=event.appended_at_ms or _time_ns() // 1_000_000,
+            )
+        )
+
+    clerk_client = getattr(args, "clerk_client", None) or AccountClerkRpcClient(
+        artifacts_root=artifacts_root,
+        account_id=args.account,
+    )
+
+    async def _adopt() -> None:
+        recorded_at_ms = _time_ns() // 1_000_000
+        write_account_instance_binding(
+            artifacts_root,
+            AccountInstanceBinding(
+                account_id=args.account,
+                strategy_instance_id=strategy_instance_id,
+                run_id=run_id,
+                bot_order_namespace=namespace,
+                lifecycle_state="ACTIVE",
+                recorded_at_ms=recorded_at_ms,
+                source="emergency_flatten.audit_adoption",
+            ),
+        )
+        try:
+            for intent in intents:
+                await clerk_client.register_emergency_flatten(intent)
+        finally:
+            write_account_instance_binding(
+                artifacts_root,
+                AccountInstanceBinding(
+                    account_id=args.account,
+                    strategy_instance_id=strategy_instance_id,
+                    run_id=run_id,
+                    bot_order_namespace=namespace,
+                    lifecycle_state="RETIRED",
+                    recorded_at_ms=_time_ns() // 1_000_000,
+                    source="emergency_flatten.audit_adoption_complete",
+                ),
+            )
+
+    try:
+        _asyncio.run(_adopt())
+    except Exception as exc:
+        logger.error(
+            "Emergency-flatten audit adoption failed",
+            extra={"account_id": args.account, "error_type": type(exc).__name__},
+        )
+        return 3
+    return 0
 
 
 # ──────────────────────────── Argparse ───────────────────────────────
@@ -3373,6 +3595,34 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     flatten.set_defaults(func=cmd_emergency_flatten)
+
+    adopt_flatten_audit = sub.add_parser(
+        "adopt-emergency-flatten-audit",
+        help="Adopt a completed legacy emergency-flatten audit into the account Clerk.",
+    )
+    adopt_flatten_audit.add_argument(
+        "--run-dir",
+        type=Path,
+        required=True,
+        help="The prior emergency-flatten run directory containing its audit WAL.",
+    )
+    adopt_flatten_audit.add_argument(
+        "--account",
+        required=True,
+        help="IBKR DU account that owns the prior emergency-flatten audit.",
+    )
+    adopt_flatten_audit.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Required. This writes a durable Clerk attribution record but never contacts IBKR.",
+    )
+    adopt_flatten_audit.add_argument(
+        "--artifacts-root",
+        type=Path,
+        default=Path("PythonDataService/artifacts"),
+        help="Root for the account Clerk and instance-registry artifacts.",
+    )
+    adopt_flatten_audit.set_defaults(func=cmd_adopt_emergency_flatten_audit)
 
     clear_freeze = sub.add_parser(
         "clear-account-freeze",

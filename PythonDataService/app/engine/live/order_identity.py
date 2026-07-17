@@ -110,6 +110,17 @@ def build_bot_order_namespace(strategy_instance_id: str) -> str:
     )
 
 
+def emergency_flatten_strategy_instance_id(account_id: str) -> str:
+    """Return the reserved emergency-flatten identity for one account.
+
+    Emergency flatten runs outside a normal bot ledger, but its broker events
+    must still have one durable Clerk owner. Keeping this identity derivation
+    here makes the command and Clerk validate the same namespace.
+    """
+
+    return f"eflat-{account_id}"
+
+
 def build_manual_order_namespace(operator_or_session: str) -> str:
     """``manual/{operator_or_session}/v1`` — app-minted manual ownership scope."""
     from app.engine.live.identity import validate_strategy_instance_id

@@ -393,6 +393,11 @@ def _unresolved_intents(
     for intent_id, intent in recorded.items():
         if intent_id in terminal:
             continue
+        if intent.intent_kind == "EMERGENCY_FLATTEN":
+            # Emergency flatten writes through its own poisoned-run escape
+            # hatch. Its Clerk receipt supplies callback attribution only;
+            # the Clerk must never retry that external broker submission.
+            continue
         submitted_at = submitting_at.get(intent_id)
         uncertainty_marker = uncertainty_at.get(intent_id)
         if intent.intent_kind == "CANCEL_NAMESPACE":

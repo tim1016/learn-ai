@@ -1,4 +1,10 @@
 const assert = require('node:assert/strict');
+const { spawnSync } = require('node:child_process');
+const path = require('node:path');
+
+const TEST_DATA_PLANE_CONTROL_SECRET = 'proxy-control-guard-test-secret';
+process.env.DATA_PLANE_CONTROL_SECRET = TEST_DATA_PLANE_CONTROL_SECRET;
+process.env.DATA_PLANE_PROXY_TARGET = 'http://python-service:8000';
 
 const proxyConfig = require('../proxy.conf.js');
 const {
@@ -8,6 +14,7 @@ const {
   DATA_PLANE_CONTROL_INTENT_VALUE,
   CONTROL_PREFIXES,
   PROTECTED_READ_PREFIXES,
+  dataPlaneControlSecret,
   attachDataPlaneSecret,
   configureDataPlaneProxy,
   isControlMutation,
@@ -77,13 +84,35 @@ function proxyEmitterRecorder() {
   };
 }
 
+for (const target of ['', '   ', 'https://data-plane.example', 'http://data-plane.example']) {
+  const result = spawnSync(
+    process.execPath,
+    ['-e', `process.env.DATA_PLANE_PROXY_TARGET = ${JSON.stringify(target)}; require(${JSON.stringify(path.resolve(__dirname, '../proxy.conf.js'))});`],
+    { encoding: 'utf8' },
+  );
+  assert.notEqual(result.status, 0, `must reject untrusted data-plane target: ${JSON.stringify(target)}`);
+}
+
+assert.equal(proxyConfig['/api'].target, 'http://python-service:8000');
+assert.equal(dataPlaneControlSecret, TEST_DATA_PLANE_CONTROL_SECRET);
+
 for (const prefix of CONTROL_PREFIXES) {
   const req = request({ url: `${prefix}/__probe` });
   const proxyReq = proxyReqRecorder();
   attachDataPlaneSecret(proxyReq, req);
-  assert.equal(proxyReq.headers.get(DATA_PLANE_CONTROL_SECRET_HEADER), 'local-dev-control-secret');
+  assert.equal(proxyReq.headers.get(DATA_PLANE_CONTROL_SECRET_HEADER), TEST_DATA_PLANE_CONTROL_SECRET);
   assert.equal(isControlMutation(req), true);
   assert.equal(requiresDataPlaneControlSecret(req), true);
+}
+
+{
+  const req = request({
+    url: '/api/accounts/DU1234567/freeze/accept-exposure-override',
+  });
+  const proxyReq = proxyReqRecorder();
+  attachDataPlaneSecret(proxyReq, req);
+  assert.equal(isControlMutation(req), true);
+  assert.equal(proxyReq.headers.get(DATA_PLANE_CONTROL_SECRET_HEADER), TEST_DATA_PLANE_CONTROL_SECRET);
 }
 
 for (const prefix of PROTECTED_READ_PREFIXES) {
@@ -93,7 +122,7 @@ for (const prefix of PROTECTED_READ_PREFIXES) {
   });
   const proxyReq = proxyReqRecorder();
   attachDataPlaneSecret(proxyReq, req);
-  assert.equal(proxyReq.headers.get(DATA_PLANE_CONTROL_SECRET_HEADER), 'local-dev-control-secret');
+  assert.equal(proxyReq.headers.get(DATA_PLANE_CONTROL_SECRET_HEADER), TEST_DATA_PLANE_CONTROL_SECRET);
   assert.equal(isProtectedControlRead(req), true);
   assert.equal(requiresDataPlaneControlSecret(req), true);
 }
@@ -107,7 +136,7 @@ for (const prefix of PROTECTED_READ_PREFIXES) {
   });
   const proxyReq = proxyReqRecorder();
   attachDataPlaneSecret(proxyReq, req);
-  assert.equal(proxyReq.headers.get(DATA_PLANE_CONTROL_SECRET_HEADER), 'local-dev-control-secret');
+  assert.equal(proxyReq.headers.get(DATA_PLANE_CONTROL_SECRET_HEADER), TEST_DATA_PLANE_CONTROL_SECRET);
   assert.equal(isProtectedControlRead(req), true);
 }
 
@@ -122,7 +151,7 @@ for (const prefix of PROTECTED_READ_PREFIXES) {
   attachDataPlaneSecret(proxyReq, req);
   assert.equal(isProtectedControlRead(req), true);
   assert.equal(requiresDataPlaneControlSecret(req), true);
-  assert.equal(proxyReq.headers.get(DATA_PLANE_CONTROL_SECRET_HEADER), 'local-dev-control-secret');
+  assert.equal(proxyReq.headers.get(DATA_PLANE_CONTROL_SECRET_HEADER), TEST_DATA_PLANE_CONTROL_SECRET);
 }
 
 {
@@ -151,7 +180,7 @@ for (const prefix of PROTECTED_READ_PREFIXES) {
   const proxyReqHandler = proxy.handler('proxyReq');
   assert.equal(typeof proxyReqHandler, 'function');
   proxyReqHandler(proxyReq, req);
-  assert.equal(proxyReq.headers.get(DATA_PLANE_CONTROL_SECRET_HEADER), 'local-dev-control-secret');
+  assert.equal(proxyReq.headers.get(DATA_PLANE_CONTROL_SECRET_HEADER), TEST_DATA_PLANE_CONTROL_SECRET);
 }
 
 {

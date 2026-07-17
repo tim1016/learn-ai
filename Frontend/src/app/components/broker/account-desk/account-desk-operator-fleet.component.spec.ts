@@ -23,9 +23,9 @@ describe('AccountDeskOperatorFleetComponent', () => {
       }],
     });
 
-    expect(await screen.findByRole('heading', { name: 'Fleet contamination' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Cross-bot position check' })).toBeTruthy();
     expect(screen.getByText('Fleet is clean.')).toBeTruthy();
-    expect(screen.getByText('No fleet net positions are reported.')).toBeTruthy();
+    expect(screen.getByText('No other bot positions are reported.')).toBeTruthy();
   });
 });
 

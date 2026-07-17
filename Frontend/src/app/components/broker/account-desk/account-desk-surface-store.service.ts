@@ -39,6 +39,9 @@ export class AccountDeskSurfaceStore {
     try {
       const triage = await this.broker.accountTriage(accountId);
       if (generation !== this.requestGeneration) return;
+      if (!sameAccountId(triage.account_id, accountId)) {
+        throw new Error('Account verdict did not attest this route.');
+      }
       this.triageState.set(triage);
     } catch (error) {
       if (generation !== this.requestGeneration) return;
@@ -52,4 +55,8 @@ export class AccountDeskSurfaceStore {
     const accountId = this.accountKey();
     if (accountId) void this.load(accountId);
   }
+}
+
+function sameAccountId(value: string, accountId: string): boolean {
+  return value.trim().toUpperCase() === accountId.trim().toUpperCase();
 }

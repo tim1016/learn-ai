@@ -27,6 +27,7 @@ from app.engine.live.account_artifacts import (
     read_account_events_tolerant,
     read_account_freeze,
     record_cohort_batch_launch_receipt,
+    repair_account_event_sequence,
     require_active_account_clerk_generation,
     write_account_clerk_lease,
     write_account_freeze,
@@ -269,6 +270,48 @@ def test_account_event_counter_recovers_missing_behind_and_ahead_without_skippin
 
     assert [event["seq"] for event in read_account_events(tmp_path, account_id)] == [1, 2, 3, 4]
     assert json.loads(counter.read_text(encoding="utf-8")) == {"last_seq": 4}
+
+
+def test_repair_account_event_sequence_resequences_without_discarding_rows(tmp_path: Path) -> None:
+    account_id = "DU123456"
+    payloads = [
+        {
+            "event_type": "account_owner_generation_recorded",
+            "recorded_at_ms": 1_700_000_020_000,
+            "source": "first-writer",
+        },
+        {
+            "event_type": "account_owner_generation_recorded",
+            "recorded_at_ms": 1_700_000_020_001,
+            "source": "second-writer",
+        },
+        {
+            "event_type": "account_owner_generation_recorded",
+            "recorded_at_ms": 1_700_000_020_002,
+            "source": "third-writer",
+        },
+    ]
+    for payload in payloads:
+        account_artifacts.append_account_event(tmp_path, account_id, payload)
+    path = account_artifacts_root(tmp_path, account_id) / account_artifacts.ACCOUNT_EVENTS_FILENAME
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    rows[2]["seq"] = 2
+    path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
+    malformed_bytes = path.read_bytes()
+
+    receipt = repair_account_event_sequence(tmp_path, account_id)
+
+    assert receipt.account_id == account_id
+    assert receipt.rewritten_rows == 3
+    assert receipt.backup_path is not None
+    assert receipt.backup_path.read_bytes() == malformed_bytes
+    repaired_rows = read_account_events(tmp_path, account_id)
+    assert [event["seq"] for event in repaired_rows] == [1, 2, 3]
+    assert [{key: value for key, value in event.items() if key != "seq"} for event in repaired_rows] == [
+        {key: value for key, value in row.items() if key != "seq"} for row in rows
+    ]
+    account_artifacts.append_account_event(tmp_path, account_id, payloads[-1])
+    assert [event["seq"] for event in read_account_events(tmp_path, account_id)] == [1, 2, 3, 4]
 
 
 def test_account_event_steady_state_append_does_not_rescan_ledger(

@@ -19,6 +19,7 @@ ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S: Final = 120.0
 
 AccountClerkRpcOperation = Literal[
     "submit",
+    "register_emergency_flatten",
     "cancel_namespace",
     "recovery_flatten",
     "recovery_flatten_batch",
@@ -28,6 +29,7 @@ AccountClerkRpcOperation = Literal[
 WRITE_OPERATIONS = frozenset(
     {
         "submit",
+        "register_emergency_flatten",
         "cancel_namespace",
         "recovery_flatten",
         "recovery_flatten_batch",
@@ -212,6 +214,7 @@ def request_operation(request: Mapping[str, object]) -> AccountClerkRpcOperation
     operation = request.get("operation")
     if operation not in (
         "submit",
+        "register_emergency_flatten",
         "cancel_namespace",
         "recovery_flatten",
         "recovery_flatten_batch",

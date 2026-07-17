@@ -6,8 +6,19 @@
 >
   @if (confirmation(); as confirmation) {
     <header>
-      <p class="eyebrow">Account recovery confirmation</p>
-      <h2 id="account-recovery-confirm-title">{{ confirmation.title }}</h2>
+      <div>
+        <p class="eyebrow">Account recovery confirmation</p>
+        <h2 id="account-recovery-confirm-title">{{ confirmation.title }}</h2>
+      </div>
+      <button
+        type="button"
+        class="dialog-close"
+        aria-label="Close confirmation"
+        [disabled]="busy()"
+        (click)="cancel()"
+      >
+        <span aria-hidden="true">×</span>
+      </button>
     </header>
     <p>{{ confirmation.body }}</p>
     <p class="consequence">{{ confirmation.consequence }}</p>
@@ -40,23 +51,44 @@
       }
     </dl>
     @if (confirmation.command === 'exposure_override') {
-      <label for="account-exposure-override-reason">Operator reason</label>
-      <textarea
-        id="account-exposure-override-reason"
-        rows="3"
-        [value]="confirmation.reason"
-        (input)="updateReason($event)"
-      ></textarea>
-      @if (confirmation.reason.trim().length === 0) {
-        <p class="validation" role="status">An operator reason is required.</p>
-      }
+      <section class="grid gap-2 rounded-lg border border-[var(--border-light)] bg-[var(--bg-sunken)] p-3.5">
+        <label class="font-semibold" id="account-exposure-override-reason-label" for="account-exposure-override-reason">
+          Why are you accepting this account exposure?
+        </label>
+        <p class="text-[0.85rem] text-[var(--text-secondary)]" id="account-exposure-override-reason-help">
+          Required. This explanation becomes part of the audited recovery record.
+        </p>
+        <textarea
+          pTextarea
+          id="account-exposure-override-reason"
+          rows="4"
+          aria-required="true"
+          aria-describedby="account-exposure-override-reason-help"
+          [attr.aria-invalid]="confirmation.reason.trim().length === 0"
+          [invalid]="confirmation.reason.trim().length === 0"
+          [value]="confirmation.reason"
+          class="box-border min-h-24 w-full resize-y rounded-md border border-[var(--border-light)] bg-[var(--bg-elevated)] px-3 py-2.5 text-[var(--text-primary)] [font:inherit] focus:border-[var(--accent)] focus:outline-2 focus:outline-[var(--accent)] focus:outline-offset-1"
+          placeholder="Describe the evidence you reviewed and why this exposure is acceptable."
+          autofocus
+          (input)="updateReason($event)"
+        ></textarea>
+        @if (confirmation.reason.trim().length === 0) {
+          <p class="font-semibold text-[var(--bear)]" role="status">Enter an operator reason to enable Accept exposure.</p>
+        }
+      </section>
     }
     @if (errorMessage(); as errorMessage) {
       <p class="error" role="alert">{{ errorMessage }}</p>
     }
     <footer>
-      <button type="button" (click)="cancel()" [disabled]="busy()">Cancel</button>
-      <button type="button" class="primary" (click)="confirm()" [disabled]="busy() || !canConfirm()">
+      <button type="button" class="secondary" (click)="cancel()" [disabled]="busy()">Cancel</button>
+      <button
+        type="button"
+        class="primary"
+        [class.primary--danger]="confirmation.command === 'exposure_override'"
+        (click)="confirm()"
+        [disabled]="busy() || !canConfirm()"
+      >
         {{ busy() ? 'Submitting…' : confirmation.confirmLabel }}
       </button>
     </footer>

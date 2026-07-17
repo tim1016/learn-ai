@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input, output } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject, input, output } from '@angular/core';
 
 import { AccountDeskDirectoryStore } from './account-desk-directory-store.service';
 
@@ -13,9 +13,6 @@ export class AccountDeskAccountSwitcherComponent {
   readonly accountId = input.required<string>();
   readonly accountChange = output<string>();
   readonly directory = inject(AccountDeskDirectoryStore);
-  readonly routeAccountIsInRoster = computed(() =>
-    this.directory.rosterRows().some((row) => row.account_id === this.accountId()),
-  );
 
   choose(event: Event): void {
     const target = event.target;
