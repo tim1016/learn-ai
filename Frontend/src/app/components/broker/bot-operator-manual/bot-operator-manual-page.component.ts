@@ -4,6 +4,7 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { map } from 'rxjs/operators';
 
 import { MarkdownViewerComponent } from '../../../shared/markdown-viewer/markdown-viewer.component';
+import { documentAnchor } from '../../../shared/markdown/markdown-slug';
 import { DocumentArticleComponent } from '../../../shared/markdown-document/document-article.component';
 import { MarkdownDocumentRepository } from '../../../shared/markdown-document/markdown-document-repository.service';
 import { SectionErrorComponent } from '../../../shared/errors/section-error.component';
@@ -23,35 +24,35 @@ const MANUAL_CHAPTERS: readonly ManualChapter[] = [
     range: '01–04',
     title: 'Know the system',
     description: 'Three planes, runtime topology, the Account Clerk, and reconciliation.',
-    anchor: '1-mental-model-three-planes',
+    anchor: documentAnchor('1. Mental model — three planes'),
     icon: 'pi pi-sitemap',
   },
   {
     range: '05–06',
     title: 'Run the lifecycle',
     description: 'Roll call, start and stop semantics, admission gates, and submit gates.',
-    anchor: '5-the-bot-lifecycle',
+    anchor: documentAnchor('5. The bot lifecycle'),
     icon: 'pi pi-sync',
   },
   {
     range: '07–08',
     title: 'Recover and scale',
     description: 'Freeze recovery, cure selection, and safe concurrent launches.',
-    anchor: '7-freezes-recovery',
+    anchor: documentAnchor('7. Freezes & recovery'),
     icon: 'pi pi-shield',
   },
   {
     range: '09–10',
     title: 'Follow a procedure',
     description: 'Common operator recipes and symptom-to-remedy troubleshooting.',
-    anchor: '9-common-operator-procedures',
+    anchor: documentAnchor('9. Common operator procedures'),
     icon: 'pi pi-wrench',
   },
   {
     range: '11–12',
     title: 'Avoid the blindspots',
     description: 'The operational traps that bite, plus the system glossary.',
-    anchor: '11-blindspots-the-things-that-bite',
+    anchor: documentAnchor('11. Blindspots — the things that bite'),
     icon: 'pi pi-eye',
   },
 ];

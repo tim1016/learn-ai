@@ -1,6 +1,8 @@
 import { ChangeDetectionStrategy, Component } from '@angular/core';
 import { RouterLink } from '@angular/router';
 
+import { documentAnchor } from '../../../shared/markdown/markdown-slug';
+
 interface QuickProcedure {
   readonly id: string;
   readonly eyebrow: string;
@@ -32,7 +34,7 @@ const QUICK_PROCEDURES: readonly QuickProcedure[] = [
     ],
     route: '/broker/bots',
     routeLabel: 'Open bots',
-    manualAnchor: '52-roll-call-the-offer-gate',
+    manualAnchor: documentAnchor('5.2 Roll call — the offer gate'),
     featured: true,
   },
   {
@@ -51,7 +53,7 @@ const QUICK_PROCEDURES: readonly QuickProcedure[] = [
     ],
     route: '/broker/bots',
     routeLabel: 'Open bots',
-    manualAnchor: '54-graceful-stop-vs-haltcrash-the-fork-that-decides-your-morning',
+    manualAnchor: documentAnchor('5.4 Graceful stop vs halt/crash — the fork that decides your morning'),
     featured: false,
   },
   {
@@ -70,7 +72,7 @@ const QUICK_PROCEDURES: readonly QuickProcedure[] = [
     ],
     route: '/broker/accounts',
     routeLabel: 'Open accounts',
-    manualAnchor: '7-freezes-recovery',
+    manualAnchor: documentAnchor('7. Freezes & recovery'),
     featured: false,
   },
   {
@@ -89,7 +91,7 @@ const QUICK_PROCEDURES: readonly QuickProcedure[] = [
     ],
     route: '/broker/bots',
     routeLabel: 'Open cohort launcher',
-    manualAnchor: '8-concurrency-recipes',
+    manualAnchor: documentAnchor('8. Concurrency recipes'),
     featured: false,
   },
 ];

@@ -2,7 +2,7 @@ import { Injectable } from '@angular/core';
 import DOMPurify from 'dompurify';
 import { Marked, type Token, type Tokens } from 'marked';
 
-import { markdownSlug } from '../markdown/markdown-slug';
+import { documentAnchor } from '../markdown/markdown-slug';
 import type {
   DocumentBlock,
   DocumentListBlock,
@@ -33,7 +33,7 @@ export class MarkdownDocumentCompiler {
 
         if (token.depth === 2) {
           currentSection = {
-            id: markdownSlug(token.text),
+            id: documentAnchor(token.text),
             ordinal: sections.length + 1,
             title: this.headingTitle(token),
             blocks: [],
@@ -44,7 +44,7 @@ export class MarkdownDocumentCompiler {
 
         if (currentSection !== null && token.depth >= 3) {
           currentSection.blocks.push({
-            id: markdownSlug(token.text),
+            id: documentAnchor(token.text),
             kind: 'subheading',
             level: subheadingLevel(token.depth),
             title: this.headingTitle(token),

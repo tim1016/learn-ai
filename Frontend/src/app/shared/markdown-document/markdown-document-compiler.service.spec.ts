@@ -35,8 +35,12 @@ Read the **evidence** first.
     expect(document.sections).toHaveLength(1);
 
     const section = document.sections[0];
-    expect(section.id).toBe('1-start-safely');
-    expect(section.blocks.some(block => block.kind === 'subheading' && block.id === '11-verify-the-offer')).toBe(true);
+    expect(section.id).toBe('document-1-start-safely');
+    expect(
+      section.blocks.some(
+        block => block.kind === 'subheading' && block.id === 'document-11-verify-the-offer',
+      ),
+    ).toBe(true);
 
     const list = section.blocks.find(isDocumentList);
     if (list === undefined) throw new Error('Expected an ordered procedure list.');

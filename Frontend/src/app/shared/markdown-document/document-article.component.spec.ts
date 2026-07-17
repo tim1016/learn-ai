@@ -30,7 +30,7 @@ describe('DocumentArticleComponent', () => {
     expect(anchors[0]?.getAttribute('href')).toBe('/broker/bot-manual#start-safely');
   });
 
-  it('follows chapter fragments that begin with a number', async () => {
+  it('follows CSS-safe chapter fragments for numbered headings', async () => {
     const scrollIntoView = vi.fn();
     const originalScrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
@@ -41,9 +41,12 @@ describe('DocumentArticleComponent', () => {
     try {
       await render(DocumentArticleComponent, {
         inputs: {
-          document: { ...documentFixture, sections: [{ ...documentFixture.sections[0], id: '1-start-safely' }] },
+          document: {
+            ...documentFixture,
+            sections: [{ ...documentFixture.sections[0], id: 'document-1-start-safely' }],
+          },
           route: '/broker/bot-manual',
-          fragment: '1-start-safely',
+          fragment: 'document-1-start-safely',
         },
         providers: [provideRouter([])],
       });

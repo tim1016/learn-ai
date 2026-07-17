@@ -23,7 +23,7 @@ describe('BotOperatorManualPageComponent', () => {
     expect(screen.getByText('Stop a bot')).toBeTruthy();
     expect(await screen.findByText('Everything in this system is one of three planes.')).toBeTruthy();
     const chapterLink = screen.getByRole('link', { name: /Know the system/ });
-    expect(chapterLink.getAttribute('href')).toBe('/broker/bot-manual#1-mental-model-three-planes');
+    expect(chapterLink.getAttribute('href')).toBe('/broker/bot-manual#document-1-mental-model-three-planes');
     expect(screen.getByText('Bot Control & Account Clerk — Operator Manual')).toBeTruthy();
     expect(screen.getByRole('navigation', { name: 'Manual contents' })).toBeTruthy();
     http.verify();

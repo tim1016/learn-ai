@@ -50,7 +50,7 @@ describe('AppSidebarComponent', () => {
     const router = TestBed.inject(Router);
     router.resetConfig([{ path: 'broker/bot-manual', component: AppSidebarComponent }]);
 
-    await router.navigateByUrl('/broker/bot-manual#5-the-bot-lifecycle');
+    await router.navigateByUrl('/broker/bot-manual#document-5-the-bot-lifecycle');
     fixture.detectChanges();
 
     const activeLabels = Array.from(
