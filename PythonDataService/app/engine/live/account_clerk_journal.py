@@ -412,10 +412,11 @@ class AccountClerkJournal:
             entries = self._load_tail_locked(inbox_path, journal_path)
             existing = _broker_callback_entry_for_key(entries, callback_key)
             if existing is not None:
+                intent = existing.intent or self._intents_by_order_ref.get(event.order_ref or "")
                 return AccountClerkBrokerEventReceipt(
                     journal_seq=existing.seq,
                     event=event,
-                    intent=existing.intent,
+                    intent=intent,
                     newly_recorded=False,
                 )
 
@@ -854,10 +855,18 @@ def _unattributed_broker_events(
 ) -> Iterator[tuple[IbkrOrderEvent, str]]:
     """Yield durable unknown callbacks whose account safety guardrail is required."""
 
+    recorded_intents_by_order_ref = {
+        entry.intent.order_ref: entry.intent
+        for entry in entries
+        if entry.entry_kind == "recorded" and entry.intent is not None
+    }
+
     for entry in entries:
         if entry.entry_kind != "broker_event" or entry.intent is not None or entry.broker_event is None:
             continue
         event = IbkrOrderEvent.model_validate(entry.broker_event)
+        if event.order_ref and event.order_ref in recorded_intents_by_order_ref:
+            continue
         yield event, entry.broker_callback_idempotency_key or broker_callback_idempotency_key(event)
 
 

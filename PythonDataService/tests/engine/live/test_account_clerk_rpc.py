@@ -51,7 +51,11 @@ from app.engine.live.account_registry import (
     write_account_instance_binding,
 )
 from app.engine.live.live_portfolio import LivePortfolio, SubmitUncertainHaltError
-from app.engine.live.order_identity import build_order_ref
+from app.engine.live.order_identity import (
+    build_bot_order_namespace,
+    build_order_ref,
+    emergency_flatten_strategy_instance_id,
+)
 from app.schemas.journal_cures import JournalCureRequest
 from app.services.journal_cures import JournalCureService
 from tests.engine.live.fixtures.fake_broker import FakeBroker
@@ -198,6 +202,33 @@ def _intent(intent_id: str = "intent-1040") -> AccountOwnerSubmitIntent:
     )
 
 
+def _emergency_flatten_intent(intent_id: str = "emergency-1040") -> AccountOwnerSubmitIntent:
+    strategy_instance_id = emergency_flatten_strategy_instance_id(ACCOUNT)
+    namespace = build_bot_order_namespace(strategy_instance_id)
+    return AccountOwnerSubmitIntent(
+        trace_id=f"trace-{intent_id}",
+        account_id=ACCOUNT,
+        strategy_instance_id=strategy_instance_id,
+        run_id="eflat-run",
+        bot_order_namespace=namespace,
+        intent_id=intent_id,
+        order_ref=build_order_ref(namespace, intent_id),
+        intent_kind="EMERGENCY_FLATTEN",
+        order_spec=IbkrOrderSpec(
+            symbol="SPY",
+            sec_type="STK",
+            action="SELL",
+            quantity=1,
+            order_type="MKT",
+            confirm_paper=True,
+            client_order_id=f"emergency-{intent_id}",
+            order_ref=build_order_ref(namespace, intent_id),
+        ).model_dump(mode="json"),
+        owner_generation=0,
+        created_at_ms=START_MS,
+    )
+
+
 def _event_consumer() -> AccountClerkEventConsumerIdentity:
     return AccountClerkEventConsumerIdentity(
         account_id=ACCOUNT,
@@ -264,6 +295,82 @@ async def _close_raw_server(server: asyncio.AbstractServer, path: Path) -> None:
     await server.wait_closed()
     if path.exists():
         path.unlink()
+
+
+@pytest.mark.asyncio
+async def test_register_emergency_flatten_persists_attribution_before_external_submit(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "eflat-DU1040", "eflat-run")
+    generation = 1
+    intent = _emergency_flatten_intent()
+    server = AccountClerkRpcServer(
+        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, clerk_generation=generation)
+    )
+    await server.start()
+    try:
+        receipt = await AccountClerkRpcClient(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+        ).register_emergency_flatten(intent)
+    finally:
+        await server.close()
+
+    assert receipt.intent_id == intent.intent_id
+    [recorded] = [
+        entry
+        for entry in read_account_clerk_journal(tmp_path, ACCOUNT)
+        if entry.entry_kind == "recorded"
+    ]
+    assert recorded.intent == intent
+
+
+@pytest.mark.asyncio
+async def test_register_emergency_flatten_rejects_non_emergency_intent(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path)
+    generation = 1
+    server = AccountClerkRpcServer(
+        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, clerk_generation=generation)
+    )
+    await server.start()
+    try:
+        with pytest.raises(AccountClerkRpcRejectedError) as exc_info:
+            await AccountClerkRpcClient(
+                artifacts_root=tmp_path,
+                account_id=ACCOUNT,
+            ).register_emergency_flatten(_intent())
+    finally:
+        await server.close()
+
+    assert exc_info.value.reason == "CLERK_EMERGENCY_FLATTEN_INTENT_KIND_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_historical_emergency_receipt_stops_unattributed_callback_replay(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "eflat-DU1040", "eflat-run")
+    intent = _emergency_flatten_intent()
+    callback = IbkrOrderEvent(
+        account_id=ACCOUNT,
+        order_id=1040,
+        event_type="fill",
+        order_ref=intent.order_ref,
+        symbol="SPY",
+        side="SELL",
+        fill_quantity=1,
+        exec_id="emergency-history-fill",
+        ts_ms=START_MS + 1,
+    )
+    first = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT)
+
+    initial = await first.record_broker_event(callback)
+    await first.register_emergency_flatten_intent(intent)
+    alarm_count_before_restart = len(read_account_events(tmp_path, ACCOUNT))
+
+    restarted = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT)
+    await restarted.rebuild_attribution()
+    duplicate = await restarted.record_broker_event(callback)
+
+    assert initial.intent is None
+    assert duplicate.intent == intent
+    assert len(read_account_events(tmp_path, ACCOUNT)) == alarm_count_before_restart
 
 
 @pytest.fixture(autouse=True)

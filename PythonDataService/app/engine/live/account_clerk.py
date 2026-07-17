@@ -77,6 +77,10 @@ from app.engine.live.account_registry import (
     read_account_instance_registry,
 )
 from app.engine.live.broker_callbacks import broker_callback_idempotency_key
+from app.engine.live.order_identity import (
+    build_bot_order_namespace,
+    emergency_flatten_strategy_instance_id,
+)
 from app.utils.advisory_lock import advisory_file_lock
 
 if TYPE_CHECKING:
@@ -176,6 +180,30 @@ class AccountClerk:
         """Validate, durably record, and acknowledge one intent without I/O to IBKR."""
 
         async with self._intake_lock:
+            return await asyncio.to_thread(self._record_intent_locked, intent)
+
+    async def register_emergency_flatten_intent(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountClerkRecordedReceipt:
+        """Durably own an externally submitted emergency liquidation.
+
+        Emergency flatten deliberately keeps its own broker connection so it
+        remains independent of a poisoned runner. It may not, however, bypass
+        the account Clerk's durable attribution journal: this receipt must
+        exist before that independent connection can place an order.
+        """
+
+        if intent.intent_kind != "EMERGENCY_FLATTEN":
+            self._reject(intent, "CLERK_EMERGENCY_FLATTEN_INTENT_KIND_REQUIRED")
+        expected_strategy_instance_id = emergency_flatten_strategy_instance_id(self._account_id)
+        if intent.strategy_instance_id != expected_strategy_instance_id:
+            self._reject(intent, "CLERK_EMERGENCY_FLATTEN_INSTANCE_MISMATCH")
+        expected_namespace = build_bot_order_namespace(expected_strategy_instance_id)
+        if intent.bot_order_namespace != expected_namespace:
+            self._reject(intent, "CLERK_EMERGENCY_FLATTEN_NAMESPACE_MISMATCH")
+        async with self._intake_lock:
+            self._require_rpc_write_intake(intent)
             return await asyncio.to_thread(self._record_intent_locked, intent)
 
     async def submit_intent(

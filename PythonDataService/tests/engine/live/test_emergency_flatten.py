@@ -22,9 +22,11 @@ from app.broker.ibkr.models import (
     IbkrPositionsSnapshot,
 )
 from app.engine.live.account_owner_fence import current_account_owner_write_grant
+from app.engine.live.account_registry import read_account_instance_registry
 from app.engine.live.intent_events import IntentEventType, IntentKind
 from app.engine.live.intent_wal import IntentWal
-from app.engine.live.run import cmd_emergency_flatten
+from app.engine.live.order_identity import build_bot_order_namespace, build_order_ref
+from app.engine.live.run import cmd_adopt_emergency_flatten_audit, cmd_emergency_flatten
 
 
 class _FakeFlattenBroker:
@@ -114,6 +116,7 @@ def _args(
     confirm: bool = True,
     broker=None,
     client=None,
+    clerk_client=None,
     artifacts_root: Path | None = None,
 ) -> argparse.Namespace:
     return argparse.Namespace(
@@ -122,7 +125,8 @@ def _args(
         confirm=confirm,
         broker=broker,
         client=client,
-        artifacts_root=artifacts_root or Path("PythonDataService/artifacts"),
+        clerk_client=clerk_client or _RecordingEmergencyClerk(),
+        artifacts_root=artifacts_root or run_dir,
     )
 
 
@@ -148,6 +152,19 @@ class _LifecycleTrackingClient:
 
     def is_connected(self) -> bool:
         return self._connected
+
+
+class _RecordingEmergencyClerk:
+    """Test double for the mandatory pre-submit Clerk receipt."""
+
+    def __init__(self, timeline: list[str] | None = None) -> None:
+        self.intents = []
+        self._timeline = timeline
+
+    async def register_emergency_flatten(self, intent: object) -> None:
+        self.intents.append(intent)
+        if self._timeline is not None:
+            self._timeline.append("clerk_recorded")
 
 
 # ──────────────────────────── Refusals ───────────────────────────────
@@ -464,6 +481,97 @@ def test_emergency_flatten_writes_structured_audit_wal(tmp_path: Path) -> None:
     assert pending[1].order_spec is not None
     assert pending[1].order_spec["symbol"] == "QQQ"
     assert pending[1].order_spec["action"] == "BUY"
+
+
+def test_emergency_flatten_registers_clerk_ownership_before_broker_submit(tmp_path: Path) -> None:
+    broker = _FakeFlattenBroker(positions=[_pos("SPY", 200)])
+    clerk = _RecordingEmergencyClerk(broker.timeline)
+
+    rc = cmd_emergency_flatten(_args(run_dir=tmp_path, broker=broker, clerk_client=clerk))
+
+    assert rc == 0
+    assert broker.timeline == ["cancel_open_orders", "clerk_recorded", "place_order:SPY"]
+    [intent] = clerk.intents
+    assert intent.account_id == "DU123"
+    assert intent.strategy_instance_id == "eflat-DU123"
+    assert intent.run_id == tmp_path.name
+    assert intent.bot_order_namespace == "learn-ai/eflat-DU123/v1"
+    assert intent.intent_kind == "EMERGENCY_FLATTEN"
+    assert intent.order_ref == broker.placed[0].order_ref
+    binding = read_account_instance_registry(tmp_path, "DU123")[-1]
+    assert binding.lifecycle_state == "RETIRED"
+    assert binding.source == "emergency_flatten.complete"
+
+
+def test_emergency_flatten_refuses_broker_submit_without_clerk_receipt(tmp_path: Path) -> None:
+    class _RejectingClerk:
+        async def register_emergency_flatten(self, _intent: object) -> None:
+            raise ConnectionError("clerk unavailable")
+
+    broker = _FakeFlattenBroker(positions=[_pos("SPY", 200)])
+
+    rc = cmd_emergency_flatten(
+        _args(run_dir=tmp_path, broker=broker, clerk_client=_RejectingClerk())
+    )
+
+    assert rc == 3
+    assert broker.placed == []
+    [pending] = IntentWal(tmp_path / "emergency_flatten_audit.jsonl").read_tail()
+    assert pending.event_type is IntentEventType.PENDING_INTENT
+    binding = read_account_instance_registry(tmp_path, "DU123")[-1]
+    assert binding.lifecycle_state == "RETIRED"
+
+
+def test_adopt_emergency_flatten_audit_registers_completed_legacy_order(tmp_path: Path) -> None:
+    strategy_instance_id = "eflat-DU123"
+    namespace = build_bot_order_namespace(strategy_instance_id)
+    intent_id = "legacy-emergency-intent"
+    order_ref = build_order_ref(namespace, intent_id)
+    spec = IbkrOrderSpec(
+        symbol="SPY",
+        sec_type="STK",
+        action="SELL",
+        quantity=1,
+        order_type="MKT",
+        confirm_paper=True,
+        client_order_id="legacy-emergency",
+        order_ref=order_ref,
+    )
+    audit_wal = IntentWal(tmp_path / "emergency_flatten_audit.jsonl")
+    audit_wal.append(
+        event_type=IntentEventType.PENDING_INTENT,
+        intent_id=intent_id,
+        bot_order_namespace=namespace,
+        order_ref=order_ref,
+        intent_kind=IntentKind.EMERGENCY_FLATTEN,
+        order_spec=spec.model_dump(mode="json"),
+    )
+    audit_wal.append(
+        event_type=IntentEventType.SUBMITTED,
+        intent_id=intent_id,
+        bot_order_namespace=namespace,
+        order_ref=order_ref,
+        intent_kind=IntentKind.EMERGENCY_FLATTEN,
+        order_id=501,
+    )
+    clerk = _RecordingEmergencyClerk()
+
+    rc = cmd_adopt_emergency_flatten_audit(
+        argparse.Namespace(
+            run_dir=tmp_path,
+            account="DU123",
+            confirm=True,
+            artifacts_root=tmp_path,
+            clerk_client=clerk,
+        )
+    )
+
+    assert rc == 0
+    [intent] = clerk.intents
+    assert intent.order_ref == order_ref
+    binding = read_account_instance_registry(tmp_path, "DU123")[-1]
+    assert binding.lifecycle_state == "RETIRED"
+    assert binding.source == "emergency_flatten.audit_adoption_complete"
 
 
 # ──────────────────────────── Failure path ───────────────────────────

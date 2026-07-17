@@ -21,6 +21,7 @@ from app.engine.live.account_clerk import (
     AccountClerkCancelNamespaceUncertainError,
     AccountClerkGenerationFencedError,
     AccountClerkIntentRejected,
+    AccountClerkRecordedReceipt,
     AccountClerkRecoveryFlattenReceipt,
     account_clerk_socket_path,
     read_account_clerk_journal,
@@ -165,6 +166,25 @@ class AccountClerkRpcClient:
             raise AccountClerkRpcMalformedResponseError(
                 operation="submit",
                 request_identity=request_identity({"intent": intent.model_dump(mode="json")}),
+            ) from exc
+
+    async def register_emergency_flatten(
+        self,
+        intent: AccountOwnerSubmitIntent,
+    ) -> AccountClerkRecordedReceipt:
+        """Register a panic-path liquidation before its separate broker write."""
+
+        request = {
+            "operation": "register_emergency_flatten",
+            "intent": intent.model_dump(mode="json"),
+        }
+        payload = await self._request(request)
+        try:
+            return AccountClerkRecordedReceipt.model_validate(payload["recorded"])
+        except (KeyError, ValidationError, TypeError) as exc:
+            raise AccountClerkRpcMalformedResponseError(
+                operation="register_emergency_flatten",
+                request_identity=request_identity(request),
             ) from exc
 
     async def submit_recovery_flatten(self, intent: AccountOwnerSubmitIntent) -> AccountClerkRecoveryFlattenReceipt:
@@ -566,6 +586,12 @@ class AccountClerkRpcServer:
                     "recorded": recorded.model_dump(mode="json"),
                     "broker_acked": broker_acked.model_dump(mode="json"),
                 }
+            )
+        if operation == "register_emergency_flatten":
+            intent = AccountOwnerSubmitIntent.model_validate(request_object(request, "intent"))
+            recorded = await self._clerk.register_emergency_flatten_intent(intent)
+            return AccountClerkRpcSuccessEnvelope(
+                payload={"recorded": recorded.model_dump(mode="json")}
             )
         if operation == "recovery_flatten":
             intent = AccountOwnerSubmitIntent.model_validate(request_object(request, "intent"))

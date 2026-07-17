@@ -8,6 +8,7 @@ import os
 import re
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -60,6 +61,15 @@ logger = logging.getLogger(__name__)
 
 class AccountArtifactError(ValueError):
     """Raised when an account artifact path or payload is invalid."""
+
+
+@dataclass(frozen=True)
+class AccountEventSequenceRepair:
+    """Forensic receipt for a guarded account-event sequence repair."""
+
+    account_id: str
+    rewritten_rows: int
+    backup_path: Path | None
 
 
 class AccountClerkLeaseUnavailableError(RuntimeError):
@@ -604,6 +614,76 @@ def read_account_events_tolerant(artifacts_root: Path, account_id: str) -> list[
     return rows
 
 
+def repair_account_event_sequence(
+    artifacts_root: Path,
+    account_id: str,
+) -> AccountEventSequenceRepair:
+    """Restore contiguous event sequence numbers without discarding evidence.
+
+    This is an explicit operator repair for a ledger whose JSON rows remain
+    valid but whose durable sequence envelope was duplicated by an interrupted
+    or legacy writer. It refuses malformed or cross-account rows, snapshots
+    the original bytes beside the ledger, then atomically rewrites only the
+    ``seq`` field and repairs the companion counter.
+    """
+
+    path = _account_event_ledger_path(artifacts_root, account_id)
+    if not path.is_file():
+        return AccountEventSequenceRepair(
+            account_id=account_id,
+            rewritten_rows=0,
+            backup_path=None,
+        )
+    with _file_lock(path):
+        raw = path.read_bytes()
+        events = _parse_account_event_bytes(path, raw, tolerant=False)
+        for index, event in enumerate(events, start=1):
+            try:
+                record = AccountEventRecord.model_validate(event)
+            except ValidationError as exc:
+                raise AccountArtifactError(f"invalid account event row {index}: {exc}") from exc
+            if record.account_id != account_id:
+                raise AccountArtifactError(f"account event row {index} belongs to another account")
+
+        if all(event.get("seq") == index for index, event in enumerate(events, start=1)):
+            _write_account_event_sequence_locked(path, len(events))
+            return AccountEventSequenceRepair(
+                account_id=account_id,
+                rewritten_rows=0,
+                backup_path=None,
+            )
+
+        backup_path = path.with_name(f"{path.name}.pre-resequence-{_sha256_bytes(raw)}.bak")
+        if backup_path.exists():
+            if backup_path.read_bytes() != raw:
+                raise AccountArtifactError("account event repair backup conflicts with current ledger bytes")
+        else:
+            with open(backup_path, "xb") as fh:
+                fh.write(raw)
+                fh.flush()
+                os.fsync(fh.fileno())
+            _fsync_parent_dir(backup_path)
+
+        rewritten_rows: list[bytes] = []
+        for index, event in enumerate(events, start=1):
+            repaired = {**event, "seq": index}
+            try:
+                record = AccountEventRecord.model_validate(repaired)
+            except ValidationError as exc:
+                raise AccountArtifactError(f"invalid repaired account event row {index}: {exc}") from exc
+            rewritten_rows.append(
+                json.dumps(record.model_dump(mode="json"), separators=(",", ":"), sort_keys=True).encode()
+            )
+        rewritten_bytes = b"\n".join(rewritten_rows) + (b"\n" if rewritten_rows else b"")
+        _atomic_replace_account_event_bytes_locked(path, rewritten_bytes)
+        _write_account_event_sequence_locked(path, len(events))
+    return AccountEventSequenceRepair(
+        account_id=account_id,
+        rewritten_rows=len(events),
+        backup_path=backup_path,
+    )
+
+
 def read_account_events_tolerant_with_hash(artifacts_root: Path, account_id: str) -> tuple[list[dict], str | None]:
     """Read tolerant account events and hash the same byte snapshot."""
 
@@ -1144,6 +1224,18 @@ def _atomic_write_json_locked(path: Path, payload: dict) -> None:
     _fsync_parent_dir(path)
 
 
+def _atomic_replace_account_event_bytes_locked(path: Path, data: bytes) -> None:
+    """Atomically replace a validated event ledger while its writer lock is held."""
+
+    tmp = path.with_suffix(path.suffix + ".resequence.tmp")
+    with open(tmp, "wb") as fh:
+        fh.write(data)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, path)
+    _fsync_parent_dir(path)
+
+
 def _append_account_event(
     artifacts_root: Path,
     account_id: str,
@@ -1363,6 +1455,7 @@ _LOCAL_EXPORTS = [
     "RESTART_INTENSITY_REASON",
     "RESTART_INTENSITY_SOURCE",
     "AccountArtifactError",
+    "AccountEventSequenceRepair",
     "AccountClerkLeaseUnavailableError",
     "AccountAuditedOverride",
     "CohortBatchLaunchReceipt",
@@ -1383,6 +1476,7 @@ _LOCAL_EXPORTS = [
     "evaluate_restart_intensity",
     "project_restart_intensity_gate",
     "read_account_events",
+    "repair_account_event_sequence",
     "read_account_events_with_snapshot",
     "read_account_clerk_generation",
     "read_account_clerk_lease",
