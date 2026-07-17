@@ -253,7 +253,7 @@ describe("AccountDeskPageComponent", () => {
     expect(
       screen.getByRole("heading", { name: "Account recovery" }),
     ).toBeTruthy();
-    expect(screen.getByText("Account event timeline")).toBeTruthy();
+    expect(screen.getByText("Journal timeline")).toBeTruthy();
   });
 
   it("keeps operator actions and recovery ahead of the audit history", async () => {
@@ -267,7 +267,7 @@ describe("AccountDeskPageComponent", () => {
       fixture.nativeElement as HTMLElement
     ).querySelector<HTMLElement>("#account-desk-recovery-controls");
     const timeline = screen.getByRole("heading", {
-      name: "Account event timeline",
+      name: "Journal timeline",
     });
 
     expect(operatorWorkspace).toBeTruthy();

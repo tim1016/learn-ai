@@ -1,15 +1,16 @@
 <p-panel
   class="operations-events"
-  aria-label="Account event timeline"
+  aria-label="Journal timeline"
   aria-live="polite"
 >
-  <ng-template #header><h2>Account event timeline</h2></ng-template>
-  <p>Read-only journal history for this account.</p>
+  <ng-template #header><h2>Journal timeline</h2></ng-template>
+  <p>Chronological, read-only operational history.</p>
   <div class="kind-filters" aria-label="Event kind filters">
     @for (kind of eventKinds; track trackKind($index, kind)) {
       <button
         type="button"
         [attr.aria-pressed]="selected(kind)"
+        [attr.data-kind]="kind"
         (click)="toggleKind(kind)"
       >
         {{ kind | receiptLabel }}
@@ -30,18 +31,27 @@
   } @else if (store.operationRows().length === 0) {
     <p class="state">No account journal events match this view.</p>
   } @else {
-    <ol>
-      @for (row of store.operationRows(); track trackEvent($index, row)) {
-        <li>
-          <div>
-            <strong>{{ row.kind | receiptLabel }}</strong
-            ><app-timestamp-display [value]="row.occurred_at_ms" mode="local" />
-          </div>
-          <p>{{ row.operator_detail }}</p>
-          @if (row.evidence_refs.length > 0) {
-            <ul aria-label="Event evidence">
+    <p-timeline [value]="timelineRows()" align="left" class="operations-timeline">
+      <ng-template #opposite let-item>
+        <span class="event-time">
+          <app-timestamp-display [value]="item.event.occurred_at_ms" mode="local" />
+        </span>
+      </ng-template>
+      <ng-template #marker let-item>
+        <span class="event-marker" [attr.data-kind]="item.event.kind" aria-hidden="true"></span>
+      </ng-template>
+      <ng-template #content let-item>
+        <article class="event-entry">
+          <span class="event-kind" [attr.data-kind]="item.event.kind">
+            {{ item.event.kind | receiptLabel }}
+          </span>
+          <p>{{ item.event.operator_detail }}</p>
+          @if (item.evidence.length > 0) {
+            <details class="event-evidence">
+              <summary>Show {{ item.evidence.length }} evidence reference{{ item.evidence.length === 1 ? '' : 's' }}</summary>
+              <ul aria-label="Event evidence">
               @for (
-                evidence of row.evidence_refs;
+                evidence of item.evidence;
                 track trackEvidence($index, evidence)
               ) {
                 <li>
@@ -49,17 +59,18 @@
                   <code>{{ evidence.ref }}</code>
                 </li>
               }
-            </ul>
+              </ul>
+            </details>
           }
           <app-account-desk-guidance
             anchor="event"
-            [subjectKey]="row.event_id"
+            [subjectKey]="item.event.event_id"
             lens="operator"
             ariaLabel="Event guidance"
           />
-        </li>
-      }
-    </ol>
+        </article>
+      </ng-template>
+    </p-timeline>
   }
   @if (store.operationsShowingStaleLastGood()) {
     <p class="state state-stale">

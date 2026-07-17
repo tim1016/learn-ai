@@ -28,17 +28,17 @@
           ><h3>Reconciliation status</h3></ng-template
         >
         @if (triage.account_reconciliation_receipt; as receipt) {
-          <dl>
+          <dl class="reconciliation-facts">
             <div>
               <dt>Reconciliation</dt>
               <dd>{{ receipt.state | receiptLabel }}</dd>
             </div>
             <div>
-              <dt>Can reconcile now</dt>
+              <dt>Action gate</dt>
               <dd>{{ receipt.final_gate_result.status | receiptLabel }}</dd>
             </div>
             <div>
-              <dt>Exposure status</dt>
+              <dt>Exposure</dt>
               <dd>{{ receipt.exposure_resolution | receiptLabel }}</dd>
             </div>
             <div>
@@ -50,9 +50,22 @@
                 />
               </dd>
             </div>
+            <div>
+              <dt>Account truth</dt>
+              <dd>{{ receipt.account_truth_verdict | receiptLabel }}</dd>
+            </div>
           </dl>
+          @if (reconciliationEvidenceNotes().length > 0) {
+            <div class="reconciliation-notes" aria-label="Reconciliation evidence summary">
+              @for (note of reconciliationEvidenceNotes(); track note.label + note.message) {
+                <p><strong>{{ note.label }}</strong><span>{{ note.message }}</span></p>
+              }
+            </div>
+          }
           @if (receipt.evidence_refs.length > 0) {
-            <ul aria-label="Reconciliation evidence references">
+            <details class="reconciliation-technical">
+              <summary>Show technical audit references</summary>
+              <ul aria-label="Technical reconciliation evidence references">
               @for (
                 evidence of receipt.evidence_refs;
                 track evidence.source + evidence.ref
@@ -62,7 +75,8 @@
                   <code>{{ evidence.ref }}</code>
                 </li>
               }
-            </ul>
+              </ul>
+            </details>
           }
         } @else {
           <p class="state">No reconciliation receipt has been recorded.</p>

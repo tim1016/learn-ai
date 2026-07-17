@@ -3,12 +3,67 @@ import { Router } from '@angular/router';
 import { render, screen } from '@testing-library/angular';
 import { describe, expect, it, vi } from 'vitest';
 
+import type { AccountReconciliationReceipt } from '../../../api/account-reconciliation.types';
 import { makeCleanAccountTriage } from '../testing/account-triage-fixtures';
 import { AccountDeskGuidanceStore } from './account-desk-guidance-store.service';
 import { AccountDeskOperatorProofComponent } from './account-desk-operator-proof.component';
 import { AccountDeskSurfaceStore } from './account-desk-surface-store.service';
 
 describe('AccountDeskOperatorProofComponent', () => {
+  it('condenses reconciliation facts and keeps raw audit references disclosed', async () => {
+    const receipt: AccountReconciliationReceipt = {
+      schema_version: 1,
+      receipt_id: 'acct-recon-DU1234567-1',
+      account_id: 'DU1234567',
+      requested_account_id: 'DU1234567',
+      connected_account_id: 'DU1234567',
+      state: 'NOT_PROVEN',
+      account_truth_verdict: 'not_proven',
+      account_truth_severity: 'warning',
+      final_gate_result: {
+        gate_id: 'account.reconciliation',
+        status: 'block',
+        source: 'account_truth',
+        operator_reason: 'Position data is stale.',
+        operator_next_step: 'Refresh account proof.',
+        evidence_at_ms: 1_780_000_000_000,
+      },
+      exposure_resolution: 'flat',
+      account_truth: {} as AccountReconciliationReceipt['account_truth'],
+      evidence_refs: [
+        { source: 'account_truth', ref: 'account_truth:1780000000000', detail: null },
+        { source: 'account_truth.blocker', ref: 'source_freshness_positions_stale', detail: null },
+      ],
+      generated_at_ms: 1_780_000_000_000,
+      account_truth_generated_at_ms: 1_780_000_000_000,
+      expires_at_ms: 1_780_000_060_000,
+      ttl_ms: 60_000,
+    };
+    const triage = makeCleanAccountTriage({ receipt });
+    await render(AccountDeskOperatorProofComponent, {
+      providers: [
+        {
+          provide: AccountDeskSurfaceStore,
+          useValue: {
+            triage: signal(triage),
+            loading: signal(false),
+            error: signal(null),
+            showingStaleLastGood: signal(false),
+            retry: vi.fn(),
+          },
+        },
+        { provide: AccountDeskGuidanceStore, useValue: { blockersFor: vi.fn().mockReturnValue([]) } },
+        { provide: Router, useValue: { navigate: vi.fn() } },
+      ],
+    });
+
+    expect((await screen.findAllByText('Not Proven')).length).toBe(2);
+    expect(screen.getByText('Block')).toBeTruthy();
+    expect(screen.getByText('Position data is stale.')).toBeTruthy();
+    expect(screen.getByText('Show technical audit references')).toBeTruthy();
+    expect(document.querySelector('[data-timestamp-mode="local"]')).not.toBeNull();
+  });
+
   it('renders server evidence and honest explicit receipt/history empty states', async () => {
     const triage = makeCleanAccountTriage({
       accountObservation: {
