@@ -254,9 +254,9 @@ export interface BacktestRunDetail {
   finalEquity: number;
   totalFees: number;
   maxDrawdown: number;
-  sharpeRatio: number;
-  sortinoRatio: number;
-  profitFactor: number;
+  sharpeRatio: number | null;
+  sortinoRatio: number | null;
+  profitFactor: number | null;
   leanStatisticsJson: string | null;
   verdictJson: string | null;
   verdictVersion: number | null;

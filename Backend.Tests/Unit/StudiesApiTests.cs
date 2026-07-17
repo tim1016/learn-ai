@@ -1,9 +1,33 @@
 using Backend;
+using System.Text.Json;
 
 namespace Backend.Tests.Unit;
 
 public class StudiesApiTests
 {
+    [Fact]
+    public void SaveStudyRequest_UnavailableRiskMetrics_DeserializesAsNull()
+    {
+        const string json = """
+            {
+              "sharpeRatio": null,
+              "sortinoRatio": null,
+              "profitFactor": null
+            }
+            """;
+        var options = new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+        };
+
+        var request = JsonSerializer.Deserialize<SaveStudyRequest>(json, options);
+
+        Assert.NotNull(request);
+        Assert.Null(request.SharpeRatio);
+        Assert.Null(request.SortinoRatio);
+        Assert.Null(request.ProfitFactor);
+    }
+
     [Fact]
     public void ValidateSaveStudyTradeTimestamps_MissingEntryTimestamp_ReturnsError()
     {

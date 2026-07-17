@@ -495,8 +495,8 @@ class LeanPortfolioStatsResponse(BaseModel):
 class LeanTradeStatsResponse(BaseModel):
     """LEAN TradeStatistics — key fields matching TS.cs."""
 
-    start_date_time: str = ""
-    end_date_time: str = ""
+    start_date_time: int | None = None
+    end_date_time: int | None = None
     total_number_of_trades: int = 0
     number_of_winning_trades: int = 0
     number_of_losing_trades: int = 0

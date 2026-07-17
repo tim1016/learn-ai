@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from app.engine.strategy.base import LoggedTrade
+from app.models.responses import LeanTradeStatsResponse
 from app.routers.engine import _format_trade, _format_trade_record, _to_ms_utc
 
 
@@ -85,3 +86,13 @@ def test_format_trade_record_emits_numeric_timestamps_for_lean_statistics() -> N
     assert isinstance(formatted.entry_timestamp, int)
     assert isinstance(formatted.exit_timestamp, int)
     assert formatted.cumulative_pnl_pct == pytest.approx(0.01, abs=1e-12, rel=0)
+
+
+def test_lean_trade_stats_response_preserves_nullable_int64_ms_utc_boundaries() -> None:
+    response = LeanTradeStatsResponse(
+        start_date_time=1_748_629_800_000,
+        end_date_time=1_748_633_400_000,
+    )
+
+    assert response.start_date_time == 1_748_629_800_000
+    assert response.end_date_time == 1_748_633_400_000

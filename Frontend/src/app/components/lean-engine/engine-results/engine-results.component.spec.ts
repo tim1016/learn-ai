@@ -31,7 +31,7 @@ function emptyLeanStats(): LeanStatistics {
       value_at_risk_99: 0, value_at_risk_95: 0, portfolio_turnover: 0,
     },
     trade: {
-      start_date_time: '', end_date_time: '',
+      start_date_time: 1_748_629_800_000, end_date_time: 1_748_633_400_000,
       total_number_of_trades: 1, number_of_winning_trades: 1,
       number_of_losing_trades: 0, total_profit_loss: 9,
       total_profit: 9, total_loss: 0,

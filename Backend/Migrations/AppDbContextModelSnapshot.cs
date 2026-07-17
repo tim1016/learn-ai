@@ -829,18 +829,18 @@ namespace Backend.Migrations
                         .HasPrecision(18, 8)
                         .HasColumnType("numeric(18,8)");
 
-                    b.Property<decimal>("ProfitFactor")
+                    b.Property<decimal?>("ProfitFactor")
                         .HasPrecision(18, 8)
                         .HasColumnType("numeric(18,8)");
 
                     b.Property<string>("RunVerdictJson")
                         .HasColumnType("jsonb");
 
-                    b.Property<decimal>("SharpeRatio")
+                    b.Property<decimal?>("SharpeRatio")
                         .HasPrecision(18, 8)
                         .HasColumnType("numeric(18,8)");
 
-                    b.Property<decimal>("SortinoRatio")
+                    b.Property<decimal?>("SortinoRatio")
                         .HasPrecision(18, 8)
                         .HasColumnType("numeric(18,8)");
 

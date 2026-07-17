@@ -76,9 +76,9 @@ public sealed record BacktestRunDetailType
     public decimal FinalEquity { get; init; }
     public decimal TotalFees { get; init; }
     public decimal MaxDrawdown { get; init; }
-    public decimal SharpeRatio { get; init; }
-    public decimal SortinoRatio { get; init; }
-    public decimal ProfitFactor { get; init; }
+    public decimal? SharpeRatio { get; init; }
+    public decimal? SortinoRatio { get; init; }
+    public decimal? ProfitFactor { get; init; }
     public string? LeanStatisticsJson { get; init; }
     public string? VerdictJson { get; init; }
     public int? VerdictVersion { get; init; }
