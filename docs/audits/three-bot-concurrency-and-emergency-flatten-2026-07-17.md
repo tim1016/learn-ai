@@ -290,8 +290,9 @@ With the host data-plane, I drove the full pipeline end-to-end
   - `RestartIntensityPolicy` defaults (`threshold=3`, `window_ms=300_000`) are
     **hard-coded**, not env-configurable (`account_artifacts.py:221`).
   - **Design question:** should a *running* bot **pause submits** during a
-    transient (auto-expiring) freeze rather than **halt/exit**? Today a 5-minute
-    restart-intensity freeze permanently kills a healthy running bot.
+    restart-intensity freeze rather than **halt/exit**? The start-rate window
+    expires, but its persisted account freeze remains active until an audited
+    clear; previously that permanently killed a healthy running bot.
 - **Recovery is clean.** The account never left a stale claim (halted bot was
   flat). I reconciled to `CLEAN`, cleared the freeze
   (`freeze/clear` → `account_recovery_proof`), and the account returned to

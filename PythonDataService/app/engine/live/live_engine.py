@@ -2086,11 +2086,11 @@ class LiveEngine:
         try:
             acks = await portfolio.submit_pending_orders()
         except TransientAccountFreezePauseError as pause:
-            # A transient (auto-expiring restart-intensity) account freeze paused
-            # submits this bar. Pending orders were already dropped at the gate,
-            # so nothing was submitted; keep the run alive and re-evaluate next
-            # bar once the freeze clears — do NOT halt a healthy bot. Mirrors the
-            # force-flat / reconcile-inhibit drop-and-continue branches above.
+            # Active restart-intensity evidence paused submits this bar. Pending
+            # orders were already dropped at the gate, so nothing was submitted;
+            # keep the run alive and re-evaluate once the provider reports a
+            # clear — do NOT halt a healthy bot. Mirrors the force-flat /
+            # reconcile-inhibit drop-and-continue branches above.
             logger.warning(
                 "[FREEZE_PAUSE] strategy=%s pending=%d — submits paused this bar; "
                 "transient account freeze active (%s); run stays alive and resumes "

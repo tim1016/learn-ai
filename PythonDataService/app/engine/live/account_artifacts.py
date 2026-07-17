@@ -106,7 +106,7 @@ class AccountEventRecord(BaseModel):
 
 
 class AccountFreezeEvidence(BaseModel):
-    """Durable account-level freeze evidence."""
+    """Persisted account-level freeze evidence."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -120,6 +120,21 @@ class AccountFreezeEvidence(BaseModel):
     cleared_at_ms: int | None = Field(default=None, ge=0)
     cleared_reason: str | None = None
     cleared_source: str | None = None
+
+    @property
+    def pauses_healthy_runs(self) -> bool:
+        """Whether this active freeze pauses submits without halting a healthy run.
+
+        Restart-intensity evidence stays active until the authoritative provider
+        records a clear. Its distinct lifecycle treatment relies on its complete
+        typed provenance, rather than a reason string that another freeze could
+        reuse.
+        """
+        return (
+            self.freeze_kind == "account"
+            and self.source == RESTART_INTENSITY_SOURCE
+            and self.reason.startswith(RESTART_INTENSITY_REASON)
+        )
 
     def to_gate_result(self) -> GateResult:
         return GateResult(

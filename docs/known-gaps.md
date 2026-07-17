@@ -28,15 +28,17 @@ No verified-open items remain in this section.
 ### Resolved
 
 - **[RESOLVED 2026-07-17] Transient account freeze permanently halted healthy
-  running bots.** A transient (auto-expiring restart-intensity) freeze now raises
-  the non-terminal `TransientAccountFreezePauseError` (not a
+  running bots.** Active restart-intensity evidence now raises the non-terminal
+  `TransientAccountFreezePauseError` (not a
   `ControlledLiveHaltError`); `live_engine` catches it, drops pending, and keeps
-  the run alive, resuming when the freeze clears. Durable freezes
+  the run alive until the authoritative provider reports the freeze cleared.
+  Durable freezes
   (exposure/contamination) still halt via `AccountFreezeBlockError`. The safety
   invariant "never submit while frozen" is preserved (pending dropped at the
   gate for both). Because the transient path never raises a terminal error, the
   bot-event terminal classifier needed no change. Tests:
   `test_submit_pending_orders_pauses_not_halts_on_transient_restart_intensity_freeze`,
+  `test_submit_pending_orders_resumes_after_restart_intensity_freeze_clears`,
   `test_live_engine_pauses_not_halts_on_transient_restart_intensity_freeze`.
   Original finding retained below for context.
 
@@ -44,11 +46,12 @@ No verified-open items remain in this section.
   `AccountFreezeBlockError` (`live_portfolio.py:1108`)
   is a `ControlledLiveHaltError` caught at the outer run loop (`run.py:2688`) →
   terminal `ExitReason.fatal_halt`. A **restart-intensity** freeze
-  (`RestartIntensityPolicy`, threshold=3 / window=300000ms, auto-expiring) is
-  transient, but it still HALTs any running bot on its next submit — so an
-  unrelated restart-storm on the account kills healthy, unrelated bots, which
-  then need retire-and-replace. Reproduced today: 3 individual starts in <1 min
-  froze the account and cascade-halted the running bot.
+  (`RestartIntensityPolicy`, threshold=3 / window=300000ms) starts from an
+  expiring start-rate window, but its written account-freeze evidence remains
+  active until clear. It previously HALTed any running bot on its next submit,
+  so an unrelated restart-storm on the account killed healthy, unrelated bots,
+  which then needed retire-and-replace. Reproduced today: 3 individual starts in
+  <1 min froze the account and cascade-halted the running bot.
   **Decision (user-approved 2026-07-17): a running bot should _pause submits_ and
   keep running through a transient freeze, resuming when it clears** — rather than
   halt. Implementation is non-trivial and flips a safety invariant, so it needs an

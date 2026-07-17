@@ -129,9 +129,7 @@ async def test_live_engine_blocks_submit_when_account_artifact_is_frozen(tmp_pat
 
 @pytest.mark.asyncio
 async def test_live_engine_pauses_not_halts_on_transient_restart_intensity_freeze(tmp_path) -> None:
-    """A transient restart-intensity freeze pauses submits but keeps the run
-    alive — the engine must NOT raise AccountFreezeBlockError and must submit
-    nothing while frozen."""
+    """Restart-intensity evidence pauses submits but keeps the run alive."""
     broker = FakeBroker()
     write_account_freeze(
         tmp_path,
@@ -151,7 +149,7 @@ async def test_live_engine_pauses_not_halts_on_transient_restart_intensity_freez
         account_id="DU123",
     )
 
-    # Completes without raising: the transient freeze pauses submits per bar.
+    # Completes without raising: active restart-intensity evidence pauses submits.
     await engine.run(MinuteHookEntryStrategy(), iter_bars([_bar(m, "500", "500") for m in range(30, 33)]))
 
     assert broker.orders == []

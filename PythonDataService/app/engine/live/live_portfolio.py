@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from app.engine.live.account_artifacts import AccountFreezeEvidence
     from app.engine.live.intent_wal import IntentWal
 
 from app.broker.ibkr.account import fetch_account_summary, fetch_positions
@@ -152,10 +153,10 @@ class AccountFreezeBlockError(SubmitGateBlockError):
     """Raised when a *durable* account-level freeze blocks order submission.
 
     Durable freezes (exposure/contamination/reconciliation) require operator
-    action to clear, so the engine halts. A *transient* freeze — an
-    auto-expiring restart-intensity freeze — instead raises the non-terminal
-    ``TransientAccountFreezePauseError`` so a healthy run pauses submits and
-    survives (see that class + ``submit_pending_orders``).
+    action to clear, so the engine halts. Active restart-intensity evidence
+    instead raises the non-terminal ``TransientAccountFreezePauseError`` so a
+    healthy run pauses submits until the authoritative provider reports the
+    freeze cleared (see that class + ``submit_pending_orders``).
     """
 
     def __init__(self, *, evidence: object) -> None:
@@ -164,21 +165,21 @@ class AccountFreezeBlockError(SubmitGateBlockError):
         self.evidence = evidence
 
 
-class TransientAccountFreezePauseError(Exception):
+class TransientAccountFreezePauseError(RuntimeError):
     """Non-terminal: a transient account freeze paused submits for this bar.
 
     Deliberately NOT a ``ControlledLiveHaltError`` — it must not reach the
-    run-loop halt path. Raised by ``submit_pending_orders`` when the active
-    freeze is an auto-expiring restart-intensity freeze: pending orders are
-    dropped at the raise site (so the "never submit while frozen" invariant
-    holds), then the engine catches this, keeps the run alive, and re-evaluates
-    on a later bar once the freeze clears — rather than permanently halting a
-    healthy bot over a freeze that expires within its window.
+    run-loop halt path. Raised by ``submit_pending_orders`` for typed
+    restart-intensity evidence: pending orders are dropped at the raise site
+    (so the "never submit while frozen" invariant holds), then the engine
+    catches this and re-evaluates after the authoritative provider reports a
+    clear rather than permanently halting a healthy bot.
     """
 
-    def __init__(self, *, reason: str) -> None:
-        super().__init__(f"TransientAccountFreezePauseError(reason={reason!r})")
-        self.reason = reason
+    def __init__(self, *, evidence: AccountFreezeEvidence) -> None:
+        super().__init__(f"TransientAccountFreezePauseError(reason={evidence.reason!r})")
+        self.evidence = evidence
+        self.reason = evidence.reason
 
 
 class AccountRegistryBlockError(SubmitGateBlockError):
@@ -718,7 +719,7 @@ class LivePortfolio:
     verdict_provider: object = None  # Callable[[], str | None] | None
     # Account-scoped lifecycle freeze provider. When it returns active
     # freeze evidence, submit is refused before any broker call.
-    account_freeze_provider: object = None
+    account_freeze_provider: Callable[[], AccountFreezeEvidence | None] | None = None
     # Account-scoped instance registry provider. When it returns any gate result
     # other than pass, submit is refused before any broker call.
     account_registry_gate_provider: GateResultProvider | None = None
@@ -1123,26 +1124,21 @@ class LivePortfolio:
         requires_durable = bool(getattr(self.broker, "requires_durable_submit", False))
 
         if self.account_freeze_provider is not None:
-            freeze_evidence = self.account_freeze_provider()  # type: ignore[operator]
+            freeze_evidence = self.account_freeze_provider()
             if freeze_evidence is not None and not self._pending_orders_reduce_exposure_only():
-                from app.engine.live.account_artifacts import RESTART_INTENSITY_REASON
-
                 self.drop_pending_before_submit(
                     drop_reason="account_freeze_block",
                     ts_ms=now_ms_utc(),
                 )
-                freeze_reason = str(getattr(freeze_evidence, "reason", "") or "")
-                if freeze_reason.startswith(RESTART_INTENSITY_REASON):
-                    # Transient (auto-expiring) restart-intensity freeze: pending
-                    # orders were dropped above, so we never submit while frozen.
-                    # Signal a non-terminal pause so the run survives and resumes
-                    # on a later bar once the freeze clears, instead of halting a
-                    # healthy bot. Durable freezes fall through and halt.
+                if freeze_evidence.pauses_healthy_runs:
+                    # Pending orders were dropped above, so we never submit while
+                    # frozen. Typed restart-intensity evidence pauses a healthy
+                    # run; all other active freeze evidence remains terminal.
                     logger.warning(
                         "submit paused: transient account freeze",
-                        extra={"account_freeze_reason": freeze_reason},
+                        extra={"account_freeze_reason": freeze_evidence.reason},
                     )
-                    raise TransientAccountFreezePauseError(reason=freeze_reason)
+                    raise TransientAccountFreezePauseError(evidence=freeze_evidence)
                 raise AccountFreezeBlockError(evidence=freeze_evidence)
 
         if self.account_registry_gate_provider is not None:
