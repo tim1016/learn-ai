@@ -84,7 +84,12 @@
       "Bash(\"C:/Users/inkan/learn-ai/.venv/Scripts/python\" -m pip install plotly -q)",
       "Bash(../.venv/Scripts/python -m pytest tests/services/test_bs_greeks.py tests/research/options/ -q)",
       "Bash(../.venv/Scripts/python -m pytest tests/services/test_options_companion_service.py tests/volatility/test_solver.py -q)",
-      "Bash(.venv/Scripts/ruff check *)"
+      "Bash(.venv/Scripts/ruff check *)",
+      "Bash(lsof -nP -iTCP:8765 -sTCP:LISTEN)",
+      "Bash(lsof -nP -iTCP:8000 -sTCP:LISTEN)",
+      "Bash(lsof -nP -iTCP:5050 -sTCP:LISTEN)",
+      "Bash(lsof -nP -iTCP:4200 -sTCP:LISTEN)",
+      "Bash(.venv/bin/python --version)"
     ]
   }
 }
