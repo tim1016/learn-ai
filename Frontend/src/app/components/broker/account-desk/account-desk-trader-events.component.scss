@@ -10,6 +10,10 @@ ol {
 p {
   color: var(--text-secondary);
 }
+.event-summary {
+  color: var(--text-primary);
+  font-weight: 600;
+}
 ol {
   display: grid;
   gap: 0.45rem;

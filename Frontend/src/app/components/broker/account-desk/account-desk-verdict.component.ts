@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, input, output } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, input, output } from "@angular/core";
 import { ButtonModule } from "primeng/button";
 import { CardModule } from "primeng/card";
 import { MessageModule } from "primeng/message";
@@ -15,6 +15,13 @@ import { fmtCurrency, fmtSignedCurrency } from "../format";
 import { accountPostureTagSeverity } from "../lib/account-posture-tag-severity";
 import type { AccountDeskHeadlineMetrics } from "./account-desk-holdings-store.service";
 import { AccountDeskGuidanceComponent } from "./account-desk-guidance.component";
+
+const VERDICT_DETAIL_COPY = new Map<string, string>([
+  [
+    'ACCOUNT_CLERK_RECONCILIATION_NOT_PROVABLE',
+    'We could not verify the current broker positions. Keep this account frozen until fresh reconciliation is available.',
+  ],
+]);
 
 /** Server-owned account verdict, freshness, and headline balance projection. */
 @Component({
@@ -46,4 +53,8 @@ export class AccountDeskVerdictComponent {
   readonly fmtCurrency = fmtCurrency;
   readonly fmtSignedCurrency = fmtSignedCurrency;
   readonly postureSeverity = accountPostureTagSeverity;
+  readonly verdictDetail = computed(() => {
+    const detail = this.triage()?.verdict.detail ?? '';
+    return VERDICT_DETAIL_COPY.get(detail) ?? detail;
+  });
 }

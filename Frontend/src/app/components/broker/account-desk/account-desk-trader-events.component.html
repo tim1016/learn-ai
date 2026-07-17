@@ -1,6 +1,6 @@
 <p-panel class="today-events" aria-label="Today at the desk" aria-live="polite">
   <ng-template #header><h2>Today at the desk</h2></ng-template>
-  <p>Account activity narrated by the desk.</p>
+  <p>A concise, trader-facing account activity feed.</p>
   @if (store.traderLoading() && !store.traderHasLastGood()) {
     <p class="state">Loading today’s account activity…</p>
   } @else if (store.traderErrorMessage() && !store.traderHasLastGood()) {
@@ -15,14 +15,22 @@
       No trader-facing account events have been recorded today.
     </p>
   } @else {
+    @if (hiddenCount() > 0 && !showAll()) {
+      <p class="event-summary">Showing the latest {{ visibleRows().length }} of {{ store.traderRows().length }} updates.</p>
+    }
     <ol>
-      @for (row of store.traderRows(); track trackEvent($index, row)) {
+      @for (row of visibleRows(); track trackEvent($index, row)) {
         <li>
           <app-timestamp-display [value]="row.occurred_at_ms" mode="local" /> —
           {{ row.trader_narration }}
         </li>
       }
     </ol>
+    @if (hiddenCount() > 0) {
+      <button pButton type="button" severity="secondary" (click)="toggleHistory()">
+        <span class="p-button-label">{{ showAll() ? 'Show fewer updates' : 'Show ' + hiddenCount() + ' older update' + (hiddenCount() === 1 ? '' : 's') }}</span>
+      </button>
+    }
   }
   @if (store.traderShowingStaleLastGood()) {
     <p class="state state-stale">

@@ -1,6 +1,6 @@
 <app-page-header
-  title="Account desk"
-  subtitle="Server-owned account posture and evidence freshness."
+  [title]="pageTitle()"
+  subtitle="Current account posture, verification status, and the safe next step."
 >
   @if (displayAccountId(); as accountId) {
     <app-account-desk-account-switcher

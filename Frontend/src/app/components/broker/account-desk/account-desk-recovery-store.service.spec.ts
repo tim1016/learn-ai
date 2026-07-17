@@ -113,6 +113,22 @@ describe('AccountDeskRecoveryStore', () => {
     });
   });
 
+  it('replaces control-plane secret failures with operator-safe recovery guidance', async () => {
+    const store = TestBed.inject(AccountDeskRecoveryStore);
+    broker.acceptExposureOverride.mockRejectedValue({
+      error: { detail: 'missing or wrong X-Data-Plane-Control-Secret' },
+    });
+    store.load('DU1234567');
+    store.requestDeclaredMove(move('account-exposure-override-action'));
+    store.setExposureOverrideReason('Operator reviewed the projected exposure.');
+
+    await store.confirm();
+
+    expect(store.errorMessage()).toBe(
+      'The secure control connection is unavailable. Ask a platform operator to restore it, then try again.',
+    );
+  });
+
   it('keeps a rejected recovery visibly distinct from success without refreshing the verdict', async () => {
     const store = TestBed.inject(AccountDeskRecoveryStore);
     broker.clearAccountFreeze.mockRejectedValue({ error: { detail: 'The reconciliation receipt has expired.' } });

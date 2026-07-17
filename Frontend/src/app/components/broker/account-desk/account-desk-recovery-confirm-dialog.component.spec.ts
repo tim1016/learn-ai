@@ -26,6 +26,7 @@ describe('AccountDeskRecoveryConfirmDialogComponent', () => {
     expect(reason.getAttribute('aria-required')).toBe('true');
     expect(reason.getAttribute('aria-describedby')).toBe('account-exposure-override-reason-help');
     expect(screen.getByText('Enter an operator reason to enable Accept exposure.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Close confirmation', hidden: true })).toBeTruthy();
     fireEvent.input(reason, { target: { value: 'Operator reason.' } });
     expect(reasonChanged).toHaveBeenCalledWith('Operator reason.');
     fireEvent.click(screen.getByRole('button', { name: 'Cancel', hidden: true }));

@@ -2,7 +2,7 @@
   <section id="account-desk-recovery-controls" class="account-recovery-controls" aria-label="Account recovery" aria-live="polite" tabindex="-1">
     <header>
       <h2>Account recovery</h2>
-      <p>Available actions are server-declared for this account and confirmed before they are sent. Additional recovery controls appear when their proof conditions are satisfied.</p>
+      <p>Safe, server-declared actions for this account. Each action is confirmed before it is sent.</p>
     </header>
     @if (surface.loading() && !surface.triage()) {
       <p class="state">Loading recovery controls…</p>
@@ -26,11 +26,7 @@
           pButton
           id="account-reconciliation-automation-action"
           type="button"
-          [severity]="
-            triage.reconciliation_automation_policy.enabled
-              ? 'danger'
-              : undefined
-          "
+          severity="secondary"
           [disabled]="recovery.busy()"
           (click)="requestAutomationChange()"
         >
