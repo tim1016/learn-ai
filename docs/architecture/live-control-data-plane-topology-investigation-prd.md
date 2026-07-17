@@ -2,7 +2,7 @@
 
 - **Status:** Draft — ready for investigation
 - **Created:** 2026-07-17
-- **Surfaces:** Account Desk, Journal cure, Broker Deploy, Bots/Bot Control, Strategy Validation, Angular development proxy, Python data plane, host live-runner daemon, account Clerk
+- **Surfaces:** Account Desk, Journal cure, Broker Deploy, Bots/Bot Control, Strategy Validation, Angular development proxy, .NET Backend, Python data plane, host live-runner daemon, account Clerk
 - **Primary outcome:** A trader can complete supported live-control work through the browser UI. If the UI cannot safely support a required operation, the product supplies one documented local command that performs or enables it.
 - **Builds on:** ADR 0006 (deploy through the host daemon), ADR 0007 (daemon authentication), the Account Clerk RPC boundary, and `docs/audits/three-bot-concurrency-and-emergency-flatten-2026-07-17.md`.
 - **Data authority:** Python remains the authority for broker/account state and mutations. Angular renders and submits backend-authored operations; it does not reproduce Clerk, deployment, or reconciliation logic.
@@ -116,16 +116,17 @@ The following are inputs to the investigation, not conclusions that may be copie
 
 Run the same evidence harness against each applicable row. A row may be rejected early if it cannot meet the paper-safety or single-port-owner prerequisites.
 
-| ID | FastAPI | Frontend | Daemon + Clerk | Expected purpose |
-|---|---|---|---|---|
-| H/H | Host | Host | Host | Baseline co-located operator workflow |
-| H/C | Host | Container, explicitly targeting host | Host | Preferred UI-container workflow if proxy policy permits it |
-| C/C | Container | Container, targeting `python-service` | Host | Current Compose-default behavior and failure reproduction |
-| C/H | Container | Host, targeting port 8000 | Host | Control case proving that moving only the frontend cannot repair Clerk RPC |
+| ID | FastAPI | `python-service` | Frontend | Backend → Python | Daemon + Clerk | Expected purpose |
+|---|---|---|---|---|---|---|
+| H/H | Host port 8000 | Stopped | Host | Host process explicitly targeting host FastAPI | Host | Fully co-located baseline; proves the entire browser and Backend assembly can start without Compose `python-service` |
+| H/C | Host port 8000 | Stopped | Container, explicitly targeting host | Container explicitly targeting host FastAPI and able to start without `python-service` | Host | Preferred container-UI workflow if proxy and Backend policy permit it |
+| C/C | Container | Running | Container, targeting `python-service` | Container targeting `http://python-service:8000` | Host | Current Compose-default behavior and failure reproduction |
+| C/H | Container | Running | Host, targeting port 8000 | Container targeting `http://python-service:8000` | Host | Control case proving that moving only the frontend cannot repair Clerk RPC |
 
 For every tested row, record:
 
 - owner of host port 8000;
+- whether `python-service` is running and healthy;
 - FastAPI working directory and artifact root;
 - temporary directory and derived Clerk socket identity;
 - daemon reachability and authenticated health;
@@ -134,6 +135,7 @@ For every tested row, record:
 - QC audit-copy count;
 - direct data-plane result;
 - browser-proxy result;
+- Backend process owner, effective Python base URL, and startup dependency state;
 - backend-to-Python result for one representative backend-dependent read;
 - whether Deploy, Start/Stop, Reconcile, cure preview, and cure confirmation are available;
 - exact typed failure for every unavailable operation.
@@ -142,7 +144,7 @@ For every tested row, record:
 
 ### Slice 1 — Reproduce and timestamp the topology transition
 
-Build a read-only evidence script or documented command sequence that identifies the process owning port 8000, Compose service state, daemon/Clerk processes, effective proxy targets, and relevant health endpoints. Run it before and after each supported restart procedure.
+Build a read-only evidence script or documented command sequence that identifies the process owning port 8000, Compose service state, daemon/Clerk processes, effective Angular and Backend Python targets, and relevant health endpoints. Run it before and after each supported restart procedure.
 
 **Exit criterion:** the investigation can state exactly which restart changes a working host topology into the container topology.
 
@@ -157,7 +159,7 @@ Trace these browser operations end to end:
 5. Account Desk journal-cure preview.
 6. Account Desk journal-cure confirmation up to the Clerk boundary.
 
-For each, name every hop and filesystem/process dependency. Capture typed outcomes at the browser proxy, FastAPI, daemon, and Clerk boundaries.
+For each, name every hop and filesystem/process dependency. Capture typed outcomes at the browser proxy, Backend, FastAPI, daemon, and Clerk boundaries.
 
 **Exit criterion:** an empty response or disabled control has one proven cause, not a topology-based guess.
 
@@ -167,8 +169,9 @@ Test the lowest-coordination candidate first:
 
 1. Keep the daemon and Clerk on the host.
 2. Run FastAPI on the host with the canonical host artifact root.
-3. Make the normal Angular UI target that host FastAPI.
-4. Preserve the existing backend target for GraphQL/backend-owned operations.
+3. Start or explicitly retarget the Backend so its Python base URL reaches that
+   host FastAPI without depending on the stopped `python-service` container.
+4. Make the normal Angular UI target that complete host-FastAPI/Backend assembly.
 5. Verify the full UI acceptance flow in §9.
 
 This slice may use a temporary command before any repository change. Record the exact command, foreground/background behavior, logs, rollback, and what happens on the next Compose restart.
@@ -224,8 +227,11 @@ Direct port-8000 success does not substitute for this browser acceptance flow.
 
 If the investigation concludes that a required action cannot be safely exposed through the current UI, the fallback must include:
 
-1. One copyable command block rooted at `/Users/inkant/learn-ai`.
-2. A preflight that refuses to run when the wrong process owns port 8000 or the host Clerk is unavailable.
+1. One copyable command block run from the repository root, or a block that
+   derives it with `git rev-parse --show-toplevel`.
+2. A topology-enabling command preflights the required port-8000 owner and host
+   Clerk. An isolated operation fallback preflights only the authority it uses;
+   it must not reject solely because an unrelated UI process owns port 8000.
 3. No secrets embedded in the command or printed to the terminal.
 4. Explicit paper-account and confirmation requirements for broker mutations.
 5. Idempotency behavior documented for retry after a timeout or ambiguous response.
