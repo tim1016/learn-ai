@@ -18,6 +18,9 @@ describe('DocumentArticleComponent', () => {
 
     expect(screen.getByRole('navigation', { name: 'Manual contents' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Start safely', level: 2 })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Advanced verification', level: 5 })).toBeTruthy();
+    expect(screen.getByText('Read the canonical source first.')).toBeTruthy();
+    expect(screen.getByRole('separator')).toBeTruthy();
     expect(screen.getByRole('note').textContent).toContain('Read the receipt before acting.');
     const procedure = screen.getByText('Verify the account state.').closest('ol');
     expect(procedure?.textContent).toContain('Verify the account state.');
@@ -30,13 +33,27 @@ describe('DocumentArticleComponent', () => {
 
 const documentFixture: MarkdownDocument = {
   title: 'Operator Manual',
-  preamble: [],
+  preamble: [
+    {
+      id: 'source-note',
+      kind: 'code',
+      language: 'text',
+      value: 'Read the canonical source first.',
+    },
+    { id: 'source-divider', kind: 'divider' },
+  ],
   sections: [
     {
       id: 'start-safely',
       ordinal: 1,
       title: 'Start safely',
       blocks: [
+        {
+          id: 'advanced-verification',
+          kind: 'subheading',
+          level: 5,
+          title: 'Advanced verification',
+        },
         {
           id: 'receipt-note',
           kind: 'callout',

@@ -1,13 +1,14 @@
 import { ChangeDetectionStrategy, Component, ElementRef, effect, input, signal, viewChild } from '@angular/core';
 
 import type { MarkdownDocument } from './markdown-document.model';
+import { DocumentBlockComponent } from './document-block.component';
 import { DocumentSectionComponent } from './document-section.component';
 import { DocumentTocComponent } from './document-toc.component';
 
 @Component({
   selector: 'app-document-article',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DocumentSectionComponent, DocumentTocComponent],
+  imports: [DocumentBlockComponent, DocumentSectionComponent, DocumentTocComponent],
   templateUrl: './document-article.component.html',
   styleUrl: './document-article.component.scss',
 })

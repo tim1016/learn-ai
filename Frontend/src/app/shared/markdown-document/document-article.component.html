@@ -15,11 +15,7 @@
     @if (document().preamble.length) {
       <div class="document-preamble">
         @for (block of document().preamble; track block.id) {
-          @if (block.kind === 'rich-text') {
-            <div [innerHTML]="block.html"></div>
-          } @else if (block.kind === 'callout') {
-            <aside class="preamble-callout" role="note" [innerHTML]="block.html"></aside>
-          }
+          <app-document-block [block]="block" [route]="route()" />
         }
       </div>
     }

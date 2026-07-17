@@ -40,23 +40,6 @@
   color: var(--text-secondary);
   font-size: var(--fs-md);
   line-height: 1.65;
-
-  ::ng-deep p {
-    margin: 0;
-  }
-}
-
-.preamble-callout {
-  margin: 0;
-  padding: var(--space-4);
-  border-left: 3px solid var(--accent);
-  border-radius: 0 var(--radius-md) var(--radius-md) 0;
-  background: var(--accent-faint);
-  color: var(--text-secondary);
-
-  ::ng-deep p {
-    margin: 0;
-  }
 }
 
 @media (max-width: 980px) {

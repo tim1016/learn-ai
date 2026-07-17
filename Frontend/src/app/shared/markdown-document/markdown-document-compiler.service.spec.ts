@@ -58,6 +58,17 @@ Read the **evidence** first.
     expect(firstBlock.html).not.toContain('<script>');
     expect(firstBlock.html).toContain('Visible text.');
   });
+
+  it('preserves the semantic level of nested headings', () => {
+    const document = compiler.compile('## 1. Safe\n\n##### 1.1 Deep verification');
+    const subheading = document.sections[0]?.blocks[0];
+
+    expect(subheading).toMatchObject({
+      kind: 'subheading',
+      level: 5,
+      title: '1.1 Deep verification',
+    });
+  });
 });
 
 function isDocumentList(block: { readonly kind: string }): block is DocumentListBlock {

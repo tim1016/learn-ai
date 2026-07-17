@@ -22,6 +22,11 @@
                 "glob": "**/*",
                 "input": "src/assets",
                 "output": "assets"
+              },
+              {
+                "glob": "bot-control-operator-manual.md",
+                "input": "../docs",
+                "output": "assets/docs"
               }
             ],
             "styles": [

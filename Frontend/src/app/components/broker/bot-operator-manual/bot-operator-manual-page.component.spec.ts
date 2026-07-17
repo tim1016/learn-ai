@@ -52,4 +52,47 @@ describe('BotOperatorManualPageComponent', () => {
     expect(await screen.findByRole('heading', { name: 'Bot Control & Account Clerk — Operator Manual' })).toBeTruthy();
     http.verify();
   });
+
+  it('makes every in-page manual link resolve to compiled canonical text', async () => {
+    await render(BotOperatorManualPageComponent, {
+      providers: [provideRouter([]), provideHttpClient(), provideHttpClientTesting()],
+    });
+
+    const http = TestBed.inject(HttpTestingController);
+    http.expectOne('/assets/docs/bot-control-operator-manual.md').flush(manualWithShortcutTargets);
+    await screen.findByText('Canonical shortcut targets.');
+
+    const missingTargets = screen
+      .getAllByRole('link')
+      .map(link => link.getAttribute('href'))
+      .filter((href): href is string => href?.startsWith('/broker/bot-manual#') ?? false)
+      .map(href => href.split('#')[1])
+      .filter((fragment): fragment is string => fragment !== undefined)
+      .filter(fragment => document.getElementById(fragment) === null);
+
+    expect(missingTargets).toEqual([]);
+    http.verify();
+  });
 });
+
+const manualWithShortcutTargets = `
+# Bot Control & Account Clerk — Operator Manual
+
+Canonical shortcut targets.
+
+## 1. Mental model — three planes
+
+## 5. The bot lifecycle
+
+### 5.2 Roll call — the offer gate
+
+### 5.4 Graceful stop vs halt/crash — the fork that decides your morning
+
+## 7. Freezes & recovery
+
+## 8. Concurrency recipes
+
+## 9. Common operator procedures
+
+## 11. Blindspots — the things that bite
+`;

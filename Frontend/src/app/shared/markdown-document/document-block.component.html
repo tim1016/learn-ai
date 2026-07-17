@@ -12,10 +12,19 @@
   }
   @case ('subheading') {
     <div class="document-subheading" [id]="currentBlock.id">
-      @if (currentBlock.level === 3) {
-        <h3>{{ currentBlock.title }}</h3>
-      } @else {
-        <h4>{{ currentBlock.title }}</h4>
+      @switch (currentBlock.level) {
+        @case (3) {
+          <h3>{{ currentBlock.title }}</h3>
+        }
+        @case (4) {
+          <h4>{{ currentBlock.title }}</h4>
+        }
+        @case (5) {
+          <h5>{{ currentBlock.title }}</h5>
+        }
+        @case (6) {
+          <h6>{{ currentBlock.title }}</h6>
+        }
       }
       <a
         class="subheading-link"
