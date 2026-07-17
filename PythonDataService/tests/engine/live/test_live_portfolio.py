@@ -13,7 +13,11 @@ from app.broker.ibkr.models import (
     IbkrPosition,
     IbkrPositionsSnapshot,
 )
-from app.engine.live.account_artifacts import AccountFreezeEvidence
+from app.engine.live.account_artifacts import (
+    RESTART_INTENSITY_REASON,
+    RESTART_INTENSITY_SOURCE,
+    AccountFreezeEvidence,
+)
 from app.engine.live.account_owner import AccountOwnerSubmitIntent, AccountOwnerSubmitRejected, AccountOwnerSubmitResult
 from app.engine.live.live_portfolio import (
     AccountFreezeBlockError,
@@ -22,6 +26,7 @@ from app.engine.live.live_portfolio import (
     LivePortfolio,
     SessionPolicyBlockError,
     SubmitUncertainHaltError,
+    TransientAccountFreezePauseError,
 )
 from app.schemas.account_truth import (
     AccountTruthMessage,
@@ -811,16 +816,22 @@ async def test_submit_pending_orders_drops_wal_intent_when_account_registry_bloc
 
 
 @pytest.mark.asyncio
-async def test_submit_pending_orders_drops_wal_intent_when_account_freeze_blocks(tmp_path: Path) -> None:
-    from types import SimpleNamespace
-
+async def test_submit_pending_orders_keeps_non_restart_freeze_terminal(tmp_path: Path) -> None:
     from app.engine.execution.order_sizer import FixedShares, OrderSizer
     from app.engine.live.intent_events import IntentEventType
     from app.engine.live.intent_wal import IntentWal
     from app.engine.live.order_identity import build_bot_order_namespace
 
     broker = FakeBroker()
-    freeze = SimpleNamespace(reason="restart_intensity.threshold_breached")
+    # A non-restart source may not opt into the non-terminal path merely by
+    # reusing a restart-intensity reason prefix.
+    freeze = AccountFreezeEvidence(
+        account_id="DU123",
+        reason=f"{RESTART_INTENSITY_REASON}:observed=3:threshold=3",
+        source="watchdog_halt_executor",
+        recorded_at_ms=_NOW_MS,
+        operator_next_step="CHECK_IBKR",
+    )
     wal = IntentWal(tmp_path / "intent_events.jsonl")
     portfolio = LivePortfolio(
         broker,
@@ -843,6 +854,78 @@ async def test_submit_pending_orders_drops_wal_intent_when_account_freeze_blocks
     assert events[1].drop_reason == "account_freeze_block"
     assert broker.orders == []
     assert list(portfolio.drain_pending()) == []
+
+
+@pytest.mark.asyncio
+async def test_submit_pending_orders_pauses_not_halts_on_transient_restart_intensity_freeze(
+    tmp_path: Path,
+) -> None:
+    """Typed restart-intensity evidence pauses submits without terminal halt."""
+    from app.engine.execution.order_sizer import FixedShares, OrderSizer
+    from app.engine.live.intent_events import IntentEventType
+    from app.engine.live.intent_wal import IntentWal
+    from app.engine.live.order_identity import build_bot_order_namespace
+
+    broker = FakeBroker()
+    freeze = AccountFreezeEvidence(
+        account_id="DU123",
+        reason=f"{RESTART_INTENSITY_REASON}:observed=3:threshold=3",
+        source=RESTART_INTENSITY_SOURCE,
+        recorded_at_ms=_NOW_MS,
+        operator_next_step="WAIT_FOR_CLEAR",
+    )
+    wal = IntentWal(tmp_path / "intent_events.jsonl")
+    portfolio = LivePortfolio(
+        broker,
+        intent_wal=wal,
+        bot_order_namespace=build_bot_order_namespace("transient-freeze-test"),
+        account_freeze_provider=lambda: freeze,
+    )
+    portfolio.order_sizer = OrderSizer(FixedShares(value=10))
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    with pytest.raises(TransientAccountFreezePauseError) as exc:
+        await portfolio.submit_pending_orders()
+    assert not isinstance(exc.value, AccountFreezeBlockError)
+    assert exc.value.reason.startswith(RESTART_INTENSITY_REASON)
+
+    # Same fail-closed drop behaviour as a durable freeze: nothing submitted.
+    events = wal.read_tail()
+    assert [event.event_type for event in events] == [
+        IntentEventType.SIZING_RESOLVED,
+        IntentEventType.INTENT_DROPPED_BEFORE_SUBMIT,
+    ]
+    assert events[1].drop_reason == "account_freeze_block"
+    assert broker.orders == []
+    assert list(portfolio.drain_pending()) == []
+
+
+@pytest.mark.asyncio
+async def test_submit_pending_orders_resumes_after_restart_intensity_freeze_clears() -> None:
+    broker = FakeBroker()
+    freeze: AccountFreezeEvidence | None = AccountFreezeEvidence(
+        account_id="DU123",
+        reason=f"{RESTART_INTENSITY_REASON}:observed=3:threshold=3",
+        source=RESTART_INTENSITY_SOURCE,
+        recorded_at_ms=_NOW_MS,
+        operator_next_step="WAIT_FOR_CLEAR",
+    )
+    portfolio = LivePortfolio(broker, account_freeze_provider=lambda: freeze)
+    portfolio.net_liquidation = Decimal("100000")
+    portfolio.update_reference_price("SPY", Decimal("500"))
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 45, tzinfo=UTC))
+
+    with pytest.raises(TransientAccountFreezePauseError):
+        await portfolio.submit_pending_orders()
+
+    freeze = None
+    portfolio.set_holdings("SPY", Decimal("1"), datetime(2026, 5, 4, 14, 46, tzinfo=UTC))
+
+    acknowledgements = await portfolio.submit_pending_orders()
+
+    assert len(acknowledgements) == 1
+    assert len(broker.orders) == 1
 
 
 @pytest.mark.asyncio

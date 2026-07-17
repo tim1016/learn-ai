@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from app.engine.live.account_artifacts import AccountFreezeEvidence
     from app.engine.live.intent_wal import IntentWal
 
 from app.broker.ibkr.account import fetch_account_summary, fetch_positions
@@ -149,12 +150,36 @@ class SubmitGateBlockError(ControlledLiveHaltError):
 
 
 class AccountFreezeBlockError(SubmitGateBlockError):
-    """Raised when account-level freeze evidence blocks order submission."""
+    """Raised when a *durable* account-level freeze blocks order submission.
+
+    Durable freezes (exposure/contamination/reconciliation) require operator
+    action to clear, so the engine halts. Active restart-intensity evidence
+    instead raises the non-terminal ``TransientAccountFreezePauseError`` so a
+    healthy run pauses submits until the authoritative provider reports the
+    freeze cleared (see that class + ``submit_pending_orders``).
+    """
 
     def __init__(self, *, evidence: object) -> None:
         reason = getattr(evidence, "reason", None)
         super().__init__(f"AccountFreezeBlockError(reason={reason!r})")
         self.evidence = evidence
+
+
+class TransientAccountFreezePauseError(RuntimeError):
+    """Non-terminal: a transient account freeze paused submits for this bar.
+
+    Deliberately NOT a ``ControlledLiveHaltError`` — it must not reach the
+    run-loop halt path. Raised by ``submit_pending_orders`` for typed
+    restart-intensity evidence: pending orders are dropped at the raise site
+    (so the "never submit while frozen" invariant holds), then the engine
+    catches this and re-evaluates after the authoritative provider reports a
+    clear rather than permanently halting a healthy bot.
+    """
+
+    def __init__(self, *, evidence: AccountFreezeEvidence) -> None:
+        super().__init__(f"TransientAccountFreezePauseError(reason={evidence.reason!r})")
+        self.evidence = evidence
+        self.reason = evidence.reason
 
 
 class AccountRegistryBlockError(SubmitGateBlockError):
@@ -694,7 +719,7 @@ class LivePortfolio:
     verdict_provider: object = None  # Callable[[], str | None] | None
     # Account-scoped lifecycle freeze provider. When it returns active
     # freeze evidence, submit is refused before any broker call.
-    account_freeze_provider: object = None
+    account_freeze_provider: Callable[[], AccountFreezeEvidence | None] | None = None
     # Account-scoped instance registry provider. When it returns any gate result
     # other than pass, submit is refused before any broker call.
     account_registry_gate_provider: GateResultProvider | None = None
@@ -1099,12 +1124,21 @@ class LivePortfolio:
         requires_durable = bool(getattr(self.broker, "requires_durable_submit", False))
 
         if self.account_freeze_provider is not None:
-            freeze_evidence = self.account_freeze_provider()  # type: ignore[operator]
+            freeze_evidence = self.account_freeze_provider()
             if freeze_evidence is not None and not self._pending_orders_reduce_exposure_only():
                 self.drop_pending_before_submit(
                     drop_reason="account_freeze_block",
                     ts_ms=now_ms_utc(),
                 )
+                if freeze_evidence.pauses_healthy_runs:
+                    # Pending orders were dropped above, so we never submit while
+                    # frozen. Typed restart-intensity evidence pauses a healthy
+                    # run; all other active freeze evidence remains terminal.
+                    logger.warning(
+                        "submit paused: transient account freeze",
+                        extra={"account_freeze_reason": freeze_evidence.reason},
+                    )
+                    raise TransientAccountFreezePauseError(evidence=freeze_evidence)
                 raise AccountFreezeBlockError(evidence=freeze_evidence)
 
         if self.account_registry_gate_provider is not None:

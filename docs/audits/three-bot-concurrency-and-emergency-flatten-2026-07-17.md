@@ -17,7 +17,7 @@ Account: `DUM284968` (paper). Start state: `master` @ `d5e05b9f`, worktree clean
 | Was the residual stale-exposure defect real? | **Yes.** Fleet contamination was live-blocking starts (`FLEET_CONTAMINATED`, `policy_blocks_starts=true`) while the reconciliation receipt was `CLEAN`. |
 | Is journal cure the correct remedy? | **Yes.** Applied two append-only cures (SPY −1, QQQ −1); fleet is now `clean`, `policy_blocks_starts=false`. |
 | Can we run three concurrent bots? | **Proven yes** — the morning cohort ran 3 bots with a **59.0-minute** genuine 3-way overlap and ~52 interleaved fills. Independently validated from the durable Clerk journal. |
-| Did the afternoon churn (4th bot / stop 3rd / start 5th) run? | **No — blocked by data-plane topology** (see §4). The deploy path is not drivable in the current container-only data-plane. Procedure + fix documented. |
+| Did the afternoon churn run? | **Partially — topology blocker resolved and a live run executed** (see §4). I swapped to a host data-plane, deployed 3 bots, ran a **live concurrent pair** under my control, and demonstrated a graceful stop. The full rapid churn is **deliberately gated** by the restart-intensity protection (see §6). |
 
 ---
 
@@ -183,7 +183,20 @@ sharing an account, with per-namespace ownership preserved end-to-end, is proven
 
 ---
 
-## 4. Data-plane topology finding (blocks the afternoon churn)
+## 4. Data-plane topology finding (RESOLVED live)
+
+> **Update (resolved 2026-07-17 ~12:49 CT):** with the user's approval I stopped
+> the `polygon-data-service` container and launched the data-plane as a **host**
+> uvicorn on `:8000` (env replicated from the container with three host
+> corrections: `IBKR_HOST=127.0.0.1`, `IBKR_LIVE_RUNNER_DAEMON_URL=http://127.0.0.1:8765`,
+> host `IBKR_LIVE_RUNS_ROOT`; daemon token read from the shared artifacts file).
+> The host data-plane then reached the daemon, saw `references/qc-shadow`, reached
+> the clerk socket, and successfully **deployed + started live bots**. The finding
+> below is why the container could not — kept for the record and the permanent fix.
+> The host DP is a hand-launched, unsupervised process (revert with
+> `podman start polygon-data-service` after killing it).
+
+
 
 The daemon (`host_daemon`, pid 46264) and the account Clerk
 (`account_clerk`, pid 1206, gen 37) run as **host** processes. The data-plane
@@ -254,6 +267,99 @@ operational-readiness finding.
    regression test so the escape hatch can't manufacture a contamination verdict.
 
 ---
+
+## 6. Live afternoon run — what actually happened (the churn envelope)
+
+With the host data-plane, I drove the full pipeline end-to-end
+(`deploy → roll-call offer → start`) and learned the operational envelope:
+
+- **Pipeline works.** Deployed `deployment_validation` bots with bounded
+  `FixedShares(1)` sizing + a single-stock action plan; started them
+  submit-to-paper (`readonly:false`). Bot #1 started, connected to IBKR, and
+  processed bars — a real running bot under my control.
+- **Restart-intensity protection is the churn ceiling (key finding).** Starting
+  three bots individually within ~1 minute tripped
+  `restart_intensity.threshold_breached (observed=3, threshold=3, window=5min)`
+  and **froze the whole account**. The freeze then **cascade-halted the
+  already-running bot #1**: on its next bar its submit gate hit
+  `AccountFreezeBlockError` and it HALTed + disconnected. So rapid individual
+  starts are self-defeating — they freeze the account *and* kill the running
+  fleet. This is exactly why the **cohort path exists** (it projects staggered
+  starts as one start-group). The user's imagined rapid "add 4th / stop 3rd /
+  start 5th" churn collides head-on with this protection.
+  - `RestartIntensityPolicy` defaults (`threshold=3`, `window_ms=300_000`) are
+    **hard-coded**, not env-configurable (`account_artifacts.py:221`).
+  - **Design question:** should a *running* bot **pause submits** during a
+    restart-intensity freeze rather than **halt/exit**? The start-rate window
+    expires, but its persisted account freeze remains active until an audited
+    clear; previously that permanently killed a healthy running bot.
+- **Recovery is clean.** The account never left a stale claim (halted bot was
+  flat). I reconciled to `CLEAN`, cleared the freeze
+  (`freeze/clear` → `account_recovery_proof`), and the account returned to
+  flat/clean/ready.
+- **Halted bots are not re-offered.** After the cascade-halt, roll-call offered
+  only the never-started bot; the halted ones require retire-and-replace (the
+  crashed-bot lifecycle).
+- **Live concurrent pair demonstrated (within the gate).** Starting exactly two
+  bots (under the 3/5-min ceiling) ran **two bots concurrently** under my
+  control, both IBKR-connected on distinct namespaces on one paper account.
+- **Graceful stop vs. halt — exit taxonomy.** A graceful
+  `stop` returned `exited / exit_reason=normal`, kept the sibling running, and
+  left `fleet clean` (no residue) — the correct contrast to both the freeze-HALT
+  and the morning cohort's clean≠flat gap. Stops are **not** gated by
+  restart-intensity; only starts are.
+
+**Net answer to the investigation:** three concurrent bots — **yes** (proven).
+Rapid ad-hoc churn — **no, by design**; the sanctioned path for concurrent
+multi-bot launch is the cohort launcher, and lifecycle churn must respect the
+restart-intensity ceiling (≤2 starts per rolling 5 min per account).
+
+## 7. Systematic lifecycle + gates probe (last trading hour, ~14:00–14:15 CT)
+
+Ran different concurrent counts of the same bot (`deployment_validation`,
+`FixedShares(1)`, single-stock action plan, submit-to-paper) to map the
+operational envelope. **Correction to §4:** the *container* data-plane **can**
+deploy/start/stop — deploy forwards paths to the host daemon, which validates
+`references/qc-shadow` + the spec on the host. The container only can't
+*enumerate* the catalog (references/ not mounted) or do *direct* clerk RPC
+(cures). So live control does **not** require a host data-plane; only journal
+cures do. The whole probe below ran on the container.
+
+**Reached 5 concurrent bots** on one paper account (distinct namespaces), fleet
+clean throughout. Findings by gate:
+
+- **Restart-intensity = start-*rate* limit, not a concurrency limit.**
+  `threshold=3 / window=5min` per account. Every 3rd start in a 5-min window
+  trips `restart_intensity.threshold_breached` and freezes the account. Total
+  concurrent count is unbounded by it — you just start ≤2 per 5 min. Hit it 3×.
+- **The pause-submits fix (this morning's commit) validated LIVE, twice.** With 2
+  then 3 bots running, tripping the freeze produced
+  `[FREEZE_PAUSE] … run stays alive and resumes when the freeze clears` on every
+  running bot (one had `pending=1` — a real order it dropped) and **they stayed
+  running**. After `freeze/clear` the next bar was a normal `[BAR]` — they
+  **resumed**. Under the old code all would have cascade-halted (as a bot did
+  earlier this afternoon). This is production proof of the fix.
+- **Stop/start churn.** Graceful `stop` → `exit_reason=normal`, is **free**
+  (not rate-gated); a replacement `start` is rate-gated. Stopping one + starting
+  a replacement maintained concurrency with **fleet clean** (graceful stop leaves
+  no stale claim).
+- **Lifecycle split.** A gracefully-stopped bot returns to **off-duty** and is
+  re-offered by roll-call (restartable). A **halted** bot goes to **sick_bay**
+  and needs retire-and-replace — roll-call won't re-offer it.
+- **Roll-call-offer gate.** Every start needs a fresh roll-call offer
+  (`ROLL_CALL_OFFER_REQUIRED`); offers expire at the session's `effective_stop`.
+- **Freeze clear** requires a clean reconciliation receipt first; clearing
+  (`account_recovery_proof`) resets the restart-intensity window.
+- **Clean-tree gate.** A stray `PythonDataService/PythonDataService/` (test
+  artifact from a relative-path test run) tripped `DirtyTreeError` on deploy —
+  the daemon's `git`-clean check over `['PythonDataService','references/qc-shadow']`.
+- **Bots ran but did not trade** with this minimal config (entry conditions not
+  met) — concurrency/lifecycle are proven independent of trading; the morning
+  cohort's tuned strategy is what produced fills.
+
+**Reset**: stop all graceful → reconcile CLEAN/flat → soft-delete all → no freeze.
+Gates *not* reached (out of time): start-boundary (force-flat proximity),
+crash-recovery-blocks-start, deploy-preflight, max-orders-per-day.
 
 ## Appendix — key evidence commands
 

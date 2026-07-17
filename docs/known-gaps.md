@@ -25,6 +25,44 @@ committing effort.
 
 No verified-open items remain in this section.
 
+### Resolved
+
+- **[RESOLVED 2026-07-17] Transient account freeze permanently halted healthy
+  running bots.** Active restart-intensity evidence now raises the non-terminal
+  `TransientAccountFreezePauseError` (not a
+  `ControlledLiveHaltError`); `live_engine` catches it, drops pending, and keeps
+  the run alive until the authoritative provider reports the freeze cleared.
+  Durable freezes
+  (exposure/contamination) still halt via `AccountFreezeBlockError`. The safety
+  invariant "never submit while frozen" is preserved (pending dropped at the
+  gate for both). Because the transient path never raises a terminal error, the
+  bot-event terminal classifier needed no change. Tests:
+  `test_submit_pending_orders_pauses_not_halts_on_transient_restart_intensity_freeze`,
+  `test_submit_pending_orders_resumes_after_restart_intensity_freeze_clears`,
+  `test_live_engine_pauses_not_halts_on_transient_restart_intensity_freeze`.
+  Original finding retained below for context.
+
+  **[original finding]** (verified live 2026-07-17)
+  `AccountFreezeBlockError` (`live_portfolio.py:1108`)
+  is a `ControlledLiveHaltError` caught at the outer run loop (`run.py:2688`) →
+  terminal `ExitReason.fatal_halt`. A **restart-intensity** freeze
+  (`RestartIntensityPolicy`, threshold=3 / window=300000ms) starts from an
+  expiring start-rate window, but its written account-freeze evidence remains
+  active until clear. It previously HALTed any running bot on its next submit,
+  so an unrelated restart-storm on the account killed healthy, unrelated bots,
+  which then needed retire-and-replace. Reproduced today: 3 individual starts in
+  <1 min froze the account and cascade-halted the running bot.
+  **Decision (user-approved 2026-07-17): a running bot should _pause submits_ and
+  keep running through a transient freeze, resuming when it clears** — rather than
+  halt. Implementation is non-trivial and flips a safety invariant, so it needs an
+  ADR: (a) classify freeze reason transient (restart_intensity) vs durable
+  (exposure/contamination — keep halting); (b) move the transient case out of the
+  terminal `ControlledLiveHaltError` path into a per-bar "skip submit, continue"
+  branch; (c) re-evaluate the freeze each bar and resume; (d) update
+  `bot_event_terminal_classifier` so a transient pause is not classified terminal;
+  (e) regression test. See
+  `docs/audits/three-bot-concurrency-and-emergency-flatten-2026-07-17.md` §6.
+
 ## 2. Architecture-investigation P1 tier (survives; not re-verified 2026-07-04)
 
 All five P0 safety issues from `architecture-investigation-2026-07-02.md` were

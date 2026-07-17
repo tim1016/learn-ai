@@ -128,6 +128,34 @@ async def test_live_engine_blocks_submit_when_account_artifact_is_frozen(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_live_engine_pauses_not_halts_on_transient_restart_intensity_freeze(tmp_path) -> None:
+    """Restart-intensity evidence pauses submits but keeps the run alive."""
+    broker = FakeBroker()
+    write_account_freeze(
+        tmp_path,
+        AccountFreezeEvidence(
+            account_id="DU123",
+            reason="restart_intensity.threshold_breached:observed=3:threshold=3",
+            source="account_restart_intensity",
+            recorded_at_ms=1_700_000_000_000,
+            operator_next_step="CHECK_IBKR",
+        ),
+    )
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        artifacts_root=tmp_path,
+        account_id="DU123",
+    )
+
+    # Completes without raising: active restart-intensity evidence pauses submits.
+    await engine.run(MinuteHookEntryStrategy(), iter_bars([_bar(m, "500", "500") for m in range(30, 33)]))
+
+    assert broker.orders == []
+
+
+@pytest.mark.asyncio
 async def test_live_engine_blocks_submit_when_account_registry_is_missing(tmp_path) -> None:
     broker = FakeBroker()
     engine = LiveEngine(
