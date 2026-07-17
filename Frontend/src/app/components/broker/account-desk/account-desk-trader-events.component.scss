@@ -3,8 +3,7 @@
   gap: 0.6rem;
 }
 h2,
-p,
-ol {
+p {
   margin: 0;
 }
 p {
@@ -14,10 +13,65 @@ p {
   color: var(--text-primary);
   font-weight: 600;
 }
-ol {
+.trader-timeline {
+  min-width: 0;
+}
+.trader-event-time {
+  display: block;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+.trader-event-marker {
+  --event-tone: var(--text-secondary);
+  display: block;
+  width: 0.85rem;
+  height: 0.85rem;
+  border: 2px solid var(--bg-elevated);
+  border-radius: 50%;
+  background: var(--event-tone);
+  box-shadow: 0 0 0 1px var(--event-tone);
+}
+.trader-event-entry {
   display: grid;
-  gap: 0.45rem;
-  padding-left: 1.25rem;
+  min-width: 0;
+  gap: 0.35rem;
+  padding-bottom: 0.9rem;
+}
+.trader-event-kind {
+  --event-tone: var(--text-secondary);
+  width: fit-content;
+  padding: 0.15rem 0.45rem;
+  border: 1px solid var(--event-tone);
+  border-radius: 999px;
+  color: var(--event-tone);
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.trader-event-marker[data-kind="safety"],
+.trader-event-kind[data-kind="safety"] {
+  --event-tone: var(--bear);
+}
+.trader-event-marker[data-kind="reconciliation"],
+.trader-event-kind[data-kind="reconciliation"] {
+  --event-tone: var(--warn);
+}
+.trader-event-marker[data-kind="configuration"],
+.trader-event-kind[data-kind="configuration"] {
+  --event-tone: var(--accent);
+}
+.trader-event-marker[data-kind="clerk"],
+.trader-event-kind[data-kind="clerk"] {
+  --event-tone: var(--info);
+}
+.trader-event-marker[data-kind="activity"],
+.trader-event-kind[data-kind="activity"] {
+  --event-tone: var(--bull);
+}
+.trader-event-marker[data-kind="other"],
+.trader-event-kind[data-kind="other"] {
+  --event-tone: var(--text-secondary);
 }
 .state-error {
   color: var(--bear);

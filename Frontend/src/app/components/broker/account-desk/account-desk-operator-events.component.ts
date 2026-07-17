@@ -1,8 +1,10 @@
-import { ChangeDetectionStrategy, Component, inject } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, inject } from "@angular/core";
 import { ButtonModule } from "primeng/button";
 import { PanelModule } from "primeng/panel";
+import { Timeline } from "primeng/timeline";
 
 import type {
+  AccountEventEvidenceRef,
   AccountEventKind,
   AccountEventRow,
 } from "../../../api/account-events.types";
@@ -19,6 +21,12 @@ const EVENT_KINDS: readonly AccountEventKind[] = [
   "configuration",
   "other",
 ];
+const JOURNAL_SEQUENCE_SOURCE = 'account_event_journal';
+
+interface AccountTimelineRow {
+  readonly event: AccountEventRow;
+  readonly evidence: AccountEventEvidenceRef[];
+}
 
 /** Operations timeline for the full backend-classified account journal. */
 @Component({
@@ -30,6 +38,7 @@ const EVENT_KINDS: readonly AccountEventKind[] = [
     PanelModule,
     ReceiptLabelPipe,
     TimestampDisplayComponent,
+    Timeline,
   ],
   templateUrl: "./account-desk-operator-events.component.html",
   styleUrl: "./account-desk-operator-events.component.scss",
@@ -37,12 +46,16 @@ const EVENT_KINDS: readonly AccountEventKind[] = [
 export class AccountDeskOperatorEventsComponent {
   readonly store = inject(AccountDeskEventsStore);
   readonly eventKinds = EVENT_KINDS;
-
-  trackEvent = (_: number, row: AccountEventRow): string => row.event_id;
+  readonly timelineRows = computed(() =>
+    this.store.operationRows().map((event): AccountTimelineRow => ({
+      event,
+      evidence: event.evidence_refs.filter((evidence) => evidence.source !== JOURNAL_SEQUENCE_SOURCE),
+    })),
+  );
   trackKind = (_: number, kind: AccountEventKind): AccountEventKind => kind;
   trackEvidence = (
     _: number,
-    evidence: AccountEventRow["evidence_refs"][number],
+    evidence: AccountEventEvidenceRef,
   ): string => `${evidence.source}:${evidence.ref}`;
 
   selected(kind: AccountEventKind): boolean {
