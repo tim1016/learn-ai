@@ -12,7 +12,6 @@ import json
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -360,16 +359,6 @@ def _parse_int(raw: Any) -> int:
         return 0
 
 
-def _format_ms_iso(ms_utc: int) -> str:
-    """``int64 ms UTC`` → ``"YYYY-MM-DD HH:MM:SS"`` for LEAN trade-stat boundaries.
-
-    This is a display-only string in a stat row consumed by the frontend.
-    The canonical wire/storage timestamp on every order/equity payload
-    stays ``int64 ms UTC`` per ``.claude/rules/numerical-rigor.md``.
-    """
-    return datetime.fromtimestamp(ms_utc / 1000.0, tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
-
-
 def _format_duration_seconds(total_seconds: float) -> str:
     """Format an average trade duration as ``"H:MM:SS"`` (matches LEAN TS.cs)."""
     if total_seconds <= 0:
@@ -490,8 +479,8 @@ def _normalized_to_lean_statistics_response(
 
         first = paired_trades[0]
         last = paired_trades[-1]
-        trade.start_date_time = _format_ms_iso(first.entry_ms_utc)
-        trade.end_date_time = _format_ms_iso(last.exit_ms_utc)
+        trade.start_date_time = first.entry_ms_utc
+        trade.end_date_time = last.exit_ms_utc
 
         all_durations = [(t.exit_ms_utc - t.entry_ms_utc) / 1000.0 for t in paired_trades]
         win_durations = [(t.exit_ms_utc - t.entry_ms_utc) / 1000.0 for t in paired_trades if t.pnl > 0]

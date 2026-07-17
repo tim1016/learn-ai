@@ -122,6 +122,41 @@ def test_save_study_payload_with_zero_commission() -> None:
 
 
 @respx.mock
+def test_save_study_payload_preserves_unavailable_risk_metrics_as_null() -> None:
+    """Undefined ratios are persisted as null rather than a fabricated zero."""
+    response = _response_with_trade(quantity=10, pnl_pts=2.0)
+    response.statistics = {
+        "max_drawdown_pct": 0.0,
+        "sharpe_ratio": None,
+        "sortino_ratio": None,
+        "profit_factor": None,
+    }
+    captured: dict[str, Any] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(201, json={"id": 100})
+
+    respx.post("http://localhost:5000/api/studies").mock(side_effect=_capture)
+
+    study_id = _save_study_sync(
+        response=response,
+        symbol="SPY",
+        start_date="2025-01-06",
+        end_date="2025-01-10",
+        resolution="minute",
+        params_json="{}",
+        duration_ms=1,
+        commission_per_order=0.0,
+    )
+
+    assert study_id == 100
+    assert captured["sharpeRatio"] is None
+    assert captured["sortinoRatio"] is None
+    assert captured["profitFactor"] is None
+
+
+@respx.mock
 def test_save_study_payload_includes_validation_analytics_envelope() -> None:
     """The frozen analytics envelope must survive persistence — the run
     report renders it from the row, never from the transient response."""

@@ -965,6 +965,8 @@ def test_normalized_to_lean_statistics_response_full_mapping() -> None:
     assert resp.trade.total_fees == pytest.approx(2.0)
     assert resp.trade.max_consecutive_winning_trades == 1
     assert resp.trade.max_consecutive_losing_trades == 1
+    assert resp.trade.start_date_time == 1_700_000_000_000
+    assert resp.trade.end_date_time == 1_700_001_300_000
 
     # Runtime stats derived from portfolio.
     assert resp.runtime.equity == pytest.approx(resp.portfolio.end_equity)

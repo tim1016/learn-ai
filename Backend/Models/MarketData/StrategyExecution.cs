@@ -38,7 +38,8 @@ public class StrategyExecution
 
     public decimal TotalPnL { get; set; }
     public decimal MaxDrawdown { get; set; }
-    public decimal SharpeRatio { get; set; }
+    /// <summary>Null when the run cannot calculate a meaningful Sharpe ratio.</summary>
+    public decimal? SharpeRatio { get; set; }
 
     // ── LEAN-parity KPIs ──
     public decimal InitialCash { get; set; }
@@ -46,9 +47,11 @@ public class StrategyExecution
     public decimal TotalFees { get; set; }
     public decimal WinRate { get; set; }
     public decimal CompoundingAnnualReturn { get; set; }
-    public decimal SortinoRatio { get; set; }
+    /// <summary>Null when the run cannot calculate a meaningful Sortino ratio.</summary>
+    public decimal? SortinoRatio { get; set; }
     public decimal ProbabilisticSharpeRatio { get; set; }
-    public decimal ProfitFactor { get; set; }
+    /// <summary>Null when the run cannot calculate a meaningful profit factor.</summary>
+    public decimal? ProfitFactor { get; set; }
     public decimal Alpha { get; set; }
     public decimal Beta { get; set; }
     public decimal InformationRatio { get; set; }

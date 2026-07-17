@@ -34,7 +34,7 @@ export interface LeanPortfolioStats {
 }
 
 export interface LeanTradeStats {
-  start_date_time: string; end_date_time: string;
+  start_date_time: number | null; end_date_time: number | null;
   total_number_of_trades: number; number_of_winning_trades: number;
   number_of_losing_trades: number; total_profit_loss: number;
   total_profit: number; total_loss: number;

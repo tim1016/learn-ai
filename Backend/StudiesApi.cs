@@ -369,15 +369,15 @@ public record SaveStudyRequest
     public int LosingTrades { get; init; }
     public decimal TotalPnL { get; init; }
     public decimal MaxDrawdown { get; init; }
-    public decimal SharpeRatio { get; init; }
+    public decimal? SharpeRatio { get; init; }
     public decimal InitialCash { get; init; }
     public decimal FinalEquity { get; init; }
     public decimal TotalFees { get; init; }
     public decimal WinRate { get; init; }
     public decimal CompoundingAnnualReturn { get; init; }
-    public decimal SortinoRatio { get; init; }
+    public decimal? SortinoRatio { get; init; }
     public decimal ProbabilisticSharpeRatio { get; init; }
-    public decimal ProfitFactor { get; init; }
+    public decimal? ProfitFactor { get; init; }
     public decimal Alpha { get; init; }
     public decimal Beta { get; init; }
     public decimal InformationRatio { get; init; }
@@ -468,11 +468,11 @@ public record StudyListItem
     public decimal WinRate { get; init; }
     public decimal TotalPnL { get; init; }
     public decimal MaxDrawdown { get; init; }
-    public decimal SharpeRatio { get; init; }
-    public decimal SortinoRatio { get; init; }
+    public decimal? SharpeRatio { get; init; }
+    public decimal? SortinoRatio { get; init; }
     public decimal CompoundingAnnualReturn { get; init; }
     public decimal ProbabilisticSharpeRatio { get; init; }
-    public decimal ProfitFactor { get; init; }
+    public decimal? ProfitFactor { get; init; }
     public decimal ValueAtRisk95 { get; init; }
     public decimal Alpha { get; init; }
     public decimal Beta { get; init; }
