@@ -39,21 +39,32 @@
       </section>
       <app-account-desk-journal-cure />
       <app-account-desk-legacy-claim-cure />
-      @if (cureBlockers().length === 0) {
-        <p class="state">
-          No account recovery action is currently declared safe.
-        </p>
-      } @else {
+      @if (triage.emergency_flatten_confirmation) {
+        <section class="emergency" aria-label="Emergency paper account flatten">
+          <h3>Emergency paper account flatten</h3>
+          <p>Close every open position when ordinary retired-bot recovery cannot produce an exact candidate.</p>
+          <button
+            pButton
+            type="button"
+            severity="danger"
+            [disabled]="recovery.busy()"
+            (click)="requestEmergencyFlatten()"
+          >
+            <span class="p-button-label">Emergency flatten</span>
+          </button>
+        </section>
+      }
+      @if (cureBlockers().length > 0) {
         <app-account-desk-guidance
           anchor="cure_tools"
           lens="operator"
           ariaLabel="Account recovery actions"
         />
-        @if (!hasActionableCure()) {
-          <p class="state">
-            No account recovery action is currently declared safe.
-          </p>
-        }
+      }
+      @if (!hasActionableCure() && !triage.emergency_flatten_confirmation) {
+        <p class="state">
+          No account recovery action is currently declared safe.
+        </p>
       }
       @if (recovery.success(); as success) {
         <app-account-desk-recovery-receipt [success]="success" />
@@ -68,6 +79,7 @@
       (cancelled)="recovery.cancelConfirmation()"
       (confirmed)="recovery.confirm()"
       (exposureReasonChanged)="recovery.setExposureOverrideReason($event)"
+      (confirmationTokenChanged)="recovery.setConfirmationToken($event)"
     />
   </section>
 </p-card>

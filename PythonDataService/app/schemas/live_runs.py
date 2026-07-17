@@ -361,6 +361,17 @@ class EmergencyFlattenRequest(BaseModel):
     confirm: bool = Field(..., description="Must be true; typo-proofing gate.")
 
 
+class AccountEmergencyFlattenResponse(BaseModel):
+    """Receipt returned after the account-scoped emergency CLI completes."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    accepted: bool
+    account_id: str = Field(min_length=2, max_length=32)
+    audit_run_id: str = Field(min_length=2, max_length=128)
+    completed_at_ms: int = Field(ge=0)
+
+
 class HostRunnerInstance(BaseModel):
     """One managed strategy instance's live process binding.
 

@@ -77,6 +77,22 @@
         }
       </section>
     }
+    @if (confirmation.requiredToken !== '') {
+      <section class="confirmation-token">
+        <label for="account-recovery-confirmation-token">
+          Type <code>{{ confirmation.requiredToken }}</code> to confirm
+        </label>
+        <input
+          id="account-recovery-confirmation-token"
+          type="text"
+          autocomplete="off"
+          spellcheck="false"
+          [value]="confirmation.providedToken"
+          [attr.aria-invalid]="confirmation.providedToken !== confirmation.requiredToken"
+          (input)="updateToken($event)"
+        />
+      </section>
+    }
     @if (errorMessage(); as errorMessage) {
       <p class="error" role="alert">{{ errorMessage }}</p>
     }
@@ -85,7 +101,7 @@
       <button
         type="button"
         class="primary"
-        [class.primary--danger]="confirmation.command === 'exposure_override'"
+        [class.primary--danger]="confirmation.command === 'exposure_override' || confirmation.command === 'emergency_flatten'"
         (click)="confirm()"
         [disabled]="busy() || !canConfirm()"
       >

@@ -43,6 +43,7 @@ from app.schemas.journal_cures import (
     OperatorRecoveryFlattenRequest,
     OperatorRecoveryFlattenResponse,
 )
+from app.schemas.live_runs import AccountEmergencyFlattenResponse, EmergencyFlattenRequest
 from app.services.account_directory import (
     AccountDirectoryError,
     AccountDirectoryService,
@@ -394,6 +395,64 @@ async def operator_recovery_flatten_endpoint(
         raise _outcome_unknown_http_error(exc) from exc
     except AccountClerkRpcError as exc:
         raise _clerk_rpc_http_error(exc) from exc
+
+
+@router.post(
+    "/{account_id}/emergency-flatten",
+    response_model=AccountEmergencyFlattenResponse,
+)
+async def emergency_flatten_account_endpoint(
+    account_id: str,
+    request: EmergencyFlattenRequest,
+    artifacts_root: AccountArtifactsRoot,
+    reconciliation: Annotated[
+        AccountReconciliationService,
+        Depends(get_account_reconciliation_service),
+    ],
+) -> AccountEmergencyFlattenResponse:
+    """Run the audited account-wide paper flatten without a surviving bot run."""
+
+    canonical_account_id = _canonical_account_id(account_id)
+    if not request.confirm:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "emergency-flatten requires confirm=true")
+    if request.account != canonical_account_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "request account does not match path")
+    if reconciliation.triage(account_id=canonical_account_id).emergency_flatten_confirmation is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "ACCOUNT_EMERGENCY_FLATTEN_NOT_DECLARED",
+                "message": "Fresh paper-account evidence does not declare an emergency flatten safe.",
+            },
+        )
+    try:
+        settings = get_settings()
+        await host_daemon_client.ensure_account_clerk(
+            settings.live_runner_daemon_url,
+            canonical_account_id,
+        )
+        payload = await host_daemon_client.emergency_flatten_account(
+            settings.live_runner_daemon_url,
+            canonical_account_id,
+            {"account": canonical_account_id, "confirm": True},
+        )
+        response = AccountEmergencyFlattenResponse.model_validate(payload)
+        append_account_event(
+            artifacts_root,
+            canonical_account_id,
+            {
+                "event_type": "account_emergency_flatten_completed",
+                "audit_run_id": response.audit_run_id,
+                "recorded_at_ms": response.completed_at_ms,
+                "receipt_id": f"account-emergency-flatten:{response.audit_run_id}",
+            },
+            only_if_receipt_absent=True,
+        )
+        return response
+    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
+        raise _outcome_unknown_http_error(exc) from exc
+    except host_daemon_client.HostDaemonError as exc:
+        raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
 
 @router.get(

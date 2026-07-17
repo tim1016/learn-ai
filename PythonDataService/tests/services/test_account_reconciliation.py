@@ -883,6 +883,7 @@ def test_triage_authors_only_an_exact_single_instrument_recovery_flatten_move(tm
     assert candidate.intent.order_spec["action"] == "SELL"
     assert candidate.intent.order_spec["quantity"] == 2
     assert candidate.confirmation.confirm_label == "Submit recovery flatten"
+    assert triage.emergency_flatten_confirmation is None
     [blocker] = [
         value
         for value in triage.operator_blockers
@@ -892,6 +893,27 @@ def test_triage_authors_only_an_exact_single_instrument_recovery_flatten_move(tm
     ]
     assert blocker.primary_move is not None
     assert blocker.primary_move.target == candidate.intent.intent_id
+
+
+def test_triage_declares_emergency_flatten_only_without_exact_recovery_candidate(
+    tmp_path: Path,
+) -> None:
+    service = AccountReconciliationService(artifacts_root=tmp_path)
+    service.write_receipt(
+        requested_account_id="DU1234567",
+        account_truth=_truth(positions=[_position(quantity=2)]),
+        now_ms=1_780_000_003_000,
+    )
+
+    triage = service.triage(
+        account_id="DU1234567",
+        now_ms=1_780_000_003_100,
+    )
+
+    assert triage.recovery_flatten_candidates == []
+    assert triage.emergency_flatten_confirmation is not None
+    assert triage.emergency_flatten_confirmation.required_token == "FLATTEN"
+    assert triage.emergency_flatten_confirmation.confirm_label == "Emergency flatten account"
 
 
 def test_triage_verdict_freeze_precedes_missing_proof(tmp_path: Path) -> None:

@@ -25,6 +25,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -88,6 +89,7 @@ from app.engine.strategy.spec.schema import load_spec_from_path
 from app.schemas.broker_session import GatewaySocketsSnapshot
 from app.schemas.live_runs import (
     AccountClerkHealth,
+    AccountEmergencyFlattenResponse,
     AuditCopySizingLookup,
     EmergencyFlattenRequest,
     HostRunnerActionResponse,
@@ -887,6 +889,26 @@ class RunnerProcessManager:
         reconciliation stays fail-closed (we don't best-guess broker ownership).
         """
         run_dir = self._validate_run_dir(run_id)
+        self._execute_emergency_flatten(run_id=run_id, run_dir=run_dir, account=account)
+        return HostRunnerActionResponse(accepted=True, process=self.process_status(run_id))
+
+    def emergency_flatten_account(self, account: str) -> AccountEmergencyFlattenResponse:
+        """Mint an audit run and flatten a paper account without a surviving bot run."""
+
+        run_id = f"eflat-{uuid.uuid4().hex}"
+        run_dir = self.live_runs_root / run_id
+        run_dir.mkdir(parents=True, exist_ok=False)
+        self._execute_emergency_flatten(run_id=run_id, run_dir=run_dir, account=account)
+        return AccountEmergencyFlattenResponse(
+            accepted=True,
+            account_id=account,
+            audit_run_id=run_id,
+            completed_at_ms=_now_ms(),
+        )
+
+    def _execute_emergency_flatten(self, *, run_id: str, run_dir: Path, account: str) -> None:
+        """Run the canonical one-shot CLI under the per-account exclusion fence."""
+
         # Claim the account so a concurrent flatten for it is rejected rather than
         # run against the same pre-fill position snapshot (double-liquidate). The
         # CLI runs OUTSIDE the lock, so a 120s flatten never blocks the daemon.
@@ -940,7 +962,6 @@ class RunnerProcessManager:
                 )
                 raise HostRunnerError(http_code, f"emergency-flatten failed: {detail}")
             logger.info("emergency-flatten completed for run=%s account=%s", run_id, account)
-            return HostRunnerActionResponse(accepted=True, process=self.process_status(run_id))
         finally:
             with self._flatten_lock:
                 self._flatten_in_flight.discard(account)
@@ -2092,6 +2113,24 @@ def create_app(
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="emergency-flatten requires confirm=true")
         try:
             return await run_in_threadpool(process_manager.emergency_flatten, run_id, request.account)
+        except HostRunnerError as exc:
+            raise HTTPException(exc.status_code, detail=exc.detail) from exc
+
+    @app.post(
+        "/accounts/{account_id}/emergency-flatten",
+        response_model=AccountEmergencyFlattenResponse,
+        dependencies=auth,
+    )
+    async def emergency_flatten_account(
+        account_id: str,
+        request: EmergencyFlattenRequest,
+    ) -> AccountEmergencyFlattenResponse:
+        if not request.confirm:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="emergency-flatten requires confirm=true")
+        if request.account != account_id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="request account does not match path")
+        try:
+            return await run_in_threadpool(process_manager.emergency_flatten_account, account_id)
         except HostRunnerError as exc:
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
 

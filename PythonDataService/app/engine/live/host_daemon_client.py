@@ -228,6 +228,16 @@ async def emergency_flatten_run(base_url: str, run_id: str, payload: dict) -> di
     )
 
 
+async def emergency_flatten_account(base_url: str, account_id: str, payload: dict) -> dict:
+    """POST an account-scoped emergency flatten with the broker timeout."""
+
+    return await _post_action(
+        f"{base_url.rstrip('/')}/accounts/{account_id}/emergency-flatten",
+        payload,
+        timeout=_FLATTEN_TIMEOUT,
+    )
+
+
 async def renew_control_plane_lease(base_url: str) -> dict:
     """POST /control-plane/renew-lease and return HostRunnerHealth as a dict."""
     return await _post_action(f"{base_url.rstrip('/')}/control-plane/renew-lease", {})

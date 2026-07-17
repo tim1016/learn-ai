@@ -27,6 +27,7 @@ describe('AccountDeskRecoveryStore', () => {
     legacyStaleClaimCandidates: vi.fn(),
     retireLegacyStaleClaim: vi.fn(),
     submitOperatorRecoveryFlatten: vi.fn(),
+    emergencyFlattenAccount: vi.fn(),
   };
   const surface = { load: vi.fn(), triage: signal<AccountTriageResponse | null>(null) };
   const events = { load: vi.fn() };
@@ -158,14 +159,19 @@ describe('AccountDeskRecoveryStore', () => {
     expect(surface.load).not.toHaveBeenCalledWith('DU7654321');
   });
 
-  it('fails closed when a future backend confirmation requires a token', async () => {
+  it('requires the exact backend token before confirming a dangerous action', async () => {
     const store = TestBed.inject(AccountDeskRecoveryStore);
+    broker.reconcileAccount.mockResolvedValue(receipt());
     store.load('DU1234567');
     store.requestDeclaredMove(move('account-reconciliation-action', null, 'HALT'));
 
     expect(store.canConfirm()).toBe(false);
-    await expect(store.confirm()).rejects.toThrow('Account Desk confirmations do not support required tokens.');
-    expect(broker.reconcileAccount).not.toHaveBeenCalled();
+    store.setConfirmationToken('WRONG');
+    expect(store.canConfirm()).toBe(false);
+    store.setConfirmationToken('HALT');
+    await store.confirm();
+
+    expect(broker.reconcileAccount).toHaveBeenCalledWith('DU1234567');
   });
 
   it('confirms the exact fresh journal preview, preserves its receipt, and refreshes shared proof', async () => {
@@ -256,6 +262,31 @@ describe('AccountDeskRecoveryStore', () => {
       intent: candidate.intent,
       request_provenance: 'account-desk/recovery-flatten',
     });
+  });
+
+  it('submits an account emergency flatten only after typed confirmation', async () => {
+    const store = TestBed.inject(AccountDeskRecoveryStore);
+    broker.emergencyFlattenAccount.mockResolvedValue({
+      accepted: true,
+      account_id: 'DU1234567',
+      audit_run_id: 'eflat-audit-1',
+      completed_at_ms: 1_780_000_000_000,
+    });
+    store.load('DU1234567');
+    store.requestEmergencyFlatten({
+      title: 'Emergency flatten paper account',
+      body: 'Backend body.',
+      consequence: 'Backend consequence.',
+      confirm_label: 'Emergency flatten account',
+      required_token: 'FLATTEN',
+    });
+
+    expect(store.canConfirm()).toBe(false);
+    store.setConfirmationToken('FLATTEN');
+    await store.confirm();
+
+    expect(broker.emergencyFlattenAccount).toHaveBeenCalledWith('DU1234567');
+    expect(store.success()?.kind).toBe('emergency_flatten');
   });
 });
 

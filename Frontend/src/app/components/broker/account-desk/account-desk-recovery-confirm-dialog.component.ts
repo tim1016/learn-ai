@@ -20,11 +20,12 @@ export class AccountDeskRecoveryConfirmDialogComponent {
   readonly cancelled = output();
   readonly confirmed = output();
   readonly exposureReasonChanged = output<string>();
+  readonly confirmationTokenChanged = output<string>();
   private readonly dialog = viewChild<ElementRef<HTMLDialogElement>>('dialog');
   readonly canConfirm = computed(() => {
     const confirmation = this.confirmation();
     return confirmation !== null &&
-      confirmation.requiredToken === '' &&
+      (confirmation.requiredToken === '' || confirmation.providedToken === confirmation.requiredToken) &&
       (confirmation.command !== 'exposure_override' || confirmation.reason.trim().length > 0);
   });
 
@@ -48,14 +49,16 @@ export class AccountDeskRecoveryConfirmDialogComponent {
   confirm(): void {
     const confirmation = this.confirmation();
     if (confirmation === null || this.busy()) return;
-    if (confirmation.requiredToken !== '') {
-      throw new Error('Account Desk confirmations do not support required tokens.');
-    }
     if (this.canConfirm()) this.confirmed.emit();
   }
 
   updateReason(event: Event): void {
     const input = event.target;
     if (input instanceof HTMLTextAreaElement) this.exposureReasonChanged.emit(input.value);
+  }
+
+  updateToken(event: Event): void {
+    const input = event.target;
+    if (input instanceof HTMLInputElement) this.confirmationTokenChanged.emit(input.value);
   }
 }

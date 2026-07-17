@@ -631,6 +631,76 @@ async def test_reconciliation_service_honors_artifact_root_dependency_override(t
     assert response.json()["receipt_id"] == receipt.receipt_id
 
 
+async def test_account_emergency_flatten_works_without_surviving_bot_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live import host_daemon_client
+    from app.main import app
+
+    async def ensure_clerk(_base_url: str, account_id: str) -> dict:
+        assert account_id == "DU1234567"
+        return {}
+
+    async def flatten(_base_url: str, account_id: str, payload: dict) -> dict:
+        assert account_id == "DU1234567"
+        assert payload == {"account": "DU1234567", "confirm": True}
+        return {
+            "accepted": True,
+            "account_id": account_id,
+            "audit_run_id": "eflat-audit-1",
+            "completed_at_ms": 1_780_000_010_000,
+        }
+
+    monkeypatch.setattr(host_daemon_client, "ensure_account_clerk", ensure_clerk)
+    monkeypatch.setattr(host_daemon_client, "emergency_flatten_account", flatten)
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    app.dependency_overrides[account_reconciliation.get_account_reconciliation_service] = lambda: SimpleNamespace(
+        triage=lambda **_: SimpleNamespace(emergency_flatten_confirmation=object())
+    )
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/accounts/DU1234567/emergency-flatten",
+                json={"account": "DU1234567", "confirm": True},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["audit_run_id"] == "eflat-audit-1"
+    assert any(
+        event.get("event_type") == "account_emergency_flatten_completed"
+        for event in read_account_events(tmp_path, "DU1234567")
+    )
+
+
+async def test_account_emergency_flatten_fails_closed_without_declared_confirmation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live import host_daemon_client
+    from app.main import app
+
+    flatten = pytest.fail
+    monkeypatch.setattr(host_daemon_client, "emergency_flatten_account", flatten)
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    app.dependency_overrides[account_reconciliation.get_account_reconciliation_service] = lambda: SimpleNamespace(
+        triage=lambda **_: SimpleNamespace(emergency_flatten_confirmation=None)
+    )
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                "/api/accounts/DU1234567/emergency-flatten",
+                json={"account": "DU1234567", "confirm": True},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "ACCOUNT_EMERGENCY_FLATTEN_NOT_DECLARED"
+
+
 async def test_triage_contract_returns_condition_rows_for_active_freeze(tmp_path: Path) -> None:
     from app.main import app
 

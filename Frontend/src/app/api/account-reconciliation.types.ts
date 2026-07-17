@@ -159,9 +159,17 @@ export interface AccountTriageResponse {
   conditions: AccountConditionRow[];
   freeze_banner: AccountFreezeBanner | null;
   clear_freeze_actionable: boolean;
+  emergency_flatten_confirmation: OperatorConfirmationCopy | null;
   affected_bots: AccountTriageBotRef[];
   recovery_flatten_candidates: AccountRecoveryFlattenCandidate[];
   operator_blockers: OperatorBlocker[];
+}
+
+export interface AccountEmergencyFlattenResponse {
+  accepted: boolean;
+  account_id: string;
+  audit_run_id: string;
+  completed_at_ms: number;
 }
 
 export interface JournalCurePreview {

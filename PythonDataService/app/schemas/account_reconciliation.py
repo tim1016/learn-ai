@@ -224,6 +224,7 @@ class AccountTriageResponse(BaseModel):
     conditions: list[AccountConditionRow] = Field(default_factory=list)
     freeze_banner: AccountFreezeBanner | None = None
     clear_freeze_actionable: bool = False
+    emergency_flatten_confirmation: OperatorConfirmationCopy | None = None
     affected_bots: list[AccountTriageBotRef] = Field(default_factory=list)
     recovery_flatten_candidates: list[AccountRecoveryFlattenCandidate] = Field(default_factory=list)
     operator_blockers: list[OperatorBlocker] = Field(default_factory=list)

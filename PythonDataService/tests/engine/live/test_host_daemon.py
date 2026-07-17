@@ -818,6 +818,35 @@ def test_emergency_flatten_runs_cli_and_reports_success(
     assert str(run_dir.resolve()) in cmd
 
 
+def test_account_emergency_flatten_mints_audit_run_without_existing_bot(
+    daemon_context: tuple[RunnerProcessManager, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.engine.live import host_daemon as hd
+
+    manager, _ = daemon_context
+    captured: dict[str, list[str]] = {}
+
+    class _Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(command: list[str], **_kwargs: object) -> _Result:
+        captured["command"] = command
+        return _Result()
+
+    monkeypatch.setattr(hd.subprocess, "run", fake_run)
+
+    response = manager.emergency_flatten_account("DU123")
+
+    assert response.accepted is True
+    assert response.account_id == "DU123"
+    assert response.audit_run_id.startswith("eflat-")
+    audit_dir = manager.live_runs_root / response.audit_run_id
+    assert audit_dir.is_dir()
+    assert str(audit_dir) in captured["command"]
+
+
 def test_emergency_flatten_account_mismatch_maps_to_http_400(
     daemon_context: tuple[RunnerProcessManager, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:

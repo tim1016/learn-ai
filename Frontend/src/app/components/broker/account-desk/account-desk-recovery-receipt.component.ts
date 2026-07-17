@@ -107,5 +107,14 @@ function recoveryReceiptView(success: AccountDeskRecoverySuccess): RecoveryRecei
           field("Recorded", "", "text", success.receipt.recovery_flatten.broker_acked.recorded_at_ms),
         ],
       };
+    case "emergency_flatten":
+      return {
+        message: "Emergency paper account flatten completed.",
+        fields: [
+          field("Account", success.receipt.account_id, "code"),
+          field("Audit run", success.receipt.audit_run_id, "code"),
+          field("Completed", "", "text", success.receipt.completed_at_ms),
+        ],
+      };
   }
 }

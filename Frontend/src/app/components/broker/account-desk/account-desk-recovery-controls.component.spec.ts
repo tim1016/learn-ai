@@ -56,6 +56,44 @@ describe('AccountDeskRecoveryControlsComponent', () => {
     expect(screen.getByText(formatTimestampDisplay(1_780_000_000_000, { mode: 'local' }))).toBeTruthy();
   });
 
+  it('shows the backend-declared emergency flatten action', async () => {
+    const recovery = recoveryStore();
+    const confirmation = {
+      title: 'Emergency flatten paper account', body: 'Backend body.', consequence: 'Backend consequence.',
+      confirm_label: 'Emergency flatten account', required_token: 'FLATTEN',
+    };
+    await render(AccountDeskRecoveryControlsComponent, {
+      providers: [
+        { provide: AccountDeskSurfaceStore, useValue: { accountId: signal('DU1234567'), triage: signal(makeCleanAccountTriage({ emergencyFlattenConfirmation: confirmation })), loading: signal(false), error: signal(null), retry: vi.fn() } },
+        { provide: AccountDeskGuidanceStore, useValue: { blockersFor: vi.fn().mockReturnValue([]) } },
+        { provide: AccountDeskRecoveryStore, useValue: recovery },
+        { provide: Router, useValue: { navigate: vi.fn() } },
+      ],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Emergency flatten' }));
+    expect(recovery.requestEmergencyFlatten).toHaveBeenCalledWith(confirmation);
+    expect(screen.queryByText('No account recovery action is currently declared safe.')).toBeNull();
+  });
+
+  it('fails closed when an older backend omits emergency flatten confirmation', async () => {
+    const recovery = recoveryStore();
+    const olderTriageContract = makeCleanAccountTriage() as Partial<ReturnType<typeof makeCleanAccountTriage>>;
+    delete olderTriageContract.emergency_flatten_confirmation;
+
+    await render(AccountDeskRecoveryControlsComponent, {
+      providers: [
+        { provide: AccountDeskSurfaceStore, useValue: { accountId: signal('DU1234567'), triage: signal(olderTriageContract), loading: signal(false), error: signal(null), retry: vi.fn() } },
+        { provide: AccountDeskGuidanceStore, useValue: { blockersFor: vi.fn().mockReturnValue([]) } },
+        { provide: AccountDeskRecoveryStore, useValue: recovery },
+        { provide: Router, useValue: { navigate: vi.fn() } },
+      ],
+    });
+
+    expect(screen.queryByRole('button', { name: 'Emergency flatten' })).toBeNull();
+    expect(await screen.findByText('No account recovery action is currently declared safe.')).toBeTruthy();
+  });
+
   it('renders a returned journal receipt with its opaque evidence token unchanged', async () => {
     const recovery = recoveryStore({
       success: signal({
@@ -158,10 +196,12 @@ function recoveryStore(overrides: Record<string, unknown> = {}) {
     requestAutomationChange: vi.fn(),
     requestJournalCure: vi.fn(),
     requestLegacyRetirement: vi.fn(),
+    requestEmergencyFlatten: vi.fn(),
     refreshLegacyCandidates: vi.fn(),
     cancelConfirmation: vi.fn(),
     confirm: vi.fn(),
     setExposureOverrideReason: vi.fn(),
+    setConfirmationToken: vi.fn(),
     confirmation: signal(null),
     busy: signal(false),
     errorMessage: signal<string | null>(null),

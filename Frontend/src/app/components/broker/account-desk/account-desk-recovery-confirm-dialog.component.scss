@@ -78,6 +78,27 @@ dd {
 .error {
   color: var(--bear);
 }
+.confirmation-token {
+  display: grid;
+  gap: 0.45rem;
+}
+.confirmation-token label {
+  font-weight: 700;
+}
+.confirmation-token input {
+  min-height: 2.5rem;
+  border: 1px solid var(--border-light);
+  border-radius: 0.45rem;
+  padding: 0.5rem 0.7rem;
+  color: var(--text-primary);
+  background: var(--bg-sunken);
+  font: inherit;
+}
+.confirmation-token input:focus-visible {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 footer {
   display: flex;
   flex-wrap: wrap;

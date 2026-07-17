@@ -47,4 +47,11 @@ export class AccountDeskRecoveryControlsComponent {
     const policy = this.surface.triage()?.reconciliation_automation_policy;
     if (policy !== undefined) this.recovery.requestAutomationChange(policy);
   }
+
+  requestEmergencyFlatten(): void {
+    const confirmation = this.surface.triage()?.emergency_flatten_confirmation;
+    if (confirmation !== undefined && confirmation !== null) {
+      this.recovery.requestEmergencyFlatten(confirmation);
+    }
+  }
 }

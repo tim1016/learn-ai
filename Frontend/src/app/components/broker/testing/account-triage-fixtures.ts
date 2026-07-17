@@ -24,6 +24,7 @@ interface AccountTriageFixtureOptions {
   conditions?: AccountConditionRow[];
   freezeBanner?: AccountFreezeBanner | null;
   clearFreezeActionable?: boolean;
+  emergencyFlattenConfirmation?: AccountTriageResponse['emergency_flatten_confirmation'];
   affectedBots?: AccountTriageBotRef[];
   recoveryFlattenCandidates?: AccountRecoveryFlattenCandidate[];
 }
@@ -99,6 +100,7 @@ export function makeCleanAccountTriage(
     conditions: options.conditions ?? [],
     freeze_banner: options.freezeBanner ?? null,
     clear_freeze_actionable: options.clearFreezeActionable ?? false,
+    emergency_flatten_confirmation: options.emergencyFlattenConfirmation ?? null,
     affected_bots: options.affectedBots ?? [],
     recovery_flatten_candidates: options.recoveryFlattenCandidates ?? [],
     operator_blockers: [],

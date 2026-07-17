@@ -17,12 +17,16 @@ header p,
 dt {
   color: var(--text-secondary);
 }
-.automation {
+.automation,
+.emergency {
   display: grid;
   gap: 0.5rem;
   border: 1px solid var(--border-light);
   border-radius: 0.5rem;
   padding: 0.75rem;
+}
+.emergency {
+  border-color: color-mix(in srgb, var(--bear) 45%, var(--border-light));
 }
 dl {
   display: grid;

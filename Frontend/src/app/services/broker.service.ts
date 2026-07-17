@@ -4,6 +4,7 @@ import { firstValueFrom } from 'rxjs';
 import type {
   AccountAcceptExposureOverrideRequest,
   AccountAcceptExposureOverrideResponse,
+  AccountEmergencyFlattenResponse,
   AccountClearFreezeRequest,
   AccountClearFreezeResponse,
   JournalCurePreview,
@@ -250,6 +251,15 @@ export class BrokerService {
       this.http.post<OperatorRecoveryFlattenResponse>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/operator-recovery-flatten`,
         payload,
+      ),
+    );
+  }
+
+  emergencyFlattenAccount(accountId: string): Promise<AccountEmergencyFlattenResponse> {
+    return firstValueFrom(
+      this.http.post<AccountEmergencyFlattenResponse>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/emergency-flatten`,
+        { account: accountId, confirm: true },
       ),
     );
   }

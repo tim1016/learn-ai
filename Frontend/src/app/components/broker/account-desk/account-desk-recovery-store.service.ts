@@ -3,6 +3,7 @@ import { Injectable, computed, inject, signal } from '@angular/core';
 import type {
   AccountAcceptExposureOverrideResponse,
   AccountClearFreezeResponse,
+  AccountEmergencyFlattenResponse,
   AccountRecoveryFlattenCandidate,
   AccountReconciliationAutomationPolicy,
   AccountReconciliationReceipt,
@@ -27,7 +28,8 @@ export type AccountDeskRecoveryCommand =
   | 'exposure_override'
   | 'journal_cure'
   | 'legacy_retire'
-  | 'recovery_flatten';
+  | 'recovery_flatten'
+  | 'emergency_flatten';
 
 export interface AccountDeskRecoveryConfirmation {
   readonly command: AccountDeskRecoveryCommand;
@@ -36,8 +38,8 @@ export interface AccountDeskRecoveryConfirmation {
   readonly body: string;
   readonly consequence: string;
   readonly confirmLabel: string;
-  /** Account Desk deliberately supports only untokenized confirmations. */
   readonly requiredToken: string;
+  readonly providedToken: string;
   readonly desiredAutomationEnabled: boolean | null;
   readonly reason: string;
   readonly journalCure: { readonly preview: JournalCurePreview; readonly request: JournalCureRequest } | null;
@@ -52,7 +54,8 @@ export type AccountDeskRecoverySuccess =
   | { readonly kind: 'exposure_override'; readonly receipt: AccountAcceptExposureOverrideResponse }
   | { readonly kind: 'journal_cure'; readonly receipt: JournalCureReceipt }
   | { readonly kind: 'legacy_retire'; readonly receipt: LegacyStaleClaimRetirementReceipt }
-  | { readonly kind: 'recovery_flatten'; readonly receipt: OperatorRecoveryFlattenResponse };
+  | { readonly kind: 'recovery_flatten'; readonly receipt: OperatorRecoveryFlattenResponse }
+  | { readonly kind: 'emergency_flatten'; readonly receipt: AccountEmergencyFlattenResponse };
 
 /**
  * Executes only exact account-desk requests declared by backend projections.
@@ -84,7 +87,7 @@ export class AccountDeskRecoveryStore {
   readonly canConfirm = computed(() => {
     const confirmation = this.confirmationState();
     return confirmation !== null &&
-      confirmation.requiredToken === '' &&
+      (confirmation.requiredToken === '' || confirmation.providedToken === confirmation.requiredToken) &&
       (confirmation.command !== 'exposure_override' || confirmation.reason.trim().length > 0);
   });
 
@@ -139,6 +142,7 @@ export class AccountDeskRecoveryStore {
       consequence: 'The server will record the policy change in the account event journal.',
       confirmLabel: desiredEnabled ? 'Enable auto-reconcile' : 'Disable auto-reconcile',
       requiredToken: '',
+      providedToken: '',
       desiredAutomationEnabled: desiredEnabled,
       reason: '',
       journalCure: null,
@@ -193,6 +197,12 @@ export class AccountDeskRecoveryStore {
     this.openConfirmation(accountId, 'legacy_retire', candidate.confirmation, { legacyCandidate: candidate });
   }
 
+  requestEmergencyFlatten(confirmation: OperatorConfirmationCopy): void {
+    const accountId = this.accountKey();
+    if (this.busyState() || accountId === null || confirmation.required_token === '') return;
+    this.openConfirmation(accountId, 'emergency_flatten', confirmation);
+  }
+
   refreshLegacyCandidates(): void {
     const accountId = this.accountKey();
     if (accountId !== null && !this.busyState()) void this.loadLegacyCandidates(accountId, this.requestGeneration);
@@ -202,6 +212,12 @@ export class AccountDeskRecoveryStore {
     const confirmation = this.confirmationState();
     if (confirmation?.command !== 'exposure_override') return;
     this.confirmationState.set({ ...confirmation, reason });
+  }
+
+  setConfirmationToken(token: string): void {
+    const confirmation = this.confirmationState();
+    if (confirmation === null || confirmation.requiredToken === '') return;
+    this.confirmationState.set({ ...confirmation, providedToken: token });
   }
 
   cancelConfirmation(): void {
@@ -214,9 +230,6 @@ export class AccountDeskRecoveryStore {
     const confirmation = this.confirmationState();
     const generation = this.requestGeneration;
     if (confirmation === null || this.busyState()) return;
-    if (confirmation.requiredToken !== '') {
-      throw new Error('Account Desk confirmations do not support required tokens.');
-    }
     if (!this.canConfirm()) return;
     this.busyState.set(true);
     this.errorMessageState.set(null);
@@ -267,6 +280,7 @@ export class AccountDeskRecoveryStore {
       consequence: confirmation.consequence,
       confirmLabel: confirmation.confirm_label,
       requiredToken: confirmation.required_token,
+      providedToken: '',
       desiredAutomationEnabled: null,
       reason: '',
       journalCure: details.journalCure ?? null,
@@ -328,6 +342,11 @@ export class AccountDeskRecoveryStore {
             intent: confirmation.recoveryFlatten.intent,
             request_provenance: 'account-desk/recovery-flatten',
           }),
+        };
+      case 'emergency_flatten':
+        return {
+          kind: 'emergency_flatten',
+          receipt: await this.broker.emergencyFlattenAccount(confirmation.accountId),
         };
     }
   }
