@@ -6,10 +6,10 @@
   tabindex="-1"
 >
   <header>
-    <h2>Operations proof</h2>
+    <h2>Current account checks</h2>
     <p>
-      Current reconciliation evidence and the server-declared action for this
-      account.
+      Review why this account can or cannot be operated, then use the
+      server-declared recovery action.
     </p>
   </header>
   @if (store.loading() && !store.triage()) {
@@ -25,24 +25,24 @@
     <div class="operations-proof__grid">
       <p-panel aria-label="Reconciliation evidence">
         <ng-template #header
-          ><h3>Reconciliation action &amp; evidence</h3></ng-template
+          ><h3>Reconciliation status</h3></ng-template
         >
         @if (triage.account_reconciliation_receipt; as receipt) {
           <dl>
             <div>
-              <dt>State</dt>
+              <dt>Reconciliation</dt>
               <dd>{{ receipt.state | receiptLabel }}</dd>
             </div>
             <div>
-              <dt>Final gate</dt>
+              <dt>Can reconcile now</dt>
               <dd>{{ receipt.final_gate_result.status | receiptLabel }}</dd>
             </div>
             <div>
-              <dt>Exposure</dt>
+              <dt>Exposure status</dt>
               <dd>{{ receipt.exposure_resolution | receiptLabel }}</dd>
             </div>
             <div>
-              <dt>Recorded</dt>
+              <dt>Last checked</dt>
               <dd>
                 <app-timestamp-display
                   [value]="receipt.generated_at_ms"
@@ -73,19 +73,20 @@
           ariaLabel="Reconciliation guidance"
         />
       </p-panel>
-      <p-panel aria-label="Observation lease evidence">
-        <ng-template #header><h3>Observation lease evidence</h3></ng-template>
+      <p-panel aria-label="Account verification">
+        <ng-template #header><h3>Account verification</h3></ng-template>
+        <p class="panel-intro">Confirms whether the broker snapshot is current enough to use.</p>
         <dl>
           <div>
-            <dt>State</dt>
+            <dt>Verification status</dt>
             <dd>{{ triage.account_observation.state | receiptLabel }}</dd>
           </div>
           <div>
-            <dt>Reason</dt>
+            <dt>Why</dt>
             <dd>{{ triage.account_observation.reason_line }}</dd>
           </div>
           <div>
-            <dt>Observed</dt>
+            <dt>Checked</dt>
             <dd>
               <app-timestamp-display
                 [value]="triage.account_observation.observed_at_ms"
@@ -94,7 +95,7 @@
             </dd>
           </div>
           <div>
-            <dt>Valid until</dt>
+            <dt>Valid through</dt>
             <dd>
               <app-timestamp-display
                 [value]="triage.account_observation.valid_until_ms"
@@ -106,11 +107,8 @@
         @if (triage.account_observation.history.length === 0) {
           <p class="state">No prior observation events are available.</p>
         } @else {
-          <ol aria-label="Observation history">
-            @for (
-              event of triage.account_observation.history;
-              track event.recorded_at_ms + event.reason_line
-            ) {
+          <ol aria-label="Recent verification history">
+            @for (event of recentVerificationHistory(); track event.recorded_at_ms + event.reason_line) {
               <li>
                 {{ event.state | receiptLabel }} ·
                 <app-timestamp-display
@@ -121,6 +119,23 @@
               </li>
             }
           </ol>
+          @if (earlierVerificationHistory().length > 0) {
+            <details class="verification-history">
+              <summary>Show {{ earlierVerificationHistory().length }} earlier verification update{{ earlierVerificationHistory().length === 1 ? '' : 's' }}</summary>
+              <ol aria-label="Earlier verification history">
+                @for (event of earlierVerificationHistory(); track event.recorded_at_ms + event.reason_line) {
+                  <li>
+                    {{ event.state | receiptLabel }} ·
+                    <app-timestamp-display
+                      [value]="event.recorded_at_ms"
+                      mode="local"
+                    />
+                    · {{ event.reason_line }}
+                  </li>
+                }
+              </ol>
+            </details>
+          }
         }
         <app-account-desk-guidance
           anchor="lease"

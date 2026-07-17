@@ -1,31 +1,31 @@
 <p-panel
   class="fleet-evidence"
-  aria-label="Fleet contamination evidence"
+  aria-label="Cross-bot position check"
   aria-live="polite"
 >
-  <ng-template #header><h2>Fleet contamination</h2></ng-template>
-  <p>Server-attested fleet evidence for this account.</p>
+  <ng-template #header><h2>Cross-bot position check</h2></ng-template>
+  <p>Checks whether another bot is holding a conflicting position in this account.</p>
   @if (store.loading() && !store.hasLastGood()) {
-    <p class="state">Loading fleet evidence…</p>
+    <p class="state">Checking other bot positions…</p>
   } @else if (store.errorMessage() && !store.hasLastGood()) {
     <div class="state state-error" role="alert">
-      <p>{{ store.errorMessage() }}</p>
+      <p>We could not check for conflicting bot positions. Trading starts remain unavailable until this check succeeds.</p>
       <button pButton type="button" severity="secondary" (click)="retry()">
-        <span class="p-button-label">Retry</span>
+        <span class="p-button-label">Check again</span>
       </button>
     </div>
   } @else if (store.summary(); as summary) {
     <dl>
       <div>
-        <dt>Account identity</dt>
+        <dt>Account match</dt>
         <dd>{{ summary.account_identity | receiptLabel }}</dd>
       </div>
       <div>
-        <dt>Contamination</dt>
+        <dt>Position conflict</dt>
         <dd>{{ summary.contamination.verdict | receiptLabel }}</dd>
       </div>
       <div>
-        <dt>Start policy</dt>
+        <dt>Trading start rule</dt>
         <dd>
           {{
             summary.contamination.policy_blocks_starts
@@ -37,11 +37,11 @@
     </dl>
     <p>{{ summary.contamination.summary }}</p>
     @if (summary.contamination.net_positions === null) {
-      <p class="state">No fleet net-position evidence is available.</p>
+      <p class="state">No cross-bot position report is available yet.</p>
     } @else if (netPositionRows().length === 0) {
-      <p class="state">No fleet net positions are reported.</p>
+      <p class="state">No other bot positions are reported.</p>
     } @else {
-      <ul aria-label="Fleet net positions">
+      <ul aria-label="Other bot positions">
         @for (row of netPositionRows(); track row[0]) {
           <li>
             <code>{{ row[0] }}</code
@@ -51,13 +51,13 @@
       </ul>
     }
   } @else {
-    <p class="state">No fleet evidence is available for this account.</p>
+    <p class="state">No cross-bot position check is available for this account.</p>
   }
   @if (store.showingStaleLastGood()) {
     <p class="state state-stale">
-      Showing last available fleet evidence from
+      Showing the last successful position check from
       <app-timestamp-display [value]="store.lastGoodAtMs()" mode="local" />.
-      Refresh is unavailable.
+      A fresh check is unavailable.
     </p>
   }
 </p-panel>

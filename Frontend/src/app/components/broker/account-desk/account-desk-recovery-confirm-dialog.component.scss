@@ -1,12 +1,24 @@
 .account-recovery-confirm {
   width: min(34rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow-y: auto;
+  position: fixed;
+  inset: auto;
+  top: 50%;
+  left: 50%;
+  z-index: 1000;
+  margin: 0;
+  padding: 1.5rem;
   border: 1px solid var(--border-light);
-  border-radius: 0.75rem;
+  border-radius: 0.9rem;
   color: var(--text-primary);
   background: var(--bg-elevated);
+  box-shadow: var(--shadow-pop);
+  transform: translate(-50%, -50%);
 }
 .account-recovery-confirm::backdrop {
-  background: rgb(0 0 0 / 45%);
+  background: rgb(0 0 0 / 65%);
+  backdrop-filter: blur(2px);
 }
 header,
 h2,
@@ -15,6 +27,12 @@ dl {
   margin: 0;
 }
 header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+header > div {
   display: grid;
   gap: 0.25rem;
 }
@@ -25,7 +43,27 @@ dt {
 }
 .account-recovery-confirm[open] {
   display: grid;
-  gap: 0.8rem;
+  gap: 1rem;
+}
+.dialog-close {
+  display: grid;
+  width: 2.25rem;
+  height: 2.25rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--border-light);
+  border-radius: 0.45rem;
+  color: var(--text-primary);
+  background: transparent;
+  font-size: 1.3rem;
+  line-height: 1;
+}
+.dialog-close:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.dialog-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 dl {
   display: grid;
@@ -34,13 +72,37 @@ dl {
 dd {
   margin: 0.15rem 0 0;
 }
-label {
+.exposure-reason {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.85rem;
+  border: 1px solid var(--border-light);
+  border-radius: 0.5rem;
+  background: var(--bg-sunken);
+}
+.exposure-reason label {
   font-weight: 600;
 }
-textarea {
+.exposure-reason > p {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+.exposure-reason textarea {
   width: 100%;
+  min-height: 6rem;
   box-sizing: border-box;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border-light);
+  border-radius: 0.35rem;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
   font: inherit;
+  resize: vertical;
+}
+.exposure-reason textarea:focus {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .consequence {
   font-weight: 600;
@@ -49,11 +111,40 @@ textarea {
 .error {
   color: var(--bear);
 }
+.exposure-reason .validation {
+  color: var(--bear);
+  font-weight: 600;
+}
 footer {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
-  gap: 0.5rem;
+  gap: 0.75rem;
+  padding-top: 0.25rem;
+}
+footer button {
+  min-height: 2.5rem;
+  padding: 0.55rem 0.9rem;
+  border-radius: 0.45rem;
+  font: inherit;
+  font-weight: 700;
+}
+.secondary {
+  border: 1px solid var(--border-light);
+  color: var(--text-primary);
+  background: transparent;
 }
 .primary {
-  font-weight: 700;
+  border: 1px solid var(--accent);
+  color: var(--text-on-accent);
+  background: var(--accent);
+}
+.primary--danger {
+  border-color: var(--bear);
+  background: var(--bear);
+}
+@media (max-width: 30rem) {
+  footer > * {
+    flex: 1 1 100%;
+  }
 }

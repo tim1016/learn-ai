@@ -16,7 +16,8 @@ header {
   gap: 0.2rem;
 }
 header p,
-dt {
+dt,
+.panel-intro {
   color: var(--text-secondary);
 }
 .operations-proof__grid {
@@ -36,6 +37,19 @@ ul {
   display: grid;
   gap: 0.35rem;
   padding-left: 1.25rem;
+}
+.panel-intro {
+  margin-bottom: 0.75rem;
+}
+.verification-history {
+  display: grid;
+  gap: 0.5rem;
+}
+.verification-history summary {
+  width: fit-content;
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 600;
 }
 .state-error {
   color: var(--bear);

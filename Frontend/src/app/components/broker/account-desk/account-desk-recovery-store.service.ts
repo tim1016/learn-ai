@@ -226,7 +226,7 @@ export class AccountDeskRecoveryStore {
     } catch (error) {
       if (this.isCurrent(confirmation.accountId, generation)) {
         this.errorMessageState.set(
-          extractServerMessage(error, 'Account recovery was not accepted. Review the current proof and try again.'),
+          recoveryErrorMessage(error, 'Account recovery was not accepted. Review the current proof and try again.'),
         );
         this.busyState.set(false);
       }
@@ -344,7 +344,7 @@ export class AccountDeskRecoveryStore {
       if (this.isCurrent(accountId, generation)) {
         this.legacyCandidatesState.set([]);
         this.legacyErrorMessageState.set(
-          extractServerMessage(error, 'Account recovery was not accepted. Review the current proof and try again.'),
+          recoveryErrorMessage(error, 'Account recovery was not accepted. Review the current proof and try again.'),
         );
       }
     } finally {
@@ -370,4 +370,11 @@ function recoveryCommandForAnchor(anchor: string): Exclude<AccountDeskRecoveryCo
     default:
       return null;
   }
+}
+
+function recoveryErrorMessage(error: unknown, fallback: string): string {
+  const message = extractServerMessage(error, fallback);
+  return /x-data-plane-control-secret/i.test(message)
+    ? 'The secure control connection is unavailable. Ask a platform operator to restore it, then try again.'
+    : message;
 }

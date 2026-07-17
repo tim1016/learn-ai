@@ -87,9 +87,11 @@ export class AccountDeskPageComponent {
   readonly error = this.store.error;
   readonly showingStaleLastGood = this.store.showingStaleLastGood;
   readonly headlineMetrics = this.holdings.headlineMetrics;
-  readonly displayAccountId = computed(
-    () => this.triage()?.account_id ?? this.store.accountId(),
-  );
+  readonly displayAccountId = this.store.accountId;
+  readonly pageTitle = computed(() => {
+    const accountId = this.store.accountId();
+    return accountId === null ? 'Account desk' : `Account desk · ${accountId}`;
+  });
   readonly freshnessCountdown = computed(() => {
     const validUntilMs = this.triage()?.account_observation.valid_until_ms;
     return validUntilMs === null || validUntilMs === undefined
