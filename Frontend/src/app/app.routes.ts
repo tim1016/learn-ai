@@ -278,6 +278,13 @@ export const routes: Routes = [
       ),
   },
   {
+    path: "broker/bot-manual",
+    loadComponent: () =>
+      import(
+        "./components/broker/bot-operator-manual/bot-operator-manual-page.component"
+      ).then((m) => m.BotOperatorManualPageComponent),
+  },
+  {
     path: "broker/desert-oasis",
     loadComponent: () =>
       import(

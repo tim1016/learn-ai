@@ -1,0 +1,89 @@
+<article class="operator-manual" aria-labelledby="manual-title">
+  <app-operator-manual-hero />
+
+  <section class="quick-section" aria-labelledby="quick-title">
+    <div class="section-heading">
+      <p class="section-kicker">I need to…</p>
+      <h2 id="quick-title">Do the next safe thing</h2>
+      <p>Open only the procedure you need. Each one ends with a verification step.</p>
+    </div>
+    <app-operator-quick-procedures />
+  </section>
+
+  <aside class="watchlist" aria-labelledby="watchlist-title">
+    <div class="watchlist-mark" aria-hidden="true">!</div>
+    <div class="watchlist-copy">
+      <p class="section-kicker">Before you act</p>
+      <h2 id="watchlist-title">Three defaults worth remembering</h2>
+    </div>
+    <ul>
+      <li><strong>Observe-only is the default.</strong> Confirm posture before expecting paper orders.</li>
+      <li><strong>Starts are rate-limited.</strong> Use no more than two individual starts per five minutes.</li>
+      <li><strong>Graceful stop preserves tomorrow.</strong> A crash sends the bot to sick bay.</li>
+    </ul>
+  </aside>
+
+  <section class="chapter-section" aria-labelledby="chapter-title">
+    <div class="section-heading">
+      <p class="section-kicker">Manual map</p>
+      <h2 id="chapter-title">Go deeper by concern</h2>
+      <p>Each link lands on the corresponding source text, rendered below from the canonical manual.</p>
+    </div>
+    <div class="chapter-grid">
+      @for (chapter of chapters; track chapter.anchor) {
+        <a class="chapter-card" [routerLink]="['/broker/bot-manual']" [fragment]="chapter.anchor">
+          <span class="chapter-range mono">{{ chapter.range }}</span>
+          <i [class]="chapter.icon" aria-hidden="true"></i>
+          <strong>{{ chapter.title }}</strong>
+          <span>{{ chapter.description }}</span>
+          <span class="chapter-action">Jump to chapter <i class="pi pi-arrow-down" aria-hidden="true"></i></span>
+        </a>
+      }
+    </div>
+  </section>
+
+  <section id="manual-chapters" class="manual-chapters" aria-labelledby="manual-chapters-title">
+    <div class="section-heading">
+      <p class="section-kicker">Canonical text</p>
+      <h2 id="manual-chapters-title">The operator manual</h2>
+      <p>Read the relevant chapter here; the unabridged source remains available below for audit.</p>
+    </div>
+    @if (manual.isLoading()) {
+      <div class="manual-loading" aria-live="polite">Loading the canonical manual…</div>
+    } @else if (manual.error(); as error) {
+      <app-section-error
+        [error]="error"
+        contextWhat="The canonical operator manual could not be loaded."
+        (retry)="manual.reload()"
+      />
+    } @else if (manual.value(); as document) {
+      <app-document-article
+        [document]="document"
+        route="/broker/bot-manual"
+        [fragment]="manualFragment()"
+      />
+    }
+  </section>
+
+  <details class="full-manual" [open]="manualOpen()" (toggle)="setManualOpen($event)">
+    <summary>
+      <span class="summary-index mono">SOURCE .MD</span>
+      <span class="summary-copy">
+        <strong>Full source Markdown</strong>
+        <span>The complete unfiltered operator manual, including its audience and maintenance notes.</span>
+      </span>
+      <span class="summary-action">{{ manualOpen() ? 'Collapse' : 'Read source Markdown' }}</span>
+    </summary>
+    @if (manualOpen()) {
+      <div class="manual-toolbar">
+        <span>Code-grounded reference · updated 2026-07-17</span>
+        <a [href]="manualSource" target="_blank" rel="noopener">
+          Open .md source <i class="pi pi-external-link" aria-hidden="true"></i>
+        </a>
+      </div>
+      <div class="manual-document">
+        <app-markdown-viewer [src]="manualSource" />
+      </div>
+    }
+  </details>
+</article>

@@ -1,0 +1,31 @@
+<article #article class="document-article" aria-label="Canonical operator manual">
+  <aside class="document-sidebar">
+    <app-document-toc
+      [sections]="document().sections"
+      [route]="route()"
+      [activeSection]="activeSection()"
+    />
+  </aside>
+
+  <div class="document-content">
+    @if (document().title; as title) {
+      <p class="document-source-title">{{ title }}</p>
+    }
+
+    @if (document().preamble.length) {
+      <div class="document-preamble">
+        @for (block of document().preamble; track block.id) {
+          @if (block.kind === 'rich-text') {
+            <div [innerHTML]="block.html"></div>
+          } @else if (block.kind === 'callout') {
+            <aside class="preamble-callout" role="note" [innerHTML]="block.html"></aside>
+          }
+        }
+      </div>
+    }
+
+    @for (section of document().sections; track section.id) {
+      <app-document-section [section]="section" [route]="route()" />
+    }
+  </div>
+</article>

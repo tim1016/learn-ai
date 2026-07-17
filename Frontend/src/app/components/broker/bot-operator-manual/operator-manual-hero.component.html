@@ -1,0 +1,63 @@
+<header class="manual-hero">
+  <div class="hero-copy">
+    <div class="hero-meta">
+      <span class="live-dot" aria-hidden="true"></span>
+      <span>Paper-trading only</span>
+      <span class="meta-divider" aria-hidden="true"></span>
+      <span>Code-grounded</span>
+    </div>
+    <p class="eyebrow">Bot control field guide</p>
+    <h1 id="manual-title">Operate the bot.<br /><span>Protect the account.</span></h1>
+    <p class="hero-lede">
+      Start, stop, recover, and scale the fleet without confusing connection,
+      account hygiene, and bot lifecycle.
+    </p>
+    <div class="hero-actions">
+      <a class="action action-primary" routerLink="/broker/bots">
+        Open bot fleet <i class="pi pi-arrow-right" aria-hidden="true"></i>
+      </a>
+      <a class="action action-secondary" [routerLink]="['/broker/bot-manual']" fragment="manual-chapters">Explore the manual</a>
+    </div>
+  </div>
+
+  <div class="plane-console" aria-label="The three operating planes">
+    <div class="console-topline">
+      <span class="mono">PAPER-ONLY CONTROL</span>
+      <span class="console-state"><span aria-hidden="true"></span> broker required</span>
+    </div>
+    <div class="plane-map" aria-hidden="true">
+      <div class="plane plane-connection">
+        <span class="plane-code mono">01</span>
+        <span class="plane-name">Connection</span>
+        <span class="plane-detail">daemon · process · socket</span>
+      </div>
+      <div class="plane plane-hygiene">
+        <span class="plane-code mono">02</span>
+        <span class="plane-name">Hygiene</span>
+        <span class="plane-detail">clerk · truth · journal</span>
+      </div>
+      <div class="plane plane-lifecycle">
+        <span class="plane-code mono">03</span>
+        <span class="plane-name">Lifecycle</span>
+        <span class="plane-detail">roster · duty · recovery</span>
+      </div>
+      <div class="plane-result">
+        <i class="pi pi-lock"></i>
+        <span><strong>Safe action</strong> begins in the right plane.</span>
+      </div>
+    </div>
+  </div>
+
+  <ol class="control-loop" aria-label="Safe operating loop">
+    @for (stage of controlLoop; track stage.number) {
+      <li>
+        <span class="loop-number mono">{{ stage.number }}</span>
+        <i [class]="stage.icon" aria-hidden="true"></i>
+        <span class="loop-copy">
+          <strong>{{ stage.label }}</strong>
+          <span>{{ stage.instruction }}</span>
+        </span>
+      </li>
+    }
+  </ol>
+</header>

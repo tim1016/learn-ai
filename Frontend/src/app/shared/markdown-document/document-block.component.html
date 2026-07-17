@@ -1,0 +1,86 @@
+@let currentBlock = block();
+
+@switch (currentBlock.kind) {
+  @case ('rich-text') {
+    <div class="rich-text" [innerHTML]="currentBlock.html"></div>
+  }
+  @case ('callout') {
+    <aside class="document-callout" role="note">
+      <span class="callout-icon" aria-hidden="true">!</span>
+      <div [innerHTML]="currentBlock.html"></div>
+    </aside>
+  }
+  @case ('subheading') {
+    <div class="document-subheading" [id]="currentBlock.id">
+      @if (currentBlock.level === 3) {
+        <h3>{{ currentBlock.title }}</h3>
+      } @else {
+        <h4>{{ currentBlock.title }}</h4>
+      }
+      <a
+        class="subheading-link"
+        [routerLink]="route()"
+        [fragment]="currentBlock.id"
+        [attr.aria-label]="'Link to ' + currentBlock.title"
+      >
+        <i class="pi pi-link" aria-hidden="true"></i>
+      </a>
+    </div>
+  }
+  @case ('list') {
+    @if (currentBlock.ordered) {
+      <ol class="document-list document-list-ordered" [start]="currentBlock.start ?? 1">
+        @for (item of currentBlock.items; track item.id) {
+          <li><div [innerHTML]="item.html"></div></li>
+        }
+      </ol>
+    } @else {
+      <ul class="document-list">
+        @for (item of currentBlock.items; track item.id) {
+          <li><div [innerHTML]="item.html"></div></li>
+        }
+      </ul>
+    }
+  }
+  @case ('table') {
+    <div class="document-table-wrap" tabindex="0" aria-label="Scroll table horizontally">
+      <table>
+        <thead>
+          <tr>
+            @for (header of currentBlock.headers; track header.id) {
+              <th
+                [class.align-center]="header.alignment === 'center'"
+                [class.align-right]="header.alignment === 'right'"
+                [innerHTML]="header.html"
+              ></th>
+            }
+          </tr>
+        </thead>
+        <tbody>
+          @for (row of currentBlock.rows; track row.id) {
+            <tr>
+              @for (cell of row.cells; track cell.id) {
+                <td
+                  [class.align-center]="cell.alignment === 'center'"
+                  [class.align-right]="cell.alignment === 'right'"
+                  [innerHTML]="cell.html"
+                ></td>
+              }
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+  @case ('code') {
+    <div class="document-code">
+      @if (currentBlock.language) {
+        <span class="code-language mono">{{ currentBlock.language }}</span>
+      }
+      <pre><code>{{ currentBlock.value }}</code></pre>
+    </div>
+  }
+  @case ('divider') {
+    <hr />
+  }
+}
