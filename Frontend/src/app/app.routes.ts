@@ -238,6 +238,11 @@ export const routes: Routes = [
       ).then((m) => m.AccountMonitorRedirectComponent),
   },
   {
+    path: "broker/reconciliation",
+    redirectTo: "broker/accounts",
+    pathMatch: "full",
+  },
+  {
     path: "broker/orders",
     loadComponent: () =>
       import(
