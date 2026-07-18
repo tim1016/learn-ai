@@ -69,6 +69,7 @@ describe('AppSidebarComponent', () => {
     expect(links.get('Accounts')).toBe('/broker/accounts');
     expect(links.has('Account Monitor')).toBe(false);
     expect(links.has('Broker Status')).toBe(false);
+    expect(links.has('Reconciliation')).toBe(false);
   });
 
   it('surfaces live options visualizations in the Options menu', () => {

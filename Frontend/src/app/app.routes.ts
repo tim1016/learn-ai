@@ -238,18 +238,16 @@ export const routes: Routes = [
       ).then((m) => m.AccountMonitorRedirectComponent),
   },
   {
+    path: "broker/reconciliation",
+    redirectTo: "broker/accounts",
+    pathMatch: "full",
+  },
+  {
     path: "broker/orders",
     loadComponent: () =>
       import(
         "./components/broker/broker-orders/broker-orders.component"
       ).then((m) => m.BrokerOrdersComponent),
-  },
-  {
-    path: "broker/reconciliation",
-    loadComponent: () =>
-      import(
-        "./components/broker/broker-reconciliation/broker-reconciliation.component"
-      ).then((m) => m.BrokerReconciliationComponent),
   },
   {
     path: "broker/session-mirror",

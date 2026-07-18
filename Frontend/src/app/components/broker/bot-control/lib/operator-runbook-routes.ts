@@ -11,7 +11,6 @@ const RUNBOOK_ROUTES: Readonly<Record<string, OperatorRunbookRoute>> = {
   'live-trade-reconciliation': {
     commands: ['/broker/accounts'],
   },
-  'broker-instance-operator-surface': { commands: ['/broker/reconciliation'] },
   'watchdog-halt': { commands: ['/broker/bots'] },
   'runtime-freshness': { commands: ['/broker/bots'] },
   'daemon-diagnostics': { commands: ['/broker/session-mirror'] },
@@ -23,6 +22,7 @@ const RUNBOOK_ROUTES: Readonly<Record<string, OperatorRunbookRoute>> = {
 // would navigate to self (a no-op), so the Verdict Card opens the why-drawer
 // instead. See docs/superpowers/specs/2026-07-08-bot-control-verdict-card-design.md.
 const INSTANCE_PAGE_RUNBOOK_SLUGS: ReadonlySet<string> = new Set([
+  'broker-instance-operator-surface',
   'watchdog-halt',
   'runtime-freshness',
 ]);

@@ -442,7 +442,7 @@ def build_submit_readiness_findings(
                 "info",
                 "No live runtime is bound",
                 f"Host process is {host_process.state}; live-only commands cannot execute until a bot process is started.",
-                "Use this as context for the blocked broker/reconciliation proofs, not as a separate broker problem.",
+                "Use this as context for the blocked broker and reconciliation proofs, not as a separate broker problem.",
                 NoPrimaryRemediationAction(kind="none", reason="MONITOR_ONLY"),
             )
         )

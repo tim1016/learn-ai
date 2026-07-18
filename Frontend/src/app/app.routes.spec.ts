@@ -18,6 +18,12 @@ describe('routes', () => {
     expect(await route.loadComponent()).toBe(AccountMonitorRedirectComponent);
   });
 
+  it('keeps the retired Reconciliation bookmark on Accounts', () => {
+    const route = routes.find((candidate) => candidate.path === 'broker/reconciliation');
+
+    expect(route).toMatchObject({ redirectTo: 'broker/accounts', pathMatch: 'full' });
+  });
+
   it('lazy-loads the bot operator manual beside the bot fleet', async () => {
     const route = routes.find((candidate) => candidate.path === 'broker/bot-manual');
     if (route?.loadComponent === undefined) throw new Error('Bot manual route is missing.');
