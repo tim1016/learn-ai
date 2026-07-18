@@ -6,10 +6,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { DiagnosticReport, IbkrConnectionHealth } from "../../../api/broker-models";
 import { BrokerHealthService } from "../../../services/broker-health.service";
 import { BrokerService } from "../../../services/broker.service";
+import { makeBrokerHealth } from "./account-desk-holdings.fixtures";
 import { AccountDeskBrokerSessionComponent } from "./account-desk-broker-session.component";
 
 class FakeBrokerHealthService {
-  readonly health = signal<IbkrConnectionHealth | null>(connectedHealth());
+  readonly health = signal<IbkrConnectionHealth | null>(makeBrokerHealth());
   readonly lifecycleAction = signal<"connect" | "disconnect" | "reconnect" | null>(null);
   readonly lifecycleError = signal<unknown | null>(null);
   readonly refresh = vi.fn().mockResolvedValue(undefined);
@@ -77,52 +78,30 @@ describe("AccountDeskBrokerSessionComponent", () => {
     await waitFor(() => expect(screen.getByText("Client ID uniqueness")).toBeTruthy());
     expect(broker.diagnose).toHaveBeenCalledOnce();
   });
+
+  it.each([
+    ["connected", makeBrokerHealth(undefined, { disabled: true })],
+    ["disconnected", makeBrokerHealth(undefined, { disabled: true, connected: false, connection_state: "disconnected" })],
+  ])("does not expose connection controls while the host owns a %s session", async (_state, connection) => {
+    const health = new FakeBrokerHealthService();
+    health.health.set(connection);
+    const { broker } = await setup("operator", "DU1234567", health);
+
+    expect(await screen.findByText("IBKR session is host-owned")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Connect gateway" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Disconnect" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Diagnose" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Probe capability" })).toBeNull();
+    expect(broker.capability).not.toHaveBeenCalled();
+  });
 });
 
 class FakeBrokerHealthServiceWithAccount extends FakeBrokerHealthService {
   constructor(accountId: string) {
     super();
-    this.health.set({ ...connectedHealth(), account_id: accountId });
+    this.health.set(makeBrokerHealth(accountId));
   }
-}
-
-function connectedHealth(): IbkrConnectionHealth {
-  return {
-    mode: "paper",
-    host: "host.containers.internal",
-    port: 4002,
-    client_id: 7,
-    connected: true,
-    disabled: false,
-    reason: null,
-    account_id: "DU1234567",
-    is_paper: true,
-    server_version: 178,
-    fetched_at_ms: 1_780_000_000_000,
-    safety_verdict: {
-      configured_mode: "paper",
-      readonly_flag: false,
-      port_class: "paper_port",
-      connected_account_prefix: "DU",
-      final_verdict: "paper-only",
-      failing_gates: [],
-      unknown_gates: [],
-    },
-    connection_state: "connected",
-    last_transition_ms: 1_780_000_000_000,
-    connection_lost: false,
-    connectivity_lost_count: 0,
-    reconnect_attempt: null,
-    condition: null,
-    last_ibkr_code: null,
-    last_ibkr_message: null,
-    subscriptions_stale: false,
-    data_farm_degraded: false,
-    last_probe_ms: 1_780_000_000_000,
-    last_probe_error: null,
-    last_recovery_ms: null,
-    recovery_error: null,
-  };
 }
 
 function capabilitySnapshot() {

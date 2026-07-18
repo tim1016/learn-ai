@@ -11,6 +11,14 @@
     @case ("loading") {
       <p class="state">Loading broker connection evidence…</p>
     }
+    @case ("disabled") {
+      <div class="connection-state disabled">
+        <div>
+          <strong>IBKR session is host-owned</strong>
+          <p>The host runner owns this broker session. Connection controls are unavailable from the Account Desk.</p>
+        </div>
+      </div>
+    }
     @case ("disconnected") {
       <div class="connection-state disconnected">
         <div><strong>IBKR is disconnected</strong><p>Account snapshot and positions remain unavailable until the gateway reconnects.</p></div>

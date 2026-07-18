@@ -10,7 +10,7 @@ import type { AccountDeskHoldingRow } from "./account-desk-holdings-store.servic
 
 /** Broker holdings table and row-specific guidance for either Account Desk lens. */
 @Component({
-  selector: "app-account-desk-trader-holdings-table",
+  selector: "app-account-desk-holdings-table",
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     ButtonModule,
@@ -18,9 +18,9 @@ import type { AccountDeskHoldingRow } from "./account-desk-holdings-store.servic
     ReceiptLabelPipe,
     TableModule,
   ],
-  templateUrl: "./account-desk-trader-holdings-table.component.html",
+  templateUrl: "./account-desk-holdings-table.component.html",
 })
-export class AccountDeskTraderHoldingsTableComponent {
+export class AccountDeskHoldingsTableComponent {
   readonly rows = input.required<AccountDeskHoldingRow[]>();
   readonly blockerMoveSelected = output<OperatorBlockerMoveEvent>();
   readonly fmtCurrency = fmtCurrency;

@@ -8,6 +8,14 @@
   padding-bottom: 0.25rem;
   border-bottom: 1px solid var(--border-light);
 }
+.eyebrow {
+  margin: 0;
+  color: var(--accent-text);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
 .operator-workspace__actions {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(19rem, 0.8fr);

@@ -32,7 +32,7 @@
     @if (store.rows().length === 0) {
       <section class="positions-empty"><h2>Positions (0)</h2><p>No open positions are reported for this attested account.</p></section>
     } @else {
-      <section class="positions"><header><h2>Positions ({{ store.rows().length }})</h2><p>Ownership and live P&amp;L remain attached to each broker position.</p></header><app-account-desk-trader-holdings-table [rows]="tableRows()" (blockerMoveSelected)="followBlockerMove($event)" /></section>
+      <section class="positions"><header><h2>Positions ({{ store.rows().length }})</h2><p>Ownership and live P&amp;L remain attached to each broker position.</p></header><app-account-desk-holdings-table [rows]="tableRows()" (blockerMoveSelected)="followBlockerMove($event)" /></section>
     }
   }
 </section>

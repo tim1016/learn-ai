@@ -65,9 +65,10 @@ export class AccountDeskBrokerSessionComponent {
   private readonly diagnosticsState = signal<DiagnosticsState>(EMPTY_DIAGNOSTICS);
   private readonly capabilityProbeErrorState = signal<unknown | null>(null);
 
-  readonly scope = computed<"loading" | "matched" | "mismatched" | "disconnected">(() => {
+  readonly scope = computed<"loading" | "disabled" | "matched" | "mismatched" | "disconnected">(() => {
     const health = this.health();
     if (health === null) return "loading";
+    if (health.disabled) return "disabled";
     if (!health.connected) return "disconnected";
     return health.account_id === this.accountId() ? "matched" : "mismatched";
   });

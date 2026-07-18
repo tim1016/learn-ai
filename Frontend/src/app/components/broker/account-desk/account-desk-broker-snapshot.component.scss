@@ -6,7 +6,7 @@
 .state-stale { padding: 0.65rem 0.75rem; border-left: 0.25rem solid var(--warn); color: var(--warn); background: var(--warn-soft); }
 .snapshot-header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; }
 .snapshot-header h2:not(.eyebrow), .positions h2, .positions-empty h2 { font-size: 1rem; }
-.eyebrow { color: var(--accent); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.eyebrow { color: var(--accent-text); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
 .muted, .scope, .positions header p, .positions-empty p { color: var(--text-secondary); font-size: 0.82rem; }
 .scope { max-width: 16rem; text-align: right; }
 .metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; border: 1px solid var(--border-light); border-radius: 0.65rem; overflow: hidden; }

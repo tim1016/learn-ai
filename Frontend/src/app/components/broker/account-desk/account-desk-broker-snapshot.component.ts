@@ -7,13 +7,13 @@ import { TimestampDisplayComponent } from "../../../shared/timestamp";
 import type { OperatorBlockerMoveEvent } from "../shared/operator-blocker-list/operator-blocker-list.component";
 import { fmtCurrency, fmtSignedCurrency } from "../format";
 import { AccountDeskHoldingsStore } from "./account-desk-holdings-store.service";
-import { AccountDeskTraderHoldingsTableComponent } from "./account-desk-trader-holdings-table.component";
+import { AccountDeskHoldingsTableComponent } from "./account-desk-holdings-table.component";
 
 /** Full, attested IBKR account snapshot for either Account Desk lens. */
 @Component({
   selector: "app-account-desk-broker-snapshot",
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AccountDeskTraderHoldingsTableComponent, ButtonModule, TimestampDisplayComponent],
+  imports: [AccountDeskHoldingsTableComponent, ButtonModule, TimestampDisplayComponent],
   templateUrl: "./account-desk-broker-snapshot.component.html",
   styleUrl: "./account-desk-broker-snapshot.component.scss",
 })
