@@ -1,8 +1,7 @@
 <section class="broker-capability" aria-label="Session capability">
   <header>
     <div>
-      <p class="eyebrow">Operator evidence</p>
-      <h2>Session capability</h2>
+      <h2 class="eyebrow">Session capability</h2>
       <p>What IBKR reports for the selected account across the supported trading sessions.</p>
     </div>
     <button type="button" [disabled]="loading() || !connected()" (click)="probeRequested.emit()">

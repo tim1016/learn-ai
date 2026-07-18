@@ -3,7 +3,7 @@
 .session-header, .connection-state, .connection-primary, .session-actions, .operator-grid, .operator-evidence, .diagnostics, .diagnostics header { display: flex; }
 .session-header, .connection-state, .diagnostics header { align-items: start; justify-content: space-between; gap: 1rem; }
 .session-header h2, .session-header p, .connection-primary p, .state, h3, .diagnostics p { margin: 0; }
-.session-header h2 { font-size: 1rem; }
+.session-header h2:not(.eyebrow) { font-size: 1rem; }
 .session-header > div > p:not(.eyebrow) { margin-top: 0.2rem; color: var(--text-secondary); font-size: 0.85rem; }
 .eyebrow { color: var(--accent); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
 button { padding: 0.45rem 0.7rem; border-radius: 0.45rem; font: inherit; font-size: 0.82rem; font-weight: 700; cursor: pointer; }
@@ -30,7 +30,7 @@ dd { margin: 0; font-size: 0.84rem; }
 .state { color: var(--text-secondary); }
 .state-error { color: var(--bear); }
 .operator-evidence { flex-direction: column; gap: 0.8rem; }
-.evidence-details, .connection-guide { padding: 0.8rem; border: 1px solid var(--border-light); border-radius: 0.6rem; background: var(--bg-sunken); }
+.evidence-details { padding: 0.8rem; border: 1px solid var(--border-light); border-radius: 0.6rem; background: var(--bg-sunken); }
 summary { cursor: pointer; color: var(--text-primary); font-size: 0.86rem; font-weight: 700; }
 .operator-grid { gap: 1rem; margin-top: 0.8rem; }
 .operator-grid > section { flex: 1 1 16rem; min-width: 0; }
@@ -49,5 +49,4 @@ a { display: inline-block; margin-top: 0.75rem; color: var(--accent); font-size:
 .diagnostics li.warn-row { border-color: var(--warn); }
 .diagnostics strong { font-size: 0.84rem; }
 .diagnostics li p { margin-top: 0.25rem; color: var(--text-secondary); font-size: 0.78rem; }
-.connection-guide p { margin: 0.6rem 0 0; color: var(--text-secondary); font-size: 0.84rem; }
 @media (max-width: 900px) { .connection-state { flex-direction: column; } .connection-facts { width: 100%; } .operator-grid { flex-direction: column; } }

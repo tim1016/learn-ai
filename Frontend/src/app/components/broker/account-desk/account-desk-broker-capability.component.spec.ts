@@ -27,6 +27,8 @@ describe("AccountDeskBrokerCapabilityComponent", () => {
     });
 
     expect(await screen.findByText("Session capability")).toBeTruthy();
+    expect(screen.queryByText("Operator evidence")).toBeNull();
+    expect(screen.getAllByRole("heading", { name: "Session capability" })).toHaveLength(1);
     expect(screen.getByText("SPY")).toBeTruthy();
     expect(screen.getByText("live + tradeable")).toBeTruthy();
     expect(screen.getByText("Codes 10349")).toBeTruthy();

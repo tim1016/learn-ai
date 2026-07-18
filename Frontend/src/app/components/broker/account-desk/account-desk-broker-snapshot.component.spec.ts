@@ -41,6 +41,8 @@ describe("AccountDeskBrokerSnapshotComponent", () => {
     await setup();
 
     expect(await screen.findByText("Broker snapshot")).toBeTruthy();
+    expect(screen.queryByText("Broker-attested account snapshot")).toBeNull();
+    expect(screen.getAllByRole("heading", { name: "Broker snapshot" })).toHaveLength(1);
     expect(screen.getByText("Cash")).toBeTruthy();
     expect(screen.getByText("Net liquidation")).toBeTruthy();
     expect(screen.getByText("Buying power")).toBeTruthy();

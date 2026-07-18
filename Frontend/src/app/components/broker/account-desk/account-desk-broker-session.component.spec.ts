@@ -46,6 +46,8 @@ describe("AccountDeskBrokerSessionComponent", () => {
     const { broker } = await setup("trader");
 
     expect(await screen.findByText("IBKR connection")).toBeTruthy();
+    expect(screen.getAllByRole("heading", { name: "IBKR connection" })).toHaveLength(1);
+    expect(screen.queryByText("Selected-account broker session")).toBeNull();
     expect(screen.getByText("Data-plane broker session connected")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Reconnect" })).toBeTruthy();
     expect(screen.queryByText("Effective IBKR configuration")).toBeNull();
@@ -69,6 +71,7 @@ describe("AccountDeskBrokerSessionComponent", () => {
     expect(await screen.findByText("Effective IBKR configuration")).toBeTruthy();
     expect(screen.getByText("host.containers.internal")).toBeTruthy();
     expect(await screen.findByText("SPY")).toBeTruthy();
+    expect(screen.queryByText("Connection guide")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Diagnose" }));
     await waitFor(() => expect(screen.getByText("Client ID uniqueness")).toBeTruthy());

@@ -1,8 +1,7 @@
 <section class="broker-session" aria-label="IBKR connection for selected account" aria-live="polite">
   <header class="session-header">
     <div>
-      <p class="eyebrow">Selected-account broker session</p>
-      <h2>IBKR connection</h2>
+      <h2 class="eyebrow">IBKR connection</h2>
       <p>Connection evidence is only used when it attests {{ accountId() }}.</p>
     </div>
     <button type="button" class="secondary" (click)="refresh()">Refresh connection</button>
@@ -107,8 +106,6 @@
                 }
               </section>
             }
-
-            <details class="connection-guide"><summary>Connection guide</summary><p>Confirm the session is PAPER and the paper sentinel matches the selected account. If the data-plane broker session is disconnected, start IB Gateway against the paper account and use Connect or Reconnect. Use Diagnose for gateway-side failures such as Trusted IP, host/port, or client-ID issues.</p></details>
           </div>
         }
       }

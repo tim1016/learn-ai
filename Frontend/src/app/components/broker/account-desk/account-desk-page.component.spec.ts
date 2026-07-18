@@ -250,6 +250,7 @@ describe("AccountDeskPageComponent", () => {
     expect(
       screen.getByRole("heading", { name: "Resolve the account posture" }),
     ).toBeTruthy();
+    expect(screen.queryByText("Operator workspace")).toBeNull();
     expect(
       screen.getByRole("heading", { name: "Account recovery" }),
     ).toBeTruthy();

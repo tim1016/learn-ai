@@ -13,7 +13,7 @@
 
   @if (store.account(); as account) {
     <header class="snapshot-header">
-      <div><p class="eyebrow">Broker-attested account snapshot</p><h2>Broker snapshot</h2><p class="muted">Last account snapshot <app-timestamp-display [value]="account.fetched_at_ms" mode="local" /></p></div>
+      <div><h2 class="eyebrow">Broker snapshot</h2><p class="muted">Attested <app-timestamp-display [value]="account.fetched_at_ms" mode="local" /></p></div>
       <p class="scope">{{ lens() === "trader" ? "Read balances and positions" : "Operator evidence for the selected account" }}</p>
     </header>
 
