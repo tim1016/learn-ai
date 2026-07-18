@@ -84,7 +84,6 @@ const NAV: NavGroup[] = [
     items: [
       { label: 'Accounts', route: '/broker/accounts' },
       { label: 'Orders', route: '/broker/orders' },
-      { label: 'Reconciliation', route: '/broker/reconciliation' },
       { label: 'Session Mirror', route: '/broker/session-mirror' },
       { label: 'Deploy', route: '/broker/deploy' },
       { label: 'Bots', route: '/broker/bots' },

@@ -13,7 +13,7 @@
 >
 > **Owner:** the engineer editing `PythonDataService/app/broker/ibkr/*` or `PythonDataService/app/engine/live/*`. Same-PR rule: if you touch those files, update the matching section here and bump **Last reviewed**.
 >
-> **Last reviewed:** 2026-07-15 (IBKR market-data capacity correction — same-process real-time-bar multiplexing, 60-new-requests/600-second pacing, and user-level line-budget documentation).
+> **Last reviewed:** 2026-07-17 (removed the unfinished standalone broker reconciliation page; account recovery and proof remain on the Account Desk).
 
 ---
 
@@ -325,9 +325,9 @@ Standalone Angular 21 components, signal-driven, OnPush, gated by `BrokerHealthS
 |---|---|---|---|
 | `/broker` | `BrokerStatusComponent` | Connection card (mode, account, sentinel), account snapshot, positions table, **Diagnose** button (PR #77) with per-check pills + fix hints. | Always visible. Account/positions cards hide when disconnected. |
 | `/broker/options-chain` | `BrokerOptionsChainComponent` | SSE-driven chain table; multi-strike select, NBBO + greeks, debounce-coalesced. | Locked unless `isPaperConnected()`. |
-| `/broker/account-monitor` | `BrokerAccountMonitorComponent` | Account summary, Account Truth verdict, owner rollups, symbol exposure, blockers, and per-position P&L SSE. | Locked unless connected. |
+| `/broker/accounts/:accountId` | `AccountDeskPageComponent` | Account Truth, broker snapshot, ownership, account recovery proof, reconciliation status, and backend-authored recovery actions. | Account-scoped evidence is rendered through trader and operator lenses. |
+| `/broker/account-monitor` | `AccountMonitorRedirectComponent` | Legacy bookmark redirect to the selected Account Desk. | Redirects to `/broker/accounts/:accountId` when exactly one account is available; otherwise opens the account roster. |
 | `/broker/orders` | `BrokerOrdersComponent` | Manual paper-order form with what-if preview, server-minted manual namespace, account-truth order ledger, cancel affordance for live working orders, and order-event SSE. | Locked unless paper-connected (defense-in-depth on the four-layer safety). |
-| `/broker/reconciliation` | `BrokerReconciliationComponent` | Proof-first account validation board: invariant verdict cards, blockers, caveats, and existing position/account reconciliation tables. | Locked unless connected. |
 
 **Shared services**:
 
@@ -490,6 +490,7 @@ If any of these fails, fix it before running. The diagnostic endpoint will tell 
 
 | Date | Reviewer | Notes |
 |---|---|---|
+| 2026-07-17 | Codex GPT-5 | Removed the unfinished `/broker/reconciliation` comparison route and component: both engine-side comparison columns were deliberately empty, while the useful Account Truth and account-recovery information is owned by `/broker/accounts/:accountId`. Removed the sidebar entry and redirected the bot-instance runbook action to the current bot control page, preserving run-scoped reconciliation without a dead route. |
 | 2026-07-15 | Codex GPT-5 | Corrected IBKR capacity scopes from current primary documentation: 32 is a simultaneous-connection count rather than a `clientId` range; the default 100 market-data lines are shared across TWS and API clients; per-second request pacing is per connection; 50 simultaneous open requests belongs to historical data; and `reqRealTimeBars` uses the shared line allocation plus 60-new-requests/600-second pacing. Added same-process real-time-bar multiplexing, reference-counted cancellation, configurable local active-line admission, and an explicit 45 requests/second transport pin. |
 | 2026-07-12 | Codex GPT-5 | Issue #1005 Slice 0 capability probe landed: `capability.py`, `/api/broker/capability/probe`, `/api/broker/capability`, persisted `SessionDataCapability` JSON snapshots, schedule parsing through instrument timezone, market-data entitlement classification, non-submitting `whatIf=True` outside-RTH preview, and Broker Status capability panel. |
 | 2026-07-12 | Codex GPT-5 | Issue #1005 Slice 1 session authority landed: `services/session_authority.py`, operator-surface trading session now consumes capability snapshots when present and falls back to NYSE calendar otherwise, `OVERNIGHT` was added to the trading-session phase contract, and ADR 0029 records the calendar-vs-IBKR authority split. |

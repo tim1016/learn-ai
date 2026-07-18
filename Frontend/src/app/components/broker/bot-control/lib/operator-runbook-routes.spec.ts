@@ -22,6 +22,9 @@ describe('resolveOperatorRunbookRoute', () => {
   });
 
   it('keeps bot-scoped runbooks on the current bot when an instance id is available', () => {
+    expect(resolveOperatorRunbookRoute('broker-instance-operator-surface', 'DEPVALJUL1')).toEqual({
+      commands: ['/broker/bots', 'DEPVALJUL1'],
+    });
     expect(resolveOperatorRunbookRoute('watchdog-halt', 'DEPVALJUL1')).toEqual({
       commands: ['/broker/bots', 'DEPVALJUL1'],
     });

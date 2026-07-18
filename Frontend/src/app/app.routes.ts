@@ -245,13 +245,6 @@ export const routes: Routes = [
       ).then((m) => m.BrokerOrdersComponent),
   },
   {
-    path: "broker/reconciliation",
-    loadComponent: () =>
-      import(
-        "./components/broker/broker-reconciliation/broker-reconciliation.component"
-      ).then((m) => m.BrokerReconciliationComponent),
-  },
-  {
     path: "broker/session-mirror",
     loadComponent: () =>
       import(

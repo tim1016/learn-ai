@@ -228,7 +228,7 @@ export const DEFAULT_OPERATOR_SURFACE: OperatorSurface = {
         current: true,
         title: 'Bot process is not running',
         summary: 'Host process is IDLE; live-only commands cannot execute until a bot process is started.',
-        next_step: 'Use this as context for the blocked broker/reconciliation proofs, not as a separate broker problem.',
+        next_step: 'Use this as context for the blocked broker and reconciliation proofs, not as a separate broker problem.',
         reason_codes: ['HOST_PROCESS_IDLE'],
       },
       {

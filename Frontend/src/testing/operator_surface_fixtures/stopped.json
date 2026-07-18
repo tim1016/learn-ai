@@ -561,7 +561,7 @@
         "code": "host_process",
         "explanation": "Host process is IDLE; live-only commands cannot execute until a bot process is started.",
         "headline": "No live runtime is bound",
-        "operator_next_step": "Use this as context for the blocked broker/reconciliation proofs, not as a separate broker problem.",
+        "operator_next_step": "Use this as context for the blocked broker and reconciliation proofs, not as a separate broker problem.",
         "remediation": {
           "kind": "none",
           "reason": "MONITOR_ONLY"

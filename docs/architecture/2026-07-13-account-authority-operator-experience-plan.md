@@ -341,8 +341,9 @@ that states the failed fact and offers the applicable action in place.
   appropriate fragment.
 - Route account-scoped bot/deploy blockers to the same page.
 - Keep `/broker/session-mirror` for daemon/socket infrastructure.
-- Keep `/broker/reconciliation` as an operator-initiated ledger comparison view,
-  not a cure destination.
+- Remove `/broker/reconciliation`; its comparison rows have no engine-side
+  values, and it must not remain a second account-evidence surface. Account
+  proof and recovery live on the Account Desk.
 - Replace stale “Open the Orders page…” flatten prose with the existing in-page
   `flattenExposureFromDialog()` action.
 
