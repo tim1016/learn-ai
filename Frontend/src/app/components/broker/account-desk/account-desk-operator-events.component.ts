@@ -21,7 +21,6 @@ const EVENT_KINDS: readonly AccountEventKind[] = [
   "configuration",
   "other",
 ];
-const JOURNAL_SEQUENCE_SOURCE = 'account_event_journal';
 
 interface AccountTimelineRow {
   readonly event: AccountEventRow;
@@ -46,11 +45,13 @@ interface AccountTimelineRow {
 export class AccountDeskOperatorEventsComponent {
   readonly store = inject(AccountDeskEventsStore);
   readonly eventKinds = EVENT_KINDS;
+  private readonly timelineRowsByEventId = new Map<string, AccountTimelineRow>();
+  readonly timelineAccessibility = {
+    host: { role: "list", "aria-label": "Journal timeline events" },
+    event: { role: "listitem" },
+  };
   readonly timelineRows = computed(() =>
-    this.store.operationRows().map((event): AccountTimelineRow => ({
-      event,
-      evidence: event.evidence_refs.filter((evidence) => evidence.source !== JOURNAL_SEQUENCE_SOURCE),
-    })),
+    this.store.operationRows().map((event) => this.timelineRowFor(event)),
   );
   trackKind = (_: number, kind: AccountEventKind): AccountEventKind => kind;
   trackEvidence = (
@@ -72,5 +73,14 @@ export class AccountDeskOperatorEventsComponent {
 
   loadOlder(): void {
     this.store.loadOlder();
+  }
+
+  private timelineRowFor(event: AccountEventRow): AccountTimelineRow {
+    const cached = this.timelineRowsByEventId.get(event.event_id);
+    if (cached !== undefined) return cached;
+
+    const row = { event, evidence: event.evidence_refs };
+    this.timelineRowsByEventId.set(event.event_id, row);
+    return row;
   }
 }

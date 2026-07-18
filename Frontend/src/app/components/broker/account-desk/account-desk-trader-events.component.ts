@@ -21,6 +21,10 @@ export class AccountDeskTraderEventsComponent {
   readonly store = inject(AccountDeskEventsStore);
   private readonly showAllState = signal(false);
   readonly showAll = this.showAllState.asReadonly();
+  readonly timelineAccessibility = {
+    host: { role: "list", "aria-label": "Today at the desk activity" },
+    event: { role: "listitem" },
+  };
   readonly timelineRows = computed(() =>
     this.store.traderRows().slice(0, this.showAll() ? undefined : RECENT_EVENT_COUNT),
   );

@@ -18,7 +18,7 @@
     @if (hiddenCount() > 0 && !showAll()) {
       <p class="event-summary">Showing the latest {{ timelineRows().length }} of {{ store.traderRows().length }} updates.</p>
     }
-    <p-timeline [value]="timelineRows()" align="left" class="trader-timeline">
+    <p-timeline [value]="timelineRows()" [pt]="timelineAccessibility" align="left" class="trader-timeline">
       <ng-template #opposite let-item>
         <span class="trader-event-time">
           <app-timestamp-display [value]="item.occurred_at_ms" mode="local" />

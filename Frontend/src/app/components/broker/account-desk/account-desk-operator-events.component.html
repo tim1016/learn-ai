@@ -31,7 +31,7 @@
   } @else if (store.operationRows().length === 0) {
     <p class="state">No account journal events match this view.</p>
   } @else {
-    <p-timeline [value]="timelineRows()" align="left" class="operations-timeline">
+    <p-timeline [value]="timelineRows()" [pt]="timelineAccessibility" align="left" class="operations-timeline">
       <ng-template #opposite let-item>
         <span class="event-time">
           <app-timestamp-display [value]="item.event.occurred_at_ms" mode="local" />

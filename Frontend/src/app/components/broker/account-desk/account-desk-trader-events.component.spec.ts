@@ -44,6 +44,8 @@ describe("AccountDeskTraderEventsComponent", () => {
     expect(
       document.querySelector('[data-timestamp-mode="local"]'),
     ).not.toBeNull();
+    expect(screen.getByRole("list", { name: "Today at the desk activity" })).toBeTruthy();
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
   });
 
   it("renders an honest error with retry instead of an empty event feed", async () => {

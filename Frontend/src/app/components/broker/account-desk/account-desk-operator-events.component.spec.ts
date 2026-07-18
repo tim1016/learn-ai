@@ -40,7 +40,7 @@ function makeStore(overrides: Record<string, unknown> = {}) {
 describe("AccountDeskOperatorEventsComponent", () => {
   it("renders a categorized journal timeline with local instants, filters, and load older", async () => {
     const store = makeStore();
-    await render(AccountDeskOperatorEventsComponent, {
+    const view = await render(AccountDeskOperatorEventsComponent, {
       providers: [
         { provide: AccountDeskEventsStore, useValue: store },
         {
@@ -58,7 +58,9 @@ describe("AccountDeskOperatorEventsComponent", () => {
       ),
     ).toBeTruthy();
     expect(document.querySelector('[data-kind="reconciliation"]')).not.toBeNull();
-    expect(screen.queryByText("DU1234567:5")).toBeNull();
+    expect(screen.getByText("DU1234567:5")).toBeTruthy();
+    expect(screen.getByRole("list", { name: "Journal timeline events" })).toBeTruthy();
+    expect(document.querySelectorAll('[aria-label="Journal timeline events"] > [role="listitem"]')).toHaveLength(1);
     expect(
       document.querySelector('[data-timestamp-mode="local"]'),
     ).not.toBeNull();
@@ -66,6 +68,10 @@ describe("AccountDeskOperatorEventsComponent", () => {
     fireEvent.click(screen.getByRole("button", { name: "Load older" }));
     expect(store.toggleOperationKind).toHaveBeenCalledWith("safety");
     expect(store.loadOlder).toHaveBeenCalledOnce();
+
+    const firstRow = view.fixture.componentInstance.timelineRows()[0];
+    store.operationRows.set(store.operationRows().map((event) => ({ ...event })));
+    expect(view.fixture.componentInstance.timelineRows()[0]).toBe(firstRow);
   });
 
   it("renders an honest operations error rather than empty history", async () => {
