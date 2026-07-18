@@ -188,6 +188,7 @@ class DeployParams:
     strategy_key: str = ""
     start_defaults: LiveRunStartDefaults | None = None
     parent_run_id: str | None = None
+    redeploy_reason: str | None = None
     clean_tree_scope: tuple[str, ...] = DEFAULT_CLEAN_TREE_SCOPE
     force: bool = False
     idempotent: bool = False
@@ -606,6 +607,8 @@ def deploy_run(params: DeployParams) -> DeployResult:
             strategy_instance_id=params.strategy_instance_id,
             strategy_key=resolved_strategy_key,
             start_defaults=params.start_defaults,
+            parent_run_id=params.parent_run_id,
+            redeploy_reason=params.redeploy_reason,
             audit_copy_allow_list_root=repo_root,
         )
     except FileNotFoundError as exc:

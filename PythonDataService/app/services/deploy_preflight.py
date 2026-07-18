@@ -24,6 +24,7 @@ from app.services.account_truth_snapshot import (
     assess_account_truth,
     get_account_truth_snapshot_provider,
 )
+from app.services.daily_session_schedule import start_boundary_verdict
 from app.services.fleet_contamination import compute_account_fleet_contamination
 from app.services.strategy_validation_manifest import (
     load_strategy_validation_entries,
@@ -66,6 +67,7 @@ class DeployPreflightSignals(BaseModel):
     fleet_blocks_starts: bool
     strategy_deployable: bool
     instance_already_running: bool
+    session_in_start_window: bool
 
 
 def _runtime_connection_state_value(
@@ -126,6 +128,7 @@ async def gather_deploy_preflight_signals(
     strategy_key: str,
     account_id: str,
     instance_id: str,
+    live_config: dict | None = None,
 ) -> DeployPreflightSignals:
     """Resolve deploy preconditions server-side for the blocker author."""
 
@@ -154,6 +157,7 @@ async def gather_deploy_preflight_signals(
         fleet_blocks_starts=fleet.policy_blocks_starts,
         strategy_deployable=_strategy_is_deployable(strategy_key),
         instance_already_running=await _instance_is_running_or_stopping(instance_id),
+        session_in_start_window=start_boundary_verdict(now_ms, live_config).allowed,
     )
 
 
@@ -340,6 +344,21 @@ def author_deploy_blockers(
                 detail="A bot with this name is already live. Go to it, or choose a different name.",
                 primary_move=_nav("Go to the running bot", "/broker/bots"),
                 applies_to="deploy",
+            )
+        )
+
+    if not signals.session_in_start_window:
+        blockers.append(
+            OperatorBlocker.for_host(
+                condition_id="session_start_window_closed",
+                scope="bot",
+                host="deploy_preflight",
+                anchor=SURFACE_ANCHOR,
+                audience="operator",
+                disposition="wait",
+                headline="Outside the session start window",
+                detail="The session stop has passed. Deploy the bot now and it will start at the next session open.",
+                applies_to="run",
             )
         )
 

@@ -2549,6 +2549,7 @@ async def _raise_if_deploy_preflight_blocks_start(
             request.strategy_key.strip(),
             request.account_id.strip(),
             request.strategy_instance_id.strip(),
+            live_config=request.live_config or None,
         )
     except AccountArtifactError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

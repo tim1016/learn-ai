@@ -256,6 +256,7 @@ def test_deploy_run_allows_parent_lineage_same_instance_redeploy(
     assert second.run_id != first.run_id
     ledger = json.loads((second.run_dir / "run_ledger.json").read_text(encoding="utf-8"))
     assert ledger["strategy_instance_id"] == "spy-ema-paper"
+    assert ledger["lineage"]["parent_run_id"] == first.run_id
 
 
 @requires_git

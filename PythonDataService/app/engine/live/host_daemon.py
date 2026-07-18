@@ -998,6 +998,7 @@ class RunnerProcessManager:
                 ibkr_host=request.start_options.ibkr_host,
             ),
             parent_run_id=request.parent_run_id,
+            redeploy_reason=request.redeploy_reason,
             force=request.force,
             idempotent=True,
         )

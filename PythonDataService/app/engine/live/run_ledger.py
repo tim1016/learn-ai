@@ -67,6 +67,16 @@ class LiveRunStartDefaults(BaseModel):
     ibkr_host: str = "127.0.0.1"
 
 
+class RedeployLineage(BaseModel):
+    """Redeploy provenance — the parent run this run was deployed to replace."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    parent_run_id: str
+    redeploy_reason: str | None = None
+    redeployed_at_ms: int
+
+
 class LiveRunLedger(BaseModel):
     """Immutable identity record for a single live paper run.
 
@@ -82,12 +92,12 @@ class LiveRunLedger(BaseModel):
     # ``strategy_key`` (#416 — the hand-coded algorithm module the run starts
     # under). 1.3 adds ADR 0009's engine-derived sizing stamps
     # (``governed_by`` + ``sizing_provenance``). 1.4 adds non-hashed operator
-    # start defaults captured at deploy time. NONE of the added fields are
-    # part of the ``run_id`` hash, so existing 1.0–1.2 run_ids, run directories,
-    # and fixtures stay byte-identical. A legacy ledger that predates a field
-    # has no key for it; the defaults below let it read cleanly as
-    # "unknown / legacy".
-    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4"] = "1.4"
+    # start defaults captured at deploy time. 1.5 adds ``lineage`` (redeploy
+    # parent_run_id and reason). NONE of the added fields are part of the
+    # ``run_id`` hash, so existing 1.0–1.4 run_ids, run directories, and
+    # fixtures stay byte-identical. A legacy ledger that predates a field has
+    # no key for it; the defaults below let it read cleanly as "unknown / legacy".
+    schema_version: Literal["1.0", "1.1", "1.2", "1.3", "1.4", "1.5"] = "1.5"
 
     run_id: str
     code_sha: str
@@ -142,6 +152,7 @@ class LiveRunLedger(BaseModel):
     )
 
     start_defaults: LiveRunStartDefaults | None = None
+    lineage: RedeployLineage | None = None
 
     created_at_ms: int = Field(default_factory=_now_ms_utc)
 
@@ -186,6 +197,8 @@ def build_ledger(
     strategy_instance_id: str = "",
     strategy_key: str = "",
     start_defaults: LiveRunStartDefaults | None = None,
+    parent_run_id: str | None = None,
+    redeploy_reason: str | None = None,
     audit_copy_allow_list_root: Path | None = None,
 ) -> LiveRunLedger:
     """Build a ``LiveRunLedger`` from on-disk inputs and resolved config.
@@ -275,6 +288,15 @@ def build_ledger(
         )
         if verdict.verdict == "proven_match":
             sizing_provenance = "reference_native"
+    lineage = (
+        RedeployLineage(
+            parent_run_id=parent_run_id,
+            redeploy_reason=redeploy_reason,
+            redeployed_at_ms=_now_ms_utc(),
+        )
+        if parent_run_id is not None
+        else None
+    )
     return LiveRunLedger(
         run_id=run_id,
         code_sha=code_sha,
@@ -289,6 +311,7 @@ def build_ledger(
         strategy_instance_id=strategy_instance_id,
         strategy_key=strategy_key,
         start_defaults=start_defaults,
+        lineage=lineage,
         governed_by=governed_by(resolved_policy),
         sizing_provenance=sizing_provenance,
     )
