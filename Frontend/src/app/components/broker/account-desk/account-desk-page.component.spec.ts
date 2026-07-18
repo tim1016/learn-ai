@@ -456,13 +456,8 @@ describe("AccountDeskPageComponent", () => {
 
     const retries = await screen.findAllByRole("button", { name: "Retry" });
     fireEvent.click(retries[0]);
-    await waitFor(() =>
-      expect(
-        screen.getByText(
-          "No open holdings are reported for this attested account.",
-        ),
-      ).toBeTruthy(),
-    );
+    await screen.findByText("Account is clean");
+    expect(broker.accountTriage).toHaveBeenCalledTimes(2);
   });
 });
 

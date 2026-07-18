@@ -31,7 +31,11 @@
     (valueChange)="selectLens($event)"
   />
 
-  <p-card styleClass="p-0" aria-live="polite">
+  @if (displayAccountId(); as accountId) {
+    <app-account-desk-broker-session [accountId]="accountId" [lens]="lens()" />
+  }
+
+  <section class="account-desk__body" aria-live="polite">
     @if (loading() && !triage()) {
       <p>Loading desk details…</p>
     } @else if (error() && !triage()) {
@@ -43,7 +47,9 @@
       </p-message>
     } @else if (triage()) {
       @if (lens() === "trader") {
-        <app-account-desk-trader-holdings />
+        <div class="account-desk__trader-layout">
+          <app-account-desk-broker-snapshot lens="trader" />
+          <div class="account-desk__trader-context">
         <app-account-desk-trader-events />
         <p-panel header="Account guidance">
           @if (
@@ -58,9 +64,11 @@
             />
           }
         </p-panel>
+          </div>
+        </div>
       } @else {
         <app-account-desk-operator-workspace />
       }
     }
-  </p-card>
+  </section>
 </main>

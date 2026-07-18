@@ -4,11 +4,17 @@
     <h2>Resolve the account posture</h2>
     <p>Start with the current proof and server-declared actions. Audit history stays available below.</p>
   </header>
+  <app-account-desk-broker-snapshot lens="operator" />
   <div class="operator-workspace__actions">
     <p-card><app-account-desk-operator-proof /></p-card>
     <app-account-desk-recovery-controls />
   </div>
-  <app-account-desk-operator-service />
-  <app-account-desk-operator-fleet />
-  <app-account-desk-operator-events />
+  <details class="operator-workspace__evidence">
+    <summary>Additional operator evidence</summary>
+    <div class="operator-workspace__evidence-body">
+      <app-account-desk-operator-service />
+      <app-account-desk-operator-fleet />
+      <app-account-desk-operator-events />
+    </div>
+  </details>
 </section>

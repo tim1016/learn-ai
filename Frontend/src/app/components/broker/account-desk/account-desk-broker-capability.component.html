@@ -1,0 +1,59 @@
+<section class="broker-capability" aria-label="Session capability">
+  <header>
+    <div>
+      <p class="eyebrow">Operator evidence</p>
+      <h2>Session capability</h2>
+      <p>What IBKR reports for the selected account across the supported trading sessions.</p>
+    </div>
+    <button type="button" [disabled]="loading() || !connected()" (click)="probeRequested.emit()">
+      {{ loading() ? "Probing…" : "Probe capability" }}
+    </button>
+  </header>
+
+  @if (error()) {
+    <p class="state state-error">Capability probe failed. Retry when the selected account is connected.</p>
+  } @else if (loading() && snapshots().length === 0) {
+    <p class="state">Loading capability evidence…</p>
+  } @else if (snapshots().length === 0) {
+    <p class="state">No capability snapshot is available for this selected account yet.</p>
+  } @else {
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            @for (kind of sessions; track kind) {
+              <th>{{ kind | receiptLabel }}</th>
+            }
+            <th>Probed</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (snapshot of snapshots(); track snapshot.account_id + ":" + snapshot.symbol) {
+            <tr>
+              <th scope="row">
+                <span class="mono">{{ snapshot.symbol }}</span>
+                <span class="account-mode">{{ snapshot.account_mode | receiptLabel }}</span>
+              </th>
+              @for (kind of sessions; track kind) {
+                @let sessionCapability = capability(snapshot, kind);
+                <td>
+                  <span
+                    class="capability"
+                    [class.good]="sessionCapability.data === 'live' && sessionCapability.tradeable === 'yes'"
+                    [class.warning]="sessionCapability.data !== 'live' || sessionCapability.tradeable === 'needs_enablement'"
+                    [class.bad]="sessionCapability.tradeable === 'no'"
+                  >
+                    {{ verdictLabel(sessionCapability) }}
+                  </span>
+                  <span class="codes">Codes {{ evidenceCodes(sessionCapability) }}</span>
+                </td>
+              }
+              <td class="probed"><app-timestamp-display [value]="snapshot.probed_at_ms" mode="et" granularity="datetime" /></td>
+            </tr>
+          }
+        </tbody>
+      </table>
+    </div>
+  }
+</section>

@@ -1,0 +1,117 @@
+<section class="broker-session" aria-label="IBKR connection for selected account" aria-live="polite">
+  <header class="session-header">
+    <div>
+      <p class="eyebrow">Selected-account broker session</p>
+      <h2>IBKR connection</h2>
+      <p>Connection evidence is only used when it attests {{ accountId() }}.</p>
+    </div>
+    <button type="button" class="secondary" (click)="refresh()">Refresh connection</button>
+  </header>
+
+  @switch (scope()) {
+    @case ("loading") {
+      <p class="state">Loading broker connection evidence…</p>
+    }
+    @case ("disconnected") {
+      <div class="connection-state disconnected">
+        <div><strong>IBKR is disconnected</strong><p>Account snapshot and positions remain unavailable until the gateway reconnects.</p></div>
+        @if (lens() === "operator") {
+          <button type="button" class="primary" [disabled]="lifecycleAction() !== null" (click)="connect()">{{ lifecycleAction() === "connect" ? "Connecting…" : "Connect gateway" }}</button>
+        } @else {
+          <button type="button" class="secondary" [disabled]="lifecycleAction() !== null" (click)="reconnect()">{{ lifecycleAction() === "reconnect" ? "Reconnecting…" : "Reconnect gateway" }}</button>
+        }
+      </div>
+    }
+    @case ("mismatched") {
+      <div class="connection-state mismatch">
+        <div><strong>Gateway attached to a different account</strong><p>The broker session attests {{ health()?.account_id ?? "no account" }}, not {{ accountId() }}. This desk does not reuse that evidence.</p></div>
+      </div>
+    }
+    @case ("matched") {
+      @let selected = selectedHealth();
+      @if (selected) {
+        <div class="connection-state connected">
+          <div class="connection-primary">
+            <span class="status-pill ok">{{ selected.mode | receiptLabel }} · {{ selected.connection_state | receiptLabel }}</span>
+            <strong>{{ connectionLabel(selected) }}</strong>
+            @if (selected.condition; as condition) { <p>{{ condition.summary }}</p> }
+          </div>
+          <dl class="connection-facts">
+            <div><dt>Data farm</dt><dd><span class="status-pill" [class.ok]="!selected.data_farm_degraded" [class.warn]="selected.data_farm_degraded">{{ selected.data_farm_degraded ? "Degraded" : "OK" }}</span></dd></div>
+            <div><dt>Last probe</dt><dd>{{ formatAge(selected.last_probe_ms) }}</dd></div>
+            <div><dt>Subscriptions</dt><dd><span class="status-pill" [class.ok]="!selected.subscriptions_stale" [class.warn]="selected.subscriptions_stale">{{ selected.subscriptions_stale ? "Stale" : "Current" }}</span></dd></div>
+          </dl>
+          <div class="session-actions">
+            <button type="button" class="secondary" [disabled]="lifecycleAction() !== null" (click)="reconnect()">{{ lifecycleAction() === "reconnect" ? "Reconnecting…" : "Reconnect" }}</button>
+            @if (lens() === "operator") {
+              <button type="button" class="secondary" [disabled]="diagnostics().loading" (click)="runDiagnostics()">{{ diagnostics().loading ? "Diagnosing…" : "Diagnose" }}</button>
+              <button type="button" class="danger" [disabled]="lifecycleAction() !== null" (click)="disconnect()">{{ lifecycleAction() === "disconnect" ? "Disconnecting…" : "Disconnect" }}</button>
+            }
+          </div>
+        </div>
+
+        @if (lifecycleError()) {
+          <p class="state state-error">The most recent gateway lifecycle request failed. Refresh the connection evidence before trying again.</p>
+        }
+
+        @if (lens() === "operator") {
+          <div class="operator-evidence">
+            <details class="evidence-details">
+              <summary>Connection detail and effective IBKR configuration</summary>
+              <div class="operator-grid">
+                <section>
+                  <h3>Connection detail</h3>
+                  <dl class="key-values">
+                    <div><dt>Broker state</dt><dd class="mono">{{ selected.connection_state }}</dd></div>
+                    <div><dt>Last IBKR code</dt><dd class="mono">{{ selected.last_ibkr_code ?? "—" }}</dd></div>
+                    <div><dt>IBKR message</dt><dd>{{ selected.last_ibkr_message ?? "—" }}</dd></div>
+                    <div><dt>Probe error</dt><dd>{{ selected.last_probe_error ?? "—" }}</dd></div>
+                    <div><dt>Last recovery</dt><dd class="mono">{{ formatAge(selected.last_recovery_ms) }}</dd></div>
+                    <div><dt>Recovery error</dt><dd>{{ selected.recovery_error ?? "—" }}</dd></div>
+                    <div><dt>Server version</dt><dd class="mono">{{ selected.server_version ?? "—" }}</dd></div>
+                  </dl>
+                </section>
+                <section>
+                  <h3>Effective IBKR configuration</h3>
+                  <dl class="key-values">
+                    @for (row of effectiveConfigRows(); track row.label) {
+                      <div><dt>{{ row.label }}</dt><dd class="mono">{{ row.value }}</dd></div>
+                    }
+                  </dl>
+                  <a routerLink="/docs/ibkr-setup-guide">Open the IBKR setup guide</a>
+                </section>
+              </div>
+              @if (clientIdOverlapWarning(); as warning) { <p class="client-warning">{{ warning }}</p> }
+            </details>
+
+            <app-account-desk-broker-capability
+              [snapshots]="capability.value() ?? []"
+              [loading]="capability.isLoading()"
+              [error]="capabilityProbeError() ?? capability.error()"
+              [connected]="true"
+              (probeRequested)="probeCapability()"
+            />
+
+            @if (diagnostics().loading || diagnostics().data || diagnostics().error) {
+              <section class="diagnostics" aria-label="Broker diagnostics">
+                <header><h2>Diagnostics</h2>@if (activeDiagnostics(); as report) { <span class="status-pill" [class.ok]="report.overall_status === 'pass'" [class.warn]="report.overall_status === 'warn'" [class.bad]="report.overall_status === 'fail'">{{ report.overall_status | receiptLabel }}</span> }</header>
+                @if (diagnostics().loading) { <p class="state">Running checks…</p> }
+                @else if (diagnostics().error) { <p class="state state-error">Broker diagnostics could not run. Retry when the gateway is available.</p> }
+                @else if (diagnostics().data?.disabled) { <p class="state">IBKR diagnostics are disabled because the host runner owns this session.</p> }
+                @else if (activeDiagnostics(); as report) {
+                  <ul>
+                    @for (check of report.checks; track check.name) {
+                      <li [class.fail]="check.status === 'fail'" [class.warn-row]="check.status === 'warn'"><span class="status-pill" [class.ok]="check.status === 'pass'" [class.warn]="check.status === 'warn'" [class.bad]="check.status === 'fail'">{{ check.status | receiptLabel }}</span><div><strong>{{ check.label }}</strong><p class="mono">{{ check.detail }}</p>@if (check.fix) { <p><strong>Fix:</strong> {{ check.fix }}</p> }</div></li>
+                    }
+                  </ul>
+                }
+              </section>
+            }
+
+            <details class="connection-guide"><summary>Connection guide</summary><p>Confirm the session is PAPER and the paper sentinel matches the selected account. If the data-plane broker session is disconnected, start IB Gateway against the paper account and use Connect or Reconnect. Use Diagnose for gateway-side failures such as Trusted IP, host/port, or client-ID issues.</p></details>
+          </div>
+        }
+      }
+    }
+  }
+</section>

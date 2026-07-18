@@ -8,7 +8,7 @@ import { OperatorBlockerListComponent } from "../shared/operator-blocker-list/op
 import { fmtCurrency, fmtSignedCurrency, fmtSignedQuantity } from "../format";
 import type { AccountDeskHoldingRow } from "./account-desk-holdings-store.service";
 
-/** Holdings table and row-specific guidance for the Trader lens. */
+/** Broker holdings table and row-specific guidance for either Account Desk lens. */
 @Component({
   selector: "app-account-desk-trader-holdings-table",
   changeDetection: ChangeDetectionStrategy.OnPush,

@@ -29,7 +29,7 @@ export class BrokerHealthService {
   readonly lastError = signal<unknown | null>(null);
   /**
    * Which lifecycle action (connect / disconnect / reconnect) is in
-   * flight. Both the global banner and the Broker Status page read this
+   * flight. Both the global banner and the Account Desk read this
    * — clicking either control disables both, so two concurrent
    * connectAsyncs can't race past the server-side asyncio lock.
    */
@@ -106,7 +106,7 @@ export class BrokerHealthService {
 
   /**
    * Drive ``POST /api/broker/connect`` and refresh health on completion.
-   * Shared by the global banner and the Broker Status page so a click
+   * Shared by the global banner and the Account Desk so a click
    * in either place is the same lifecycle action — and the
    * ``lifecycleAction`` signal locks both controls together.
    */

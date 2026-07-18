@@ -68,6 +68,7 @@ describe('AppSidebarComponent', () => {
     const links = navLinks(fixture);
     expect(links.get('Accounts')).toBe('/broker/accounts');
     expect(links.has('Account Monitor')).toBe(false);
+    expect(links.has('Broker Status')).toBe(false);
   });
 
   it('surfaces live options visualizations in the Options menu', () => {

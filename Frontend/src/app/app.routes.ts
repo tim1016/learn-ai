@@ -197,10 +197,8 @@ export const routes: Routes = [
   },
   {
     path: "broker",
-    loadComponent: () =>
-      import(
-        "./components/broker/broker-status/broker-status.component"
-      ).then((m) => m.BrokerStatusComponent),
+    redirectTo: "broker/accounts",
+    pathMatch: "full",
   },
   {
     path: "broker/options-chain",

@@ -1,0 +1,53 @@
+:host { display: block; }
+.broker-session { display: grid; gap: 0.85rem; padding: 1rem; border: 1px solid var(--border-light); border-radius: 0.75rem; background: var(--bg-elevated); }
+.session-header, .connection-state, .connection-primary, .session-actions, .operator-grid, .operator-evidence, .diagnostics, .diagnostics header { display: flex; }
+.session-header, .connection-state, .diagnostics header { align-items: start; justify-content: space-between; gap: 1rem; }
+.session-header h2, .session-header p, .connection-primary p, .state, h3, .diagnostics p { margin: 0; }
+.session-header h2 { font-size: 1rem; }
+.session-header > div > p:not(.eyebrow) { margin-top: 0.2rem; color: var(--text-secondary); font-size: 0.85rem; }
+.eyebrow { color: var(--accent); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+button { padding: 0.45rem 0.7rem; border-radius: 0.45rem; font: inherit; font-size: 0.82rem; font-weight: 700; cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: 0.6; }
+button:focus-visible, summary:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.primary { border: 1px solid var(--accent); color: #fff; background: var(--accent); }
+.secondary { border: 1px solid var(--border-light); color: var(--text-primary); background: var(--bg-sunken); }
+.danger { border: 1px solid var(--bear); color: var(--bear); background: var(--bear-soft); }
+.connection-state { padding: 0.9rem; border: 1px solid var(--border-light); border-radius: 0.6rem; background: var(--bg-sunken); }
+.connection-state.connected { border-color: color-mix(in srgb, var(--bull) 50%, var(--border-light)); }
+.connection-state.disconnected, .connection-state.mismatch { border-color: color-mix(in srgb, var(--warn) 50%, var(--border-light)); }
+.connection-primary { flex: 1; flex-direction: column; align-items: start; gap: 0.35rem; }
+.connection-primary strong { font-size: 0.95rem; }
+.connection-primary p { color: var(--text-secondary); font-size: 0.84rem; }
+.connection-facts { display: grid; grid-template-columns: repeat(3, minmax(5.5rem, 1fr)); gap: 0.5rem; margin: 0; }
+.connection-facts div { display: grid; gap: 0.2rem; }
+dt { color: var(--text-secondary); font-size: 0.76rem; }
+dd { margin: 0; font-size: 0.84rem; }
+.status-pill { display: inline-flex; width: fit-content; padding: 0.16rem 0.5rem; border-radius: 999px; font-size: 0.74rem; font-weight: 700; }
+.status-pill.ok { color: var(--bull); background: var(--bull-soft); }
+.status-pill.warn { color: var(--warn); background: var(--warn-soft); }
+.status-pill.bad { color: var(--bear); background: var(--bear-soft); }
+.session-actions { flex-wrap: wrap; gap: 0.5rem; }
+.state { color: var(--text-secondary); }
+.state-error { color: var(--bear); }
+.operator-evidence { flex-direction: column; gap: 0.8rem; }
+.evidence-details, .connection-guide { padding: 0.8rem; border: 1px solid var(--border-light); border-radius: 0.6rem; background: var(--bg-sunken); }
+summary { cursor: pointer; color: var(--text-primary); font-size: 0.86rem; font-weight: 700; }
+.operator-grid { gap: 1rem; margin-top: 0.8rem; }
+.operator-grid > section { flex: 1 1 16rem; min-width: 0; }
+h3 { font-size: 0.86rem; }
+.key-values { display: grid; gap: 0.35rem; margin: 0.6rem 0 0; }
+.key-values div { display: grid; grid-template-columns: minmax(8rem, .7fr) minmax(0, 1.3fr); gap: 0.75rem; padding-top: 0.35rem; border-top: 1px solid var(--border-light); }
+.key-values dd { overflow-wrap: anywhere; text-align: right; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+a { display: inline-block; margin-top: 0.75rem; color: var(--accent); font-size: 0.82rem; }
+.client-warning { margin: 0.8rem 0 0; padding: 0.7rem; border: 1px solid var(--bear); border-radius: 0.5rem; color: var(--bear); background: var(--bear-soft); font-size: 0.84rem; }
+.diagnostics { flex-direction: column; gap: 0.7rem; padding: 0.9rem; border: 1px solid var(--border-light); border-radius: 0.6rem; }
+.diagnostics h2 { margin: 0; font-size: 0.95rem; }
+.diagnostics ul { display: grid; gap: 0.55rem; margin: 0; padding: 0; list-style: none; }
+.diagnostics li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.6rem; padding: 0.7rem; border: 1px solid var(--border-light); border-radius: 0.5rem; background: var(--bg-sunken); }
+.diagnostics li.fail { border-color: var(--bear); }
+.diagnostics li.warn-row { border-color: var(--warn); }
+.diagnostics strong { font-size: 0.84rem; }
+.diagnostics li p { margin-top: 0.25rem; color: var(--text-secondary); font-size: 0.78rem; }
+.connection-guide p { margin: 0.6rem 0 0; color: var(--text-secondary); font-size: 0.84rem; }
+@media (max-width: 900px) { .connection-state { flex-direction: column; } .connection-facts { width: 100%; } .operator-grid { flex-direction: column; } }

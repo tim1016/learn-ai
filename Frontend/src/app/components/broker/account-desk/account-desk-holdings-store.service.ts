@@ -21,6 +21,7 @@ import type {
 import {
   isRecord,
   operatorBlockersForAccountDeskLens,
+  type AccountDeskLens,
   type OperatorBlocker,
 } from '../../../api/operator-blocker.types';
 import { BrokerService } from '../../../services/broker.service';
@@ -93,7 +94,9 @@ export class AccountDeskHoldingsStore {
       openPositions: holdings.positions.positions.length,
     };
   });
-  readonly rows = computed<readonly AccountDeskHoldingRow[]>(() => {
+  readonly rows = computed<readonly AccountDeskHoldingRow[]>(() => this.rowsForLens('trader'));
+
+  rowsForLens(lens: AccountDeskLens): readonly AccountDeskHoldingRow[] {
     const holdings = this.holdingsState();
     if (holdings === null) return [];
     const ticks = this.positionTicks();
@@ -112,11 +115,11 @@ export class AccountDeskHoldingsStore {
               blocker.anchor.kind === 'holdings_row' &&
               blocker.anchor.subject_key === String(position.con_id),
           ),
-          'trader',
+          lens,
         ),
       };
     });
-  });
+  }
 
   constructor() {
     this.destroyRef.onDestroy(() => {

@@ -14,6 +14,30 @@
   gap: 1rem;
   align-items: start;
 }
+
+.operator-workspace__evidence {
+  padding: 1rem;
+  border: 1px solid var(--border-light);
+  border-radius: 0.75rem;
+  background: var(--bg-elevated);
+}
+
+.operator-workspace__evidence summary {
+  cursor: pointer;
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.operator-workspace__evidence summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.operator-workspace__evidence-body {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+}
 @media (max-width: 48rem) {
   .operator-workspace__actions {
     grid-template-columns: 1fr;

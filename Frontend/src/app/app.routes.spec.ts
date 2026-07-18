@@ -5,6 +5,12 @@ import { BotOperatorManualPageComponent } from './components/broker/bot-operator
 import { routes } from './app.routes';
 
 describe('routes', () => {
+  it('redirects the retired Broker Status bookmark to the account roster', () => {
+    const route = routes.find((candidate) => candidate.path === 'broker');
+
+    expect(route).toMatchObject({ redirectTo: 'broker/accounts', pathMatch: 'full' });
+  });
+
   it('keeps the retired Account Monitor bookmark as the one-time Accounts redirect', async () => {
     const route = routes.find((candidate) => candidate.path === 'broker/account-monitor');
     if (route?.loadComponent === undefined) throw new Error('Account Monitor redirect route is missing.');
