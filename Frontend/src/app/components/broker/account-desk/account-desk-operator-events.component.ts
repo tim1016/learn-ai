@@ -1,8 +1,10 @@
-import { ChangeDetectionStrategy, Component, inject } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, inject } from "@angular/core";
 import { ButtonModule } from "primeng/button";
 import { PanelModule } from "primeng/panel";
+import { Timeline } from "primeng/timeline";
 
 import type {
+  AccountEventEvidenceRef,
   AccountEventKind,
   AccountEventRow,
 } from "../../../api/account-events.types";
@@ -20,6 +22,11 @@ const EVENT_KINDS: readonly AccountEventKind[] = [
   "other",
 ];
 
+interface AccountTimelineRow {
+  readonly event: AccountEventRow;
+  readonly evidence: AccountEventEvidenceRef[];
+}
+
 /** Operations timeline for the full backend-classified account journal. */
 @Component({
   selector: "app-account-desk-operator-events",
@@ -30,6 +37,7 @@ const EVENT_KINDS: readonly AccountEventKind[] = [
     PanelModule,
     ReceiptLabelPipe,
     TimestampDisplayComponent,
+    Timeline,
   ],
   templateUrl: "./account-desk-operator-events.component.html",
   styleUrl: "./account-desk-operator-events.component.scss",
@@ -37,12 +45,18 @@ const EVENT_KINDS: readonly AccountEventKind[] = [
 export class AccountDeskOperatorEventsComponent {
   readonly store = inject(AccountDeskEventsStore);
   readonly eventKinds = EVENT_KINDS;
-
-  trackEvent = (_: number, row: AccountEventRow): string => row.event_id;
+  private readonly timelineRowsByEventId = new Map<string, AccountTimelineRow>();
+  readonly timelineAccessibility = {
+    host: { role: "list", "aria-label": "Journal timeline events" },
+    event: { role: "listitem" },
+  };
+  readonly timelineRows = computed(() =>
+    this.store.operationRows().map((event) => this.timelineRowFor(event)),
+  );
   trackKind = (_: number, kind: AccountEventKind): AccountEventKind => kind;
   trackEvidence = (
     _: number,
-    evidence: AccountEventRow["evidence_refs"][number],
+    evidence: AccountEventEvidenceRef,
   ): string => `${evidence.source}:${evidence.ref}`;
 
   selected(kind: AccountEventKind): boolean {
@@ -59,5 +73,14 @@ export class AccountDeskOperatorEventsComponent {
 
   loadOlder(): void {
     this.store.loadOlder();
+  }
+
+  private timelineRowFor(event: AccountEventRow): AccountTimelineRow {
+    const cached = this.timelineRowsByEventId.get(event.event_id);
+    if (cached !== undefined) return cached;
+
+    const row = { event, evidence: event.evidence_refs };
+    this.timelineRowsByEventId.set(event.event_id, row);
+    return row;
   }
 }

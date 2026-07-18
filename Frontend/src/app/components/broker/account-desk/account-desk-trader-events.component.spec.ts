@@ -29,21 +29,23 @@ function makeStore(overrides: Record<string, unknown> = {}) {
 }
 
 describe("AccountDeskTraderEventsComponent", () => {
-  it("renders only backend narration with local timestamp display", async () => {
+  it("renders a categorized timeline with only backend narration and local timestamp display", async () => {
     await render(AccountDeskTraderEventsComponent, {
       providers: [{ provide: AccountDeskEventsStore, useValue: makeStore() }],
     });
 
     expect(await screen.findByText("Today at the desk")).toBeTruthy();
-    expect(screen.getByRole("listitem").textContent).toContain(
-      "The backend wrote this trader narration.",
-    );
+    expect(screen.getByText("Safety")).toBeTruthy();
+    expect(screen.getByText("The backend wrote this trader narration.")).toBeTruthy();
+    expect(document.querySelector('.trader-event-marker[data-kind="safety"]')).not.toBeNull();
     expect(
       screen.queryByText("Operator detail stays out of this feed."),
     ).toBeNull();
     expect(
       document.querySelector('[data-timestamp-mode="local"]'),
     ).not.toBeNull();
+    expect(screen.getByRole("list", { name: "Today at the desk activity" })).toBeTruthy();
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
   });
 
   it("renders an honest error with retry instead of an empty event feed", async () => {

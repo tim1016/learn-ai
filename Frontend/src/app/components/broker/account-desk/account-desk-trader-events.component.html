@@ -16,16 +16,26 @@
     </p>
   } @else {
     @if (hiddenCount() > 0 && !showAll()) {
-      <p class="event-summary">Showing the latest {{ visibleRows().length }} of {{ store.traderRows().length }} updates.</p>
+      <p class="event-summary">Showing the latest {{ timelineRows().length }} of {{ store.traderRows().length }} updates.</p>
     }
-    <ol>
-      @for (row of visibleRows(); track trackEvent($index, row)) {
-        <li>
-          <app-timestamp-display [value]="row.occurred_at_ms" mode="local" /> —
-          {{ row.trader_narration }}
-        </li>
-      }
-    </ol>
+    <p-timeline [value]="timelineRows()" [pt]="timelineAccessibility" align="left" class="trader-timeline">
+      <ng-template #opposite let-item>
+        <span class="trader-event-time">
+          <app-timestamp-display [value]="item.occurred_at_ms" mode="local" />
+        </span>
+      </ng-template>
+      <ng-template #marker let-item>
+        <span class="trader-event-marker" [attr.data-kind]="item.kind" aria-hidden="true"></span>
+      </ng-template>
+      <ng-template #content let-item>
+        <article class="trader-event-entry">
+          <span class="trader-event-kind" [attr.data-kind]="item.kind">
+            {{ item.kind | receiptLabel }}
+          </span>
+          <p>{{ item.trader_narration }}</p>
+        </article>
+      </ng-template>
+    </p-timeline>
     @if (hiddenCount() > 0) {
       <button pButton type="button" severity="secondary" (click)="toggleHistory()">
         <span class="p-button-label">{{ showAll() ? 'Show fewer updates' : 'Show ' + hiddenCount() + ' older update' + (hiddenCount() === 1 ? '' : 's') }}</span>
@@ -34,7 +44,9 @@
   }
   @if (store.traderShowingStaleLastGood()) {
     <p class="state state-stale">
-      Showing the last available event history. Refresh is unavailable.
+      Showing the last available event history from
+      <app-timestamp-display [value]="store.traderLastGoodAtMs()" mode="local" />.
+      Refresh is unavailable.
     </p>
   }
 </p-panel>

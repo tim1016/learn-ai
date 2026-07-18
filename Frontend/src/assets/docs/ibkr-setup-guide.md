@@ -53,16 +53,16 @@ IBKR's API connection signature includes host, port, and client ID. The client I
 | Host runner / bot-owned session | `20-49`                   |
 | Manual scripts and notebooks    | `100+`                    |
 
-If Broker Status reports client-ID overlap, do not retry blindly. Stop the duplicate client, choose another client ID, or restart Gateway/TWS to clear stale sessions.
+If the selected Account Desk reports a client-ID overlap, do not retry blindly. Stop the duplicate client, choose another client ID, or restart Gateway/TWS to clear stale sessions.
 
 ## Diagnostic flow
 
-1. Open Broker Status.
+1. Open the selected account in Account Desk.
 2. Confirm Mode is `PAPER`, the account is a `DU...` paper account, and the port matches paper Gateway/TWS.
 3. Read the Effective IBKR configuration card. It is display-only.
 4. Click Diagnose if the socket does not connect or reconnects unexpectedly.
 5. If diagnostics mention client ID, socket, Trusted IPs, API settings, or read-only mode, fix the Gateway/TWS setting first, then reconnect.
-6. After reconnect, open Account Monitor and run account reconciliation before starting bots.
+6. After reconnect, review the Account Desk verdict and run account reconciliation before starting bots.
 
 ## Common failures
 
@@ -78,10 +78,10 @@ If Broker Status reports client-ID overlap, do not retry blindly. Stop the dupli
 
 Before enabling any real code path that depends on live broker evidence:
 
-- Broker Status shows paper mode, paper port, and `DU` account sentinel.
+- The selected Account Desk shows paper mode, paper port, and the matching `DU` account sentinel.
 - Effective IBKR configuration shows the expected host, port, and data-plane client ID.
 - No client-ID overlap warning is active.
-- Account Monitor has a fresh account reconciliation receipt.
+- Account Desk has a fresh account reconciliation receipt.
 - Unattributed exposure is flat or has an audited accepted override.
 - Any retired-bot recovery row is resolved or deliberately left frozen.
 

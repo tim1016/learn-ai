@@ -1,12 +1,14 @@
-import { provideZonelessChangeDetection } from '@angular/core';
+import { provideZonelessChangeDetection, signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { IbkrPnLTick } from '../../../api/broker-models';
+import type { IbkrConnectionHealth, IbkrPnLTick } from '../../../api/broker-models';
+import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import {
   makeAccountSummary,
   makeAccountTruth,
+  makeBrokerHealth,
   makePosition,
   makePositionsSnapshot,
   makeTruthPosition,
@@ -44,6 +46,7 @@ describe('AccountDeskHoldingsStore', () => {
     positions: vi.fn(),
     accountTruth: vi.fn(),
   };
+  let health: { health: ReturnType<typeof signal<IbkrConnectionHealth | null>> };
 
   beforeEach(() => {
     StubEventSource.instances = [];
@@ -51,11 +54,13 @@ describe('AccountDeskHoldingsStore', () => {
     broker.account.mockReset();
     broker.positions.mockReset();
     broker.accountTruth.mockReset();
+    health = { health: signal<IbkrConnectionHealth | null>(makeBrokerHealth()) };
     TestBed.configureTestingModule({
       providers: [
         provideZonelessChangeDetection(),
         AccountDeskHoldingsStore,
         { provide: BrokerService, useValue: broker },
+        { provide: BrokerHealthService, useValue: health },
       ],
     });
   });
@@ -183,6 +188,36 @@ describe('AccountDeskHoldingsStore', () => {
 
     expect(firstSources.every((source) => source.closed)).toBe(true);
     expect(store.rows()[0]?.position.account_id).toBe('DU7654321');
+  });
+
+  it('invalidates holdings on shared broker changes and reloads only when the selected account is re-attested', async () => {
+    const position = makePosition();
+    broker.account.mockResolvedValue(makeAccountSummary());
+    broker.positions.mockResolvedValue(makePositionsSnapshot(undefined, [position]));
+    broker.accountTruth.mockResolvedValue(makeAccountTruth(undefined, [makeTruthPosition(position)]));
+    const store = TestBed.inject(AccountDeskHoldingsStore);
+    await store.load('DU1234567');
+    const firstSources = [...StubEventSource.instances];
+
+    health.health.set(makeBrokerHealth('DU1234567', { connected: false, connection_state: 'disconnected' }));
+    await settleEffects();
+
+    expect(firstSources.every((source) => source.closed)).toBe(true);
+    expect(store.rows()).toEqual([]);
+    expect(store.unavailableMessage()).toContain('disconnected');
+
+    health.health.set(makeBrokerHealth('DU7654321'));
+    await settleEffects();
+
+    expect(broker.account).toHaveBeenCalledOnce();
+    expect(store.rows()).toEqual([]);
+    expect(store.unavailableMessage()).toContain('different account');
+
+    health.health.set(makeBrokerHealth());
+    await vi.waitFor(() => expect(broker.account).toHaveBeenCalledTimes(2));
+
+    expect(store.rows()).toHaveLength(1);
+    expect(store.rows()[0]?.position.account_id).toBe('DU1234567');
   });
 });
 

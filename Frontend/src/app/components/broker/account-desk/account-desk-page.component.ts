@@ -13,7 +13,6 @@ import {
 import { takeUntilDestroyed } from "@angular/core/rxjs-interop";
 import { ActivatedRoute, Router } from "@angular/router";
 import { ButtonModule } from "primeng/button";
-import { CardModule } from "primeng/card";
 import { MessageModule } from "primeng/message";
 import { PanelModule } from "primeng/panel";
 
@@ -28,6 +27,8 @@ import {
 } from "./account-desk-lens-select.component";
 import { AccountDeskEventsStore } from "./account-desk-events-store.service";
 import { AccountDeskAccountSwitcherComponent } from "./account-desk-account-switcher.component";
+import { AccountDeskBrokerSessionComponent } from "./account-desk-broker-session.component";
+import { AccountDeskBrokerSnapshotComponent } from "./account-desk-broker-snapshot.component";
 import { AccountDeskDirectoryStore } from "./account-desk-directory-store.service";
 import { AccountDeskOperatorWorkspaceComponent } from "./account-desk-operator-workspace.component";
 import { AccountDeskFleetStore } from "./account-desk-fleet-store.service";
@@ -36,7 +37,6 @@ import { AccountDeskGuidanceStore } from "./account-desk-guidance-store.service"
 import { AccountDeskRecoveryStore } from "./account-desk-recovery-store.service";
 import { AccountDeskSurfaceStore } from "./account-desk-surface-store.service";
 import { AccountDeskTraderEventsComponent } from "./account-desk-trader-events.component";
-import { AccountDeskTraderHoldingsComponent } from "./account-desk-trader-holdings.component";
 import { AccountDeskVerdictComponent } from "./account-desk-verdict.component";
 import { accountDeskFragmentTarget } from "./account-desk-legacy-fragments";
 
@@ -49,11 +49,11 @@ import { accountDeskFragmentTarget } from "./account-desk-legacy-fragments";
     AccountDeskGuidanceComponent,
     AccountDeskVerdictComponent,
     AccountDeskOperatorWorkspaceComponent,
-    AccountDeskTraderHoldingsComponent,
     AccountDeskLensSelectComponent,
     AccountDeskTraderEventsComponent,
     ButtonModule,
-    CardModule,
+    AccountDeskBrokerSessionComponent,
+    AccountDeskBrokerSnapshotComponent,
     MessageModule,
     PageHeaderComponent,
     PanelModule,

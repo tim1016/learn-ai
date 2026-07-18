@@ -2,3 +2,26 @@
   display: grid;
   gap: 1rem;
 }
+
+.account-desk__body {
+  display: grid;
+  gap: 1rem;
+}
+
+.account-desk__trader-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(18rem, 0.85fr);
+  align-items: start;
+  gap: 1rem;
+}
+
+.account-desk__trader-context {
+  display: grid;
+  gap: 1rem;
+}
+
+@media (max-width: 1000px) {
+  .account-desk__trader-layout {
+    grid-template-columns: 1fr;
+  }
+}

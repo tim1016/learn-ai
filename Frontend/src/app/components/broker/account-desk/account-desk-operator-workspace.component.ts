@@ -5,6 +5,7 @@ import { AccountDeskOperatorEventsComponent } from "./account-desk-operator-even
 import { AccountDeskOperatorFleetComponent } from "./account-desk-operator-fleet.component";
 import { AccountDeskOperatorProofComponent } from "./account-desk-operator-proof.component";
 import { AccountDeskOperatorServiceComponent } from "./account-desk-operator-service.component";
+import { AccountDeskBrokerSnapshotComponent } from "./account-desk-broker-snapshot.component";
 import { AccountDeskRecoveryControlsComponent } from "./account-desk-recovery-controls.component";
 
 /** Focused operator workspace, ordered around current proof and recovery. */
@@ -16,6 +17,7 @@ import { AccountDeskRecoveryControlsComponent } from "./account-desk-recovery-co
     AccountDeskOperatorFleetComponent,
     AccountDeskOperatorProofComponent,
     AccountDeskOperatorServiceComponent,
+    AccountDeskBrokerSnapshotComponent,
     AccountDeskRecoveryControlsComponent,
     CardModule,
   ],

@@ -33,6 +33,7 @@ $text-muted:     #6b6f7a;
 // ── Brand / Accent (TV blue) ───────────────────────────────
 $accent:        #2962ff;  // was #3b82f6 — TV signature
 $accent-hover:  #1e53e5;
+$accent-text:   #7aa9ff;  // AA blue text on elevated dark surfaces
 
 // ── Semantic: Market (TV green/red) ────────────────────────
 $bull: #26a69a;  // was #00c896 — TV green
@@ -95,6 +96,7 @@ $container-lg: 1400px;
   // Brand / Accent
   --accent:         #{$accent};
   --accent-hover:   #{$accent-hover};
+  --accent-text:    #{$accent-text};
   --accent-soft:    rgba(41, 98, 255, 0.15);
   --accent-faint:   rgba(41, 98, 255, 0.08);
 

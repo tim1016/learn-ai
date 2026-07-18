@@ -14,6 +14,7 @@ import type {
   AccountTruthPositionRow,
   AccountTruthResponse,
   IbkrAccountSummary,
+  IbkrConnectionHealth,
   IbkrPnLTick,
   IbkrPosition,
   IbkrPositionsSnapshot,
@@ -21,9 +22,11 @@ import type {
 import {
   isRecord,
   operatorBlockersForAccountDeskLens,
+  type AccountDeskLens,
   type OperatorBlocker,
 } from '../../../api/operator-blocker.types';
 import { BrokerService } from '../../../services/broker.service';
+import { BrokerHealthService } from '../../../services/broker-health.service';
 import { brokerSse, type SseStream } from '../../../services/broker-sse';
 
 interface AttestedHoldings {
@@ -56,9 +59,11 @@ export interface AccountDeskHeadlineMetrics {
 @Injectable()
 export class AccountDeskHoldingsStore {
   private readonly broker = inject(BrokerService);
+  private readonly brokerHealth = inject(BrokerHealthService);
   private readonly destroyRef = inject(DestroyRef);
   private readonly injector = inject(Injector);
   private requestGeneration = 0;
+  private lastBrokerConnectionContext: string | null = null;
 
   private readonly accountKey = signal<string | null>(null);
   private readonly holdingsState = signal<AttestedHoldings | null>(null);
@@ -93,7 +98,9 @@ export class AccountDeskHoldingsStore {
       openPositions: holdings.positions.positions.length,
     };
   });
-  readonly rows = computed<readonly AccountDeskHoldingRow[]>(() => {
+  readonly rows = computed<readonly AccountDeskHoldingRow[]>(() => this.rowsForLens('trader'));
+
+  rowsForLens(lens: AccountDeskLens): readonly AccountDeskHoldingRow[] {
     const holdings = this.holdingsState();
     if (holdings === null) return [];
     const ticks = this.positionTicks();
@@ -112,11 +119,11 @@ export class AccountDeskHoldingsStore {
               blocker.anchor.kind === 'holdings_row' &&
               blocker.anchor.subject_key === String(position.con_id),
           ),
-          'trader',
+          lens,
         ),
       };
     });
-  });
+  }
 
   constructor() {
     this.destroyRef.onDestroy(() => {
@@ -124,6 +131,9 @@ export class AccountDeskHoldingsStore {
       this.closeStreams();
     });
 
+    effect(() => {
+      this.observeBrokerConnection(this.brokerHealth.health());
+    });
     effect(() => {
       const stream = this.accountStream();
       if (stream === null) return;
@@ -139,6 +149,7 @@ export class AccountDeskHoldingsStore {
   async load(accountId: string): Promise<void> {
     if (this.accountKey() !== accountId) {
       this.requestGeneration += 1;
+      this.lastBrokerConnectionContext = brokerConnectionContext(this.brokerHealth.health());
       this.accountKey.set(accountId);
       this.holdingsState.set(null);
       this.errorState.set(null);
@@ -190,6 +201,25 @@ export class AccountDeskHoldingsStore {
   retry(): void {
     const accountId = this.accountKey();
     if (accountId) void this.load(accountId);
+  }
+
+  private observeBrokerConnection(health: IbkrConnectionHealth | null): void {
+    const accountId = this.accountKey();
+    if (accountId === null) {
+      this.lastBrokerConnectionContext = null;
+      return;
+    }
+
+    const nextContext = brokerConnectionContext(health);
+    if (this.lastBrokerConnectionContext === null) {
+      this.lastBrokerConnectionContext = nextContext;
+      return;
+    }
+    if (this.lastBrokerConnectionContext === nextContext) return;
+
+    this.lastBrokerConnectionContext = nextContext;
+    this.invalidateForConnectionChange(brokerConnectionMessage(health, accountId));
+    if (brokerContextAttestsRoute(health, accountId)) void this.load(accountId);
   }
 
   private consumeAccountStream(stream: SseStream<IbkrPnLTick>): void {
@@ -271,6 +301,15 @@ export class AccountDeskHoldingsStore {
     this.closeStreams();
   }
 
+  private invalidateForConnectionChange(message: string): void {
+    this.requestGeneration += 1;
+    this.holdingsState.set(null);
+    this.loadingState.set(false);
+    this.errorState.set(null);
+    this.unavailableMessageState.set(message);
+    this.closeStreams();
+  }
+
   private closeStreams(): void {
     this.accountStream()?.close();
     this.positionStream()?.close();
@@ -279,6 +318,46 @@ export class AccountDeskHoldingsStore {
     this.accountTickState.set(null);
     this.positionTicks.set(new Map());
   }
+}
+
+function brokerConnectionContext(health: IbkrConnectionHealth | null): string {
+  if (health === null) return 'health-unavailable';
+  return [
+    health.disabled,
+    health.connected,
+    health.connection_state,
+    health.account_id ?? 'unbound',
+  ].join(':');
+}
+
+function brokerContextAttestsRoute(
+  health: IbkrConnectionHealth | null,
+  accountId: string,
+): boolean {
+  return health !== null &&
+    health.disabled === false &&
+    health.connected === true &&
+    health.connection_state === 'connected' &&
+    health.account_id === accountId;
+}
+
+function brokerConnectionMessage(
+  health: IbkrConnectionHealth | null,
+  accountId: string,
+): string {
+  if (health === null) {
+    return 'Broker health is unavailable. Live holdings are unavailable until the selected account can be re-attested.';
+  }
+  if (health.disabled) {
+    return 'The broker data plane is host-owned. Live holdings are unavailable from this desk.';
+  }
+  if (!health.connected || health.connection_state !== 'connected') {
+    return 'The broker session is disconnected. Live holdings are unavailable until the selected account can be re-attested.';
+  }
+  if (health.account_id !== accountId) {
+    return 'The connected broker session is attached to a different account. Live holdings are unavailable.';
+  }
+  return 'Broker connection changed. Live holdings are unavailable until the selected account can be re-attested.';
 }
 
 function attestedTruthPositions(

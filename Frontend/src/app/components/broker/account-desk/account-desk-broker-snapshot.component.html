@@ -1,0 +1,38 @@
+<section class="broker-snapshot" aria-label="Broker snapshot and positions" aria-live="polite">
+  @if (store.loading() && !store.hasLastGood()) {
+    <p class="state">Attesting the selected broker account before loading its snapshot…</p>
+  } @else if (store.unavailableMessage(); as message) {
+    <div class="state state-unavailable" role="alert"><p>{{ message }}</p>@if (!store.hasLastGood()) { <button pButton type="button" severity="secondary" (click)="retry()"><span class="p-button-label">Retry</span></button> }</div>
+  } @else if (store.error() && !store.hasLastGood()) {
+    <div class="state state-error" role="alert"><p>We could not load the selected account's attested broker snapshot.</p><button pButton type="button" severity="secondary" (click)="retry()"><span class="p-button-label">Retry</span></button></div>
+  }
+
+  @if (store.showingStaleLastGood()) {
+    <p class="state state-stale">Showing the last attested broker snapshot. A live refresh is unavailable.</p>
+  }
+
+  @if (store.account(); as account) {
+    <header class="snapshot-header">
+      <div><h2 class="eyebrow">Broker snapshot</h2><p class="muted">Attested <app-timestamp-display [value]="account.fetched_at_ms" mode="local" /></p></div>
+      <p class="scope">{{ lens() === "trader" ? "Read balances and positions" : "Operator evidence for the selected account" }}</p>
+    </header>
+
+    <dl class="metrics" aria-label="Broker account snapshot">
+      <div><dt>Cash</dt><dd>{{ fmtCurrency(account.cash_balance) }}</dd></div>
+      <div><dt>Net liquidation</dt><dd>{{ fmtCurrency(account.net_liquidation) }}</dd></div>
+      <div><dt>Buying power</dt><dd>{{ fmtCurrency(account.buying_power) }}</dd></div>
+      <div><dt>Excess liquidity</dt><dd>{{ fmtCurrency(account.excess_liquidity) }}</dd></div>
+      <div><dt>Initial margin</dt><dd>{{ fmtCurrency(account.init_margin) }}</dd></div>
+      <div><dt>Maintenance margin</dt><dd>{{ fmtCurrency(account.maint_margin) }}</dd></div>
+      <div><dt>Day P&amp;L</dt><dd>{{ fmtSignedCurrency(account.day_pnl) }}</dd></div>
+      <div><dt>Unrealized P&amp;L</dt><dd>{{ fmtSignedCurrency(account.unrealized_pnl) }}</dd></div>
+      <div><dt>Realized P&amp;L</dt><dd>{{ fmtSignedCurrency(account.realized_pnl) }}</dd></div>
+    </dl>
+
+    @if (store.rows().length === 0) {
+      <section class="positions-empty"><h2>Positions (0)</h2><p>No open positions are reported for this attested account.</p></section>
+    } @else {
+      <section class="positions"><header><h2>Positions ({{ store.rows().length }})</h2><p>Ownership and live P&amp;L remain attached to each broker position.</p></header><app-account-desk-holdings-table [rows]="tableRows()" (blockerMoveSelected)="followBlockerMove($event)" /></section>
+    }
+  }
+</section>

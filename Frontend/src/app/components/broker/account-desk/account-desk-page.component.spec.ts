@@ -250,10 +250,11 @@ describe("AccountDeskPageComponent", () => {
     expect(
       screen.getByRole("heading", { name: "Resolve the account posture" }),
     ).toBeTruthy();
+    expect(screen.queryByText("Operator workspace")).toBeNull();
     expect(
       screen.getByRole("heading", { name: "Account recovery" }),
     ).toBeTruthy();
-    expect(screen.getByText("Account event timeline")).toBeTruthy();
+    expect(screen.getByText("Journal timeline")).toBeTruthy();
   });
 
   it("keeps operator actions and recovery ahead of the audit history", async () => {
@@ -267,7 +268,7 @@ describe("AccountDeskPageComponent", () => {
       fixture.nativeElement as HTMLElement
     ).querySelector<HTMLElement>("#account-desk-recovery-controls");
     const timeline = screen.getByRole("heading", {
-      name: "Account event timeline",
+      name: "Journal timeline",
     });
 
     expect(operatorWorkspace).toBeTruthy();
@@ -456,13 +457,8 @@ describe("AccountDeskPageComponent", () => {
 
     const retries = await screen.findAllByRole("button", { name: "Retry" });
     fireEvent.click(retries[0]);
-    await waitFor(() =>
-      expect(
-        screen.getByText(
-          "No open holdings are reported for this attested account.",
-        ),
-      ).toBeTruthy(),
-    );
+    await screen.findByText("Account is clean");
+    expect(broker.accountTriage).toHaveBeenCalledTimes(2);
   });
 });
 

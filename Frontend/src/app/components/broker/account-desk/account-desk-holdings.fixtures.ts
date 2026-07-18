@@ -3,6 +3,7 @@ import type {
   AccountTruthPositionRow,
   AccountTruthResponse,
   IbkrAccountSummary,
+  IbkrConnectionHealth,
   IbkrPosition,
   IbkrPositionsSnapshot,
 } from '../../../api/broker-models';
@@ -18,6 +19,49 @@ export function makeAccountSummary(accountId = 'DU1234567'): IbkrAccountSummary 
     buying_power: 20_000,
     day_pnl: 25,
     fetched_at_ms: 1_780_000_002_000,
+  };
+}
+
+export function makeBrokerHealth(
+  accountId = 'DU1234567',
+  overrides: Partial<IbkrConnectionHealth> = {},
+): IbkrConnectionHealth {
+  return {
+    mode: 'paper',
+    host: 'host.containers.internal',
+    port: 4002,
+    client_id: 7,
+    connected: true,
+    disabled: false,
+    reason: null,
+    account_id: accountId,
+    is_paper: true,
+    server_version: 178,
+    fetched_at_ms: 1_780_000_002_000,
+    safety_verdict: {
+      configured_mode: 'paper',
+      readonly_flag: false,
+      port_class: 'paper_port',
+      connected_account_prefix: 'DU',
+      final_verdict: 'paper-only',
+      failing_gates: [],
+      unknown_gates: [],
+    },
+    connection_state: 'connected',
+    last_transition_ms: 1_780_000_002_000,
+    connection_lost: false,
+    connectivity_lost_count: 0,
+    reconnect_attempt: null,
+    condition: null,
+    last_ibkr_code: null,
+    last_ibkr_message: null,
+    subscriptions_stale: false,
+    data_farm_degraded: false,
+    last_probe_ms: 1_780_000_002_000,
+    last_probe_error: null,
+    last_recovery_ms: null,
+    recovery_error: null,
+    ...overrides,
   };
 }
 
