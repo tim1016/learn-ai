@@ -76,6 +76,7 @@ def strategy_registry_seeds() -> list[StrategyRegistrySeed]:
             description=registration.description,
         )
         for key, registration in sorted(_STRATEGY_REGISTRY.items())
+        if registration.catalog_visible
     ]
 
 

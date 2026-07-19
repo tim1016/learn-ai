@@ -106,6 +106,15 @@ describe('action-plan deploy readiness', () => {
     ).toEqual(expect.objectContaining({ canDeploy: true }));
   });
 
+  it('requires a stock Action Plan for the migrated EMA signal strategy', () => {
+    expect(actionPlanDeployReadiness('ema_crossover_signal', null)).toEqual({
+      canDeploy: false,
+      reasonCode: 'ACTION_PLAN_EMPTY',
+      message:
+        'EMA Crossover Signal requires an action plan with one long stock entry leg and a matching close leg before deployment.',
+    });
+  });
+
   it.each(actionPlanSnapshot.cases)(
     'matches backend action-plan deploy readiness snapshot: $id',
     (scenario) => {

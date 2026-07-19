@@ -7,6 +7,14 @@ import ast
 import pytest
 
 from app.lean_sidecar.trusted_samples.ema_crossover import EMA_CROSSOVER_SOURCE
+from app.lean_sidecar.trusted_samples.ema_crossover_signal import (
+    EMA_CROSSOVER_SIGNAL_SOURCE,
+)
+
+
+def test_signal_template_reuses_the_single_lean_source_of_truth() -> None:
+    """The migrated strategy gets its own template key without source drift."""
+    assert EMA_CROSSOVER_SIGNAL_SOURCE is EMA_CROSSOVER_SOURCE
 
 
 def test_source_is_non_empty_string() -> None:

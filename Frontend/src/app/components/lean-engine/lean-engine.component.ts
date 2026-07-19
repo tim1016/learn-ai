@@ -408,11 +408,15 @@ export class LeanEngineComponent implements OnInit {
     };
   }
 
+  /** The exact source-versus-decision cadence shown to and submitted by the operator. */
+  readonly dataPolicy = computed(() => this.composeDataPolicy());
+
   private strategyBarsSpec(
     timespan: DataPolicy['input_bars']['timespan'],
   ): DataPolicy['strategy_bars'] {
     const strategyName = this.selectedStrategyName();
     const isEmaCrossoverRun =
+      strategyName === 'ema_crossover_signal' ||
       strategyName === 'spy_ema_crossover' ||
       (strategyName === null && this.engine() === 'lean');
     if (timespan === 'minute' && isEmaCrossoverRun) {
@@ -854,7 +858,7 @@ export class LeanEngineComponent implements OnInit {
       // submission. The Python router accepts the block as-is and echoes
       // it in the response; the persistence layer writes it into the new
       // ``DataPolicyJson`` column.
-      data_policy: this.composeDataPolicy(),
+      data_policy: this.dataPolicy(),
     };
     if (this.startDate()) backtest["start_date"] = this.startDate();
     if (this.endDate()) backtest["end_date"] = this.endDate();
@@ -943,7 +947,7 @@ export class LeanEngineComponent implements OnInit {
           starting_cash: this.initialCash(),
           start_ms_utc: this.composeStartMs(),
           end_ms_utc: endResolution.session_open_ms_utc,
-          data_policy: this.composeDataPolicy(),
+          data_policy: this.dataPolicy(),
         },
       });
       this.leanJobId.set(id);

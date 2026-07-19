@@ -42,7 +42,6 @@ from app.lean_sidecar.lean_config import LeanConfig
 from app.lean_sidecar.manifest import (
     MANIFEST_SCHEMA_VERSION,
     P2_5_DATE_SEMANTICS_NOTE,
-    BrokeragePolicy,
     DataPolicy,
     RunManifest,
     StagedDataManifest,
@@ -69,14 +68,10 @@ from app.lean_sidecar.staging import (
     stage_minute_zips_from_store,
     stage_quote_bars,
 )
-from app.lean_sidecar.trusted_samples.buy_and_hold import BUY_AND_HOLD_SOURCE
-from app.lean_sidecar.trusted_samples.buy_and_hold_reconciliation import (
-    BUY_AND_HOLD_RECONCILIATION_SOURCE,
+from app.lean_sidecar.trusted_templates import (
+    TrustedTemplate,
+    trusted_template_definition,
 )
-from app.lean_sidecar.trusted_samples.deployment_validation import (
-    DEPLOYMENT_VALIDATION_SOURCE,
-)
-from app.lean_sidecar.trusted_samples.ema_crossover import EMA_CROSSOVER_SOURCE
 from app.lean_sidecar.workspace import Workspace, resolve_workspace
 from app.schemas.run_verdict import RunVerdictCleanliness
 from app.services.lean_sidecar_persistence import (
@@ -85,30 +80,6 @@ from app.services.lean_sidecar_persistence import (
     persist_via_dotnet,
 )
 from app.utils.timestamps import now_ms_utc
-
-# Phase 5b — selector for which trusted-sample source the orchestrator
-# stages when the caller does not provide their own ``algorithm_source``.
-# "trusted_default" keeps Phase 1's LEAN-default-brokerage behavior
-# (backwards-compatible default); "reconciliation" pins IBKR brokerage
-# explicitly so the Phase 5a fee reconciler returns a clean report.
-TrustedTemplate = Literal["trusted_default", "reconciliation", "ema_crossover", "deployment_validation"]
-
-# Maps the template selector to the manifest's ``brokerage_policy``
-# enum so a reader of the manifest can tell at a glance which
-# brokerage the sample's source actually pinned.
-_BROKERAGE_POLICY_FOR_TEMPLATE: dict[TrustedTemplate, BrokeragePolicy] = {
-    "trusted_default": "algorithm_default",
-    "reconciliation": "interactive_brokers",
-    "ema_crossover": "algorithm_default",
-    "deployment_validation": "algorithm_default",
-}
-
-_SOURCE_FOR_TEMPLATE: dict[TrustedTemplate, str] = {
-    "trusted_default": BUY_AND_HOLD_SOURCE,
-    "reconciliation": BUY_AND_HOLD_RECONCILIATION_SOURCE,
-    "ema_crossover": EMA_CROSSOVER_SOURCE,
-    "deployment_validation": DEPLOYMENT_VALIDATION_SOURCE,
-}
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +155,7 @@ class TrustedRunRequest:
     # fee reconciler can return a clean report. Ignored when the
     # caller supplies their own ``algorithm_source`` — operator-pasted
     # source picks its own brokerage via SetBrokerageModel.
-    template: TrustedTemplate = "trusted_default"
+    template: TrustedTemplate = TrustedTemplate.TRUSTED_DEFAULT
     # Engine Lab parity — set when this run is the LEAN validating
     # companion of a Python engine run. Persisted onto the
     # StrategyExecution row so the .NET persist step can compute the
@@ -655,7 +626,11 @@ async def run_trusted_sample(
     # sample when present. The Phase 1c sandbox shape (--read-only,
     # --user=<non-root>, --cap-drop=ALL, --network=none, workspace-
     # only mount) is what makes accepting arbitrary source safe.
-    source_to_stage = request.algorithm_source if request.algorithm_source else _SOURCE_FOR_TEMPLATE[request.template]
+    source_to_stage = (
+        request.algorithm_source
+        if request.algorithm_source
+        else trusted_template_definition(request.template).source
+    )
     source_path = stage_algorithm_source(workspace, source_to_stage)
     # PR B: ``bar_minutes`` for the LEAN config is derived from
     # ``data_policy.strategy_bars.multiplier``. The bundled EMA template
@@ -940,7 +915,9 @@ def _build_manifest(
         # the source's hash, captured above). When using a bundled
         # template, the template selector pins the policy exactly.
         brokerage_policy=(
-            "algorithm_default" if request.algorithm_source else _BROKERAGE_POLICY_FOR_TEMPLATE[request.template]
+            "algorithm_default"
+            if request.algorithm_source
+            else trusted_template_definition(request.template).brokerage_policy
         ),
         starting_capital=request.starting_cash,
         account_currency="USD",

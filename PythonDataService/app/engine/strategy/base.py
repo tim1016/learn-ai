@@ -20,11 +20,14 @@ from app.engine.execution.order import OrderEvent
 from app.engine.execution.portfolio import Portfolio
 from app.engine.framework.insight import Insight
 from app.engine.framework.insight_manager import InsightManager
+from app.engine.strategy.signal_intent import SignalIntent
 
 if TYPE_CHECKING:
+    from app.engine.execution.signal_intent_executor import SignalIntentExecutor
+    from app.engine.live.indicator_state import ValidationResult
+
     # Type-only: a runtime import would create an indicator_state -> strategy
     # cycle. The default validate_state_payload imports it locally instead.
-    from app.engine.live.indicator_state import ValidationResult
 
 
 @dataclass(frozen=True)
@@ -48,7 +51,7 @@ class DecisionSnapshot:
     ``ENTER`` if it newly entered a position on this bar, ``EXIT`` if
     it newly liquidated, ``HOLD`` for any other state (warmup-skip,
     bars-until-exit countdown, no signal fired). The strategy is
-    responsible for computing this — see ``SpyEmaCrossoverAlgorithm``
+    responsible for computing this — see ``EmaCrossoverSignalAlgorithm``
     for the canonical pattern.
     """
 
@@ -127,6 +130,11 @@ class StrategyContext:
     # position state when its ``on_bar`` runs. ``None`` on strategies
     # unit-tested without the engine.
     _pre_handler_hook: Callable[[TradeBar], None] | None = None
+    # Engine-owned execution policy for an instrument-free strategy decision.
+    # BacktestEngine binds the single signal stream explicitly after initialize.
+    _signal_intent_executor: SignalIntentExecutor | None = None
+    # Retained as an audit trail for tests, diagnostics, and future consumers.
+    signal_intents: list[SignalIntent] = field(default_factory=list)
 
     def add_equity(self, symbol: str) -> str:
         symbol = symbol.upper()
@@ -193,6 +201,21 @@ class StrategyContext:
             self.current_time,
             tag,
         )
+
+    def set_signal_intent_executor(self, executor: SignalIntentExecutor) -> None:
+        """Bind the engine-owned execution policy for asset-free decisions."""
+        self._signal_intent_executor = executor
+
+    def emit_signal_intent(self, intent: SignalIntent) -> None:
+        """Record and route a strategy-owned, instrument-free decision.
+
+        Engine Lab and parity bind a same-symbol executor explicitly. Live
+        policy strategies bind an Action Plan executor at their runner edge.
+        """
+        self.signal_intents.append(intent)
+        if self._signal_intent_executor is None:
+            raise RuntimeError("SignalIntent requires a bound SignalIntentExecutor")
+        self._signal_intent_executor.execute(self, intent)
 
     def emit_insight(self, insight: Insight) -> None:
         """Register a structured prediction.

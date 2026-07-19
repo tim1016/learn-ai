@@ -9,7 +9,7 @@ router symbols just to answer deploy/start safety questions.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from dataclasses import field as dc_field
 from typing import Literal
 
@@ -22,6 +22,9 @@ from app.engine.pine_generators import (
 )
 from app.engine.strategy.algorithms.deployment_validation import (
     DeploymentValidationConsecutiveGreen,
+)
+from app.engine.strategy.algorithms.ema_crossover_signal import (
+    EmaCrossoverSignalAlgorithm,
 )
 from app.engine.strategy.algorithms.rsi_mean_reversion import (
     RsiMeanReversionAlgorithm,
@@ -51,17 +54,23 @@ class StrategyParamsBase(BaseModel):
 
 
 class EmaCrossoverParams(StrategyParamsBase):
-    """EMA crossover parameters — dynamic ticker.
+    """EMA crossover signal parameters.
 
     Shares the exact indicator / gap / RSI logic as the LEAN-parity SPY
-    reference run, but lets the user pick any ticker at request time.
+    reference run, but lets the user pick the *signal stream* at request time.
     Defaults to SPY so the out-of-the-box run matches the bit-exact
     reference fixture; other symbols (QQQ, IWM, etc.) can be substituted
-    without touching code as long as the data has been fetched into the
-    cache first (flip ``auto_fetch: true`` to pull on demand).
+    without touching the strategy. A live Action Plan independently selects
+    the stock to trade; Engine Lab backtests bind the one loaded price stream
+    to both roles.
     """
 
-    symbol: str = Field("SPY", min_length=1, max_length=20)
+    symbol: str = Field(
+        "SPY",
+        min_length=1,
+        max_length=20,
+        description="Signal-stream ticker. The live Action Plan selects the traded stock separately.",
+    )
 
 
 class SmaCrossoverParams(StrategyParamsBase):
@@ -315,7 +324,8 @@ class StrategyRegistration:
     # script via ``GET /api/engine/strategies/{name}/pine``.
     pine_generator: Callable[[StrategyParamsBase], str] | None = None
     # ADR 0009 § 6 — which boundary sizes this strategy.
-    # ``"policy"`` (default) — the strategy targets via ``set_holdings``;
+    # ``"policy"`` (default) — the execution boundary targets via
+    # ``set_holdings``;
     # the deploy-form sizing selector is enabled, and
     # ``live_config.sizing`` ∈ {FixedShares, FixedNotional, SetHoldings}
     # governs the magnitude.
@@ -329,16 +339,23 @@ class StrategyRegistration:
     # but are hidden from ``GET /strategies`` and rejected by normal backtests.
     hidden_params: set[str] = dc_field(default_factory=set)
     # ADR 0012 / PRD #593 Slice 1A — which boundary chooses the
-    # *instrument* this strategy trades. ``"explicit"`` (default in
-    # Slices 1–3 — every current strategy) means the strategy code
+    # *instrument* this strategy trades. ``"explicit"`` means the strategy code
     # itself names the instrument (e.g. ``set_holdings("SPY", 1.0)``),
     # and ``live_config.action`` is informational only. ``"policy"``
-    # is forward-compatible with Slice 4: future strategies that emit a
-    # generic ``SignalIntent`` and let the deploy-time action plan
-    # resolve to concrete instruments. The deploy boundary STORES this
-    # field in the run ledger but does not refuse deploys based on it
-    # in Slices 1–3 — enforcement lands with consumption (Slice 4).
+    # is active for strategies that emit a generic ``SignalIntent`` and let the
+    # deploy-time Action Plan resolve concrete instruments. The deploy boundary
+    # stores this field in the run ledger and rejects unsupported Action Plans
+    # for policy strategies.
     instrument_surface: Literal["policy", "explicit"] = "explicit"
+    # The live Action Plan shape this strategy requires to start. This is
+    # intentionally independent from ``instrument_surface``: a legacy explicit
+    # strategy may still receive its trade symbol from a stock Action Plan.
+    # ``"single_long_stock"`` means exactly one long stock entry and a
+    # matching close-leg exit; ``"none"`` means no deploy/start requirement.
+    action_plan_contract: Literal["none", "single_long_stock"] = "none"
+    # Compatibility registrations remain runnable for existing ledgers but
+    # must not appear as duplicate choices in the Engine Lab strategy picker.
+    catalog_visible: bool = True
     # Engine Lab parity — the LEAN trusted-sample template that implements
     # the same rules as this strategy, if one exists. When set, every raw
     # minute-resolution Python run auto-spawns a LEAN validating companion
@@ -348,26 +365,27 @@ class StrategyRegistration:
 
 
 _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
-    "spy_ema_crossover": StrategyRegistration(
-        display_name="EMA Crossover",
-        class_name="SpyEmaCrossoverAlgorithm",
+    "ema_crossover_signal": StrategyRegistration(
+        display_name="EMA Crossover Signal",
+        class_name="EmaCrossoverSignalAlgorithm",
         description=(
-            "Long-only intraday trend strategy. Bit-exact against the LEAN "
-            "C# reference when run with the default SPY symbol; any ticker "
-            "in the cache (or auto-fetched from Polygon) can be substituted "
-            "without touching code.\n"
+            "Long-only intraday EMA signal generator. Bit-exact against the "
+            "LEAN C# reference when the default SPY signal stream is used; "
+            "any cached ticker (or Polygon-fetched ticker) can supply signals "
+            "without changing the strategy.\n"
             "\n"
-            "The strategy reads minute SPY bars, consolidates them into "
+            "The strategy reads minute signal bars, consolidates them into "
             "15-minute bars, tracks EMA(5), EMA(10) and Wilders RSI(14), "
             "and goes long for exactly five 15-minute bars (75 min) every "
             "time a fresh fast-over-slow crossover lines up with a 0.20 "
             "minimum gap and an RSI in the 50–70 trend-confirmation band. "
             "There is no stop, no target, no scaling, and at most one "
-            "position open at a time."
+            "position lifecycle open at a time. In live runs, the Action Plan "
+            "selects the stock to trade; the strategy does not."
         ),
         algorithm_pseudocode=(
             "Universe\n"
-            "    symbol     = configurable (default SPY)\n"
+            "    signal_symbol = configurable (default SPY)\n"
             "    resolution = 15-minute bars consolidated from minute data\n"
             "\n"
             "Indicators (Alpha — updated each 15m bar close at bar.end_time)\n"
@@ -387,19 +405,20 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "                  AND EMA_fast[-1] <= EMA_slow[-1]\n"
             "    gap_ok      = (EMA_fast - EMA_slow) >= 0.20\n"
             "    rsi_ok      = 50 <= RSI <= 70\n"
-            "    ⇒ if all three: emit Insight(UP, period=5 bars); enter long\n"
+            "    ⇒ if all three: emit Insight(UP, period=5 bars); emit ENTER\n"
             "\n"
             "Alpha — bar exit conditions (evaluated while in trade)\n"
             "    bars_held += 1 each new bar\n"
-            "    ⇒ when bars_held == 5: Liquidate(symbol)\n"
+            "    ⇒ when bars_held == 5: emit EXIT\n"
             "\n"
             "Risk Management — position survival rules\n"
             "    none — no stop-loss, no take-profit, no signal-flip exit.\n"
             "    A losing trade is held to the time-stop. A reversed crossover\n"
             "    inside the 5-bar window is ignored.\n"
             "\n"
-            "Portfolio Construction\n"
-            "    SetHoldings(symbol, 1.0)  — single-position, all-in\n"
+            "Action Plan / Portfolio Construction\n"
+            "    live execution selects the stock from its Action Plan\n"
+            "    Engine Lab binds intents to its single signal stream\n"
             "\n"
             "Execution\n"
             "    fill_mode = signal_bar_close → fills at the signal bar's close\n"
@@ -408,7 +427,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "                                   (matches TradingView trade-list)\n"
             "\n"
             "End of algorithm\n"
-            "    if still in position at the last bar: Liquidate(symbol)"
+            "    if still in position at the last bar: emit EXIT"
         ),
         gotchas=[
             "EMA warmup is seeded from the SMA of the first N samples — "
@@ -439,14 +458,19 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
             "Engine Lab writes proper UTC in bar.end_time. Cross-system "
             "diffs must normalize to a single reference frame (see SPY EMA "
             "validation report §5.1).",
+            "The Action Plan may trade a different stock from the signal "
+            "stream. That stock selection and sizing are execution concerns; "
+            "this strategy emits only ENTER and EXIT intents.",
             "TV labels trades by bar START, Engine Lab by bar END — a fixed "
             "15-minute label offset that is cosmetic, not a fill-time bug.",
         ],
         param_schema=EmaCrossoverParams,
-        build=lambda p: SpyEmaCrossoverAlgorithm(
+        build=lambda p: EmaCrossoverSignalAlgorithm(
             symbol=p.symbol,  # type: ignore[attr-defined]
         ),
-        lean_twin="ema_crossover",
+        instrument_surface="policy",
+        action_plan_contract="single_long_stock",
+        lean_twin="ema_crossover_signal",
     ),
     "sma_crossover": StrategyRegistration(
         display_name="SMA Crossover",
@@ -814,6 +838,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         lean_twin="deployment_validation",
         param_schema=DeploymentValidationParams,
         hidden_params={"trade_symbol"},
+        action_plan_contract="single_long_stock",
         build=lambda p: DeploymentValidationConsecutiveGreen(
             symbol=p.symbol,  # type: ignore[attr-defined]
             trade_symbol=p.trade_symbol,  # type: ignore[attr-defined]
@@ -1185,6 +1210,19 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         ),
     ),
 }
+
+# Historical ledgers use this key and import path. Keep it executable but do
+# not offer it as a second picker option beside the migrated signal strategy.
+_STRATEGY_REGISTRY["spy_ema_crossover"] = replace(
+    _STRATEGY_REGISTRY["ema_crossover_signal"],
+    display_name="EMA Crossover (legacy compatibility)",
+    class_name="SpyEmaCrossoverAlgorithm",
+    build=lambda p: SpyEmaCrossoverAlgorithm(symbol=p.symbol),  # type: ignore[attr-defined]
+    instrument_surface="explicit",
+    action_plan_contract="none",
+    catalog_visible=False,
+    lean_twin="ema_crossover",
+)
 
 
 

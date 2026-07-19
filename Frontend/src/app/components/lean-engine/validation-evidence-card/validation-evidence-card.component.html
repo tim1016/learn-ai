@@ -5,7 +5,14 @@
   <ol>
     <li>
       <strong>Data policy matches</strong>
-      <small>{{ symbol() }} · {{ resolution() }} · RTH · adjusted</small>
+      <small>
+        Polygon input: {{ inputBarsLabel() }} source bars → strategy: {{ strategyBarsLabel() }} decision bars · RTH · adjusted
+      </small>
+      @if (consolidatesInputBars()) {
+        <small class="policy-detail">
+          Signals are evaluated after consolidation, not on every source bar.
+        </small>
+      }
     </li>
     <li>
       <strong>Trades reconcile</strong>

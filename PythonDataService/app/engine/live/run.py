@@ -1043,19 +1043,41 @@ def _strategy_param_resolution_from_live_config(
 ) -> StrategyParamResolution:
     """Build strategy params from the hashed live config.
 
-    ``live_config.symbol`` remains the signal/data stream. For strategies that
-    opt into a separate ``trade_symbol`` param, a single long stock action-plan
-    leg is the trade target.
+    ``live_config.symbol`` remains the signal/data stream. The registry's
+    Action Plan contract resolves the stock execution target without adding a
+    trade-symbol parameter to policy strategies. Explicit strategies that opt
+    into ``trade_symbol`` retain their compatibility injection.
     """
     fields = registration.param_schema.model_fields
     kwargs: dict[str, object] = {}
     effective_trade_symbol = live_config.symbol.upper()
     if "symbol" in fields:
         kwargs["symbol"] = live_config.symbol
-    if "trade_symbol" in fields:
+    action_plan = ledger_live_config.get("action")
+    if registration.action_plan_contract == "single_long_stock":
         from app.engine.live.config import stock_symbol_from_action_plan
 
-        action_plan = ledger_live_config.get("action")
+        trade_symbol = stock_symbol_from_action_plan(action_plan)
+        if trade_symbol is None:
+            if action_plan is not None:
+                raise ValueError(
+                    "live_config.action is present but is not a supported single long stock plan"
+                )
+            if registration.instrument_surface == "policy":
+                raise ValueError(
+                    "policy strategy requires live_config.action with one supported long stock leg"
+                )
+        else:
+            effective_trade_symbol = trade_symbol.upper()
+        if (
+            trade_symbol is not None
+            and registration.instrument_surface == "explicit"
+            and "trade_symbol" in fields
+        ):
+            kwargs["trade_symbol"] = effective_trade_symbol
+    elif "trade_symbol" in fields:
+        from app.engine.live.config import stock_symbol_from_action_plan
+
         trade_symbol = stock_symbol_from_action_plan(action_plan)
         if trade_symbol is None and action_plan is not None:
             raise ValueError(
@@ -1632,11 +1654,23 @@ def cmd_start(args: argparse.Namespace) -> int:
 
             if not isinstance(live_config.sizing, FixedShares):
                 raise ValueError(
-                    "cross-asset deployment_validation requires FixedShares sizing "
+                    "cross-asset Action Plan execution requires FixedShares sizing "
                     "because only the signal symbol has a bar price stream"
                 )
         strategy_params = registration.param_schema(**param_resolution.kwargs)
         strategy = registration.build(strategy_params)
+        signal_intent_executor = None
+        if registration.instrument_surface == "policy":
+            if registration.action_plan_contract != "single_long_stock":
+                raise ValueError(
+                    "policy strategy must declare action_plan_contract='single_long_stock' "
+                    "before it can start"
+                )
+            from app.engine.live.action_plan_signal_executor import StockActionPlanSignalExecutor
+
+            signal_intent_executor = StockActionPlanSignalExecutor.from_action_plan(
+                ledger_live_config.get("action")
+            )
     except Exception as exc:
         print(
             f"[START] could not build strategy {args.strategy!r} for symbol {live_config.symbol!r}: {exc}",
@@ -2140,6 +2174,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         decision_columns=decision_columns,
         owned_perm_ids=owned_perm_ids,
         sizing_surface=_lookup_sizing_surface(args.strategy),
+        signal_intent_executor=signal_intent_executor,
         # Phase 5A wiring (VCR-0002 hot-fix) — give the engine the path
         # to the run's intent_events.jsonl so it can construct an
         # IntentWal on LivePortfolio. Required since Phase 5B (ADR 0008)

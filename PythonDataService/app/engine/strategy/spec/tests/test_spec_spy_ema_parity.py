@@ -1,9 +1,9 @@
-"""Spec SPY EMA crossover ≡ ``SpyEmaCrossoverAlgorithm``.
+"""Spec SPY EMA crossover ≡ ``EmaCrossoverSignalAlgorithm``.
 
 Phase 1 acceptance gate — the most demanding of the three. The hand-coded
-``SpyEmaCrossoverAlgorithm`` is bit-exact against LEAN's reference C#
+``EmaCrossoverSignalAlgorithm`` is bit-exact against LEAN's reference C#
 output (validated by ``test_spy_validation``); proving that
-``SpecAlgorithm`` reproduces ``SpyEmaCrossoverAlgorithm`` trade-by-trade
+``SpecAlgorithm`` reproduces ``EmaCrossoverSignalAlgorithm`` trade-by-trade
 on a controlled synthetic stream therefore inherits LEAN bit-exactness
 for the spec layer on this rule set.
 
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import sys
 
-from app.engine.strategy.algorithms.spy_ema_crossover import SpyEmaCrossoverAlgorithm
+from app.engine.strategy.algorithms.ema_crossover_signal import EmaCrossoverSignalAlgorithm
 from app.engine.strategy.spec.tests._parity_helpers import (
     assert_trade_logs_match,
     build_minute_bars,
@@ -37,12 +37,12 @@ def _run_parity() -> tuple[list, list]:
     closes = closes_for_spy_ema(NUM_BARS)
     bars = build_minute_bars(closes)
 
-    # Hand-coded reference. SpyEmaCrossoverAlgorithm parameterizes the symbol
+    # Hand-coded reference. EmaCrossoverSignalAlgorithm parameterizes the signal symbol
     # so we can drive it against the synthetic TEST stream while keeping
     # the LEAN-bit-exact rule set (EMA(5)/EMA(10) + RSI(14), 5-bar exit).
     from app.engine.strategy.spec.tests._parity_helpers import SYMBOL
 
-    ref_strategy = SpyEmaCrossoverAlgorithm(symbol=SYMBOL)
+    ref_strategy = EmaCrossoverSignalAlgorithm(symbol=SYMBOL)
     ref_trades = run_strategy(ref_strategy, bars)
 
     spec_strategy = load_spec_algo("spy_ema_crossover")
@@ -87,7 +87,7 @@ def run_parity() -> None:
         sys.exit(1)
 
     logger.info(
-        "PASS: spec SPY EMA crossover reproduces SpyEmaCrossoverAlgorithm "
+        "PASS: spec SPY EMA crossover reproduces EmaCrossoverSignalAlgorithm "
         "(%d trades, identical trade-by-trade)",
         len(spec_trades),
     )

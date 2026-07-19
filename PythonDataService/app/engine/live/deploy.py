@@ -221,31 +221,36 @@ class ActionPlanDeployReadiness:
         return self.reason_code is None
 
 
-_ACTION_PLAN_REQUIRED_STRATEGIES = frozenset({"deployment_validation"})
-
-
 def action_plan_deploy_readiness(
     *,
     strategy_key: str,
     live_config: dict,
 ) -> ActionPlanDeployReadiness:
-    """Return the deploy-time action-plan verdict for strategies that consume it.
+    """Return the deploy-time Action Plan verdict declared by the registry.
 
-    Today the live runtime consumes a stock-only action plan for
-    ``deployment_validation``: exactly one long stock entry leg plus a close-leg
-    exit for that entry. Other strategies remain non-blocking until they declare
-    a deploy-time action-plan contract, which keeps valid future entry-only/roll
-    plans from being rejected by this deployment-validation-specific gate.
+    Today the live runtime accepts one stock-only shape for strategies that
+    declare ``action_plan_contract="single_long_stock"``: exactly one long
+    stock entry leg plus a close-leg exit for that entry. Other strategies
+    remain non-blocking until they declare a contract, which keeps valid future
+    entry-only/roll plans from being rejected by this stock-runtime gate.
     """
 
-    if strategy_key.strip() not in _ACTION_PLAN_REQUIRED_STRATEGIES:
+    normalized_strategy_key = strategy_key.strip()
+    registration = _STRATEGY_REGISTRY.get(normalized_strategy_key)
+    if registration is None or registration.action_plan_contract == "none":
         return ActionPlanDeployReadiness()
+    if registration.action_plan_contract != "single_long_stock":
+        raise RuntimeError(
+            f"unsupported Action Plan contract {registration.action_plan_contract!r} "
+            f"for strategy {normalized_strategy_key!r}"
+        )
+    strategy_label = registration.display_name
     action = live_config.get("action") if isinstance(live_config, dict) else None
     if not isinstance(action, dict):
         return ActionPlanDeployReadiness(
             reason_code="ACTION_PLAN_EMPTY",
             message=(
-                "Deployment Validation requires an action plan with one long stock "
+                f"{strategy_label} requires an action plan with one long stock "
                 "entry leg and a matching close leg before deployment."
             ),
         )
@@ -256,12 +261,12 @@ def action_plan_deploy_readiness(
     if not has_entries and not has_exits:
         return ActionPlanDeployReadiness(
             reason_code="ACTION_PLAN_EMPTY",
-            message=("Deployment Validation requires an action plan; ON ENTER and ON EXIT are both empty."),
+            message=(f"{strategy_label} requires an action plan; ON ENTER and ON EXIT are both empty."),
         )
     if not has_entries:
         return ActionPlanDeployReadiness(
             reason_code="ACTION_PLAN_ENTRY_LEG_REQUIRED",
-            message="Deployment Validation requires at least one ON ENTER entry leg.",
+            message=f"{strategy_label} requires at least one ON ENTER entry leg.",
         )
     try:
         from app.schemas.action_plan import ActionPlan
@@ -272,7 +277,7 @@ def action_plan_deploy_readiness(
         return ActionPlanDeployReadiness(
             reason_code="ACTION_PLAN_UNSUPPORTED",
             message=(
-                "Deployment Validation cannot consume this action-plan shape. "
+                f"{strategy_label} cannot consume this action-plan shape. "
                 "Use one long stock entry leg with a close-leg exit."
             ),
         )
@@ -280,7 +285,7 @@ def action_plan_deploy_readiness(
         return ActionPlanDeployReadiness(
             reason_code="ACTION_PLAN_UNSUPPORTED",
             message=(
-                "Deployment Validation currently supports exactly one long stock "
+                f"{strategy_label} currently supports exactly one long stock "
                 "entry leg. Option, short, and multi-leg plans are not deployable "
                 "on this runtime path yet."
             ),
@@ -289,7 +294,7 @@ def action_plan_deploy_readiness(
     if not any(exit_entry.entry_leg_id == entry_leg_id for exit_entry in plan.on_exit):
         return ActionPlanDeployReadiness(
             reason_code="ACTION_PLAN_CLOSE_LEG_REQUIRED",
-            message=(f"Deployment Validation requires an ON EXIT close leg for the entry leg {entry_leg_id!r}."),
+            message=(f"{strategy_label} requires an ON EXIT close leg for the entry leg {entry_leg_id!r}."),
         )
     return ActionPlanDeployReadiness(normalized_action=normalized_action)
 

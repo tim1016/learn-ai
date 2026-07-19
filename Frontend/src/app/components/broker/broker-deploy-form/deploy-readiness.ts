@@ -21,7 +21,10 @@ interface ReadableActionPlanEntry {
   position: string;
 }
 
-const ACTION_PLAN_REQUIRED_STRATEGIES = new Set(['deployment_validation']);
+const ACTION_PLAN_REQUIRED_STRATEGIES = new Set([
+  'deployment_validation',
+  'ema_crossover_signal',
+]);
 const ACTION_PLAN_READY: ActionPlanDeployReadiness = {
   canDeploy: true,
   reasonCode: null,
@@ -32,14 +35,16 @@ export function actionPlanDeployReadiness(
   strategyKey: string,
   actionPlan: unknown,
 ): ActionPlanDeployReadiness {
-  if (!ACTION_PLAN_REQUIRED_STRATEGIES.has(strategyKey.trim())) {
+  const normalizedStrategyKey = strategyKey.trim();
+  if (!ACTION_PLAN_REQUIRED_STRATEGIES.has(normalizedStrategyKey)) {
     return ACTION_PLAN_READY;
   }
+  const strategyLabel = actionPlanStrategyLabel(normalizedStrategyKey);
   if (!hasActionPlanEnvelope(actionPlan)) {
     return {
       canDeploy: false,
       reasonCode: 'ACTION_PLAN_EMPTY',
-      message: 'Deployment Validation requires an action plan with one long stock entry leg and a matching close leg before deployment.',
+      message: `${strategyLabel} requires an action plan with one long stock entry leg and a matching close leg before deployment.`,
     };
   }
   const hasEntries = actionPlan.on_enter.length > 0;
@@ -48,14 +53,14 @@ export function actionPlanDeployReadiness(
     return {
       canDeploy: false,
       reasonCode: 'ACTION_PLAN_EMPTY',
-      message: 'Deployment Validation requires an action plan; ON ENTER and ON EXIT are both empty.',
+      message: `${strategyLabel} requires an action plan; ON ENTER and ON EXIT are both empty.`,
     };
   }
   if (!hasEntries) {
     return {
       canDeploy: false,
       reasonCode: 'ACTION_PLAN_ENTRY_LEG_REQUIRED',
-      message: 'Deployment Validation requires at least one ON ENTER entry leg.',
+      message: `${strategyLabel} requires at least one ON ENTER entry leg.`,
     };
   }
   const firstEntry = readableFirstEntry(actionPlan);
@@ -63,7 +68,7 @@ export function actionPlanDeployReadiness(
     return {
       canDeploy: false,
       reasonCode: 'ACTION_PLAN_UNSUPPORTED',
-      message: 'Deployment Validation cannot consume this action-plan shape. Use one long stock entry leg with a close-leg exit.',
+      message: `${strategyLabel} cannot consume this action-plan shape. Use one long stock entry leg with a close-leg exit.`,
     };
   }
   if (
@@ -74,17 +79,23 @@ export function actionPlanDeployReadiness(
     return {
       canDeploy: false,
       reasonCode: 'ACTION_PLAN_UNSUPPORTED',
-      message: 'Deployment Validation currently supports exactly one long stock entry leg. Option, short, and multi-leg plans are not deployable on this runtime path yet.',
+      message: `${strategyLabel} currently supports exactly one long stock entry leg. Option, short, and multi-leg plans are not deployable on this runtime path yet.`,
     };
   }
   if (!actionPlan.on_exit.some((exit) => closeLegReferences(exit, firstEntry.legId))) {
     return {
       canDeploy: false,
       reasonCode: 'ACTION_PLAN_CLOSE_LEG_REQUIRED',
-      message: `Deployment Validation requires an ON EXIT close leg for the entry leg '${firstEntry.legId}'.`,
+      message: `${strategyLabel} requires an ON EXIT close leg for the entry leg '${firstEntry.legId}'.`,
     };
   }
   return ACTION_PLAN_READY;
+}
+
+function actionPlanStrategyLabel(strategyKey: string): string {
+  return strategyKey === 'ema_crossover_signal'
+    ? 'EMA Crossover Signal'
+    : 'Deployment Validation';
 }
 
 function hasActionPlanEnvelope(value: unknown): value is ActionPlanEnvelope {

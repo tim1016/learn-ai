@@ -33,6 +33,7 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import EquitySnapshot
 from app.engine.execution.order import Direction, OrderEvent
 from app.engine.execution.order_sizer import OrderSizer, WholeAccountPortfolioValueProvider
+from app.engine.execution.signal_intent_executor import SignalIntentExecutor
 from app.engine.framework.insight_scorer import DefaultInsightScoreFunction
 from app.engine.live import bot_event_spine
 from app.engine.live.artifacts import (
@@ -500,6 +501,10 @@ class LiveEngine:
         # ADR 0009 § 6 — propagated registered sizing surface. ``None`` ⇒
         # legacy / unregistered (no fail-fast applies).
         sizing_surface: str | None = None,
+        # Instrument-free policy strategies emit SignalIntent values. The
+        # runner supplies an Action Plan executor that selects the actual
+        # traded stock without exposing it to strategy code.
+        signal_intent_executor: SignalIntentExecutor | None = None,
         # Phase 5E / VCR-0012 — when set, ``_convert_ibkr_fill`` falls back
         # to a fold of this WAL to reconstruct a fill's ``_OrderMeta`` when
         # the in-memory dict has no entry for the fill's ``order_id``. The
@@ -745,6 +750,7 @@ class LiveEngine:
         self._last_connectivity_lost_count: int = 0
         self._connection_epoch: int = 0
         self._sizing_surface = sizing_surface
+        self._signal_intent_executor = signal_intent_executor
 
         # Phase 5C / VCR-0002 — durable submit activation. When the operator
         # has flipped ``LiveConfig.durable_submit_enabled = True`` AND a
@@ -1072,6 +1078,8 @@ class LiveEngine:
         )
         strategy.ctx = ctx
         strategy.initialize()
+        if self._signal_intent_executor is not None:
+            ctx.set_signal_intent_executor(self._signal_intent_executor)
 
         # NEW: hydrate call site (after initialize, before bar loop).
         if self._hydrate_policy is not None:

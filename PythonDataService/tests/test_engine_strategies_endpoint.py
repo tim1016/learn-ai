@@ -29,7 +29,7 @@ import pytest
 EXPECTED_STRATEGY_KEYS = {
     # VCR-0004 / Phase 2 — registry keys are now module names so the runner
     # can import every registered strategy by ``app.engine.strategy.algorithms.{key}``.
-    "spy_ema_crossover",
+    "ema_crossover_signal",
     "sma_crossover",
     "daily_sma_crossover",
     "rsi_mean_reversion",
@@ -138,6 +138,12 @@ def test_all_registered_strategies_have_algorithm_and_gotchas():
         f"strategies missing gotchas: {missing_gotchas}.  "
         f"Populate the field in app/routers/engine.py _STRATEGY_REGISTRY."
     )
+
+
+def test_legacy_spy_ema_key_is_not_offered_in_the_strategy_picker():
+    names = {strategy["name"] for strategy in _list_strategies()}
+    assert "ema_crossover_signal" in names
+    assert "spy_ema_crossover" not in names
 
 
 def test_orb_gotchas_include_traded_today_guard():

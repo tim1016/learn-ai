@@ -70,7 +70,9 @@ from app.lean_sidecar.staging import (  # noqa: E402
     stage_lean_config,
     stage_lean_metadata_from_image,
 )
-from app.lean_sidecar.trusted_samples.ema_crossover import EMA_CROSSOVER_SOURCE  # noqa: E402
+from app.lean_sidecar.trusted_samples.ema_crossover_signal import (  # noqa: E402
+    EMA_CROSSOVER_SIGNAL_SOURCE,
+)
 from app.lean_sidecar.workspace import resolve_workspace  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -155,7 +157,7 @@ def _stage_lean_run(cell: Cell, output_dir: Path) -> None:
     stage_lean_metadata_from_image(workspace, PINNED_LEAN_IMAGE_DIGEST)
 
     # Stage algorithm source.
-    stage_algorithm_source(workspace, EMA_CROSSOVER_SOURCE)
+    stage_algorithm_source(workspace, EMA_CROSSOVER_SIGNAL_SOURCE)
 
     # Build and write LEAN config.
     config = LeanConfig(
@@ -239,7 +241,7 @@ def _run_engine_live(cell: Cell, output_dir: Path) -> list[CrossRunOrderEvent]:
     t0 = time.monotonic()
     result = run_engine_lab_on_workspace(
         workspace_path=capture,
-        strategy_class_name="SpyEmaCrossoverAlgorithm",
+        strategy_class_name="EmaCrossoverSignalAlgorithm",
         symbol=cell.ticker,
         start_date=cell.start_date,
         end_date=cell.end_date,
@@ -368,7 +370,7 @@ def _build_manifest_dict(cell: Cell, staging: Path) -> dict:
         raise RuntimeError(f"PINNED_LEAN_IMAGE_DIGEST unexpected format: {bare_digest!r}")
     container_image_digest = f"{LEAN_IMAGE_REPO}@{bare_digest}"
 
-    # --- strategy constants and runtime parameters (mirror EMA_CROSSOVER_SOURCE) ---
+    # --- strategy constants and runtime parameters (mirror the LEAN twin) ---
     parameters_constants: dict[str, int | float] = {
         "FAST_PERIOD": 5,
         "SLOW_PERIOD": 10,
@@ -415,8 +417,8 @@ def _build_manifest_dict(cell: Cell, staging: Path) -> dict:
             "trading_days_expected": trading_days_expected,
         },
         "strategy": {
-            "trusted_sample": "EMA_CROSSOVER_SOURCE",
-            "trusted_sample_source_sha256": sha256_of_text(EMA_CROSSOVER_SOURCE),
+            "trusted_sample": "EMA_CROSSOVER_SIGNAL_SOURCE",
+            "trusted_sample_source_sha256": sha256_of_text(EMA_CROSSOVER_SIGNAL_SOURCE),
             "parameters_constants": parameters_constants,
             "runtime_parameters": runtime_parameters,
         },
