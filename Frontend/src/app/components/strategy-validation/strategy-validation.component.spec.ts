@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
-import { provideRouter } from '@angular/router';
+import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
+import { of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -277,6 +278,47 @@ describe('StrategyValidationComponent', () => {
     expect(await screen.findByRole('heading', { name: 'QuantConnect reference algorithm' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Copy QuantConnect algorithm' })).toBeTruthy();
     expect(screen.getByText('references/qc-shadow/SpyEmaCrossoverAlgorithm.py')).toBeTruthy();
+  });
+
+  it('shows a retryable load error instead of an empty EMA detail pane', async () => {
+    const service = new FakeStrategyValidationService();
+    let emaDetailUnavailable = true;
+    service.getDetail.mockImplementation((key: string) =>
+      key === 'ema_crossover_signal' && emaDetailUnavailable
+        ? Promise.reject(new Error('Strategy audit copy unreadable'))
+        : Promise.resolve(DETAIL_BY_KEY[key] ?? ORB_DETAIL),
+    );
+    await render(StrategyValidationComponent, {
+      providers: [
+        provideRouter([]),
+        { provide: StrategyValidationService, useValue: service },
+      ],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /EMA Crossover Signal/ }));
+
+    expect((await screen.findByRole('alert')).textContent).toContain('Validation evidence could not be loaded.');
+    emaDetailUnavailable = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(await screen.findByRole('heading', { name: 'EMA Crossover Signal' })).toBeTruthy();
+    expect(service.getDetail).toHaveBeenCalledWith('ema_crossover_signal');
+  });
+
+  it('opens the requested strategy audit copy from an Engine Lab link', async () => {
+    await render(StrategyValidationComponent, {
+      providers: [
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { queryParamMap: of(convertToParamMap({ strategy: 'ema_crossover_signal' })) },
+        },
+        { provide: StrategyValidationService, useClass: FakeStrategyValidationService },
+      ],
+    });
+
+    expect(await screen.findByRole('heading', { name: 'EMA Crossover Signal' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'QuantConnect reference algorithm' })).toBeTruthy();
   });
 
   it('refreshes validation evidence for the selected strategy', async () => {

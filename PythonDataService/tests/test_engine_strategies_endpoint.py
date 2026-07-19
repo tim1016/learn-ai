@@ -80,6 +80,7 @@ def test_deployment_validation_is_registered_with_fixed_rule_metadata():
     strategy = next(s for s in strategies if s["name"] == "deployment_validation")
     assert strategy["display_name"] == "Deployment Validation"
     assert "minute" in strategy["supported_resolutions"]
+    assert strategy["lean_twin"] == "deployment_validation"
     props = strategy["params_schema"]["properties"]
     assert set(props) == {"symbol"}
     from app.routers.engine import _STRATEGY_REGISTRY
@@ -144,6 +145,12 @@ def test_legacy_spy_ema_key_is_not_offered_in_the_strategy_picker():
     names = {strategy["name"] for strategy in _list_strategies()}
     assert "ema_crossover_signal" in names
     assert "spy_ema_crossover" not in names
+
+
+def test_ema_signal_advertises_its_matching_lean_validation_template():
+    strategy = next(strategy for strategy in _list_strategies() if strategy["name"] == "ema_crossover_signal")
+
+    assert strategy["lean_twin"] == "ema_crossover_signal"
 
 
 def test_orb_gotchas_include_traded_today_guard():

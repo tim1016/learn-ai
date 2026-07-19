@@ -517,6 +517,9 @@ class StrategyInfo(BaseModel):
     # its own quantity/contracts and the deploy form's sizing control is
     # disabled + labelled "self-sized".
     sizing_surface: Literal["policy", "explicit"] = "policy"
+    # The LEAN trusted template that validates this strategy's execution
+    # semantics. ``None`` means Engine Lab must not offer a LEAN parity run.
+    lean_twin: str | None = None
 
 
 @router.get("/strategies", response_model=list[StrategyInfo])
@@ -543,6 +546,7 @@ def list_engine_strategies() -> list[StrategyInfo]:
                 gotchas=list(reg.gotchas),
                 pine_available=reg.pine_generator is not None,
                 sizing_surface=reg.sizing_surface,
+                lean_twin=reg.lean_twin,
             )
         )
     return result
