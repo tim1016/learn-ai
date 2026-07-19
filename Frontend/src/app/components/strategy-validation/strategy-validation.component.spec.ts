@@ -94,16 +94,49 @@ const ORB_DETAIL: StrategyValidationDetail = {
   reference_code: null,
 };
 
+const EMA_DETAIL: StrategyValidationDetail = {
+  strategy_key: 'ema_crossover_signal',
+  display_name: 'EMA Crossover Signal',
+  description: 'Canonical SPY EMA crossover signal.',
+  validation_state: 'needs_validation',
+  deployable: false,
+  settings_file_ref: null,
+  settings_file_sha256: null,
+  qc_cloud_backtest_id: null,
+  audit_copy_ref: 'references/qc-shadow/SpyEmaCrossoverAlgorithm.py',
+  audit_copy_sha256: 'audit-sha',
+  reconciliation_ref: null,
+  validation_case_symbol: 'SPY',
+  reconciliation_status: null,
+  diagnostics: null,
+  behavioral_equivalence: null,
+  current_flag_event: null,
+  flag_events: [],
+  reference_code: {
+    path: 'references/qc-shadow/SpyEmaCrossoverAlgorithm.py',
+    sha256: 'audit-sha',
+    language: 'python',
+    source: 'class SpyEmaCrossoverAlgorithm(QCAlgorithm):\n    pass\n',
+  },
+};
+
 const CATALOG: StrategyValidationCatalog = {
   strategies: [
     DEPLOYMENT_DETAIL,
+    EMA_DETAIL,
     ORB_DETAIL,
   ],
 };
 
+const DETAIL_BY_KEY: Record<string, StrategyValidationDetail> = {
+  deployment_validation: DEPLOYMENT_DETAIL,
+  ema_crossover_signal: EMA_DETAIL,
+  spy_orb: ORB_DETAIL,
+};
+
 class FakeStrategyValidationService {
   getCatalog = vi.fn().mockResolvedValue(CATALOG);
-  getDetail = vi.fn((key: string) => Promise.resolve(key === 'deployment_validation' ? DEPLOYMENT_DETAIL : ORB_DETAIL));
+  getDetail = vi.fn((key: string) => Promise.resolve(DETAIL_BY_KEY[key] ?? ORB_DETAIL));
   refreshValidationEvidence = vi.fn((key: string) =>
     Promise.resolve({
       refresh_id: `manifest-evidence:${key}:123`,
@@ -229,6 +262,21 @@ describe('StrategyValidationComponent', () => {
     });
     expect(screen.getAllByText('Needs validation').length).toBeGreaterThan(0);
     expect(screen.getByText('Validation evidence has not been registered yet.')).toBeTruthy();
+  });
+
+  it('shows the SPY EMA QuantConnect audit copy even before validation evidence exists', async () => {
+    await render(StrategyValidationComponent, {
+      providers: [
+        provideRouter([]),
+        { provide: StrategyValidationService, useClass: FakeStrategyValidationService },
+      ],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /EMA Crossover Signal/ }));
+
+    expect(await screen.findByRole('heading', { name: 'QuantConnect reference algorithm' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Copy QuantConnect algorithm' })).toBeTruthy();
+    expect(screen.getByText('references/qc-shadow/SpyEmaCrossoverAlgorithm.py')).toBeTruthy();
   });
 
   it('refreshes validation evidence for the selected strategy', async () => {

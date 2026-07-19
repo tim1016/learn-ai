@@ -15,10 +15,11 @@ import type {
   StrategyValidationSummary,
 } from '../../services/strategy-validation.types';
 import { ReceiptLabelPipe } from '../../shared/pipes/receipt-label.pipe';
+import { QuantConnectReferenceCodeComponent } from './quantconnect-reference-code/quantconnect-reference-code.component';
 
 @Component({
   selector: 'app-strategy-validation',
-  imports: [RouterLink, ReceiptLabelPipe],
+  imports: [RouterLink, ReceiptLabelPipe, QuantConnectReferenceCodeComponent],
   templateUrl: './strategy-validation.component.html',
   styleUrl: './strategy-validation.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,

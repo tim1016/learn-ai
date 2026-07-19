@@ -54,7 +54,6 @@ async def test_strategy_validation_catalog_and_detail_expose_manifest(tmp_path) 
     assert "class DeploymentValidationAlgorithm" in detail["reference_code"]["source"]
     assert "DeploymentValidationConsecutiveGreen" not in detail["reference_code"]["source"]
 
-
     assert ema_detail_response.status_code == 200, ema_detail_response.text
     ema_detail = ema_detail_response.json()
     assert ema_detail["strategy_key"] == "ema_crossover_signal"
@@ -64,6 +63,10 @@ async def test_strategy_validation_catalog_and_detail_expose_manifest(tmp_path) 
     )
     assert ema_detail["settings_file_ref"].endswith("spy_ema_crossover.spec.json")
     assert ema_detail["audit_copy_ref"] == "references/qc-shadow/SpyEmaCrossoverAlgorithm.py"
+
+    assert ema_detail["reference_code"]["path"] == "references/qc-shadow/SpyEmaCrossoverAlgorithm.py"
+    assert "class SpyEmaCrossoverAlgorithm(QCAlgorithm)" in ema_detail["reference_code"]["source"]
+
 
 @pytest.mark.asyncio
 async def test_strategy_validation_detail_404s_unknown_strategy() -> None:

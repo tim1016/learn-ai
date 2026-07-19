@@ -1,0 +1,47 @@
+@let code = referenceCode();
+
+<section class="qc-reference" aria-labelledby="qc-reference-title">
+  <header class="qc-reference__header">
+    <div>
+      <p class="qc-reference__eyebrow"><i class="pi pi-shield" aria-hidden="true"></i> Third-engine validation</p>
+      <h3 id="qc-reference-title">QuantConnect reference algorithm</h3>
+      <p>
+        Copy this exact audit copy into a QuantConnect Python project and run a backtest.
+        Attach its backtest ID here, then reconcile its output before accepting the evidence.
+      </p>
+    </div>
+    <button
+      type="button"
+      class="qc-reference__copy"
+      [attr.aria-label]="isCopied(code) ? 'QuantConnect algorithm copied' : 'Copy QuantConnect algorithm'"
+      (click)="copyAlgorithm()">
+      <i class="pi" [class.pi-copy]="!isCopied(code)" [class.pi-check]="isCopied(code)" aria-hidden="true"></i>
+      {{ isCopied(code) ? 'Copied' : 'Copy algorithm' }}
+    </button>
+  </header>
+
+  <dl class="qc-reference__provenance" aria-label="QuantConnect audit-copy provenance">
+    <div>
+      <dt>Audit copy</dt>
+      <dd><code>{{ code.path }}</code></dd>
+    </div>
+    <div>
+      <dt>SHA-256</dt>
+      <dd><code>{{ code.sha256 }}</code></dd>
+    </div>
+  </dl>
+
+  <ol class="qc-reference__steps">
+    <li>Create a Python project in QuantConnect.</li>
+    <li>Replace its starter code with this audit copy and run the backtest.</li>
+    <li>Record the backtest ID here; reconciliation, not the ID alone, is the validation receipt.</li>
+  </ol>
+
+  @if (copyError()) {
+    <p class="qc-reference__error" role="alert">
+      Copy was blocked by the browser. Select the code below and copy it manually.
+    </p>
+  }
+
+  <pre class="qc-reference__source"><code>{{ code.source }}</code></pre>
+</section>
