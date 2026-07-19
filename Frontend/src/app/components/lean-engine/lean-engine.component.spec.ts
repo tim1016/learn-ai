@@ -413,6 +413,31 @@ describe('LeanEngineComponent engine selector', () => {
     });
   });
 
+  it('keeps the legacy SPY EMA strategy aligned while the catalog omits lean_twin', async () => {
+    const { startJob } = configureTestBed();
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+
+    component.engine.set('lean');
+    component.leanLauncherStatus.set('ready');
+    component.strategies.set([
+      {
+        name: 'spy_ema_crossover',
+        display_name: 'SPY EMA Crossover',
+        description: '',
+        params_schema: { properties: {} },
+        supported_resolutions: ['minute'],
+      },
+    ]);
+    component.selectedStrategyName.set('spy_ema_crossover');
+
+    await component.run();
+
+    const envelope = startJob.mock.calls[0][1] as { request: TrustedRunRequest };
+    expect(envelope.request.template).toBe('ema_crossover_signal');
+  });
+
   it('submits the deployment-validation LEAN template for the matching Python strategy', async () => {
     const { startJob } = configureTestBed();
     const fixture = TestBed.createComponent(LeanEngineComponent);

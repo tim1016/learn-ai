@@ -44,7 +44,7 @@ import {
 } from "../../shared/run-dock/run-dock-source";
 import { EngineRunDockSource } from "./engine-run-dock-source";
 import {
-  isLeanValidationTemplate,
+  leanValidationTemplateForStrategy,
   leanValidationTemplateLabel,
   type LeanValidationTemplate,
 } from "./lean-validation-template";
@@ -501,7 +501,9 @@ export class LeanEngineComponent implements OnInit {
     const strategies = this.availableStrategies();
     return this.engine() === "python"
       ? strategies
-      : strategies.filter((strategy) => isLeanValidationTemplate(strategy.lean_twin));
+      : strategies.filter((strategy) =>
+          leanValidationTemplateForStrategy(strategy.name, strategy.lean_twin) !== null,
+        );
   });
 
   readonly selectedStrategy = computed(() => {
@@ -511,8 +513,10 @@ export class LeanEngineComponent implements OnInit {
   });
 
   readonly leanValidationTemplate = computed<LeanValidationTemplate | null>(() => {
-    const template = this.selectedStrategy()?.lean_twin;
-    return isLeanValidationTemplate(template) ? template : null;
+    const strategy = this.selectedStrategy();
+    return strategy === null
+      ? null
+      : leanValidationTemplateForStrategy(strategy.name, strategy.lean_twin);
   });
 
   readonly paramEntries = computed(() => {
