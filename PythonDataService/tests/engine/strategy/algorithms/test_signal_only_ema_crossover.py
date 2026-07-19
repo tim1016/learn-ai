@@ -11,11 +11,17 @@ import pytest
 from app.engine.data.trade_bar import TradeBar
 from app.engine.execution.order_sizer import FixedShares
 from app.engine.execution.portfolio import Portfolio
-from app.engine.execution.signal_intent_executor import SignalIntentExecutionContext
+from app.engine.execution.signal_intent_executor import (
+    SignalIntentExecutionContext,
+    SignalSymbolExecutor,
+)
 from app.engine.live.action_plan_signal_executor import StockActionPlanSignalExecutor
 from app.engine.live.config import LiveConfig
 from app.engine.live.live_engine import LiveEngine
-from app.engine.live.run import _strategy_param_resolution_from_live_config
+from app.engine.live.run import (
+    _signal_intent_executor_for_live_start,
+    _strategy_param_resolution_from_live_config,
+)
 from app.engine.strategy.algorithms.ema_crossover_signal import EmaCrossoverSignalAlgorithm
 from app.engine.strategy.base import Strategy, StrategyContext
 from app.engine.strategy.registry import _STRATEGY_REGISTRY
@@ -171,6 +177,23 @@ def test_live_binding_keeps_signal_symbol_outside_strategy_trade_params() -> Non
     assert resolution.effective_trade_symbol == "NVDA"
 
 
+def test_legacy_ema_binding_executes_intents_on_its_signal_symbol() -> None:
+    executor = _signal_intent_executor_for_live_start(
+        _STRATEGY_REGISTRY["spy_ema_crossover"],
+        LiveConfig(symbol="SPY"),
+        {},
+    )
+    context = _RecordingExecutionContext()
+
+    assert isinstance(executor, SignalSymbolExecutor)
+    executor.execute(
+        context,
+        SignalIntent(SignalIntentKind.ENTER, bar_close_ms=1, intended_price=Decimal("500")),
+    )
+
+    assert context.calls == [("set_holdings", "SPY", Decimal(1))]
+
+
 def _live_probe_bars() -> list[TradeBar]:
     start = datetime(2026, 7, 17, 14, 30, tzinfo=UTC)
     return [
@@ -202,7 +225,6 @@ def _nvda_action_plan() -> dict[str, object]:
     }
 
 
-@pytest.mark.asyncio
 async def test_live_engine_routes_policy_signal_to_action_plan_stock() -> None:
     broker = FakeBroker()
     engine = LiveEngine(
@@ -218,7 +240,6 @@ async def test_live_engine_routes_policy_signal_to_action_plan_stock() -> None:
     assert result.open_positions == {"NVDA": 1}
 
 
-@pytest.mark.asyncio
 async def test_live_engine_rejects_signal_without_execution_policy() -> None:
     broker = FakeBroker()
     engine = LiveEngine(

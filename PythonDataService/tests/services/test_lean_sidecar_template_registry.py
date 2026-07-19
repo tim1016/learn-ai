@@ -30,10 +30,10 @@ def test_ema_crossover_signal_is_in_source_registry() -> None:
     assert EMA_CROSSOVER_SIGNAL_SOURCE is EMA_CROSSOVER_SOURCE
 
 
-def test_ema_crossover_signal_brokerage_policy_is_algorithm_default() -> None:
+def test_ema_crossover_signal_brokerage_policy_is_interactive_brokers() -> None:
     assert (
         TRUSTED_TEMPLATE_DEFINITIONS[TrustedTemplate.EMA_CROSSOVER_SIGNAL].brokerage_policy
-        == "algorithm_default"
+        == "interactive_brokers"
     )
 
 

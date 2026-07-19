@@ -353,6 +353,11 @@ class StrategyRegistration:
     # ``"single_long_stock"`` means exactly one long stock entry and a
     # matching close-leg exit; ``"none"`` means no deploy/start requirement.
     action_plan_contract: Literal["none", "single_long_stock"] = "none"
+    # Signal-only strategies must declare how the live runner binds their
+    # asset-free ENTER/EXIT intents. ``signal_symbol`` preserves the original
+    # same-symbol behavior for legacy ledgers; ``action_plan_stock`` delegates
+    # the asset selection to the validated Action Plan contract.
+    signal_intent_binding: Literal["none", "signal_symbol", "action_plan_stock"] = "none"
     # Compatibility registrations remain runnable for existing ledgers but
     # must not appear as duplicate choices in the Engine Lab strategy picker.
     catalog_visible: bool = True
@@ -470,6 +475,7 @@ _STRATEGY_REGISTRY: dict[str, StrategyRegistration] = {
         ),
         instrument_surface="policy",
         action_plan_contract="single_long_stock",
+        signal_intent_binding="action_plan_stock",
         lean_twin="ema_crossover_signal",
     ),
     "sma_crossover": StrategyRegistration(
@@ -1220,6 +1226,7 @@ _STRATEGY_REGISTRY["spy_ema_crossover"] = replace(
     build=lambda p: SpyEmaCrossoverAlgorithm(symbol=p.symbol),  # type: ignore[attr-defined]
     instrument_surface="explicit",
     action_plan_contract="none",
+    signal_intent_binding="signal_symbol",
     catalog_visible=False,
     lean_twin="ema_crossover",
 )

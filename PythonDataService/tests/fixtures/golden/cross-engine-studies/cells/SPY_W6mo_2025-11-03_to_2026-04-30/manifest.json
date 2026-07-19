@@ -2,7 +2,7 @@
   "artifacts": {
     "observations_sha256": "2ee2bcc9b27de28201c0abb9967273aec61cf7b96c792d8d59a135fde2c2d7b9",
     "orders_sha256": "3a3711920bdeb7d519dfe90b277fd78554e8e64a48b81a724234a3a48db5c628",
-    "reconciliation_sha256": "384e585df4be72eb72bd78ca9ca06c7828fc2c967d4fdc9481455b78c290ad8c",
+    "reconciliation_sha256": "be150a95c0ec49678b2ca9f327c96838bf3ec6b269307bd2df3572ce0595c3e6",
     "state_sha256": "089e39688cb4cedda3419c3efcf1f1e373c94c6abdea24de08d5f0fc702c6f98"
   },
   "broker": {
@@ -11,19 +11,19 @@
     "fee_model": "InteractiveBrokersFeeModel",
     "fill_model": "ImmediateFillModel"
   },
-  "captured_at_ms_utc": 1784430979035,
+  "captured_at_ms_utc": 1784470747196,
   "captured_by": "Inkant Awasthi",
   "cell_id": "SPY_W6mo_2025-11-03_to_2026-04-30",
   "data": {
     "data_contract_hash": "615fec830b501a0310389de67232497681f70933b09e72b6f931cc8745e2ebe4",
     "lean_data_capture_ref": "_lean_data_capture/SPY"
   },
-  "fixture_git_commit": "be6a400f369040600c4c9be78b4b1ea89d70931c",
+  "fixture_git_commit": "d24b05116d4658920245c5167d2b45c408c7aef1",
   "generator_script_sha256": "64d7795b0c9a23723afea949c884e98073b1496f9e56e402f53e5cb14041e073",
   "lean_runtime": {
     "container_image_digest": "localhost/learn-ai/lean-sandbox@sha256:0b8d4e381b63daaa4cebbea7af294cc5b140793a6fd13f8c9cfd63ef2a2fb24d"
   },
-  "python_data_service_commit": "be6a400f369040600c4c9be78b4b1ea89d70931c",
+  "python_data_service_commit": "d24b05116d4658920245c5167d2b45c408c7aef1",
   "schema_version": 1,
   "state_csv_schema": {
     "column_types": {

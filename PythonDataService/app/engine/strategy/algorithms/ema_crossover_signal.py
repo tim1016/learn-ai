@@ -3,7 +3,7 @@
 Formula: Long-only EMA(5)/EMA(10) crossover on 15-minute signal bars with an RSI(14) filter. Entry: fresh EMA5 > EMA10 crossover AND (EMA5 - EMA10) >= 0.20 AND 50 <= RSI <= 70. Exit: 5 consolidated bars (75 minutes) after entry.
 Reference: Lean/Algorithm.CSharp/SpyEmaCrossoverAlgorithm.cs (Apr 2026 revision); TradingView Pine validation `docs/validation/SPY_EMA_Crossover_RSI.pine`; validation report `docs/validation/SPY_EMA_Crossover_Validation_Report.pdf`.
 Canonical implementation: this file. The legacy `spy_ema_crossover` module is a compatibility wrapper for prior run ledgers. Parity-pinned secondary: `app/engine/strategy/spec/evaluator.py::SpecAlgorithm` driven by `app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json` reproduces the default-SPY signal sequence trade-by-trade (Phase 1 acceptance gate, 2026-05-04).
-Validated against: `tests/engine/test_signal_only_ema_crossover.py`; the historical LEAN/TradingView/spec suite, including `app/engine/strategy/spec/tests/test_spec_spy_ema_parity.py`; and the SPY/QQQ three- and six-month LEAN cells recorded in `docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md`.
+Validated against: `tests/engine/strategy/algorithms/test_signal_only_ema_crossover.py`; the historical LEAN/TradingView/spec suite, including `app/engine/strategy/spec/tests/test_spec_spy_ema_parity.py`; and the SPY/QQQ three- and six-month LEAN cells recorded in `docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md`.
 
 Line-for-line port of
 ``Lean/Algorithm.CSharp/SpyEmaCrossoverAlgorithm.cs`` (Apr 2026 revision).

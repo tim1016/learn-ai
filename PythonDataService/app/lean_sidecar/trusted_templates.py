@@ -52,7 +52,7 @@ TRUSTED_TEMPLATE_DEFINITIONS: Final[Mapping[TrustedTemplate, TrustedTemplateDefi
         ),
         TrustedTemplate.EMA_CROSSOVER_SIGNAL: TrustedTemplateDefinition(
             source=EMA_CROSSOVER_SIGNAL_SOURCE,
-            brokerage_policy="algorithm_default",
+            brokerage_policy="interactive_brokers",
         ),
         TrustedTemplate.DEPLOYMENT_VALIDATION: TrustedTemplateDefinition(
             source=DEPLOYMENT_VALIDATION_SOURCE,

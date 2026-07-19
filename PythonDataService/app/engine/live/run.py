@@ -59,10 +59,12 @@ from typing import TYPE_CHECKING, Literal, Protocol
 if TYPE_CHECKING:
     from app.broker.ibkr.client import IbkrClient
     from app.broker.ibkr.models import IbkrOrderSpec
+    from app.engine.execution.signal_intent_executor import SignalIntentExecutor
     from app.engine.live.account_artifacts import (
         AccountOwnerGeneration,
     )
     from app.engine.live.live_state_sidecar import LiveStateEnvelope
+    from app.engine.strategy.registry import StrategyRegistration
     from app.engine.strategy.spec.schema import StrategySpec
 
 from app.broker.runtime_snapshot import make_live_engine_verdict_provider
@@ -1092,6 +1094,36 @@ def _strategy_param_resolution_from_live_config(
     )
 
 
+def _signal_intent_executor_for_live_start(
+    registration: StrategyRegistration,
+    live_config: LiveConfig,  # noqa: F821
+    ledger_live_config: dict[str, object],
+) -> SignalIntentExecutor | None:
+    """Bind a signal-only strategy's intents to its declared execution policy."""
+    binding = registration.signal_intent_binding
+    if binding == "none":
+        return None
+    if binding == "signal_symbol":
+        if registration.instrument_surface != "explicit":
+            raise ValueError("signal-symbol intent binding requires an explicit instrument surface")
+        from app.engine.execution.signal_intent_executor import SignalSymbolExecutor
+
+        return SignalSymbolExecutor(live_config.symbol)
+    if binding == "action_plan_stock":
+        if (
+            registration.instrument_surface != "policy"
+            or registration.action_plan_contract != "single_long_stock"
+        ):
+            raise ValueError(
+                "Action Plan intent binding requires a policy strategy with "
+                "action_plan_contract='single_long_stock'"
+            )
+        from app.engine.live.action_plan_signal_executor import StockActionPlanSignalExecutor
+
+        return StockActionPlanSignalExecutor.from_action_plan(ledger_live_config.get("action"))
+    raise ValueError(f"unsupported signal intent binding: {binding!r}")
+
+
 def _make_ibkr_client(runtime_client_id: int | None = None) -> IbkrClient:
     """Construct the IBKR client for a live ``start``.
 
@@ -1659,18 +1691,11 @@ def cmd_start(args: argparse.Namespace) -> int:
                 )
         strategy_params = registration.param_schema(**param_resolution.kwargs)
         strategy = registration.build(strategy_params)
-        signal_intent_executor = None
-        if registration.instrument_surface == "policy":
-            if registration.action_plan_contract != "single_long_stock":
-                raise ValueError(
-                    "policy strategy must declare action_plan_contract='single_long_stock' "
-                    "before it can start"
-                )
-            from app.engine.live.action_plan_signal_executor import StockActionPlanSignalExecutor
-
-            signal_intent_executor = StockActionPlanSignalExecutor.from_action_plan(
-                ledger_live_config.get("action")
-            )
+        signal_intent_executor = _signal_intent_executor_for_live_start(
+            registration,
+            live_config,
+            ledger_live_config,
+        )
     except Exception as exc:
         print(
             f"[START] could not build strategy {args.strategy!r} for symbol {live_config.symbol!r}: {exc}",

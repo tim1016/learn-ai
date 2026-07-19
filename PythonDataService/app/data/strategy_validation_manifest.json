@@ -24,6 +24,30 @@
           "The referenced QC attribution records 112 fills paired into 56 long round-trips for SPY."
         ]
       }
+    },
+    {
+      "strategy_key": "ema_crossover_signal",
+      "validator_code_ref": "PythonDataService/app/lean_sidecar/trusted_samples/ema_crossover_signal.py",
+      "validator_code_sha256": "5f84ed3485537f174e2fe4ed25c775bfd123fe0aa129051a8da0731c9412b1ef",
+      "settings_file_ref": "PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json",
+      "settings_file_sha256": "9fbf2566b09139092dd84b9f8719b436c76d38f4b51ec97a87f622422f5fb89f",
+      "qc_cloud_backtest_id": "d2fe45a7142e88575f6fbd75229f8681",
+      "audit_copy_ref": "references/qc-shadow/SpyEmaCrossoverAlgorithm.py",
+      "audit_copy_sha256": "cfc7f18877b8dcf9b99af4bb26e4f36f0b7ac6799fa5f4d6dc286945653d6078",
+      "reconciliation_ref": "docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md",
+      "validation_case_symbol": "SPY",
+      "reconciliation_status": "passed",
+      "diagnostics": {
+        "verdict": "passed",
+        "trades_matched": 31,
+        "trades_validated": 31,
+        "pnl_max_abs_diff": "0.00",
+        "divergence_counts": {},
+        "notes": [
+          "The committed W3mo and W6mo SPY cells reconcile 31 EMA round-trips with zero gating divergences.",
+          "The retained QuantConnect audit copy and backtest ID validate the same default-SPY decision and execution path; the current signal-only strategy delegates live asset selection to its Action Plan."
+        ]
+      }
     }
   ],
   "seed_flag_events": [
@@ -66,6 +90,47 @@
         }
       },
       "evidence_snapshot_sha256": "1ecd82810bc477490eb7b181e3b747b5b05cfeaf8f4a71e1727a6281b2e26da8",
+      "superseded_by_event_id": null
+    },
+    {
+      "event_id": "seed-ema-crossover-signal-accepted-for-deploy",
+      "event_version": "1.0",
+      "strategy_key": "ema_crossover_signal",
+      "flag": "validated",
+      "flagged_by": "migration:ema-signal-parity-seed",
+      "flagged_at_ms": 1784430933866,
+      "reason": "Seeded from the committed EMA signal LEAN parity receipt and the retained QuantConnect audit evidence accepted for deployment.",
+      "behavioral_equivalence": {
+        "verdict": "accepted_for_deploy",
+        "detail": "Human validation accepted the current EMA signal parity evidence for deployment.",
+        "tolerance": "manifest_reconciliation_passed",
+        "tolerance_reason": "The W3mo and W6mo SPY parity cells passed with zero gating divergences; the validator and default-SPY deploy binding hashes match the manifest.",
+        "gating_divergence_counts": {}
+      },
+      "evidence_snapshot": {
+        "validator_code_ref": "PythonDataService/app/lean_sidecar/trusted_samples/ema_crossover_signal.py",
+        "validator_code_sha256": "5f84ed3485537f174e2fe4ed25c775bfd123fe0aa129051a8da0731c9412b1ef",
+        "settings_file_ref": "PythonDataService/app/engine/strategy/spec/fixtures/spy_ema_crossover.spec.json",
+        "settings_file_sha256": "9fbf2566b09139092dd84b9f8719b436c76d38f4b51ec97a87f622422f5fb89f",
+        "qc_cloud_backtest_id": "d2fe45a7142e88575f6fbd75229f8681",
+        "audit_copy_ref": "references/qc-shadow/SpyEmaCrossoverAlgorithm.py",
+        "audit_copy_sha256": "cfc7f18877b8dcf9b99af4bb26e4f36f0b7ac6799fa5f4d6dc286945653d6078",
+        "reconciliation_ref": "docs/references/reconciliations/ema-crossover-signal-lean-2026-07-18.md",
+        "validation_case_symbol": "SPY",
+        "reconciliation_status": "passed",
+        "diagnostics": {
+          "verdict": "passed",
+          "trades_matched": 31,
+          "trades_validated": 31,
+          "pnl_max_abs_diff": "0.00",
+          "divergence_counts": {},
+          "notes": [
+            "The committed W3mo and W6mo SPY cells reconcile 31 EMA round-trips with zero gating divergences.",
+            "The retained QuantConnect audit copy and backtest ID validate the same default-SPY decision and execution path; the current signal-only strategy delegates live asset selection to its Action Plan."
+          ]
+        }
+      },
+      "evidence_snapshot_sha256": "5f8b2a9a27c8235ae3d662372f99e668061acfef26157647792738c3d6effad4",
       "superseded_by_event_id": null
     }
   ]

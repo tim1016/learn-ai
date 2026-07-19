@@ -15,6 +15,8 @@ from app.routers.engine import _STRATEGY_REGISTRY
 
 _POLICY_STRATEGIES = {"ema_crossover_signal"}
 _SINGLE_LONG_STOCK_ACTION_PLAN_STRATEGIES = {"deployment_validation", "ema_crossover_signal"}
+_ACTION_PLAN_SIGNAL_INTENT_STRATEGIES = {"ema_crossover_signal"}
+_SIGNAL_SYMBOL_INTENT_STRATEGIES = {"spy_ema_crossover"}
 
 
 @pytest.mark.parametrize("strategy_key", sorted(_STRATEGY_REGISTRY.keys()))
@@ -33,3 +35,16 @@ def test_every_registered_strategy_declares_its_action_plan_contract(strategy_ke
 
     expected = "single_long_stock" if strategy_key in _SINGLE_LONG_STOCK_ACTION_PLAN_STRATEGIES else "none"
     assert reg.action_plan_contract == expected
+
+
+@pytest.mark.parametrize("strategy_key", sorted(_STRATEGY_REGISTRY.keys()))
+def test_every_registered_strategy_declares_its_signal_intent_binding(strategy_key: str) -> None:
+    reg = _STRATEGY_REGISTRY[strategy_key]
+
+    if strategy_key in _ACTION_PLAN_SIGNAL_INTENT_STRATEGIES:
+        expected = "action_plan_stock"
+    elif strategy_key in _SIGNAL_SYMBOL_INTENT_STRATEGIES:
+        expected = "signal_symbol"
+    else:
+        expected = "none"
+    assert reg.signal_intent_binding == expected
