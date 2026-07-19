@@ -33,6 +33,8 @@
               <span class="sv-row-meta">
                 @if (strategy.diagnostics) {
                   {{ strategy.diagnostics.trades_validated }} trades · {{ (strategy.reconciliation_status ?? strategy.validation_state) | receiptLabel }}
+                } @else if (strategy.audit_copy_ref) {
+                  QuantConnect reference ready
                 } @else {
                   Evidence missing
                 }
@@ -187,15 +189,12 @@
               </section>
             }
 
-            @if (selected.reference_code; as code) {
-              <section class="sv-code">
-                <h3>QuantConnect reference code</h3>
-                <p>{{ code.path }}</p>
-                <pre><code>{{ code.source }}</code></pre>
-              </section>
-            }
           } @else {
             <p class="sv-empty">Validation evidence has not been registered yet.</p>
+          }
+
+          @if (selected.reference_code; as code) {
+            <app-quantconnect-reference-code [referenceCode]="code" />
           }
         }
       </article>
