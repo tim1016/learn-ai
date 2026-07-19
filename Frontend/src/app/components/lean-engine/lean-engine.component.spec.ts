@@ -333,14 +333,15 @@ describe('LeanEngineComponent engine selector', () => {
     component.leanLauncherStatus.set('ready');
     component.strategies.set([
       {
-        name: 'spy_ema_crossover',
-        display_name: 'SPY EMA Crossover',
+        name: 'ema_crossover_signal',
+        display_name: 'EMA Crossover Signal',
         description: '',
         params_schema: { properties: {} },
         supported_resolutions: ['minute'],
+        lean_twin: 'ema_crossover_signal',
       },
     ]);
-    component.selectedStrategyName.set('spy_ema_crossover');
+    component.selectedStrategyName.set('ema_crossover_signal');
 
     await component.run();
 
@@ -350,7 +351,7 @@ describe('LeanEngineComponent engine selector', () => {
     ]);
   });
 
-  it('submits the built-in EMA template for default LEAN runs', async () => {
+  it('submits the EMA signal template for the EMA signal strategy', async () => {
     const { startJob, startTrustedRun, nextTradingDayOpen } = configureTestBed();
     const fixture = TestBed.createComponent(LeanEngineComponent);
     fixture.detectChanges();
@@ -358,7 +359,17 @@ describe('LeanEngineComponent engine selector', () => {
 
     component.engine.set('lean');
     component.leanLauncherStatus.set('ready');
-    component.selectedStrategyName.set(null);
+    component.strategies.set([
+      {
+        name: 'ema_crossover_signal',
+        display_name: 'EMA Crossover Signal',
+        description: '',
+        params_schema: { properties: {} },
+        supported_resolutions: ['minute'],
+        lean_twin: 'ema_crossover_signal',
+      },
+    ]);
+    component.selectedStrategyName.set('ema_crossover_signal');
     component.startDate.set('2025-01-13');
     component.endDate.set('2025-01-17');
     component.initialCash.set(100_000);
@@ -383,7 +394,7 @@ describe('LeanEngineComponent engine selector', () => {
     const envelope = startJob.mock.calls[0][1] as { request: TrustedRunRequest };
     const payload = envelope.request;
     expect(payload.algorithm_source).toBeUndefined();
-    expect(payload.template).toBe('ema_crossover');
+    expect(payload.template).toBe('ema_crossover_signal');
     expect(payload.starting_cash).toBe(100_000);
     expect(payload.run_id).toMatch(/^engine_lab_spy_[a-z0-9]+$/);
     expect(payload.start_ms_utc).toBe(component.composeStartMs());
@@ -410,6 +421,16 @@ describe('LeanEngineComponent engine selector', () => {
 
     component.engine.set('lean');
     component.leanLauncherStatus.set('ready');
+    component.strategies.set([
+      {
+        name: 'deployment_validation',
+        display_name: 'Deployment Validation',
+        description: '',
+        params_schema: { properties: {} },
+        supported_resolutions: ['minute'],
+        lean_twin: 'deployment_validation',
+      },
+    ]);
     component.selectedStrategyName.set('deployment_validation');
     component.startDate.set('2025-01-13');
     component.endDate.set('2025-01-17');
@@ -444,6 +465,17 @@ describe('LeanEngineComponent engine selector', () => {
     const component = fixture.componentInstance;
 
     component.engine.set('lean');
+    component.strategies.set([
+      {
+        name: 'ema_crossover_signal',
+        display_name: 'EMA Crossover Signal',
+        description: '',
+        params_schema: { properties: {} },
+        supported_resolutions: ['minute'],
+        lean_twin: 'ema_crossover_signal',
+      },
+    ]);
+    component.selectedStrategyName.set('ema_crossover_signal');
 
     await component.run();
 
@@ -480,6 +512,17 @@ describe('LeanEngineComponent engine selector', () => {
     const component = fixture.componentInstance;
 
     component.engine.set('lean');
+    component.strategies.set([
+      {
+        name: 'ema_crossover_signal',
+        display_name: 'EMA Crossover Signal',
+        description: '',
+        params_schema: { properties: {} },
+        supported_resolutions: ['minute'],
+        lean_twin: 'ema_crossover_signal',
+      },
+    ]);
+    component.selectedStrategyName.set('ema_crossover_signal');
     component.startDate.set('2025-01-13');
     component.endDate.set('2025-01-17');
 
@@ -508,6 +551,17 @@ describe('LeanEngineComponent engine selector', () => {
 
     component.engine.set('lean');
     component.leanLauncherStatus.set('ready');
+    component.strategies.set([
+      {
+        name: 'ema_crossover_signal',
+        display_name: 'EMA Crossover Signal',
+        description: '',
+        params_schema: { properties: {} },
+        supported_resolutions: ['minute'],
+        lean_twin: 'ema_crossover_signal',
+      },
+    ]);
+    component.selectedStrategyName.set('ema_crossover_signal');
     component.startDate.set('2025-01-13');
     component.endDate.set('2025-01-13');
     component.initialCash.set(100_000);

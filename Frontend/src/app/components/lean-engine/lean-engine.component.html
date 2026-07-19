@@ -62,17 +62,30 @@
               }
             }
             @if (engine() !== 'python') {
+              @let leanTemplate = leanValidationTemplate();
               <div class="params-card lean-script-card">
                 <h3 data-section="01">LEAN algorithm</h3>
-                <!-- Strategies are authored in-repo (overhaul decision #6):
-                     LEAN runs stage the vetted trusted-sample template.
-                     The operator-pasted source editor was deleted with it. -->
-                <div class="lean-template-summary">
-                  <div>
-                    <strong>EMA crossover</strong>
-                    <span>Built-in template</span>
+                @if (leanTemplate) {
+                  <div class="lean-template-summary">
+                    <div>
+                      <strong>{{ leanTemplateLabel(leanTemplate) }}</strong>
+                      <span>Audited LEAN validation template</span>
+                    </div>
+                    @if (selectedStrategyName(); as strategyKey) {
+                      <a
+                        class="lean-template-link"
+                        routerLink="/strategy-validation"
+                        [queryParams]="{ strategy: strategyKey }">
+                        View copyable QuantConnect code
+                        <i class="pi pi-arrow-up-right" aria-hidden="true"></i>
+                      </a>
+                    }
                   </div>
-                </div>
+                } @else {
+                  <p class="lean-template-unavailable">
+                    No aligned LEAN validation template is registered for this strategy.
+                  </p>
+                }
               </div>
               <div class="params-card lean-launcher-card" [attr.data-status]="leanLauncherStatus()">
                 <h3 data-section="01A">
@@ -146,31 +159,29 @@
               (advisoryAction)="onPickerAdvisoryAction($event)"
             />
 
-            @if (engine() !== 'lean') {
-              <div class="options-card strategy-card">
-                <h3 data-section="02">
-                  <i class="pi pi-list" aria-hidden="true"></i>
-                  Strategy queue
-                </h3>
-                <div class="strategy-list" role="list" aria-label="Available strategies">
-                  @for (strategy of availableStrategies(); track strategy.name) {
-                    <button
-                      type="button"
-                      class="strategy-list__item"
-                      [class.selected]="selectedStrategyName() === strategy.name"
-                      (click)="openStrategyDetail(strategy.name)">
-                      <span>
-                        <strong>{{ strategy.display_name }}</strong>
-                        <small class="mono">{{ strategy.name }}</small>
-                      </span>
-                      <i class="pi pi-arrow-up-right" aria-hidden="true"></i>
-                    </button>
-                  } @empty {
-                    <p class="strategy-list__empty">No strategies support {{ resolution() }} data.</p>
-                  }
-                </div>
+            <div class="options-card strategy-card">
+              <h3 data-section="02">
+                <i class="pi pi-list" aria-hidden="true"></i>
+                Strategy queue
+              </h3>
+              <div class="strategy-list" role="list" aria-label="Available strategies">
+                @for (strategy of selectableStrategies(); track strategy.name) {
+                  <button
+                    type="button"
+                    class="strategy-list__item"
+                    [class.selected]="selectedStrategyName() === strategy.name"
+                    (click)="openStrategyDetail(strategy.name)">
+                    <span>
+                      <strong>{{ strategy.display_name }}</strong>
+                      <small class="mono">{{ strategy.name }}</small>
+                    </span>
+                    <i class="pi pi-arrow-up-right" aria-hidden="true"></i>
+                  </button>
+                } @empty {
+                  <p class="strategy-list__empty">No strategies support {{ resolution() }} data.</p>
+                }
               </div>
-            }
+            </div>
 
             <div class="options-card execution-card">
               <h3 data-section="03">
@@ -238,7 +249,7 @@
                   type="button"
                   class="run-btn"
                   data-testid="run-btn"
-                  [disabled]="running() || (engine() !== 'lean' && !selectedStrategyName()) || leanLauncherBlocksRun()"
+                  [disabled]="running() || !selectedStrategyName() || (engine() !== 'python' && (!leanValidationTemplate() || leanLauncherBlocksRun()))"
                   [title]="leanLauncherBlocksRun()
                     ? 'Check the LEAN launcher before running.'
                     : 'Run the backtest with the current configuration.'"

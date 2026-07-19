@@ -6,7 +6,9 @@ import {
   resource,
   signal,
 } from '@angular/core';
-import { RouterLink } from '@angular/router';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { ActivatedRoute, RouterLink } from '@angular/router';
+import { map } from 'rxjs';
 
 import { StrategyValidationService } from '../../services/strategy-validation.service';
 import type {
@@ -26,7 +28,12 @@ import { QuantConnectReferenceCodeComponent } from './quantconnect-reference-cod
 })
 export class StrategyValidationComponent {
   private readonly service = inject(StrategyValidationService);
+  private readonly route = inject(ActivatedRoute);
   private readonly selectedOverride = signal<string | null>(null);
+  private readonly requestedStrategyKey = toSignal(
+    this.route.queryParamMap.pipe(map((params) => params.get('strategy'))),
+    { initialValue: null },
+  );
   protected readonly flagChoice = signal<StrategyValidationFlag>('validated');
   protected readonly flagReason = signal<string>('');
   protected readonly backtestId = signal<string>('');
@@ -46,11 +53,19 @@ export class StrategyValidationComponent {
     () => this.strategies().filter((strategy) => !this.isAcceptedForDeploy(strategy)).length,
   );
   protected readonly selectedKey = computed(
-    () =>
-      this.selectedOverride() ??
-      this.strategies().find((strategy) => this.isAcceptedForDeploy(strategy))?.strategy_key ??
-      this.strategies()[0]?.strategy_key ??
-      null,
+    () => {
+      const requested = this.requestedStrategyKey();
+      const requestedKey = this.strategies().some((strategy) => strategy.strategy_key === requested)
+        ? requested
+        : null;
+      return (
+        this.selectedOverride() ??
+        requestedKey ??
+        this.strategies().find((strategy) => this.isAcceptedForDeploy(strategy))?.strategy_key ??
+        this.strategies()[0]?.strategy_key ??
+        null
+      );
+    },
   );
 
   protected readonly detail = resource<StrategyValidationDetail | null, string | null>({

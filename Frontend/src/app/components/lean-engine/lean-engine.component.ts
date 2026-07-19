@@ -43,6 +43,11 @@ import {
   RUN_DOCK_STORAGE_KEY,
 } from "../../shared/run-dock/run-dock-source";
 import { EngineRunDockSource } from "./engine-run-dock-source";
+import {
+  isLeanValidationTemplate,
+  leanValidationTemplateLabel,
+  type LeanValidationTemplate,
+} from "./lean-validation-template";
 import { toMostRecentWeekday } from "../../shared/date/weekday";
 import type { EngineValidationAnalytics } from "./engine-results/engine-validation-analytics.types";
 
@@ -72,6 +77,8 @@ export interface StrategyInfo {
   /** Parity-critical gotchas surfaced from the validation studies.
    *  Render as a bullet list under the strategy description. */
   gotchas?: string[];
+  /** Aligned LEAN template for a valid cross-engine comparison, if one exists. */
+  lean_twin?: string | null;
 }
 
 type EngineResolution = "minute" | "daily";
@@ -488,10 +495,24 @@ export class LeanEngineComponent implements OnInit {
     );
   });
 
+  /** Strategies that can run under the selected engine without comparing
+   * unrelated algorithms. LEAN and Both require a registry-declared twin. */
+  readonly selectableStrategies = computed<StrategyInfo[]>(() => {
+    const strategies = this.availableStrategies();
+    return this.engine() === "python"
+      ? strategies
+      : strategies.filter((strategy) => isLeanValidationTemplate(strategy.lean_twin));
+  });
+
   readonly selectedStrategy = computed(() => {
     const name = this.selectedStrategyName();
     if (!name) return null;
     return this.strategies().find((s) => s.name === name) ?? null;
+  });
+
+  readonly leanValidationTemplate = computed<LeanValidationTemplate | null>(() => {
+    const template = this.selectedStrategy()?.lean_twin;
+    return isLeanValidationTemplate(template) ? template : null;
   });
 
   readonly paramEntries = computed(() => {
@@ -568,7 +589,7 @@ export class LeanEngineComponent implements OnInit {
     // is selected). Rebind to the first strategy that supports the newly
     // chosen resolution so the form stays usable.
     effect(() => {
-      const available = this.availableStrategies();
+      const available = this.selectableStrategies();
       const current = this.selectedStrategyName();
       if (available.length === 0) {
         return;
@@ -892,6 +913,14 @@ export class LeanEngineComponent implements OnInit {
    * the Python path does.
    */
   private async runLean(): Promise<void> {
+    const template = this.leanValidationTemplate();
+    if (template === null) {
+      const message = "Select a strategy with an aligned LEAN validation template.";
+      this.runError.set(message);
+      this.setRunStatus("failed", "LEAN validation template unavailable", message);
+      return;
+    }
+
     if (this.leanLauncherStatus() !== "ready") {
       await this.checkLeanLauncher();
       if (this.leanLauncherStatus() !== "ready") {
@@ -943,7 +972,7 @@ export class LeanEngineComponent implements OnInit {
       const id = await this.jobsService.startJob("lean_engine_run", {
         request: {
           run_id: this.composeRunId(),
-          template: this.leanTemplateForSelectedStrategy(),
+          template,
           starting_cash: this.initialCash(),
           start_ms_utc: this.composeStartMs(),
           end_ms_utc: endResolution.session_open_ms_utc,
@@ -963,10 +992,8 @@ export class LeanEngineComponent implements OnInit {
     }
   }
 
-  private leanTemplateForSelectedStrategy(): "ema_crossover" | "deployment_validation" {
-    return this.selectedStrategyName() === "deployment_validation"
-      ? "deployment_validation"
-      : "ema_crossover";
+  protected leanTemplateLabel(template: LeanValidationTemplate): string {
+    return leanValidationTemplateLabel(template);
   }
 
   /**

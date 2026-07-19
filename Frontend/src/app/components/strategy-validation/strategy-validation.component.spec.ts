@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/angular';
-import { provideRouter } from '@angular/router';
+import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
+import { of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -277,6 +278,22 @@ describe('StrategyValidationComponent', () => {
     expect(await screen.findByRole('heading', { name: 'QuantConnect reference algorithm' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Copy QuantConnect algorithm' })).toBeTruthy();
     expect(screen.getByText('references/qc-shadow/SpyEmaCrossoverAlgorithm.py')).toBeTruthy();
+  });
+
+  it('opens the requested strategy audit copy from an Engine Lab link', async () => {
+    await render(StrategyValidationComponent, {
+      providers: [
+        provideRouter([]),
+        {
+          provide: ActivatedRoute,
+          useValue: { queryParamMap: of(convertToParamMap({ strategy: 'ema_crossover_signal' })) },
+        },
+        { provide: StrategyValidationService, useClass: FakeStrategyValidationService },
+      ],
+    });
+
+    expect(await screen.findByRole('heading', { name: 'EMA Crossover Signal' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'QuantConnect reference algorithm' })).toBeTruthy();
   });
 
   it('refreshes validation evidence for the selected strategy', async () => {
