@@ -27,16 +27,16 @@ export function leanValidationTemplateLabel(template: LeanValidationTemplate): s
 }
 
 /**
- * The registry response is authoritative. The key fallback keeps the two
- * known validation strategies runnable while a frontend is deployed before
- * the Python strategy-catalog service is restarted with the new field.
+ * The registry response is authoritative whenever it declares the field.
+ * The key fallback only supports an older strategy-catalog service that
+ * omits ``lean_twin`` during a rolling frontend deployment.
  */
 export function leanValidationTemplateForStrategy(
   strategyKey: string,
   declaredTemplate: string | null | undefined,
 ): LeanValidationTemplate | null {
-  if (isLeanValidationTemplate(declaredTemplate)) {
-    return declaredTemplate;
+  if (declaredTemplate !== undefined) {
+    return isLeanValidationTemplate(declaredTemplate) ? declaredTemplate : null;
   }
   return LEGACY_STRATEGY_TEMPLATES[strategyKey] ?? null;
 }

@@ -438,6 +438,35 @@ describe('LeanEngineComponent engine selector', () => {
     expect(envelope.request.template).toBe('ema_crossover_signal');
   });
 
+  it.each([
+    ['withdraws the LEAN twin', null],
+    ['declares a different LEAN twin', 'ema_crossover'],
+  ])('does not use the legacy fallback when the catalog %s', async (_case, leanTwin) => {
+    const { startJob } = configureTestBed();
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+
+    component.engine.set('lean');
+    component.leanLauncherStatus.set('ready');
+    component.strategies.set([
+      {
+        name: 'ema_crossover_signal',
+        display_name: 'EMA Crossover Signal',
+        description: '',
+        params_schema: { properties: {} },
+        supported_resolutions: ['minute'],
+        lean_twin: leanTwin,
+      },
+    ]);
+    component.selectedStrategyName.set('ema_crossover_signal');
+
+    await component.run();
+
+    expect(startJob).not.toHaveBeenCalled();
+    expect(component.runError()).toBe('Select a strategy with an aligned LEAN validation template.');
+  });
+
   it('submits the deployment-validation LEAN template for the matching Python strategy', async () => {
     const { startJob } = configureTestBed();
     const fixture = TestBed.createComponent(LeanEngineComponent);
