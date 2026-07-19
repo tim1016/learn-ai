@@ -1,4 +1,4 @@
-"""Verify ema_crossover is registered alongside trusted_default and reconciliation."""
+"""Verify the legacy and migrated EMA templates are registered."""
 
 from __future__ import annotations
 
@@ -6,31 +6,50 @@ from app.lean_sidecar.trusted_samples.deployment_validation import (
     DEPLOYMENT_VALIDATION_SOURCE,
 )
 from app.lean_sidecar.trusted_samples.ema_crossover import EMA_CROSSOVER_SOURCE
-from app.services.lean_sidecar_service import (
-    _BROKERAGE_POLICY_FOR_TEMPLATE,
-    _SOURCE_FOR_TEMPLATE,
+from app.lean_sidecar.trusted_samples.ema_crossover_signal import (
+    EMA_CROSSOVER_SIGNAL_SOURCE,
+)
+from app.lean_sidecar.trusted_templates import (
+    TRUSTED_TEMPLATE_DEFINITIONS,
+    TrustedTemplate,
 )
 
 
 def test_ema_crossover_is_in_source_registry() -> None:
-    assert "ema_crossover" in _SOURCE_FOR_TEMPLATE
-    assert _SOURCE_FOR_TEMPLATE["ema_crossover"] is EMA_CROSSOVER_SOURCE
+    assert TrustedTemplate.EMA_CROSSOVER in TRUSTED_TEMPLATE_DEFINITIONS
+    assert TRUSTED_TEMPLATE_DEFINITIONS[TrustedTemplate.EMA_CROSSOVER].source is EMA_CROSSOVER_SOURCE
 
 
 def test_ema_crossover_brokerage_policy_is_algorithm_default() -> None:
-    assert _BROKERAGE_POLICY_FOR_TEMPLATE["ema_crossover"] == "algorithm_default"
+    assert TRUSTED_TEMPLATE_DEFINITIONS[TrustedTemplate.EMA_CROSSOVER].brokerage_policy == "algorithm_default"
+
+
+def test_ema_crossover_signal_is_in_source_registry() -> None:
+    assert TrustedTemplate.EMA_CROSSOVER_SIGNAL in TRUSTED_TEMPLATE_DEFINITIONS
+    assert TRUSTED_TEMPLATE_DEFINITIONS[TrustedTemplate.EMA_CROSSOVER_SIGNAL].source is EMA_CROSSOVER_SIGNAL_SOURCE
+    assert EMA_CROSSOVER_SIGNAL_SOURCE is EMA_CROSSOVER_SOURCE
+
+
+def test_ema_crossover_signal_brokerage_policy_is_interactive_brokers() -> None:
+    assert (
+        TRUSTED_TEMPLATE_DEFINITIONS[TrustedTemplate.EMA_CROSSOVER_SIGNAL].brokerage_policy
+        == "interactive_brokers"
+    )
 
 
 def test_deployment_validation_is_in_source_registry() -> None:
-    assert "deployment_validation" in _SOURCE_FOR_TEMPLATE
-    assert _SOURCE_FOR_TEMPLATE["deployment_validation"] is DEPLOYMENT_VALIDATION_SOURCE
+    assert TrustedTemplate.DEPLOYMENT_VALIDATION in TRUSTED_TEMPLATE_DEFINITIONS
+    assert TRUSTED_TEMPLATE_DEFINITIONS[TrustedTemplate.DEPLOYMENT_VALIDATION].source is DEPLOYMENT_VALIDATION_SOURCE
 
 
 def test_deployment_validation_brokerage_policy_is_algorithm_default() -> None:
-    assert _BROKERAGE_POLICY_FOR_TEMPLATE["deployment_validation"] == "algorithm_default"
+    assert (
+        TRUSTED_TEMPLATE_DEFINITIONS[TrustedTemplate.DEPLOYMENT_VALIDATION].brokerage_policy
+        == "algorithm_default"
+    )
 
 
 def test_existing_templates_still_registered() -> None:
     """Regression guard: don't break existing templates."""
-    assert "trusted_default" in _SOURCE_FOR_TEMPLATE
-    assert "reconciliation" in _SOURCE_FOR_TEMPLATE
+    assert TrustedTemplate.TRUSTED_DEFAULT in TRUSTED_TEMPLATE_DEFINITIONS
+    assert TrustedTemplate.RECONCILIATION in TRUSTED_TEMPLATE_DEFINITIONS

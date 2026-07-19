@@ -5,7 +5,7 @@ consolidators, invokes strategy event handlers on consolidated bars, and
 processes pending orders through the fill model.
 
 Designed to reproduce LEAN's backtest semantics bit-exactly for the
-SpyEmaCrossoverAlgorithm. See docs/lean-engine-implementation-plan.md §2
+EmaCrossoverSignalAlgorithm. See docs/lean-engine-implementation-plan.md §2
 for the reproducibility details this engine guarantees.
 """
 
@@ -25,6 +25,7 @@ from app.engine.execution.intrabar_resolver import (
 )
 from app.engine.execution.order import Direction, FillMode, Order, OrderEvent, OrderType
 from app.engine.execution.portfolio import Portfolio
+from app.engine.execution.signal_intent_executor import SignalSymbolExecutor
 from app.engine.execution.sizing import SimpleFloorSizing, SizingModel
 from app.engine.strategy.base import Strategy, StrategyContext
 
@@ -100,6 +101,11 @@ class BacktestEngine:
             raise RuntimeError("Strategy must call set_start_date and set_end_date in initialize()")
         if not ctx.symbols:
             raise RuntimeError("Strategy must call ctx.add_equity() in initialize() for at least one symbol")
+        if len(ctx.symbols) != 1:
+            raise NotImplementedError("BacktestEngine supports one signal symbol only")
+        # Engine Lab's historical same-symbol behavior is an explicit policy,
+        # never an unbound fallback inherited by the live runtime.
+        ctx.set_signal_intent_executor(SignalSymbolExecutor(ctx.symbols[0]))
 
         # Now that initialize has run, reset portfolio cash to the configured amount.
         portfolio.initial_cash = strategy.initial_cash

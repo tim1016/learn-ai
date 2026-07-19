@@ -1,0 +1,8 @@
+{
+  "captured_at_ms_utc": 1784470697721,
+  "status": "passed",
+  "trade_summary": {
+    "gating_divergent_count": 0,
+    "passed": true
+  }
+}

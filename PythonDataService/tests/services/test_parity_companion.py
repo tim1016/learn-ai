@@ -117,6 +117,28 @@ def test_dispatch_eligible_creates_pending_row_and_launches_job():
 
 
 @respx.mock
+def test_dispatch_migrated_signal_launches_its_named_lean_template():
+    """The canonical signal strategy must not silently dispatch the legacy key."""
+    launched: dict = {}
+
+    def _capture_job(request: httpx.Request) -> httpx.Response:
+        launched.update(json.loads(request.content))
+        return httpx.Response(202, json={"id": "job-signal"})
+
+    respx.post(f"{BACKEND}/api/parity-verdicts").mock(return_value=httpx.Response(200, json={"id": 1}))
+    respx.post(f"{BACKEND}/api/jobs/lean_engine_run").mock(side_effect=_capture_job)
+
+    dispatch_parity_companion(
+        registration=_STRATEGY_REGISTRY["ema_crossover_signal"],
+        request=_request(strategy_name="ema_crossover_signal"),
+        parity_group_id="pg-signal-template",
+        left_execution_id=43,
+    )
+
+    assert launched["request"]["template"] == "ema_crossover_signal"
+
+
+@respx.mock
 def test_dispatch_ineligible_records_unavailable_and_launches_nothing():
     created: dict = {}
 

@@ -620,7 +620,9 @@ def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         _strategy_key: str,
         _account_id: str,
         _instance_id: str,
+        live_config: dict | None = None,
     ) -> DeployPreflightSignals:
+        del live_config
         return DeployPreflightSignals(
             daemon_reachable=True,
             broker_connection_state="connected",
@@ -629,6 +631,7 @@ def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             fleet_blocks_starts=False,
             strategy_deployable=True,
             instance_already_running=False,
+            session_in_start_window=True,
         )
 
     monkeypatch.setattr(
@@ -4710,7 +4713,9 @@ async def test_deploy_and_start_rejects_backend_preflight_blocker(
         _strategy_key: str,
         _account_id: str,
         _instance_id: str,
+        live_config: dict | None = None,
     ) -> DeployPreflightSignals:
+        del live_config
         return DeployPreflightSignals(
             daemon_reachable=True,
             broker_connection_state="disconnected",
@@ -4719,6 +4724,7 @@ async def test_deploy_and_start_rejects_backend_preflight_blocker(
             fleet_blocks_starts=False,
             strategy_deployable=True,
             instance_already_running=False,
+            session_in_start_window=True,
         )
 
     monkeypatch.setattr(
@@ -4759,7 +4765,9 @@ async def test_deploy_and_start_rejects_fleet_contamination_preflight(
         _strategy_key: str,
         _account_id: str,
         _instance_id: str,
+        live_config: dict | None = None,
     ) -> DeployPreflightSignals:
+        del live_config
         return DeployPreflightSignals(
             daemon_reachable=True,
             broker_connection_state="connected",
@@ -4768,6 +4776,7 @@ async def test_deploy_and_start_rejects_fleet_contamination_preflight(
             fleet_blocks_starts=True,
             strategy_deployable=True,
             instance_already_running=False,
+            session_in_start_window=True,
         )
 
     monkeypatch.setattr(

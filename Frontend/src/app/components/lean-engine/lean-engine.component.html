@@ -274,8 +274,7 @@
             <div class="ide-rail-right">
 
             <app-validation-evidence-card
-              [symbol]="effectiveSymbol()"
-              [resolution]="resolution()" />
+              [policy]="dataPolicy()" />
 
             @if (selectedStrategy(); as strategy) {
               @if (strategy.algorithm_pseudocode) {

@@ -8,7 +8,7 @@ vocabulary that grilling sharpened and cross-references that list.
 
 ## Identity ladder (established — see plan §16.4)
 
-- **strategy_key** — algorithm family (e.g. `spy_ema_crossover`).
+- **strategy_key** — algorithm family (e.g. `ema_crossover_signal`; `spy_ema_crossover` remains a legacy compatibility key).
 - **strategy_instance_id** — one *configured* instance of a strategy_key. The
   unit the operator actually governs. Owns the `ib_client_id`,
   `bot_order_namespace`, durable desired-state sidecar, and (after PR-A) the
@@ -1055,6 +1055,9 @@ the *deployment* binds.
   from the **traded instrument**, which the Action plan controls: signal stream is
   *what the strategy watches*, the action-plan legs are *what it trades*. All three
   (validation symbol, signal stream, traded legs) may differ.
+- **Signal intent** — an instrument-free ENTER or EXIT decision emitted by a
+  signal-only strategy at a decision-bar close. The Action Plan consumes that
+  decision to choose the traded leg; the strategy never chooses the asset.
 - **Strategy Validation page** — the standalone surface that owns a strategy
   *becoming* validated and that displays the equivalence evidence. It is a
   **master-detail list** (a row per validated strategy, click through to detail),

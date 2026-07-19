@@ -1944,6 +1944,16 @@ class TestTemplateSelection:
         model = TrustedRunRequestModel.model_validate(payload)
         assert model.template == "deployment_validation"
 
+    async def test_template_accepts_ema_crossover_signal(self) -> None:
+        from app.routers.lean_sidecar import TrustedRunRequestModel
+
+        payload = _good_payload()
+        payload["template"] = "ema_crossover_signal"
+
+        model = TrustedRunRequestModel.model_validate(payload)
+
+        assert model.template == "ema_crossover_signal"
+
     async def test_template_rejects_unknown_value(self, client: AsyncClient) -> None:
         """A typo or unknown template must 422 — silently falling
         through to the default would mask brokerage intent."""

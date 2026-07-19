@@ -50,12 +50,12 @@ def test_parse_args_requires_one() -> None:
 
 def test_resolve_target_cells_all() -> None:
     cells = _resolve_target_cells(argparse.Namespace(all=True, cell=None, ticker=None))
-    assert len(cells) == 12
+    assert len(cells) == 16
 
 
 def test_resolve_target_cells_ticker() -> None:
     cells = _resolve_target_cells(argparse.Namespace(all=False, cell=None, ticker="SPY"))
-    assert len(cells) == 3
+    assert len(cells) == 4
     assert all(c.ticker == "SPY" for c in cells)
 
 

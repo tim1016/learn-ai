@@ -530,6 +530,8 @@ def list_engine_strategies() -> list[StrategyInfo]:
     result: list[StrategyInfo] = []
     for name in sorted(_STRATEGY_REGISTRY.keys()):
         reg = _STRATEGY_REGISTRY[name]
+        if not reg.catalog_visible:
+            continue
         result.append(
             StrategyInfo(
                 name=name,

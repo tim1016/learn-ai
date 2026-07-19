@@ -16,6 +16,7 @@ async def test_strategy_validation_catalog_and_detail_expose_manifest(tmp_path) 
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             catalog_response = await client.get("/api/strategy-validation/strategies")
             detail_response = await client.get("/api/strategy-validation/strategies/deployment_validation")
+            ema_detail_response = await client.get("/api/strategy-validation/strategies/ema_crossover_signal")
     finally:
         app.dependency_overrides.pop(get_strategy_validation_flag_events_path, None)
 
@@ -26,6 +27,8 @@ async def test_strategy_validation_catalog_and_detail_expose_manifest(tmp_path) 
     assert "spy_orb" in strategies
     assert strategies["deployment_validation"]["validation_state"] == "validated"
     assert strategies["deployment_validation"]["deployable"] is True
+    assert strategies["ema_crossover_signal"]["validation_state"] == "validated"
+    assert strategies["ema_crossover_signal"]["deployable"] is True
     assert (
         strategies["deployment_validation"]["current_flag_event"]["flagged_by"]
         == "migration:strategy-validation-prd-seed"
@@ -51,6 +54,16 @@ async def test_strategy_validation_catalog_and_detail_expose_manifest(tmp_path) 
     assert "class DeploymentValidationAlgorithm" in detail["reference_code"]["source"]
     assert "DeploymentValidationConsecutiveGreen" not in detail["reference_code"]["source"]
 
+
+    assert ema_detail_response.status_code == 200, ema_detail_response.text
+    ema_detail = ema_detail_response.json()
+    assert ema_detail["strategy_key"] == "ema_crossover_signal"
+    assert ema_detail["deployable"] is True
+    assert ema_detail["validator_code_ref"].endswith(
+        "lean_sidecar/trusted_samples/ema_crossover_signal.py"
+    )
+    assert ema_detail["settings_file_ref"].endswith("spy_ema_crossover.spec.json")
+    assert ema_detail["audit_copy_ref"] == "references/qc-shadow/SpyEmaCrossoverAlgorithm.py"
 
 @pytest.mark.asyncio
 async def test_strategy_validation_detail_404s_unknown_strategy() -> None:

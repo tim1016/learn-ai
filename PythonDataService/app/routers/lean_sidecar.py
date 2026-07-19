@@ -62,6 +62,7 @@ from app.lean_sidecar.trading_calendar import (
     next_trading_day,
     session_open_ms_utc,
 )
+from app.lean_sidecar.trusted_templates import TrustedTemplate
 from app.lean_sidecar.workspace import (
     RUN_ID_PATTERN,
     TICKER_SYMBOL_PATTERN,
@@ -262,8 +263,8 @@ class TrustedRunRequestModel(BaseModel):
             "shape is what makes accepting arbitrary source safe."
         ),
     )
-    template: Literal["trusted_default", "reconciliation", "ema_crossover", "deployment_validation"] = Field(
-        default="trusted_default",
+    template: TrustedTemplate = Field(
+        default=TrustedTemplate.TRUSTED_DEFAULT,
         description=(
             "Phase 5b — which bundled trusted sample to stage when "
             "``algorithm_source`` is omitted. ``trusted_default`` (the "

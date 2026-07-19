@@ -289,9 +289,9 @@ class TestRunEngineLabOnWorkspace:
 
     def test_output_dir_threads_to_strategy_constructor(self, tmp_path: Path) -> None:
         """output_dir kwarg is passed to the strategy constructor so
-        SpyEmaCrossoverAlgorithm emits observations.csv + state.csv.
+        EmaCrossoverSignalAlgorithm emits observations.csv + state.csv.
 
-        Uses SpyEmaCrossoverAlgorithm (which accepts output_dir) against
+        Uses EmaCrossoverSignalAlgorithm (which accepts output_dir) against
         a synthetic workspace with enough bars to warm up all indicators
         (RSI needs 14 consolidated bars × 15 min = 210 minute bars).
         """
@@ -315,7 +315,7 @@ class TestRunEngineLabOnWorkspace:
         output_dir = tmp_path / "strategy_out"
         result = run_engine_lab_on_workspace(
             ws.workspace_dir,
-            "SpyEmaCrossoverAlgorithm",
+            "EmaCrossoverSignalAlgorithm",
             symbol="SPY",
             start_date=start,
             end_date=start + _td(days=4),
@@ -335,4 +335,4 @@ class TestRunEngineLabOnWorkspace:
         assert len(obs_lines) > 1, "observations.csv has no data rows"
         assert obs_lines[0].startswith("ms_utc"), f"unexpected header: {obs_lines[0]}"
         # Strategy class name preserved in the result.
-        assert result.strategy_class_name == "SpyEmaCrossoverAlgorithm"
+        assert result.strategy_class_name == "EmaCrossoverSignalAlgorithm"

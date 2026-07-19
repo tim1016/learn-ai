@@ -5,11 +5,11 @@ runs Engine Lab live against the shared _lean_data_capture/<TICKER>/
 data folder, and asserts all three gates pass via the cell runner.
 
 Markers:
-  * ``cross_engine_smoke`` — applied to W6mo cells (4 of 12); runs on every PR.
-  * ``slow``               — applied to W12mo and W24mo cells (8 of 12);
+  * ``cross_engine_smoke`` — applied to W3mo and W6mo cells (8 of 16); runs on every PR.
+  * ``slow``               — applied to W12mo and W24mo cells (8 of 16);
                               run pre-push / on-demand.
 
-Until Task 11 (cell regeneration) lands, all 12 cells will skip with a
+Until a cell is regenerated, its test skips with a
 "fixture missing" message. That is the intended state of this test until
 fixtures are pinned.
 
@@ -32,12 +32,12 @@ from app.lean_sidecar.parity_matrix.matrix import CELLS, Cell, WindowLabel
 
 # tests/research/parity/test_cross_engine_study.py → parents[3] = PythonDataService/
 FIXTURE_ROOT = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "golden" / "cross-engine-studies"
-STRATEGY_CLASS_NAME = "SpyEmaCrossoverAlgorithm"
+STRATEGY_CLASS_NAME = "EmaCrossoverSignalAlgorithm"
 INITIAL_CASH = Decimal(100000)
 
 
 def _markers_for(cell: Cell) -> list:
-    if cell.window_label is WindowLabel.W6MO:
+    if cell.window_label in {WindowLabel.W3MO, WindowLabel.W6MO}:
         return [pytest.mark.cross_engine_smoke]
     return [pytest.mark.slow]
 
@@ -101,7 +101,7 @@ def _run_engine_for_cell(cell: Cell, capture: Path, output_dir: Path) -> list[Cr
 
     Wires app.lean_sidecar.cross_runner.run_engine_lab_on_workspace to
     point at the shared _lean_data_capture/<TICKER>/ directory, with
-    the SpyEmaCrossoverAlgorithm strategy resolved by class name.
+    the EmaCrossoverSignalAlgorithm strategy resolved by class name.
 
     ``output_dir`` is threaded to the strategy constructor so it emits
     observations.csv + state.csv for Gate 1 and Gate 2.

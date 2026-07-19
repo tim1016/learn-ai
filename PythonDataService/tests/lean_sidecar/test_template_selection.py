@@ -16,11 +16,11 @@ from app.lean_sidecar.trusted_samples.buy_and_hold import BUY_AND_HOLD_SOURCE
 from app.lean_sidecar.trusted_samples.buy_and_hold_reconciliation import (
     BUY_AND_HOLD_RECONCILIATION_SOURCE,
 )
-from app.services.lean_sidecar_service import (
-    _BROKERAGE_POLICY_FOR_TEMPLATE,
-    _SOURCE_FOR_TEMPLATE,
-    TrustedRunRequest,
+from app.lean_sidecar.trusted_templates import (
+    TRUSTED_TEMPLATE_DEFINITIONS,
+    TrustedTemplate,
 )
+from app.services.lean_sidecar_service import TrustedRunRequest
 
 
 def _default_data_policy() -> DataPolicy:
@@ -60,7 +60,7 @@ def test_trusted_default_template_is_the_dataclass_default() -> None:
 
 
 def test_template_maps_default_to_algorithm_default_policy() -> None:
-    assert _BROKERAGE_POLICY_FOR_TEMPLATE["trusted_default"] == "algorithm_default"
+    assert TRUSTED_TEMPLATE_DEFINITIONS[TrustedTemplate.TRUSTED_DEFAULT].brokerage_policy == "algorithm_default"
 
 
 def test_template_maps_reconciliation_to_interactive_brokers_policy() -> None:
@@ -68,15 +68,15 @@ def test_template_maps_reconciliation_to_interactive_brokers_policy() -> None:
     UI displays — and what an auditor reads to know whether a run is
     Engine-Lab-comparable. Reconciliation template must map exactly
     to ``interactive_brokers``."""
-    assert _BROKERAGE_POLICY_FOR_TEMPLATE["reconciliation"] == "interactive_brokers"
+    assert TRUSTED_TEMPLATE_DEFINITIONS[TrustedTemplate.RECONCILIATION].brokerage_policy == "interactive_brokers"
 
 
 def test_default_template_stages_legacy_buy_and_hold_source() -> None:
-    assert _SOURCE_FOR_TEMPLATE["trusted_default"] == BUY_AND_HOLD_SOURCE
+    assert TRUSTED_TEMPLATE_DEFINITIONS[TrustedTemplate.TRUSTED_DEFAULT].source == BUY_AND_HOLD_SOURCE
 
 
 def test_reconciliation_template_stages_ibkr_pinned_source() -> None:
-    assert _SOURCE_FOR_TEMPLATE["reconciliation"] == BUY_AND_HOLD_RECONCILIATION_SOURCE
+    assert TRUSTED_TEMPLATE_DEFINITIONS[TrustedTemplate.RECONCILIATION].source == BUY_AND_HOLD_RECONCILIATION_SOURCE
 
 
 def test_reconciliation_source_explicitly_pins_ibkr_brokerage() -> None:
@@ -108,7 +108,10 @@ def test_reconciliation_source_class_name_is_my_algorithm() -> None:
     assert "class MyAlgorithm" in BUY_AND_HOLD_RECONCILIATION_SOURCE
 
 
-@pytest.mark.parametrize("template", ["trusted_default", "reconciliation", "ema_crossover", "deployment_validation"])
-def test_request_accepts_known_templates(template: str) -> None:
+@pytest.mark.parametrize(
+    "template",
+    list(TrustedTemplate),
+)
+def test_request_accepts_known_templates(template: TrustedTemplate) -> None:
     req = _request(template=template)
     assert req.template == template

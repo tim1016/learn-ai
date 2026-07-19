@@ -37,7 +37,7 @@ def sha256_of_file(path: Path) -> str:
 
 class WindowSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    label: Literal["W6mo", "W12mo", "W24mo"]
+    label: Literal["W3mo", "W6mo", "W12mo", "W24mo"]
     start_date: str
     end_date: str
     session: Literal["regular", "extended"]
@@ -98,7 +98,7 @@ class StateCsvSchema(BaseModel):
         return self
 
 
-_CELL_ID_RE = re.compile(r"[A-Z]+_W(6|12|24)mo_\d{4}-\d{2}-\d{2}_to_\d{4}-\d{2}-\d{2}")
+_CELL_ID_RE = re.compile(r"[A-Z]+_W(3|6|12|24)mo_\d{4}-\d{2}-\d{2}_to_\d{4}-\d{2}-\d{2}")
 
 
 class CellManifest(BaseModel):

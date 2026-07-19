@@ -23,6 +23,7 @@ def patch_signals(monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
             "fleet_blocks_starts": False,
             "strategy_deployable": True,
             "instance_already_running": False,
+            "session_in_start_window": True,
         }
         base.update(overrides)
 
@@ -30,7 +31,9 @@ def patch_signals(monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
             strategy_key: str,
             account_id: str,
             instance_id: str,
+            live_config: dict | None = None,
         ) -> DeployPreflightSignals:
+            del strategy_key, account_id, instance_id, live_config
             return DeployPreflightSignals(**base)
 
         monkeypatch.setattr(deploy_preflight, "gather_deploy_preflight_signals", fake)

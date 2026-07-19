@@ -68,7 +68,7 @@ def run_cell_gates(
     and ``orders.json`` (the latter is a JSON array of
     ``NormalizedOrderEvent`` dicts produced by the regeneration script).
     ``engine_output_dir`` contains the same first two filenames written
-    by ``SpyEmaCrossoverAlgorithm`` with ``output_dir=engine_output_dir``.
+    by ``EmaCrossoverSignalAlgorithm`` with ``output_dir=engine_output_dir``.
     ``engine_normalized_orders`` is the list of fills returned by the
     Engine Lab run (from ``cross_runner.run_engine_lab_on_workspace``).
 

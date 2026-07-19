@@ -1,8 +1,8 @@
 {
   "artifacts": {
     "observations_sha256": "2ee2bcc9b27de28201c0abb9967273aec61cf7b96c792d8d59a135fde2c2d7b9",
-    "orders_sha256": "42640cad41cd9d3e4e45cf3778c7168e61835b7f1e7a6a188c3269f11f107945",
-    "reconciliation_sha256": "d5bf4b0ecddc275927c2b19259c27c26a57efd8e801cf3375aa948d7d1f0ad35",
+    "orders_sha256": "3a3711920bdeb7d519dfe90b277fd78554e8e64a48b81a724234a3a48db5c628",
+    "reconciliation_sha256": "be150a95c0ec49678b2ca9f327c96838bf3ec6b269307bd2df3572ce0595c3e6",
     "state_sha256": "089e39688cb4cedda3419c3efcf1f1e373c94c6abdea24de08d5f0fc702c6f98"
   },
   "broker": {
@@ -11,19 +11,19 @@
     "fee_model": "InteractiveBrokersFeeModel",
     "fill_model": "ImmediateFillModel"
   },
-  "captured_at_ms_utc": 1779505326008,
+  "captured_at_ms_utc": 1784470747196,
   "captured_by": "Inkant Awasthi",
   "cell_id": "SPY_W6mo_2025-11-03_to_2026-04-30",
   "data": {
     "data_contract_hash": "615fec830b501a0310389de67232497681f70933b09e72b6f931cc8745e2ebe4",
     "lean_data_capture_ref": "_lean_data_capture/SPY"
   },
-  "fixture_git_commit": "1f266c971079b1aeb15bdbd31f6a8077747de2b3",
-  "generator_script_sha256": "e80422d92d22de24638f92d99591396ef2182479bb20c26139f739c2ee710589",
+  "fixture_git_commit": "d24b05116d4658920245c5167d2b45c408c7aef1",
+  "generator_script_sha256": "64d7795b0c9a23723afea949c884e98073b1496f9e56e402f53e5cb14041e073",
   "lean_runtime": {
-    "container_image_digest": "docker.io/quantconnect/lean@sha256:97884667be20077925996ac22b5e3e16e3a47e7363e01795151459d16786247c"
+    "container_image_digest": "localhost/learn-ai/lean-sandbox@sha256:0b8d4e381b63daaa4cebbea7af294cc5b140793a6fd13f8c9cfd63ef2a2fb24d"
   },
-  "python_data_service_commit": "1f266c971079b1aeb15bdbd31f6a8077747de2b3",
+  "python_data_service_commit": "d24b05116d4658920245c5167d2b45c408c7aef1",
   "schema_version": 1,
   "state_csv_schema": {
     "column_types": {
@@ -63,7 +63,7 @@
       "starting_cash": 100000,
       "symbol": "SPY"
     },
-    "trusted_sample": "EMA_CROSSOVER_SOURCE",
+    "trusted_sample": "EMA_CROSSOVER_SIGNAL_SOURCE",
     "trusted_sample_source_sha256": "7bd99036d8e98526bc5b75c6760b67960ae676c6dfc667c9b442df95a2c6d581"
   },
   "ticker": "SPY",

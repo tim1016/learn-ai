@@ -82,11 +82,11 @@ describe('LeanEngineComponent.composeDataPolicy', () => {
     expect(dp.strategy_bars).toEqual({ timespan: 'day', multiplier: 1 });
   });
 
-  it('uses 15-minute strategy bars for the SPY EMA crossover', () => {
+  it('uses 15-minute strategy bars for the migrated EMA crossover signal', () => {
     const fixture = TestBed.createComponent(LeanEngineComponent);
     const component = fixture.componentInstance;
 
-    component.selectedStrategyName.set('spy_ema_crossover');
+    component.selectedStrategyName.set('ema_crossover_signal');
     component.resolution.set('minute');
 
     const dp = component.composeDataPolicy();

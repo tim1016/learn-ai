@@ -14,8 +14,10 @@ from app.engine.data.trade_bar import TradeBar
 from app.engine.framework.insight import Insight
 from app.engine.framework.insight_manager import InsightManager
 from app.engine.live.live_portfolio import LivePortfolio
+from app.engine.strategy.signal_intent import SignalIntent
 
 if TYPE_CHECKING:
+    from app.engine.execution.signal_intent_executor import SignalIntentExecutor
     from app.engine.live.indicator_state import HydratePolicy
 
 
@@ -33,6 +35,8 @@ class LiveContext:
     consolidated_bars: list[TradeBar] = field(default_factory=list)
     insight_manager: InsightManager = field(default_factory=InsightManager)
     _pre_handler_hook: Callable[[TradeBar], None] | None = None
+    _signal_intent_executor: SignalIntentExecutor | None = None
+    signal_intents: list[SignalIntent] = field(default_factory=list)
 
     # ---- Indicator-state persistence ----
     hydrate_policy: HydratePolicy | None = None
@@ -100,6 +104,21 @@ class LiveContext:
             tag,
             explicit_call=True,
         )
+
+    def set_signal_intent_executor(self, executor: SignalIntentExecutor) -> None:
+        """Bind the live execution policy for instrument-free strategy decisions."""
+        self._signal_intent_executor = executor
+
+    def emit_signal_intent(self, intent: SignalIntent) -> None:
+        """Record and route a strategy-owned, instrument-free decision.
+
+        Live policy strategies must bind an Action Plan executor before their
+        first signal. There is deliberately no same-symbol live fallback.
+        """
+        self.signal_intents.append(intent)
+        if self._signal_intent_executor is None:
+            raise RuntimeError("SignalIntent requires a bound SignalIntentExecutor")
+        self._signal_intent_executor.execute(self, intent)
 
     def emit_insight(self, insight: Insight) -> None:
         if self.current_time is not None:

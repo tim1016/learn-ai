@@ -1,4 +1,4 @@
-"""Cross-engine parity matrix — 4 tickers × 3 nested windows = 12 cells.
+"""Cross-engine parity matrix — 4 tickers × 4 nested windows = 16 cells.
 
 Reference: docs/superpowers/specs/2026-05-21-cross-engine-golden-matrix-design.md
 """
@@ -15,12 +15,14 @@ END_DATE: Final[date] = date(2026, 4, 30)
 
 
 class WindowLabel(StrEnum):
+    W3MO = "W3mo"
     W6MO = "W6mo"
     W12MO = "W12mo"
     W24MO = "W24mo"
 
 
 _WINDOW_STARTS: Final[dict[WindowLabel, date]] = {
+    WindowLabel.W3MO: date(2026, 2, 2),
     WindowLabel.W6MO: date(2025, 11, 3),
     WindowLabel.W12MO: date(2025, 5, 1),
     WindowLabel.W24MO: date(2024, 6, 3),
