@@ -606,6 +606,7 @@ def test_broker_disconnected_blocker_matches_deploy_and_run_surfaces() -> None:
                 fleet_blocks_starts=False,
                 strategy_deployable=True,
                 instance_already_running=False,
+                session_in_start_window=True,
             )
         )
         if blocker.condition.id == "broker_disconnected"

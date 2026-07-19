@@ -24,6 +24,7 @@ def _healthy() -> DeployPreflightSignals:
         fleet_blocks_starts=False,
         strategy_deployable=True,
         instance_already_running=False,
+        session_in_start_window=True,
     )
 
 
@@ -176,6 +177,7 @@ def test_every_blocker_satisfies_pairing_invariant() -> None:
         fleet_blocks_starts=True,
         strategy_deployable=False,
         instance_already_running=True,
+        session_in_start_window=False,
     )
 
     blockers = author_deploy_blockers(unhealthy)

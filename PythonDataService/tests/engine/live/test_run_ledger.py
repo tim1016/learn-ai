@@ -222,7 +222,7 @@ def test_build_ledger_stores_strategy_instance_id_and_bumps_schema(tmp_path: Pat
         strategy_instance_id="spy-ema-paper-1",
     )
     assert ledger.strategy_instance_id == "spy-ema-paper-1"
-    assert ledger.schema_version == "1.4"
+    assert ledger.schema_version == "1.5"
 
 
 def test_strategy_instance_id_not_in_run_id_hash(tmp_path: Path) -> None:
@@ -291,7 +291,7 @@ def test_write_read_round_trips_strategy_instance_id(tmp_path: Path) -> None:
 
     loaded = read_ledger(out)
     assert loaded.strategy_instance_id == "spy-ema-paper-1"
-    assert loaded.schema_version == "1.4"
+    assert loaded.schema_version == "1.5"
     assert loaded.run_id == ledger.run_id
 
 
@@ -311,7 +311,7 @@ def test_default_ledger_is_latest_schema() -> None:
         start_date_ms=1_700_000_000_000,
         live_config={},
     )
-    assert ledger.schema_version == "1.4"
+    assert ledger.schema_version == "1.5"
     assert ledger.strategy_instance_id == ""
     assert ledger.strategy_key == ""
     # ADR 0009 — defaults for an empty/legacy live_config.
@@ -335,7 +335,7 @@ def test_build_ledger_stores_strategy_key(tmp_path: Path) -> None:
         strategy_key="spy_ema_crossover",
     )
     assert ledger.strategy_key == "spy_ema_crossover"
-    assert ledger.schema_version == "1.4"
+    assert ledger.schema_version == "1.5"
 
 
 def test_strategy_key_not_in_run_id_hash(tmp_path: Path) -> None:
