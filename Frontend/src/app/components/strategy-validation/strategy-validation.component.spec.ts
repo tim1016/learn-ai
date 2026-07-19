@@ -280,6 +280,31 @@ describe('StrategyValidationComponent', () => {
     expect(screen.getByText('references/qc-shadow/SpyEmaCrossoverAlgorithm.py')).toBeTruthy();
   });
 
+  it('shows a retryable load error instead of an empty EMA detail pane', async () => {
+    const service = new FakeStrategyValidationService();
+    let emaDetailUnavailable = true;
+    service.getDetail.mockImplementation((key: string) =>
+      key === 'ema_crossover_signal' && emaDetailUnavailable
+        ? Promise.reject(new Error('Strategy audit copy unreadable'))
+        : Promise.resolve(DETAIL_BY_KEY[key] ?? ORB_DETAIL),
+    );
+    await render(StrategyValidationComponent, {
+      providers: [
+        provideRouter([]),
+        { provide: StrategyValidationService, useValue: service },
+      ],
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /EMA Crossover Signal/ }));
+
+    expect((await screen.findByRole('alert')).textContent).toContain('Validation evidence could not be loaded.');
+    emaDetailUnavailable = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(await screen.findByRole('heading', { name: 'EMA Crossover Signal' })).toBeTruthy();
+    expect(service.getDetail).toHaveBeenCalledWith('ema_crossover_signal');
+  });
+
   it('opens the requested strategy audit copy from an Engine Lab link', async () => {
     await render(StrategyValidationComponent, {
       providers: [

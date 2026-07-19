@@ -50,6 +50,11 @@
       <article class="sv-detail">
         @if (detail.isLoading()) {
           <p class="sv-message" aria-live="polite">Loading validation evidence...</p>
+        } @else if (detail.error()) {
+          <section class="sv-error" role="alert">
+            <p>Validation evidence could not be loaded.</p>
+            <button type="button" class="sv-refresh" (click)="detail.reload()">Try again</button>
+          </section>
         } @else if (detail.value(); as selected) {
           <header class="sv-detail-header">
             <div>

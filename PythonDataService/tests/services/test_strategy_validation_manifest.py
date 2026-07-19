@@ -544,3 +544,21 @@ def test_reference_code_uses_service_fallback_when_repo_reference_absent(tmp_pat
     assert code is not None
     assert code.path == "references/qc-shadow/DeploymentValidationAlgorithm.py"
     assert "class DeploymentValidationAlgorithm" in code.source
+
+
+def test_ema_reference_code_uses_service_fallback_when_repo_reference_absent(tmp_path) -> None:
+    entry = StrategyValidationEntry(
+        strategy_key="ema_crossover_signal",
+        display_name="EMA Crossover Signal",
+        description="Canonical SPY EMA crossover signal.",
+        validation_state="needs_validation",
+        deployable=False,
+        audit_copy_ref="references/qc-shadow/SpyEmaCrossoverAlgorithm.py",
+        audit_copy_sha256="cfc7f18877b8dcf9b99af4bb26e4f36f0b7ac6799fa5f4d6dc286945653d6078",
+    )
+
+    code = reference_code_for_entry(entry, repo_root=tmp_path)
+
+    assert code is not None
+    assert code.path == "references/qc-shadow/SpyEmaCrossoverAlgorithm.py"
+    assert "class SpyEmaCrossoverAlgorithm" in code.source
