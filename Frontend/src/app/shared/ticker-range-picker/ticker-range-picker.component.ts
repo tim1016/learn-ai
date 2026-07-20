@@ -31,6 +31,7 @@ import {
 } from './parts/sampling-card.component';
 
 export type { LegendTreatment, SessionMode };
+type TickerRangePickerPresentation = 'card' | 'embedded';
 
 /**
  * Shared ticker + range picker.
@@ -40,7 +41,7 @@ export type { LegendTreatment, SessionMode };
  *   <app-time-window-card>  — date inputs + presets + availability strip + legend
  *   <app-sampling-card>     — resolution toggle + opt-in multiplier + session + auto-fetch
  *
- * Owns the cross-card concerns: the outer card frame, the summary
+ * Owns the cross-card concerns: the optional outer card frame, the summary
  * header, and the advisory cluster. Sub-component state is encapsulated
  * (open/query for the dropdown, presets list, etc.). Both two-way
  * bindings flow through the same ``value`` model.
@@ -77,6 +78,12 @@ export class TickerRangePickerComponent {
    *  richer resolution control (e.g. Data Lab's bar-timeframe dropdown)
    *  and only needs the picker for symbol/date/availability/advisories. */
   readonly hideSampling = input(false);
+
+  /**
+   * `card` renders the standalone Backtest data frame. `embedded` removes
+   * that duplicate frame when the host already owns the section chrome.
+   */
+  readonly presentation = input<TickerRangePickerPresentation>('card');
 
   readonly title = input('Backtest data');
   readonly legendTreatment = input<LegendTreatment>('tinted-bold');

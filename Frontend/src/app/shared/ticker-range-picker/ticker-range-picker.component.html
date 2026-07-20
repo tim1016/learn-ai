@@ -1,23 +1,26 @@
 <div class="picker-v2"
+     [class.picker-v2--embedded]="presentation() === 'embedded'"
      [class.picker-v2--legend-tinted]="legendTreatment() === 'tinted-bold'"
      [class.picker-v2--legend-solid]="legendTreatment() === 'solid-bold'"
      [class.picker-v2--legend-icon]="legendTreatment() === 'icon-glyph'">
 
   <!-- ── Outer card head: title + summary ──────────────────────── -->
-  <div class="picker-v2__head">
-    <div class="picker-v2__title">
-      <i class="pi pi-database picker-v2__title-icon" aria-hidden="true"></i>
-      <span>{{ title() }}</span>
+  @if (presentation() === 'card') {
+    <div class="picker-v2__head">
+      <div class="picker-v2__title">
+        <i class="pi pi-database picker-v2__title-icon" aria-hidden="true"></i>
+        <span>{{ title() }}</span>
+      </div>
+      <div class="picker-v2__summary mono">
+        <span class="picker-v2__summary-symbol">{{ value().symbol }}</span>
+        <span class="picker-v2__summary-sep">·</span>
+        <span>{{ value().from }} → {{ value().to }}</span>
+        <span class="picker-v2__summary-sep">·</span>
+        <span>{{ value().resolution }}</span>
+        <ng-content select="[slot=right-action]" />
+      </div>
     </div>
-    <div class="picker-v2__summary mono">
-      <span class="picker-v2__summary-symbol">{{ value().symbol }}</span>
-      <span class="picker-v2__summary-sep">·</span>
-      <span>{{ value().from }} → {{ value().to }}</span>
-      <span class="picker-v2__summary-sep">·</span>
-      <span>{{ value().resolution }}</span>
-      <ng-content select="[slot=right-action]" />
-    </div>
-  </div>
+  }
 
   <!-- ── Three composed cards ──────────────────────────────────── -->
   <div class="picker-v2__groups"
