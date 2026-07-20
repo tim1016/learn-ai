@@ -793,10 +793,10 @@ All components use Angular signals, `OnPush` change detection, and modern contro
 ## 7. Database Notes
 
 - All `decimal` columns use precision `(18, 8)` via EF Core Fluent API
-- `EnsureCreated()` is used for table creation — adding new entities requires **deleting the pgdata volume** and restarting (see workaround below)
-- No EF migrations are configured; schema changes require a full reset in development
+- EF Core migrations run during backend startup, so new entities are applied through the migration chain without deleting local data
+- A populated database created historically with `EnsureCreated()` must be adopted using the [EF migrations adoption runbook](runbooks/ef-migrations-adoption.md) after a restorable backup
 
-### Volume Reset Procedure
+### Intentional Local Data Reset
 
 ```bash
 podman compose down
@@ -804,7 +804,7 @@ podman volume rm learn-ai_pgdata
 podman compose up -d --build
 ```
 
-> **Warning**: This deletes all data. For preserving data across schema changes, EF migrations should be implemented.
+> **Warning**: This deletes all data and is not a schema-change workflow. Preserve populated legacy data by following the [EF migrations adoption runbook](runbooks/ef-migrations-adoption.md).
 
 ---
 

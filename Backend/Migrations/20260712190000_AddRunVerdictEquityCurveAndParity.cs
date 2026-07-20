@@ -1,4 +1,6 @@
 using System;
+using Backend.Data;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -7,6 +9,8 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Backend.Migrations
 {
     /// <inheritdoc />
+    [DbContext(typeof(AppDbContext))]
+    [Migration("20260712190000_AddRunVerdictEquityCurveAndParity")]
     public partial class AddRunVerdictEquityCurveAndParity : Migration
     {
         /// <inheritdoc />
