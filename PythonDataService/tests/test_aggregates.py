@@ -20,7 +20,7 @@ async def test_fetch_aggregates_success(client):
         mock_sanitizer.sanitize_aggregates.return_value = {
             "data": [
                 {
-                    "timestamp": "2024-01-01T00:00:00.000000Z",
+                    "timestamp": 1704067200000,
                     "open": 150.0,
                     "high": 155.0,
                     "low": 148.0,
@@ -121,7 +121,12 @@ async def test_fetch_aggregates_calls_polygon_with_correct_params(client):
         mock_polygon.fetch_aggregates.return_value = []
         mock_sanitizer.sanitize_aggregates.return_value = {
             "data": [],
-            "summary": {"original_count": 0, "cleaned_count": 0, "removed_count": 0},
+            "summary": {
+                "original_count": 0,
+                "cleaned_count": 0,
+                "removed_count": 0,
+                "removal_percentage": 0.0,
+            },
         }
 
         await client.post(
@@ -161,7 +166,12 @@ async def test_fetch_aggregates_calls_sanitizer(client):
         mock_polygon.fetch_aggregates.return_value = raw_data
         mock_sanitizer.sanitize_aggregates.return_value = {
             "data": [],
-            "summary": {"original_count": 1, "cleaned_count": 0, "removed_count": 1},
+            "summary": {
+                "original_count": 1,
+                "cleaned_count": 0,
+                "removed_count": 1,
+                "removal_percentage": 100.0,
+            },
         }
 
         await client.post(
@@ -202,7 +212,12 @@ async def test_fetch_aggregates_default_multiplier_and_timespan(client):
         mock_polygon.fetch_aggregates.return_value = []
         mock_sanitizer.sanitize_aggregates.return_value = {
             "data": [],
-            "summary": {"original_count": 0, "cleaned_count": 0, "removed_count": 0},
+            "summary": {
+                "original_count": 0,
+                "cleaned_count": 0,
+                "removed_count": 0,
+                "removal_percentage": 0.0,
+            },
         }
 
         await client.post(

@@ -1,0 +1,24 @@
+{
+  "success": true,
+  "data": [
+    {
+      "timestamp": 1704153600000,
+      "open": 470.5,
+      "high": 472.2,
+      "low": 469.8,
+      "close": 471.75,
+      "volume": 1234567,
+      "vwap": 471.1,
+      "transactions": 9123
+    }
+  ],
+  "summary": {
+    "original_count": 1,
+    "cleaned_count": 1,
+    "removed_count": 0,
+    "removal_percentage": 0.0
+  },
+  "ticker": "SPY",
+  "data_type": "aggregates",
+  "error": null
+}

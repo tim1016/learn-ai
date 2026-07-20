@@ -189,7 +189,7 @@ class DataPlaneHealth(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    service: Literal["polygon-data-service"] = "polygon-data-service"
+    service: Literal["polygon-data-service"]
     code_revision: str
     process_start_ms: int = Field(gt=0)
     fetched_at_ms: int = Field(gt=0)

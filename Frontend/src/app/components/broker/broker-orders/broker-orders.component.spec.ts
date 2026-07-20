@@ -258,6 +258,8 @@ function accountTruthOrder(overrides: AccountTruthOrderFixtureOverrides): Accoun
     headline: 'Bot test-bot open order',
     detail: 'Ownership is proven by bot-stamped order ref.',
     ...overrides,
+    cumulative_filled: overrides.cumulative_filled ?? openOrderWithRef.cumulative_filled ?? 0,
+    remaining: overrides.remaining ?? openOrderWithRef.remaining ?? 0,
   };
 }
 
@@ -328,6 +330,8 @@ function accountTruthPosition(
 function openOrderTruthRow(order: IbkrOpenOrder): AccountTruthOrderRow {
   return accountTruthOrder({
     ...order,
+    cumulative_filled: order.cumulative_filled ?? 0,
+    remaining: order.remaining ?? 0,
     lifecycle_id: `perm:${order.perm_id ?? order.order_id}`,
     cancel_action: enabledCancelAction(),
   });

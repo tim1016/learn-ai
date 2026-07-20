@@ -186,19 +186,7 @@ export interface IbkrOrderWhatIfPreview extends IbkrOrderEvidenceFields, IbkrOrd
   previewed_at_ms: number;
 }
 
-export type DataPlaneReloadMode =
-  | 'disabled'
-  | 'watchfiles'
-  | 'watchfiles-polling'
-  | 'unknown';
-
-export interface DataPlaneHealth {
-  service: 'polygon-data-service';
-  code_revision: string;
-  process_start_ms: number;
-  fetched_at_ms: number;
-  reload: DataPlaneReloadMode;
-}
+export type DataPlaneHealth = components['schemas']['DataPlaneHealth'];
 
 export type SessionKind = 'RTH' | 'PRE' | 'POST' | 'OVERNIGHT';
 export type CapabilityDataQuality =

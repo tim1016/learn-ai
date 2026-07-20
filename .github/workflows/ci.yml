@@ -54,6 +54,7 @@ jobs:
           cache: npm
           cache-dependency-path: Frontend/package-lock.json
       - run: npm ci
+      - run: npm run codegen:check
       - run: npx tsc --noEmit
 
   frontend-test:
@@ -96,6 +97,20 @@ jobs:
       - run: dotnet build podman.sln --no-restore --configuration Release
         env:
           DOTNET_NOLOGO: true
+
+  backend-graphql-contract:
+    name: Backend GraphQL Contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - run: dotnet restore Backend/Backend.csproj
+      - name: Export GraphQL schema and require a committed snapshot
+        run: |
+          dotnet run --project Backend --configuration Release -- schema export --output ../contracts/graphql/backend.schema.graphql
+          git diff --exit-code -- contracts/graphql/backend.schema.graphql
 
   backend-test:
     name: Backend Tests
@@ -158,6 +173,7 @@ jobs:
       PYTHON_FAST_BASELINE_TEST_DIRS: >-
         tests/unit tests/indicators tests/edge tests/utils
         tests/engine tests/routers tests/schemas tests/services tests/operator
+        tests/contracts
     defaults:
       run:
         working-directory: PythonDataService
@@ -171,6 +187,8 @@ jobs:
           cache: pip
           cache-dependency-path: PythonDataService/requirements*.txt
       - run: pip install -r requirements-heavy.txt -r requirements-light.txt -r requirements-dev.txt
+      - name: Verify committed OpenAPI contract
+        run: python scripts/export_openapi_contract.py --check
 
       # Curated fast baseline + diff-driven extras.
       # Baseline dirs always run; everything else only runs when the diff touches it

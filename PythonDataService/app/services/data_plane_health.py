@@ -103,6 +103,7 @@ _CODE_REVISION = (
 def data_plane_health() -> DataPlaneHealth:
     """Return stable process metadata plus request-time freshness."""
     return DataPlaneHealth(
+        service="polygon-data-service",
         code_revision=_CODE_REVISION,
         process_start_ms=_PROCESS_START_MS,
         fetched_at_ms=now_ms_utc(),

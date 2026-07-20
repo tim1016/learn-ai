@@ -1,0 +1,33 @@
+{
+  "success": true,
+  "strategy_name": "EMA crossover",
+  "initial_cash": 100000.0,
+  "final_equity": 100320.5,
+  "net_profit": 320.5,
+  "total_fees": 2.0,
+  "total_trades": 1,
+  "winning_trades": 1,
+  "losing_trades": 0,
+  "win_rate": 1.0,
+  "trades": [
+    {
+      "trade_number": 1,
+      "entry_time": 1704153600000,
+      "entry_price": 470.5,
+      "exit_time": 1704157200000,
+      "exit_price": 472.1,
+      "indicators": {
+        "ema_fast": 471.0,
+        "ema_slow": 470.2
+      },
+      "pnl_pts": 1.6,
+      "pnl_pct": 0.0034,
+      "result": "WIN",
+      "signal_reason": "ema_fast crossed above ema_slow"
+    }
+  ],
+  "log_lines": [
+    "Trade 1: WIN"
+  ],
+  "error": null
+}
