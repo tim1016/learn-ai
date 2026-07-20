@@ -44,6 +44,16 @@ When adding a dep:
 - **Schema separation**: Pydantic models in `app/schemas/<domain>.py`, not inline in routers.
 - **Service separation**: business logic in `app/services/<domain>_service.py`. Routers are transport only.
 
+### Live-control router freeze
+
+Routers above **1,000 physical lines** are frozen. New live-instance behavior
+belongs in a service module; the router may only validate/parse the HTTP request,
+call a facade, and shape the response or translate a typed domain error. While
+`app/routers/live_instances.py` exceeds this threshold, a PR may not increase
+its net physical line count: any necessary transport wiring must be offset by a
+same-PR extraction. An emergency safety fix is the sole exception and must ship
+with its regression test plus a tracking issue for the deferred extraction.
+
 ## Pydantic v2
 
 - `model_validator(mode='after')` for cross-field validation.

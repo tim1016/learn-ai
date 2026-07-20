@@ -25,7 +25,7 @@ from app.engine.live.daemon_connectivity_monitor import (
 from app.engine.live.daemon_transport import DaemonResult
 from app.schemas.broker_session import BrokerSessionMirrorSnapshot
 from app.schemas.daemon_diagnostics import DaemonDiagnosticReport
-from app.schemas.live_runs import HostRunnerInstancesStatus
+from app.schemas.live_runs import HostRunnerHealth, HostRunnerInstancesStatus
 from app.services.broker_session_mirror import (
     BrokerSessionMirrorService,
     get_broker_session_mirror_service,
@@ -47,11 +47,30 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DaemonDiagnosticsService",
+    "DaemonHealthPayloadError",
+    "DaemonHealthProbeError",
     "build_daemon_diagnostic_report",
     "get_daemon_diagnostics_service",
     "project_daemon_diagnostic_report",
     "redact_host_runner_health",
 ]
+
+
+class DaemonHealthProbeError(RuntimeError):
+    """A daemon health probe that did not produce a usable envelope.
+
+    The service owns classification of the host-daemon transport result.  The
+    router remains responsible for translating that domain result to its HTTP
+    contract.
+    """
+
+    def __init__(self, result: DaemonResult) -> None:
+        super().__init__(result.detail or f"host daemon returned {result.kind}")
+        self.result = result
+
+
+class DaemonHealthPayloadError(RuntimeError):
+    """The daemon accepted a renewal request but returned an invalid envelope."""
 
 
 class DaemonDiagnosticsService:
@@ -115,6 +134,36 @@ class DaemonDiagnosticsService:
             strategy_instance_ids=[strategy_instance_id] if strategy_instance_id else None,
             run_dir_visibility=run_dir_visibility,
         )
+
+    async def health(self) -> HostRunnerHealth:
+        """Return the browser-safe health envelope or its typed failure.
+
+        The browser cannot authenticate directly to the host daemon.  This
+        service therefore owns the authenticated read and redaction while the
+        router maps a typed failure to the established 502/503 HTTP contract.
+        """
+
+        settings = get_settings()
+        result, health = await host_daemon_client.fetch_health(
+            settings.live_runner_daemon_url
+        )
+        if health is not None:
+            return redact_host_runner_health(health)
+        raise DaemonHealthProbeError(result)
+
+    async def renew_control_plane_lease(self) -> HostRunnerHealth:
+        """Renew the daemon control-plane lease and validate its response."""
+
+        settings = get_settings()
+        result = await host_daemon_client.renew_control_plane_lease(
+            settings.live_runner_daemon_url
+        )
+        try:
+            return redact_host_runner_health(HostRunnerHealth.model_validate(result))
+        except ValidationError as exc:
+            raise DaemonHealthPayloadError(
+                "host daemon returned an invalid renew-lease envelope"
+            ) from exc
 
     async def _safe_mirror_snapshot(
         self,
