@@ -69,6 +69,15 @@ class _PinnedCohortMember:
 _COHORT_EVIDENCE_CADENCE_MS = COHORT_EVIDENCE_CADENCE_MS
 _COHORT_VALIDATION_WINDOW_MS = 60 * 60 * 1_000
 
+# A scheduled cohort member can momentarily drop out of the roll call at its slot
+# instant — e.g. its start capability blips while the daemon is busy dispatching an
+# earlier member's fills. A single missed roll call used to hard-block that member
+# and cascade-skip the rest of the cohort. Re-run the slot roll call a bounded
+# number of times before giving up so a transient eligibility flip does not fail
+# an otherwise-ready launch.
+_SLOT_PREFLIGHT_MAX_ATTEMPTS = 4
+_SLOT_PREFLIGHT_RETRY_DELAY_S = 3.0
+
 
 class CohortLaunchSchedulerRegistry:
     """Own server-owned V2 start schedulers for the life of this process."""
@@ -397,6 +406,44 @@ class CohortLaunchCoordinator:
         ):
             await self._start_evidence_sampler(receipt)
 
+    async def _resolve_scheduled_offer(
+        self,
+        slot: CohortBatchLaunchMemberSchedule,
+    ) -> BotRollCallOffer | None:
+        """Re-run the slot roll call, tolerating a transient eligibility flip.
+
+        Returns the pinned member's current offer, retrying a bounded number of
+        times if the first roll call omits it (a momentary start-capability blip
+        under daemon load). Returns ``None`` only when the member stays absent
+        across every attempt, i.e. the blocker is not transient.
+        """
+
+        for attempt in range(_SLOT_PREFLIGHT_MAX_ATTEMPTS):
+            roll_call = await self._run_roll_call()
+            offer = next(
+                (
+                    candidate
+                    for candidate in roll_call.offers
+                    if candidate.strategy_instance_id == slot.strategy_instance_id
+                    and candidate.run_id == slot.run_id
+                ),
+                None,
+            )
+            if offer is not None:
+                return offer
+            if attempt < _SLOT_PREFLIGHT_MAX_ATTEMPTS - 1:
+                logger.info(
+                    "cohort slot roll call missed pinned offer; retrying",
+                    extra={
+                        "strategy_instance_id": slot.strategy_instance_id,
+                        "run_id": slot.run_id,
+                        "attempt": attempt + 1,
+                        "max_attempts": _SLOT_PREFLIGHT_MAX_ATTEMPTS,
+                    },
+                )
+                await asyncio.sleep(_SLOT_PREFLIGHT_RETRY_DELAY_S)
+        return None
+
     async def _start_scheduled_member(
         self,
         receipt: CohortBatchLaunchReceipt,
@@ -404,15 +451,7 @@ class CohortLaunchCoordinator:
     ) -> CohortBatchLaunchMemberOutcome:
         """Refresh only the ephemeral offer; receipt membership and settings stay pinned."""
 
-        roll_call = await self._run_roll_call()
-        offer = next(
-            (
-                candidate
-                for candidate in roll_call.offers
-                if candidate.strategy_instance_id == slot.strategy_instance_id and candidate.run_id == slot.run_id
-            ),
-            None,
-        )
+        offer = await self._resolve_scheduled_offer(slot)
         if offer is None:
             return CohortBatchLaunchMemberOutcome(
                 strategy_instance_id=slot.strategy_instance_id,

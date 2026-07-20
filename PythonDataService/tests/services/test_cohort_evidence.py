@@ -10,6 +10,7 @@ from fastapi import HTTPException
 
 from app.engine.live.account_artifacts import (
     CohortBatchLaunchMemberPin,
+    CohortBatchLaunchMemberSchedule,
     CohortBatchLaunchReceipt,
     read_account_events,
     record_cohort_batch_launch_receipt,
@@ -25,6 +26,7 @@ from app.schemas.live_runs import (
     BotRollCallSummary,
     HostRunnerStartRequest,
 )
+from app.services import cohort_launch
 from app.services.cohort_batch_launch import CohortBatchLaunchService, parse_cohort_evidence_sample
 from app.services.cohort_evidence import (
     CohortEvidenceSample,
@@ -569,3 +571,74 @@ def test_runtime_observer_requires_fresh_running_runtime_and_ready_vector(
 
     assert sample.state == "failed"
     assert sample.reason == "RUNTIME_READINESS_BLOCKED"
+
+
+def _retry_coordinator(tmp_path, roll_call):
+    async def _unused_start(_run_id, _request):
+        raise AssertionError("start_run must not be called during offer resolution")
+
+    async def _unused_posture(_account_id):
+        raise AssertionError("posture must not be called during offer resolution")
+
+    return CohortLaunchCoordinator(
+        artifacts_root=tmp_path,
+        live_runs_root=tmp_path / "runs",
+        run_roll_call=roll_call,
+        start_run=_unused_start,
+        visible_runs_by_instance=lambda _root: {},
+        run_account_id=lambda _run_dir: None,
+        run_live_config=lambda _run_dir: {},
+        start_request_for_run=lambda _run_dir: None,
+        target_account_posture=_unused_posture,
+        now_ms=lambda: 0,
+        evidence_samplers=CohortEvidenceSamplerRegistry(),
+        launch_schedulers=CohortLaunchSchedulerRegistry(),
+    )
+
+
+def test_slot_preflight_retries_a_transient_roll_call_miss(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cohort_launch, "_SLOT_PREFLIGHT_RETRY_DELAY_S", 0)
+    slot = CohortBatchLaunchMemberSchedule(
+        strategy_instance_id="bot-nvda", run_id="run-nvda", scheduled_start_at_ms=0, start_request={}
+    )
+    offer = BotRollCallOffer(
+        offer_id="offer-nvda",
+        strategy_instance_id="bot-nvda",
+        run_id="run-nvda",
+        session_date="2026-07-20",
+        issued_at_ms=0,
+        expires_at_ms=9_999_999,
+    )
+    calls = {"n": 0}
+
+    async def roll_call() -> BotRollCallResponse:
+        calls["n"] += 1
+        # The pinned member is omitted on the first two slot roll calls (a
+        # transient eligibility flip) and only appears on the third.
+        offers = [offer] if calls["n"] >= 3 else []
+        return BotRollCallResponse(summary=BotRollCallSummary(ready=len(offers)), offers=offers)
+
+    coordinator = _retry_coordinator(tmp_path, roll_call)
+    resolved = asyncio.run(coordinator._resolve_scheduled_offer(slot))
+
+    assert resolved is not None
+    assert resolved.offer_id == "offer-nvda"
+    assert calls["n"] == 3
+
+
+def test_slot_preflight_gives_up_after_max_attempts(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cohort_launch, "_SLOT_PREFLIGHT_RETRY_DELAY_S", 0)
+    slot = CohortBatchLaunchMemberSchedule(
+        strategy_instance_id="bot-nvda", run_id="run-nvda", scheduled_start_at_ms=0, start_request={}
+    )
+    calls = {"n": 0}
+
+    async def roll_call() -> BotRollCallResponse:
+        calls["n"] += 1
+        return BotRollCallResponse(summary=BotRollCallSummary(ready=0), offers=[])
+
+    coordinator = _retry_coordinator(tmp_path, roll_call)
+    resolved = asyncio.run(coordinator._resolve_scheduled_offer(slot))
+
+    assert resolved is None
+    assert calls["n"] == cohort_launch._SLOT_PREFLIGHT_MAX_ATTEMPTS
