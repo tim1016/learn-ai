@@ -13,6 +13,10 @@ cd Frontend && npx vitest run
 # .NET
 cd Backend.Tests && dotnet test
 
+# .NET migration integration test (requires PostgreSQL)
+BACKEND_TEST_POSTGRES_CONNECTION_STRING='Host=localhost;Port=5432;Database=postgres;Username=postgres;Password=<password>' \
+  dotnet test --filter "Category=PostgresIntegration"
+
 # Python
 cd PythonDataService && python -m pytest tests/ -v
 ```
@@ -200,6 +204,11 @@ dotnet test --filter "FullyQualifiedName~LstmServiceTests"
 
 # With coverage
 dotnet test --collect:"XPlat Code Coverage"
+
+# Migration integration test against a disposable database created by the test.
+# CI supplies this variable through its PostgreSQL service container.
+BACKEND_TEST_POSTGRES_CONNECTION_STRING='Host=localhost;Port=5432;Database=postgres;Username=postgres;Password=<password>' \
+  dotnet test --filter "Category=PostgresIntegration"
 ```
 
 ---
@@ -312,7 +321,7 @@ Components still lacking tests:
 Backend:
 - `Query.cs` LSTM queries (`lstmJobStatus`, `lstmModels`)
 - `Mutation.cs` LSTM mutations (`startLstmTraining`, `startLstmValidation`)
-- Integration tests (currently all tests mock external dependencies)
+- Integration coverage beyond PostgreSQL migration initialization
 
 Python:
 - `POST /api/options/contracts` and `POST /api/options/expirations` — endpoint tests
