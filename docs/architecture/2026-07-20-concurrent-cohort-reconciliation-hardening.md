@@ -148,6 +148,93 @@ becomes reachable. This supersedes the probe-timeout band-aid as the primary C f
 4. **N+1 fleet contamination**: `_resolve_fleet_blocks_starts_for_status` recomputes
    `_compute_account_fleet_contamination` per bot (no memoization); ~0.2s × N.
 
+## Architectural blindspots — higher-angle review (2026-07-20, post-mortem of all four runs)
+
+The user's hypothesis: *"every bot should have its own identity attached to the
+transaction, and that could resolve the collision logic."* Verdict: **the identity
+already exists — the blindspot is that it was never made authoritative.** Every order
+carries `learn-ai/{strategy_instance_id}/v1:{intent_id}` in `order_ref`
+(`order_identity.build_order_ref`), and IBKR echoes it back on fills. Yet three
+different components each *re-decide ownership locally* using weaker, connection-local
+keys (`client_order_id`, async `perm_id`). Identity was treated as an audit
+annotation, not as the ownership key. Fix A promoted it to a third signal in one
+check; the deeper fix is to make it *the* key, resolved once by one authority.
+
+The individual failures (A, B, C) are symptoms of **one meta-blindspot: the system was
+designed single-bot-first, and N-bot concurrency was bolted on.** Concretely:
+
+1. **The account authority exists but is bypassed.** The Clerk is already the
+   single-writer account authority: it journals every execution with principled
+   attribution ("a broker callback without a durable Clerk intent remains an account
+   fact, never a guessed namespace" — `account_clerk_journal_models.py`). Yet (a) each
+   bot's `outside_mutation` guard re-polices the whole account from its own local
+   memory; (b) the fleet read paths query the broker per bot instead of reading the
+   clerk's projection; (c) fills surface via the clerk's connection but bots never
+   consume the clerk's classification. The right pieces exist; the wiring routes
+   around them. **A, B, and C all collapse if the Clerk is promoted to sole broker
+   reader + sole execution classifier + projection server.** (This is exactly the
+   direction already envisioned by the Account Custodian PRD #1114 and the PRD #718
+   rebuildable projection — today's failures are the empirical proof they're needed.)
+
+2. **IBKR multi-client semantics were misread.** IBKR is account-scoped, not
+   connection-scoped: executions broadcast to all subscribed clients regardless of
+   placer; `client_order_id` does not cross connections; `perm_id` arrives async. The
+   single-bot design implicitly assumed "my connection sees my orders (first)". With
+   clerk + N bots on one account that assumption is structurally false (msft's own
+   fill surfaced under the clerk's clientId 50). Any ownership logic keyed on
+   connection-local facts is unsound on a shared account.
+
+3. **The broker can attribute executions but NOT positions.** `IbkrPosition` is an
+   account-level aggregate — there is no namespace below the account at the broker.
+   Therefore position-truth *must* come from our journal projection; per-bot
+   `reqPositions` (root cause C) was asking the broker a question it structurally
+   cannot answer per-bot, N times, on one serialized connection.
+
+4. **Event-sourced writes, no materialized reads (half-CQRS).** Every write is an
+   append-only journal/receipt, but every read rebuilds the world per request:
+   catalog re-scans run dirs, recomputes contamination per bot, re-queries broker
+   positions per bot. The 15s `AccountTruthRefreshLoop` maintains a snapshot the read
+   paths don't consume. Read cost grows with fleet size AND with history (journals
+   never compact) — concurrency plus uptime *both* degrade the control plane.
+
+5. **Durable pins exist, but eligibility is re-derived live at the worst moment.**
+   The cohort receipt durably pins members/run_ids/settings after a full preflight —
+   then each staggered slot discards that trust and re-derives *the entire fleet's*
+   eligibility synchronously, under peak load, with silent failure. The trust model is
+   inverted: a flaky live recomputation outranks the durable pin. The slot check
+   should be narrow (pinned run still deployed? account not frozen? no crash flag?) —
+   or eligibility should be a durable event-maintained state, not a per-slot rebuild.
+
+6. **Per-bot fail-closed guards make N bots N single points of failure for each
+   other.** `outside_mutation` fatal-halts THIS bot on ANY unattributed account
+   activity. Correct for one bot on a dedicated account; on a shared account every
+   timing race anywhere kills somebody. The fail-closed unit should be the account
+   (freeze submits account-wide on genuinely unattributable activity) with
+   attribution resolved by the account authority — not per-bot poison on shared
+   evidence.
+
+7. **Negative decisions are receiptless.** In a system philosophically committed to
+   receipts, a roll-call *drop* leaves no artifact — it took hours of live debugging
+   to find `status_is_roll_call_eligible` silently skipping members. Every "not
+   offered" needs a reason-coded receipt (honest-empty applied to eligibility).
+
+8. **Unbounded growth treated as free.** Journals, per-run daemon logs, and run dirs
+   accumulate forever and sit in hot read paths. No retention/compaction policy
+   exists anywhere.
+
+**Target shape (aligns with #1114 / #718, sequenced smallest-first):**
+- *Step 1 (= "real Fix C" above):* reads consume the cached Account Truth snapshot /
+  a once-per-request account-level computation. No broker calls in request paths.
+- *Step 2:* slot dispatch trusts the durable pin — narrow re-check only, with a
+  reason-coded receipt for any refusal.
+- *Step 3:* Clerk becomes sole execution classifier; bots consume their namespace
+  slice + an account-level "unattributable activity" alarm instead of local
+  `outside_mutation` guesswork (subsumes Fix B).
+- *Step 4:* retention/compaction for journals and logs.
+- The one-account-per-bot alternative (below) remains the escape hatch if
+  shared-account complexity is deemed not worth it — but note it does NOT fix
+  blindspots 4, 5, 7, 8, which are about the control plane, not the account.
+
 ## Alternative — one IBKR paper account per bot
 
 Root causes A and B exist ONLY because N bots share one DU account. One account per
