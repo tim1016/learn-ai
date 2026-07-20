@@ -9,7 +9,6 @@ namespace Backend.Migrations
 {
     /// <inheritdoc />
     [DbContext(typeof(AppDbContext))]
-    [Migration("20260717010000_PreserveUnavailableRunMetrics")]
     public partial class PreserveUnavailableRunMetrics : Migration
     {
         /// <inheritdoc />
