@@ -251,5 +251,4 @@ class BrokerFreeFleetReadService:
             daemon_process,
             runs_by_instance=by_instance,
             account_fleet_read_context=account_context,
-            broker_free_account_read=True,
         )

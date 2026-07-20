@@ -1148,20 +1148,11 @@ async def test_surface_assembler_matches_pre_extraction_payload_golden(
     async def no_diagnostic(_sid: str):
         return None
 
-    async def no_fleet_block(_settings, _root: Path) -> bool:
-        return False
-
     monkeypatch.setattr(
         live_instances,
         "_resolve_daemon_diagnostic_condition_for_status",
         no_diagnostic,
     )
-    monkeypatch.setattr(
-        live_instances,
-        "_resolve_fleet_blocks_starts_for_status",
-        no_fleet_block,
-    )
-
     payload = (await live_instances._assemble_instance_surface(sid)).model_dump(
         mode="json", exclude={"stream_epoch", "surface_version"}
     )
@@ -1210,6 +1201,75 @@ async def test_instance_status_running_exposes_live_binding(app_with_root, monke
     assert body["evidence_binding"]["run_id"] == "run-live-aaa"
     assert body["evidence_binding"]["is_live"] is False
     assert body["desired_state"] is not None
+
+
+async def test_instance_status_does_not_fetch_broker_positions(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-status", "spy_ema_paper", 100)
+    _set_daemon(monkeypatch, process={"state": "idle", "run_id": "run-status"})
+    broker_position_fetches = 0
+
+    async def counted_fetch_positions(_account_id: str | None = None) -> dict[str, int]:
+        nonlocal broker_position_fetches
+        broker_position_fetches += 1
+        return {}
+
+    async def fleet_from_observed_broker(
+        observed_root: Path,
+        *,
+        account_id: str | None = None,
+    ) -> FleetContamination:
+        return await live_instances.fleet_contamination_service.compute_account_fleet_contamination(
+            observed_root,
+            fetch_positions=live_instances._fetch_net_positions,
+            account_id=account_id,
+        )
+
+    monkeypatch.setattr(live_instances, "_fetch_net_positions", counted_fetch_positions)
+    monkeypatch.setattr(live_instances, "_compute_account_fleet_contamination", fleet_from_observed_broker)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
+
+    assert response.status_code == 200
+    assert broker_position_fetches == 0
+
+
+async def test_surface_producer_does_not_fetch_broker_positions(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _app, root = app_with_root
+    _write_ledger(root, "run-producer", "spy_ema_paper", 100)
+    _set_daemon(monkeypatch, process={"state": "idle", "run_id": "run-producer"})
+    broker_position_fetches = 0
+
+    async def counted_fetch_positions(_account_id: str | None = None) -> dict[str, int]:
+        nonlocal broker_position_fetches
+        broker_position_fetches += 1
+        return {}
+
+    async def fleet_from_observed_broker(
+        observed_root: Path,
+        *,
+        account_id: str | None = None,
+    ) -> FleetContamination:
+        return await live_instances.fleet_contamination_service.compute_account_fleet_contamination(
+            observed_root,
+            fetch_positions=live_instances._fetch_net_positions,
+            account_id=account_id,
+        )
+
+    monkeypatch.setattr(live_instances, "_fetch_net_positions", counted_fetch_positions)
+    monkeypatch.setattr(live_instances, "_compute_account_fleet_contamination", fleet_from_observed_broker)
+
+    snapshot = await live_instances._assemble_instance_surface("spy_ema_paper")
+
+    assert snapshot.strategy_instance_id == "spy_ema_paper"
+    assert broker_position_fetches == 0
 
 
 async def test_instance_status_blocks_start_when_crash_recovery_required(

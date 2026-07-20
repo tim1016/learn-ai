@@ -1,12 +1,12 @@
 {
-  "baseline_commit": "a0eb1c05655f+track-b-account-clerk-schema-v2",
+  "baseline_commit": "2e112bfa+broker-free-status-read-context",
   "cases": {
     "daemon_unreachable": {
       "display_status": "Sick bay",
       "evidence_run_id": "run-unreachable",
       "live_run_id": null,
       "process_state": "unreachable",
-      "sha256": "3cf82098bc1347c3760c84278d102a1c9e1326de66af313860f5fac3b662e523",
+      "sha256": "a576ad3f12a5fd272cceb8dfa1c5fb8049881c69dcfd833deddb80ea2f0ecf28",
       "strategy_instance_id": "unreachable-bot"
     },
     "idle_stopped": {
@@ -14,7 +14,7 @@
       "evidence_run_id": "run-idle",
       "live_run_id": null,
       "process_state": "idle",
-      "sha256": "5a33c739fc6888b27bb5b1a574f228c439c984ba05b769a94f004d2b550f8fb9",
+      "sha256": "45c8833b6eaa5eacd8fc1a9ee45e2112903d462201f49ac9f41820165a23fc69",
       "strategy_instance_id": "idle-bot"
     },
     "nothing_deployed": {
@@ -22,7 +22,7 @@
       "evidence_run_id": null,
       "live_run_id": null,
       "process_state": "unreachable",
-      "sha256": "27d1345b3a92d7a3387319fe66515de30ffaa0c7acb1cf1b52471bc29a5b47b3",
+      "sha256": "db53ae52368175d92fb7ade02d6a52b6ebf9f4226da79034252ecac0e72b744c",
       "strategy_instance_id": "ghost-instance"
     },
     "running_live": {
@@ -30,7 +30,7 @@
       "evidence_run_id": "run-running",
       "live_run_id": "run-running",
       "process_state": "running",
-      "sha256": "8b7b2b566f0038139287509e1acdb7a0b3568e32401d4001e3229a08eaabb6f9",
+      "sha256": "3596227342ea6727f58311c67dcd56d89629aea459580277822a1aa4741e80c1",
       "strategy_instance_id": "running-bot"
     }
   },

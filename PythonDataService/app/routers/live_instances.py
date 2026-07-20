@@ -1848,18 +1848,6 @@ async def _resolve_daemon_diagnostic_condition_for_status(
     return None
 
 
-async def _resolve_fleet_blocks_starts_for_status(
-    _settings: IbkrSettings,
-    root: Path,
-) -> bool:
-    try:
-        fleet = await _compute_account_fleet_contamination(root)
-    except Exception as exc:
-        logger.warning("status-time fleet contamination unavailable (%s)", exc)
-        return True
-    return fleet.policy_blocks_starts
-
-
 async def _surface_visible_runs_by_instance(root: Path) -> dict[str, list[dict]]:
     return await _SURFACE_RUNS_CACHE.get(root, _visible_runs_by_instance)
 
@@ -1922,7 +1910,6 @@ def _get_surface_assembler() -> LiveInstanceSurfaceAssembler:
             resolve_broker_observation_consistency=(_resolve_broker_observation_consistency),
             resolve_reconciliation_inputs=_resolve_reconciliation_inputs,
             resolve_activity_publisher_for_status=_resolve_activity_publisher_for_status,
-            resolve_fleet_blocks_starts_for_status=(_resolve_fleet_blocks_starts_for_status),
             resolve_daemon_diagnostic_condition_for_status=(_resolve_daemon_diagnostic_condition_for_status),
             resolve_incident_headline=_resolve_incident_headline,
             resolve_bot_lifecycle_state=_resolve_bot_lifecycle_state,
@@ -1976,7 +1963,6 @@ async def _resolve_instance_status_from_process(
     *,
     runs_by_instance: dict[str, list[dict]] | None = None,
     account_fleet_read_context: AccountFleetReadContext | None = None,
-    broker_free_account_read: bool = False,
 ) -> LiveInstanceStatus:
     """Compatibility entry point for non-HTTP projections and tests."""
 
@@ -1987,7 +1973,6 @@ async def _resolve_instance_status_from_process(
         daemon_process,
         runs_by_instance=runs_by_instance,
         account_fleet_read_context=account_fleet_read_context,
-        broker_free_account_read=broker_free_account_read,
     )
 
 

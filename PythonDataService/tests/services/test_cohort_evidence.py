@@ -24,6 +24,7 @@ from app.schemas.live_runs import (
     BotRollCallOffer,
     BotRollCallResponse,
     BotRollCallSummary,
+    FleetContamination,
     HostRunnerStartRequest,
 )
 from app.services import cohort_launch
@@ -510,6 +511,58 @@ def test_runtime_observer_fails_member_when_poisoned_flag_precedes_sidecar_updat
 
     assert sample.state == "failed"
     assert sample.reason == "COHORT_MEMBER_HALTED"
+
+
+async def test_runtime_observer_does_not_fetch_broker_positions(tmp_path: Path, monkeypatch) -> None:
+    from app.services import cohort_evidence_runtime
+
+    observer = CohortEvidenceRuntimeObserver(
+        live_runs_root=tmp_path,
+        visible_runs_by_instance=lambda _root: {},
+        now_ms=lambda: 10_000,
+    )
+    receipt = CohortBatchLaunchReceipt(
+        account_id="DU123456",
+        cohort_id="cohort-a",
+        member_strategy_instance_ids=("bot-a",),
+        window_start_ms=10_000,
+        window_end_ms=20_000,
+        authorized_by="operator.alice",
+        recorded_at_ms=10_000,
+        member_pins=(
+            CohortBatchLaunchMemberPin(
+                strategy_instance_id="bot-a",
+                run_id="run-a",
+                roll_call_offer_id="offer-a",
+            ),
+        ),
+    )
+    broker_position_fetches = 0
+
+    async def counted_fleet_fetch(*_args, **_kwargs) -> FleetContamination:
+        nonlocal broker_position_fetches
+        broker_position_fetches += 1
+        return FleetContamination(
+            net_positions={},
+            explained_total={},
+            explained_by_instance=[],
+            residual={},
+            verdict="clean",
+            policy_blocks_starts=False,
+            summary="Account clean.",
+        )
+
+    monkeypatch.setattr(
+        cohort_evidence_runtime,
+        "compute_account_fleet_contamination",
+        counted_fleet_fetch,
+        raising=False,
+    )
+
+    sample = await observer.observe(receipt, expected_at_ms=10_000)
+
+    assert sample.fleet == "unknown"
+    assert broker_position_fetches == 0
 
 
 def test_runtime_observer_requires_fresh_running_runtime_and_ready_vector(

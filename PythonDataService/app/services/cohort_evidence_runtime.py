@@ -10,13 +10,14 @@ from app.engine.live.account_artifacts import CohortBatchLaunchMemberPin, Cohort
 from app.engine.live.engine_runtime import ENGINE_RUNTIME_FILENAME, read_engine_runtime_snapshot
 from app.engine.live.readiness_sidecar import read_readiness
 from app.schemas.live_runs import ReadinessVector
+from app.services.account_fleet_read_context import build_account_fleet_read_contexts
 from app.services.account_truth_snapshot import (
     AccountTruthUnavailable,
     assess_account_truth,
     get_account_truth_snapshot_provider,
 )
 from app.services.cohort_evidence import CohortEvidenceSample, CohortMemberSample
-from app.services.fleet_contamination import compute_account_fleet_contamination, read_instance_live_state
+from app.services.fleet_contamination import read_instance_live_state
 from app.services.runtime_freshness import evaluate_runtime_freshness
 
 VisibleRuns = Callable[[Path], dict[str, list[dict[str, object]]]]
@@ -38,8 +39,26 @@ class CohortEvidenceRuntimeObserver:
     ) -> CohortEvidenceSample:
         """Return one exact-tick observation from account and engine authorities."""
 
-        truth_evidence = get_account_truth_snapshot_provider().get(receipt.account_id)
-        truth = assess_account_truth(truth_evidence, now_ms=expected_at_ms)
+        try:
+            account_context = (
+                await asyncio.to_thread(
+                    build_account_fleet_read_contexts,
+                    self._live_runs_root,
+                    [receipt.account_id],
+                    snapshot_provider=get_account_truth_snapshot_provider(),
+                    observed_at_ms=expected_at_ms,
+                )
+            ).get(receipt.account_id)
+        except Exception:
+            account_context = None
+        truth_evidence = (
+            account_context.account_truth_evidence if account_context is not None else None
+        )
+        truth = (
+            account_context.account_truth_assessment
+            if account_context is not None
+            else assess_account_truth(truth_evidence, now_ms=expected_at_ms)
+        )
         truth_state = (
             "unknown"
             if truth_evidence is None or isinstance(truth_evidence, AccountTruthUnavailable)
@@ -47,11 +66,8 @@ class CohortEvidenceRuntimeObserver:
             if truth.status == "pass"
             else "failed"
         )
-        try:
-            fleet = await compute_account_fleet_contamination(
-                self._live_runs_root,
-                account_id=receipt.account_id,
-            )
+        if account_context is not None:
+            fleet = account_context.contamination
             fleet_state = (
                 "healthy"
                 if fleet.verdict == "clean"
@@ -61,7 +77,7 @@ class CohortEvidenceRuntimeObserver:
             )
             broker_net_positions = fleet.net_positions
             broker_residual = fleet.residual
-        except Exception:
+        else:
             fleet_state = "unknown"
             broker_net_positions = None
             broker_residual = None
