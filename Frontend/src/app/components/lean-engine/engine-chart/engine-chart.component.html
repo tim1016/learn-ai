@@ -1,34 +1,38 @@
 @if (hasData() || hasEquity()) {
-  <div class="chart-wrapper">
-    <!-- Tab switcher -->
-    <div class="chart-tabs">
-      <button
-        class="chart-tab"
-        [class.active]="activeView() === 'price'"
-        (click)="setView('price')"
-        [disabled]="!hasData()">
-        Price Chart
-      </button>
-      <button
-        class="chart-tab"
-        [class.active]="activeView() === 'equity'"
-        (click)="setView('equity')"
-        [disabled]="!hasEquity()">
-        Equity Curve
-      </button>
-    </div>
+  <div class="chart-wrapper" [class.chart-wrapper--stacked]="layout() === 'stacked'">
+    <!-- Tab switcher (tabbed layout only) -->
+    @if (layout() === 'tabbed') {
+      <div class="chart-tabs">
+        <button
+          class="chart-tab"
+          [class.active]="activeView() === 'price'"
+          (click)="setView('price')"
+          [disabled]="!hasData()">
+          Price Chart
+        </button>
+        <button
+          class="chart-tab"
+          [class.active]="activeView() === 'equity'"
+          (click)="setView('equity')"
+          [disabled]="!hasEquity()">
+          Equity Curve
+        </button>
+      </div>
+    }
 
     <!-- Price chart -->
-    <div
-      class="chart-panel"
-      [style.display]="activeView() === 'price' ? 'block' : 'none'">
+    <div class="chart-panel" [style.display]="priceVisible() ? 'block' : 'none'">
+      @if (layout() === 'stacked') {
+        <div class="chart-panel__label">Price chart</div>
+      }
       <div #priceChart class="chart-container"></div>
     </div>
 
     <!-- Equity curve -->
-    <div
-      class="chart-panel"
-      [style.display]="activeView() === 'equity' ? 'block' : 'none'">
+    <div class="chart-panel" [style.display]="equityVisible() ? 'block' : 'none'">
+      @if (layout() === 'stacked') {
+        <div class="chart-panel__label">Equity curve</div>
+      }
       <div #equityChart class="chart-container equity-container"></div>
     </div>
   </div>

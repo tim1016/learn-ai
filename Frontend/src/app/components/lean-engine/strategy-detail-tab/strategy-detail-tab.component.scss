@@ -93,6 +93,34 @@
   font-family: $font-mono;
 }
 
+// Algorithm pseudocode — migrated from the retired workbench right rail.
+.strategy-detail-algo {
+  padding: 1rem;
+  border: 1px solid $border;
+  border-left: 3px solid $accent;
+  border-radius: 8px;
+  background: $bg-canvas;
+}
+
+.strategy-detail-pseudocode {
+  margin: 0.7rem 0 0;
+  padding: 0.7rem 0.85rem;
+  background: $bg-sunken;
+  border-radius: 6px;
+  font-family: $font-mono;
+  font-size: 0.76rem;
+  line-height: 1.5;
+  color: $text-primary;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.strategy-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
 .detail-btn {
   display: inline-flex;
   align-items: center;
@@ -103,11 +131,17 @@
   border: 1px solid $border;
   font-size: 0.8rem;
   cursor: pointer;
+  text-decoration: none;
+
+  &:focus-visible { outline: 2px solid $accent; outline-offset: 2px; }
+  .pi { font-size: 0.72rem; }
 }
 
 .detail-btn--ghost {
   background: transparent;
   color: $text-secondary;
+
+  &:hover { color: $text-primary; border-color: $border-strong; }
 }
 
 .detail-btn--primary {

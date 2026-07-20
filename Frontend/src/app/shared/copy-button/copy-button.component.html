@@ -1,0 +1,20 @@
+<button
+  type="button"
+  class="copy-button"
+  [class.copy-button--icon]="variant() === 'icon'"
+  [class.copy-button--pill]="variant() === 'button'"
+  [class.is-copied]="copied()"
+  [attr.aria-label]="accessibleName()"
+  (click)="copy()"
+>
+  <i class="pi" [class.pi-copy]="!copied()" [class.pi-check]="copied()" aria-hidden="true"></i>
+  @if (variant() === 'button') {
+    <span>{{ copied() ? copiedLabel() : label() }}</span>
+  }
+</button>
+
+<span class="copy-button__live" aria-live="polite">{{ copied() ? copiedLabel() : '' }}</span>
+
+@if (failed()) {
+  <span class="copy-button__error" role="alert">Copy was blocked — select &amp; copy manually.</span>
+}

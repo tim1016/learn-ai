@@ -17,4 +17,6 @@ export class ValidationStagePlaceholderComponent {
   readonly resolution = input.required<string>();
   readonly fillMode = input.required<string>();
   readonly engine = input.required<string>();
+  /** Data-policy / bar-consolidation summary for the current configuration. */
+  readonly dataPolicyNote = input('');
 }

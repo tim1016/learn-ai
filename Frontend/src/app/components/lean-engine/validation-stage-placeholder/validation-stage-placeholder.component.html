@@ -13,5 +13,8 @@
   <div class="stage-empty">
     <i class="pi pi-play-circle" aria-hidden="true"></i>
     <p>Run a validation to populate the equity curve, trade ledger, and performance metrics.</p>
+    @if (dataPolicyNote()) {
+      <p class="stage-policy-note">{{ dataPolicyNote() }}</p>
+    }
   </div>
 </section>

@@ -1,4 +1,5 @@
 import { ChangeDetectionStrategy, Component, input, output } from '@angular/core';
+import { RouterLink } from '@angular/router';
 
 import type { StrategyInfo } from '../lean-engine.component';
 
@@ -9,6 +10,7 @@ import type { StrategyInfo } from '../lean-engine.component';
  */
 @Component({
   selector: 'app-strategy-detail-tab',
+  imports: [RouterLink],
   templateUrl: './strategy-detail-tab.component.html',
   styleUrl: './strategy-detail-tab.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,

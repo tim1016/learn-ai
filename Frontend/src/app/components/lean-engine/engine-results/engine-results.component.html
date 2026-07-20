@@ -126,22 +126,31 @@
   </article>
 </div>
 
-<!-- ═════════ 1.6fr / 1fr split — chart + readiness sidebar ═════════
-     Equity curve + price chart on the left, production-readiness card
-     on the right. Replaces the prior full-width chart + full-width
-     readiness pattern that produced the bulk of the vertical scroll. -->
-<div class="results-split">
-  <div class="results-split__chart">
-    <app-engine-chart
-      [chartBars]="chartBars()"
-      [trades]="chartTrades()"
-      [equityCurve]="equityCurve()"
-    />
-  </div>
-  <div class="results-split__side">
+<!-- ═════════ Full-width stacked charts ═════════
+     Price chart on top, equity curve below — both full page width so the
+     charts own the space once results exist. Production-readiness moved to
+     its own drawer below (was a chart sidebar that stole chart width). -->
+<div class="results-charts">
+  <app-engine-chart
+    layout="stacked"
+    [chartBars]="chartBars()"
+    [trades]="chartTrades()"
+    [equityCurve]="equityCurve()"
+  />
+</div>
+
+<details class="secondary-drawer" [open]="showReadiness()"
+         (toggle)="showReadiness.set($any($event.target).open)">
+  <summary class="secondary-drawer__head">
+    <i class="pi" [class.pi-chevron-right]="!showReadiness()"
+                  [class.pi-chevron-down]="showReadiness()"></i>
+    <span>Production readiness</span>
+    <span class="secondary-drawer__hint">deploy gate &amp; score</span>
+  </summary>
+  <div class="secondary-drawer__body">
     <app-readiness-score-card [verdict]="verdict()" />
   </div>
-</div>
+</details>
 
 <!-- ═════════ Secondary metrics drawer ═════════
      Win rate · Profit factor · Sortino · Expectancy · Trade Sharpe

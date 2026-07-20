@@ -34,187 +34,235 @@
         <!-- ═══ Configure Tab ═══ -->
         <p-tabpanel value="configuration">
           <section class="config-card">
-            @if (engine() !== 'lean') {
-              <!-- Top strip: strategy params form (full-width inside the tab) -->
-              @if (paramEntries().length > 0) {
-                <div class="params-card">
-                  <h3 data-section="01">Strategy parameters</h3>
+            <!-- Two-rail workbench: collapsible config nav + full-width main.
+                 The right reference rail was retired — algorithm + gotchas
+                 now live on the strategy tab, validation evidence on the
+                 Strategy Validation page. -->
+            <div class="workbench-grid" [class.workbench-grid--nav-collapsed]="configNavCollapsed()">
+
+            @if (!configNavCollapsed()) {
+              <aside class="config-nav" aria-label="Backtest configuration">
+                <div class="config-nav__head">
+                  <span class="config-nav__title">Configuration</span>
+                  <button
+                    type="button"
+                    class="config-nav__collapse"
+                    aria-label="Collapse configuration panel"
+                    (click)="toggleConfigNav()">
+                    <i class="pi pi-angle-double-left" aria-hidden="true"></i>
+                  </button>
+                </div>
+
+                <!-- PR B.5 — engine choice gates which script surface renders. -->
+                <app-config-section
+                  title="Engine" icon="pi pi-server" index="00"
+                  [configured]="true" [summary]="engineSummary()"
+                  [open]="isSectionOpen('engine')"
+                  (openChange)="setSectionOpen('engine', $event)">
+                  <label class="field">
+                    <span class="label">Engine</span>
+                    <select
+                      data-testid="engine-select"
+                      [ngModel]="engine()"
+                      (ngModelChange)="engine.set($event)">
+                      <option value="python">Python (in-process)</option>
+                      <option value="lean">LEAN (sidecar)</option>
+                      <option value="both">Both — validate equivalence</option>
+                    </select>
+                  </label>
+                </app-config-section>
+
+                <app-config-section
+                  title="Time window" icon="pi pi-calendar" index="01"
+                  [configured]="timeWindowConfigured()" [summary]="timeWindowSummary()"
+                  [open]="isSectionOpen('time')"
+                  (openChange)="setSectionOpen('time', $event)">
+                  <app-ticker-range-picker
+                    [(value)]="rangeState"
+                    [tickerPool]="tickerPool"
+                    [recent]="recentTickers"
+                    [availability]="pickerAvailability()"
+                    [availableResolutions]="['minute', 'daily']"
+                    (advisoryAction)="onPickerAdvisoryAction($event)" />
+                </app-config-section>
+
+                <app-config-section
+                  title="Strategy" icon="pi pi-list" index="02"
+                  [configured]="strategyConfigured()" [summary]="strategySummary()"
+                  [open]="isSectionOpen('strategy')"
+                  (openChange)="setSectionOpen('strategy', $event)">
+                  <div class="strategy-list" role="list" aria-label="Available strategies">
+                    @for (strategy of selectableStrategies(); track strategy.name) {
+                      <button
+                        type="button"
+                        class="strategy-list__item"
+                        [class.selected]="selectedStrategyName() === strategy.name"
+                        (click)="openStrategyDetail(strategy.name)">
+                        <span>
+                          <strong>{{ strategy.display_name }}</strong>
+                          <small class="mono">{{ strategy.name }}</small>
+                        </span>
+                        <i class="pi pi-arrow-up-right" aria-hidden="true"></i>
+                      </button>
+                    } @empty {
+                      <p class="strategy-list__empty">No strategies support {{ resolution() }} data.</p>
+                    }
+                  </div>
+
+                  @if (engine() !== 'lean' && paramEntries().length > 0) {
+                    <div class="strategy-params">
+                      <h4 class="config-subhead">Parameters</h4>
+                      <div class="form-grid">
+                        @for (entry of paramEntries(); track entry.name) {
+                          <label class="field">
+                            <span class="label">
+                              {{ entry.prop.title || entry.name }}
+                              @if (entry.prop.description) {
+                                <span class="hint" [title]="entry.prop.description">?</span>
+                              }
+                            </span>
+                            <input
+                              [type]="entry.prop.type === 'integer' || entry.prop.type === 'number' ? 'number' : 'text'"
+                              [value]="paramValues()[entry.name] ?? ''"
+                              (input)="onParamChange(entry.name, $any($event.target).value, entry.prop.type)"
+                              [attr.min]="entry.prop.minimum ?? null"
+                              [attr.max]="entry.prop.maximum ?? null" />
+                          </label>
+                        }
+                      </div>
+                    </div>
+                  }
+                </app-config-section>
+
+                <app-config-section
+                  title="Execution" icon="pi pi-bolt" index="03"
+                  [configured]="true" [summary]="executionSummary()"
+                  [open]="isSectionOpen('execution')"
+                  (openChange)="setSectionOpen('execution', $event)">
                   <div class="form-grid">
-                    @for (entry of paramEntries(); track entry.name) {
-                      <label class="field">
-                        <span class="label">
-                          {{ entry.prop.title || entry.name }}
-                          @if (entry.prop.description) {
-                            <span class="hint" [title]="entry.prop.description">?</span>
+                    <label class="field">
+                      <span class="label">Fill mode</span>
+                      <select [ngModel]="fillMode()" (ngModelChange)="fillMode.set($event)">
+                        <option value="signal_bar_close">Signal bar close</option>
+                        <option value="next_bar_open">Next bar open</option>
+                      </select>
+                    </label>
+
+                    <label class="field">
+                      <span class="label">Initial cash</span>
+                      <input type="number" min="0" step="1000"
+                        [ngModel]="initialCash()" (ngModelChange)="initialCash.set($event)" />
+                    </label>
+
+                    <label class="field">
+                      <span class="label">
+                        Commission / order
+                        <span class="hint" title="Fee charged per filled order. $1.00 matches LEAN's InteractiveBrokers model.">?</span>
+                      </span>
+                      <input type="number" min="0" step="0.01"
+                        [ngModel]="commissionPerOrder()" (ngModelChange)="commissionPerOrder.set($event)" />
+                    </label>
+                  </div>
+                </app-config-section>
+
+                @if (engine() !== 'python') {
+                  @let leanTemplate = leanValidationTemplate();
+                  <app-config-section
+                    title="LEAN" icon="pi pi-server" index="04"
+                    [configured]="leanConfigured()" [summary]="leanSummary()"
+                    [open]="isSectionOpen('lean')"
+                    (openChange)="setSectionOpen('lean', $event)">
+                    @if (leanTemplate) {
+                      <div class="lean-template-summary">
+                        <div>
+                          <strong>{{ leanTemplateLabel(leanTemplate) }}</strong>
+                          <span>Audited LEAN validation template</span>
+                        </div>
+                        @if (selectedStrategyName(); as strategyKey) {
+                          <a
+                            class="lean-template-link"
+                            routerLink="/strategy-validation"
+                            [queryParams]="{ strategy: strategyKey }">
+                            View copyable QuantConnect code
+                            <i class="pi pi-arrow-up-right" aria-hidden="true"></i>
+                          </a>
+                        }
+                      </div>
+                    } @else {
+                      <p class="lean-template-unavailable">
+                        No aligned LEAN validation template is registered for this strategy.
+                      </p>
+                    }
+
+                    <div class="lean-launcher-card" [attr.data-status]="leanLauncherStatus()">
+                      <div class="launcher-status">
+                        <span class="launcher-status__dot" aria-hidden="true"></span>
+                        <span>
+                          @switch (leanLauncherStatus()) {
+                            @case ('ready') { Launcher ready }
+                            @case ('checking') { Checking... }
+                            @case ('blocked') { Launcher not running }
+                            @default { Launcher not checked }
                           }
                         </span>
-                        <input
-                          [type]="entry.prop.type === 'integer' || entry.prop.type === 'number' ? 'number' : 'text'"
-                          [value]="paramValues()[entry.name] ?? ''"
-                          (input)="onParamChange(entry.name, $any($event.target).value, entry.prop.type)"
-                          [attr.min]="entry.prop.minimum ?? null"
-                          [attr.max]="entry.prop.maximum ?? null"
-                        />
-                      </label>
-                    }
-                  </div>
-                </div>
-              }
-            }
-            @if (engine() !== 'python') {
-              @let leanTemplate = leanValidationTemplate();
-              <div class="params-card lean-script-card">
-                <h3 data-section="01">LEAN algorithm</h3>
-                @if (leanTemplate) {
-                  <div class="lean-template-summary">
-                    <div>
-                      <strong>{{ leanTemplateLabel(leanTemplate) }}</strong>
-                      <span>Audited LEAN validation template</span>
+                      </div>
+                      <div class="launcher-command copyable">
+                        <code>{{ leanLauncherCommand }}</code>
+                        <app-copy-button
+                          [text]="leanLauncherCommand"
+                          ariaLabel="Copy launcher command" />
+                      </div>
+                      @if (leanLauncherDetail()) {
+                        <p class="launcher-detail">{{ leanLauncherDetail() }}</p>
+                      }
+                      <div class="launcher-actions">
+                        <button
+                          type="button"
+                          class="launcher-btn"
+                          [disabled]="leanLauncherStatus() === 'checking'"
+                          (click)="checkLeanLauncher()">
+                          <i class="pi pi-refresh" aria-hidden="true"></i>
+                          @if (leanLauncherStatus() === 'checking') { Checking... }
+                          @else { Check launcher }
+                        </button>
+                      </div>
                     </div>
-                    @if (selectedStrategyName(); as strategyKey) {
-                      <a
-                        class="lean-template-link"
-                        routerLink="/strategy-validation"
-                        [queryParams]="{ strategy: strategyKey }">
-                        View copyable QuantConnect code
-                        <i class="pi pi-arrow-up-right" aria-hidden="true"></i>
-                      </a>
-                    }
-                  </div>
-                } @else {
-                  <p class="lean-template-unavailable">
-                    No aligned LEAN validation template is registered for this strategy.
-                  </p>
+                  </app-config-section>
                 }
-              </div>
-              <div class="params-card lean-launcher-card" [attr.data-status]="leanLauncherStatus()">
-                <h3 data-section="01A">
+              </aside>
+            } @else {
+              <nav class="config-rail" aria-label="Configuration (collapsed)">
+                <button
+                  type="button"
+                  class="config-rail__expand"
+                  aria-label="Expand configuration panel"
+                  (click)="toggleConfigNav()">
+                  <i class="pi pi-angle-double-right" aria-hidden="true"></i>
+                </button>
+                <button type="button" class="config-rail__icon" title="Engine"
+                  aria-label="Edit engine" (click)="expandSectionFromIcon('engine')">
                   <i class="pi pi-server" aria-hidden="true"></i>
-                  Launcher
-                </h3>
-                <div class="launcher-status">
-                  <span class="launcher-status__dot" aria-hidden="true"></span>
-                  <span>
-                    @switch (leanLauncherStatus()) {
-                      @case ('ready') { Ready }
-                      @case ('checking') { Checking... }
-                      @case ('blocked') { Not running }
-                      @default { Not checked }
-                    }
-                  </span>
-                </div>
-                <code class="launcher-command">{{ leanLauncherCommand }}</code>
-                @if (leanLauncherDetail()) {
-                  <p class="launcher-detail">{{ leanLauncherDetail() }}</p>
+                </button>
+                <button type="button" class="config-rail__icon" title="Time window"
+                  aria-label="Edit time window" (click)="expandSectionFromIcon('time')">
+                  <i class="pi pi-calendar" aria-hidden="true"></i>
+                </button>
+                <button type="button" class="config-rail__icon" title="Strategy"
+                  aria-label="Edit strategy" (click)="expandSectionFromIcon('strategy')">
+                  <i class="pi pi-list" aria-hidden="true"></i>
+                </button>
+                <button type="button" class="config-rail__icon" title="Execution"
+                  aria-label="Edit execution" (click)="expandSectionFromIcon('execution')">
+                  <i class="pi pi-bolt" aria-hidden="true"></i>
+                </button>
+                @if (engine() !== 'python') {
+                  <button type="button" class="config-rail__icon" title="LEAN"
+                    aria-label="Edit LEAN settings" (click)="expandSectionFromIcon('lean')">
+                    <i class="pi pi-server" aria-hidden="true"></i>
+                  </button>
                 }
-                <div class="launcher-actions">
-                  <button
-                    type="button"
-                    class="launcher-btn"
-                    [disabled]="leanLauncherStatus() === 'checking'"
-                    (click)="checkLeanLauncher()">
-                    <i class="pi pi-refresh" aria-hidden="true"></i>
-                    @if (leanLauncherStatus() === 'checking') { Checking... }
-                    @else { Check launcher }
-                  </button>
-                  <button
-                    type="button"
-                    class="launcher-btn secondary"
-                    (click)="copyLeanLauncherCommand()">
-                    <i class="pi pi-copy" aria-hidden="true"></i>
-                    {{ leanLauncherCopied() ? 'Copied' : 'Copy command' }}
-                  </button>
-                </div>
-              </div>
+              </nav>
             }
-
-            <!-- IDE shell: left rail = inputs, main = status + run actions, right rail = pre-flight + reference -->
-            <div class="ide-grid">
-
-            <div class="ide-rail-left">
-
-            <!-- PR B.5 — engine choice gates which script surface renders below. -->
-            <div class="engine-selector params-card">
-              <h3 data-section="00">Engine</h3>
-              <label class="field">
-                <span class="label">Engine</span>
-                <select
-                  data-testid="engine-select"
-                  [ngModel]="engine()"
-                  (ngModelChange)="engine.set($event)"
-                >
-                  <option value="python">Python (in-process)</option>
-                  <option value="lean">LEAN (sidecar)</option>
-                  <option value="both">Both — validate equivalence</option>
-                </select>
-              </label>
-            </div>
-
-            <app-ticker-range-picker
-              [(value)]="rangeState"
-              [tickerPool]="tickerPool"
-              [recent]="recentTickers"
-              [availability]="pickerAvailability()"
-              [availableResolutions]="['minute', 'daily']"
-              (advisoryAction)="onPickerAdvisoryAction($event)"
-            />
-
-            <div class="options-card strategy-card">
-              <h3 data-section="02">
-                <i class="pi pi-list" aria-hidden="true"></i>
-                Strategy queue
-              </h3>
-              <div class="strategy-list" role="list" aria-label="Available strategies">
-                @for (strategy of selectableStrategies(); track strategy.name) {
-                  <button
-                    type="button"
-                    class="strategy-list__item"
-                    [class.selected]="selectedStrategyName() === strategy.name"
-                    (click)="openStrategyDetail(strategy.name)">
-                    <span>
-                      <strong>{{ strategy.display_name }}</strong>
-                      <small class="mono">{{ strategy.name }}</small>
-                    </span>
-                    <i class="pi pi-arrow-up-right" aria-hidden="true"></i>
-                  </button>
-                } @empty {
-                  <p class="strategy-list__empty">No strategies support {{ resolution() }} data.</p>
-                }
-              </div>
-            </div>
-
-            <div class="options-card execution-card">
-              <h3 data-section="03">
-                <i class="pi pi-bolt" aria-hidden="true"></i>
-                Execution
-              </h3>
-              <div class="form-grid">
-                <label class="field">
-                  <span class="label">Fill mode</span>
-                  <select [ngModel]="fillMode()" (ngModelChange)="fillMode.set($event)">
-                    <option value="signal_bar_close">Signal bar close</option>
-                    <option value="next_bar_open">Next bar open</option>
-                  </select>
-                </label>
-
-                <label class="field">
-                  <span class="label">Initial cash</span>
-                  <input type="number" min="0" step="1000"
-                    [ngModel]="initialCash()" (ngModelChange)="initialCash.set($event)" />
-                </label>
-
-                <label class="field">
-                  <span class="label">
-                    Commission / order
-                    <span class="hint" title="Fee charged per filled order. $1.00 matches LEAN's InteractiveBrokers model.">?</span>
-                  </span>
-                  <input type="number" min="0" step="0.01"
-                    [ngModel]="commissionPerOrder()" (ngModelChange)="commissionPerOrder.set($event)" />
-                </label>
-              </div>
-            </div>
-
-            </div><!-- end ide-rail-left -->
 
             <div class="ide-main">
 
@@ -277,38 +325,12 @@
                 [symbol]="effectiveSymbol()"
                 [resolution]="resolution()"
                 [fillMode]="fillMode()"
-                [engine]="engine()" />
+                [engine]="engine()"
+                [dataPolicyNote]="dataPolicyNote()" />
             }
 
             </div><!-- end ide-main -->
-
-            <div class="ide-rail-right">
-
-            <app-validation-evidence-card
-              [policy]="dataPolicy()" />
-
-            @if (selectedStrategy(); as strategy) {
-              @if (strategy.algorithm_pseudocode) {
-                <details class="strategy-algorithm">
-                  <summary>Algorithm</summary>
-                  <pre class="strategy-pseudocode">{{ strategy.algorithm_pseudocode }}</pre>
-                </details>
-              }
-
-              @if (strategy.gotchas && strategy.gotchas.length > 0) {
-                <details class="strategy-gotchas">
-                  <summary>Gotchas ({{ strategy.gotchas.length }})</summary>
-                  <ul>
-                    @for (g of strategy.gotchas; track g) {
-                      <li>{{ g }}</li>
-                    }
-                  </ul>
-                </details>
-              }
-            }
-
-            </div><!-- end ide-rail-right -->
-            </div><!-- end ide-grid -->
+            </div><!-- end workbench-grid -->
           </section>
         </p-tabpanel>
 

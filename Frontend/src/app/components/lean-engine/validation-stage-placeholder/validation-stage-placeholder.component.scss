@@ -75,3 +75,14 @@
     color: $text-subtle;
   }
 }
+
+.stage-policy-note {
+  max-width: 46ch;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid $border;
+  border-left: 3px solid $accent;
+  border-radius: 6px;
+  background: $bg-elevated;
+  color: $text-secondary !important;
+  font-size: 0.78rem !important;
+}

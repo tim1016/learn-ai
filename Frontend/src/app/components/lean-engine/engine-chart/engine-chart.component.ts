@@ -72,6 +72,12 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
   chartBars = input<ChartBar[]>([]);
   trades = input<EngineTradeForChart[]>([]);
   equityCurve = input<EquityCurvePoint[]>([]);
+  /**
+   * `tabbed` (default) keeps the Price/Equity switcher — one chart visible
+   * at a time, for tight surfaces. `stacked` drops the switcher and renders
+   * both charts full-width, one above the other, so results own the page.
+   */
+  layout = input<'tabbed' | 'stacked'>('tabbed');
 
   // Template refs
   priceChartEl = viewChild<ElementRef<HTMLDivElement>>('priceChart');
@@ -81,6 +87,15 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
   activeView = signal<'price' | 'equity'>('price');
   hasData = computed(() => this.chartBars().length > 0);
   hasEquity = computed(() => this.equityCurve().length > 0);
+  // In stacked layout both panels are always visible; in tabbed layout the
+  // active tab decides. Drives the panel `display` so hidden charts don't
+  // reserve layout height.
+  priceVisible = computed(() =>
+    this.layout() === 'stacked' ? this.hasData() : this.activeView() === 'price',
+  );
+  equityVisible = computed(() =>
+    this.layout() === 'stacked' ? this.hasEquity() : this.activeView() === 'equity',
+  );
 
   // Chart instances
   private priceChart: IChartApi | null = null;
@@ -143,7 +158,7 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
 
     this.priceChart = createChart(el, {
       width: el.clientWidth,
-      height: 480,
+      height: this.layout() === 'stacked' ? 560 : 480,
       layout: { background: { color: DARK.bg }, textColor: DARK.text },
       grid: {
         vertLines: { color: DARK.grid },
@@ -181,14 +196,20 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
       scaleMargins: { top: 0.8, bottom: 0 },
     });
 
-    this.resizeObserver = new ResizeObserver(entries => {
-      if (entries.length > 0) {
-        const { width } = entries[0].contentRect;
-        this.priceChart?.applyOptions({ width });
-        this.equityChart?.applyOptions({ width });
-      }
+    // Each chart tracks its own container width. Reading per-element
+    // clientWidth (guarded > 0) means a hidden panel — display:none in the
+    // tabbed layout, or an empty price panel in stacked equity-only runs —
+    // can't zero out the visible chart. Also fires on config-nav collapse,
+    // which is the width change we need to react to.
+    this.resizeObserver = new ResizeObserver(() => {
+      const priceWidth = this.priceChartEl()?.nativeElement.clientWidth ?? 0;
+      const equityWidth = this.equityChartEl()?.nativeElement.clientWidth ?? 0;
+      if (priceWidth > 0) this.priceChart?.applyOptions({ width: priceWidth });
+      if (equityWidth > 0) this.equityChart?.applyOptions({ width: equityWidth });
     });
     this.resizeObserver.observe(el);
+    const equityEl = this.equityChartEl()?.nativeElement;
+    if (equityEl) this.resizeObserver.observe(equityEl);
   }
 
   // ──────────────────────────────────────────────
@@ -200,7 +221,7 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
 
     this.equityChart = createChart(el, {
       width: el.clientWidth,
-      height: 300,
+      height: this.layout() === 'stacked' ? 320 : 300,
       layout: { background: { color: DARK.bg }, textColor: DARK.text },
       grid: {
         vertLines: { color: DARK.grid },

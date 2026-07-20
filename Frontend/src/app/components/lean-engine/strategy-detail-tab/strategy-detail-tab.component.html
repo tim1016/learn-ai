@@ -29,7 +29,24 @@
       }
     </section>
   </div>
-  <button type="button" class="detail-btn detail-btn--primary" (click)="configure.emit()">
-    Configure this strategy
-  </button>
+
+  @if (detail.algorithm_pseudocode) {
+    <section class="strategy-detail-algo">
+      <h3>Algorithm</h3>
+      <pre class="strategy-detail-pseudocode">{{ detail.algorithm_pseudocode }}</pre>
+    </section>
+  }
+
+  <div class="strategy-detail-actions">
+    <button type="button" class="detail-btn detail-btn--primary" (click)="configure.emit()">
+      Configure this strategy
+    </button>
+    <a
+      class="detail-btn detail-btn--ghost"
+      routerLink="/strategy-validation"
+      [queryParams]="{ strategy: detail.name }">
+      View LEAN code on Strategy Validation
+      <i class="pi pi-arrow-up-right" aria-hidden="true"></i>
+    </a>
+  </div>
 </article>

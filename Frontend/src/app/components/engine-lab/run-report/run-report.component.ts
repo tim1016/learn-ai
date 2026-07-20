@@ -12,6 +12,7 @@ import {
   BacktestRunDetailQueryResult,
   BacktestRunDetailTrade,
 } from "../../../graphql/backtest-runs.query";
+import { CopyButtonComponent } from "../../../shared/copy-button/copy-button.component";
 import { ReceiptLabelPipe } from "../../../shared/pipes/receipt-label.pipe";
 import { TimestampDisplayComponent, TimestampDisplayPipe } from "../../../shared/timestamp";
 import type {
@@ -67,7 +68,13 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 @Component({
   selector: "app-engine-run-report",
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [EngineResultsComponent, ReceiptLabelPipe, TimestampDisplayComponent, TimestampDisplayPipe],
+  imports: [
+    EngineResultsComponent,
+    ReceiptLabelPipe,
+    TimestampDisplayComponent,
+    TimestampDisplayPipe,
+    CopyButtonComponent,
+  ],
   templateUrl: "./run-report.component.html",
   styleUrls: ["./run-report.component.scss"],
 })
