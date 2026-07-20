@@ -5436,6 +5436,26 @@ async def test_daemon_health_unreachable_surfaces_as_503(app_with_root, monkeypa
     assert response.status_code == 503
 
 
+async def test_daemon_health_contract_mismatch_surfaces_as_502(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A daemon result that is neither AUTH_FAILED nor UNREACHABLE (e.g. a
+    schema mismatch) falls through to the generic 502, carrying the typed
+    probe result's detail rather than a rebuilt string."""
+    from app.engine.live.daemon_transport import DaemonResult
+
+    app, _ = app_with_root
+
+    async def fake_fetch(_base_url: str):
+        return DaemonResult.incompatible_contract(detail="daemon envelope shape drifted"), None
+
+    monkeypatch.setattr(host_daemon_client, "fetch_health", fake_fetch)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/daemon-health")
+
+    assert response.status_code == 502
+    assert "daemon envelope shape drifted" in response.json()["detail"]
+
+
 async def test_daemon_diagnose_always_200_and_instance_route_projects_report(
     app_with_root,
     monkeypatch: pytest.MonkeyPatch,

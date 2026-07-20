@@ -59,9 +59,9 @@ __all__ = [
 class DaemonHealthProbeError(RuntimeError):
     """A daemon health probe that did not produce a usable envelope.
 
-    The service owns classification of the host-daemon transport result.  The
-    router remains responsible for translating that domain result to its HTTP
-    contract.
+    The service owns the authenticated read, redaction, and the
+    usable-envelope-vs-transport-failure distinction; the router maps the
+    transport result's ``kind`` to its HTTP status contract.
     """
 
     def __init__(self, result: DaemonResult) -> None:

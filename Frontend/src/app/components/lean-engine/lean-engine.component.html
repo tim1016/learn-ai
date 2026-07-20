@@ -73,12 +73,13 @@
                 </app-config-section>
 
                 <app-config-section
-                  title="Time window" icon="pi pi-calendar" index="01"
+                  title="Market data" icon="pi pi-database" index="01"
                   [configured]="timeWindowConfigured()" [summary]="timeWindowSummary()"
                   [open]="isSectionOpen('time')"
                   (openChange)="setSectionOpen('time', $event)">
                   <app-ticker-range-picker
                     [(value)]="rangeState"
+                    presentation="embedded"
                     [tickerPool]="tickerPool"
                     [recent]="recentTickers"
                     [availability]="pickerAvailability()"
