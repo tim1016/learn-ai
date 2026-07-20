@@ -57,5 +57,6 @@ An order-insensitive PostgreSQL catalog fingerprint of tables, columns, defaults
 - `Backend/Program.cs` now calls `DatabaseInitializer.MigrateAsync` before mapping endpoints.
 - The development backend logs `No migrations were applied. The database is already up to date.` followed by `Database migrations applied successfully.` and serves `/health` successfully.
 - `.github/workflows/ci.yml` now defines `Backend Tests`, using a PostgreSQL 16 service and the full Release suite.
-
-The repository administrator must add the `Backend Tests` check to the `master` branch-protection/ruleset requirements after the job first appears in GitHub Actions.
+- GitHub Actions [run 29711711411](https://github.com/tim1016/learn-ai/actions/runs/29711711411) completed successfully for this change, including `Backend Tests` (229 passed).
+- The isolated negative-control [run 29711822189](https://github.com/tim1016/learn-ai/actions/runs/29711822189) removed one inline `[Migration]` attribute. `AllConcreteMigrations_AreDiscoverableByEf` failed as intended (1 failed, 228 passed), while the backend build and formatting jobs succeeded. Its test-results artifact is retained by GitHub Actions.
+- Active GitHub ruleset [19185467](https://github.com/tim1016/learn-ai/rules/19185467), `Require Backend Tests on master`, targets only `refs/heads/master`, has no bypass actors, requires the exact `Backend Tests` context, and uses the strict up-to-date policy. `gh pr checks --required` reports that required check passing on PR #1129.
