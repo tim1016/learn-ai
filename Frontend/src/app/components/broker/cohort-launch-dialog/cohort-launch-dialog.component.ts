@@ -37,6 +37,7 @@ export class CohortLaunchDialogComponent {
   readonly authorize = output<readonly string[]>();
   readonly selectionToggled = output<string>();
   readonly threeBotPresetRequested = output();
+  readonly fiveBotPresetRequested = output();
   readonly cancelled = output();
 
   readonly hardBlockerCount = computed(() =>

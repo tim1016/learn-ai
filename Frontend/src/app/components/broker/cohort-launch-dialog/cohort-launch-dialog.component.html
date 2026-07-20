@@ -31,6 +31,11 @@
           <span class="p-button-label">Select 3-bot stagger preset</span>
         </button>
       }
+      @if (eligibleCandidates().length >= 5) {
+        <button pButton type="button" severity="secondary" [outlined]="true" (click)="fiveBotPresetRequested.emit()">
+          <span class="p-button-label">Select 5-bot stagger preset</span>
+        </button>
+      }
       <ol class="preflight-list" aria-label="Cohort preflight results">
         @for (row of candidates(); track row.candidate.strategyInstanceId) {
           <li>

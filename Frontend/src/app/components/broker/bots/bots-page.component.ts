@@ -14,6 +14,7 @@ import { TabsModule } from 'primeng/tabs';
 import { TagModule } from 'primeng/tag';
 
 import type { AccountTriageResponse } from '../../../api/account-reconciliation.types';
+import type { CohortStaggerProfileName } from '../../../api/cohort-batch-launch.types';
 import type { DeployPreflightResponse } from '../../../api/operator-blocker.types';
 import type {
   BotCatalogRow,
@@ -47,6 +48,13 @@ type LifecycleFilter = 'all' | BotLifecycleDisplayStatus;
 type BotLaunchProgressPhase = 'idle' | 'preparing' | 'running' | 'blocked' | 'complete';
 type BotLaunchRowStatus = 'queued' | 'starting' | 'accepted' | 'blocked';
 type TagSeverity = 'success' | 'warn' | 'danger' | 'secondary';
+
+// Member counts that map to a server-owned staggered validation profile. Any
+// other selected count launches via the generic (unstaggered) cohort path.
+const STAGGER_PROFILE_BY_MEMBER_COUNT: Record<number, CohortStaggerProfileName> = {
+  3: 'paper_three_bot_stagger_v2',
+  5: 'paper_five_bot_stagger_v2',
+};
 
 const EMPTY_ROLL_CALL_SUMMARY: BotRollCallSummary = {
   ready: 0,
@@ -390,9 +398,10 @@ export class BotsPageComponent {
           reasonCode: null,
         })),
       });
+      const staggerProfile = STAGGER_PROFILE_BY_MEMBER_COUNT[refreshedRows.length];
       const cohort = await this.liveRuns.launchCohort(accountId, {
         member_strategy_instance_ids: refreshedRows.map((row) => row.id),
-        ...(refreshedRows.length === 3 ? { launch_profile: 'paper_three_bot_stagger_v2' as const } : {}),
+        ...(staggerProfile ? { launch_profile: staggerProfile } : {}),
       });
       this.cohortMonitorReloadVersion.update((version) => version + 1);
       await this.refresh();
@@ -516,12 +525,20 @@ export class BotsPageComponent {
     });
   }
 
-  selectThreeBotCohortPreset(): void {
+  private selectStaggerCohortPreset(memberCount: number): void {
     const eligibleIds = this.cohortPreflight()
       .filter((row) => row.error === null && row.blockers.length === 0)
-      .slice(0, 3)
+      .slice(0, memberCount)
       .map((row) => row.candidate.strategyInstanceId);
-    if (eligibleIds.length === 3) this.cohortSelectedIds.set(new Set(eligibleIds));
+    if (eligibleIds.length === memberCount) this.cohortSelectedIds.set(new Set(eligibleIds));
+  }
+
+  selectThreeBotCohortPreset(): void {
+    this.selectStaggerCohortPreset(3);
+  }
+
+  selectFiveBotCohortPreset(): void {
+    this.selectStaggerCohortPreset(5);
   }
 
   async confirmCohortStart(selectedMemberIds: readonly string[]): Promise<void> {

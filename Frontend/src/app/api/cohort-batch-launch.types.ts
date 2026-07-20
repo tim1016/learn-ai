@@ -1,7 +1,10 @@
+/** Server-owned staggered cohort validation profiles. */
+export type CohortStaggerProfileName = 'paper_three_bot_stagger_v2' | 'paper_five_bot_stagger_v2';
+
 /** Browser compare token for the server-owned cohort launch command. */
 export interface CohortBatchLaunchCommandRequest {
   member_strategy_instance_ids: string[];
-  launch_profile?: 'paper_three_bot_stagger_v2';
+  launch_profile?: CohortStaggerProfileName;
 }
 
 export interface CohortBatchLaunchMemberOutcome {
@@ -74,7 +77,7 @@ export interface CohortValidationCertificateRoundTrip {
 
 export interface CohortBatchLaunchStatus {
   schema_version: number;
-  launch_profile?: 'paper_three_bot_stagger_v2' | null;
+  launch_profile?: CohortStaggerProfileName | null;
   account_id: string;
   cohort_id: string;
   member_strategy_instance_ids: string[];

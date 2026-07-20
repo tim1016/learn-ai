@@ -686,6 +686,54 @@ describe('BotsPageComponent', () => {
     });
   });
 
+  it('uses the 5-bot stagger preset only for five selected, preflight-ready bots', async () => {
+    const { fixture, service } = await setup();
+    const additionalReadyBots = ['qqq', 'iwm', 'aapl', 'msft'].map((symbol) => bot({
+      strategy_instance_id: `live-idle-${symbol}`,
+      name: `live-idle-${symbol}`,
+      symbols: [symbol.toUpperCase()],
+      daily_lifecycle: lifecycle({
+        latest_run_id: `run-live-idle-${symbol}`,
+        primary_action: action({
+          id: 'confirm_start',
+          label: 'Start',
+          offer_id: `offer-live-idle-${symbol}`,
+          expires_at_ms: OFFER_EXPIRES_AT,
+        }),
+      }),
+    }));
+    service.getBotCatalog.mockResolvedValue(catalog([bot(), ...additionalReadyBots]));
+    await fixture.componentInstance.refresh();
+    await settle(fixture);
+
+    await fixture.componentInstance.requestCohortStart();
+    await settle(fixture);
+    fixture.componentInstance.selectFiveBotCohortPreset();
+
+    const selected = [...fixture.componentInstance.cohortSelectedIds()];
+    expect(selected).toEqual([
+      'live-idle-aapl',
+      'live-idle-iwm',
+      'live-idle-msft',
+      'live-idle-qqq',
+      'live-idle-spy',
+    ]);
+
+    await fixture.componentInstance.confirmCohortStart(selected);
+    await settle(fixture);
+
+    expect(service.launchCohort).toHaveBeenCalledWith('DU1234567', {
+      member_strategy_instance_ids: [
+        'live-idle-aapl',
+        'live-idle-iwm',
+        'live-idle-msft',
+        'live-idle-qqq',
+        'live-idle-spy',
+      ],
+      launch_profile: 'paper_five_bot_stagger_v2',
+    });
+  });
+
   it('lists hard cohort preflight blockers and disables authorization', async () => {
     const { fixture, service } = await setup();
     service.deployPreflight.mockResolvedValue({
