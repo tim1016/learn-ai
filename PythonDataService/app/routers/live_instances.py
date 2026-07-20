@@ -3801,20 +3801,20 @@ async def get_daemon_health() -> HostRunnerHealth:
         return await get_daemon_diagnostics_service().health()
     except DaemonHealthProbeError as exc:
         result = exc.result
-    if result.kind == "AUTH_FAILED":
+        if result.kind == "AUTH_FAILED":
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY,
+                detail="host daemon rejected the data plane's token",
+            ) from exc
+        if result.kind == "UNREACHABLE":
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=result.detail or "host daemon unreachable",
+            ) from exc
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
-            detail="host daemon rejected the data plane's token",
-        )
-    if result.kind == "UNREACHABLE":
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=result.detail or "host daemon unreachable",
-        )
-    raise HTTPException(
-        status.HTTP_502_BAD_GATEWAY,
-        detail=result.detail or f"host daemon returned {result.kind}",
-    )
+            detail=str(exc),
+        ) from exc
 
 
 @router.post("/daemon-health/renew-lease", response_model=HostRunnerHealth)

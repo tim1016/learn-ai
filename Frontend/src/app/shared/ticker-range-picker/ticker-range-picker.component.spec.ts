@@ -4,10 +4,10 @@
  * The pure-function tests cover ``summarizeAvailability`` /
  * ``computeAdvisories`` / ``dominantState`` / ``weekdaysBetween``.
  *
- * The component-level tests verify the picker flags from PR (i):
- * ``availableMultipliers`` (passes through to SamplingCard) and
- * ``hideSampling`` (collapses Sampling card). The deprecated
- * ``hideResolution`` alias was removed in PR (iii).
+ * The component-level tests verify picker presentation and flags:
+ * ``presentation`` removes duplicate host chrome, ``availableMultipliers``
+ * passes through to SamplingCard, and ``hideSampling`` collapses Sampling.
+ * The deprecated ``hideResolution`` alias was removed in PR (iii).
  */
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -140,6 +140,25 @@ describe('TickerRangePickerComponent (flags)', () => {
 
   it('renders the Sampling card by default', () => {
     fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('app-sampling-card')).not.toBeNull();
+  });
+
+  it('keeps the standalone Backtest data frame by default', () => {
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.picker-v2__head')).not.toBeNull();
+    expect(fixture.nativeElement.textContent).toContain('Backtest data');
+  });
+
+  it('removes the standalone frame when embedded in a host section', () => {
+    fixture.componentRef.setInput('presentation', 'embedded');
+    fixture.detectChanges();
+
+    const picker = fixture.nativeElement.querySelector('.picker-v2');
+    expect(picker?.classList.contains('picker-v2--embedded')).toBe(true);
+    expect(fixture.nativeElement.querySelector('.picker-v2__head')).toBeNull();
+    expect(fixture.nativeElement.querySelector('app-instrument-card')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('app-time-window-card')).not.toBeNull();
     expect(fixture.nativeElement.querySelector('app-sampling-card')).not.toBeNull();
   });
 
