@@ -672,7 +672,7 @@ describe('BotsPageComponent', () => {
 
     await fixture.componentInstance.requestCohortStart();
     await settle(fixture);
-    fixture.componentInstance.selectThreeBotCohortPreset();
+    fixture.componentInstance.selectStaggerCohortPreset(3);
 
     const selected = [...fixture.componentInstance.cohortSelectedIds()];
     expect(selected).toEqual(['live-idle-iwm', 'live-idle-qqq', 'live-idle-spy']);
@@ -708,7 +708,7 @@ describe('BotsPageComponent', () => {
 
     await fixture.componentInstance.requestCohortStart();
     await settle(fixture);
-    fixture.componentInstance.selectFiveBotCohortPreset();
+    fixture.componentInstance.selectStaggerCohortPreset(5);
 
     const selected = [...fixture.componentInstance.cohortSelectedIds()];
     expect(selected).toEqual([

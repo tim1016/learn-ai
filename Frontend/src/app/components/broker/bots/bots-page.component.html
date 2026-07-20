@@ -99,10 +99,10 @@
     [accountId]="connectedAccountId()"
     [accountPosture]="cohortTargetPosture()"
     [selectedIds]="cohortSelectedIds()"
+    [staggerPresetCounts]="staggerPresetCounts"
     (cancelled)="cancelCohortStart()"
     (selectionToggled)="toggleCohortCandidate($event)"
-    (threeBotPresetRequested)="selectThreeBotCohortPreset()"
-    (fiveBotPresetRequested)="selectFiveBotCohortPreset()"
+    (staggerPresetRequested)="selectStaggerCohortPreset($event)"
     (authorize)="confirmCohortStart($event)"
   />
 

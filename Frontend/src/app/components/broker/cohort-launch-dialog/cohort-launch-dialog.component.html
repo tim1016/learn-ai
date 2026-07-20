@@ -26,15 +26,12 @@
       <p class="status" role="status">
         {{ hardBlockerCount() }} hard blocker{{ hardBlockerCount() === 1 ? '' : 's' }} across {{ candidates().length }} bots. Select at least two ready bots.
       </p>
-      @if (eligibleCandidates().length >= 3) {
-        <button pButton type="button" severity="secondary" [outlined]="true" (click)="threeBotPresetRequested.emit()">
-          <span class="p-button-label">Select 3-bot stagger preset</span>
-        </button>
-      }
-      @if (eligibleCandidates().length >= 5) {
-        <button pButton type="button" severity="secondary" [outlined]="true" (click)="fiveBotPresetRequested.emit()">
-          <span class="p-button-label">Select 5-bot stagger preset</span>
-        </button>
+      @for (count of staggerPresetCounts(); track count) {
+        @if (eligibleCandidates().length >= count) {
+          <button pButton type="button" severity="secondary" [outlined]="true" (click)="staggerPresetRequested.emit(count)">
+            <span class="p-button-label">Select {{ count }}-bot stagger preset</span>
+          </button>
+        }
       }
       <ol class="preflight-list" aria-label="Cohort preflight results">
         @for (row of candidates(); track row.candidate.strategyInstanceId) {

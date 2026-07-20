@@ -56,6 +56,11 @@ const STAGGER_PROFILE_BY_MEMBER_COUNT: Record<number, CohortStaggerProfileName> 
   5: 'paper_five_bot_stagger_v2',
 };
 
+// Sanctioned cohort sizes, ascending — one preset button per count in the dialog.
+const STAGGER_PRESET_COUNTS: readonly number[] = Object.keys(STAGGER_PROFILE_BY_MEMBER_COUNT)
+  .map(Number)
+  .sort((a, b) => a - b);
+
 const EMPTY_ROLL_CALL_SUMMARY: BotRollCallSummary = {
   ready: 0,
   off_roster: 0,
@@ -169,6 +174,7 @@ export class BotsPageComponent {
   readonly activeModeTab = signal<BotModeTab>('paper');
   readonly selectedBotIds = signal<ReadonlySet<string>>(new Set<string>());
   readonly cohortConfirmationOpen = signal<boolean>(false);
+  readonly staggerPresetCounts = STAGGER_PRESET_COUNTS;
   readonly cohortPreflightLoading = signal<boolean>(false);
   readonly cohortPreflightError = signal<string | null>(null);
   readonly cohortPreflight = signal<readonly CohortLaunchPreflightCandidate[]>([]);
@@ -525,20 +531,12 @@ export class BotsPageComponent {
     });
   }
 
-  private selectStaggerCohortPreset(memberCount: number): void {
+  selectStaggerCohortPreset(memberCount: number): void {
     const eligibleIds = this.cohortPreflight()
       .filter((row) => row.error === null && row.blockers.length === 0)
       .slice(0, memberCount)
       .map((row) => row.candidate.strategyInstanceId);
     if (eligibleIds.length === memberCount) this.cohortSelectedIds.set(new Set(eligibleIds));
-  }
-
-  selectThreeBotCohortPreset(): void {
-    this.selectStaggerCohortPreset(3);
-  }
-
-  selectFiveBotCohortPreset(): void {
-    this.selectStaggerCohortPreset(5);
   }
 
   async confirmCohortStart(selectedMemberIds: readonly string[]): Promise<void> {
