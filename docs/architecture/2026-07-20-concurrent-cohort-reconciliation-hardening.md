@@ -1,6 +1,6 @@
 # Concurrent-cohort reconciliation hardening
 
-**Status:** Draft design (2026-07-20). Not yet grilled/implemented.
+**Status:** Active (2026-07-20). Fix A and the partial C mitigations are implemented and live-validated; steps 1-2 of the target shape are specified as PRD #1136 (rev 2, reviewed); Fix B and retention remain future work.
 **Owner:** (pending)
 **Motivation:** Two live paper attempts to certify a 5-bot concurrent cohort on
 DUM284968 (`paper_five_bot_stagger_v2`, 5-min stagger, 45-min overlap) both failed
