@@ -3,6 +3,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
 import { provideZonelessChangeDetection } from '@angular/core';
+import { Apollo } from 'apollo-angular';
 import { of } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -219,6 +220,19 @@ describe('LeanEngineComponent engine selector', () => {
             queryParamMap: of(convertToParamMap(overrides.queryParams ?? {})),
           },
         },
+        {
+          // The History tab (eagerly instantiated by the tabs) reads its
+          // rows via Apollo; an empty result keeps it inert while the
+          // workbench renders.
+          provide: Apollo,
+          useValue: {
+            watchQuery: () => ({
+              valueChanges: of({ data: { backtestRuns: { nodes: [] } } }),
+              refetch: () => Promise.resolve({}),
+              stopPolling: () => undefined,
+            }),
+          },
+        },
       ],
     });
 
@@ -233,6 +247,74 @@ describe('LeanEngineComponent engine selector', () => {
     expect(component.engine()).toBe('python');
     component.engine.set('lean');
     expect(component.engine()).toBe('lean');
+  });
+
+  it('collapses the whole config rail to the icon strip when a run completes', () => {
+    configureTestBed();
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+
+    expect(component.configNavCollapsed()).toBe(false);
+
+    // A completed run (or a history selection) arrives.
+    component.completedRunId.set(4321);
+    fixture.detectChanges();
+
+    expect(component.configNavCollapsed()).toBe(true);
+    expect(component.isSectionOpen('strategy')).toBe(false);
+  });
+
+  it('keeps a user-pinned-open rail expanded across completed runs', () => {
+    configureTestBed();
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+
+    // Collapse then reopen → records an explicit "expanded" override.
+    component.toggleConfigNav();
+    component.toggleConfigNav();
+    expect(component.configNavCollapsed()).toBe(false);
+
+    component.completedRunId.set(9876);
+    fixture.detectChanges();
+
+    // The pinned-open override wins over the auto-collapse.
+    expect(component.configNavCollapsed()).toBe(false);
+  });
+
+  it('swaps the full nav for the collapsed icon rail when collapsed', () => {
+    configureTestBed();
+    const fixture = TestBed.createComponent(LeanEngineComponent);
+    fixture.detectChanges();
+    const component = fixture.componentInstance;
+    component.strategies.set([
+      {
+        name: 'spy_ema_crossover',
+        display_name: 'SPY EMA Crossover',
+        description: '',
+        params_schema: { properties: {} },
+        supported_resolutions: ['minute'],
+      },
+    ]);
+    // The mocked strategies fetch never resolves in this harness, so clear the
+    // loading gate explicitly to render the workbench tab body.
+    component.strategiesLoading.set(false);
+    fixture.detectChanges();
+
+    const host = fixture.nativeElement as HTMLElement;
+    // Expanded by default → full nav, no icon rail.
+    expect(host.querySelector('.config-nav')).not.toBeNull();
+    expect(host.querySelector('.config-rail')).toBeNull();
+
+    component.toggleConfigNav();
+    fixture.detectChanges();
+
+    // Collapsed → icon rail with per-section buttons, no full nav.
+    expect(host.querySelector('.config-nav')).toBeNull();
+    const rail = host.querySelector('.config-rail');
+    expect(rail).not.toBeNull();
+    expect(rail?.querySelectorAll('.config-rail__icon').length ?? 0).toBeGreaterThan(0);
   });
 
   it('hydrates Engine Lab launch state from query params after strategies load', async () => {

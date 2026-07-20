@@ -31,7 +31,10 @@
 }
 
 .run-id-chip {
-  padding: 0.2rem 0.55rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.35rem 0.2rem 0.55rem;
   border: 1px solid var(--border-light, #2a2e39);
   border-radius: 999px;
   font-size: 0.72rem;

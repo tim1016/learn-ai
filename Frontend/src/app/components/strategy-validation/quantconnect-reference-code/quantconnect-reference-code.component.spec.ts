@@ -22,11 +22,12 @@ describe('QuantConnectReferenceCodeComponent', () => {
     expect(screen.getByText('references/qc-shadow/SpyEmaCrossoverAlgorithm.py')).toBeTruthy();
     expect(screen.getByText(REFERENCE_CODE.sha256)).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy QuantConnect algorithm' }));
+    const copyButton = screen.getByRole('button', { name: 'Copy QuantConnect algorithm' });
+    fireEvent.click(copyButton);
 
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith(REFERENCE_CODE.source);
-      expect(screen.getByRole('button', { name: 'QuantConnect algorithm copied' })).toBeTruthy();
+      expect(copyButton.textContent).toContain('Copied');
     });
   });
 
@@ -39,8 +40,6 @@ describe('QuantConnectReferenceCodeComponent', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Copy QuantConnect algorithm' }));
 
-    expect((await screen.findByRole('alert')).textContent).toContain(
-      'Copy was blocked by the browser. Select the code below and copy it manually.',
-    );
+    expect((await screen.findByRole('alert')).textContent).toContain('Copy was blocked');
   });
 });

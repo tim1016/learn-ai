@@ -142,6 +142,11 @@ export class EngineResultsComponent {
   showFeeDrawer = signal(false);
   toggleFeeDrawer(): void { this.showFeeDrawer.update(v => !v); }
 
+  /** Production-readiness drawer. Open by default — it used to live beside
+   *  the chart, so keeping it revealed preserves its prominence while the
+   *  charts take the full page width. */
+  showReadiness = signal(true);
+
   /**
    * Defensive shape guard: legacy LEAN runs persisted before commit
    * <fix/lean-engine-lab-ui-bugs> wrote a flat

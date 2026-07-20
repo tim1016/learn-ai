@@ -18,10 +18,11 @@ import { ButtonModule } from "primeng/button";
 import { Tab, TabList, TabPanel, TabPanels, Tabs } from "primeng/tabs";
 import { RunReportComponent } from "../engine-lab/run-report/run-report.component";
 import { EngineLabRunHistoryComponent } from "./engine-lab-run-history/engine-lab-run-history.component";
-import { ValidationEvidenceCardComponent } from "./validation-evidence-card/validation-evidence-card.component";
 import { ValidationStagePlaceholderComponent } from "./validation-stage-placeholder/validation-stage-placeholder.component";
 import { StrategyDetailTabComponent } from "./strategy-detail-tab/strategy-detail-tab.component";
+import { ConfigSectionComponent } from "./config-section/config-section.component";
 import { PageHeaderComponent } from "../../shared/page-header/page-header.component";
+import { CopyButtonComponent } from "../../shared/copy-button/copy-button.component";
 import {
   TickerRangePickerComponent,
   type AdvisoryAction,
@@ -239,10 +240,11 @@ interface DataAvailability {
     CommonModule, FormsModule, RouterModule, ButtonModule,
     Tabs, TabList, Tab, TabPanel, TabPanels,
     RunReportComponent, EngineLabRunHistoryComponent,
-    ValidationEvidenceCardComponent,
     ValidationStagePlaceholderComponent,
     StrategyDetailTabComponent,
+    ConfigSectionComponent,
     PageHeaderComponent,
+    CopyButtonComponent,
     TickerRangePickerComponent,
     RunDockComponent,
   ],
@@ -286,7 +288,6 @@ export class LeanEngineComponent implements OnInit {
     "cd PythonDataService && PYTHONPATH=. ./.venv/bin/python -m uvicorn app.lean_sidecar.launcher.app:app --host 0.0.0.0 --port 8090";
   readonly leanLauncherStatus = signal<LeanLauncherStatus>("unknown");
   readonly leanLauncherDetail = signal<string>("");
-  readonly leanLauncherCopied = signal(false);
   readonly leanLauncherBlocksRun = computed(
     () => this.engine() !== "python" && this.leanLauncherStatus() !== "ready",
   );
@@ -418,6 +419,26 @@ export class LeanEngineComponent implements OnInit {
   /** The exact source-versus-decision cadence shown to and submitted by the operator. */
   readonly dataPolicy = computed(() => this.composeDataPolicy());
 
+  /**
+   * One-line data-policy note for the pre-run placeholder. Preserves the
+   * bar-consolidation fact (e.g. minute input → 15-minute strategy bars for
+   * EMA crossover) that used to live on the retired validation-evidence
+   * card — a strict-equivalence detail that must not silently vanish.
+   */
+  readonly dataPolicyNote = computed(() => {
+    const policy = this.dataPolicy();
+    const input = LeanEngineComponent.barLabel(policy.input_bars);
+    const strategy = LeanEngineComponent.barLabel(policy.strategy_bars);
+    return input === strategy
+      ? `Strategy evaluates ${strategy} bars.`
+      : `Input ${input} bars are consolidated → strategy evaluates ${strategy} bars.`;
+  });
+
+  private static barLabel(bars: { timespan: string; multiplier: number }): string {
+    const unit = bars.timespan === "day" ? "day" : "minute";
+    return `${bars.multiplier}-${unit}`;
+  }
+
   private strategyBarsSpec(
     timespan: DataPolicy['input_bars']['timespan'],
   ): DataPolicy['strategy_bars'] {
@@ -540,7 +561,154 @@ export class LeanEngineComponent implements OnInit {
     return { name: strat.display_name, symbol, from, to, res };
   });
 
+  // ------------------------------------------------------------------
+  // Config nav — progressive revelation
+  //
+  // The left rail is a collapsible nav: each section folds to a one-line
+  // summary once configured, and the whole rail can collapse to an icon
+  // strip. On the first completed run all sections auto-collapse so the
+  // full-width results take over. Section open/closed lives here (not in
+  // the child) so the auto-collapse can drive it.
+  // ------------------------------------------------------------------
+  private static readonly CONFIG_NAV_KEY = "engineLab.configNavOverride";
+
+  readonly openSections = signal<Record<string, boolean>>({
+    engine: true,
+    time: true,
+    strategy: true,
+    execution: true,
+    lean: true,
+  });
+
+  /**
+   * Explicit, persisted user choice for the whole-rail state. ``null`` means
+   * the user hasn't pinned it, so the rail is free to auto-collapse when
+   * results arrive. Any manual expand/collapse records intent here so a later
+   * run won't re-collapse a rail the user deliberately pinned open.
+   */
+  private readonly configNavOverride = signal<"expanded" | "collapsed" | null>(
+    LeanEngineComponent.loadNavOverride(),
+  );
+  readonly configNavCollapsed = signal<boolean>(
+    LeanEngineComponent.loadNavOverride() === "collapsed",
+  );
+  private autoCollapsedRunId: number | null = null;
+
+  isSectionOpen(id: string): boolean {
+    return this.openSections()[id] ?? true;
+  }
+
+  setSectionOpen(id: string, open: boolean): void {
+    this.openSections.update((sections) => ({ ...sections, [id]: open }));
+  }
+
+  /** Single writer for the rail state. A ``user`` source records the choice
+   *  as a persisted override; ``auto`` collapses without claiming intent. */
+  private setNavCollapsed(collapsed: boolean, source: "user" | "auto"): void {
+    this.configNavCollapsed.set(collapsed);
+    if (source === "user") {
+      this.configNavOverride.set(collapsed ? "collapsed" : "expanded");
+    }
+  }
+
+  toggleConfigNav(): void {
+    this.setNavCollapsed(!this.configNavCollapsed(), "user");
+  }
+
+  /** Icon-rail click: reopen the rail and expand the chosen section. */
+  expandSectionFromIcon(id: string): void {
+    this.setNavCollapsed(false, "user");
+    this.setSectionOpen(id, true);
+  }
+
+  private engineLabel(engine: EngineChoice): string {
+    if (engine === "python") return "Python (in-process)";
+    if (engine === "lean") return "LEAN (sidecar)";
+    return "Both engines";
+  }
+
+  readonly engineSummary = computed(() => this.engineLabel(this.engine()));
+
+  readonly timeWindowConfigured = computed(
+    () => !!this.effectiveSymbol() && !!this.startDate() && !!this.endDate(),
+  );
+  readonly timeWindowSummary = computed(
+    () => `${this.effectiveSymbol()} · ${this.startDate()} → ${this.endDate()} · ${this.resolution()}`,
+  );
+
+  readonly strategyConfigured = computed(() => this.selectedStrategyName() !== null);
+  readonly strategySummary = computed(() => this.selectedStrategy()?.display_name ?? "");
+
+  readonly executionSummary = computed(() => {
+    const fill = this.fillMode() === "signal_bar_close" ? "signal close" : "next open";
+    return `${fill} · ${this.formatCurrency(this.initialCash())} · ${this.formatCurrency(this.commissionPerOrder())}/order`;
+  });
+
+  readonly leanConfigured = computed(() => this.leanValidationTemplate() !== null);
+  readonly leanSummary = computed(() => {
+    switch (this.leanLauncherStatus()) {
+      case "ready":
+        return "Launcher ready";
+      case "checking":
+        return "Checking launcher…";
+      case "blocked":
+        return "Launcher not running";
+      default:
+        return "Launcher not checked";
+    }
+  });
+
+  private static loadNavOverride(): "expanded" | "collapsed" | null {
+    try {
+      if (typeof localStorage === "undefined") return null;
+      const value = localStorage.getItem(LeanEngineComponent.CONFIG_NAV_KEY);
+      return value === "expanded" || value === "collapsed" ? value : null;
+    } catch {
+      // Storage disabled (private mode / blocked) — no override.
+      return null;
+    }
+  }
+
   constructor() {
+    // Persist the whole-rail collapse choice so it survives reloads,
+    // mirroring the run-dock's expand/collapse persistence.
+    effect(() => {
+      const override = this.configNavOverride();
+      try {
+        if (typeof localStorage !== "undefined") {
+          if (override) {
+            localStorage.setItem(LeanEngineComponent.CONFIG_NAV_KEY, override);
+          } else {
+            localStorage.removeItem(LeanEngineComponent.CONFIG_NAV_KEY);
+          }
+        }
+      } catch {
+        // Best-effort persistence — a blocked localStorage is non-fatal.
+      }
+    });
+
+    // First completed run (or a history selection) folds every section to
+    // its summary so the full-width results own the page. Only depends on
+    // completedRunId — the set() below reads no tracked signal.
+    effect(() => {
+      const runId = this.completedRunId();
+      if (runId === null || runId === this.autoCollapsedRunId) return;
+      this.autoCollapsedRunId = runId;
+      // Fold every section to its summary…
+      this.openSections.set({
+        engine: false,
+        time: false,
+        strategy: false,
+        execution: false,
+        lean: false,
+      });
+      // …and collapse the whole rail to the icon strip so the full-width
+      // results own the page — unless the user pinned the rail open.
+      if (this.configNavOverride() !== "expanded") {
+        this.setNavCollapsed(true, "auto");
+      }
+    });
+
     // Bridge JobsService events → run banner state. One effect per
     // engine; both react to the same SSE stream but read different
     // jobId signals so a Python run and a LEAN run can't tangle.
@@ -1020,15 +1188,6 @@ export class LeanEngineComponent implements OnInit {
     } catch (err) {
       this.leanLauncherStatus.set("blocked");
       this.leanLauncherDetail.set(err instanceof Error ? err.message : "Launcher check failed.");
-    }
-  }
-
-  async copyLeanLauncherCommand(): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(this.leanLauncherCommand);
-      this.leanLauncherCopied.set(true);
-    } catch {
-      this.leanLauncherCopied.set(false);
     }
   }
 

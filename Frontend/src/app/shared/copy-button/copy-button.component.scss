@@ -1,0 +1,75 @@
+@use 'sass:color';
+@use '../../styles/tokens' as *;
+
+:host {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.copy-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid $border;
+  background: transparent;
+  color: $text-subtle;
+  border-radius: $radius-md;
+  cursor: pointer;
+  font: inherit;
+  transition: color $t-ui, background $t-ui, border-color $t-ui, opacity $t-ui;
+
+  &:hover { color: $text-primary; background: $bg-hover; }
+  &:focus-visible { outline: 2px solid $accent; outline-offset: 2px; }
+
+  &.is-copied {
+    color: $bull;
+    border-color: rgba($bull, 0.5);
+  }
+
+  .pi { font-size: 0.78rem; }
+}
+
+.copy-button--pill {
+  padding: 0.4rem 0.7rem;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+// Icon variant is hidden at rest but always in the DOM and focusable.
+// It reveals when a `.copyable` ancestor (or the button itself) is
+// hovered/focused, and is always visible on coarse pointers — so hover
+// is an enhancement, never the only way to reach it (AXE / WCAG AA).
+.copy-button--icon {
+  padding: 0.3rem;
+  opacity: 0;
+}
+
+:host(:hover) .copy-button--icon,
+:host(:focus-within) .copy-button--icon,
+:host-context(.copyable:hover) .copy-button--icon,
+.copy-button--icon:focus-visible {
+  opacity: 1;
+}
+
+@media (pointer: coarse) {
+  .copy-button--icon { opacity: 1; }
+}
+
+.copy-button__error {
+  font-size: 0.7rem;
+  color: $bear;
+}
+
+// Visually hidden, screen-reader only live region.
+.copy-button__live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

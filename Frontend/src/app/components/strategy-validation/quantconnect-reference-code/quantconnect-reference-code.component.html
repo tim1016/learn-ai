@@ -10,14 +10,12 @@
         Attach its backtest ID here, then reconcile its output before accepting the evidence.
       </p>
     </div>
-    <button
-      type="button"
-      class="qc-reference__copy"
-      [attr.aria-label]="isCopied(code) ? 'QuantConnect algorithm copied' : 'Copy QuantConnect algorithm'"
-      (click)="copyAlgorithm()">
-      <i class="pi" [class.pi-copy]="!isCopied(code)" [class.pi-check]="isCopied(code)" aria-hidden="true"></i>
-      {{ isCopied(code) ? 'Copied' : 'Copy algorithm' }}
-    </button>
+    <app-copy-button
+      variant="button"
+      [text]="code.source"
+      label="Copy algorithm"
+      copiedLabel="Copied"
+      ariaLabel="Copy QuantConnect algorithm" />
   </header>
 
   <dl class="qc-reference__provenance" aria-label="QuantConnect audit-copy provenance">
@@ -27,7 +25,10 @@
     </div>
     <div>
       <dt>SHA-256</dt>
-      <dd><code>{{ code.sha256 }}</code></dd>
+      <dd class="copyable">
+        <code>{{ code.sha256 }}</code>
+        <app-copy-button [text]="code.sha256" ariaLabel="Copy SHA-256 hash" />
+      </dd>
     </div>
   </dl>
 
@@ -36,12 +37,6 @@
     <li>Replace its starter code with this audit copy and run the backtest.</li>
     <li>Record the backtest ID here; reconciliation, not the ID alone, is the validation receipt.</li>
   </ol>
-
-  @if (copyError()) {
-    <p class="qc-reference__error" role="alert">
-      Copy was blocked by the browser. Select the code below and copy it manually.
-    </p>
-  }
 
   <pre class="qc-reference__source"><code>{{ code.source }}</code></pre>
 </section>

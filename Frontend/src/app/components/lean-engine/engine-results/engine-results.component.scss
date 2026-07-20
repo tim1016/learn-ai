@@ -221,20 +221,11 @@
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// 1.6fr / 1fr split — chart + readiness sidebar
+// Full-width stacked charts — price + equity own the page width
 // ═══════════════════════════════════════════════════════════════════
-.results-split {
-  display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(280px, 420px);
-  gap: 12px;
-  align-items: flex-start;
+.results-charts {
+  min-width: 0;
   margin: 0 0 12px;
-
-  @media (max-width: 1100px) {
-    grid-template-columns: 1fr;
-  }
-
-  &__chart, &__side { min-width: 0; }
 }
 
 // ═══════════════════════════════════════════════════════════════════

@@ -11,7 +11,10 @@
           <app-timestamp-display [value]="r.executedAt" mode="local" />
         </p>
       </div>
-      <span class="run-id-chip">run #{{ r.id }}</span>
+      <span class="run-id-chip copyable">
+        run #{{ r.id }}
+        <app-copy-button [text]="'' + r.id" ariaLabel="Copy run id" />
+      </span>
     </header>
 
     @if (parity(); as p) {

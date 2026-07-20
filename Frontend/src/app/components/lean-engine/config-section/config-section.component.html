@@ -1,0 +1,31 @@
+<section class="config-section" [class.is-open]="open()" [class.is-configured]="configured()">
+  <button
+    type="button"
+    class="config-section__header"
+    [attr.aria-expanded]="open()"
+    (click)="toggle()"
+  >
+    @if (index()) {
+      <span class="config-section__index">{{ index() }}</span>
+    }
+    @if (icon()) {
+      <i [class]="icon()" aria-hidden="true"></i>
+    }
+    <span class="config-section__title">{{ title() }}</span>
+    @if (!open() && configured() && summary()) {
+      <span class="config-section__summary" [title]="summary()">{{ summary() }}</span>
+    }
+    <i
+      class="pi config-section__chevron"
+      [class.pi-chevron-down]="open()"
+      [class.pi-chevron-right]="!open()"
+      aria-hidden="true"
+    ></i>
+  </button>
+
+  @if (open()) {
+    <div class="config-section__body">
+      <ng-content />
+    </div>
+  }
+</section>

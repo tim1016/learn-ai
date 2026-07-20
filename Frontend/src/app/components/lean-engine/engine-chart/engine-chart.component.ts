@@ -1,5 +1,5 @@
 import {
-  Component, signal, computed, input,
+  Component, computed, input,
   viewChild, ElementRef, AfterViewInit, OnDestroy,
   ChangeDetectionStrategy, effect,
 } from '@angular/core';
@@ -77,8 +77,8 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
   priceChartEl = viewChild<ElementRef<HTMLDivElement>>('priceChart');
   equityChartEl = viewChild<ElementRef<HTMLDivElement>>('equityChart');
 
-  // State
-  activeView = signal<'price' | 'equity'>('price');
+  // State — price + equity render stacked; each panel shows only when it
+  // has data (drives the panel `display` so an empty chart reserves no height).
   hasData = computed(() => this.chartBars().length > 0);
   hasEquity = computed(() => this.equityCurve().length > 0);
 
@@ -119,20 +119,6 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
     this.equityChart?.remove();
   }
 
-  setView(view: 'price' | 'equity'): void {
-    this.activeView.set(view);
-    // Charts need a resize after becoming visible
-    setTimeout(() => {
-      const priceEl = this.priceChartEl()?.nativeElement;
-      const equityEl = this.equityChartEl()?.nativeElement;
-      if (view === 'price' && priceEl) {
-        this.priceChart?.applyOptions({ width: priceEl.clientWidth });
-      }
-      if (view === 'equity' && equityEl) {
-        this.equityChart?.applyOptions({ width: equityEl.clientWidth });
-      }
-    });
-  }
 
   // ──────────────────────────────────────────────
   // Price chart (candlestick + volume + trade markers)
@@ -143,7 +129,7 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
 
     this.priceChart = createChart(el, {
       width: el.clientWidth,
-      height: 480,
+      height: 560,
       layout: { background: { color: DARK.bg }, textColor: DARK.text },
       grid: {
         vertLines: { color: DARK.grid },
@@ -181,14 +167,19 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
       scaleMargins: { top: 0.8, bottom: 0 },
     });
 
-    this.resizeObserver = new ResizeObserver(entries => {
-      if (entries.length > 0) {
-        const { width } = entries[0].contentRect;
-        this.priceChart?.applyOptions({ width });
-        this.equityChart?.applyOptions({ width });
-      }
+    // Each chart tracks its own container width. Reading per-element
+    // clientWidth (guarded > 0) means a hidden panel — an empty price panel
+    // on an equity-only run — can't zero out the visible chart. Also fires on
+    // config-nav collapse, the width change we need to react to.
+    this.resizeObserver = new ResizeObserver(() => {
+      const priceWidth = this.priceChartEl()?.nativeElement.clientWidth ?? 0;
+      const equityWidth = this.equityChartEl()?.nativeElement.clientWidth ?? 0;
+      if (priceWidth > 0) this.priceChart?.applyOptions({ width: priceWidth });
+      if (equityWidth > 0) this.equityChart?.applyOptions({ width: equityWidth });
     });
     this.resizeObserver.observe(el);
+    const equityEl = this.equityChartEl()?.nativeElement;
+    if (equityEl) this.resizeObserver.observe(equityEl);
   }
 
   // ──────────────────────────────────────────────
@@ -200,7 +191,7 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
 
     this.equityChart = createChart(el, {
       width: el.clientWidth,
-      height: 300,
+      height: 320,
       layout: { background: { color: DARK.bg }, textColor: DARK.text },
       grid: {
         vertLines: { color: DARK.grid },
