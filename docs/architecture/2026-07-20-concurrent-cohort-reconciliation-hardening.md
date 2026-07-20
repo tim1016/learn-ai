@@ -95,9 +95,23 @@ the slot-preflight retry (commit 62ffb97d1) can't help — each retry re-hits th
 dedicated timeout (a startability check, not a health ping — 10 s is fine), so a
 momentarily-busy daemon doesn't drop an otherwise-ready member. Change lives in
 `host_daemon_client.fetch_instance_process` (a dedicated `_INSTANCE_PROBE_TIMEOUT`),
-NOT the frozen `live_instances.py` router. Deeper follow-up (optional): make the
-daemon's `/instances/{id}/process` non-blocking so it doesn't slow under load, and/or
-treat a probe timeout as "unknown/retryable" rather than "ineligible."
+NOT the frozen `live_instances.py` router. Shipped: commit 357609b9d.
+
+**C is BROADER than the probe timeout (2026-07-20, attempt 4 — Fix C necessary but
+not sufficient).** After shipping Fix C, a compressed re-run still dropped nvda at +10
+with only 2 bots running, and the monitor's polls to the data-plane timed out
+continuously for the whole 20-min stagger. Measured: **a `/catalog` read takes ~10.4 s
+even at rest with all bots stopped**, against **20 accumulated run directories** whose
+`broker_callbacks.jsonl` reach 2.0 MB. The catalog/roll-call/account-truth read path
+rebuilds by scanning all run-dir artifacts on every request, so it is
+**O(accumulated artifacts)** and blows even the extended 10 s probe budget → members
+are dropped. Part real production concern (read path degrades as runs accumulate),
+part test-environment bloat (4+ runs today). **Real Fix C ⇒ make the status read path
+fast**: cache/index the fleet roster, bound per-run reads, and/or prune-retire old run
+dirs so `_visible_runs_by_instance` + `compose_bot_catalog_row` don't re-scan MBs each
+call. Cheap unblock for the *next attempt*: run in a **clean environment** (few run
+dirs) — the existing Fix A + Fix C likely reach 5 there. Confirm the read-path latency
+hypothesis by timing `/catalog` before vs after pruning run dirs.
 
 ## Alternative — one IBKR paper account per bot
 
