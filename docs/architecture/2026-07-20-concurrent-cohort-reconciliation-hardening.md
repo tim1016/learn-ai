@@ -69,17 +69,35 @@ allowlist — recognize (suppress halt) but never adopt. Must NOT suppress a gen
 unattributable foreign fill (manual TWS click, unknown namespace). This is the
 delicate part; it changes a fatal safety guard and needs careful test coverage.
 
-## Root cause C — roll-call offer degradation under concurrent load
+## Root cause C — roll-call drops the idle member on a 2s daemon-probe timeout under load
 
-As concurrency rises, the next member's roll-call offer goes missing for 20-30s at its
-slot (`status_is_roll_call_eligible` requires `phase==OFF_DUTY ∧ start.enabled ∧
-not SICK_BAY ∧ …`; something transiently flips). The retry fix rides out short misses
-but spy's (+20, 3 bots running) outlasted the ~24s window. **Mechanism not yet
-pinned** — candidate causes: the daemon serializing `/instances` status under load;
-a start-capability gate flickering; account-truth refresh contention. Needs a focused
-diagnostic (instrument which gate flips at a slot under load) before choosing between:
-widen/scale the retry window, make the daemon status path non-blocking, or stabilize
-the flapping gate. Do not just widen the retry blindly — that masks the cause.
+**PINNED (2026-07-20, attempt 3).** As concurrency rises, the next member is silently
+dropped from the roll-call at its slot. Mechanism, confirmed from code + the load
+correlation:
+
+1. `run_roll_call` resolves each candidate's status via `_resolve_instance_status_for_fleet_sid`.
+2. An **idle** candidate (the not-yet-started member) is omitted from the daemon's bulk
+   `fetch_instances` snapshot, so the resolver falls back to a per-bot
+   `host_daemon_client.fetch_instance_process` (`GET /instances/{sid}/process`).
+3. That probe uses the default `_TIMEOUT = httpx.Timeout(2.0)` — **2 seconds**.
+4. Under concurrent load the single-event-loop host daemon (managing N running bots +
+   their fill/order streams) can't answer within 2 s → the probe **times out** → the
+   candidate's `start_capability` resolves with a failing daemon-state gate →
+   `start.enabled=False` → `status_is_roll_call_eligible` returns False → the member is
+   **silently skipped** (live_instances.py roll-call loop, `if not …: continue`).
+
+This matches all evidence: the failure is always the last/highest-concurrency slot
+(more bots → busier daemon → >2 s), it is silent (a timeout, not a logged error), and
+the slot-preflight retry (commit 62ffb97d1) can't help — each retry re-hits the same
+2 s timeout against the still-busy daemon.
+
+**Fix C (small, low-risk):** give the roll-call's idle-bot process probe a longer,
+dedicated timeout (a startability check, not a health ping — 10 s is fine), so a
+momentarily-busy daemon doesn't drop an otherwise-ready member. Change lives in
+`host_daemon_client.fetch_instance_process` (a dedicated `_INSTANCE_PROBE_TIMEOUT`),
+NOT the frozen `live_instances.py` router. Deeper follow-up (optional): make the
+daemon's `/instances/{id}/process` non-blocking so it doesn't slow under load, and/or
+treat a probe timeout as "unknown/retryable" rather than "ineligible."
 
 ## Alternative — one IBKR paper account per bot
 
