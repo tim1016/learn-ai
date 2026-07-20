@@ -451,7 +451,9 @@ podman compose down backend && podman compose up -d --build backend
 podman compose down python-service && podman compose up -d --build python-service
 ```
 
-To reset the database (e.g. after adding new EF Core entities):
+The backend applies EF Core migrations during startup. New empty development databases are therefore created and upgraded through the migration chain automatically.
+
+Only reset the database when you explicitly intend to discard local data:
 
 ```bash
 podman compose down db
@@ -459,7 +461,7 @@ podman volume rm learn-ai_pgdata
 podman compose up -d
 ```
 
-> **Note**: EF Core's `EnsureCreated()` does nothing if any tables already exist. New entities require a volume reset or switching to EF migrations.
+> **Note**: Do not use a volume reset as a schema-change workflow. To adopt a populated database that was historically created with `EnsureCreated()`, follow the [EF migrations adoption runbook](docs/runbooks/ef-migrations-adoption.md) after taking a restorable backup.
 
 ## Container Operations
 
