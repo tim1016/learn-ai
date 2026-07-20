@@ -124,8 +124,8 @@ def test_direct_one_receipt_preserves_the_five_bar_execution_profile() -> None:
     for trade, duration_minutes in zip(trades, durations_minutes, strict=True):
         assert int(trade["entry_time_ms"]) < int(trade["exit_time_ms"])
         assert trade["order_ids"].count(";") == 1
-        hours, minutes, seconds = (int(part) for part in trade["reported_duration"].split(":"))
-        assert duration_minutes == hours * 60 + minutes + seconds // 60
+        hours, minutes, _seconds = (int(part) for part in trade["reported_duration"].split(":"))
+        assert duration_minutes == hours * 60 + minutes
 
 
 def test_python_and_lean_templates_exit_after_five_consolidated_bars() -> None:
