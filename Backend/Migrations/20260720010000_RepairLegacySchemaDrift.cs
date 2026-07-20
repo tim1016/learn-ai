@@ -191,6 +191,33 @@ namespace Backend.Migrations
                     END IF;
                 END $$;
 
+                DO $$
+                DECLARE
+                    greek_data_guard text;
+                    has_greek_data boolean;
+                BEGIN
+                    SELECT CASE
+                        WHEN count(*) = 0 THEN NULL
+                        ELSE format(
+                            'SELECT EXISTS (SELECT 1 FROM %I WHERE %s)',
+                            'PortfolioSnapshots',
+                            string_agg(format('%I IS NOT NULL', column_name), ' OR '))
+                    END
+                    INTO greek_data_guard
+                    FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'PortfolioSnapshots'
+                      AND column_name IN ('NetDelta', 'NetGamma', 'NetTheta', 'NetVega');
+
+                    IF greek_data_guard IS NOT NULL THEN
+                        EXECUTE greek_data_guard INTO has_greek_data;
+
+                        IF has_greek_data THEN
+                            RAISE EXCEPTION 'PortfolioSnapshots contains non-null Greek data; aborting destructive column drop';
+                        END IF;
+                    END IF;
+                END $$;
+
                 ALTER TABLE ""PortfolioSnapshots"" DROP COLUMN IF EXISTS ""NetDelta"";
                 ALTER TABLE ""PortfolioSnapshots"" DROP COLUMN IF EXISTS ""NetGamma"";
                 ALTER TABLE ""PortfolioSnapshots"" DROP COLUMN IF EXISTS ""NetTheta"";

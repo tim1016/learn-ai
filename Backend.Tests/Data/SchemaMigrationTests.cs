@@ -12,6 +12,8 @@ namespace Backend.Tests.Data;
 
 public class SchemaMigrationTests
 {
+    private const string MigrationBeforeLegacySchemaRepair = "20260717010000_PreserveUnavailableRunMetrics";
+
     [Fact]
     public void StrategyExecution_HasLeanRunIdProperty()
     {
@@ -116,6 +118,77 @@ public class SchemaMigrationTests
         }
     }
 
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task RepairLegacySchemaDrift_PopulatedGreekColumns_AbortsDestructiveDrop()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("BACKEND_TEST_POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(baseConnectionString))
+        {
+            return;
+        }
+
+        await using var database = await TemporaryPostgresDatabase.CreateAsync(baseConnectionString);
+        using var services = new ServiceCollection()
+            .AddDbContext<AppDbContext>(options => options.UseNpgsql(database.ConnectionString))
+            .BuildServiceProvider();
+        await using var scope = services.CreateAsyncScope();
+        var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var migrator = context.GetService<IMigrator>();
+
+        await migrator.MigrateAsync(MigrationBeforeLegacySchemaRepair, CancellationToken.None);
+
+        await using (var connection = new NpgsqlConnection(database.ConnectionString))
+        {
+            await connection.OpenAsync();
+
+            await using (var addGreekColumns = new NpgsqlCommand(@"
+                ALTER TABLE ""PortfolioSnapshots"" ADD COLUMN ""NetDelta"" numeric(18,8);
+                ALTER TABLE ""PortfolioSnapshots"" ADD COLUMN ""NetGamma"" numeric(18,8);
+                ALTER TABLE ""PortfolioSnapshots"" ADD COLUMN ""NetTheta"" numeric(18,8);
+                ALTER TABLE ""PortfolioSnapshots"" ADD COLUMN ""NetVega"" numeric(18,8);", connection))
+            {
+                await addGreekColumns.ExecuteNonQueryAsync();
+            }
+
+            await using var seedGreekData = new NpgsqlCommand(@"
+                INSERT INTO ""Accounts"" (""Id"", ""Name"", ""Type"", ""BaseCurrency"", ""InitialCash"", ""Cash"", ""CreatedAt"")
+                VALUES (@accountId, 'migration guard', 'test', 'USD', 0, 0, @timestamp);
+
+                INSERT INTO ""PortfolioSnapshots"" (""Id"", ""AccountId"", ""Timestamp"", ""Equity"", ""Cash"", ""MarketValue"", ""MarginUsed"", ""UnrealizedPnL"", ""RealizedPnL"", ""NetDelta"")
+                VALUES (@snapshotId, @accountId, @timestamp, 0, 0, 0, 0, 0, 0, 1);", connection);
+            seedGreekData.Parameters.AddWithValue("accountId", Guid.NewGuid());
+            seedGreekData.Parameters.AddWithValue("snapshotId", Guid.NewGuid());
+            seedGreekData.Parameters.AddWithValue("timestamp", DateTime.UtcNow);
+            await seedGreekData.ExecuteNonQueryAsync();
+        }
+
+        var exception = await Assert.ThrowsAsync<PostgresException>(() =>
+            migrator.MigrateAsync(cancellationToken: CancellationToken.None));
+
+        Assert.Contains("PortfolioSnapshots contains non-null Greek data", exception.MessageText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "PostgresIntegration")]
+    public async Task AssertRelationExistsAsync_MissingRelation_Throws()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable("BACKEND_TEST_POSTGRES_CONNECTION_STRING");
+        if (string.IsNullOrWhiteSpace(baseConnectionString))
+        {
+            return;
+        }
+
+        await using var database = await TemporaryPostgresDatabase.CreateAsync(baseConnectionString);
+        await using var connection = new NpgsqlConnection(database.ConnectionString);
+        await connection.OpenAsync();
+
+        var exception = await Record.ExceptionAsync(() =>
+            AssertRelationExistsAsync(connection, "public.missing_migration_relation"));
+
+        Assert.NotNull(exception);
+    }
+
     private static readonly string[] RawSqlMigrationTables =
     [
         "bot_lifecycle_events",
@@ -153,7 +226,7 @@ public class SchemaMigrationTests
         await using var command = new NpgsqlCommand("SELECT to_regclass(@relationName)::text;", connection);
         command.Parameters.AddWithValue("relationName", relationName);
 
-        Assert.NotNull(await command.ExecuteScalarAsync());
+        Assert.IsType<string>(await command.ExecuteScalarAsync());
     }
 
     private static string FindRepositoryFile(params string[] relativePathSegments)
