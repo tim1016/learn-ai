@@ -8,19 +8,17 @@ namespace Backend.Migrations
 {
     /// <inheritdoc />
     [DbContext(typeof(AppDbContext))]
-    [Migration("20260720010000_RepairLegacySchemaDrift")]
-    public partial class RepairLegacySchemaDrift : Migration
+    [Migration("20260720020000_ReconcileLegacySchemaRepairContract")]
+    public partial class ReconcileLegacySchemaRepairContract : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            // Databases created with EnsureCreated() skipped the raw-SQL portions of
-            // earlier migrations. This converges those legacy schemas to the audited
-            // migration-chain schema without changing a fresh database's result.
+            // 20260720010000 was already released before its catalog-definition
+            // checks were strengthened. Reapply the raw-SQL contract here so a
+            // database that recorded the first repair is reconciled as well.
             migrationBuilder.Sql(@"
                 ALTER TABLE bot_lifecycle_events
-                ADD COLUMN IF NOT EXISTS source_rank integer NOT NULL DEFAULT 0;
-                ALTER TABLE bot_lifecycle_events
                 ALTER COLUMN source_rank TYPE integer USING source_rank::integer;
                 ALTER TABLE bot_lifecycle_events
                 ALTER COLUMN source_rank SET NOT NULL;
@@ -28,17 +26,12 @@ namespace Backend.Migrations
                 ALTER COLUMN source_rank DROP DEFAULT;
 
                 ALTER TABLE account_lifecycle_events
-                ADD COLUMN IF NOT EXISTS source_rank integer NOT NULL DEFAULT 0;
-                ALTER TABLE account_lifecycle_events
                 ALTER COLUMN source_rank TYPE integer USING source_rank::integer;
                 ALTER TABLE account_lifecycle_events
                 ALTER COLUMN source_rank SET NOT NULL;
                 ALTER TABLE account_lifecycle_events
                 ALTER COLUMN source_rank DROP DEFAULT;
 
-                -- A matching object name does not prove the raw-SQL invariant is
-                -- correct. Recreate these constraints so PostgreSQL validates the
-                -- current data against the canonical definitions.
                 ALTER TABLE bot_lifecycle_events
                 DROP CONSTRAINT IF EXISTS ck_bot_lifecycle_events_source_rank_nonnegative;
                 ALTER TABLE bot_lifecycle_events
@@ -59,9 +52,6 @@ namespace Backend.Migrations
                 CREATE INDEX ix_account_lifecycle_events_timeline
                   ON account_lifecycle_events (account_id, ts_ms DESC, source_rank DESC, source_seq DESC);
 
-                -- Recreate functional and partial indexes for the same reason: a
-                -- hand-created index with the canonical name can have the wrong key
-                -- expression, uniqueness, or predicate.
                 DROP INDEX IF EXISTS ix_strategyexecution_datapolicy_symbol;
                 CREATE INDEX ix_strategyexecution_datapolicy_symbol
                   ON ""StrategyExecutions"" ((""DataPolicyJson""->>'symbol'));
@@ -186,38 +176,6 @@ namespace Backend.Migrations
                 CREATE INDEX ix_data_lake_artifacts_incomplete
                   ON ""DataLakeArtifacts"" (""Status"", ""LeaseExpiresAtMs"")
                   WHERE ""Status"" <> 'complete';
-
-                DO $$
-                DECLARE
-                    greek_data_guard text;
-                    has_greek_data boolean;
-                BEGIN
-                    SELECT CASE
-                        WHEN count(*) = 0 THEN NULL
-                        ELSE format(
-                            'SELECT EXISTS (SELECT 1 FROM %I WHERE %s)',
-                            'PortfolioSnapshots',
-                            string_agg(format('%I IS NOT NULL', column_name), ' OR '))
-                    END
-                    INTO greek_data_guard
-                    FROM information_schema.columns
-                    WHERE table_schema = 'public'
-                      AND table_name = 'PortfolioSnapshots'
-                      AND column_name IN ('NetDelta', 'NetGamma', 'NetTheta', 'NetVega');
-
-                    IF greek_data_guard IS NOT NULL THEN
-                        EXECUTE greek_data_guard INTO has_greek_data;
-
-                        IF has_greek_data THEN
-                            RAISE EXCEPTION 'PortfolioSnapshots contains non-null Greek data; aborting destructive column drop';
-                        END IF;
-                    END IF;
-                END $$;
-
-                ALTER TABLE ""PortfolioSnapshots"" DROP COLUMN IF EXISTS ""NetDelta"";
-                ALTER TABLE ""PortfolioSnapshots"" DROP COLUMN IF EXISTS ""NetGamma"";
-                ALTER TABLE ""PortfolioSnapshots"" DROP COLUMN IF EXISTS ""NetTheta"";
-                ALTER TABLE ""PortfolioSnapshots"" DROP COLUMN IF EXISTS ""NetVega"";
             ");
         }
 
@@ -225,7 +183,7 @@ namespace Backend.Migrations
         protected override void Down(MigrationBuilder migrationBuilder)
         {
             throw new InvalidOperationException(
-                "RepairLegacySchemaDrift is intentionally irreversible. Restore the pre-adoption database backup to roll it back.");
+                "ReconcileLegacySchemaRepairContract is intentionally irreversible. Restore the pre-adoption database backup to roll it back.");
         }
     }
 }

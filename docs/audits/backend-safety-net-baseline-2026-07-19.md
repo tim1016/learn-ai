@@ -7,7 +7,8 @@
 | Point in time | Result | Notes |
 | --- | --- | --- |
 | Before this work | 226 passed | Existing `Backend.Tests` suite, built in Release against local PostgreSQL. |
-| After this work | 229 passed | Includes migration discovery, startup-path, and fresh-PostgreSQL migration regression coverage. |
+| After #1124 | 229 passed | Includes migration discovery, startup-path, and fresh-PostgreSQL migration regression coverage. |
+| Reviewer and maintainability follow-up | 235 passed | Adds populated-Greek destructive-drop protection, explicit PostgreSQL-test skips, a legacy-drift catalog-fingerprint regression, an already-adopted-database reconciliation regression, retry classification, and a SQL-`NULL` relation-check regression. |
 
 `Backend.Tests` currently contains 31 `*Tests.cs` files. The test suite does not call the Python service: every Python-facing service test uses a fake `HttpMessageHandler`. The CI gate therefore needs PostgreSQL, but not Python or Redis.
 
@@ -23,7 +24,7 @@ The repository held 11 logical migrations before this work, but EF discovered on
 
 Each now declares both `[DbContext(typeof(AppDbContext))]` and `[Migration("...")]`. The `AllConcreteMigrations_AreDiscoverableByEf` regression test compares every concrete `Migration` subtype with EF's `IMigrationsAssembly` inventory.
 
-The migration chain now contains 12 migrations, including `20260720010000_RepairLegacySchemaDrift`.
+The migration chain now contains 13 migrations, including `20260720010000_RepairLegacySchemaDrift` and the versioned follow-up `20260720020000_ReconcileLegacySchemaRepairContract`.
 
 ## Development-schema audit and adoption
 
@@ -60,3 +61,4 @@ An order-insensitive PostgreSQL catalog fingerprint of tables, columns, defaults
 - GitHub Actions [run 29711711411](https://github.com/tim1016/learn-ai/actions/runs/29711711411) completed successfully for this change, including `Backend Tests` (229 passed).
 - The isolated negative-control [run 29711822189](https://github.com/tim1016/learn-ai/actions/runs/29711822189) removed one inline `[Migration]` attribute. `AllConcreteMigrations_AreDiscoverableByEf` failed as intended (1 failed, 228 passed), while the backend build and formatting jobs succeeded. Its test-results artifact is retained by GitHub Actions.
 - Active GitHub ruleset [19185467](https://github.com/tim1016/learn-ai/rules/19185467), `Require Backend Tests on master`, targets only `refs/heads/master`, has no bypass actors, requires the exact `Backend Tests` context, and uses the strict up-to-date policy. `gh pr checks --required` reports that required check passing on PR #1129.
+- The reviewer follow-up hardens the `Backend Tests` job token to `contents: read` and disables checkout credential persistence. It also adds a migration precondition that aborts if a legacy database still contains populated Portfolio Snapshot Greek columns. A full legacy-drift fixture now compares normalized column, constraint, and index definitions with a clean migration chain; a versioned reconciliation migration carries that catalog contract to databases that had already applied the initial repair. Database startup retries only transient failures, so data-validation failures surface immediately. The historical development and shadow catalog fingerprints both contain all six Data Lake partial indexes; the repair now creates those indexes for `EnsureCreated` databases that lack them.

@@ -29,7 +29,7 @@ The canonical contract is the EF model snapshot plus the intentional raw-SQL obj
 2. Verify data safety before destructive operations. For example, the #1124 repair drops obsolete portfolio-Greek columns only after confirming they contain no development data.
 3. Apply the new repair migration to the shadow database and compare the two schemas again.
 
-For #1124, `20260720010000_RepairLegacySchemaDrift` restores the raw-SQL migration objects skipped by `EnsureCreated` and removes the four stale `PortfolioSnapshots` Greek columns.
+For #1124, `20260720010000_RepairLegacySchemaDrift` recreates the canonical raw-SQL constraints and indexes (rather than trusting a matching object name), restores the six Data Lake partial indexes skipped by `EnsureCreated`, and removes the four stale `PortfolioSnapshots` Greek columns only when they contain no data. `20260720020000_ReconcileLegacySchemaRepairContract` repeats the non-destructive catalog reconciliation for databases that had already recorded the first repair before its contract was strengthened.
 
 ## Baseline the legacy history and migrate
 

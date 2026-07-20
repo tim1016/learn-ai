@@ -65,5 +65,5 @@ Backend/
 ## Gotchas
 
 - HC v15 camelCase converts `PnL` → `pnL` (not `pnl`) — use explicit `[GraphQLName]`
-- `EnsureCreated()` does nothing if ANY tables exist — delete pgdata volume for new entities
+- EF Core migrations run at backend startup; do not delete pgdata for routine schema changes. For a populated legacy `EnsureCreated()` database, follow `docs/runbooks/ef-migrations-adoption.md` after taking a backup.
 - Backend maps port 5000 (host) → 8080 (container)

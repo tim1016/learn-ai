@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Npgsql;
 
 namespace Backend.Data;
 
@@ -17,41 +18,61 @@ public static class DatabaseInitializer
         ILogger logger,
         CancellationToken cancellationToken)
     {
-        for (var attempt = 1; attempt <= MaxRetries; attempt++)
-        {
-            try
+        await ExecuteWithRetryAsync(
+            async cancellationToken =>
             {
                 await using var scope = services.CreateAsyncScope();
                 var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
                 await context.Database.MigrateAsync(cancellationToken);
-                logger.LogInformation("Database migrations applied successfully.");
+            },
+            logger,
+            cancellationToken,
+            RetryDelay);
+
+        logger.LogInformation("Database migrations applied successfully.");
+    }
+
+    internal static async Task ExecuteWithRetryAsync(
+        Func<CancellationToken, Task> operation,
+        ILogger logger,
+        CancellationToken cancellationToken,
+        TimeSpan retryDelay)
+    {
+        for (var attempt = 1; attempt <= MaxRetries; attempt++)
+        {
+            try
+            {
+                await operation(cancellationToken);
                 return;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
             }
-            catch (Exception exception)
+            catch (Exception exception) when (IsTransientDatabaseFailure(exception) && attempt < MaxRetries)
             {
-                if (attempt == MaxRetries)
-                {
-                    logger.LogError(
-                        exception,
-                        "Database migrations failed after {MaxRetries} attempts.",
-                        MaxRetries);
-                    throw;
-                }
-
                 logger.LogWarning(
                     exception,
                     "Database migration attempt {Attempt}/{MaxRetries} failed; retrying in {RetryDelaySeconds} seconds.",
                     attempt,
                     MaxRetries,
-                    RetryDelay.TotalSeconds);
+                    retryDelay.TotalSeconds);
 
-                await Task.Delay(RetryDelay, cancellationToken);
+                await Task.Delay(retryDelay, cancellationToken);
+            }
+            catch (Exception exception)
+            {
+                logger.LogError(
+                    exception,
+                    "Database migrations failed on attempt {Attempt}/{MaxRetries}; the error is not retryable.",
+                    attempt,
+                    MaxRetries);
+                throw;
             }
         }
     }
+
+    private static bool IsTransientDatabaseFailure(Exception exception) =>
+        exception is TimeoutException or NpgsqlException { IsTransient: true };
 }
