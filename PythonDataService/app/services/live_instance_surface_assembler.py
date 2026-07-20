@@ -18,6 +18,7 @@ from typing import Any
 from fastapi import HTTPException, status
 
 from app.schemas.live_runs import EvidenceBinding, LiveInstanceStatus
+from app.services.account_fleet_read_context import AccountFleetReadContext
 from app.services.bot_daily_lifecycle import BotDailyLifecycleEvidence
 from app.services.bot_lifecycle_receipts import LifecycleReceiptContext
 
@@ -167,6 +168,8 @@ class LiveInstanceSurfaceAssembler:
         daemon_process: dict | None,
         *,
         runs_by_instance: dict[str, list[dict]] | None = None,
+        account_fleet_read_context: AccountFleetReadContext | None = None,
+        broker_free_account_read: bool = False,
     ) -> LiveInstanceStatus:
         d = self._d
         process, live_binding = d.interpret_daemon_process(daemon_process, root)
@@ -234,7 +237,15 @@ class LiveInstanceSurfaceAssembler:
             instance_account_id,
             now_ms=observed_at_ms,
         )
-        account_truth_snapshot = d.get_account_truth_snapshot_provider().get(instance_account_id)
+        account_truth_snapshot = (
+            account_fleet_read_context.account_truth_evidence
+            if account_fleet_read_context is not None
+            else (
+                None
+                if broker_free_account_read
+                else d.get_account_truth_snapshot_provider().get(instance_account_id)
+            )
+        )
         latest_mutation = d.resolve_latest_mutation(root, sid)
         broker_observation_consistency = d.resolve_broker_observation_consistency(
             live_binding,
@@ -252,10 +263,17 @@ class LiveInstanceSurfaceAssembler:
         activity_publisher, activity_publisher_registered_at_ms = await d.resolve_activity_publisher_for_status(
             sid, live_binding
         )
-        fleet_blocks_starts, daemon_diagnostic_condition = await asyncio.gather(
-            d.resolve_fleet_blocks_starts_for_status(settings, root),
-            d.resolve_daemon_diagnostic_condition_for_status(sid),
-        )
+        if account_fleet_read_context is not None:
+            fleet_blocks_starts = account_fleet_read_context.fleet_blocks_starts
+            daemon_diagnostic_condition = await d.resolve_daemon_diagnostic_condition_for_status(sid)
+        elif broker_free_account_read:
+            fleet_blocks_starts = True
+            daemon_diagnostic_condition = await d.resolve_daemon_diagnostic_condition_for_status(sid)
+        else:
+            fleet_blocks_starts, daemon_diagnostic_condition = await asyncio.gather(
+                d.resolve_fleet_blocks_starts_for_status(settings, root),
+                d.resolve_daemon_diagnostic_condition_for_status(sid),
+            )
         incident_headline = d.resolve_incident_headline(root, live_binding, runs)
         lifecycle_state = d.resolve_bot_lifecycle_state(root, sid)
         live_run_dir = d.resolve_live_run_dir(root, live_binding)
@@ -282,6 +300,11 @@ class LiveInstanceSurfaceAssembler:
             latest_mutation=latest_mutation,
             broker_observation_consistency=broker_observation_consistency,
             account_truth_snapshot=account_truth_snapshot,
+            precomputed_account_truth_assessment=(
+                account_fleet_read_context.account_truth_assessment
+                if account_fleet_read_context is not None
+                else None
+            ),
             fleet_blocks_starts=fleet_blocks_starts,
             daemon_diagnostic_condition=daemon_diagnostic_condition,
             durable_control_write_failure=d.resolve_durable_control_write_failure_for_status(

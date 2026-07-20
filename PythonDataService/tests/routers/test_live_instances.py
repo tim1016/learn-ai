@@ -19,6 +19,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.broker.ibkr.api_evidence import evidence_request, evidence_response, get_ibkr_api_evidence_recorder
+from app.broker.ibkr.models import IbkrConnectionHealth
 from app.broker.runtime_snapshot import BrokerRuntimeSnapshot
 from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import (
@@ -59,6 +60,7 @@ from app.operator.notices.schema import (
     OperatorNoticeAction,
 )
 from app.routers import live_instances
+from app.schemas.account_truth import AccountTruthResponse
 from app.schemas.broker_activity import BrokerActivityRow
 from app.schemas.live_runs import (
     BotRollCallOffer,
@@ -67,9 +69,11 @@ from app.schemas.live_runs import (
     FleetContamination,
     LiveBinding,
 )
+from app.services.account_truth_snapshot import AccountTruthSnapshotProvider
 from app.services.live_chart_window import ChartTimeframe, ChartWindowResult
 from app.services.mutation_attempt import MutationAttemptRepo
 from tests._fixtures.daemon_transport import as_typed_get
+from tests._helpers.account_truth import fresh_account_truth_source_freshness
 
 
 async def _capture_first_asgi_stream_body(
@@ -178,6 +182,41 @@ def _write_roll_call_offer(
 
 def _set_startable_now(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(live_instances, "_now_ms", lambda: 1_783_533_600_000)
+
+
+def _remember_clean_account_truth(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    account_id: str = "DU111",
+    observed_at_ms: int = 1_783_533_600_000,
+) -> None:
+    provider = AccountTruthSnapshotProvider()
+    provider.remember(
+        AccountTruthResponse(
+            account_id=account_id,
+            final_verdict="clean",
+            final_severity="ok",
+            status_label="Clean",
+            status_detail="Account Truth is clean.",
+            generated_at_ms=observed_at_ms,
+            health=IbkrConnectionHealth(
+                mode="paper",
+                host="127.0.0.1",
+                port=4002,
+                client_id=7,
+                connected=True,
+                account_id=account_id,
+                is_paper=True,
+                fetched_at_ms=observed_at_ms,
+                connection_state="connected",
+                last_transition_ms=observed_at_ms,
+            ),
+            invariants=[],
+            source_freshness=fresh_account_truth_source_freshness(observed_at_ms),
+        ),
+        cached_at_ms=observed_at_ms,
+    )
+    monkeypatch.setattr(live_instances, "get_account_truth_snapshot_provider", lambda: provider)
 
 
 def _write_crash_retired_binding(
@@ -3379,6 +3418,72 @@ async def test_bot_catalog_returns_backend_composed_rows(app_with_root, monkeypa
     assert row["last_run_detail"] == "No completed run has been recorded for this bot."
 
 
+async def test_bot_catalog_does_not_fetch_broker_positions(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Catalog cards must project cached account evidence without IBKR I/O."""
+
+    app, root = app_with_root
+    _write_ledger(root, "run-ema-1", "spy_ema_paper", 100)
+    _write_ledger(root, "run-vwap-1", "spy_vwap_shadow", 110)
+    _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1})
+    broker_position_fetches = 0
+
+    async def counted_fetch_positions(_account_id: str | None = None) -> dict[str, int]:
+        nonlocal broker_position_fetches
+        broker_position_fetches += 1
+        return {}
+
+    async def fleet_from_observed_broker(
+        observed_root: Path,
+        *,
+        account_id: str | None = None,
+    ) -> FleetContamination:
+        return await live_instances.fleet_contamination_service.compute_account_fleet_contamination(
+            observed_root,
+            fetch_positions=live_instances._fetch_net_positions,
+            account_id=account_id,
+        )
+
+    monkeypatch.setattr(live_instances, "_fetch_net_positions", counted_fetch_positions)
+    monkeypatch.setattr(live_instances, "_compute_account_fleet_contamination", fleet_from_observed_broker)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/catalog")
+
+    assert response.status_code == 200
+    assert {row["strategy_instance_id"] for row in response.json()["bots"]} == {
+        "spy_ema_paper",
+        "spy_vwap_shadow",
+    }
+    assert broker_position_fetches == 0
+
+
+async def test_bot_catalog_reads_account_truth_once_per_distinct_account(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-ema-1", "spy_ema_paper", 100, account_id="DU111")
+    _write_ledger(root, "run-vwap-1", "spy_vwap_shadow", 110, account_id="du111")
+    _write_ledger(root, "run-qqq-1", "qqq_ema_paper", 120, account_id="DU222")
+    _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1})
+    observed_accounts: list[str] = []
+
+    class CountingAccountTruthProvider:
+        def get(self, account_id: str | None):
+            if account_id is not None:
+                observed_accounts.append(account_id)
+            return None
+
+    provider = CountingAccountTruthProvider()
+    monkeypatch.setattr(live_instances, "get_account_truth_snapshot_provider", lambda: provider)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/catalog")
+
+    assert response.status_code == 200
+    assert sorted(observed_accounts) == ["DU111", "DU222"]
+
+
 async def test_bot_catalog_offloads_run_scan(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
     app, _root = app_with_root
     called = False
@@ -3469,6 +3574,7 @@ async def test_roll_call_tick_persists_start_offer(
     app, root = app_with_root
     _write_ledger(root, "run-offer", "spy_ema_paper", 100, strategy_key="spy_ema")
     _set_startable_now(monkeypatch)
+    _remember_clean_account_truth(monkeypatch)
     _set_daemon(
         monkeypatch,
         instances={
@@ -3485,6 +3591,26 @@ async def test_roll_call_tick_persists_start_offer(
         process={"state": "idle"},
     )
     monkeypatch.setattr(live_instances, "status_is_roll_call_eligible", lambda _status: True)
+    broker_position_fetches = 0
+
+    async def counted_fetch_positions(_account_id: str | None = None) -> dict[str, int]:
+        nonlocal broker_position_fetches
+        broker_position_fetches += 1
+        return {}
+
+    async def fleet_from_observed_broker(
+        observed_root: Path,
+        *,
+        account_id: str | None = None,
+    ) -> FleetContamination:
+        return await live_instances.fleet_contamination_service.compute_account_fleet_contamination(
+            observed_root,
+            fetch_positions=live_instances._fetch_net_positions,
+            account_id=account_id,
+        )
+
+    monkeypatch.setattr(live_instances, "_fetch_net_positions", counted_fetch_positions)
+    monkeypatch.setattr(live_instances, "_compute_account_fleet_contamination", fleet_from_observed_broker)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         roll_call = await client.post("/api/live-instances/roll-call")
@@ -3497,18 +3623,19 @@ async def test_roll_call_tick_persists_start_offer(
         stable_bot_roll_call_offers_path(root.parent, "spy_ema_paper")
     ).read().offers
     assert [offer.offer_id for offer in offers] == [body["offers"][0]["offer_id"]]
+    assert broker_position_fetches == 0
 
 
-async def test_roll_call_rejects_unreadable_connected_account_identity(
+async def test_roll_call_does_not_requery_connected_account_identity(
     app_with_root,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Roll call shares the start boundary and must not mint unsafe offers."""
+    """Roll call projects cached proof; dispatch owns the live identity check."""
 
     app, root = app_with_root
     _write_ledger(root, "run-unreadable-account", "spy_ema_paper", 100, strategy_key="spy_ema")
-    _set_connected_broker_account(monkeypatch, "12345")
     _set_startable_now(monkeypatch)
+    _remember_clean_account_truth(monkeypatch)
     _set_daemon(
         monkeypatch,
         instances={
@@ -3524,15 +3651,19 @@ async def test_roll_call_rejects_unreadable_connected_account_identity(
         },
         process={"state": "idle"},
     )
+    monkeypatch.setattr(live_instances, "status_is_roll_call_eligible", lambda _status: True)
+
+    async def unexpected_connected_account_read() -> tuple[str | None, bool]:
+        raise AssertionError("roll call must not read the connected broker account")
+
+    monkeypatch.setattr(live_instances, "_fetch_broker_connected_account", unexpected_connected_account_read)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/api/live-instances/roll-call")
 
-    assert response.status_code == 409
-    detail = response.json()["detail"]
-    assert detail["reason_code"] == "BROKER_TRUTH_UNAVAILABLE"
-    assert detail["connected_account_id"] == "12345"
-    assert not (root.parent / "bot_roll_call_offers").exists()
+    assert response.status_code == 200
+    assert response.json()["summary"]["ready"] == 1
+    assert response.json()["offers"][0]["strategy_instance_id"] == "spy_ema_paper"
 
 
 async def test_roll_call_does_not_offer_legacy_run_without_account_identity_when_catalog_is_not_loaded(
@@ -3565,7 +3696,7 @@ async def test_roll_call_does_not_offer_legacy_run_without_account_identity_when
     assert response.json()["offers"] == []
 
 
-async def test_roll_call_ignores_retired_account_during_broker_truth_preflight(
+async def test_roll_call_ignores_retired_account_when_building_cached_contexts(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app, root = app_with_root
@@ -3577,6 +3708,7 @@ async def test_roll_call_ignores_retired_account_during_broker_truth_preflight(
         reason="retired before roll call",
     )
     _set_startable_now(monkeypatch)
+    _remember_clean_account_truth(monkeypatch)
     _set_daemon(
         monkeypatch,
         instances={
@@ -3592,21 +3724,6 @@ async def test_roll_call_ignores_retired_account_during_broker_truth_preflight(
         },
         process={"state": "idle"},
     )
-    checked_accounts: list[str | None] = []
-
-    async def clean_fleet(_root: Path, *, account_id: str | None = None) -> FleetContamination:
-        checked_accounts.append(account_id)
-        return FleetContamination(
-            net_positions={},
-            explained_total={},
-            explained_by_instance=[],
-            residual={},
-            verdict="clean",
-            policy_blocks_starts=False,
-            summary="Account clean.",
-        )
-
-    monkeypatch.setattr(live_instances, "_compute_account_fleet_contamination", clean_fleet)
     monkeypatch.setattr(live_instances, "status_is_roll_call_eligible", lambda _status: True)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -3614,37 +3731,20 @@ async def test_roll_call_ignores_retired_account_during_broker_truth_preflight(
 
     assert response.status_code == 200
     assert [offer["strategy_instance_id"] for offer in response.json()["offers"]] == ["active-bot"]
-    assert "DU111" in checked_accounts
-    assert "DU999" not in checked_accounts
 
 
-async def test_roll_call_rejects_contaminated_account(
+async def test_roll_call_returns_no_offer_when_account_truth_is_unavailable(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-dirty", "spy_ema_paper", 100)
 
-    async def contaminated(_root: Path, *, account_id: str | None = None) -> FleetContamination:
-        del account_id
-        return FleetContamination(
-            net_positions={"SPY": 1},
-            explained_total={},
-            explained_by_instance=[],
-            residual={"SPY": 1},
-            verdict="contaminated",
-            policy_blocks_starts=True,
-            summary="Unmanaged broker position(s): SPY +1.",
-        )
-
-    monkeypatch.setattr(live_instances, "_compute_account_fleet_contamination", contaminated)
-
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/api/live-instances/roll-call")
 
-    assert response.status_code == 409
-    detail = response.json()["detail"]
-    assert detail["reason_code"] == "FLEET_CONTAMINATED"
-    assert detail["blockers"][0]["condition"]["id"] == "fleet_contaminated"
+    assert response.status_code == 200
+    assert response.json()["summary"]["ready"] == 0
+    assert response.json()["offers"] == []
 
 
 async def test_roll_call_uses_instance_process_when_bulk_snapshot_omits_idle_bot(
@@ -3654,6 +3754,7 @@ async def test_roll_call_uses_instance_process_when_bulk_snapshot_omits_idle_bot
     app, root = app_with_root
     _write_ledger(root, "run-offer", "spy_ema_paper", 100, strategy_key="spy_ema")
     _set_startable_now(monkeypatch)
+    _remember_clean_account_truth(monkeypatch)
     _set_daemon(
         monkeypatch,
         instances={"instances": [], "fetched_at_ms": 1},

@@ -1346,6 +1346,7 @@ def compute_operator_surface(
     latest_mutation: MutationAttempt | None = None,
     broker_observation_consistency: BrokerObservationConsistency | None = None,
     account_truth_snapshot: AccountTruthReadinessEvidence | None = None,
+    precomputed_account_truth_assessment: AccountTruthAssessment | None = None,
     fleet_blocks_starts: bool = False,
     daemon_diagnostic_condition: DaemonDominantCondition | None = None,
     durable_control_write_failure: str | None = None,
@@ -1458,7 +1459,10 @@ def compute_operator_surface(
     )
     runtime_freshness_projection = _project_runtime_freshness(runtime_freshness)
     control_plane_projection = _project_control_plane(control_plane_state)
-    account_truth_assessment = assess_account_truth(account_truth_snapshot, now_ms=now_ms)
+    account_truth_assessment = precomputed_account_truth_assessment or assess_account_truth(
+        account_truth_snapshot,
+        now_ms=now_ms,
+    )
     submit_readiness = author_submit_readiness(
         host_process=host_process,
         broker=broker_projection,

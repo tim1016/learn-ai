@@ -126,7 +126,6 @@ from app.schemas.live_runs import (
     ActivityReconciliationWarning,
     AuditCopySizingLookup,
     BotCatalogResponse,
-    BotCatalogRow,
     BotDeleteRequest,
     BotDeleteResponse,
     BotLifecycleMutationResponse,
@@ -192,6 +191,7 @@ from app.services.account_crash_recovery import (
     crash_recovery_gate_for_instance,
     record_crash_recovery_override_evidence,
 )
+from app.services.account_fleet_read_context import AccountFleetReadContext
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.account_truth_refresh import refresh_account_truth_now
 from app.services.account_truth_snapshot import get_account_truth_snapshot_provider
@@ -216,7 +216,6 @@ from app.services.activity_projection_contract import (
     fold_activity_event_rows,
 )
 from app.services.activity_repair_projection import load_activity_repair_projection
-from app.services.bot_catalog_projection import TradingMode, compose_bot_catalog_row, trading_mode_from_configured_mode
 from app.services.bot_daily_lifecycle import project_bot_daily_lifecycle
 from app.services.bot_deletion import (
     BOT_DELETION_FILENAME,
@@ -238,17 +237,16 @@ from app.services.bot_lifecycle_projection import (
 )
 from app.services.bot_roll_call import (
     active_roll_call_offer,
-    attendance_for_instance,
     bot_roll_call_offer_repo,
-    ensure_roll_call_offer,
-    evening_report_from_rows,
-    roll_call_offer_schema,
-    roll_call_summary_from_rows,
     status_is_roll_call_eligible,
 )
 from app.services.broker_activity_publisher_registry import get_publisher_registry
 from app.services.broker_activity_wal import BrokerActivityWal, instance_broker_activity_wal_path
 from app.services.broker_capability_service import get_broker_capability_service
+from app.services.broker_free_fleet_reads import (
+    BrokerFreeFleetReadDependencies,
+    BrokerFreeFleetReadService,
+)
 from app.services.cohort_evidence import get_cohort_evidence_sampler_registry
 from app.services.cohort_launch import (
     CohortLaunchCoordinator,
@@ -1950,6 +1948,26 @@ def _get_surface_assembler() -> LiveInstanceSurfaceAssembler:
     )
 
 
+def _broker_free_fleet_read_service() -> BrokerFreeFleetReadService:
+    return BrokerFreeFleetReadService(
+        BrokerFreeFleetReadDependencies(
+            visible_runs_by_instance=_visible_runs_by_instance,
+            sid_has_soft_deletion=_sid_has_soft_deletion,
+            resolve_bot_lifecycle_state=_resolve_bot_lifecycle_state,
+            run_dir_account_id=_run_dir_account_id,
+            fetch_instances=host_daemon_client.fetch_instances,
+            fetch_instance_process=host_daemon_client.fetch_instance_process,
+            daemon_process_from_instance=_daemon_process_from_instance,
+            resolve_status_from_process=_resolve_instance_status_from_process,
+            get_account_truth_snapshot_provider=get_account_truth_snapshot_provider,
+            now_ms=_now_ms,
+            read_sidecar=_read_sidecar,
+            live_config_for_run_dir=_live_config_for_run_dir,
+            status_is_roll_call_eligible=status_is_roll_call_eligible,
+        )
+    )
+
+
 async def _resolve_instance_status_from_process(
     sid: str,
     root: Path,
@@ -1957,6 +1975,8 @@ async def _resolve_instance_status_from_process(
     daemon_process: dict | None,
     *,
     runs_by_instance: dict[str, list[dict]] | None = None,
+    account_fleet_read_context: AccountFleetReadContext | None = None,
+    broker_free_account_read: bool = False,
 ) -> LiveInstanceStatus:
     """Compatibility entry point for non-HTTP projections and tests."""
 
@@ -1966,6 +1986,8 @@ async def _resolve_instance_status_from_process(
         settings,
         daemon_process,
         runs_by_instance=runs_by_instance,
+        account_fleet_read_context=account_fleet_read_context,
+        broker_free_account_read=broker_free_account_read,
     )
 
 
@@ -2132,203 +2154,16 @@ async def list_bot_catalog() -> BotCatalogResponse:
     """Server-authored bot catalog cards for the frontend DataView."""
     settings = get_settings()
     root = Path(settings.live_runs_root)
-    by_instance = await asyncio.to_thread(_visible_runs_by_instance, root)
-
-    _result, daemon = await host_daemon_client.fetch_instances(settings.live_runner_daemon_url)
-    daemon_by_sid: dict[str, dict] = {}
-    if daemon:
-        for inst in daemon.get("instances", []):
-            sid = inst.get("strategy_instance_id")
-            if sid:
-                daemon_by_sid[sid] = inst
-
-    trading_mode = trading_mode_from_configured_mode(getattr(settings, "mode", None))
-    sids = [
-        sid
-        for sid in sorted(set(by_instance) | set(daemon_by_sid))
-        if sid in by_instance or not _sid_has_soft_deletion(root.parent, sid)
-    ]
-    rows = list(
-        await asyncio.gather(
-            *(
-                _bot_catalog_row_for_sid(
-                    sid,
-                    root,
-                    settings,
-                    daemon_by_sid.get(sid),
-                    by_instance,
-                    trading_mode,
-                )
-                for sid in sids
-            )
-        )
-    )
-    rows.sort(key=lambda row: (row.created_at_ms or row.last_run_at_ms or 0, row.name), reverse=True)
-    return BotCatalogResponse(
-        bots=rows,
-        roll_call=roll_call_summary_from_rows(rows, now_ms=_now_ms()),
-        evening_report=evening_report_from_rows(rows, now_ms=_now_ms()),
-    )
-
-
-async def _bot_catalog_row_for_sid(
-    sid: str,
-    root: Path,
-    settings: IbkrSettings,
-    daemon_instance: dict | None,
-    by_instance: dict[str, list[dict]],
-    trading_mode: TradingMode,
-) -> BotCatalogRow:
-    status_view = await _resolve_instance_status_for_fleet_sid(
-        sid,
-        root,
-        settings,
-        daemon_instance,
-        runs_by_instance=by_instance,
-    )
-    row = compose_bot_catalog_row(status_view, trading_mode)
-    return row.model_copy(
-        update={
-            "attendance": attendance_for_instance(
-                runs=by_instance.get(sid, []),
-                lifecycle_state=_resolve_bot_lifecycle_state(root, sid),
-                read_sidecar=_read_sidecar,
-            )
-        }
-    )
-
-
-async def _resolve_instance_status_for_fleet_sid(
-    sid: str,
-    root: Path,
-    settings: IbkrSettings,
-    daemon_instance: dict | None,
-    *,
-    runs_by_instance: dict[str, list[dict]],
-) -> LiveInstanceStatus:
-    daemon_process = _daemon_process_from_instance(daemon_instance)
-    if daemon_process is None:
-        _result, daemon_process = await host_daemon_client.fetch_instance_process(
-            settings.live_runner_daemon_url,
-            sid,
-        )
-    return await _resolve_instance_status_from_process(
-        sid,
-        root,
-        settings,
-        daemon_process,
-        runs_by_instance=runs_by_instance,
-    )
+    return await _broker_free_fleet_read_service().catalog(settings, root)
 
 
 @router.post("/roll-call", response_model=BotRollCallResponse)
 async def run_roll_call() -> BotRollCallResponse:
-    """Persist start offers for all eligible non-retired bots.
-
-    The daemon bulk snapshot may omit idle instances, so resolving each fleet
-    row can fall back to one daemon process probe per omitted bot. Keep those
-    probes concurrent; otherwise a morning roll call degrades into an
-    operator-visible sequential N-call path.
-    """
+    """Persist offers projected from cached account truth and durable state."""
 
     settings = get_settings()
     root = Path(settings.live_runs_root)
-    by_instance = await asyncio.to_thread(_visible_runs_by_instance, root)
-    account_ids = {
-        account_id
-        for sid, runs in by_instance.items()
-        if runs
-        and not (
-            (lifecycle_state := _resolve_bot_lifecycle_state(root, sid)) is not None
-            and lifecycle_state.phase == BotLifecyclePhase.RETIRED
-        )
-        for account_id in [_run_dir_account_id(Path(runs[0]["run_dir"]))]
-        if account_id is not None
-    }
-    for account_id in sorted(account_ids):
-        await _raise_if_fleet_contamination_blocks_start(root, account_id=account_id)
-    _result, daemon = await host_daemon_client.fetch_instances(settings.live_runner_daemon_url)
-    daemon_by_sid: dict[str, dict] = {}
-    if daemon:
-        for inst in daemon.get("instances", []):
-            sid = inst.get("strategy_instance_id")
-            if sid:
-                daemon_by_sid[sid] = inst
-
-    now_ms = _now_ms()
-    rows = []
-    offers = []
-    retired_count = 0
-    trading_mode = trading_mode_from_configured_mode(getattr(settings, "mode", None))
-    summary_session_date: str | None = None
-    summary_effective_stop_ms: int | None = None
-    candidate_sids: list[str] = []
-    for sid in sorted(set(by_instance) | set(daemon_by_sid)):
-        lifecycle_state = _resolve_bot_lifecycle_state(root, sid)
-        if lifecycle_state is not None and lifecycle_state.phase == BotLifecyclePhase.RETIRED:
-            retired_count += 1
-            continue
-        candidate_sids.append(sid)
-    status_views = await asyncio.gather(
-        *(
-            _resolve_instance_status_for_fleet_sid(
-                sid,
-                root,
-                settings,
-                daemon_by_sid.get(sid),
-                runs_by_instance=by_instance,
-            )
-            for sid in candidate_sids
-        )
-    )
-    for sid, status_view in zip(candidate_sids, status_views, strict=True):
-        rows.append(compose_bot_catalog_row(status_view, trading_mode))
-        if not status_is_roll_call_eligible(status_view):
-            continue
-        runs = by_instance.get(sid, [])
-        if not runs:
-            continue
-        run_dir = Path(runs[0]["run_dir"])
-        # A legacy ledger without an account identity cannot pass the same
-        # broker-truth gate enforced by the start endpoint.  Do not mint an
-        # offer that is guaranteed to be rejected at dispatch time.
-        if _run_dir_account_id(run_dir) is None:
-            continue
-        boundary = start_boundary_verdict(now_ms, _live_config_for_run_dir(run_dir))
-        if not boundary.allowed or boundary.effective_stop_ms is None or boundary.session_date is None:
-            continue
-        offer = ensure_roll_call_offer(
-            root,
-            sid=sid,
-            run_id=status_view.operator_surface.host_process.start_capability.run_id or str(runs[0]["run_id"]),
-            session_date=boundary.session_date,
-            issued_at_ms=now_ms,
-            expires_at_ms=boundary.effective_stop_ms,
-            evidence_snapshot={
-                "readiness_verdict": (status_view.readiness.verdict if status_view.readiness is not None else None),
-                "process_state": status_view.process.state,
-                "display_status": status_view.daily_lifecycle.display_status,
-            },
-        )
-        offers.append(roll_call_offer_schema(offer))
-        summary_session_date = summary_session_date or boundary.session_date
-        summary_effective_stop_ms = (
-            boundary.effective_stop_ms
-            if summary_effective_stop_ms is None
-            else min(summary_effective_stop_ms, boundary.effective_stop_ms)
-        )
-
-    return BotRollCallResponse(
-        summary=roll_call_summary_from_rows(rows, now_ms=now_ms).model_copy(
-            update={
-                "ready": len(offers),
-                "retired": retired_count,
-                "session_date": summary_session_date,
-                "effective_stop_ms": summary_effective_stop_ms,
-            }
-        ),
-        offers=offers,
-    )
+    return await _broker_free_fleet_read_service().roll_call(settings, root)
 
 
 def _live_config_for_run_dir(run_dir: Path) -> Mapping[str, object] | None:
