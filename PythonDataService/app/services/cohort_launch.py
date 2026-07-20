@@ -24,7 +24,11 @@ from app.engine.live.account_artifacts import (
     record_cohort_batch_launch_outcomes,
     record_cohort_batch_launch_receipt,
 )
-from app.schemas.cohort_batch_launch import CohortBatchLaunchStatusResponse
+from app.schemas.cohort_batch_launch import (
+    COHORT_EVIDENCE_CADENCE_MS,
+    COHORT_STAGGER_PROFILES,
+    CohortBatchLaunchStatusResponse,
+)
 from app.schemas.live_runs import (
     BotRollCallOffer,
     BotRollCallResponse,
@@ -59,13 +63,11 @@ class _PinnedCohortMember:
     start_request: HostRunnerStartRequest
     live_config: Mapping[str, object] | None
 
-_COHORT_EVIDENCE_CADENCE_MS = 5_000
+# Sourced from the canonical cohort contract so the launcher, the receipt
+# validator, and the request schema never disagree on cadence or per-profile
+# stagger/overlap timing. See app/schemas/cohort_batch_launch.py.
+_COHORT_EVIDENCE_CADENCE_MS = COHORT_EVIDENCE_CADENCE_MS
 _COHORT_VALIDATION_WINDOW_MS = 60 * 60 * 1_000
-_THREE_BOT_STAGGER_MS = 15 * 60 * 1_000
-# The acceptance protocol requires a full hour after the third member has
-# started. The two preceding stagger slots and first sampler cadence are
-# included separately in the admission window below.
-_THREE_BOT_OVERLAP_MS = 60 * 60 * 1_000
 
 
 class CohortLaunchSchedulerRegistry:
@@ -168,14 +170,15 @@ class CohortLaunchCoordinator:
             roll_call.offers,
         )
         now_ms = self._now_ms()
-        if launch_profile == "paper_three_bot_stagger_v2":
-            return await self._launch_three_bot_stagger(
+        if launch_profile in COHORT_STAGGER_PROFILES:
+            return await self._launch_staggered_cohort(
                 account_id=account_id,
                 members=members,
                 operator_identity=operator_identity,
                 identity_header_present=identity_header_present,
                 client_host=client_host,
                 now_ms=now_ms,
+                profile_name=launch_profile,
             )
         receipt = CohortBatchLaunchReceipt(
             account_id=account_id,
@@ -221,7 +224,7 @@ class CohortLaunchCoordinator:
             raise RuntimeError("newly persisted cohort receipt could not be read")
         return status_view
 
-    async def _launch_three_bot_stagger(
+    async def _launch_staggered_cohort(
         self,
         *,
         account_id: str,
@@ -230,15 +233,20 @@ class CohortLaunchCoordinator:
         identity_header_present: bool,
         client_host: str | None,
         now_ms: int,
+        profile_name: str,
     ) -> CohortBatchLaunchStatusResponse:
-        """Persist the fixed paper-only schedule before its first start is due."""
+        """Persist the server-owned staggered schedule before its first start is due."""
 
-        if len(members) != 3:
+        profile = COHORT_STAGGER_PROFILES[profile_name]
+        if len(members) != profile.member_count:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail={
-                    "reason_code": "COHORT_THREE_BOT_PROFILE_REQUIRES_EXACTLY_THREE",
-                    "message": "The paper validation profile requires exactly three current ready bots.",
+                    "reason_code": "COHORT_STAGGER_PROFILE_MEMBER_COUNT_MISMATCH",
+                    "message": (
+                        f"The {profile_name} validation profile requires exactly "
+                        f"{profile.member_count} current ready bots."
+                    ),
                 },
             )
         restart_gate = await asyncio.to_thread(
@@ -253,7 +261,7 @@ class CohortLaunchCoordinator:
                 detail={
                     "reason_code": "COHORT_RESTART_INTENSITY_WOULD_FREEZE",
                     "message": (
-                        "This three-bot cohort would breach the account restart-intensity gate. "
+                        "This cohort would breach the account restart-intensity gate. "
                         "No cohort authorization or start was recorded."
                     ),
                     "gate_result": restart_gate.model_dump(mode="json"),
@@ -271,7 +279,9 @@ class CohortLaunchCoordinator:
             now_ms,
             live_configs=tuple(member.live_config for member in members if member.live_config is not None),
             required_window_ms=(
-                2 * _THREE_BOT_STAGGER_MS + _COHORT_EVIDENCE_CADENCE_MS + _THREE_BOT_OVERLAP_MS
+                (profile.member_count - 1) * profile.stagger_ms
+                + _COHORT_EVIDENCE_CADENCE_MS
+                + profile.overlap_ms
             ),
         )
         if not schedule_window.allowed:
@@ -288,7 +298,7 @@ class CohortLaunchCoordinator:
             CohortBatchLaunchMemberSchedule(
                 strategy_instance_id=member.pin.strategy_instance_id,
                 run_id=member.pin.run_id,
-                scheduled_start_at_ms=now_ms + index * _THREE_BOT_STAGGER_MS,
+                scheduled_start_at_ms=now_ms + index * profile.stagger_ms,
                 start_request=member.start_request.model_dump(mode="json", exclude={"roll_call_offer_id", "cohort_id"}),
             )
             for index, member in enumerate(members)
@@ -296,12 +306,12 @@ class CohortLaunchCoordinator:
         validation_start_ms = schedule[-1].scheduled_start_at_ms + _COHORT_EVIDENCE_CADENCE_MS
         receipt = CohortBatchLaunchReceipt(
             schema_version=2,
-            launch_profile="paper_three_bot_stagger_v2",
+            launch_profile=profile_name,
             account_id=account_id,
             cohort_id=f"paper-validation-{now_ms}-{uuid4().hex[:12]}",
             member_strategy_instance_ids=tuple(member.pin.strategy_instance_id for member in members),
             window_start_ms=validation_start_ms,
-            window_end_ms=validation_start_ms + _THREE_BOT_OVERLAP_MS,
+            window_end_ms=validation_start_ms + profile.overlap_ms,
             authorized_by=operator_identity,
             recorded_at_ms=now_ms,
             member_pins=tuple(member.pin for member in members),
@@ -314,7 +324,7 @@ class CohortLaunchCoordinator:
         await asyncio.to_thread(record_cohort_batch_launch_receipt, self._artifacts_root, receipt)
         self._launch_schedulers.start(
             receipt.cohort_id,
-            lambda stop: self._run_three_bot_stagger(receipt, stop),
+            lambda stop: self._run_staggered_cohort(receipt, stop),
         )
         status_view = await CohortBatchLaunchService(artifacts_root=self._artifacts_root).get_status(
             account_id=account_id,
@@ -324,7 +334,7 @@ class CohortLaunchCoordinator:
             raise RuntimeError("newly persisted cohort receipt could not be read")
         return status_view
 
-    async def _run_three_bot_stagger(
+    async def _run_staggered_cohort(
         self,
         receipt: CohortBatchLaunchReceipt,
         stop: asyncio.Event,
@@ -635,7 +645,7 @@ async def resume_open_cohort_launch_schedulers(
                 continue
             launch_schedulers.start(
                 receipt.cohort_id,
-                lambda stop, receipt=receipt: coordinator._run_three_bot_stagger(receipt, stop),
+                lambda stop, receipt=receipt: coordinator._run_staggered_cohort(receipt, stop),
             )
 
 

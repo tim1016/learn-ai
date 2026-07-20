@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -27,6 +28,35 @@ def validate_cohort_batch_launch_window_and_members(
         raise ValueError("member_strategy_instance_ids must be unique")
 
 
+COHORT_EVIDENCE_CADENCE_MS = 5_000
+"""Server evidence-sampling cadence, shared by every staggered cohort profile."""
+
+
+@dataclass(frozen=True)
+class CohortStaggerProfile:
+    """Canonical launch parameters for one server-owned staggered cohort profile."""
+
+    member_count: int
+    stagger_ms: int
+    overlap_ms: int
+
+
+# Single source of truth for every staggered-cohort profile's timing. The receipt
+# validator (account_artifacts), the server launcher (cohort_launch), and this
+# request contract all derive member count / schedule spacing / overlap width from
+# this table, so the three can never drift apart.
+COHORT_STAGGER_PROFILES: dict[str, CohortStaggerProfile] = {
+    "paper_three_bot_stagger_v2": CohortStaggerProfile(
+        member_count=3, stagger_ms=15 * 60 * 1_000, overlap_ms=60 * 60 * 1_000
+    ),
+    "paper_five_bot_stagger_v2": CohortStaggerProfile(
+        member_count=5, stagger_ms=5 * 60 * 1_000, overlap_ms=45 * 60 * 1_000
+    ),
+}
+
+CohortStaggerProfileName = Literal["paper_three_bot_stagger_v2", "paper_five_bot_stagger_v2"]
+
+
 class CohortBatchLaunchCommandRequest(BaseModel):
     """Client selection for one server-authored cohort launch command.
 
@@ -38,7 +68,7 @@ class CohortBatchLaunchCommandRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     member_strategy_instance_ids: tuple[str, ...] = Field(min_length=1, max_length=128)
-    launch_profile: Literal["paper_three_bot_stagger_v2"] | None = None
+    launch_profile: CohortStaggerProfileName | None = None
 
     @model_validator(mode="after")
     def validate_members(self) -> CohortBatchLaunchCommandRequest:
@@ -46,8 +76,11 @@ class CohortBatchLaunchCommandRequest(BaseModel):
             raise ValueError("member_strategy_instance_ids must not contain blank values")
         if len(set(self.member_strategy_instance_ids)) != len(self.member_strategy_instance_ids):
             raise ValueError("member_strategy_instance_ids must be unique")
-        if self.launch_profile == "paper_three_bot_stagger_v2" and len(self.member_strategy_instance_ids) != 3:
-            raise ValueError("paper three-bot stagger requires exactly three selected bots")
+        profile = COHORT_STAGGER_PROFILES.get(self.launch_profile) if self.launch_profile else None
+        if profile is not None and len(self.member_strategy_instance_ids) != profile.member_count:
+            raise ValueError(
+                f"{self.launch_profile} requires exactly {profile.member_count} selected bots"
+            )
         return self
 
 
@@ -109,7 +142,7 @@ class CohortBatchLaunchStatusResponse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version: int = 1
-    launch_profile: Literal["paper_three_bot_stagger_v2"] | None = None
+    launch_profile: CohortStaggerProfileName | None = None
     account_id: str = Field(min_length=1, max_length=64)
     cohort_id: str = Field(min_length=1, max_length=128)
     member_strategy_instance_ids: list[str] = Field(min_length=1, max_length=128)
