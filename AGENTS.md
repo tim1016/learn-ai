@@ -17,6 +17,7 @@ A scientific platform for porting and validating trading logic. Reference implem
 - `Backend/` — .NET 10 GraphQL API (Hot Chocolate v15, EF Core, Postgres)
 - `Backend.Tests/` — xUnit test suite for Backend
 - `PythonDataService/` — FastAPI data proxy + backtesting engine (pandas, Polygon.io)
+- `contracts/` — committed OpenAPI/GraphQL snapshots and shared cross-stack fixtures
 - `docs/architecture/` — ADRs and system diagrams
 - `docs/domain/` — Trading concepts, glossary, invariants
 - `docs/references/` — Per-port notes: what was ported, from where (repo + commit), with what tolerance

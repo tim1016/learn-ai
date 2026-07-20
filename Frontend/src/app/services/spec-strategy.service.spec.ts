@@ -2,7 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { ApolloTestingController, ApolloTestingModule } from 'apollo-angular/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { StrategySpec } from '../graphql/spec-strategy-types';
+import { StrategySpec } from '../graphql/spec-strategy.models';
 import { RUN_SPEC_STRATEGY_BACKTEST, SpecStrategyService } from './spec-strategy.service';
 
 const TRIVIAL_SPEC: StrategySpec = {

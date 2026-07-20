@@ -1,0 +1,45 @@
+mutation RunSpecStrategyBacktest(
+  $specJson: String!
+  $startDate: String!
+  $endDate: String!
+  $initialCash: Decimal
+  $fillMode: String
+  $commissionPerOrder: Decimal
+) {
+  runSpecStrategyBacktest(
+    specJson: $specJson
+    startDate: $startDate
+    endDate: $endDate
+    initialCash: $initialCash
+    fillMode: $fillMode
+    commissionPerOrder: $commissionPerOrder
+  ) {
+    success
+    strategyName
+    initialCash
+    finalEquity
+    netProfit
+    totalFees
+    totalTrades
+    winningTrades
+    losingTrades
+    winRate
+    trades {
+      tradeNumber
+      entryTime
+      entryPrice
+      exitTime
+      exitPrice
+      indicators {
+        name
+        value
+      }
+      pnlPts
+      pnlPct
+      result
+      signalReason
+    }
+    logLines
+    error
+  }
+}

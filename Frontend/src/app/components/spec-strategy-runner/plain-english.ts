@@ -16,7 +16,7 @@ import {
   Operand,
   StrategySpec,
   SurvivalRule,
-} from '../../graphql/spec-strategy-types';
+} from '../../graphql/spec-strategy.models';
 
 const OP_LABEL: Record<string, string> = {
   '<': '<',
@@ -44,8 +44,6 @@ export function formatOperand(op: Operand, indicators: readonly IndicatorBlock[]
       return indicatorLabel(op.indicator, indicators);
     case 'Const':
       return formatNumber(op.value);
-    case 'BarField':
-      return `bar.${op.field}`;
     case 'Subtract':
       return `${formatOperand(op.left, indicators)} − ${formatOperand(op.right, indicators)}`;
   }
@@ -131,6 +129,10 @@ export function formatCondition(
       };
       const label = propLabel[cond.property] ?? cond.property;
       return `${label} ${op} ${formatNumber(cond.value)}`;
+    }
+    case 'PredictionComparison': {
+      const op = OP_LABEL[cond.op] ?? cond.op;
+      return `prediction ${cond.prediction} ${op} ${formatNumber(cond.value)}`;
     }
   }
 }
@@ -232,8 +234,6 @@ function operandFragments(op: Operand, indicators: readonly IndicatorBlock[]): S
       return [indFragment(op.indicator, indicators)];
     case 'Const':
       return [f('num', formatNumberLocal(op.value))];
-    case 'BarField':
-      return [f('ind', `bar.${op.field}`)];
     case 'Subtract':
       return [
         ...operandFragments(op.left, indicators),
@@ -353,6 +353,16 @@ function condFragments(cond: Condition, indicators: readonly IndicatorBlock[]): 
       };
       return [
         f('verb', propLabel[cond.property] ?? cond.property),
+        f('text', ' '),
+        f('verb', op),
+        f('text', ' '),
+        f('num', formatNumberLocal(cond.value)),
+      ];
+    }
+    case 'PredictionComparison': {
+      const op = OP_LABEL[cond.op] ?? cond.op;
+      return [
+        f('verb', `prediction ${cond.prediction}`),
         f('text', ' '),
         f('verb', op),
         f('text', ' '),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { StrategySpec } from '../../graphql/spec-strategy-types';
+import { StrategySpec } from '../../graphql/spec-strategy.models';
 import {
   addEntryCondition,
   addExitCondition,

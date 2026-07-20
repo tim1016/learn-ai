@@ -47,7 +47,15 @@ class DataSanitizer:
         """Clean and validate OHLCV aggregate data"""
         try:
             if not raw_data:
-                return {"data": [], "summary": {"original_count": 0, "cleaned_count": 0}}
+                return {
+                    "data": [],
+                    "summary": {
+                        "original_count": 0,
+                        "cleaned_count": 0,
+                        "removed_count": 0,
+                        "removal_percentage": 0.0,
+                    },
+                }
 
             df = pd.DataFrame(raw_data)
             original_count = len(df)

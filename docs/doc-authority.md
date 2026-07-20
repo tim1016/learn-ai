@@ -55,6 +55,7 @@ have their decision preserved here.
 | 0017 | Per-bot lifecycle workbench: nodes explain, not gate |
 | 0018 | Broker session mirror: client observatory + recovery |
 | 0019 | Daemon diagnostics: composed control-plane authority |
+| 0031 | Cross-stack boundary selection and generated contracts |
 
 ---
 

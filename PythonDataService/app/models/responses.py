@@ -5,12 +5,34 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+class AggregateBar(BaseModel):
+    """One sanitized OHLCV bar at an ``int64 ms UTC`` timestamp."""
+
+    timestamp: int
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    vwap: float | None = None
+    transactions: float | None = None
+
+
+class SanitizationSummary(BaseModel):
+    """Row-count evidence emitted by aggregate sanitization."""
+
+    original_count: int
+    cleaned_count: int
+    removed_count: int
+    removal_percentage: float
+
+
 class SanitizedDataResponse(BaseModel):
-    """Standard response schema for sanitized data"""
+    """Typed response for the Python-to-.NET aggregate-bars boundary."""
 
     success: bool
-    data: list[dict[str, Any]]
-    summary: dict[str, Any]
+    data: list[AggregateBar]
+    summary: SanitizationSummary
     ticker: str
     data_type: str
     error: str | None = None

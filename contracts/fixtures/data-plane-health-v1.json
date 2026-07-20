@@ -1,0 +1,7 @@
+{
+  "service": "polygon-data-service",
+  "code_revision": "contract-fixture",
+  "process_start_ms": 1704150000000,
+  "fetched_at_ms": 1704153600000,
+  "reload": "watchfiles"
+}

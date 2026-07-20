@@ -204,10 +204,16 @@ builder.Services
 
 var app = builder.Build();
 
-await DatabaseInitializer.MigrateAsync(
-    app.Services,
-    app.Logger,
-    app.Lifetime.ApplicationStopping);
+var isGraphQLSchemaCommand = args.Length > 0
+    && string.Equals(args[0], "schema", StringComparison.OrdinalIgnoreCase);
+
+if (!isGraphQLSchemaCommand)
+{
+    await DatabaseInitializer.MigrateAsync(
+        app.Services,
+        app.Logger,
+        app.Lifetime.ApplicationStopping);
+}
 
 app.UseCors();
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
@@ -217,4 +223,4 @@ app.MapParityVerdictsEndpoints();
 app.MapJobsEndpoints();
 app.MapGraphQL();
 
-app.Run();
+return await app.RunWithGraphQLCommandsAsync(args);

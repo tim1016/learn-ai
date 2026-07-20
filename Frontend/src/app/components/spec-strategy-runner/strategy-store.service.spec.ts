@@ -1,6 +1,6 @@
 import { TestBed } from '@angular/core/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { StrategySpec } from '../../graphql/spec-strategy-types';
+import { StrategySpec } from '../../graphql/spec-strategy.models';
 import { SpecStrategyStore } from './strategy-store.service';
 
 const SPEC: StrategySpec = {

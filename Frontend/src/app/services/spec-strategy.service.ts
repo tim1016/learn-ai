@@ -1,60 +1,13 @@
 import { Injectable, inject, signal } from '@angular/core';
-import { Apollo, gql } from 'apollo-angular';
+import { Apollo } from 'apollo-angular';
 import { firstValueFrom } from 'rxjs';
 import {
   RunSpecStrategyBacktestResponse,
   RunSpecStrategyBacktestVariables,
   SpecStrategyBacktestResult,
   StrategySpec,
-} from '../graphql/spec-strategy-types';
-
-const RUN_SPEC_STRATEGY_BACKTEST = gql`
-  mutation RunSpecStrategyBacktest(
-    $specJson: String!
-    $startDate: String!
-    $endDate: String!
-    $initialCash: Decimal
-    $fillMode: String
-    $commissionPerOrder: Decimal
-  ) {
-    runSpecStrategyBacktest(
-      specJson: $specJson
-      startDate: $startDate
-      endDate: $endDate
-      initialCash: $initialCash
-      fillMode: $fillMode
-      commissionPerOrder: $commissionPerOrder
-    ) {
-      success
-      strategyName
-      initialCash
-      finalEquity
-      netProfit
-      totalFees
-      totalTrades
-      winningTrades
-      losingTrades
-      winRate
-      trades {
-        tradeNumber
-        entryTime
-        entryPrice
-        exitTime
-        exitPrice
-        indicators {
-          name
-          value
-        }
-        pnlPts
-        pnlPct
-        result
-        signalReason
-      }
-      logLines
-      error
-    }
-  }
-`;
+} from '../graphql/spec-strategy.models';
+import { RunSpecStrategyBacktestDocument } from '../graphql/generated/graphql';
 
 /**
  * Frontend wrapper around the `runSpecStrategyBacktest` GraphQL mutation.
@@ -122,7 +75,7 @@ export class SpecStrategyService {
     try {
       const response = await firstValueFrom(
         this.apollo.mutate<RunSpecStrategyBacktestResponse, RunSpecStrategyBacktestVariables>({
-          mutation: RUN_SPEC_STRATEGY_BACKTEST,
+          mutation: RunSpecStrategyBacktestDocument,
           variables,
         }),
       );
@@ -152,4 +105,4 @@ export class SpecStrategyService {
   }
 }
 
-export { RUN_SPEC_STRATEGY_BACKTEST };
+export { RunSpecStrategyBacktestDocument as RUN_SPEC_STRATEGY_BACKTEST };

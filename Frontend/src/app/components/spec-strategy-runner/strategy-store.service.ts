@@ -1,5 +1,5 @@
 import { Injectable, signal } from '@angular/core';
-import { StrategySpec } from '../../graphql/spec-strategy-types';
+import { StrategySpec } from '../../graphql/spec-strategy.models';
 
 /**
  * One saved strategy entry.

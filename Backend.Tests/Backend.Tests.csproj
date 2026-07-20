@@ -24,4 +24,10 @@
     <ProjectReference Include="..\Backend\Backend.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="..\contracts\fixtures\*.json"
+          Link="contracts\fixtures\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

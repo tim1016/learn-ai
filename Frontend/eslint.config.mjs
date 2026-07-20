@@ -13,6 +13,9 @@ export default tseslint.config(
       // hand-edit. Regenerate with ``npx openapi-typescript`` (see
       // src/app/api/broker-models.ts).
       "src/app/api/broker.types.ts",
+      // Generated from the committed Hot Chocolate schema and GraphQL
+      // operation documents. Regenerate with ``npm run codegen:graphql``.
+      "src/app/graphql/generated/**",
     ],
   },
   {
