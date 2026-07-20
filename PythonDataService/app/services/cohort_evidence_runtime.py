@@ -39,18 +39,15 @@ class CohortEvidenceRuntimeObserver:
     ) -> CohortEvidenceSample:
         """Return one exact-tick observation from account and engine authorities."""
 
-        try:
-            account_context = (
-                await asyncio.to_thread(
-                    build_account_fleet_read_contexts,
-                    self._live_runs_root,
-                    [receipt.account_id],
-                    snapshot_provider=get_account_truth_snapshot_provider(),
-                    observed_at_ms=expected_at_ms,
-                )
-            ).get(receipt.account_id)
-        except Exception:
-            account_context = None
+        account_context = (
+            await asyncio.to_thread(
+                build_account_fleet_read_contexts,
+                self._live_runs_root,
+                [receipt.account_id],
+                snapshot_provider=get_account_truth_snapshot_provider(),
+                observed_at_ms=expected_at_ms,
+            )
+        ).get(receipt.account_id)
         truth_evidence = (
             account_context.account_truth_evidence if account_context is not None else None
         )

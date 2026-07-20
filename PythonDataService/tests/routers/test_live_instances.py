@@ -76,6 +76,19 @@ from tests._fixtures.daemon_transport import as_typed_get
 from tests._helpers.account_truth import fresh_account_truth_source_freshness
 
 
+class BrokerPositionFetchForbidden(BaseException):
+    """Raised when a broker-free read attempts to fetch live positions."""
+
+
+def _forbid_broker_position_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.broker.ibkr import account as ibkr_account
+
+    async def fail_if_called(*_args: object, **_kwargs: object) -> None:
+        raise BrokerPositionFetchForbidden("broker-free read attempted IBKR reqPositions")
+
+    monkeypatch.setattr(ibkr_account, "fetch_positions", fail_if_called)
+
+
 async def _capture_first_asgi_stream_body(
     app,
     path: str,
@@ -1169,7 +1182,10 @@ async def test_surface_assembler_matches_pre_extraction_payload_golden(
     normalized = normalize(payload)
     encoded = json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode()
     fixture_path = Path(__file__).parents[1] / "fixtures" / "surface_hub" / "status_payload_parity.json"
-    expected = json.loads(fixture_path.read_text(encoding="utf-8"))["cases"][case_name]
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    assert fixture["baseline_commit"] == "d2554090a0e99e8c3ecdf2bdf7b04ab03a33ef03"
+    assert fixture["semantics"]["account_truth_unavailable_reason"] == "ACCOUNT_TRUTH_NOT_AVAILABLE"
+    expected = fixture["cases"][case_name]
 
     assert hashlib.sha256(encoded).hexdigest() == expected["sha256"]
     assert normalized["strategy_instance_id"] == expected["strategy_instance_id"]
@@ -1179,6 +1195,9 @@ async def test_surface_assembler_matches_pre_extraction_payload_golden(
         "evidence_run_id"
     ]
     assert normalized["daily_lifecycle"]["display_status"] == expected["display_status"]
+    assert fixture["semantics"]["account_truth_unavailable_reason"] in normalized["operator_surface"][
+        "submit_readiness"
+    ]["blocking_reason_codes"]
 
 
 async def test_instance_status_running_exposes_live_binding(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1210,32 +1229,12 @@ async def test_instance_status_does_not_fetch_broker_positions(
     app, root = app_with_root
     _write_ledger(root, "run-status", "spy_ema_paper", 100)
     _set_daemon(monkeypatch, process={"state": "idle", "run_id": "run-status"})
-    broker_position_fetches = 0
-
-    async def counted_fetch_positions(_account_id: str | None = None) -> dict[str, int]:
-        nonlocal broker_position_fetches
-        broker_position_fetches += 1
-        return {}
-
-    async def fleet_from_observed_broker(
-        observed_root: Path,
-        *,
-        account_id: str | None = None,
-    ) -> FleetContamination:
-        return await live_instances.fleet_contamination_service.compute_account_fleet_contamination(
-            observed_root,
-            fetch_positions=live_instances._fetch_net_positions,
-            account_id=account_id,
-        )
-
-    monkeypatch.setattr(live_instances, "_fetch_net_positions", counted_fetch_positions)
-    monkeypatch.setattr(live_instances, "_compute_account_fleet_contamination", fleet_from_observed_broker)
+    _forbid_broker_position_fetch(monkeypatch)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
 
     assert response.status_code == 200
-    assert broker_position_fetches == 0
 
 
 async def test_surface_producer_does_not_fetch_broker_positions(
@@ -1245,31 +1244,11 @@ async def test_surface_producer_does_not_fetch_broker_positions(
     _app, root = app_with_root
     _write_ledger(root, "run-producer", "spy_ema_paper", 100)
     _set_daemon(monkeypatch, process={"state": "idle", "run_id": "run-producer"})
-    broker_position_fetches = 0
-
-    async def counted_fetch_positions(_account_id: str | None = None) -> dict[str, int]:
-        nonlocal broker_position_fetches
-        broker_position_fetches += 1
-        return {}
-
-    async def fleet_from_observed_broker(
-        observed_root: Path,
-        *,
-        account_id: str | None = None,
-    ) -> FleetContamination:
-        return await live_instances.fleet_contamination_service.compute_account_fleet_contamination(
-            observed_root,
-            fetch_positions=live_instances._fetch_net_positions,
-            account_id=account_id,
-        )
-
-    monkeypatch.setattr(live_instances, "_fetch_net_positions", counted_fetch_positions)
-    monkeypatch.setattr(live_instances, "_compute_account_fleet_contamination", fleet_from_observed_broker)
+    _forbid_broker_position_fetch(monkeypatch)
 
     snapshot = await live_instances._assemble_instance_surface("spy_ema_paper")
 
     assert snapshot.strategy_instance_id == "spy_ema_paper"
-    assert broker_position_fetches == 0
 
 
 async def test_instance_status_blocks_start_when_crash_recovery_required(
@@ -3485,26 +3464,7 @@ async def test_bot_catalog_does_not_fetch_broker_positions(app_with_root, monkey
     _write_ledger(root, "run-ema-1", "spy_ema_paper", 100)
     _write_ledger(root, "run-vwap-1", "spy_vwap_shadow", 110)
     _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1})
-    broker_position_fetches = 0
-
-    async def counted_fetch_positions(_account_id: str | None = None) -> dict[str, int]:
-        nonlocal broker_position_fetches
-        broker_position_fetches += 1
-        return {}
-
-    async def fleet_from_observed_broker(
-        observed_root: Path,
-        *,
-        account_id: str | None = None,
-    ) -> FleetContamination:
-        return await live_instances.fleet_contamination_service.compute_account_fleet_contamination(
-            observed_root,
-            fetch_positions=live_instances._fetch_net_positions,
-            account_id=account_id,
-        )
-
-    monkeypatch.setattr(live_instances, "_fetch_net_positions", counted_fetch_positions)
-    monkeypatch.setattr(live_instances, "_compute_account_fleet_contamination", fleet_from_observed_broker)
+    _forbid_broker_position_fetch(monkeypatch)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/api/live-instances/catalog")
@@ -3514,7 +3474,6 @@ async def test_bot_catalog_does_not_fetch_broker_positions(app_with_root, monkey
         "spy_ema_paper",
         "spy_vwap_shadow",
     }
-    assert broker_position_fetches == 0
 
 
 async def test_bot_catalog_reads_account_truth_once_per_distinct_account(
@@ -3651,26 +3610,7 @@ async def test_roll_call_tick_persists_start_offer(
         process={"state": "idle"},
     )
     monkeypatch.setattr(live_instances, "status_is_roll_call_eligible", lambda _status: True)
-    broker_position_fetches = 0
-
-    async def counted_fetch_positions(_account_id: str | None = None) -> dict[str, int]:
-        nonlocal broker_position_fetches
-        broker_position_fetches += 1
-        return {}
-
-    async def fleet_from_observed_broker(
-        observed_root: Path,
-        *,
-        account_id: str | None = None,
-    ) -> FleetContamination:
-        return await live_instances.fleet_contamination_service.compute_account_fleet_contamination(
-            observed_root,
-            fetch_positions=live_instances._fetch_net_positions,
-            account_id=account_id,
-        )
-
-    monkeypatch.setattr(live_instances, "_fetch_net_positions", counted_fetch_positions)
-    monkeypatch.setattr(live_instances, "_compute_account_fleet_contamination", fleet_from_observed_broker)
+    _forbid_broker_position_fetch(monkeypatch)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         roll_call = await client.post("/api/live-instances/roll-call")
@@ -3683,7 +3623,6 @@ async def test_roll_call_tick_persists_start_offer(
         stable_bot_roll_call_offers_path(root.parent, "spy_ema_paper")
     ).read().offers
     assert [offer.offer_id for offer in offers] == [body["offers"][0]["offer_id"]]
-    assert broker_position_fetches == 0
 
 
 async def test_roll_call_does_not_requery_connected_account_identity(

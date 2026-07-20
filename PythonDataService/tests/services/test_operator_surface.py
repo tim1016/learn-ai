@@ -42,7 +42,7 @@ from app.schemas.live_runs import (
     ReadinessVector,
 )
 from app.services import operator_surface as operator_surface_module
-from app.services.account_truth_snapshot import AccountTruthSnapshot
+from app.services.account_truth_snapshot import AccountTruthReadiness, AccountTruthSnapshot
 from app.services.deploy_preflight import DeployPreflightSignals, author_deploy_blockers
 from app.services.operator_capability import REASON_CODES, evaluate_action
 from app.services.operator_surface import compute_operator_surface
@@ -68,7 +68,10 @@ def _surface(**overrides):
     kwargs = {
         "process": _PROC,
         "now_ms": now_ms,
-        "account_truth_snapshot": _account_truth_snapshot(generated_at_ms=now_ms - 1_000),
+        "account_truth_readiness": _account_truth_readiness(
+            _account_truth_snapshot(generated_at_ms=now_ms - 1_000),
+            now_ms=now_ms,
+        ),
     }
     kwargs.update(overrides)
     return compute_operator_surface(**kwargs)
@@ -105,6 +108,14 @@ def _account_truth_snapshot(
         source_freshness=fresh_account_truth_source_freshness(generated_at_ms),
     )
     return AccountTruthSnapshot(truth=truth, cached_at_ms=generated_at_ms)
+
+
+def _account_truth_readiness(
+    evidence: AccountTruthSnapshot | None,
+    *,
+    now_ms: int,
+) -> AccountTruthReadiness:
+    return AccountTruthReadiness.from_evidence(evidence, now_ms=now_ms)
 
 
 def test_operator_surface_carries_account_observation_proof() -> None:
@@ -900,7 +911,7 @@ def test_trader_guidance_missing_account_truth_cache_is_not_safe_to_submit() -> 
         guard_state=_guard(),
         account_clerk=_clerk(),
         reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
-        account_truth_snapshot=None,
+        account_truth_readiness=_account_truth_readiness(None, now_ms=_RTH_MID),
         now_ms=_RTH_MID,
     )
 
@@ -923,7 +934,10 @@ def test_trader_guidance_stale_account_truth_cache_is_not_safe_to_submit() -> No
         guard_state=_guard(),
         account_clerk=_clerk(),
         reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
-        account_truth_snapshot=_account_truth_snapshot(generated_at_ms=_NOW_MS - 60_001),
+        account_truth_readiness=_account_truth_readiness(
+            _account_truth_snapshot(generated_at_ms=_NOW_MS - 60_001),
+            now_ms=_NOW_MS,
+        ),
         now_ms=_NOW_MS,
     )
 
@@ -953,10 +967,13 @@ def test_trader_guidance_not_clean_account_truth_cache_is_not_safe_to_submit() -
         guard_state=_guard(),
         account_clerk=_clerk(),
         reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
-        account_truth_snapshot=_account_truth_snapshot(
-            final_verdict="not_proven",
-            generated_at_ms=_RTH_MID - 1_000,
-            blockers=[blocker],
+        account_truth_readiness=_account_truth_readiness(
+            _account_truth_snapshot(
+                final_verdict="not_proven",
+                generated_at_ms=_RTH_MID - 1_000,
+                blockers=[blocker],
+            ),
+            now_ms=_RTH_MID,
         ),
         now_ms=_RTH_MID,
     )
@@ -1480,7 +1497,7 @@ def test_blockage_ladder_missing_account_truth_is_warning_not_danger() -> None:
         guard_state=_guard(),
         account_clerk=_clerk(),
         reconciliation_receipt=_make_receipt(status="passed", outcome="clean"),
-        account_truth_snapshot=None,
+        account_truth_readiness=_account_truth_readiness(None, now_ms=_RTH_MID),
         now_ms=_RTH_MID,
     )
 

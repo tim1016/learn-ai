@@ -248,11 +248,6 @@ class LiveInstanceSurfaceAssembler:
                     observed_at_ms=observed_at_ms,
                 )
             ).get(instance_account_id)
-        account_truth_snapshot = (
-            account_fleet_read_context.account_truth_evidence
-            if account_fleet_read_context is not None
-            else None
-        )
         latest_mutation = d.resolve_latest_mutation(root, sid)
         broker_observation_consistency = d.resolve_broker_observation_consistency(
             live_binding,
@@ -300,9 +295,8 @@ class LiveInstanceSurfaceAssembler:
             control_plane_state=control_plane_state,
             latest_mutation=latest_mutation,
             broker_observation_consistency=broker_observation_consistency,
-            account_truth_snapshot=account_truth_snapshot,
-            precomputed_account_truth_assessment=(
-                account_fleet_read_context.account_truth_assessment
+            account_truth_readiness=(
+                account_fleet_read_context.account_truth_readiness
                 if account_fleet_read_context is not None
                 else None
             ),

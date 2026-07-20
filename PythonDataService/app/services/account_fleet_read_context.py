@@ -7,18 +7,19 @@ it or otherwise talk to IBKR themselves.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 
 from app.engine.live.fleet import compute_fleet_contamination
 from app.schemas.live_runs import FleetContamination
 from app.services.account_truth_snapshot import (
     AccountTruthAssessment,
+    AccountTruthReadiness,
     AccountTruthReadinessEvidence,
     AccountTruthSnapshot,
     AccountTruthSnapshotProvider,
-    assess_account_truth,
 )
 from app.services.fleet_contamination import collect_fleet_position_explanations
 
@@ -29,9 +30,16 @@ class AccountFleetReadContext:
 
     account_id: str
     observed_at_ms: int
-    account_truth_evidence: AccountTruthReadinessEvidence | None
-    account_truth_assessment: AccountTruthAssessment
+    account_truth_readiness: AccountTruthReadiness
     contamination: FleetContamination
+
+    @property
+    def account_truth_evidence(self) -> AccountTruthReadinessEvidence | None:
+        return self.account_truth_readiness.evidence
+
+    @property
+    def account_truth_assessment(self) -> AccountTruthAssessment:
+        return self.account_truth_readiness.assessment
 
     @property
     def fleet_blocks_starts(self) -> bool:
@@ -42,7 +50,7 @@ class AccountFleetReadContext:
 class AccountFleetReadContexts:
     """Request-scoped account contexts, keyed case-insensitively."""
 
-    by_account_id: dict[str, AccountFleetReadContext]
+    by_account_id: Mapping[str, AccountFleetReadContext]
 
     def get(self, account_id: str | None) -> AccountFleetReadContext | None:
         if account_id is None:
@@ -65,10 +73,10 @@ def build_account_fleet_read_contexts(
         if not account_id or account_id.upper() in contexts:
             continue
         evidence = snapshot_provider.get(account_id)
-        assessment = assess_account_truth(evidence, now_ms=observed_at_ms)
+        readiness = AccountTruthReadiness.from_evidence(evidence, now_ms=observed_at_ms)
         net_positions = _cached_net_positions(
             evidence,
-            assessment=assessment,
+            assessment=readiness.assessment,
             account_id=account_id,
             observed_at_ms=observed_at_ms,
         )
@@ -82,11 +90,10 @@ def build_account_fleet_read_contexts(
         contexts[account_id.upper()] = AccountFleetReadContext(
             account_id=account_id,
             observed_at_ms=observed_at_ms,
-            account_truth_evidence=evidence,
-            account_truth_assessment=assessment,
+            account_truth_readiness=readiness,
             contamination=contamination,
         )
-    return AccountFleetReadContexts(by_account_id=contexts)
+    return AccountFleetReadContexts(by_account_id=MappingProxyType(contexts))
 
 
 def _cached_net_positions(

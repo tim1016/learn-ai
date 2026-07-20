@@ -24,7 +24,6 @@ from app.schemas.live_runs import (
     BotRollCallOffer,
     BotRollCallResponse,
     BotRollCallSummary,
-    FleetContamination,
     HostRunnerStartRequest,
 )
 from app.services import cohort_launch
@@ -514,6 +513,46 @@ def test_runtime_observer_fails_member_when_poisoned_flag_precedes_sidecar_updat
 
 
 async def test_runtime_observer_does_not_fetch_broker_positions(tmp_path: Path, monkeypatch) -> None:
+    from app.broker.ibkr import account as ibkr_account
+
+    observer = CohortEvidenceRuntimeObserver(
+        live_runs_root=tmp_path,
+        visible_runs_by_instance=lambda _root: {},
+        now_ms=lambda: 10_000,
+    )
+    receipt = CohortBatchLaunchReceipt(
+        account_id="DU123456",
+        cohort_id="cohort-a",
+        member_strategy_instance_ids=("bot-a",),
+        window_start_ms=10_000,
+        window_end_ms=20_000,
+        authorized_by="operator.alice",
+        recorded_at_ms=10_000,
+        member_pins=(
+            CohortBatchLaunchMemberPin(
+                strategy_instance_id="bot-a",
+                run_id="run-a",
+                roll_call_offer_id="offer-a",
+            ),
+        ),
+    )
+    class BrokerPositionFetchForbidden(BaseException):
+        pass
+
+    async def fail_if_broker_position_fetches(*_args, **_kwargs) -> None:
+        raise BrokerPositionFetchForbidden("cohort observation must not call IBKR")
+
+    monkeypatch.setattr(ibkr_account, "fetch_positions", fail_if_broker_position_fetches)
+
+    sample = await observer.observe(receipt, expected_at_ms=10_000)
+
+    assert sample.fleet == "unknown"
+
+
+async def test_runtime_observer_propagates_unexpected_account_projection_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     from app.services import cohort_evidence_runtime
 
     observer = CohortEvidenceRuntimeObserver(
@@ -537,32 +576,18 @@ async def test_runtime_observer_does_not_fetch_broker_positions(tmp_path: Path, 
             ),
         ),
     )
-    broker_position_fetches = 0
 
-    async def counted_fleet_fetch(*_args, **_kwargs) -> FleetContamination:
-        nonlocal broker_position_fetches
-        broker_position_fetches += 1
-        return FleetContamination(
-            net_positions={},
-            explained_total={},
-            explained_by_instance=[],
-            residual={},
-            verdict="clean",
-            policy_blocks_starts=False,
-            summary="Account clean.",
-        )
+    def fail_account_projection(*_args, **_kwargs) -> None:
+        raise RuntimeError("account projection corrupt")
 
     monkeypatch.setattr(
         cohort_evidence_runtime,
-        "compute_account_fleet_contamination",
-        counted_fleet_fetch,
-        raising=False,
+        "build_account_fleet_read_contexts",
+        fail_account_projection,
     )
 
-    sample = await observer.observe(receipt, expected_at_ms=10_000)
-
-    assert sample.fleet == "unknown"
-    assert broker_position_fetches == 0
+    with pytest.raises(RuntimeError, match="account projection corrupt"):
+        await observer.observe(receipt, expected_at_ms=10_000)
 
 
 def test_runtime_observer_requires_fresh_running_runtime_and_ready_vector(

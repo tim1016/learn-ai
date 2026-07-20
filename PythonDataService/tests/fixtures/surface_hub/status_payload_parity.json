@@ -1,5 +1,9 @@
 {
-  "baseline_commit": "2e112bfa+broker-free-status-read-context",
+  "baseline_commit": "d2554090a0e99e8c3ecdf2bdf7b04ab03a33ef03",
+  "semantics": {
+    "account_truth_unavailable_reason": "ACCOUNT_TRUTH_NOT_AVAILABLE",
+    "read_side_broker_policy": "cached account truth only; no live broker refresh"
+  },
   "cases": {
     "daemon_unreachable": {
       "display_status": "Sick bay",
