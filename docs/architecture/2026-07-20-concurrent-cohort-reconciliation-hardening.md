@@ -113,6 +113,41 @@ call. Cheap unblock for the *next attempt*: run in a **clean environment** (few 
 dirs) — the existing Fix A + Fix C likely reach 5 there. Confirm the read-path latency
 hypothesis by timing `/catalog` before vs after pruning run dirs.
 
+## Root cause C — TRUE cause: per-bot IBKR position queries serialize (2026-07-20, deep-dive)
+
+The probe-timeout (Fix C, 357609b9d) treated a symptom. Profiling the ~10-12s
+`/catalog` (and the equivalent roll-call) read path, everything cheap was ruled out:
+daemon `/instances` **0.02s** (direct), container→host `host.containers.internal` hop
+**0.01s**, mounted-volume small-file I/O **0.01s**, journal parses **0.04-0.19s** (incl.
+the 58MB session_roster), a daemon restart changed nothing (not in-memory bloat), and
+`_compute_account_fleet_contamination` is only **0.2s**. The cost is **per-bot IBKR
+work**: a `/catalog` request emits **~356 `ib_async` lines incl. 64 `position:` lines**
+for 6 bots — i.e. the per-bot status/exposure/account-truth resolution triggers repeated
+IBKR **`reqPositions`** round-trips that **serialize on the single broker connection**.
+So the read path is **O(N bots × broker-round-trip)**; at 6 bots it is ~12s, which makes
+the roll-call too slow to offer a member at its staggered slot → the member is silently
+dropped → the cohort caps below 5 (observed 4, then 2). The rows are `asyncio.gather`-ed
+but serialize on the one IBKR connection, so concurrency does not help.
+
+**Real Fix C:** serve the read paths from the **cached** Account Truth snapshot (the 15s
+`AccountTruthRefreshLoop` already maintains one) instead of triggering a fresh per-bot
+`reqPositions`; compute account-level state (truth, exposure, fleet contamination) **once
+per request** and share it across all bot rows. Expected: `/catalog` and roll-call drop
+from ~12s to sub-second, the roll-call reliably offers every member, and 5-concurrent
+becomes reachable. This supersedes the probe-timeout band-aid as the primary C fix.
+
+## Adjacent issues found in the bot-control read/storage layer (2026-07-20)
+
+1. **`policy_blocks_starts=True` right now** — residual fleet contamination from the
+   day's runs blocks new starts; a cohort launch would be refused until reconciled.
+2. **Unbounded, never-compacted append-only journals**: `session_roster_history.jsonl`
+   **58MB**, `clerk_journal.jsonl` **8.6MB**, `account_events.jsonl` **3.8MB**. They grow
+   forever; every read re-parses the whole file. Needs rotation/compaction/indexing.
+3. **Per-run `host_daemon.log` balloons to 24MB** — the daemon dumps every
+   execDetails/commissionReport/position line per run. Verbose; disk + I/O cost.
+4. **N+1 fleet contamination**: `_resolve_fleet_blocks_starts_for_status` recomputes
+   `_compute_account_fleet_contamination` per bot (no memoization); ~0.2s × N.
+
 ## Alternative — one IBKR paper account per bot
 
 Root causes A and B exist ONLY because N bots share one DU account. One account per
