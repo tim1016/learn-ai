@@ -253,6 +253,98 @@ def test_outside_mutation_ignores_execution_with_owned_perm_id() -> None:
     assert reason is None
 
 
+def test_outside_mutation_ignores_own_namespace_order_ref() -> None:
+    """A bot's own fill is owned via its echoed order_ref namespace even when the
+    fill arrives with a null client_order_id and a perm_id not yet registered.
+
+    This is the perm_id-assignment race that fatal-halted a cohort member on its OWN
+    fill: IBKR reported the execution with a null client_order_id and via the clerk's
+    client connection, before the run had registered the perm_id — but the fill
+    carries this run's order_ref namespace, the strongest ownership signal.
+    """
+    from app.engine.live.halt import check_outside_mutation
+
+    executions = [
+        {
+            "client_order_id": None,
+            "exec_id": "0000dc8f.6b16e1e2.01.01",
+            "perm_id": 1324475496,
+            "account_id": "DUM284968",
+            "client_id": 50,
+            "exec_time_ms": 5_000,
+            "order_ref": "learn-ai/cohort5-msft/v1:WBEvBFObRp6hvJfw3vbZEg",
+        },
+    ]
+    reason = check_outside_mutation(
+        executions,
+        owned_client_order_ids=set(),
+        owned_perm_ids=set(),
+        owned_namespace="learn-ai/cohort5-msft/v1",
+        halted_at_ms=6_000,
+        last_clean_bar_close_ms=5_900,
+        session_start_ms=1_000,
+    )
+    assert reason is None
+
+
+def test_outside_mutation_flags_order_ref_in_a_different_namespace() -> None:
+    """Fix A recognizes only THIS run's namespace. A fill stamped with a different
+    namespace (a sibling or unknown actor on the shared account) is still foreign to
+    the runtime guard — sibling awareness is a separate, more delicate change."""
+    from app.engine.live.halt import check_outside_mutation
+
+    executions = [
+        {
+            "client_order_id": None,
+            "exec_id": "e-sibling",
+            "perm_id": 999,
+            "account_id": "DUM284968",
+            "client_id": 51,
+            "exec_time_ms": 5_000,
+            "order_ref": "learn-ai/cohort5-aapl/v1:someOtherIntent",
+        },
+    ]
+    reason = check_outside_mutation(
+        executions,
+        owned_client_order_ids=set(),
+        owned_perm_ids=set(),
+        owned_namespace="learn-ai/cohort5-msft/v1",
+        halted_at_ms=6_000,
+        last_clean_bar_close_ms=5_900,
+        session_start_ms=1_000,
+    )
+    assert reason is not None
+
+
+def test_outside_mutation_still_halts_null_order_ref_with_owned_namespace() -> None:
+    """A genuinely foreign fill (no echoed order_ref — e.g. a manual TWS click) still
+    fatal-halts even when the run's owned_namespace is supplied. Namespace ownership
+    only recognizes fills stamped with our own ref; it never loosens the guard."""
+    from app.engine.live.halt import check_outside_mutation
+
+    executions = [
+        {
+            "client_order_id": None,
+            "exec_id": "e-manual",
+            "perm_id": 7,
+            "account_id": "DUM284968",
+            "client_id": 0,
+            "exec_time_ms": 5_000,
+            "order_ref": None,
+        },
+    ]
+    reason = check_outside_mutation(
+        executions,
+        owned_client_order_ids=set(),
+        owned_perm_ids=set(),
+        owned_namespace="learn-ai/cohort5-msft/v1",
+        halted_at_ms=6_000,
+        last_clean_bar_close_ms=5_900,
+        session_start_ms=1_000,
+    )
+    assert reason is not None
+
+
 def test_outside_mutation_ignores_foreign_execution_before_session_start() -> None:
     """A foreign execution whose broker time predates session start is
     pre-existing account history replayed at connect, not contamination.

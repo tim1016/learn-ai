@@ -34,6 +34,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from app.engine.live.order_identity import OrderRefParseError, parse_order_ref
+
 POISONED_FLAG_FILENAME = "poisoned.flag"
 
 
@@ -202,6 +204,7 @@ def check_outside_mutation(
     last_clean_bar_close_ms: int,
     session_start_ms: int | None = None,
     owned_perm_ids: set[int] | None = None,
+    owned_namespace: str | None = None,
 ) -> PoisonedHaltReason | None:
     """Return a halt reason if any execution lacks a Python-owned ``client_order_id``.
 
@@ -236,6 +239,16 @@ def check_outside_mutation(
     across sessions, while order ids are not; a fill whose client order id
     is missing but whose permId is in the sidecar trail is still bot-owned.
 
+    ``owned_namespace`` (``learn-ai/{strategy_instance_id}/v1``) is the
+    strongest and earliest ownership signal: a fill IBKR echoes back with
+    *this run's* ``order_ref`` namespace is ours even when the fill arrives
+    with a null ``client_order_id`` and a ``permId`` not yet registered in
+    ``owned_perm_ids`` — the perm-id-assignment race that can otherwise
+    fatal-halt a bot on its own fill (especially under concurrent load, and
+    when the fill surfaces via a sibling client connection). This never
+    loosens the guard: a foreign fill has no echoed ``order_ref`` (``None``),
+    and a fill stamped with a *different* namespace is still policed.
+
     Returns ``None`` when every execution is Python-owned (or provably
     pre-session); otherwise a ``PoisonedHaltReason`` describing the
     first offender (the ``details`` dict carries the foreign exec_id /
@@ -254,6 +267,16 @@ def check_outside_mutation(
             normalized_perm_id = None
         if normalized_perm_id is not None and normalized_perm_id in owned_perm_ids:
             continue
+        # Namespace ownership: a fill IBKR echoes back with this run's own
+        # order_ref namespace is ours even before the perm_id is registered.
+        order_ref = execution.get("order_ref")
+        if owned_namespace is not None and order_ref:
+            try:
+                execution_namespace, _ = parse_order_ref(order_ref)
+            except OrderRefParseError:
+                execution_namespace = None
+            if execution_namespace == owned_namespace:
+                continue
         # Pre-session account history is not contamination: skip a foreign
         # execution whose broker time precedes this run's session start. Only
         # suppresses fills we can prove are stale — unknown time or no floor

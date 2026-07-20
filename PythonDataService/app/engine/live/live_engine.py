@@ -2871,6 +2871,10 @@ class LiveEngine:
                     "perm_id": event.perm_id,
                     "account_id": event.account_id,
                     "client_id": event.client_id,
+                    # IBKR echoes our own order_ref namespace back on our fills;
+                    # None for genuinely foreign execs. The outside-mutation check
+                    # uses it as an early ownership signal before permId registers.
+                    "order_ref": event.order_ref,
                     # Broker execution time so check_outside_mutation can floor
                     # at session start (stale connect-time replay vs concurrent
                     # foreign fill). None when the broker omitted the time.
@@ -2893,7 +2897,14 @@ class LiveEngine:
         writers: LiveArtifactWriters | None,
     ) -> None:
         """Run § 7.1 trigger A. On halt, perform fatal-halt cleanup and raise."""
+        from app.engine.live.account_registry import bot_order_namespace_for_instance
+
         owned_client_order_ids = {f"live-{oid}" for oid in self._order_meta}
+        owned_namespace = (
+            bot_order_namespace_for_instance(self._strategy_instance_id)
+            if self._strategy_instance_id
+            else None
+        )
         reason = check_outside_mutation(
             seen_executions,
             owned_client_order_ids,
@@ -2901,6 +2912,7 @@ class LiveEngine:
             last_clean_bar_close_ms=last_clean_bar_close_ms,
             session_start_ms=self._session_start_ms,
             owned_perm_ids=self._owned_perm_ids,
+            owned_namespace=owned_namespace,
         )
         if reason is None:
             return
