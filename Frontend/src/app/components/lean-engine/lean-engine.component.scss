@@ -203,6 +203,20 @@
   .pi { font-size: 0.82rem; }
 }
 
+// Below the desktop breakpoint the collapsed rail is a full-width band above
+// the results (single-column grid), so lay its icons out as a compact
+// horizontal top bar instead of a tall vertical stack.
+@media (max-width: 899px) {
+  .config-rail {
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    position: static;
+  }
+
+  .config-rail__expand { margin-bottom: 0; }
+}
+
 // Strategy parameters folded into the Strategy section.
 .config-subhead {
   margin: 1rem 0 0.6rem;

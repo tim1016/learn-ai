@@ -570,7 +570,7 @@ export class LeanEngineComponent implements OnInit {
   // full-width results take over. Section open/closed lives here (not in
   // the child) so the auto-collapse can drive it.
   // ------------------------------------------------------------------
-  private static readonly CONFIG_NAV_KEY = "engineLab.configNavCollapsed";
+  private static readonly CONFIG_NAV_KEY = "engineLab.configNavOverride";
 
   readonly openSections = signal<Record<string, boolean>>({
     engine: true,
@@ -579,7 +579,19 @@ export class LeanEngineComponent implements OnInit {
     execution: true,
     lean: true,
   });
-  readonly configNavCollapsed = signal<boolean>(LeanEngineComponent.loadNavCollapsed());
+
+  /**
+   * Explicit, persisted user choice for the whole-rail state. ``null`` means
+   * the user hasn't pinned it, so the rail is free to auto-collapse when
+   * results arrive. Any manual expand/collapse records intent here so a later
+   * run won't re-collapse a rail the user deliberately pinned open.
+   */
+  private readonly configNavOverride = signal<"expanded" | "collapsed" | null>(
+    LeanEngineComponent.loadNavOverride(),
+  );
+  readonly configNavCollapsed = signal<boolean>(
+    LeanEngineComponent.loadNavOverride() === "collapsed",
+  );
   private autoCollapsedRunId: number | null = null;
 
   isSectionOpen(id: string): boolean {
@@ -590,13 +602,22 @@ export class LeanEngineComponent implements OnInit {
     this.openSections.update((sections) => ({ ...sections, [id]: open }));
   }
 
+  /** Single writer for the rail state. A ``user`` source records the choice
+   *  as a persisted override; ``auto`` collapses without claiming intent. */
+  private setNavCollapsed(collapsed: boolean, source: "user" | "auto"): void {
+    this.configNavCollapsed.set(collapsed);
+    if (source === "user") {
+      this.configNavOverride.set(collapsed ? "collapsed" : "expanded");
+    }
+  }
+
   toggleConfigNav(): void {
-    this.configNavCollapsed.update((collapsed) => !collapsed);
+    this.setNavCollapsed(!this.configNavCollapsed(), "user");
   }
 
   /** Icon-rail click: reopen the rail and expand the chosen section. */
   expandSectionFromIcon(id: string): void {
-    this.configNavCollapsed.set(false);
+    this.setNavCollapsed(false, "user");
     this.setSectionOpen(id, true);
   }
 
@@ -637,15 +658,14 @@ export class LeanEngineComponent implements OnInit {
     }
   });
 
-  private static loadNavCollapsed(): boolean {
+  private static loadNavOverride(): "expanded" | "collapsed" | null {
     try {
-      return (
-        typeof localStorage !== "undefined" &&
-        localStorage.getItem(LeanEngineComponent.CONFIG_NAV_KEY) === "1"
-      );
+      if (typeof localStorage === "undefined") return null;
+      const value = localStorage.getItem(LeanEngineComponent.CONFIG_NAV_KEY);
+      return value === "expanded" || value === "collapsed" ? value : null;
     } catch {
-      // Storage disabled (private mode / blocked) — default to expanded.
-      return false;
+      // Storage disabled (private mode / blocked) — no override.
+      return null;
     }
   }
 
@@ -653,10 +673,14 @@ export class LeanEngineComponent implements OnInit {
     // Persist the whole-rail collapse choice so it survives reloads,
     // mirroring the run-dock's expand/collapse persistence.
     effect(() => {
-      const collapsed = this.configNavCollapsed();
+      const override = this.configNavOverride();
       try {
         if (typeof localStorage !== "undefined") {
-          localStorage.setItem(LeanEngineComponent.CONFIG_NAV_KEY, collapsed ? "1" : "0");
+          if (override) {
+            localStorage.setItem(LeanEngineComponent.CONFIG_NAV_KEY, override);
+          } else {
+            localStorage.removeItem(LeanEngineComponent.CONFIG_NAV_KEY);
+          }
         }
       } catch {
         // Best-effort persistence — a blocked localStorage is non-fatal.
@@ -670,6 +694,7 @@ export class LeanEngineComponent implements OnInit {
       const runId = this.completedRunId();
       if (runId === null || runId === this.autoCollapsedRunId) return;
       this.autoCollapsedRunId = runId;
+      // Fold every section to its summary…
       this.openSections.set({
         engine: false,
         time: false,
@@ -677,6 +702,11 @@ export class LeanEngineComponent implements OnInit {
         execution: false,
         lean: false,
       });
+      // …and collapse the whole rail to the icon strip so the full-width
+      // results own the page — unless the user pinned the rail open.
+      if (this.configNavOverride() !== "expanded") {
+        this.setNavCollapsed(true, "auto");
+      }
     });
 
     // Bridge JobsService events → run banner state. One effect per

@@ -1,5 +1,5 @@
 import {
-  Component, signal, computed, input,
+  Component, computed, input,
   viewChild, ElementRef, AfterViewInit, OnDestroy,
   ChangeDetectionStrategy, effect,
 } from '@angular/core';
@@ -72,30 +72,15 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
   chartBars = input<ChartBar[]>([]);
   trades = input<EngineTradeForChart[]>([]);
   equityCurve = input<EquityCurvePoint[]>([]);
-  /**
-   * `tabbed` (default) keeps the Price/Equity switcher — one chart visible
-   * at a time, for tight surfaces. `stacked` drops the switcher and renders
-   * both charts full-width, one above the other, so results own the page.
-   */
-  layout = input<'tabbed' | 'stacked'>('tabbed');
 
   // Template refs
   priceChartEl = viewChild<ElementRef<HTMLDivElement>>('priceChart');
   equityChartEl = viewChild<ElementRef<HTMLDivElement>>('equityChart');
 
-  // State
-  activeView = signal<'price' | 'equity'>('price');
+  // State — price + equity render stacked; each panel shows only when it
+  // has data (drives the panel `display` so an empty chart reserves no height).
   hasData = computed(() => this.chartBars().length > 0);
   hasEquity = computed(() => this.equityCurve().length > 0);
-  // In stacked layout both panels are always visible; in tabbed layout the
-  // active tab decides. Drives the panel `display` so hidden charts don't
-  // reserve layout height.
-  priceVisible = computed(() =>
-    this.layout() === 'stacked' ? this.hasData() : this.activeView() === 'price',
-  );
-  equityVisible = computed(() =>
-    this.layout() === 'stacked' ? this.hasEquity() : this.activeView() === 'equity',
-  );
 
   // Chart instances
   private priceChart: IChartApi | null = null;
@@ -134,20 +119,6 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
     this.equityChart?.remove();
   }
 
-  setView(view: 'price' | 'equity'): void {
-    this.activeView.set(view);
-    // Charts need a resize after becoming visible
-    setTimeout(() => {
-      const priceEl = this.priceChartEl()?.nativeElement;
-      const equityEl = this.equityChartEl()?.nativeElement;
-      if (view === 'price' && priceEl) {
-        this.priceChart?.applyOptions({ width: priceEl.clientWidth });
-      }
-      if (view === 'equity' && equityEl) {
-        this.equityChart?.applyOptions({ width: equityEl.clientWidth });
-      }
-    });
-  }
 
   // ──────────────────────────────────────────────
   // Price chart (candlestick + volume + trade markers)
@@ -158,7 +129,7 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
 
     this.priceChart = createChart(el, {
       width: el.clientWidth,
-      height: this.layout() === 'stacked' ? 560 : 480,
+      height: 560,
       layout: { background: { color: DARK.bg }, textColor: DARK.text },
       grid: {
         vertLines: { color: DARK.grid },
@@ -197,10 +168,9 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
     });
 
     // Each chart tracks its own container width. Reading per-element
-    // clientWidth (guarded > 0) means a hidden panel — display:none in the
-    // tabbed layout, or an empty price panel in stacked equity-only runs —
-    // can't zero out the visible chart. Also fires on config-nav collapse,
-    // which is the width change we need to react to.
+    // clientWidth (guarded > 0) means a hidden panel — an empty price panel
+    // on an equity-only run — can't zero out the visible chart. Also fires on
+    // config-nav collapse, the width change we need to react to.
     this.resizeObserver = new ResizeObserver(() => {
       const priceWidth = this.priceChartEl()?.nativeElement.clientWidth ?? 0;
       const equityWidth = this.equityChartEl()?.nativeElement.clientWidth ?? 0;
@@ -221,7 +191,7 @@ export class EngineChartComponent implements AfterViewInit, OnDestroy {
 
     this.equityChart = createChart(el, {
       width: el.clientWidth,
-      height: this.layout() === 'stacked' ? 320 : 300,
+      height: 320,
       layout: { background: { color: DARK.bg }, textColor: DARK.text },
       grid: {
         vertLines: { color: DARK.grid },
