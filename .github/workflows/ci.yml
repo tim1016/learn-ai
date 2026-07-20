@@ -173,6 +173,7 @@ jobs:
       PYTHON_FAST_BASELINE_TEST_DIRS: >-
         tests/unit tests/indicators tests/edge tests/utils
         tests/engine tests/routers tests/schemas tests/services tests/operator
+        tests/contracts
     defaults:
       run:
         working-directory: PythonDataService
