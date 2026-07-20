@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+
+from app.engine.live import host_daemon_client
 from app.engine.live.daemon_transport import DaemonResult
 from app.schemas.broker_session import (
     BrokerSessionMirrorSnapshot,
@@ -15,6 +18,9 @@ from app.schemas.live_runs import (
     HostRunnerProcessStatus,
 )
 from app.services.daemon_diagnostics import (
+    DaemonDiagnosticsService,
+    DaemonHealthPayloadError,
+    DaemonHealthProbeError,
     _fetch_instances,
     build_daemon_diagnostic_report,
     redact_host_runner_health,
@@ -22,6 +28,73 @@ from app.services.daemon_diagnostics import (
 from app.services.fleet_daemon_snapshot_provider import FleetDaemonObservation
 
 NOW_MS = 1_700_000_000_000
+
+
+async def test_health_returns_redacted_connected_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    health = _health(
+        repo_root="/Users/inkant/learn-ai",
+        live_runs_root="/Users/inkant/learn-ai/PythonDataService/artifacts/live_runs",
+        process=_process(command=["python", "secret"], log_path="/tmp/live.log"),
+    )
+
+    async def fake_fetch_health(
+        _daemon_url: str,
+    ) -> tuple[DaemonResult, HostRunnerHealth | None]:
+        return DaemonResult.connected(daemon_boot_id="boot-123456789"), health
+
+    monkeypatch.setattr(host_daemon_client, "fetch_health", fake_fetch_health)
+
+    returned = await DaemonDiagnosticsService().health()
+
+    assert returned.repo_root == "learn-ai"
+    assert returned.live_runs_root == "PythonDataService/artifacts/live_runs"
+    assert returned.process.command == []
+    assert returned.process.log_path == "live.log"
+
+
+async def test_health_preserves_typed_transport_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = DaemonResult.auth_failed(status=401, detail="bad token")
+
+    async def fake_fetch_health(
+        _daemon_url: str,
+    ) -> tuple[DaemonResult, HostRunnerHealth | None]:
+        return expected, None
+
+    monkeypatch.setattr(host_daemon_client, "fetch_health", fake_fetch_health)
+
+    with pytest.raises(DaemonHealthProbeError) as raised:
+        await DaemonDiagnosticsService().health()
+
+    assert raised.value.result == expected
+
+
+async def test_renew_control_plane_lease_validates_and_redacts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_renew(_daemon_url: str) -> dict[str, object]:
+        return _health(repo_root="/Users/inkant/learn-ai").model_dump(mode="json")
+
+    monkeypatch.setattr(host_daemon_client, "renew_control_plane_lease", fake_renew)
+
+    returned = await DaemonDiagnosticsService().renew_control_plane_lease()
+
+    assert returned.repo_root == "learn-ai"
+
+
+async def test_renew_control_plane_lease_rejects_invalid_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_renew(_daemon_url: str) -> dict[str, object]:
+        return {"not": "a health envelope"}
+
+    monkeypatch.setattr(host_daemon_client, "renew_control_plane_lease", fake_renew)
+
+    with pytest.raises(DaemonHealthPayloadError, match="invalid renew-lease envelope"):
+        await DaemonDiagnosticsService().renew_control_plane_lease()
 
 
 async def test_stale_fleet_payload_is_not_reused_as_current_registry() -> None:

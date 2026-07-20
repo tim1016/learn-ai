@@ -256,9 +256,10 @@ from app.services.cohort_launch import (
     get_cohort_launch_scheduler_registry,
 )
 from app.services.daemon_diagnostics import (
+    DaemonHealthPayloadError,
+    DaemonHealthProbeError,
     get_daemon_diagnostics_service,
     project_daemon_diagnostic_report,
-    redact_host_runner_health,
 )
 from app.services.daily_session_schedule import start_boundary_verdict
 from app.services.deploy_admission import (
@@ -3796,10 +3797,10 @@ async def get_daemon_health() -> HostRunnerHealth:
     - UNREACHABLE → 503 (daemon process down or network error)
     - any other   → 502 (protocol / contract mismatch)
     """
-    settings = get_settings()
-    result, health = await host_daemon_client.fetch_health(settings.live_runner_daemon_url)
-    if health is not None:
-        return redact_host_runner_health(health)
+    try:
+        return await get_daemon_diagnostics_service().health()
+    except DaemonHealthProbeError as exc:
+        result = exc.result
     if result.kind == "AUTH_FAILED":
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
@@ -3824,20 +3825,17 @@ async def renew_daemon_lease() -> HostRunnerHealth:
     ``runtime.control_plane_lease_stale``. The data plane forwards the
     authenticated request so the browser never holds the daemon token.
     """
-    settings = get_settings()
     try:
-        result = await host_daemon_client.renew_control_plane_lease(settings.live_runner_daemon_url)
+        return await get_daemon_diagnostics_service().renew_control_plane_lease()
     except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
         _raise_outcome_unknown("renew_daemon_lease", exc)
     except host_daemon_client.HostDaemonError as exc:
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
-    try:
-        return redact_host_runner_health(HostRunnerHealth.model_validate(result))
-    except ValidationError as exc:
+    except DaemonHealthPayloadError as exc:
         logger.warning("invalid renew-lease payload from host daemon: %s", exc)
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY,
-            detail="host daemon returned an invalid renew-lease envelope",
+            detail=str(exc),
         ) from exc
 
 
