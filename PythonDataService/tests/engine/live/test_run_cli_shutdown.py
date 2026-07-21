@@ -90,6 +90,7 @@ def _make_args(
     *,
     client=None,
 ) -> argparse.Namespace:
+    artifacts_root = run_dir.parent / "artifacts"
     return argparse.Namespace(
         command="start",
         run_dir=run_dir,
@@ -99,6 +100,7 @@ def _make_args(
         broker=broker,
         bars=_iter_bars(bars),
         client=client,
+        artifacts_root=artifacts_root,
     )
 
 

@@ -33,7 +33,7 @@ import secrets
 import tempfile
 from pathlib import Path
 
-from app.lean_sidecar.config import DEFAULT_ARTIFACTS_ROOT
+from app.lean_sidecar import config as sidecar_config
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ def token_file_path(artifacts_root: Path | None = None) -> Path:
     callers (the launcher) may override when they resolve a different
     artifacts root via ``LEAN_LAUNCHER_ARTIFACTS_ROOT``.
     """
-    root = artifacts_root if artifacts_root is not None else DEFAULT_ARTIFACTS_ROOT
+    root = artifacts_root if artifacts_root is not None else sidecar_config.DEFAULT_ARTIFACTS_ROOT
     return root / LAUNCHER_TOKEN_FILENAME
 
 

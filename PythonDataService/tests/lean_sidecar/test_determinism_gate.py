@@ -136,9 +136,10 @@ async def _post_trusted_run(client: AsyncClient, run_id: str) -> dict:
         json={
             "run_id": run_id,
             "symbol": "SPY",
-            # 2025-01-06 .. 2025-01-10 (Mon-Fri) — same fixture as E2E.
-            "start_ms_utc": 1_736_121_600_000,
-            "end_ms_utc": 1_736_467_200_000,
+            # 2025-01-06 .. 2025-01-10 (Mon-Fri), represented by the
+            # session-open ms of the first session and next trading day.
+            "start_ms_utc": 1_736_173_800_000,
+            "end_ms_utc": 1_736_778_600_000,
             "starting_cash": 100000.0,
         },
         timeout=httpx.Timeout(300.0),

@@ -111,6 +111,20 @@ class TestLauncherAppConcurrency:
     """
 
     @pytest.mark.asyncio
+    async def test_lifespan_materializes_token_before_first_request(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        from app.lean_sidecar.launcher import app as launcher_app_module
+
+        monkeypatch.delenv("LEAN_LAUNCHER_TOKEN", raising=False)
+        monkeypatch.setattr(launcher_app_module, "_artifacts_root", lambda: tmp_path)
+
+        async with launcher_app_module.app.router.lifespan_context(launcher_app_module.app):
+            assert (tmp_path / ".launcher-token").is_file()
+
+    @pytest.mark.asyncio
     async def test_extract_metadata_responds_while_launch_is_running(
         self,
         monkeypatch: pytest.MonkeyPatch,

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from app.lean_sidecar import config as sidecar_config
 from app.lean_sidecar.launcher_auth import (
     LAUNCHER_TOKEN_FILENAME,
     ensure_launcher_token,
@@ -144,3 +145,13 @@ def test_token_file_path_lives_at_artifacts_root() -> None:
     test guards against an accidental rename of the constant."""
     artifacts = Path("/tmp/test")
     assert token_file_path(artifacts) == artifacts / ".launcher-token"
+
+
+def test_default_token_file_path_tracks_configured_artifacts_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The data plane must read the token generated for its active root."""
+    monkeypatch.setattr(sidecar_config, "DEFAULT_ARTIFACTS_ROOT", tmp_path)
+
+    assert token_file_path() == tmp_path / LAUNCHER_TOKEN_FILENAME
