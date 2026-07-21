@@ -46,6 +46,11 @@ _SOCKET_PROBE_TIMEOUT = httpx.Timeout(10.0)
 # call at its slot. A startability probe can afford to wait longer than a liveness
 # GET; keep it bounded so a genuinely wedged daemon still surfaces.
 _INSTANCE_PROBE_TIMEOUT = httpx.Timeout(10.0)
+# Starting a cohort member and ensuring its account Clerk can both wait behind
+# the host daemon's broker reconciliation work. They are admission operations,
+# not low-latency liveness reads: keep a bounded deadline so a busy but healthy
+# daemon does not turn a safe launch into a false ``connect_timeout``.
+_START_ADMISSION_TIMEOUT = httpx.Timeout(10.0)
 # Deploy runs git + file hashing on the host; allow more headroom than the
 # liveness GETs, but still bounded so a wedged daemon surfaces as 503.
 _DEPLOY_TIMEOUT = httpx.Timeout(15.0)
@@ -211,7 +216,11 @@ async def start_run(base_url: str, run_id: str, payload: dict) -> dict:
     plane (which forwards the token from the artifacts bind mount)
     rather than calling the daemon directly (ADR 0007).
     """
-    return await _post_action(f"{base_url.rstrip('/')}/runs/{run_id}/start", payload)
+    return await _post_action(
+        f"{base_url.rstrip('/')}/runs/{run_id}/start",
+        payload,
+        timeout=_START_ADMISSION_TIMEOUT,
+    )
 
 
 async def stop_run(base_url: str, run_id: str, payload: dict) -> dict:
@@ -261,6 +270,7 @@ async def ensure_account_clerk(
     return await _post_action(
         f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/ensure",
         {"ibkr_host": ibkr_host},
+        timeout=_START_ADMISSION_TIMEOUT,
     )
 
 

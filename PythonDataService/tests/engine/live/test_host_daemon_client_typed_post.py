@@ -73,6 +73,24 @@ async def test_start_run_returns_parsed_body_on_2xx() -> None:
 
 
 @pytest.mark.asyncio
+async def test_start_run_uses_bounded_admission_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_timeout: list[httpx.Timeout] = []
+
+    async def post(_url: str, _payload: dict, *, timeout: httpx.Timeout) -> dict:
+        observed_timeout.append(timeout)
+        return {"accepted": True}
+
+    monkeypatch.setattr(host_daemon_client, "_post_action", post)
+
+    await start_run(BASE, "run-A", {})
+
+    assert observed_timeout == [host_daemon_client._START_ADMISSION_TIMEOUT]
+    assert observed_timeout[0].read > host_daemon_client._TIMEOUT.read
+
+
+@pytest.mark.asyncio
 @respx.mock
 async def test_ensure_account_clerk_sends_host_side_broker_address() -> None:
     route = respx.post(f"{BASE}/accounts/DU123/clerk/ensure").mock(
@@ -87,6 +105,24 @@ async def test_ensure_account_clerk_sends_host_side_broker_address() -> None:
 
     assert result == {"clerks": []}
     assert route.calls.last.request.content == b'{"ibkr_host":"127.0.0.1"}'
+
+
+@pytest.mark.asyncio
+async def test_ensure_account_clerk_uses_bounded_admission_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_timeout: list[httpx.Timeout] = []
+
+    async def post(_url: str, _payload: dict, *, timeout: httpx.Timeout) -> dict:
+        observed_timeout.append(timeout)
+        return {"clerks": []}
+
+    monkeypatch.setattr(host_daemon_client, "_post_action", post)
+
+    await ensure_account_clerk(BASE, "DU123")
+
+    assert observed_timeout == [host_daemon_client._START_ADMISSION_TIMEOUT]
+    assert observed_timeout[0].read > host_daemon_client._TIMEOUT.read
 
 
 @pytest.mark.asyncio
