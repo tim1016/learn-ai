@@ -55,6 +55,16 @@ COHORT_STAGGER_PROFILES: dict[str, CohortStaggerProfile] = {
 }
 
 CohortStaggerProfileName = Literal["paper_three_bot_stagger_v2", "paper_five_bot_stagger_v2"]
+CohortBatchLaunchMemberOutcomeReason = Literal[
+    "COHORT_POSTURE_MISMATCH",
+    "COHORT_PRIOR_MEMBER_BLOCKED",
+    "COHORT_SLOT_PREFLIGHT_NOT_READY",
+    "COHORT_START_ACCEPTED",
+    "COHORT_START_FAILED",
+    "COHORT_START_NOT_ACCEPTED",
+    "COHORT_START_REJECTED",
+    "COHORT_START_SETTINGS_UNREADABLE",
+]
 
 
 class CohortBatchLaunchCommandRequest(BaseModel):
@@ -91,7 +101,7 @@ class CohortBatchLaunchMemberOutcomeRequest(BaseModel):
 
     strategy_instance_id: str = Field(min_length=1, max_length=128)
     state: Literal["accepted", "blocked", "skipped"]
-    reason: str = Field(min_length=1, max_length=512)
+    reason: CohortBatchLaunchMemberOutcomeReason
     next_safe_action: str = Field(min_length=1, max_length=512)
 
 

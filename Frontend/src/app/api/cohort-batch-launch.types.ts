@@ -1,5 +1,10 @@
+import type { components } from './broker.types';
+
 /** Server-owned staggered cohort validation profiles. */
 export type CohortStaggerProfileName = 'paper_three_bot_stagger_v2' | 'paper_five_bot_stagger_v2';
+
+export type CohortBatchLaunchMemberOutcomeReason =
+  components['schemas']['CohortBatchLaunchMemberOutcomeRequest']['reason'];
 
 /** Browser compare token for the server-owned cohort launch command. */
 export interface CohortBatchLaunchCommandRequest {
@@ -10,7 +15,7 @@ export interface CohortBatchLaunchCommandRequest {
 export interface CohortBatchLaunchMemberOutcome {
   strategy_instance_id: string;
   state: 'accepted' | 'blocked' | 'skipped';
-  reason: string;
+  reason: CohortBatchLaunchMemberOutcomeReason;
   next_safe_action: string;
 }
 

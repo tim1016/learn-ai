@@ -49,7 +49,8 @@ export class CohortLaunchMonitorComponent {
       strategyInstanceId,
       outcome: outcomes.get(strategyInstanceId) ?? null,
       evidence: evidence.get(strategyInstanceId) ?? null,
-      receiptState: outcomes.get(strategyInstanceId)?.state ?? cohort.outcomes_state,
+      receiptState: outcomes.get(strategyInstanceId)?.state
+        ?? (cohort.outcomes_state === 'unreadable' ? 'unreadable' : 'pending'),
       scheduledStartAtMs: cohort.member_scheduled_start_at_ms?.[strategyInstanceId] ?? null,
     }));
   });

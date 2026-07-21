@@ -8955,8 +8955,11 @@ export interface components {
         CohortBatchLaunchMemberOutcomeRequest: {
             /** Next Safe Action */
             next_safe_action: string;
-            /** Reason */
-            reason: string;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "COHORT_POSTURE_MISMATCH" | "COHORT_PRIOR_MEMBER_BLOCKED" | "COHORT_SLOT_PREFLIGHT_NOT_READY" | "COHORT_START_ACCEPTED" | "COHORT_START_FAILED" | "COHORT_START_NOT_ACCEPTED" | "COHORT_START_REJECTED" | "COHORT_START_SETTINGS_UNREADABLE";
             /**
              * State
              * @enum {string}

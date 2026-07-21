@@ -18,6 +18,7 @@ from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
 from app.schemas.cohort_batch_launch import (
     COHORT_EVIDENCE_CADENCE_MS,
     COHORT_STAGGER_PROFILES,
+    CohortBatchLaunchMemberOutcomeReason,
     CohortStaggerProfileName,
     validate_cohort_batch_launch_window_and_members,
 )
@@ -345,7 +346,7 @@ class CohortBatchLaunchMemberOutcome(BaseModel):
 
     strategy_instance_id: str = Field(min_length=1, max_length=128)
     state: Literal["accepted", "blocked", "skipped"]
-    reason: str = Field(min_length=1, max_length=512)
+    reason: CohortBatchLaunchMemberOutcomeReason
     next_safe_action: str = Field(min_length=1, max_length=512)
 
 

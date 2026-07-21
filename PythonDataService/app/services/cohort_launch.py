@@ -351,7 +351,20 @@ class CohortLaunchCoordinator:
         """Dispatch V2 slots from the durable receipt, never a browser timer."""
 
         service = CohortBatchLaunchService(artifacts_root=self._artifacts_root)
-        for slot in receipt.member_schedule:
+        outcomes = await service.scheduled_member_outcomes(
+            account_id=receipt.account_id,
+            cohort_id=receipt.cohort_id,
+        )
+        if any(outcome.state == "blocked" for outcome in outcomes.values()):
+            await self._record_cascade_skips(
+                service=service,
+                receipt=receipt,
+                candidate_slots=receipt.member_schedule,
+                existing_outcomes=outcomes,
+                recorded_at_ms=self._now_ms(),
+            )
+            return
+        for slot_index, slot in enumerate(receipt.member_schedule):
             delay_seconds = max(0, slot.scheduled_start_at_ms - self._now_ms()) / 1_000
             try:
                 await asyncio.wait_for(stop.wait(), timeout=delay_seconds)
@@ -381,7 +394,7 @@ class CohortLaunchCoordinator:
                     outcome = CohortBatchLaunchMemberOutcome(
                         strategy_instance_id=slot.strategy_instance_id,
                         state="blocked",
-                        reason=str(detail.get("reason_code", "COHORT_POSTURE_MISMATCH")),
+                        reason="COHORT_POSTURE_MISMATCH",
                         next_safe_action=str(
                             detail.get(
                                 "message",
@@ -391,12 +404,22 @@ class CohortLaunchCoordinator:
                     )
                 else:
                     outcome = await self._start_scheduled_member(receipt, slot)
+            recorded_at_ms = self._now_ms()
             await service.record_scheduled_member_outcome(
                 account_id=receipt.account_id,
                 cohort_id=receipt.cohort_id,
                 outcome=outcome,
-                recorded_at_ms=self._now_ms(),
+                recorded_at_ms=recorded_at_ms,
             )
+            if outcome.state == "blocked":
+                await self._record_cascade_skips(
+                    service=service,
+                    receipt=receipt,
+                    candidate_slots=receipt.member_schedule[slot_index + 1 :],
+                    existing_outcomes=outcomes,
+                    recorded_at_ms=recorded_at_ms,
+                )
+                return
         outcomes = await service.scheduled_member_outcomes(
             account_id=receipt.account_id,
             cohort_id=receipt.cohort_id,
@@ -405,6 +428,32 @@ class CohortLaunchCoordinator:
             outcome.state == "accepted" for outcome in outcomes.values()
         ):
             await self._start_evidence_sampler(receipt)
+
+    async def _record_cascade_skips(
+        self,
+        *,
+        service: CohortBatchLaunchService,
+        receipt: CohortBatchLaunchReceipt,
+        candidate_slots: tuple[CohortBatchLaunchMemberSchedule, ...],
+        existing_outcomes: dict[str, CohortBatchLaunchMemberOutcome],
+        recorded_at_ms: int,
+    ) -> None:
+        """Durably close every later slot after the cohort's first blocker."""
+
+        for slot in candidate_slots:
+            if slot.strategy_instance_id in existing_outcomes:
+                continue
+            await service.record_scheduled_member_outcome(
+                account_id=receipt.account_id,
+                cohort_id=receipt.cohort_id,
+                outcome=CohortBatchLaunchMemberOutcome(
+                    strategy_instance_id=slot.strategy_instance_id,
+                    state="skipped",
+                    reason="COHORT_PRIOR_MEMBER_BLOCKED",
+                    next_safe_action="Inspect the recorded member blocker before authorizing a new cohort.",
+                ),
+                recorded_at_ms=recorded_at_ms,
+            )
 
     async def _resolve_scheduled_offer(
         self,
@@ -574,7 +623,6 @@ class CohortLaunchCoordinator:
                 ),
             )
         except HTTPException as exc:
-            reason = exc.detail.get("reason_code") if isinstance(exc.detail, dict) else None
             next_safe_action = "Refresh roll call and resolve the backend blocker before authorizing a new cohort."
             if isinstance(exc.detail, dict) and isinstance(exc.detail.get("message"), str):
                 next_safe_action = exc.detail["message"]
@@ -583,7 +631,7 @@ class CohortLaunchCoordinator:
             return CohortBatchLaunchMemberOutcome(
                 strategy_instance_id=member.pin.strategy_instance_id,
                 state="blocked",
-                reason=reason if isinstance(reason, str) else "COHORT_START_REJECTED",
+                reason="COHORT_START_REJECTED",
                 next_safe_action=next_safe_action,
             )
         except Exception:

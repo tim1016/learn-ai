@@ -417,8 +417,9 @@ export class BotsPageComponent {
       const outcomesById = new Map(
         cohort.outcomes.map((outcome) => [outcome.strategy_instance_id, outcome]),
       );
-      if (cohort.outcomes_state !== 'recorded') {
-        const outcomesArePending = cohort.outcomes_state === 'pending';
+      const outcomesAreComplete = cohort.member_strategy_instance_ids.every((memberId) => outcomesById.has(memberId));
+      if (cohort.outcomes_state !== 'recorded' || !outcomesAreComplete) {
+        const outcomesArePending = cohort.outcomes_state !== 'unreadable';
         this.launchProgress.update((current) => ({
           ...current,
           phase: outcomesArePending ? 'running' : 'blocked',
