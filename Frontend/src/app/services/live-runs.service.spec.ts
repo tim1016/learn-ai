@@ -153,7 +153,7 @@ describe('LiveRunsService start/stop proxy', () => {
     await expect(promise).resolves.toEqual(response);
   });
 
-  it('reads the latest durable cohort receipt through the account endpoint', async () => {
+  it('reads a fresh latest durable cohort receipt through the account endpoint', async () => {
     const response: CohortBatchLaunchStatus = {
       schema_version: 1,
       account_id: 'DU123',
@@ -179,7 +179,10 @@ describe('LiveRunsService start/stop proxy', () => {
     };
     const promise = service.getLatestCohortBatchLaunch('DU123');
 
-    const req = httpMock.expectOne('/api/accounts/DU123/cohort-batch-launches/latest');
+    const req = httpMock.expectOne((request) =>
+      request.url === '/api/accounts/DU123/cohort-batch-launches/latest'
+      && request.params.has('cache_bust'),
+    );
     expect(req.request.method).toBe('GET');
     req.flush(response);
 

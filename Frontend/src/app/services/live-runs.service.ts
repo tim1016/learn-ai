@@ -254,6 +254,7 @@ export class LiveRunsService {
   getLatestCohortBatchLaunch(accountId: string): Promise<CohortBatchLaunchStatus | null> {
     return firstValueFrom(this.http.get<CohortBatchLaunchStatus | null>(
       `/api/accounts/${encodeURIComponent(accountId)}/cohort-batch-launches/latest`,
+      { params: new HttpParams().set('cache_bust', String(Date.now())) },
     ));
   }
 

@@ -795,27 +795,35 @@ def test_emergency_flatten_runs_cli_and_reports_success(
     from app.engine.live import host_daemon as hd
 
     manager, run_dir = daemon_context
-    captured: dict[str, list[str]] = {}
+    captured: dict[str, object] = {}
 
     class _Result:
         returncode = 0
         stdout = ""
         stderr = ""
 
-    def fake_run(command: list[str], **_kwargs: object) -> _Result:
+    def fake_run(command: list[str], **kwargs: object) -> _Result:
         captured["command"] = command
+        captured["env"] = kwargs["env"]
         return _Result()
 
+    monkeypatch.setenv("IBKR_HOST", "host.containers.internal")
+    monkeypatch.setenv("IBKR_CLIENT_ID", "42")
     monkeypatch.setattr(hd.subprocess, "run", fake_run)
 
     resp = manager.emergency_flatten(RUN_ID, "DU123")
 
     assert resp.accepted is True
     cmd = captured["command"]
+    assert isinstance(cmd, list)
     assert cmd[1:4] == ["-m", "app.engine.live.run", "emergency-flatten"]
     assert "--confirm" in cmd
     assert "DU123" in cmd
     assert str(run_dir.resolve()) in cmd
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["IBKR_HOST"] == "127.0.0.1"
+    assert env["IBKR_CLIENT_ID"] == "1000000"
 
 
 def test_account_emergency_flatten_mints_audit_run_without_existing_bot(

@@ -125,6 +125,7 @@ _IBKR_CLIENT_ID_MIN = 1
 _IBKR_CLIENT_ID_MAX = 2**31 - 1
 _IBKR_CLIENT_ID_POOL_MAX_SPAN = 1_000
 _IBKR_CLIENT_ID_IN_USE = "IBKR_CLIENT_ID_IN_USE"
+_EMERGENCY_FLATTEN_IBKR_CLIENT_ID = 1_000_000
 _ACCOUNT_CLERK_HANDSHAKE_TIMEOUT_SECONDS = 5.0
 _ACCOUNT_CLERK_TERMINATE_WAIT_SECONDS = 2.0
 _ACCOUNT_CLERK_KILL_WAIT_SECONDS = 2.0
@@ -935,6 +936,11 @@ class RunnerProcessManager:
             python_path = str(self.repo_root / "PythonDataService")
             existing = env.get("PYTHONPATH")
             env["PYTHONPATH"] = python_path if not existing else f"{python_path}{os.pathsep}{existing}"
+            env["IBKR_HOST"] = host_process_ibkr_host(env.get("IBKR_HOST", "auto"))
+            # This one-shot client must not inherit the data-plane's or an
+            # ordinary bot's session identity.  The dedicated ID is outside
+            # the configurable host-runner pool (whose default is 50-99).
+            env["IBKR_CLIENT_ID"] = str(_EMERGENCY_FLATTEN_IBKR_CLIENT_ID)
             try:
                 proc = subprocess.run(
                     command,
