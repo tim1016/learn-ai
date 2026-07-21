@@ -96,7 +96,7 @@ from app.schemas.operator_blocker import (
 )
 from app.services.account_truth_snapshot import (
     AccountTruthAssessment,
-    AccountTruthReadinessEvidence,
+    AccountTruthReadiness,
     assess_account_truth,
 )
 from app.services.broker_activity_publisher import BrokerActivityPublisher
@@ -1345,7 +1345,7 @@ def compute_operator_surface(
     control_plane_state: DaemonConnectivityState | None = None,
     latest_mutation: MutationAttempt | None = None,
     broker_observation_consistency: BrokerObservationConsistency | None = None,
-    account_truth_snapshot: AccountTruthReadinessEvidence | None = None,
+    account_truth_readiness: AccountTruthReadiness | None = None,
     fleet_blocks_starts: bool = False,
     daemon_diagnostic_condition: DaemonDominantCondition | None = None,
     durable_control_write_failure: str | None = None,
@@ -1458,7 +1458,11 @@ def compute_operator_surface(
     )
     runtime_freshness_projection = _project_runtime_freshness(runtime_freshness)
     control_plane_projection = _project_control_plane(control_plane_state)
-    account_truth_assessment = assess_account_truth(account_truth_snapshot, now_ms=now_ms)
+    account_truth_assessment = (
+        account_truth_readiness.assessment
+        if account_truth_readiness is not None
+        else assess_account_truth(None, now_ms=now_ms)
+    )
     submit_readiness = author_submit_readiness(
         host_process=host_process,
         broker=broker_projection,

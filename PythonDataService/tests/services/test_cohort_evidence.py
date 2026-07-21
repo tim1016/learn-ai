@@ -7,10 +7,14 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app.engine.live.account_artifacts import (
+    CohortBatchLaunchMemberOutcome,
     CohortBatchLaunchMemberPin,
+    CohortBatchLaunchMemberSchedule,
     CohortBatchLaunchReceipt,
+    append_account_event,
     read_account_events,
     record_cohort_batch_launch_receipt,
 )
@@ -25,6 +29,7 @@ from app.schemas.live_runs import (
     BotRollCallSummary,
     HostRunnerStartRequest,
 )
+from app.services import cohort_launch
 from app.services.cohort_batch_launch import CohortBatchLaunchService, parse_cohort_evidence_sample
 from app.services.cohort_evidence import (
     CohortEvidenceSample,
@@ -56,6 +61,98 @@ def _sample(at_ms: int, *members: str) -> CohortEvidenceSample:
 
 async def _paper_target_account_posture(_account_id: str) -> str:
     return "PAPER_EXECUTION"
+
+
+def _three_bot_stagger_receipt(*, first_start_ms: int = 1_780_000_000_000) -> CohortBatchLaunchReceipt:
+    """Return a valid V2 receipt with deliberately distant later slots."""
+
+    members = ("bot-a", "bot-b", "bot-c")
+    return CohortBatchLaunchReceipt(
+        schema_version=2,
+        launch_profile="paper_three_bot_stagger_v2",
+        account_id="DU123456",
+        cohort_id="partial-outcomes-cohort",
+        member_strategy_instance_ids=members,
+        window_start_ms=first_start_ms + 1_805_000,
+        window_end_ms=first_start_ms + 1_805_000 + 3_600_000,
+        authorized_by="operator.alice",
+        recorded_at_ms=first_start_ms,
+        member_schedule=tuple(
+            CohortBatchLaunchMemberSchedule(
+                strategy_instance_id=member_id,
+                run_id=f"run-{member_id}",
+                scheduled_start_at_ms=first_start_ms + (index * 900_000),
+                start_request={"strategy": "spy_ema_crossover"},
+            )
+            for index, member_id in enumerate(members)
+        ),
+    )
+
+
+def test_cohort_member_outcome_rejects_an_unknown_reason_code() -> None:
+    with pytest.raises(ValidationError, match="reason"):
+        CohortBatchLaunchMemberOutcome(
+            strategy_instance_id="bot-a",
+            state="blocked",
+            reason="ACCOUNT_FROZEN",
+            next_safe_action="Clear the account freeze.",
+        )
+
+
+def test_scheduled_outcomes_project_partial_receipt_immediately(tmp_path: Path) -> None:
+    receipt = _three_bot_stagger_receipt()
+    record_cohort_batch_launch_receipt(tmp_path, receipt)
+    service = CohortBatchLaunchService(artifacts_root=tmp_path)
+
+    asyncio.run(
+        service.record_scheduled_member_outcome(
+            account_id=receipt.account_id,
+            cohort_id=receipt.cohort_id,
+            outcome=CohortBatchLaunchMemberOutcome(
+                strategy_instance_id="bot-a",
+                state="accepted",
+                reason="COHORT_START_ACCEPTED",
+                next_safe_action="Monitor the bot receipt state and account exposure.",
+            ),
+            recorded_at_ms=receipt.recorded_at_ms + 1,
+        )
+    )
+
+    status = asyncio.run(
+        service.get_status(account_id=receipt.account_id, cohort_id=receipt.cohort_id)
+    )
+
+    assert status is not None
+    assert status.outcomes_state == "recorded"
+    assert [outcome.strategy_instance_id for outcome in status.outcomes] == ["bot-a"]
+    assert status.member_strategy_instance_ids == ["bot-a", "bot-b", "bot-c"]
+
+
+def test_scheduled_outcomes_fail_closed_for_duplicate_member(tmp_path: Path) -> None:
+    receipt = _three_bot_stagger_receipt()
+    record_cohort_batch_launch_receipt(tmp_path, receipt)
+    duplicate = {
+        "event_type": "cohort_batch_launch_member_start_recorded",
+        "cohort_id": receipt.cohort_id,
+        "recorded_at_ms": receipt.recorded_at_ms + 1,
+        "strategy_instance_id": "bot-a",
+        "state": "accepted",
+        "reason": "COHORT_START_ACCEPTED",
+        "next_safe_action": "Monitor the bot receipt state and account exposure.",
+    }
+    append_account_event(tmp_path, receipt.account_id, duplicate)
+    append_account_event(tmp_path, receipt.account_id, duplicate)
+
+    status = asyncio.run(
+        CohortBatchLaunchService(artifacts_root=tmp_path).get_status(
+            account_id=receipt.account_id,
+            cohort_id=receipt.cohort_id,
+        )
+    )
+
+    assert status is not None
+    assert status.outcomes_state == "unreadable"
+    assert status.outcomes == []
 
 
 def test_healthy_overlap_requires_exact_concurrent_members() -> None:
@@ -318,6 +415,129 @@ def test_three_bot_stagger_dispatches_from_durable_schedule(tmp_path: Path) -> N
     assert [outcome.state for outcome in status.outcomes] == ["accepted", "accepted", "accepted"]
 
 
+def test_staggered_cohort_cascades_skips_without_waiting_for_later_slots(tmp_path: Path) -> None:
+    receipt = _three_bot_stagger_receipt(first_start_ms=0)
+    starts: list[str] = []
+
+    async def roll_call() -> BotRollCallResponse:
+        return BotRollCallResponse(
+            summary=BotRollCallSummary(ready=3),
+            offers=[
+                BotRollCallOffer(
+                    offer_id=f"offer-{member}",
+                    strategy_instance_id=member,
+                    run_id=f"run-{member}",
+                    session_date="2026-07-20",
+                    issued_at_ms=0,
+                    expires_at_ms=9_999_999,
+                )
+                for member in receipt.member_strategy_instance_ids
+            ],
+        )
+
+    async def start_run(run_id: str, _request: HostRunnerStartRequest) -> SimpleNamespace:
+        starts.append(run_id)
+        return SimpleNamespace(accepted=False)
+
+    coordinator = CohortLaunchCoordinator(
+        artifacts_root=tmp_path,
+        live_runs_root=tmp_path / "runs",
+        run_roll_call=roll_call,
+        start_run=start_run,
+        visible_runs_by_instance=lambda _root: {},
+        run_account_id=lambda _run_dir: None,
+        run_live_config=lambda _run_dir: {},
+        start_request_for_run=lambda _run_dir: None,
+        target_account_posture=_paper_target_account_posture,
+        now_ms=lambda: 0,
+        evidence_samplers=CohortEvidenceSamplerRegistry(),
+        launch_schedulers=CohortLaunchSchedulerRegistry(),
+    )
+    record_cohort_batch_launch_receipt(tmp_path, receipt)
+
+    async def run_scheduler() -> None:
+        await asyncio.wait_for(
+            coordinator._run_staggered_cohort(receipt, asyncio.Event()),
+            timeout=0.1,
+        )
+
+    asyncio.run(run_scheduler())
+
+    assert starts == ["run-bot-a"]
+    status = asyncio.run(
+        CohortBatchLaunchService(artifacts_root=tmp_path).get_status(
+            account_id=receipt.account_id,
+            cohort_id=receipt.cohort_id,
+        )
+    )
+    assert status is not None
+    assert [outcome.state for outcome in status.outcomes] == ["blocked", "skipped", "skipped"]
+    assert [outcome.reason for outcome in status.outcomes] == [
+        "COHORT_START_NOT_ACCEPTED",
+        "COHORT_PRIOR_MEMBER_BLOCKED",
+        "COHORT_PRIOR_MEMBER_BLOCKED",
+    ]
+
+
+def test_restarted_staggered_cohort_cascades_existing_blocker_without_waiting(tmp_path: Path) -> None:
+    receipt = _three_bot_stagger_receipt(first_start_ms=0)
+    record_cohort_batch_launch_receipt(tmp_path, receipt)
+    service = CohortBatchLaunchService(artifacts_root=tmp_path)
+    asyncio.run(
+        service.record_scheduled_member_outcome(
+            account_id=receipt.account_id,
+            cohort_id=receipt.cohort_id,
+            outcome=CohortBatchLaunchMemberOutcome(
+                strategy_instance_id="bot-a",
+                state="blocked",
+                reason="COHORT_START_NOT_ACCEPTED",
+                next_safe_action="Review the backend start response before authorizing a new cohort.",
+            ),
+            recorded_at_ms=0,
+        )
+    )
+
+    async def unexpected_roll_call() -> BotRollCallResponse:
+        raise AssertionError("a durable blocker must end the scheduler before a roll call")
+
+    async def unexpected_start(_run_id: str, _request: HostRunnerStartRequest) -> SimpleNamespace:
+        raise AssertionError("a durable blocker must end the scheduler before a start")
+
+    coordinator = CohortLaunchCoordinator(
+        artifacts_root=tmp_path,
+        live_runs_root=tmp_path / "runs",
+        run_roll_call=unexpected_roll_call,
+        start_run=unexpected_start,
+        visible_runs_by_instance=lambda _root: {},
+        run_account_id=lambda _run_dir: None,
+        run_live_config=lambda _run_dir: {},
+        start_request_for_run=lambda _run_dir: None,
+        target_account_posture=_paper_target_account_posture,
+        now_ms=lambda: 0,
+        evidence_samplers=CohortEvidenceSamplerRegistry(),
+        launch_schedulers=CohortLaunchSchedulerRegistry(),
+    )
+
+    async def run_restarted_scheduler() -> None:
+        await asyncio.wait_for(
+            coordinator._run_staggered_cohort(receipt, asyncio.Event()),
+            timeout=0.1,
+        )
+
+    asyncio.run(run_restarted_scheduler())
+
+    status = asyncio.run(
+        service.get_status(account_id=receipt.account_id, cohort_id=receipt.cohort_id)
+    )
+    assert status is not None
+    assert [outcome.state for outcome in status.outcomes] == ["blocked", "skipped", "skipped"]
+    assert [outcome.reason for outcome in status.outcomes] == [
+        "COHORT_START_NOT_ACCEPTED",
+        "COHORT_PRIOR_MEMBER_BLOCKED",
+        "COHORT_PRIOR_MEMBER_BLOCKED",
+    ]
+
+
 def test_three_bot_stagger_refuses_before_authorization_when_restart_budget_is_exhausted(tmp_path: Path) -> None:
     for index, recorded_at_ms in enumerate((1_000, 2_000), start=1):
         write_account_instance_binding(
@@ -510,6 +730,84 @@ def test_runtime_observer_fails_member_when_poisoned_flag_precedes_sidecar_updat
     assert sample.reason == "COHORT_MEMBER_HALTED"
 
 
+async def test_runtime_observer_does_not_fetch_broker_positions(tmp_path: Path, monkeypatch) -> None:
+    from app.broker.ibkr import account as ibkr_account
+
+    observer = CohortEvidenceRuntimeObserver(
+        live_runs_root=tmp_path,
+        visible_runs_by_instance=lambda _root: {},
+        now_ms=lambda: 10_000,
+    )
+    receipt = CohortBatchLaunchReceipt(
+        account_id="DU123456",
+        cohort_id="cohort-a",
+        member_strategy_instance_ids=("bot-a",),
+        window_start_ms=10_000,
+        window_end_ms=20_000,
+        authorized_by="operator.alice",
+        recorded_at_ms=10_000,
+        member_pins=(
+            CohortBatchLaunchMemberPin(
+                strategy_instance_id="bot-a",
+                run_id="run-a",
+                roll_call_offer_id="offer-a",
+            ),
+        ),
+    )
+    class BrokerPositionFetchForbidden(BaseException):
+        pass
+
+    async def fail_if_broker_position_fetches(*_args, **_kwargs) -> None:
+        raise BrokerPositionFetchForbidden("cohort observation must not call IBKR")
+
+    monkeypatch.setattr(ibkr_account, "fetch_positions", fail_if_broker_position_fetches)
+
+    sample = await observer.observe(receipt, expected_at_ms=10_000)
+
+    assert sample.fleet == "unknown"
+
+
+async def test_runtime_observer_propagates_unexpected_account_projection_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from app.services import cohort_evidence_runtime
+
+    observer = CohortEvidenceRuntimeObserver(
+        live_runs_root=tmp_path,
+        visible_runs_by_instance=lambda _root: {},
+        now_ms=lambda: 10_000,
+    )
+    receipt = CohortBatchLaunchReceipt(
+        account_id="DU123456",
+        cohort_id="cohort-a",
+        member_strategy_instance_ids=("bot-a",),
+        window_start_ms=10_000,
+        window_end_ms=20_000,
+        authorized_by="operator.alice",
+        recorded_at_ms=10_000,
+        member_pins=(
+            CohortBatchLaunchMemberPin(
+                strategy_instance_id="bot-a",
+                run_id="run-a",
+                roll_call_offer_id="offer-a",
+            ),
+        ),
+    )
+
+    def fail_account_projection(*_args, **_kwargs) -> None:
+        raise RuntimeError("account projection corrupt")
+
+    monkeypatch.setattr(
+        cohort_evidence_runtime,
+        "build_account_fleet_read_contexts",
+        fail_account_projection,
+    )
+
+    with pytest.raises(RuntimeError, match="account projection corrupt"):
+        await observer.observe(receipt, expected_at_ms=10_000)
+
+
 def test_runtime_observer_requires_fresh_running_runtime_and_ready_vector(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -569,3 +867,74 @@ def test_runtime_observer_requires_fresh_running_runtime_and_ready_vector(
 
     assert sample.state == "failed"
     assert sample.reason == "RUNTIME_READINESS_BLOCKED"
+
+
+def _retry_coordinator(tmp_path, roll_call):
+    async def _unused_start(_run_id, _request):
+        raise AssertionError("start_run must not be called during offer resolution")
+
+    async def _unused_posture(_account_id):
+        raise AssertionError("posture must not be called during offer resolution")
+
+    return CohortLaunchCoordinator(
+        artifacts_root=tmp_path,
+        live_runs_root=tmp_path / "runs",
+        run_roll_call=roll_call,
+        start_run=_unused_start,
+        visible_runs_by_instance=lambda _root: {},
+        run_account_id=lambda _run_dir: None,
+        run_live_config=lambda _run_dir: {},
+        start_request_for_run=lambda _run_dir: None,
+        target_account_posture=_unused_posture,
+        now_ms=lambda: 0,
+        evidence_samplers=CohortEvidenceSamplerRegistry(),
+        launch_schedulers=CohortLaunchSchedulerRegistry(),
+    )
+
+
+def test_slot_preflight_retries_a_transient_roll_call_miss(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cohort_launch, "_SLOT_PREFLIGHT_RETRY_DELAY_S", 0)
+    slot = CohortBatchLaunchMemberSchedule(
+        strategy_instance_id="bot-nvda", run_id="run-nvda", scheduled_start_at_ms=0, start_request={}
+    )
+    offer = BotRollCallOffer(
+        offer_id="offer-nvda",
+        strategy_instance_id="bot-nvda",
+        run_id="run-nvda",
+        session_date="2026-07-20",
+        issued_at_ms=0,
+        expires_at_ms=9_999_999,
+    )
+    calls = {"n": 0}
+
+    async def roll_call() -> BotRollCallResponse:
+        calls["n"] += 1
+        # The pinned member is omitted on the first two slot roll calls (a
+        # transient eligibility flip) and only appears on the third.
+        offers = [offer] if calls["n"] >= 3 else []
+        return BotRollCallResponse(summary=BotRollCallSummary(ready=len(offers)), offers=offers)
+
+    coordinator = _retry_coordinator(tmp_path, roll_call)
+    resolved = asyncio.run(coordinator._resolve_scheduled_offer(slot))
+
+    assert resolved is not None
+    assert resolved.offer_id == "offer-nvda"
+    assert calls["n"] == 3
+
+
+def test_slot_preflight_gives_up_after_max_attempts(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(cohort_launch, "_SLOT_PREFLIGHT_RETRY_DELAY_S", 0)
+    slot = CohortBatchLaunchMemberSchedule(
+        strategy_instance_id="bot-nvda", run_id="run-nvda", scheduled_start_at_ms=0, start_request={}
+    )
+    calls = {"n": 0}
+
+    async def roll_call() -> BotRollCallResponse:
+        calls["n"] += 1
+        return BotRollCallResponse(summary=BotRollCallSummary(ready=0), offers=[])
+
+    coordinator = _retry_coordinator(tmp_path, roll_call)
+    resolved = asyncio.run(coordinator._resolve_scheduled_offer(slot))
+
+    assert resolved is None
+    assert calls["n"] == cohort_launch._SLOT_PREFLIGHT_MAX_ATTEMPTS

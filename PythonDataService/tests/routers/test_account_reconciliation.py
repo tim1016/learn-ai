@@ -335,7 +335,7 @@ async def test_latest_cohort_status_reloads_exact_persisted_blocker(tmp_path: Pa
                 CohortBatchLaunchMemberOutcome(
                     strategy_instance_id="spy-b",
                     state="blocked",
-                    reason="ACCOUNT_FROZEN",
+                    reason="COHORT_START_REJECTED",
                     next_safe_action="Clear the account freeze.",
                 ),
             ),
@@ -361,7 +361,7 @@ async def test_latest_cohort_status_reloads_exact_persisted_blocker(tmp_path: Pa
     assert body["outcomes"][1] == {
         "strategy_instance_id": "spy-b",
         "state": "blocked",
-        "reason": "ACCOUNT_FROZEN",
+        "reason": "COHORT_START_REJECTED",
         "next_safe_action": "Clear the account freeze.",
     }
 

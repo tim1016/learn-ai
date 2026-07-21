@@ -15,7 +15,13 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
-from app.schemas.cohort_batch_launch import validate_cohort_batch_launch_window_and_members
+from app.schemas.cohort_batch_launch import (
+    COHORT_EVIDENCE_CADENCE_MS,
+    COHORT_STAGGER_PROFILES,
+    CohortBatchLaunchMemberOutcomeReason,
+    CohortStaggerProfileName,
+    validate_cohort_batch_launch_window_and_members,
+)
 from app.schemas.live_runs import GateResult
 
 ACCOUNT_FREEZE_FILENAME = "unresolved_exposure.flag"
@@ -270,7 +276,7 @@ class CohortBatchLaunchReceipt(BaseModel):
     recorded_at_ms: int = Field(ge=0)
     member_pins: tuple[CohortBatchLaunchMemberPin, ...] = ()
     request_provenance: CohortBatchLaunchRequestProvenance | None = None
-    launch_profile: Literal["paper_three_bot_stagger_v2"] | None = None
+    launch_profile: CohortStaggerProfileName | None = None
     member_schedule: tuple[CohortBatchLaunchMemberSchedule, ...] = ()
 
     @model_validator(mode="after")
@@ -288,22 +294,29 @@ class CohortBatchLaunchReceipt(BaseModel):
             if self.launch_profile is not None or self.member_schedule:
                 raise ValueError("V1 cohort receipts cannot contain a V2 launch profile or schedule")
             return self
-        if self.launch_profile != "paper_three_bot_stagger_v2":
-            raise ValueError("V2 cohort receipt must use the fixed paper three-bot stagger profile")
-        if len(self.member_strategy_instance_ids) != 3:
-            raise ValueError("paper three-bot stagger requires exactly three members")
-        if len(self.member_schedule) != 3:
-            raise ValueError("paper three-bot stagger requires exactly three schedule slots")
+        profile = COHORT_STAGGER_PROFILES.get(self.launch_profile) if self.launch_profile else None
+        if profile is None:
+            raise ValueError("V2 cohort receipt must use a known staggered launch profile")
+        member_count = profile.member_count
+        if len(self.member_strategy_instance_ids) != member_count:
+            raise ValueError(f"{self.launch_profile} requires exactly {member_count} members")
+        if len(self.member_schedule) != member_count:
+            raise ValueError(f"{self.launch_profile} requires exactly {member_count} schedule slots")
         if {slot.strategy_instance_id for slot in self.member_schedule} != set(self.member_strategy_instance_ids):
             raise ValueError("member_schedule must cover exactly the authorized cohort members")
         ordered_slots = tuple(sorted(self.member_schedule, key=lambda slot: slot.scheduled_start_at_ms))
         first_start = ordered_slots[0].scheduled_start_at_ms
-        if tuple(slot.scheduled_start_at_ms - first_start for slot in ordered_slots) != (0, 900_000, 1_800_000):
-            raise ValueError("paper three-bot stagger slots must be T+0, T+15m, and T+30m")
-        if self.window_start_ms != ordered_slots[-1].scheduled_start_at_ms + 5_000:
+        expected_offsets = tuple(index * profile.stagger_ms for index in range(member_count))
+        if tuple(slot.scheduled_start_at_ms - first_start for slot in ordered_slots) != expected_offsets:
+            raise ValueError(
+                f"{self.launch_profile} slots must be staggered evenly by {profile.stagger_ms} ms"
+            )
+        if self.window_start_ms != ordered_slots[-1].scheduled_start_at_ms + COHORT_EVIDENCE_CADENCE_MS:
             raise ValueError("V2 validation window must begin one evidence cadence after the final start")
-        if self.window_end_ms - self.window_start_ms != 3_600_000:
-            raise ValueError("V2 validation window must require sixty minutes of healthy overlap")
+        if self.window_end_ms - self.window_start_ms != profile.overlap_ms:
+            raise ValueError(
+                f"{self.launch_profile} validation window must require {profile.overlap_ms} ms of healthy overlap"
+            )
         return self
 
 
@@ -333,7 +346,7 @@ class CohortBatchLaunchMemberOutcome(BaseModel):
 
     strategy_instance_id: str = Field(min_length=1, max_length=128)
     state: Literal["accepted", "blocked", "skipped"]
-    reason: str = Field(min_length=1, max_length=512)
+    reason: CohortBatchLaunchMemberOutcomeReason
     next_safe_action: str = Field(min_length=1, max_length=512)
 
 

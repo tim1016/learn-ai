@@ -34,9 +34,10 @@ export class CohortLaunchDialogComponent {
   readonly accountId = input<string | null>(null);
   readonly accountPosture = input<CohortTargetPosture>('UNKNOWN');
   readonly selectedIds = input.required<ReadonlySet<string>>();
+  readonly staggerPresetCounts = input<readonly number[]>([]);
   readonly authorize = output<readonly string[]>();
   readonly selectionToggled = output<string>();
-  readonly threeBotPresetRequested = output();
+  readonly staggerPresetRequested = output<number>();
   readonly cancelled = output();
 
   readonly hardBlockerCount = computed(() =>

@@ -86,6 +86,26 @@ class AccountTruthAssessment:
         )
 
 
+@dataclass(frozen=True)
+class AccountTruthReadiness:
+    """Evidence and its one matching readiness assessment."""
+
+    evidence: AccountTruthReadinessEvidence | None
+    assessment: AccountTruthAssessment
+
+    @classmethod
+    def from_evidence(
+        cls,
+        evidence: AccountTruthReadinessEvidence | None,
+        *,
+        now_ms: int,
+    ) -> AccountTruthReadiness:
+        return cls(
+            evidence=evidence,
+            assessment=assess_account_truth(evidence, now_ms=now_ms),
+        )
+
+
 class AccountTruthSnapshotProvider:
     """Process-local cache of the latest Account Truth projection by account."""
 

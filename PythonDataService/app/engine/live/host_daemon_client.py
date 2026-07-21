@@ -39,6 +39,13 @@ _TIMEOUT = httpx.Timeout(2.0)
 # owning processes. Keep this read bounded, but do not force false degradation
 # with the generic low-latency health timeout.
 _SOCKET_PROBE_TIMEOUT = httpx.Timeout(10.0)
+# The roll-call falls back to a per-bot /instances/{id}/process probe for idle
+# candidates the daemon's bulk snapshot omits. Under concurrent load the single-
+# loop daemon (managing running bots + their fill/order streams) can exceed the 2s
+# health timeout, which would silently drop an otherwise-ready member from the roll
+# call at its slot. A startability probe can afford to wait longer than a liveness
+# GET; keep it bounded so a genuinely wedged daemon still surfaces.
+_INSTANCE_PROBE_TIMEOUT = httpx.Timeout(10.0)
 # Deploy runs git + file hashing on the host; allow more headroom than the
 # liveness GETs, but still bounded so a wedged daemon surfaces as 503.
 _DEPLOY_TIMEOUT = httpx.Timeout(15.0)
@@ -367,7 +374,8 @@ async def fetch_instance_process(
 ) -> tuple[DaemonResult, dict | None]:
     """GET /instances/{id}/process. Returns ``(DaemonResult, dict | None)``."""
     return await _typed_get_json(
-        f"{base_url.rstrip('/')}/instances/{strategy_instance_id}/process"
+        f"{base_url.rstrip('/')}/instances/{strategy_instance_id}/process",
+        timeout=_INSTANCE_PROBE_TIMEOUT,
     )
 
 

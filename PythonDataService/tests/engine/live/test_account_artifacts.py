@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from app.engine.live import account_artifacts, account_registry
 from app.engine.live.account_artifacts import (
@@ -14,6 +15,8 @@ from app.engine.live.account_artifacts import (
     AccountClerkLease,
     AccountFreezeEvidence,
     AccountRecoveryProof,
+    CohortBatchLaunchMemberPin,
+    CohortBatchLaunchMemberSchedule,
     CohortBatchLaunchReceipt,
     RestartIntensityPolicy,
     account_artifacts_root,
@@ -36,6 +39,7 @@ from app.engine.live.account_registry import (
     AccountInstanceBinding,
     write_account_instance_binding,
 )
+from app.schemas.cohort_batch_launch import COHORT_EVIDENCE_CADENCE_MS, COHORT_STAGGER_PROFILES
 from app.schemas.live_runs import GateResult
 
 
@@ -712,6 +716,86 @@ def test_restart_intensity_counts_authorized_cohort_bindings_once(tmp_path: Path
     assert event["window_start_ms"] == 1_700_000_000_000
     assert event["window_end_ms"] == 1_700_000_030_000
     assert event["authorized_by"] == "operator.alice"
+
+
+def _staggered_receipt(profile_name: str) -> CohortBatchLaunchReceipt:
+    profile = COHORT_STAGGER_PROFILES[profile_name]
+    ids = tuple(f"bot-{index}" for index in range(profile.member_count))
+    pins = tuple(
+        CohortBatchLaunchMemberPin(
+            strategy_instance_id=sid, run_id=f"run-{sid}", roll_call_offer_id=f"offer-{sid}"
+        )
+        for sid in ids
+    )
+    schedule = tuple(
+        CohortBatchLaunchMemberSchedule(
+            strategy_instance_id=sid,
+            run_id=f"run-{sid}",
+            scheduled_start_at_ms=1_700_000_000_000 + index * profile.stagger_ms,
+            start_request={"symbol": sid},
+        )
+        for index, sid in enumerate(ids)
+    )
+    window_start_ms = schedule[-1].scheduled_start_at_ms + COHORT_EVIDENCE_CADENCE_MS
+    return CohortBatchLaunchReceipt(
+        schema_version=2,
+        launch_profile=profile_name,
+        account_id="DU123456",
+        cohort_id="paper-validation-1-abc",
+        member_strategy_instance_ids=ids,
+        window_start_ms=window_start_ms,
+        window_end_ms=window_start_ms + profile.overlap_ms,
+        authorized_by="operator.alice",
+        recorded_at_ms=1_700_000_000_000,
+        member_pins=pins,
+        member_schedule=schedule,
+    )
+
+
+def test_v2_cohort_receipt_accepts_five_bot_stagger_profile() -> None:
+    receipt = _staggered_receipt("paper_five_bot_stagger_v2")
+
+    assert len(receipt.member_schedule) == 5
+    first_start = receipt.member_schedule[0].scheduled_start_at_ms
+    offsets = tuple(slot.scheduled_start_at_ms - first_start for slot in receipt.member_schedule)
+    assert offsets == (0, 300_000, 600_000, 900_000, 1_200_000)
+    assert receipt.window_end_ms - receipt.window_start_ms == 45 * 60 * 1_000
+
+
+def test_v2_cohort_receipt_rejects_five_bot_stagger_with_wrong_spacing() -> None:
+    profile = COHORT_STAGGER_PROFILES["paper_five_bot_stagger_v2"]
+    ids = tuple(f"bot-{index}" for index in range(profile.member_count))
+    pins = tuple(
+        CohortBatchLaunchMemberPin(
+            strategy_instance_id=sid, run_id=f"run-{sid}", roll_call_offer_id=f"offer-{sid}"
+        )
+        for sid in ids
+    )
+    schedule = tuple(
+        CohortBatchLaunchMemberSchedule(
+            strategy_instance_id=sid,
+            run_id=f"run-{sid}",
+            scheduled_start_at_ms=1_700_000_000_000 + index * 999,
+            start_request={},
+        )
+        for index, sid in enumerate(ids)
+    )
+    window_start_ms = schedule[-1].scheduled_start_at_ms + COHORT_EVIDENCE_CADENCE_MS
+
+    with pytest.raises(ValidationError, match="staggered evenly"):
+        CohortBatchLaunchReceipt(
+            schema_version=2,
+            launch_profile="paper_five_bot_stagger_v2",
+            account_id="DU123456",
+            cohort_id="paper-validation-1-abc",
+            member_strategy_instance_ids=ids,
+            window_start_ms=window_start_ms,
+            window_end_ms=window_start_ms + profile.overlap_ms,
+            authorized_by="operator.alice",
+            recorded_at_ms=1_700_000_000_000,
+            member_pins=pins,
+            member_schedule=schedule,
+        )
 
 
 def test_restart_intensity_counts_daemon_crash_restarts_individually_during_cohort_window(tmp_path: Path) -> None:
