@@ -89,6 +89,13 @@ def _forbid_broker_position_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ibkr_account, "fetch_positions", fail_if_called)
 
 
+def _forbid_account_truth_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fail_if_called(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("broker-free read attempted an Account Truth refresh")
+
+    monkeypatch.setattr(live_instances, "refresh_account_truth_now", fail_if_called)
+
+
 async def _capture_first_asgi_stream_body(
     app,
     path: str,
@@ -1230,6 +1237,7 @@ async def test_instance_status_does_not_fetch_broker_positions(
     _write_ledger(root, "run-status", "spy_ema_paper", 100)
     _set_daemon(monkeypatch, process={"state": "idle", "run_id": "run-status"})
     _forbid_broker_position_fetch(monkeypatch)
+    _forbid_account_truth_refresh(monkeypatch)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/api/live-instances/spy_ema_paper/status?refresh=true")
@@ -1245,6 +1253,7 @@ async def test_surface_producer_does_not_fetch_broker_positions(
     _write_ledger(root, "run-producer", "spy_ema_paper", 100)
     _set_daemon(monkeypatch, process={"state": "idle", "run_id": "run-producer"})
     _forbid_broker_position_fetch(monkeypatch)
+    _forbid_account_truth_refresh(monkeypatch)
 
     snapshot = await live_instances._assemble_instance_surface("spy_ema_paper")
 
