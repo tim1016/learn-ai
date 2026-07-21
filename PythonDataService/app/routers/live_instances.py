@@ -321,6 +321,7 @@ from app.services.runtime_freshness import (
     evaluate_runtime_freshness,
     unavailable_runtime_freshness,
 )
+from app.services.start_admission_policy import StartAdmissionDependencies, StartAdmissionService
 from app.services.strategy_validation_manifest import (
     StrategyValidationManifestError,
 )
@@ -2761,12 +2762,6 @@ async def preview_action_plan(plan: ActionPlan) -> ActionPlanPreviewResponse:
     return ActionPlanPreviewResponse(warnings=parity_diagnostics(plan))
 
 
-_START_DAEMON_STATE_REASON: dict[str, str] = {
-    "running": "ALREADY_RUNNING",
-    "stopping": "STOPPING",
-}
-
-
 def _bot_soft_deleted_detail(sid: str, run_id: str | None = None) -> dict[str, str]:
     detail = {
         "reason_code": "BOT_SOFT_DELETED",
@@ -2776,27 +2771,6 @@ def _bot_soft_deleted_detail(sid: str, run_id: str | None = None) -> dict[str, s
     if run_id is not None:
         detail["run_id"] = run_id
     return detail
-
-
-def _raise_if_start_boundary_blocks(root: Path, sid: str, *, now_ms: int) -> None:
-    runs = _visible_runs_by_instance(root).get(sid, [])
-    if not runs:
-        return
-    run_dir = Path(runs[0]["run_dir"])
-    verdict = start_boundary_verdict(now_ms, _live_config_for_run_dir(run_dir))
-    if verdict.allowed:
-        return
-    raise HTTPException(
-        status.HTTP_409_CONFLICT,
-        detail={
-            "reason_code": verdict.reason_code,
-            "message": verdict.message,
-            "gate_id": "daily_lifecycle.effective_stop",
-            "strategy_instance_id": sid,
-            "session_date": verdict.session_date,
-            "effective_stop_ms": verdict.effective_stop_ms,
-        },
-    )
 
 
 async def _ensure_account_observation_lease_allows_start(
@@ -2871,64 +2845,6 @@ async def _ensure_account_observation_lease_allows_start(
     )
 
 
-def _assert_roll_call_offer_allows_start(
-    root: Path,
-    sid: str,
-    run_id: str,
-    body: HostRunnerStartRequest,
-    *,
-    now_ms: int,
-) -> None:
-    if body.roll_call_offer_id is None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "ROLL_CALL_OFFER_REQUIRED",
-                "message": "Run roll call and start from the current offer.",
-                "remediation": "Run roll call, wait for this bot to show Ready, then click Start before the offer expires.",
-                "gate_id": "daily_lifecycle.roll_call_offer",
-                "strategy_instance_id": sid,
-            },
-        )
-    active = _active_roll_call_offer(root, sid, now_ms=now_ms)
-    if active is None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "ROLL_CALL_OFFER_EXPIRED",
-                "message": "The roll-call start offer is absent or expired. Run roll call again.",
-                "remediation": "Run roll call again, wait for this bot to show Ready, then click Start before the offer expires.",
-                "gate_id": "daily_lifecycle.roll_call_offer",
-                "strategy_instance_id": sid,
-            },
-        )
-    if active.offer_id != body.roll_call_offer_id:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "ROLL_CALL_OFFER_STALE",
-                "message": "This start request does not match the current roll-call offer.",
-                "remediation": "Refresh Bot Control, then start from the current roll-call offer.",
-                "gate_id": "daily_lifecycle.roll_call_offer",
-                "strategy_instance_id": sid,
-                "current_offer_id": active.offer_id,
-            },
-        )
-    if active.run_id != run_id:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "ROLL_CALL_OFFER_RUN_MISMATCH",
-                "message": "This roll-call offer belongs to a different run. Run roll call again.",
-                "remediation": "Run roll call again, then start the run attached to the new offer.",
-                "gate_id": "daily_lifecycle.roll_call_offer",
-                "strategy_instance_id": sid,
-                "run_id": run_id,
-                "offer_run_id": active.run_id,
-            },
-        )
-
-
 def _start_request_with_ledger_strategy_default(
     root: Path,
     run_id: str,
@@ -2966,31 +2882,6 @@ def _start_request_with_ledger_strategy_default(
                 "run_id": run_id,
             },
         ) from exc
-
-
-def _raise_if_lifecycle_retired(root: Path, sid: str) -> None:
-    try:
-        record = _bot_lifecycle_state_repo(root, sid).read()
-    except BotLifecycleStateCorruptError as exc:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "BOT_LIFECYCLE_STATE_UNREADABLE",
-                "message": "The bot lifecycle state is unreadable. Repair it before starting.",
-                "gate_id": "daily_lifecycle.phase",
-                "strategy_instance_id": sid,
-            },
-        ) from exc
-    if record is not None and record.phase == BotLifecyclePhase.RETIRED:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "BOT_RETIRED",
-                "message": "This bot is retired. Deploy a replacement bot before starting.",
-                "gate_id": "daily_lifecycle.phase",
-                "strategy_instance_id": sid,
-            },
-        )
 
 
 def _start_intent_repo(root: Path, sid: str) -> DesiredStateRepo:
@@ -3058,119 +2949,50 @@ def _restore_start_intent(
         )
 
 
-async def _assert_start_allowed(run_id: str, body: HostRunnerStartRequest, settings) -> None:
-    """Re-evaluate the start gates before forwarding /runs/{run_id}/start.
-
-    ADR 0013 amendment 2026-06-22 + design "Architectural permission for
-    Start bot process": the cockpit's ``host_process.start_capability``
-    is a status-time projection (polled every 4s). The data plane must
-    re-check the gates that block enablement before forwarding so a
-    stale ``enabled=true`` cannot bypass a STOPPED / poisoned / RUNNING
-    transition that happened between the trader's last poll and click.
-
-    Mirrors the projection's ``HostProcessStartDisabledReasonCode`` enum.
-    Legacy runs without a ledger / strategy_instance_id are passed
-    through — only the daemon is the gate for those.
-    """
-    root = Path(settings.live_runs_root)
-    # Resolve (sid, run_dir) through a disk scan rather than ``root / run_id``.
-    # ``_scan_runs_by_instance`` iterates ``root.iterdir()`` so every returned
-    # ``run_dir`` is a path produced by the filesystem walk, never a join of
-    # user-controlled input — this is what CodeQL traces as "untainted" (the
-    # ``_validate_run_id`` sanitizer alone does not bridge the function-call
-    # boundary in py/path-injection).
-    sid: str | None = None
-    run_dir: Path | None = None
-    for candidate_sid, runs in _scan_runs_by_instance(root).items():
-        for run in runs:
-            if run["run_id"] == run_id:
-                sid = candidate_sid
-                run_dir = Path(run["run_dir"])
-                break
-        if run_dir is not None:
-            break
-    if sid is None or run_dir is None:
-        return  # unknown run_id — daemon will 404; not our gate
-
-    if _run_is_soft_deleted(root.parent, sid, run_id):
-        raise HTTPException(
-            status.HTTP_410_GONE,
-            detail=_bot_soft_deleted_detail(sid, run_id),
-        )
-    _raise_if_lifecycle_retired(root, sid)
-
-    account_freeze = _resolve_account_freeze(
-        root.parent,
-        [{"run_dir": str(run_dir)}],
-    )
-    if account_freeze is not None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "ACCOUNT_FROZEN",
-                "message": "This broker account is frozen until unresolved exposure is reconciled.",
-                "gate_result": account_freeze.to_gate_result().model_dump(mode="json"),
-            },
-        )
-    account_id = _run_dir_account_id(run_dir)
-    if account_id is None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "ACCOUNT_ID_UNAVAILABLE",
-                "message": "The run ledger has no account identity; broker truth cannot be verified.",
-                "gate_id": "account.broker_truth",
-                "operator_next_step": "WAIT_FOR_BROKER_TRUTH",
-            },
-        )
-    now_ms = _now_ms()
+async def _interactive_start_observation_guard(
+    artifacts_root: Path,
+    account_id: str,
+    settings: IbkrSettings,
+    now_ms: int,
+) -> None:
     await _ensure_account_observation_lease_allows_start(
-        root.parent,
+        artifacts_root,
         account_id,
         settings,
         now_ms=now_ms,
     )
-    await _raise_if_fleet_contamination_blocks_start(root, account_id=account_id)
-    _raise_if_crash_recovery_blocks_start(
-        root.parent,
-        account_id=account_id,
-        strategy_instance_id=sid,
-    )
 
-    if (run_dir / "poisoned.flag").exists():
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "STOPPED_REQUIRES_REDEPLOY",
-                "message": "This run is permanently retired. Redeploy the bot to trade again.",
-            },
-        )
-    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
-    if daemon is None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "HOST_SERVICE_OFFLINE",
-                "message": "The bot service is offline. Start it on the host machine first.",
-            },
-        )
-    daemon_state = str(daemon.get("state") or "idle")
-    reason = _START_DAEMON_STATE_REASON.get(daemon_state)
-    if reason is not None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": reason,
-                "message": (
-                    "The bot is already running."
-                    if reason == "ALREADY_RUNNING"
-                    else "The bot is shutting down. Wait for it to finish before starting again."
-                ),
-            },
-        )
-    # idle / exited / unrecognised -> proceed; daemon performs its own start gates.
-    _raise_if_start_boundary_blocks(root, sid, now_ms=now_ms)
-    _assert_roll_call_offer_allows_start(root, sid, run_id, body, now_ms=now_ms)
+
+async def _interactive_start_fleet_guard(root: Path, account_id: str) -> None:
+    await _raise_if_fleet_contamination_blocks_start(root, account_id=account_id)
+
+
+def _start_admission_service(settings: IbkrSettings) -> StartAdmissionService:
+    root = Path(settings.live_runs_root)
+    return StartAdmissionService(
+        artifacts_root=root.parent,
+        live_runs_root=root,
+        settings=settings,
+        dependencies=StartAdmissionDependencies(
+            scan_runs_by_instance=_scan_runs_by_instance,
+            run_is_soft_deleted=_run_is_soft_deleted,
+            soft_deleted_detail=_bot_soft_deleted_detail,
+            account_freeze=_resolve_account_freeze,
+            run_account_id=_run_dir_account_id,
+            interactive_observation_guard=_interactive_start_observation_guard,
+            interactive_fleet_guard=_interactive_start_fleet_guard,
+            fetch_instance_process=host_daemon_client.fetch_instance_process,
+            active_roll_call_offer=lambda live_root, strategy_instance_id, now_ms: _active_roll_call_offer(
+                live_root,
+                strategy_instance_id,
+                now_ms=now_ms,
+            ),
+            read_account_events=read_account_events,
+            live_config_for_run=_live_config_for_run_dir,
+            start_boundary_allowed=start_boundary_verdict,
+            now_ms=_now_ms,
+        ),
+    )
 
 
 @router.post("/runs/{run_id}/start", response_model=HostRunnerActionResponse)
@@ -3188,8 +3010,8 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
     cockpit's ``host_process.start_capability`` projection used (ADR 0013
     amendment 2026-06-22): poisoned-flag, account freeze, daemon ``running`` /
     ``stopping``, host service unreachable, roll-call offer, and session
-    boundary. A stale ``enabled=true`` projection cannot bypass them — see
-    ``_assert_start_allowed``.
+    boundary. A stale ``enabled=true`` projection cannot bypass them — the
+    typed start-admission policy re-evaluates the interactive gate chain.
 
     Slice 3 (ADR 0011 amendment) — broker-activity publisher start. After
     a successful start the broker-activity publisher is registered for
@@ -3205,9 +3027,11 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
 
     settings = get_settings()
     root = Path(settings.live_runs_root)
-    await _assert_start_allowed(run_id, body, settings)
+    admission = await _start_admission_service(settings).admit(run_id, body)
+    if admission.refusal is not None:
+        raise HTTPException(admission.refusal.status_code, detail=admission.refusal.detail)
     body = _start_request_with_ledger_strategy_default(root, run_id, body)
-    sid = _strategy_instance_id_for_run(root, run_id)
+    sid = admission.strategy_instance_id or _strategy_instance_id_for_run(root, run_id)
     if sid is None:
         raise HTTPException(
             status.HTTP_409_CONFLICT,

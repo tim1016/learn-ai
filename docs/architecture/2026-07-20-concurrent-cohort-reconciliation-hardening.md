@@ -235,6 +235,29 @@ designed single-bot-first, and N-bot concurrency was bolted on.** Concretely:
   shared-account complexity is deemed not worth it — but note it does NOT fix
   blindspots 4, 5, 7, 8, which are about the control plane, not the account.
 
+### Start-gate classification for receipt-authorized cohort slots
+
+The interactive `POST /runs/{run_id}/start` path remains the complete
+fail-closed admission chain. A V2 staggered cohort has already passed that
+chain before its authorization receipt is written, so a scheduled member uses
+the typed receipt-authorized policy below. Each current gate belongs to exactly
+one class; this prevents a later slot from silently rebuilding fleet
+eligibility under load.
+
+| Existing start gate | Receipt-authorized class | Why |
+|---|---|---|
+| Run exists / exact `strategy_instance_id` and account | Admission-proved | The receipt is selected only when its account, member pin, and scheduled `run_id` exactly match the resolved run. Unknown runs remain the daemon's 404 authority. |
+| Persisted start request | Admission-proved | The request excluding transport-only offer/cohort fields must equal the V2 schedule's immutable start request. |
+| Roll-call offer and Ready eligibility | Admission-proved | The original offer was pinned when the receipt was authorized. A slot must not re-derive fleet eligibility. The coordinator's temporary retry remains outside this policy until the dedicated dispatch slice removes it. |
+| Cohort session window / effective stop | Admission-proved | Authorization proves the whole receipt schedule and validation window fit before effective stop; the slot does not recompute it. |
+| Account observation lease, connected-account identity, and fleet contamination | Intentionally removed | The authorization validates target paper posture and pins membership; re-running these checks can refresh/query broker state and recreates the contention this change removes. A stale or unavailable observation stays honest for reads; it is not repaired synchronously by a slot. |
+| Account freeze | Dynamic | A freeze can be written after authorization and must block every later slot. |
+| Soft deletion and lifecycle retirement | Dynamic | A bot can be removed or retired after authorization; a durable pin never overrides a later retirement decision. |
+| Crash-recovery block | Dynamic | A crash or recovery-required binding can appear after authorization. |
+| `poisoned.flag` | Dynamic | A later fatal run state must continue to require redeploy. |
+| Host daemon reachability and process state | Dynamic | The daemon can go offline, start, or stop between slots; only an idle/startable process reaches the POST. |
+| Daemon run-dir/request validation, desired-state/idempotency lock, client-id allocation, account binding/freeze write, Clerk readiness, spawn and runtime pre-flight | Daemon-delegated | These are the host's atomic start boundary and remain idempotently enforced even after data-plane admission. |
+
 ## Alternative — one IBKR paper account per bot
 
 Root causes A and B exist ONLY because N bots share one DU account. One account per
