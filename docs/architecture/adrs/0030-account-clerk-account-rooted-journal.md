@@ -66,6 +66,10 @@ dormant fallback:
 - Per-runner global owner-generation checks that reject healthy siblings.
 - Runner-held write-capable IBKR submit lanes and broker callbacks.
 - Per-run sidecar sums as the managed-exposure source for account verdicts.
+- The cohort launcher: its HTTP routes, scheduler/resumption loop, receipt-authorized
+  admission bypass, evidence sampler, cockpit dialog, monitor, and generated client
+  contract. Historical account-event fields remain read-only evidence only; every new
+  start takes the complete interactive gate chain and proceeds one bot at a time.
 
 Until the cutover slices land, these mechanisms remain documented legacy
 behavior. There is no fallback from a disabled clerk to multi-writer submit.

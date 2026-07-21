@@ -21,6 +21,7 @@ from app.engine.live.account_clerk import (
     AccountClerkCancelNamespaceUncertainError,
     AccountClerkGenerationFencedError,
     AccountClerkIntentRejected,
+    AccountClerkLegacyEmergencyFenceReceipt,
     AccountClerkRecordedReceipt,
     AccountClerkRecoveryFlattenReceipt,
     account_clerk_socket_path,
@@ -283,6 +284,40 @@ class AccountClerkRpcClient:
             raise AccountClerkRpcMalformedResponseError(
                 operation="operator_adjustment",
                 request_identity=request_identity(rpc_request),
+            ) from exc
+
+    async def activate_legacy_emergency_fence(
+        self,
+        *,
+        fence_id: str,
+    ) -> AccountClerkLegacyEmergencyFenceReceipt:
+        """Close Clerk broker-write intake for the temporary external panic lane."""
+
+        request = {"operation": "activate_legacy_emergency_fence", "fence_id": fence_id}
+        payload = await self._request(request)
+        try:
+            return AccountClerkLegacyEmergencyFenceReceipt.model_validate(payload["legacy_emergency_fence"])
+        except (KeyError, ValidationError, TypeError) as exc:
+            raise AccountClerkRpcMalformedResponseError(
+                operation="activate_legacy_emergency_fence",
+                request_identity=request_identity(request),
+            ) from exc
+
+    async def release_legacy_emergency_fence(
+        self,
+        *,
+        fence_id: str,
+    ) -> AccountClerkLegacyEmergencyFenceReceipt:
+        """Reopen Clerk broker-write intake after the external panic process exits."""
+
+        request = {"operation": "release_legacy_emergency_fence", "fence_id": fence_id}
+        payload = await self._request(request)
+        try:
+            return AccountClerkLegacyEmergencyFenceReceipt.model_validate(payload["legacy_emergency_fence"])
+        except (KeyError, ValidationError, TypeError) as exc:
+            raise AccountClerkRpcMalformedResponseError(
+                operation="release_legacy_emergency_fence",
+                request_identity=request_identity(request),
             ) from exc
 
     async def drain_events(
@@ -639,6 +674,20 @@ class AccountClerkRpcServer:
             receipt = await self._operator_adjustment_handler(cure_request)
             return AccountClerkRpcSuccessEnvelope(
                 payload={"operator_adjustment": receipt.model_dump(mode="json")}
+            )
+        if operation == "activate_legacy_emergency_fence":
+            receipt = await self._clerk.activate_legacy_emergency_fence(
+                fence_id=required_string(request, "fence_id"),
+            )
+            return AccountClerkRpcSuccessEnvelope(
+                payload={"legacy_emergency_fence": receipt.model_dump(mode="json")}
+            )
+        if operation == "release_legacy_emergency_fence":
+            receipt = await self._clerk.release_legacy_emergency_fence(
+                fence_id=required_string(request, "fence_id"),
+            )
+            return AccountClerkRpcSuccessEnvelope(
+                payload={"legacy_emergency_fence": receipt.model_dump(mode="json")}
             )
         consumer = self._validated_event_consumer(request)
         after_seq = required_nonnegative_int(request, "after_seq")

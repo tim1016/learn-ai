@@ -47,11 +47,6 @@ import type {
   SetInstanceDesiredStateResponse,
 } from '../api/live-instances.types';
 import type { DeployPreflightResponse } from '../api/operator-blocker.types';
-import type {
-  CohortBatchLaunchCommandRequest,
-  CohortBatchLaunchStatus,
-  CohortValidationCertificate,
-} from '../api/cohort-batch-launch.types';
 
 @Injectable({ providedIn: 'root' })
 export class LiveRunsService {
@@ -243,37 +238,6 @@ export class LiveRunsService {
     return firstValueFrom(
       this.http.post<BotRollCallResponse>(`${this.instancesBase}/roll-call`, {}),
     );
-  }
-
-  launchCohort(accountId: string, request: CohortBatchLaunchCommandRequest): Promise<CohortBatchLaunchStatus> {
-    return firstValueFrom(this.http.post<CohortBatchLaunchStatus>(
-      `${this.instancesBase}/accounts/${encodeURIComponent(accountId)}/cohort-launch`, request,
-    ));
-  }
-
-  getLatestCohortBatchLaunch(accountId: string): Promise<CohortBatchLaunchStatus | null> {
-    return firstValueFrom(this.http.get<CohortBatchLaunchStatus | null>(
-      `/api/accounts/${encodeURIComponent(accountId)}/cohort-batch-launches/latest`,
-      { params: new HttpParams().set('cache_bust', String(Date.now())) },
-    ));
-  }
-
-  getCohortBatchLaunch(
-    accountId: string,
-    cohortId: string,
-  ): Promise<CohortBatchLaunchStatus> {
-    return firstValueFrom(this.http.get<CohortBatchLaunchStatus>(
-      `/api/accounts/${encodeURIComponent(accountId)}/cohort-batch-launches/${encodeURIComponent(cohortId)}`,
-    ));
-  }
-
-  getCohortValidationCertificate(
-    accountId: string,
-    cohortId: string,
-  ): Promise<CohortValidationCertificate> {
-    return firstValueFrom(this.http.get<CohortValidationCertificate>(
-      `/api/accounts/${encodeURIComponent(accountId)}/cohort-batch-launches/${encodeURIComponent(cohortId)}/certificate`,
-    ));
   }
 
   deleteBot(instanceId: string, request: BotDeleteRequest = { mode: 'soft' }): Promise<BotDeleteResponse> {

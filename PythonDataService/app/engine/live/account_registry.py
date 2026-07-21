@@ -44,7 +44,9 @@ class AccountInstanceBinding(BaseModel):
     strategy_instance_id: str = Field(min_length=1, max_length=128)
     run_id: str = Field(min_length=1, max_length=128)
     bot_order_namespace: str = Field(min_length=1, max_length=256)
-    cohort_id: str | None = Field(default=None, min_length=1, max_length=128)
+    # Read-only compatibility for bindings written before cohort launches were
+    # removed. New registry rows deliberately never serialize this field.
+    cohort_id: str | None = Field(default=None, min_length=1, max_length=128, exclude=True)
     lifecycle_state: Literal["DEPLOYED", "ACTIVE", "RETIRED"] = "ACTIVE"
     recorded_at_ms: int = Field(ge=0)
     source: str = Field(min_length=1)
@@ -123,7 +125,6 @@ def write_account_instance_binding(
             "strategy_instance_id": binding.strategy_instance_id,
             "run_id": binding.run_id,
             "bot_order_namespace": binding.bot_order_namespace,
-            "cohort_id": binding.cohort_id,
             "lifecycle_state": binding.lifecycle_state,
             "recorded_at_ms": binding.recorded_at_ms,
             "source": binding.source,

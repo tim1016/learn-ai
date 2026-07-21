@@ -29,8 +29,11 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from app.broker.ibkr.models import IbkrOrderEvent, IbkrOrderSpec
 from app.engine.live.account_artifacts import (
+    LEGACY_EMERGENCY_FENCE_OPENED_EVENT_TYPE,
+    LEGACY_EMERGENCY_FENCE_RELEASED_EVENT_TYPE,
     AccountFreezeEvidence,
     account_artifacts_root,
+    active_legacy_emergency_fence_id,
     append_account_event,
     read_account_clerk_generation,
     read_account_freeze,
@@ -56,6 +59,7 @@ from app.engine.live.account_clerk_journal import (
     read_account_clerk_inbox,
     read_account_clerk_journal,
 )
+from app.engine.live.account_clerk_journal_models import AccountClerkLegacyEmergencyFenceReceipt
 from app.engine.live.account_clerk_lease import AccountClerkLeaseWriter
 from app.engine.live.account_clerk_operations import (
     ACCOUNT_CLERK_CANCEL_NAMESPACE_TIMEOUT_S,
@@ -123,7 +127,10 @@ class AccountClerk:
         # Kept as a direct alias for focused compatibility tests that model a
         # process restart by clearing only volatile callback attribution.
         self._intents_by_order_ref = self._journal.intents_by_order_ref
-        self._normal_submit_intake_reason: str | None = None
+        self._legacy_emergency_fence_id = active_legacy_emergency_fence_id(artifacts_root, account_id)
+        self._normal_submit_intake_reason: str | None = (
+            "CLERK_LEGACY_EMERGENCY_FENCE" if self._legacy_emergency_fence_id is not None else None
+        )
         self._cancel_operation_lock = asyncio.Lock()
         self._callback_drain: Callable[[], Awaitable[None]] | None = None
         self._operations = AccountClerkOperationCoordinator(
@@ -343,6 +350,91 @@ class AccountClerk:
             await asyncio.to_thread(self._record_event_stream_down_locked, failure)
             self._event_stream_down_recorded = True
 
+    async def activate_legacy_emergency_fence(
+        self,
+        *,
+        fence_id: str,
+    ) -> AccountClerkLegacyEmergencyFenceReceipt:
+        """Fence Clerk broker writes before the temporary external panic lane runs."""
+
+        if self._legacy_emergency_fence_id not in (None, fence_id):
+            raise AccountClerkIntentRejected(
+                reason="CLERK_LEGACY_EMERGENCY_FENCE_ACTIVE",
+                diagnostics={"account_id": self._account_id},
+            )
+        self._legacy_emergency_fence_id = fence_id
+        self._normal_submit_intake_reason = "CLERK_LEGACY_EMERGENCY_FENCE"
+        recorded_at_ms = self._now_ms()
+        try:
+            async with self._cancel_operation_lock, self._intake_lock:
+                await asyncio.to_thread(
+                    append_account_event,
+                    self._artifacts_root,
+                    self._account_id,
+                    {
+                        "event_type": LEGACY_EMERGENCY_FENCE_OPENED_EVENT_TYPE,
+                        "fence_id": fence_id,
+                        "reason_code": "CLERK_LEGACY_EMERGENCY_FENCE",
+                        "source": "account_clerk",
+                        "recorded_at_ms": recorded_at_ms,
+                        "receipt_id": f"legacy-emergency-fence:{fence_id}",
+                    },
+                    only_if_receipt_absent=True,
+                )
+        except Exception:
+            self._legacy_emergency_fence_id = active_legacy_emergency_fence_id(
+                self._artifacts_root,
+                self._account_id,
+            )
+            self._normal_submit_intake_reason = (
+                "CLERK_LEGACY_EMERGENCY_FENCE" if self._legacy_emergency_fence_id is not None else None
+            )
+            raise
+        return AccountClerkLegacyEmergencyFenceReceipt(
+            status="legacy_emergency_fenced",
+            account_id=self._account_id,
+            fence_id=fence_id,
+            recorded_at_ms=recorded_at_ms,
+        )
+
+    async def release_legacy_emergency_fence(
+        self,
+        *,
+        fence_id: str,
+    ) -> AccountClerkLegacyEmergencyFenceReceipt:
+        """Reopen Clerk broker-write intake after the external process has exited."""
+
+        if self._legacy_emergency_fence_id != fence_id:
+            raise AccountClerkIntentRejected(
+                reason="CLERK_LEGACY_EMERGENCY_FENCE_MISMATCH",
+                diagnostics={"account_id": self._account_id},
+            )
+        recorded_at_ms = self._now_ms()
+        async with self._cancel_operation_lock, self._intake_lock:
+            await asyncio.to_thread(
+                append_account_event,
+                self._artifacts_root,
+                self._account_id,
+                {
+                    "event_type": LEGACY_EMERGENCY_FENCE_RELEASED_EVENT_TYPE,
+                    "fence_id": fence_id,
+                    "reason_code": "CLERK_LEGACY_EMERGENCY_FENCE",
+                    "source": "account_clerk",
+                    "recorded_at_ms": recorded_at_ms,
+                    "receipt_id": f"legacy-emergency-fence-release:{fence_id}",
+                },
+                only_if_receipt_absent=True,
+            )
+            self._legacy_emergency_fence_id = None
+            if self._normal_submit_intake_reason == "CLERK_LEGACY_EMERGENCY_FENCE":
+                self._normal_submit_intake_reason = None
+        return AccountClerkLegacyEmergencyFenceReceipt(
+            status="legacy_emergency_fence_released",
+            account_id=self._account_id,
+            fence_id=fence_id,
+            recorded_at_ms=recorded_at_ms,
+        )
+
     def close_normal_submit_intake(self) -> None:
         """Fence all broker writes before this Clerk's RPC transport shuts down."""
 
@@ -546,6 +638,8 @@ class AccountClerk:
             self._reject(intent, "CLERK_CANCEL_NAMESPACE_UNRESOLVED")
 
     def _require_rpc_write_intake(self, intent: AccountOwnerSubmitIntent) -> None:
+        if self._legacy_emergency_fence_id is not None and intent.intent_kind != "EMERGENCY_FLATTEN":
+            self._reject(intent, "CLERK_LEGACY_EMERGENCY_FENCE")
         if not self._rpc_write_intake_closed:
             return
         self._reject(intent, "CLERK_RPC_CLOSED")

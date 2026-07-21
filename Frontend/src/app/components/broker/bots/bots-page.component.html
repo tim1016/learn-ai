@@ -61,7 +61,7 @@
   </section>
 
   @if (launchProgress().phase !== 'idle') {
-    <section class="launch-progress" aria-live="polite" aria-label="Cohort launch progress">
+    <section class="launch-progress" aria-live="polite" aria-label="Rolling launch progress">
       <div class="launch-progress-header">
         <div>
           <strong>{{ launchProgress().title }}</strong>
@@ -87,28 +87,6 @@
         </ol>
       }
     </section>
-  }
-
-  <app-cohort-launch-dialog
-    [open]="cohortConfirmationOpen()"
-    [candidates]="cohortPreflight()"
-    [loading]="cohortPreflightLoading()"
-    [error]="cohortPreflightError()"
-    [accountId]="connectedAccountId()"
-    [accountPosture]="cohortTargetPosture()"
-    [selectedIds]="cohortSelectedIds()"
-    [staggerPresetCounts]="staggerPresetCounts"
-    (cancelled)="cancelCohortStart()"
-    (selectionToggled)="toggleCohortCandidate($event)"
-    (staggerPresetRequested)="selectStaggerCohortPreset($event)"
-    (authorize)="confirmCohortStart($event)"
-  />
-
-  @if (connectedAccountId(); as accountId) {
-    <app-cohort-launch-monitor
-      [accountId]="accountId"
-      [reloadVersion]="cohortMonitorReloadVersion()"
-    />
   }
 
   <section class="filters" aria-label="Bot filters">

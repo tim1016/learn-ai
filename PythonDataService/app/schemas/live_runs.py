@@ -429,7 +429,6 @@ class HostRunnerStartRequest(BaseModel):
     max_orders_per_day: int = Field(default=DEFAULT_MAX_ORDERS_PER_DAY, ge=0, le=100_000)
     ibkr_host: str = Field(default="127.0.0.1", min_length=1, max_length=255)
     roll_call_offer_id: str | None = Field(default=None, min_length=1, max_length=128)
-    cohort_id: str | None = Field(default=None, min_length=1, max_length=128)
 
     @field_validator("ibkr_host")
     @classmethod

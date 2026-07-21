@@ -228,6 +228,18 @@ class AccountClerkCancelNamespaceReceipt(BaseModel):
     cancelled_order_ids: tuple[int, ...]
 
 
+class AccountClerkLegacyEmergencyFenceReceipt(BaseModel):
+    """Durable state of the temporary legacy emergency-write fence."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status: Literal["legacy_emergency_fenced", "legacy_emergency_fence_released"]
+    account_id: str = Field(min_length=1, max_length=64)
+    fence_id: str = Field(min_length=1, max_length=128)
+    reason_code: Literal["CLERK_LEGACY_EMERGENCY_FENCE"] = "CLERK_LEGACY_EMERGENCY_FENCE"
+    recorded_at_ms: int = Field(ge=0, le=_MAX_INT64)
+
+
 @dataclass(frozen=True)
 class AccountClerkBrokerEventReceipt:
     """Durable callback result used to gate relay after persistence."""
@@ -252,6 +264,7 @@ __all__ = [
     "AccountClerkIntentRejected",
     "AccountClerkJournalCorruptError",
     "AccountClerkJournalEntry",
+    "AccountClerkLegacyEmergencyFenceReceipt",
     "AccountClerkOperatorAdjustment",
     "AccountClerkOperatorAdjustmentConflict",
     "AccountClerkRecordedReceipt",

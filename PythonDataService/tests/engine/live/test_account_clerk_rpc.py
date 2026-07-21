@@ -324,6 +324,39 @@ async def test_register_emergency_flatten_persists_attribution_before_external_s
 
 
 @pytest.mark.asyncio
+async def test_legacy_emergency_fence_rejects_normal_submit_but_keeps_audit_registration(tmp_path: Path) -> None:
+    """The temporary external panic lane fences every Clerk broker write except its audit record."""
+
+    _write_active_binding(tmp_path)
+    _write_active_binding(tmp_path, "eflat-DU1040", "eflat-run")
+    broker = _Broker()
+    server = AccountClerkRpcServer(
+        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker, clerk_generation=1)
+    )
+    await server.start()
+    client = AccountClerkRpcClient(artifacts_root=tmp_path, account_id=ACCOUNT)
+    try:
+        fence = await client.activate_legacy_emergency_fence(fence_id="fence-1040")
+        with pytest.raises(AccountClerkRpcRejectedError) as exc_info:
+            await client.submit(_intent())
+        registered = await client.register_emergency_flatten(_emergency_flatten_intent())
+        released = await client.release_legacy_emergency_fence(fence_id=fence.fence_id)
+        broker_acked = await client.submit(_intent("after-fence"))
+    finally:
+        await server.close()
+
+    assert fence.status == "legacy_emergency_fenced"
+    assert exc_info.value.reason == "CLERK_LEGACY_EMERGENCY_FENCE"
+    assert registered.intent_id == "emergency-1040"
+    assert released.status == "legacy_emergency_fence_released"
+    assert broker_acked.intent_id == "after-fence"
+    assert [event["event_type"] for event in read_account_events(tmp_path, ACCOUNT)][-2:] == [
+        "account_legacy_emergency_fence_opened",
+        "account_legacy_emergency_fence_released",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_register_emergency_flatten_rejects_non_emergency_intent(tmp_path: Path) -> None:
     _write_active_binding(tmp_path)
     generation = 1

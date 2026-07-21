@@ -88,6 +88,10 @@ When starting a session on this repo, before the first significant edit:
 2. Before touching stack code, read the relevant `.claude/rules/*.md`.
 3. If the task involves a reference repo, check `references/` for a vendored copy. If not present, ask the user whether to vendor it or fetch via GitHub MCP.
 
+## GitHub publishing environment
+
+Containerized agent sessions can fail to reach Podman or report unusable GitHub CLI credentials even when the host Git credential is valid. For a requested push, retry the host-side `git` operation with the permitted sandbox bypass; use the GitHub connector to create or update the pull request. Treat the container failure as an environment boundary, not as evidence that the remote is unavailable.
+
 ## Disclaimers
 
 This repo is for research and education. Nothing produced here is financial advice. The backtesting engine is a research tool; live trading requires separately validated infrastructure.

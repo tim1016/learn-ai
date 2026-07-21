@@ -22,7 +22,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal, NoReturn, TypedDict
 
-from fastapi import APIRouter, Body, Header, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Body, Header, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
@@ -109,7 +109,6 @@ from app.routers.live_runs import (
 )
 from app.schemas.account_recovery import CrashRecoveryOverrideRequest, CrashRecoveryOverrideResponse
 from app.schemas.action_plan import ActionPlan, ActionPlanPreviewResponse
-from app.schemas.cohort_batch_launch import CohortBatchLaunchCommandRequest, CohortBatchLaunchStatusResponse
 from app.schemas.daemon_diagnostics import DaemonDiagnosticReport, DaemonDominantCondition
 from app.schemas.live_runs import (
     ActiveDateEntry,
@@ -244,12 +243,6 @@ from app.services.broker_free_fleet_reads import (
     BrokerFreeFleetReadDependencies,
     BrokerFreeFleetReadService,
 )
-from app.services.cohort_evidence import get_cohort_evidence_sampler_registry
-from app.services.cohort_launch import (
-    CohortLaunchCoordinator,
-    CohortTargetPosture,
-    get_cohort_launch_scheduler_registry,
-)
 from app.services.daemon_diagnostics import (
     DaemonHealthPayloadError,
     DaemonHealthProbeError,
@@ -344,17 +337,6 @@ _STATUS_DAEMON_DIAGNOSTICS_TIMEOUT_S = 1.5
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["live-instances"])
-_cohort_launch_locks: dict[str, asyncio.Lock] = {}
-
-
-def _cohort_launch_lock(account_id: str) -> asyncio.Lock:
-    """Return the one in-process admission lock for an account cohort."""
-
-    lock = _cohort_launch_locks.get(account_id)
-    if lock is None:
-        lock = asyncio.Lock()
-        _cohort_launch_locks[account_id] = lock
-    return lock
 _SURFACE_HUBS = SurfaceHubRegistry[LiveInstanceStatus]()
 _SURFACE_RUNS_CACHE = VisibleRunsSnapshotCache()
 _FLEET_DAEMON_PROVIDER: FleetDaemonSnapshotProvider | None = None
@@ -1213,46 +1195,6 @@ def _start_defaults(
         if isinstance(captured_readonly, bool):
             start_default_payload["readonly"] = readonly_default or captured_readonly
     return InstanceStartDefaults(**start_default_payload)
-
-
-def _cohort_start_request_for_run(
-    run_dir: Path,
-    *,
-    readonly_default: bool,
-) -> HostRunnerStartRequest | None:
-    """Recover the exact safe start settings for a durable cohort slot."""
-
-    try:
-        defaults = _start_defaults(
-            run_dir.parent,
-            None,
-            [{"run_dir": str(run_dir)}],
-            readonly_default=readonly_default,
-        )
-    except ValidationError:
-        return None
-    if defaults is None or not defaults.strategy:
-        return None
-    try:
-        return HostRunnerStartRequest(
-            readonly=defaults.readonly,
-            hydrate_policy=defaults.hydrate_policy,
-            strategy=defaults.strategy,
-            max_orders_per_day=defaults.max_orders_per_day,
-            ibkr_host=defaults.ibkr_host,
-        )
-    except ValidationError:
-        return None
-
-
-def _cohort_live_config_for_run(run_dir: Path) -> dict[str, object] | None:
-    """Recover the immutable session policy that constrains a cohort window."""
-
-    try:
-        live_config = _read_ledger(run_dir).get("live_config")
-    except (OSError, ValueError, KeyError):
-        return None
-    return live_config if isinstance(live_config, dict) else None
 
 
 def _resolve_symbol_resolution(
@@ -2802,7 +2744,6 @@ def _start_admission_service(settings: IbkrSettings) -> StartAdmissionService:
                 strategy_instance_id,
                 now_ms=now_ms,
             ),
-            read_account_events=read_account_events,
             live_config_for_run=_live_config_for_run_dir,
             start_boundary_allowed=start_boundary_verdict,
             now_ms=_now_ms,
@@ -2821,10 +2762,9 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
     daemon's statuses propagate verbatim: bad ``strategy``/spec mismatch -> 400,
     missing run -> 404, subprocess/daemon unreachable -> 503.
 
-    The typed admission policy selects the gate set. Interactive starts recheck
-    the complete fail-closed chain; a receipt-authorized cohort slot trusts its
-    durable pin and rechecks only named dynamic safety state. Recovery of an
-    already-running exact pinned run is an accepted idempotent replay.
+    The typed admission policy rechecks the complete fail-closed chain for every
+    start. Recovery of an already-running exact run is an accepted idempotent
+    replay.
 
     Slice 3 (ADR 0011 amendment) — broker-activity publisher start. After
     a successful start the broker-activity publisher is registered for
@@ -2916,60 +2856,6 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
         )
     await _ensure_surface_hub_started(sid)
     return response
-
-
-@router.post(
-    "/accounts/{account_id}/cohort-launch",
-    response_model=CohortBatchLaunchStatusResponse,
-)
-async def launch_cohort(
-    account_id: str,
-    body: CohortBatchLaunchCommandRequest,
-    request: Request,
-) -> CohortBatchLaunchStatusResponse:
-    """Atomically admit then start one exact, server-pinned cohort.
-
-    The browser provides only the member IDs it displayed.  The server refreshes
-    roll call under an account admission lock, rejects any changed candidate
-    set, persists the authorization before side effects, and derives every
-    outcome from its own ``start_run`` calls.  Starts are intentionally not
-    rolled back: an accepted sibling remains managed after a partial launch.
-    """
-
-    try:
-        normalized_account_id = normalize_account_id(account_id)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-
-    async with _cohort_launch_lock(normalized_account_id):
-        identity_header = request.headers.get("X-Operator-Identity")
-        settings = get_settings()
-        readonly_default = _resolve_readonly_default(settings)
-        coordinator = CohortLaunchCoordinator(
-            artifacts_root=Path(settings.live_runs_root).parent,
-            live_runs_root=Path(settings.live_runs_root),
-            run_roll_call=run_roll_call,
-            start_run=start_run,
-            visible_runs_by_instance=_visible_runs_by_instance,
-            run_account_id=_run_dir_account_id,
-            run_live_config=_cohort_live_config_for_run,
-            start_request_for_run=lambda run_dir: _cohort_start_request_for_run(
-                run_dir,
-                readonly_default=readonly_default,
-            ),
-            target_account_posture=_cohort_target_account_posture,
-            now_ms=_now_ms,
-            evidence_samplers=get_cohort_evidence_sampler_registry(),
-            launch_schedulers=get_cohort_launch_scheduler_registry(),
-        )
-        return await coordinator.launch(
-            account_id=normalized_account_id,
-            requested_members=body.member_strategy_instance_ids,
-            operator_identity=(identity_header.strip() if identity_header and identity_header.strip() else "local-operator"),
-            identity_header_present=bool(identity_header),
-            client_host=request.client.host if request.client is not None else None,
-            launch_profile=body.launch_profile,
-        )
 
 
 async def _maybe_start_broker_activity_publisher(
@@ -3530,34 +3416,6 @@ async def _fetch_broker_connected_account(
     if isinstance(account, str) and account.strip():
         return account.strip(), True
     return None, True
-
-
-async def _cohort_target_account_posture(account_id: str) -> CohortTargetPosture:
-    """Return the current broker-authored posture for one cohort target.
-
-    A run ledger already pins the account identity, while the data-plane
-    broker snapshot owns whether that exact account is currently connected in
-    paper mode.  Keep this derivation at the existing broker boundary rather
-    than writing another mode value into every run ledger.
-    """
-
-    snapshot = snapshot_data_plane_broker()
-    broker_account, broker_known = await _fetch_broker_connected_account(snapshot)
-    if not broker_known or broker_account is None:
-        return "UNKNOWN"
-    try:
-        connected_account_id = normalize_account_id(broker_account)
-    except InvalidAccountIdError:
-        return "UNKNOWN"
-    if connected_account_id != account_id:
-        return "UNKNOWN"
-    if (
-        snapshot.connected
-        and snapshot.connection_state == "connected"
-        and snapshot.configured_mode == "paper"
-    ):
-        return "PAPER_EXECUTION"
-    return "UNSAFE"
 
 
 async def _compute_account_fleet_contamination(

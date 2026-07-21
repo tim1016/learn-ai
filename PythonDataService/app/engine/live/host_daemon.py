@@ -36,6 +36,11 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.engine.live.account_clerk_rpc import (
+    AccountClerkRpcClient,
+    AccountClerkRpcError,
+    AccountClerkRpcRejectedError,
+)
 from app.engine.live.account_clerk_supervisor import (
     AccountClerkProcessEvidence,
     AccountClerkSupervisor,
@@ -716,6 +721,29 @@ class RunnerProcessManager:
 
         return self._clerk_supervisor.account_lock(account_id)
 
+    def _reject_start_during_legacy_emergency(self, account_id: str | None) -> None:
+        """Keep a new bot from joining an account while its legacy panic lane is fenced."""
+
+        if account_id is None:
+            return
+        from app.engine.live.account_artifacts import active_legacy_emergency_fence_id
+
+        try:
+            fence_id = active_legacy_emergency_fence_id(self.artifacts_root, account_id)
+        except (OSError, ValueError) as exc:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "could not read the legacy emergency fence before start",
+            ) from exc
+        if fence_id is not None:
+            raise HostRunnerError(
+                status.HTTP_409_CONFLICT,
+                {
+                    "reason_code": "CLERK_LEGACY_EMERGENCY_FENCE",
+                    "message": "Start is refused while the account emergency fence is active.",
+                },
+            )
+
     def start(self, run_id: str, request: HostRunnerStartRequest) -> HostRunnerActionResponse:
         """Start ``app.engine.live.run start`` for an existing run directory.
 
@@ -736,6 +764,8 @@ class RunnerProcessManager:
             raise HostRunnerError(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
         sid = self._resolve_strategy_instance_id(run_dir)
         key = sid or run_id
+        account_id, _ = self._account_registry_identity(run_dir)
+        self._reject_start_during_legacy_emergency(account_id)
 
         with self._instance_start_lock(key):
             clerk_client_ids = self._clerk_supervisor.in_use_client_ids()
@@ -769,7 +799,7 @@ class RunnerProcessManager:
 
             env = self._build_child_env(request, ibkr_client_id=ibkr_client_id)
             log_path = run_dir / "host_daemon.log"
-            account_id: str | None = None
+            account_id = None
             active_binding_written = False
             try:
                 log_handle = log_path.open("a", encoding="utf-8")
@@ -784,7 +814,6 @@ class RunnerProcessManager:
                     run_id=run_id,
                     lifecycle_state="ACTIVE",
                     source="host_daemon.start",
-                    cohort_id=request.cohort_id,
                 )
                 active_binding_written = True
                 if account_freeze is not None:
@@ -819,7 +848,6 @@ class RunnerProcessManager:
                             run_id=run_id,
                             lifecycle_state="RETIRED",
                             source="host_daemon.start_rejected_before_spawn",
-                            cohort_id=request.cohort_id,
                         )
                     except HostRunnerError:
                         logger.exception(
@@ -920,7 +948,16 @@ class RunnerProcessManager:
                     f"emergency-flatten already in progress for account {account}",
                 )
             self._flatten_in_flight.add(account)
+        # Generate the id before the RPC.  A timed-out request may already have
+        # committed the durable open event, so this identity is what lets us
+        # distinguish that safe-to-release case from an activation failure.
+        fence_id = uuid.uuid4().hex
+        fence_activated = False
+        command_error: HostRunnerError | None = None
         try:
+            self._activate_legacy_emergency_fence(account, fence_id=fence_id)
+            fence_activated = True
+            self._refuse_legacy_emergency_with_active_runs(account)
             command = [
                 sys.executable,
                 "-m",
@@ -966,11 +1003,127 @@ class RunnerProcessManager:
                 detail = (proc.stderr or proc.stdout or "").strip()[:500] or (
                     f"emergency-flatten exited {proc.returncode}"
                 )
-                raise HostRunnerError(http_code, f"emergency-flatten failed: {detail}")
+                command_error = HostRunnerError(http_code, f"emergency-flatten failed: {detail}")
+                raise command_error
             logger.info("emergency-flatten completed for run=%s account=%s", run_id, account)
+        except HostRunnerError as exc:
+            command_error = exc
+            raise
         finally:
+            if fence_activated:
+                try:
+                    self._release_legacy_emergency_fence(account, fence_id=fence_id)
+                except HostRunnerError:
+                    logger.exception(
+                        "legacy emergency fence could not be released after subprocess exit",
+                        extra={"account_id": account, "fence_id": fence_id},
+                    )
+                    if command_error is None:
+                        raise
             with self._flatten_lock:
                 self._flatten_in_flight.discard(account)
+
+    def _activate_legacy_emergency_fence(self, account_id: str, *, fence_id: str) -> None:
+        """Close Clerk broker-write intake before invoking the temporary second writer."""
+
+        try:
+            self._ensure_account_clerk(account_id)
+            receipt = asyncio.run(
+                AccountClerkRpcClient(
+                    artifacts_root=self.artifacts_root,
+                    account_id=account_id,
+                ).activate_legacy_emergency_fence(fence_id=fence_id)
+            )
+        except AccountClerkRpcError as exc:
+            # The Clerk may have appended the open event just before a socket
+            # timeout or malformed response reached the host.  Re-read the
+            # durable authority record using the caller-owned identity before
+            # deciding whether the fence needs a compensating release.
+            from app.engine.live.account_artifacts import active_legacy_emergency_fence_id
+
+            try:
+                active_fence_id = active_legacy_emergency_fence_id(self.artifacts_root, account_id)
+            except (OSError, ValueError) as read_exc:
+                raise HostRunnerError(
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    "Emergency flatten could not confirm whether Clerk intake was fenced.",
+                ) from read_exc
+            if active_fence_id == fence_id:
+                logger.warning(
+                    "legacy emergency fence activation response was lost; durable fence confirmed",
+                    extra={"account_id": account_id, "fence_id": fence_id, "reason_code": exc.reason_code},
+                )
+                return
+            unavailable = exc.reason_code.startswith("ACCOUNT_CLERK_UNAVAILABLE:")
+            reason_code = exc.reason if isinstance(exc, AccountClerkRpcRejectedError) else exc.reason_code
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE if unavailable else status.HTTP_409_CONFLICT,
+                {
+                    "reason_code": reason_code,
+                    "message": "Emergency flatten could not close Clerk broker-write intake.",
+                },
+            ) from exc
+        except OSError as exc:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "Emergency flatten could not start the account Clerk to close intake.",
+            ) from exc
+        if receipt.fence_id != fence_id:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "Emergency flatten received a mismatched Clerk fence receipt.",
+            )
+
+    def _release_legacy_emergency_fence(self, account_id: str, *, fence_id: str) -> None:
+        """Reopen Clerk intake only after the external emergency process has exited."""
+
+        try:
+            asyncio.run(
+                AccountClerkRpcClient(
+                    artifacts_root=self.artifacts_root,
+                    account_id=account_id,
+                ).release_legacy_emergency_fence(fence_id=fence_id)
+            )
+        except AccountClerkRpcError as exc:
+            unavailable = exc.reason_code.startswith("ACCOUNT_CLERK_UNAVAILABLE:")
+            reason_code = exc.reason if isinstance(exc, AccountClerkRpcRejectedError) else exc.reason_code
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE if unavailable else status.HTTP_409_CONFLICT,
+                {
+                    "reason_code": reason_code,
+                    "message": "Emergency flatten exited but Clerk intake remains fenced.",
+                },
+            ) from exc
+
+    def _refuse_legacy_emergency_with_active_runs(self, account_id: str) -> None:
+        """Refuse the second broker writer while any current binding remains ACTIVE."""
+
+        from app.engine.live.account_registry import index_account_instance_bindings, read_account_instance_registry
+
+        try:
+            bindings = index_account_instance_bindings(
+                read_account_instance_registry(self.artifacts_root, account_id),
+                account_id=account_id,
+            ).latest_by_instance.values()
+        except (OSError, ValueError) as exc:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "could not read account bindings before emergency flatten",
+            ) from exc
+        active_instance_ids = sorted(
+            binding.strategy_instance_id
+            for binding in bindings
+            if binding.lifecycle_state == "ACTIVE"
+        )
+        if active_instance_ids:
+            raise HostRunnerError(
+                status.HTTP_409_CONFLICT,
+                {
+                    "reason_code": "EMERGENCY_FLATTEN_ACTIVE_RUNS_SURVIVE",
+                    "message": "Emergency flatten is refused while ACTIVE bot bindings survive.",
+                    "strategy_instance_ids": active_instance_ids,
+                },
+            )
 
     def deploy(self, request: HostRunnerDeployRequest) -> HostRunnerDeployResponse:
         """Create a run on the host via ``deploy_run`` (ADR 0006), optionally
@@ -1093,7 +1246,6 @@ class RunnerProcessManager:
         run_id: str,
         lifecycle_state: str,
         source: str,
-        cohort_id: str | None = None,
     ):
         account_id, strategy_instance_id = self._account_registry_identity(run_dir)
         if account_id is None or strategy_instance_id is None:
@@ -1117,7 +1269,6 @@ class RunnerProcessManager:
                     strategy_instance_id=strategy_instance_id,
                     run_id=run_id,
                     bot_order_namespace=bot_order_namespace_for_instance(strategy_instance_id),
-                    cohort_id=cohort_id,
                     lifecycle_state=lifecycle_state,
                     recorded_at_ms=recorded_at_ms,
                     source=source,

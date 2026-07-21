@@ -204,7 +204,7 @@ journaled**, the per-instance fold still shows the open → the fleet residual g
 non-zero even though the broker is flat, and the namespace shows
 `owner_binding_state=RETIRED` with a non-zero `gross_position_quantity`. This is the
 recording gap that a **journal cure** fixes (§6.3). *(Observed live 2026-07-17: two
-cohort bots ended holding +1 with no journaled close → residual SPY -1/QQQ -1 blocked
+validation bots ended holding +1 with no journaled close → residual SPY -1/QQQ -1 blocked
 new starts while the receipt read CLEAN.)*
 
 ---
@@ -312,12 +312,12 @@ coherence, preflight, and start-boundary are gated on `start=true`.
 
 ### 6.4 Restart-intensity (the concurrency-churn ceiling) — READ THIS
 `RestartIntensityPolicy` = **3** starts within a **5-minute** rolling window **per
-account** (`account_artifacts.py:221`). The 3rd start in the window **freezes the whole
+account** (`account_artifacts.py`). The 3rd start in the window **freezes the whole
 account** (`restart_intensity.threshold_breached`, surfaces as `ACCOUNT_FROZEN` on the
 next deploy/start). It is a **start-*rate* limit, not a concurrency cap** — you can run
 many bots concurrently; you just can't *start* more than 2 per 5 min. Stops are free
-(only starts count). The **cohort launcher** exists to launch a staggered group as
-*one* start-group and sidestep this; ad-hoc individual starts do not batch.
+(only starts count). Start one bot, review its evidence, then run a fresh roll call
+before the next start; there is no batch-launch bypass.
 
 The freeze is **transient/auto-expiring** (the window rolls off), and — since
 2026-07-17 — a *running* bot **pauses submits and survives** a restart-intensity freeze
@@ -386,15 +386,13 @@ memory*, not the *account* — never use it when the broker actually holds the p
 
 ## 8. Concurrency — recipes
 
-**Launch N concurrent bots (respecting the rate ceiling):**
+**Start several bots safely (respecting the rate ceiling):**
 1. Ensure the tree is clean in scope, the account is CLEAN/flat, fleet clean, no freeze.
 2. Deploy all N (`start:false`) — deploys don't count toward the rate limit.
 3. `roll-call` → get offers.
-4. Start **≤2 per 5-min window**; if you need more, wait for the window to roll (or the
-   3rd start will freeze the account — running bots now survive that, but the new start
-   is rejected).
-5. For a *staggered group launched as one*, use the **cohort launcher** instead
-   (`POST /api/live-instances/accounts/{account_id}/cohort-launch`).
+4. Start one bot and verify its On duty and account evidence.
+5. Run a fresh roll call before the next start. Never batch or stagger starts through
+   a cohort launcher; it has been removed.
 
 **Stop-and-replace (churn):** graceful `stop` (free) + a replacement `start` (counts
 toward the rate limit). Gracefully-stopped bots are re-offered; crashed ones need

@@ -1,10 +1,4 @@
-"""Typed admission policies for interactive and receipt-authorized Starts.
-
-The interactive policy preserves the cockpit's complete fail-closed gate chain.
-The cohort policy is deliberately narrower: a durable V2 receipt proves the
-member, run, and start settings once; only safety state that can change between
-authorization and a scheduled slot is checked again.
-"""
+"""Typed admission policy for interactive starts."""
 
 from __future__ import annotations
 
@@ -26,17 +20,16 @@ from app.engine.live.bot_lifecycle_state import (
 )
 from app.schemas.live_runs import HostRunnerStartRequest
 from app.services.account_crash_recovery import crash_recovery_block_detail, crash_recovery_blocking_binding
-from app.services.cohort_batch_launch import CohortBatchLaunchService
 from app.services.daily_session_schedule import StartBoundaryVerdict
 
-StartAdmissionPolicyName = Literal["interactive", "receipt_authorized_cohort"]
+StartAdmissionPolicyName = Literal["interactive"]
 StartAdmissionDetail = str | dict[str, object]
 RunRows = dict[str, list[dict[str, object]]]
 
 
 @dataclass(frozen=True)
 class StartAdmissionRefusal:
-    """One typed policy refusal for the router or cohort outcome writer."""
+    """One typed policy refusal for the router."""
 
     status_code: int
     detail: StartAdmissionDetail
@@ -69,7 +62,6 @@ class StartAdmissionDependencies:
     interactive_fleet_guard: Callable[[Path, str], Awaitable[None]]
     fetch_instance_process: Callable[[str, str], Awaitable[tuple[object, dict[str, object] | None]]]
     active_roll_call_offer: Callable[[Path, str, int], BotRollCallOfferRecord | None]
-    read_account_events: Callable[[Path, str], list[dict[str, object]]]
     live_config_for_run: Callable[[Path], Mapping[str, object] | None]
     start_boundary_allowed: Callable[[int, Mapping[str, object] | None], StartBoundaryVerdict]
     now_ms: Callable[[], int]
@@ -84,7 +76,7 @@ class _ResolvedStart:
 
 
 class StartAdmissionService:
-    """Select and evaluate the interactive or durable-receipt start policy."""
+    """Evaluate the complete fail-closed interactive start policy."""
 
     def __init__(
         self,
@@ -112,9 +104,6 @@ class StartAdmissionService:
             # authoritatively reject an unknown run id.
             return StartAdmissionDecision(policy="interactive", strategy_instance_id=None)
 
-        receipt_authorized = self._receipt_authorizes(resolved, request)
-        if receipt_authorized:
-            return await self._admit_receipt_authorized_cohort(resolved, run_id)
         return await self._admit_interactive(resolved, run_id, request)
 
     def _resolve(self, run_id: str) -> _ResolvedStart | None:
@@ -133,135 +122,6 @@ class StartAdmissionService:
                     account_id=self._dependencies.run_account_id(run_dir),
                 )
         return None
-
-    def _receipt_authorizes(
-        self,
-        resolved: _ResolvedStart,
-        request: HostRunnerStartRequest,
-    ) -> bool:
-        """Prove that a V2 receipt, including its offer pin, selects the policy."""
-
-        if request.cohort_id is None or resolved.account_id is None:
-            return False
-        try:
-            events = self._dependencies.read_account_events(self._artifacts_root, resolved.account_id)
-            authorization = CohortBatchLaunchService.authorization_event(events, request.cohort_id)
-        except (OSError, ValueError):
-            return False
-        if authorization is None:
-            return False
-        authorization_seq, receipt = authorization
-        if receipt.schema_version != 2 or receipt.account_id != resolved.account_id:
-            return False
-        pin = next(
-            (
-                candidate
-                for candidate in receipt.member_pins
-                if candidate.strategy_instance_id == resolved.strategy_instance_id
-                and candidate.run_id == resolved.run_id
-            ),
-            None,
-        )
-        slot = next(
-            (
-                candidate
-                for candidate in receipt.member_schedule
-                if candidate.strategy_instance_id == resolved.strategy_instance_id
-                and candidate.run_id == resolved.run_id
-            ),
-            None,
-        )
-        if pin is None or slot is None or self._dependencies.now_ms() < slot.scheduled_start_at_ms:
-            return False
-        for event in events:
-            if (
-                event.get("event_type") == "cohort_batch_launch_member_start_recorded"
-                and event.get("cohort_id") == receipt.cohort_id
-                and event.get("strategy_instance_id") == resolved.strategy_instance_id
-                and _event_follows_authorization(event, authorization_seq)
-            ):
-                # A receipt authorizes one scheduled start attempt, not a
-                # client-selectable bypass that can revive a finished slot.
-                return False
-        return pin.roll_call_offer_id == request.roll_call_offer_id and slot.start_request == request.model_dump(
-            mode="json",
-            exclude={"roll_call_offer_id", "cohort_id"},
-        )
-
-    async def _admit_receipt_authorized_cohort(
-        self,
-        resolved: _ResolvedStart,
-        run_id: str,
-    ) -> StartAdmissionDecision:
-        """Recheck only dynamic cohort safety state at a durable slot."""
-
-        rejection = self._soft_delete_refusal(resolved.strategy_instance_id, run_id)
-        if rejection is not None:
-            return self._refused("receipt_authorized_cohort", resolved.strategy_instance_id, rejection)
-        rejection = self._lifecycle_refusal(resolved.strategy_instance_id)
-        if rejection is not None:
-            return self._refused("receipt_authorized_cohort", resolved.strategy_instance_id, rejection)
-        account_freeze = self._dependencies.account_freeze(
-            self._artifacts_root,
-            [{"run_dir": str(resolved.run_dir)}],
-        )
-        if account_freeze is not None:
-            return self._refused(
-                "receipt_authorized_cohort",
-                resolved.strategy_instance_id,
-                StartAdmissionRefusal(
-                    409,
-                    {
-                        "reason_code": "ACCOUNT_FROZEN",
-                        "message": "This broker account is frozen until unresolved exposure is reconciled.",
-                        "gate_result": account_freeze.to_gate_result().model_dump(mode="json"),
-                    },
-                ),
-            )
-        rejection = self._crash_recovery_refusal(resolved)
-        if rejection is not None:
-            return self._refused("receipt_authorized_cohort", resolved.strategy_instance_id, rejection)
-        if (resolved.run_dir / "poisoned.flag").exists():
-            return self._refused(
-                "receipt_authorized_cohort",
-                resolved.strategy_instance_id,
-                StartAdmissionRefusal(
-                    409,
-                    {
-                        "reason_code": "STOPPED_REQUIRES_REDEPLOY",
-                        "message": "This run is permanently retired. Redeploy the bot to trade again.",
-                    },
-                ),
-            )
-        _result, daemon = await self._dependencies.fetch_instance_process(
-            self._settings.live_runner_daemon_url if self._settings is not None else "",
-            resolved.strategy_instance_id,
-        )
-        if daemon is None:
-            return self._refused(
-                "receipt_authorized_cohort",
-                resolved.strategy_instance_id,
-                StartAdmissionRefusal(
-                    409,
-                    {
-                        "reason_code": "HOST_SERVICE_OFFLINE",
-                        "message": "The bot service is offline. Start it on the host machine first.",
-                    },
-                ),
-            )
-        if daemon.get("state") == "running" and daemon.get("run_id") == resolved.run_id:
-            return StartAdmissionDecision(
-                policy="receipt_authorized_cohort",
-                strategy_instance_id=resolved.strategy_instance_id,
-                idempotent_process=daemon,
-            )
-        daemon_refusal = self._daemon_state_refusal(daemon)
-        if daemon_refusal is not None:
-            return self._refused("receipt_authorized_cohort", resolved.strategy_instance_id, daemon_refusal)
-        return StartAdmissionDecision(
-            policy="receipt_authorized_cohort",
-            strategy_instance_id=resolved.strategy_instance_id,
-        )
 
     async def _admit_interactive(
         self,
@@ -554,9 +414,6 @@ class StartAdmissionService:
         )
 
 
-def _event_follows_authorization(event: Mapping[str, object], authorization_seq: int) -> bool:
-    seq = event.get("seq")
-    return isinstance(seq, int) and not isinstance(seq, bool) and seq > authorization_seq
 
 
 def _http_exception_detail(exc: HTTPException) -> StartAdmissionDetail:

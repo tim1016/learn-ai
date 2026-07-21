@@ -46,7 +46,7 @@ _SOCKET_PROBE_TIMEOUT = httpx.Timeout(10.0)
 # call at its slot. A startability probe can afford to wait longer than a liveness
 # GET; keep it bounded so a genuinely wedged daemon still surfaces.
 _INSTANCE_PROBE_TIMEOUT = httpx.Timeout(10.0)
-# Starting a cohort member and ensuring its account Clerk can both wait behind
+# Starting a run and ensuring its account Clerk can both wait behind
 # the host daemon's broker reconciliation work. They are admission operations,
 # not low-latency liveness reads: keep a bounded deadline so a busy but healthy
 # daemon does not turn a safe launch into a false ``connect_timeout``.

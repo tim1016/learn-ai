@@ -510,12 +510,15 @@ def _add_managed_process(
 
 
 @pytest.fixture
-def daemon_context(tmp_path: Path) -> tuple[RunnerProcessManager, Path]:
+def daemon_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[RunnerProcessManager, Path]:
     repo_root = tmp_path / "repo"
     live_runs_root = repo_root / "PythonDataService" / "artifacts" / "live_runs"
     run_dir = live_runs_root / RUN_ID
     run_dir.mkdir(parents=True)
-    return RunnerProcessManager(repo_root=repo_root, live_runs_root=live_runs_root), run_dir
+    manager = RunnerProcessManager(repo_root=repo_root, live_runs_root=live_runs_root)
+    monkeypatch.setattr(manager, "_activate_legacy_emergency_fence", lambda _account, *, fence_id: None)
+    monkeypatch.setattr(manager, "_release_legacy_emergency_fence", lambda _account, *, fence_id: None)
+    return manager, run_dir
 
 
 async def test_health_reports_idle_process(daemon_context: tuple[RunnerProcessManager, Path]) -> None:
@@ -853,6 +856,155 @@ def test_account_emergency_flatten_mints_audit_run_without_existing_bot(
     audit_dir = manager.live_runs_root / response.audit_run_id
     assert audit_dir.is_dir()
     assert str(audit_dir) in captured["command"]
+
+
+def test_account_emergency_flatten_refuses_when_active_binding_survives(
+    daemon_context: tuple[RunnerProcessManager, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The temporary second broker writer never starts while a live binding remains ACTIVE."""
+
+    from app.engine.live import host_daemon as hd
+
+    manager, _ = daemon_context
+    write_account_instance_binding(
+        manager.artifacts_root,
+        AccountInstanceBinding(
+            account_id="DU123",
+            strategy_instance_id="bot-still-active",
+            run_id="run-still-active",
+            bot_order_namespace=bot_order_namespace_for_instance("bot-still-active"),
+            lifecycle_state="ACTIVE",
+            recorded_at_ms=1,
+            source="test",
+        ),
+    )
+    monkeypatch.setattr(hd.subprocess, "run", pytest.fail)
+
+    with pytest.raises(HostRunnerError) as exc_info:
+        manager.emergency_flatten_account("DU123")
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == {
+        "reason_code": "EMERGENCY_FLATTEN_ACTIVE_RUNS_SURVIVE",
+        "message": "Emergency flatten is refused while ACTIVE bot bindings survive.",
+        "strategy_instance_ids": ["bot-still-active"],
+    }
+
+
+def test_emergency_fence_response_loss_releases_the_durably_open_fence(
+    daemon_context: tuple[RunnerProcessManager, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A committed open event plus a lost RPC response must never strand intake closed."""
+
+    from app.engine.live import host_daemon as hd
+    from app.engine.live.account_clerk_rpc_protocol import (
+        AccountClerkRpcRequestIdentity,
+        AccountClerkRpcTimeoutError,
+    )
+
+    manager, _ = daemon_context
+    fence_id = "fence-response-lost"
+    run_dir = manager.live_runs_root / "emergency-response-loss"
+    run_dir.mkdir()
+    activated_fence_ids: list[str] = []
+    write_account_instance_binding(
+        manager.artifacts_root,
+        AccountInstanceBinding(
+            account_id="DU123",
+            strategy_instance_id="bot-still-active",
+            run_id="run-still-active",
+            bot_order_namespace=bot_order_namespace_for_instance("bot-still-active"),
+            lifecycle_state="ACTIVE",
+            recorded_at_ms=1,
+            source="test",
+        ),
+    )
+
+    class _ResponseLostClient:
+        def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
+            self.artifacts_root = artifacts_root
+            self.account_id = account_id
+
+        async def activate_legacy_emergency_fence(self, *, fence_id: str) -> None:
+            activated_fence_ids.append(fence_id)
+            append_account_event(
+                self.artifacts_root,
+                self.account_id,
+                {
+                    "event_type": "account_legacy_emergency_fence_opened",
+                    "fence_id": fence_id,
+                    "recorded_at_ms": 1,
+                },
+            )
+            raise AccountClerkRpcTimeoutError(
+                operation="activate_legacy_emergency_fence",
+                request_identity=AccountClerkRpcRequestIdentity(intent_id=None, order_ref=None),
+            )
+
+    released_fence_ids: list[str] = []
+
+    def release_fence(account_id: str, *, fence_id: str) -> None:
+        released_fence_ids.append(fence_id)
+        append_account_event(
+            manager.artifacts_root,
+            account_id,
+            {
+                "event_type": "account_legacy_emergency_fence_released",
+                "fence_id": fence_id,
+                "recorded_at_ms": 2,
+            },
+        )
+
+    monkeypatch.setattr(manager, "_ensure_account_clerk", lambda _account: None)
+    monkeypatch.setattr(
+        manager,
+        "_activate_legacy_emergency_fence",
+        RunnerProcessManager._activate_legacy_emergency_fence.__get__(manager, RunnerProcessManager),
+    )
+    monkeypatch.setattr(hd, "AccountClerkRpcClient", _ResponseLostClient)
+    monkeypatch.setattr(hd.uuid, "uuid4", lambda: SimpleNamespace(hex=fence_id))
+    monkeypatch.setattr(
+        manager,
+        "_release_legacy_emergency_fence",
+        release_fence,
+    )
+    monkeypatch.setattr(hd.subprocess, "run", pytest.fail)
+
+    with pytest.raises(HostRunnerError, match="ACTIVE bot bindings survive"):
+        manager._execute_emergency_flatten(run_id="emergency-response-loss", run_dir=run_dir, account="DU123")
+
+    assert activated_fence_ids == [fence_id]
+    assert released_fence_ids == [fence_id]
+    fence_events = [
+        event["event_type"]
+        for event in read_account_events(manager.artifacts_root, "DU123")
+        if event["event_type"].startswith("account_legacy_emergency_fence_")
+    ]
+    assert fence_events == [
+        "account_legacy_emergency_fence_opened",
+        "account_legacy_emergency_fence_released",
+    ]
+
+
+def test_start_refuses_while_a_durable_legacy_emergency_fence_is_open(
+    daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    manager, _ = daemon_context
+    append_account_event(
+        manager.artifacts_root,
+        "DU123",
+        {
+            "event_type": "account_legacy_emergency_fence_opened",
+            "fence_id": "fence-open",
+            "recorded_at_ms": 1,
+        },
+    )
+
+    with pytest.raises(HostRunnerError) as exc_info:
+        manager._reject_start_during_legacy_emergency("DU123")
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["reason_code"] == "CLERK_LEGACY_EMERGENCY_FENCE"
 
 
 def test_emergency_flatten_account_mismatch_maps_to_http_400(
@@ -1630,7 +1782,7 @@ async def test_start_writes_account_registry_before_spawn(
         assert bindings[-1].strategy_instance_id == "spy_ema_paper"
         assert bindings[-1].run_id == RUN_ID
         assert bindings[-1].bot_order_namespace == "learn-ai/spy_ema_paper/v1"
-        assert bindings[-1].cohort_id == "cohort-restart-test"
+        assert bindings[-1].cohort_id is None
         assert bindings[-1].lifecycle_state == "ACTIVE"
         return FakeProcess()
 
@@ -1640,7 +1792,7 @@ async def test_start_writes_account_registry_before_spawn(
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         response = await client.post(
             f"/runs/{RUN_ID}/start",
-            json={"cohort_id": "cohort-restart-test"},
+            json={},
         )
 
     assert response.status_code == 200
@@ -1649,7 +1801,7 @@ async def test_start_writes_account_registry_before_spawn(
         for event in read_account_events(manager.artifacts_root, "DU111")
         if event.get("event_type") == "account_instance_binding_recorded"
     ]
-    assert event["cohort_id"] == "cohort-restart-test"
+    assert "cohort_id" not in event
 
 
 async def test_start_retires_account_registry_binding_when_spawn_fails(

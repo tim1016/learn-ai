@@ -14,8 +14,6 @@ import { TabsModule } from 'primeng/tabs';
 import { TagModule } from 'primeng/tag';
 
 import type { AccountTriageResponse } from '../../../api/account-reconciliation.types';
-import type { CohortStaggerProfileName } from '../../../api/cohort-batch-launch.types';
-import type { DeployPreflightResponse } from '../../../api/operator-blocker.types';
 import type {
   BotCatalogRow,
   BotCatalogTone,
@@ -31,13 +29,6 @@ import { BrokerHealthService } from '../../../services/broker-health.service';
 import { BrokerService } from '../../../services/broker.service';
 import { LiveRunsService } from '../../../services/live-runs.service';
 import { AccountFreezeBannerComponent } from '../account-freeze-banner/account-freeze-banner.component';
-import {
-  CohortLaunchDialogComponent,
-  type CohortLaunchCandidate,
-  type CohortLaunchPreflightCandidate,
-  type CohortTargetPosture,
-} from '../cohort-launch-dialog/cohort-launch-dialog.component';
-import { CohortLaunchMonitorComponent } from '../cohort-launch-monitor/cohort-launch-monitor.component';
 import { fmtInteger, fmtSignedCurrency, fmtTimestampLocal } from '../format';
 import { lifecycleConditionCureTarget } from '../lib/condition-cure-actions';
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
@@ -48,15 +39,6 @@ type LifecycleFilter = 'all' | BotLifecycleDisplayStatus;
 type BotLaunchProgressPhase = 'idle' | 'preparing' | 'running' | 'blocked' | 'complete';
 type BotLaunchRowStatus = 'queued' | 'starting' | 'accepted' | 'blocked';
 type TagSeverity = 'success' | 'warn' | 'danger' | 'secondary';
-
-const STAGGER_PROFILE_BY_MEMBER_COUNT: Record<number, CohortStaggerProfileName> = {
-  3: 'paper_three_bot_stagger_v2',
-  5: 'paper_five_bot_stagger_v3',
-};
-
-const STAGGER_PRESET_COUNTS: readonly number[] = Object.keys(STAGGER_PROFILE_BY_MEMBER_COUNT)
-  .map(Number)
-  .sort((a, b) => a - b);
 
 const EMPTY_ROLL_CALL_SUMMARY: BotRollCallSummary = {
   ready: 0,
@@ -138,8 +120,6 @@ interface BotLaunchProgress {
     TabsModule,
     TagModule,
     AccountFreezeBannerComponent,
-    CohortLaunchDialogComponent,
-    CohortLaunchMonitorComponent,
     ReceiptLabelPipe,
   ],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -170,13 +150,6 @@ export class BotsPageComponent {
   readonly lifecycleFilter = signal<LifecycleFilter>('all');
   readonly activeModeTab = signal<BotModeTab>('paper');
   readonly selectedBotIds = signal<ReadonlySet<string>>(new Set<string>());
-  readonly cohortConfirmationOpen = signal<boolean>(false);
-  readonly staggerPresetCounts = STAGGER_PRESET_COUNTS;
-  readonly cohortPreflightLoading = signal<boolean>(false);
-  readonly cohortPreflightError = signal<string | null>(null);
-  readonly cohortPreflight = signal<readonly CohortLaunchPreflightCandidate[]>([]);
-  readonly cohortSelectedIds = signal<ReadonlySet<string>>(new Set<string>());
-  readonly cohortMonitorReloadVersion = signal(0);
   readonly deleteConfirmationOpen = signal<boolean>(false);
   readonly isDeleting = signal<boolean>(false);
   readonly deleteErrorMessage = signal<string | null>(null);
@@ -223,13 +196,6 @@ export class BotsPageComponent {
 
   readonly activeTabCount = computed(() => this.activeRows().length);
   readonly connectedAccountId = computed(() => this.health.health()?.account_id ?? null);
-  readonly cohortTargetPosture = computed<CohortTargetPosture>(() => {
-    const broker = this.health.health();
-    const accountId = this.connectedAccountId();
-    if (broker === null || accountId === null || broker.account_id !== accountId) return 'UNKNOWN';
-    if (!broker.connected || broker.connection_state !== 'connected') return 'UNKNOWN';
-    return broker.is_paper === true ? 'PAPER_EXECUTION' : 'UNSAFE';
-  });
   readonly readyRows = computed<BotTableRow[]>(() =>
     this.visibleBots().filter((row) => {
       return (
@@ -364,7 +330,7 @@ export class BotsPageComponent {
       this.updateLaunchProgress({
         phase: 'preparing',
         title: 'Running roll call',
-        detail: 'Refreshing start offers and daemon state before authorizing the cohort.',
+        detail: 'Refreshing the next start offer and daemon state.',
       });
       const rollCall = await this.liveRuns.runRollCall();
       this.rollCall.set(rollCall.summary);
@@ -374,98 +340,36 @@ export class BotsPageComponent {
       if (refreshedRows.length !== requestedIds.size) {
         this.launchProgress.set({
           phase: 'blocked',
-          title: 'Selected cohort changed after roll call',
-          detail: 'At least one selected bot no longer has a current start offer. Refresh and select the cohort again.',
+          title: 'Ready bot changed after roll call',
+          detail: 'The next bot no longer has a current start offer. Refresh and try again.',
           activeBotId: null,
           rows: [],
         });
         return;
       }
 
-      const accountId = this.accountId();
-      if (!accountId) {
-        this.blockLaunchProgress('No paper broker account is connected for cohort authorization.');
+      const nextBot = refreshedRows[0];
+      if (nextBot === undefined || nextBot.latestRunId === null || nextBot.startRequest === null || nextBot.startOfferId === null) {
+        this.blockLaunchProgress('The next bot is missing its start request. Refresh and run roll call again.');
         return;
       }
-
       this.launchProgress.set({
         phase: 'running',
-        title: 'Starting authorized cohort',
-        detail: `${refreshedRows.length} bots are starting under one server-authorized receipt.`,
-        activeBotId: null,
-        rows: refreshedRows.map((row) => ({
-          botId: row.id,
-          botName: row.name,
-          status: 'starting',
-          detail: 'Start request is in flight.',
-          reasonCode: null,
-        })),
+        title: 'Starting next ready bot',
+        detail: `${nextBot.name} is starting. Another bot will not start until this result is reviewed.`,
+        activeBotId: nextBot.id,
+        rows: this.progressRowsForCanary(refreshedRows, nextBot, 'starting', 'Start request is in flight.'),
       });
-      const staggerProfile = STAGGER_PROFILE_BY_MEMBER_COUNT[refreshedRows.length];
-      const cohort = await this.liveRuns.launchCohort(accountId, {
-        member_strategy_instance_ids: refreshedRows.map((row) => row.id),
-        ...(staggerProfile ? { launch_profile: staggerProfile } : {}),
+      const response = await this.liveRuns.startHostRunner(nextBot.latestRunId, {
+        ...nextBot.startRequest,
+        roll_call_offer_id: nextBot.startOfferId,
       });
-      this.cohortMonitorReloadVersion.update((version) => version + 1);
       await this.refresh();
-      const liveStatusById = new Map(
-        this.bots().map((bot) => [bot.strategy_instance_id, bot.daily_lifecycle.display_status]),
-      );
-      const outcomesById = new Map(
-        cohort.outcomes.map((outcome) => [outcome.strategy_instance_id, outcome]),
-      );
-      const outcomesAreComplete = cohort.member_strategy_instance_ids.every((memberId) => outcomesById.has(memberId));
-      if (cohort.outcomes_state !== 'recorded' || !outcomesAreComplete) {
-        const outcomesArePending = cohort.outcomes_state !== 'unreadable';
-        this.launchProgress.update((current) => ({
-          ...current,
-          phase: outcomesArePending ? 'running' : 'blocked',
-          title: outcomesArePending ? 'Cohort start pending' : 'Cohort outcome receipt unreadable',
-          detail: outcomesArePending
-            ? `Cohort receipt ${cohort.cohort_id} is durable; wait for the server to record member outcomes.`
-            : cohort.outcomes_error
-              ?? `Cohort receipt ${cohort.cohort_id} could not be read. Refresh before retrying any start.`,
-          rows: refreshedRows.map((row) => ({
-            botId: row.id,
-            botName: row.name,
-            status: outcomesArePending ? 'starting' : 'blocked',
-            detail: outcomesArePending
-              ? 'Cohort authorization is durable; the server has not yet recorded this member outcome.'
-              : 'The server could not read the cohort outcome receipt. Refresh before retrying.',
-            reasonCode: null,
-          })),
-        }));
+      if (!response.accepted) {
+        this.blockLaunchProgress('The start was not accepted. Read the bot and account evidence before trying again.');
         return;
       }
-      const accepted = refreshedRows.every(
-        (row) => outcomesById.get(row.id)?.state === 'accepted',
-      );
-      this.launchProgress.update((current) => ({
-        ...current,
-        phase: accepted ? 'complete' : 'blocked',
-        title: accepted ? 'Cohort start accepted' : 'Cohort start needs attention',
-        detail: `Cohort receipt ${cohort.cohort_id} records server-derived outcomes.`,
-        rows: refreshedRows.map((row) => {
-          const outcome = outcomesById.get(row.id);
-          return outcome?.state === 'accepted'
-            ? {
-              botId: row.id,
-              botName: row.name,
-              status: 'accepted',
-              detail: `Start accepted; live status is ${liveStatusById.get(row.id) ?? 'unavailable'}.`,
-              reasonCode: outcome.reason,
-            }
-            : {
-              botId: row.id,
-              botName: row.name,
-              status: 'blocked',
-              detail: outcome
-                ? 'The server did not accept this cohort member.'
-                : 'The server did not record a cohort outcome for this bot.',
-              reasonCode: outcome?.reason ?? null,
-            };
-        }),
-      }));
+      this.launchProgress.set(this.progressAfterCanaryStart(refreshedRows, nextBot));
     } catch (err) {
       const message = this.humanError(err);
       this.startAllErrorMessage.set(message);
@@ -474,89 +378,6 @@ export class BotsPageComponent {
     } finally {
       this.isStartingReady.set(false);
     }
-  }
-
-  async requestCohortStart(): Promise<void> {
-    const rows = this.readyRows();
-    if (rows.length === 0 || this.isStartingReady() || this.cohortConfirmationOpen()) return;
-    this.cohortConfirmationOpen.set(true);
-    this.cohortPreflightError.set(null);
-    this.cohortPreflight.set([]);
-    this.cohortSelectedIds.set(new Set<string>());
-    const accountId = this.accountId();
-    if (accountId === null) {
-      this.cohortPreflightError.set('No paper broker account is connected for cohort preflight.');
-      return;
-    }
-    const candidates = rows.map(toCohortLaunchCandidate);
-    this.cohortPreflightLoading.set(true);
-    try {
-      const preflight = await Promise.all(
-        candidates.map(async (candidate): Promise<CohortLaunchPreflightCandidate> => {
-          try {
-            const response = await this.liveRuns.deployPreflight({
-              strategyKey: candidate.strategyKey,
-              accountId,
-              instanceId: candidate.strategyInstanceId,
-            });
-            return preflightCandidate(candidate, response);
-          } catch (error) {
-            return { candidate, blockers: [], error: this.humanError(error) };
-          }
-        }),
-      );
-      this.cohortPreflight.set(preflight);
-    } finally {
-      this.cohortPreflightLoading.set(false);
-    }
-  }
-
-  cancelCohortStart(): void {
-    this.cohortConfirmationOpen.set(false);
-    this.cohortSelectedIds.set(new Set<string>());
-  }
-
-  toggleCohortCandidate(strategyInstanceId: string): void {
-    const candidate = this.cohortPreflight().find(
-      (row) => row.candidate.strategyInstanceId === strategyInstanceId,
-    );
-    if (candidate === undefined || candidate.error !== null || candidate.blockers.length > 0) return;
-    this.cohortSelectedIds.update((selected) => {
-      const next = new Set(selected);
-      if (next.has(strategyInstanceId)) next.delete(strategyInstanceId);
-      else next.add(strategyInstanceId);
-      return next;
-    });
-  }
-
-  selectStaggerCohortPreset(memberCount: number): void {
-    const eligibleIds = this.cohortPreflight()
-      .filter((row) => row.error === null && row.blockers.length === 0)
-      .slice(0, memberCount)
-      .map((row) => row.candidate.strategyInstanceId);
-    if (eligibleIds.length === memberCount) this.cohortSelectedIds.set(new Set(eligibleIds));
-  }
-
-  async confirmCohortStart(selectedMemberIds: readonly string[]): Promise<void> {
-    const selectedIds = new Set(selectedMemberIds);
-    const preflightById = new Map(
-      this.cohortPreflight().map((row) => [row.candidate.strategyInstanceId, row]),
-    );
-    if (
-      this.cohortPreflightLoading()
-      || this.cohortPreflightError() !== null
-      || selectedIds.size < 2
-      || selectedIds.size !== selectedMemberIds.length
-      || [...selectedIds].some((id) => {
-        const row = preflightById.get(id);
-        return row === undefined || row.error !== null || row.blockers.length > 0;
-      })
-    ) {
-      return;
-    }
-    this.cohortConfirmationOpen.set(false);
-    this.cohortSelectedIds.set(new Set(selectedIds));
-    await this.startReadyBots([...selectedIds]);
   }
 
   setSearchQuery(event: Event): void {
@@ -858,28 +679,6 @@ export class BotsPageComponent {
 
 function normalize(value: string): string {
   return value.trim().toLowerCase();
-}
-
-function toCohortLaunchCandidate(row: BotTableRow): CohortLaunchCandidate {
-  return {
-    strategyInstanceId: row.id,
-    name: row.name,
-    strategyKey: row.startRequest?.strategy ?? '',
-  };
-}
-
-function preflightCandidate(
-  candidate: CohortLaunchCandidate,
-  response: DeployPreflightResponse,
-): CohortLaunchPreflightCandidate {
-  const blockers = response.blockers.filter((blocker) => blocker.condition.severity === 'blocking');
-  return {
-    candidate,
-    blockers,
-    error: response.ready || blockers.length > 0
-      ? null
-      : 'The cohort preflight did not return a launch-ready verdict.',
-  };
 }
 
 function toTableRow(bot: BotCatalogRow): BotTableRow {
