@@ -60,6 +60,7 @@ def _dependencies(
     receipt: CohortBatchLaunchReceipt | None,
     interactive_calls: list[str],
     daemon_state: str = "idle",
+    daemon_run_id: str | None = None,
     recorded_member_outcome: bool = False,
 ) -> StartAdmissionDependencies:
     async def _interactive_observation(*_args: object) -> None:
@@ -69,7 +70,7 @@ def _dependencies(
         interactive_calls.append("fleet")
 
     async def _fetch_process(*_args: object) -> tuple[object, dict[str, object] | None]:
-        return object(), {"state": daemon_state}
+        return object(), {"state": daemon_state, "run_id": daemon_run_id}
 
     return StartAdmissionDependencies(
         scan_runs_by_instance=lambda _root: {
@@ -145,13 +146,18 @@ def test_admit_valid_pinned_cohort_bypasses_interactive_broker_and_roll_call_gua
     assert interactive_calls == []
 
 
-def test_admit_pinned_cohort_rechecks_daemon_startability_at_slot(tmp_path: Path) -> None:
+def test_admit_pinned_cohort_rejects_a_different_active_run_at_slot(tmp_path: Path) -> None:
     receipt = _receipt(now_ms=1_000)
     service = StartAdmissionService(
         artifacts_root=tmp_path,
         live_runs_root=tmp_path / "runs",
         settings=IbkrSettings(broker_enabled=False),
-        dependencies=_dependencies(receipt=receipt, interactive_calls=[], daemon_state="running"),
+        dependencies=_dependencies(
+            receipt=receipt,
+            interactive_calls=[],
+            daemon_state="running",
+            daemon_run_id="run-other",
+        ),
     )
 
     decision = asyncio.run(
@@ -169,6 +175,36 @@ def test_admit_pinned_cohort_rechecks_daemon_startability_at_slot(tmp_path: Path
     assert decision.policy == "receipt_authorized_cohort"
     assert decision.refusal is not None
     assert decision.refusal.detail["reason_code"] == "ALREADY_RUNNING"
+
+
+def test_admit_pinned_cohort_recovers_an_exact_active_run_idempotently(tmp_path: Path) -> None:
+    receipt = _receipt(now_ms=1_000)
+    service = StartAdmissionService(
+        artifacts_root=tmp_path,
+        live_runs_root=tmp_path / "runs",
+        settings=IbkrSettings(broker_enabled=False),
+        dependencies=_dependencies(
+            receipt=receipt,
+            interactive_calls=[],
+            daemon_state="running",
+            daemon_run_id="run-a",
+        ),
+    )
+
+    decision = asyncio.run(
+        service.admit(
+            "run-a",
+            HostRunnerStartRequest(
+                strategy="spy_ema_crossover",
+                roll_call_offer_id="offer-a",
+                cohort_id=receipt.cohort_id,
+            ),
+        )
+    )
+
+    assert decision.allowed is True
+    assert decision.policy == "receipt_authorized_cohort"
+    assert decision.idempotent_process == {"state": "running", "run_id": "run-a"}
 
 
 @pytest.mark.parametrize(

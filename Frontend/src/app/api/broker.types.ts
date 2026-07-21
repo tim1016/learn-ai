@@ -2938,12 +2938,10 @@ export interface paths {
          *     daemon's statuses propagate verbatim: bad ``strategy``/spec mismatch -> 400,
          *     missing run -> 404, subprocess/daemon unreachable -> 503.
          *
-         *     Before forwarding, the data plane re-evaluates the same start gates the
-         *     cockpit's ``host_process.start_capability`` projection used (ADR 0013
-         *     amendment 2026-06-22): poisoned-flag, account freeze, daemon ``running`` /
-         *     ``stopping``, host service unreachable, roll-call offer, and session
-         *     boundary. A stale ``enabled=true`` projection cannot bypass them — the
-         *     typed start-admission policy re-evaluates the interactive gate chain.
+         *     The typed admission policy selects the gate set. Interactive starts recheck
+         *     the complete fail-closed chain; a receipt-authorized cohort slot trusts its
+         *     durable pin and rechecks only named dynamic safety state. Recovery of an
+         *     already-running exact pinned run is an accepted idempotent replay.
          *
          *     Slice 3 (ADR 0011 amendment) — broker-activity publisher start. After
          *     a successful start the broker-activity publisher is registered for
@@ -8954,7 +8952,7 @@ export interface components {
              * Reason
              * @enum {string}
              */
-            reason: "COHORT_ACCOUNT_FROZEN" | "COHORT_CRASH_RECOVERY_BLOCKED" | "COHORT_DAEMON_NOT_STARTABLE" | "COHORT_DAEMON_UNAVAILABLE" | "COHORT_MEMBER_DELETED" | "COHORT_MEMBER_POISONED" | "COHORT_MEMBER_RETIRED" | "COHORT_PRIOR_MEMBER_BLOCKED" | "COHORT_START_ACCEPTED" | "COHORT_START_FAILED" | "COHORT_START_NOT_ACCEPTED" | "COHORT_START_REJECTED" | "COHORT_START_SETTINGS_UNREADABLE";
+            reason: "COHORT_ACCOUNT_FROZEN" | "COHORT_CRASH_RECOVERY_BLOCKED" | "COHORT_DAEMON_NOT_STARTABLE" | "COHORT_DAEMON_UNAVAILABLE" | "COHORT_MEMBER_DELETED" | "COHORT_MEMBER_POISONED" | "COHORT_MEMBER_RETIRED" | "COHORT_PRIOR_MEMBER_BLOCKED" | "COHORT_POSTURE_MISMATCH" | "COHORT_SLOT_PREFLIGHT_NOT_READY" | "COHORT_START_ACCEPTED" | "COHORT_START_FAILED" | "COHORT_START_NOT_ACCEPTED" | "COHORT_START_REJECTED" | "COHORT_START_SETTINGS_UNREADABLE";
             /**
              * State
              * @enum {string}

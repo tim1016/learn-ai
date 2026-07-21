@@ -49,6 +49,7 @@ class StartAdmissionDecision:
     policy: StartAdmissionPolicyName
     strategy_instance_id: str | None
     refusal: StartAdmissionRefusal | None = None
+    idempotent_process: dict[str, object] | None = None
 
     @property
     def allowed(self) -> bool:
@@ -247,6 +248,12 @@ class StartAdmissionService:
                         "message": "The bot service is offline. Start it on the host machine first.",
                     },
                 ),
+            )
+        if daemon.get("state") == "running" and daemon.get("run_id") == resolved.run_id:
+            return StartAdmissionDecision(
+                policy="receipt_authorized_cohort",
+                strategy_instance_id=resolved.strategy_instance_id,
+                idempotent_process=daemon,
             )
         daemon_refusal = self._daemon_state_refusal(daemon)
         if daemon_refusal is not None:

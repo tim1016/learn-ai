@@ -9,11 +9,18 @@ from pathlib import Path
 from typing import Protocol
 
 from app.engine.live.bot_lifecycle_state import BotLifecyclePhase, BotLifecycleStateRecord
-from app.schemas.live_runs import BotCatalogResponse, BotCatalogRow, BotRollCallResponse, LiveInstanceStatus
+from app.schemas.live_runs import (
+    BotCatalogResponse,
+    BotCatalogRow,
+    BotRollCallResponse,
+    FleetAccountSummary,
+    LiveInstanceStatus,
+)
 from app.services.account_fleet_read_context import (
     AccountFleetReadContext,
     AccountFleetReadContexts,
     build_account_fleet_read_contexts,
+    compose_fleet_account_read_summary,
 )
 from app.services.account_truth_snapshot import AccountTruthSnapshotProvider
 from app.services.bot_catalog_projection import (
@@ -74,6 +81,7 @@ class BrokerFreeFleetReadDependencies:
     read_sidecar: Callable[[Path], object | None]
     live_config_for_run_dir: Callable[[Path], Mapping[str, object] | None]
     status_is_roll_call_eligible: Callable[[LiveInstanceStatus], bool]
+    fetch_broker_connected_account: Callable[[], Awaitable[tuple[str | None, bool]]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -186,6 +194,34 @@ class BrokerFreeFleetReadService:
                 }
             ),
             offers=offers,
+        )
+
+    async def account_summary(
+        self,
+        root: Path,
+        *,
+        requested_account_id: str | None,
+    ) -> FleetAccountSummary:
+        """Project account identity and contamination from cached broker truth."""
+
+        by_instance = await asyncio.to_thread(self._d.visible_runs_by_instance, root)
+        instance_account_ids = {sid: self._account_id_for_sid(by_instance, sid) for sid in by_instance}
+        if requested_account_id is not None:
+            instance_account_ids = {
+                sid: account_id
+                for sid, account_id in instance_account_ids.items()
+                if account_id == requested_account_id
+            }
+        broker_account, broker_known = await self._d.fetch_broker_connected_account()
+        return await asyncio.to_thread(
+            compose_fleet_account_read_summary,
+            root,
+            requested_account_id=requested_account_id,
+            instance_account_ids=instance_account_ids,
+            broker_connected_account=broker_account,
+            broker_account_known=broker_known,
+            snapshot_provider=self._d.get_account_truth_snapshot_provider(),
+            observed_at_ms=self._d.now_ms(),
         )
 
     async def _read_snapshot(self, settings: FleetReadSettings, root: Path) -> FleetReadSnapshot:

@@ -69,9 +69,11 @@ from app.schemas.live_runs import (
     FleetContamination,
     LiveBinding,
 )
+from app.services import account_fleet_read_context
 from app.services.account_truth_snapshot import AccountTruthSnapshotProvider
 from app.services.live_chart_window import ChartTimeframe, ChartWindowResult
 from app.services.mutation_attempt import MutationAttemptRepo
+from app.services.start_admission_policy import StartAdmissionDecision
 from tests._fixtures.daemon_transport import as_typed_get
 from tests._helpers.account_truth import fresh_account_truth_source_freshness
 
@@ -209,34 +211,45 @@ def _remember_clean_account_truth(
     *,
     account_id: str = "DU111",
     observed_at_ms: int = 1_783_533_600_000,
+    positions: dict[str, int] | None = None,
 ) -> None:
     provider = AccountTruthSnapshotProvider()
-    provider.remember(
-        AccountTruthResponse(
+    truth = AccountTruthResponse(
+        account_id=account_id,
+        final_verdict="clean",
+        final_severity="ok",
+        status_label="Clean",
+        status_detail="Account Truth is clean.",
+        generated_at_ms=observed_at_ms,
+        health=IbkrConnectionHealth(
+            mode="paper",
+            host="127.0.0.1",
+            port=4002,
+            client_id=7,
+            connected=True,
             account_id=account_id,
-            final_verdict="clean",
-            final_severity="ok",
-            status_label="Clean",
-            status_detail="Account Truth is clean.",
-            generated_at_ms=observed_at_ms,
-            health=IbkrConnectionHealth(
-                mode="paper",
-                host="127.0.0.1",
-                port=4002,
-                client_id=7,
-                connected=True,
-                account_id=account_id,
-                is_paper=True,
-                fetched_at_ms=observed_at_ms,
-                connection_state="connected",
-                last_transition_ms=observed_at_ms,
-            ),
-            invariants=[],
-            source_freshness=fresh_account_truth_source_freshness(observed_at_ms),
+            is_paper=True,
+            fetched_at_ms=observed_at_ms,
+            connection_state="connected",
+            last_transition_ms=observed_at_ms,
         ),
+        invariants=[],
+        source_freshness=fresh_account_truth_source_freshness(observed_at_ms),
+    )
+    if positions:
+        truth = truth.model_copy(
+            update={
+                "positions": [
+                    SimpleNamespace(symbol=symbol, quantity=quantity) for symbol, quantity in positions.items()
+                ]
+            }
+        )
+    provider.remember(
+        truth,
         cached_at_ms=observed_at_ms,
     )
     monkeypatch.setattr(live_instances, "get_account_truth_snapshot_provider", lambda: provider)
+    monkeypatch.setattr(live_instances, "_now_ms", lambda: observed_at_ms)
 
 
 def _write_crash_retired_binding(
@@ -4233,19 +4246,13 @@ async def test_account_fleet_flags_residual_contamination(app_with_root, monkeyp
     app, root = app_with_root
     _write_ledger(root, "run-ema", "spy_ema", 100)
     _write_live_state(root, "spy_ema", "run-ema", {"SPY": 100})
-
-    async def fake_net() -> dict[str, int]:
-        return {"SPY": 137}  # 37 unexplained
-
-    monkeypatch.setattr(live_instances, "_fetch_net_positions", fake_net)
-    async def real_fleet(run_root: Path, *, account_id: str | None = None) -> FleetContamination:
-        return await live_instances.fleet_contamination_service.compute_account_fleet_contamination(
-            run_root,
-            fetch_positions=live_instances._fetch_net_positions,
-            account_id=account_id,
-        )
-
-    monkeypatch.setattr(live_instances, "_compute_account_fleet_contamination", real_fleet)
+    _remember_clean_account_truth(monkeypatch, positions={"SPY": 137})
+    _forbid_broker_position_fetch(monkeypatch)
+    monkeypatch.setattr(
+        account_fleet_read_context,
+        "collect_fleet_position_explanations",
+        lambda _root, *, account_id=None: {"spy_ema": {"SPY": 100}},
+    )
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -4262,25 +4269,41 @@ async def test_account_fleet_unknown_without_broker(app_with_root, monkeypatch: 
     app, root = app_with_root
     _write_ledger(root, "run-ema", "spy_ema", 100)
     _write_live_state(root, "spy_ema", "run-ema", {"SPY": 100})
-
-    async def fake_net() -> None:
-        return None
-
-    monkeypatch.setattr(live_instances, "_fetch_net_positions", fake_net)
-    async def real_fleet(run_root: Path, *, account_id: str | None = None) -> FleetContamination:
-        return await live_instances.fleet_contamination_service.compute_account_fleet_contamination(
-            run_root,
-            fetch_positions=live_instances._fetch_net_positions,
-            account_id=account_id,
-        )
-
-    monkeypatch.setattr(live_instances, "_compute_account_fleet_contamination", real_fleet)
+    monkeypatch.setattr(
+        live_instances,
+        "get_account_truth_snapshot_provider",
+        lambda: AccountTruthSnapshotProvider(),
+    )
+    _forbid_broker_position_fetch(monkeypatch)
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/api/live-instances/account")
 
     assert response.json()["verdict"] == "unknown"
+
+
+async def test_account_summary_uses_cached_positions_without_broker_fetch(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    _write_ledger(root, "run-summary", "spy_ema", 100)
+    _write_live_state(root, "spy_ema", "run-summary", {"SPY": 100})
+    _remember_clean_account_truth(monkeypatch, positions={"SPY": 137})
+    _forbid_broker_position_fetch(monkeypatch)
+    monkeypatch.setattr(
+        account_fleet_read_context,
+        "collect_fleet_position_explanations",
+        lambda _root, *, account_id=None: {"spy_ema": {"SPY": 100}},
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/api/live-instances/account-summary")
+
+    assert response.status_code == 200
+    assert response.json()["account_id"] == "DU111"
+    assert response.json()["contamination"]["residual"] == {"SPY": 37}
 
 
 async def test_instance_commands_returns_bound_run_timeline(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -5779,6 +5802,42 @@ async def test_start_run_forwards_and_returns_action(app_with_root, monkeypatch:
     assert lifecycle is not None
     assert lifecycle.phase == "ON_DUTY"
     assert lifecycle.active_run_id == "run-abc"
+
+
+async def test_start_run_recovers_receipt_pinned_active_run_without_duplicate_daemon_post(
+    app_with_root,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, root = app_with_root
+    run_id = "run-recovered"
+    _write_ledger(root, run_id, "spy_ema_paper", 100)
+    process = _running_process(run_id)
+
+    class IdempotentAdmissionService:
+        async def admit(self, _run_id: str, _body: object) -> StartAdmissionDecision:
+            return StartAdmissionDecision(
+                policy="receipt_authorized_cohort",
+                strategy_instance_id="spy_ema_paper",
+                idempotent_process=process,
+            )
+
+    monkeypatch.setattr(
+        live_instances,
+        "_start_admission_service",
+        lambda _settings: IdempotentAdmissionService(),
+    )
+
+    async def unexpected_start(*_args: object, **_kwargs: object) -> dict:
+        raise AssertionError("an exact active run must not receive a duplicate daemon start")
+
+    monkeypatch.setattr(host_daemon_client, "start_run", unexpected_start)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(f"/api/live-instances/runs/{run_id}/start", json={})
+
+    assert response.status_code == 200
+    assert response.json()["accepted"] is True
+    assert response.json()["process"]["run_id"] == run_id
 
 
 async def test_start_run_rejects_contaminated_account_even_with_roll_call_offer(
