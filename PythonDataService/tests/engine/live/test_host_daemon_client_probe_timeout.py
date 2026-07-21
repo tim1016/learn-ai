@@ -31,3 +31,23 @@ async def test_fetch_instance_process_uses_instance_probe_timeout(monkeypatch) -
     # The probe must use the dedicated longer timeout, distinct from the 2s health default.
     assert captured["timeout"] is host_daemon_client._INSTANCE_PROBE_TIMEOUT
     assert host_daemon_client._INSTANCE_PROBE_TIMEOUT.read > host_daemon_client._TIMEOUT.read
+
+
+async def test_fetch_startability_health_uses_instance_probe_timeout(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_classify_http(url, *, method, timeout=host_daemon_client._TIMEOUT):
+        captured["url"] = url
+        captured["method"] = method
+        captured["timeout"] = timeout
+        return DaemonResult.connected(), None
+
+    monkeypatch.setattr(host_daemon_client, "_classify_http", fake_classify_http)
+
+    result, health = await host_daemon_client.fetch_startability_health("http://d")
+
+    assert result.kind == "CONNECTED"
+    assert health is None
+    assert str(captured["url"]).endswith("/health")
+    assert captured["method"] == "GET"
+    assert captured["timeout"] is host_daemon_client._INSTANCE_PROBE_TIMEOUT

@@ -92,16 +92,11 @@ def _strategy_is_deployable(strategy_key: str) -> bool:
 
 async def _instance_is_running_or_stopping(instance_id: str) -> bool:
     settings = get_settings()
-    _result, daemon = await host_daemon_client.fetch_instances(settings.live_runner_daemon_url)
-    if daemon is None:
-        return False
-    for inst in daemon.get("instances", []):
-        if inst.get("strategy_instance_id") != instance_id:
-            continue
-        process = inst.get("process")
-        if isinstance(process, dict) and process.get("state") in _LIVE_PROCESS_STATES:
-            return True
-    return False
+    _result, process = await host_daemon_client.fetch_instance_process(
+        settings.live_runner_daemon_url,
+        instance_id,
+    )
+    return isinstance(process, dict) and process.get("state") in _LIVE_PROCESS_STATES
 
 
 def _account_proof_is_current(
@@ -136,7 +131,9 @@ async def gather_deploy_preflight_signals(
     root = Path(settings.live_runs_root)
     artifacts_root = root.parent
 
-    daemon_result, _health = await host_daemon_client.fetch_health(settings.live_runner_daemon_url)
+    daemon_result, _health = await host_daemon_client.fetch_startability_health(
+        settings.live_runner_daemon_url
+    )
     account_freeze = read_account_freeze(artifacts_root, account_id)
     account_truth = get_account_truth_snapshot_provider().get(account_id)
     now_ms = _now_ms()

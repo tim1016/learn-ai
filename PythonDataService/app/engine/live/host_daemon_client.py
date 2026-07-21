@@ -435,8 +435,24 @@ async def fetch_health(
     - ``pydantic.ValidationError`` → ``DaemonResult.incompatible_contract(...)``
     - JSON decode ``ValueError`` → ``DaemonResult.malformed_body(...)``
     """
+    return await _fetch_health(base_url, timeout=_TIMEOUT)
+
+
+async def fetch_startability_health(
+    base_url: str,
+) -> tuple[DaemonResult, HostRunnerHealth | None]:
+    """GET /health with the bounded deadline used for start admission."""
+
+    return await _fetch_health(base_url, timeout=_INSTANCE_PROBE_TIMEOUT)
+
+
+async def _fetch_health(
+    base_url: str,
+    *,
+    timeout: httpx.Timeout,
+) -> tuple[DaemonResult, HostRunnerHealth | None]:
     result, response = await _classify_http(
-        f"{base_url.rstrip('/')}/health", method="GET"
+        f"{base_url.rstrip('/')}/health", method="GET", timeout=timeout
     )
     if response is None:
         return result, None
