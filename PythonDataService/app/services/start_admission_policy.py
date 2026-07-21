@@ -49,6 +49,7 @@ class StartAdmissionDecision:
     policy: StartAdmissionPolicyName
     strategy_instance_id: str | None
     refusal: StartAdmissionRefusal | None = None
+    idempotent_process: dict[str, object] | None = None
 
     @property
     def allowed(self) -> bool:
@@ -138,7 +139,7 @@ class StartAdmissionService:
         resolved: _ResolvedStart,
         request: HostRunnerStartRequest,
     ) -> bool:
-        """Prove that a V2 receipt, not a client id, selects the cohort policy."""
+        """Prove that a V2 receipt, including its offer pin, selects the policy."""
 
         if request.cohort_id is None or resolved.account_id is None:
             return False
@@ -182,7 +183,7 @@ class StartAdmissionService:
                 # A receipt authorizes one scheduled start attempt, not a
                 # client-selectable bypass that can revive a finished slot.
                 return False
-        return slot.start_request == request.model_dump(
+        return pin.roll_call_offer_id == request.roll_call_offer_id and slot.start_request == request.model_dump(
             mode="json",
             exclude={"roll_call_offer_id", "cohort_id"},
         )
@@ -247,6 +248,12 @@ class StartAdmissionService:
                         "message": "The bot service is offline. Start it on the host machine first.",
                     },
                 ),
+            )
+        if daemon.get("state") == "running" and daemon.get("run_id") == resolved.run_id:
+            return StartAdmissionDecision(
+                policy="receipt_authorized_cohort",
+                strategy_instance_id=resolved.strategy_instance_id,
+                idempotent_process=daemon,
             )
         daemon_refusal = self._daemon_state_refusal(daemon)
         if daemon_refusal is not None:

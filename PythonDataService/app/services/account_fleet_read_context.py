@@ -12,8 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 
-from app.engine.live.fleet import compute_fleet_contamination
-from app.schemas.live_runs import FleetContamination
+from app.engine.live.fleet import compute_account_identity, compute_fleet_contamination
+from app.schemas.live_runs import FleetAccountSummary, FleetContamination
 from app.services.account_truth_snapshot import (
     AccountTruthAssessment,
     AccountTruthReadiness,
@@ -94,6 +94,52 @@ def build_account_fleet_read_contexts(
             contamination=contamination,
         )
     return AccountFleetReadContexts(by_account_id=MappingProxyType(contexts))
+
+
+def compose_fleet_account_read_summary(
+    root: Path,
+    *,
+    requested_account_id: str | None,
+    instance_account_ids: Mapping[str, str | None],
+    broker_connected_account: str | None,
+    broker_account_known: bool,
+    snapshot_provider: AccountTruthSnapshotProvider,
+    observed_at_ms: int,
+) -> FleetAccountSummary:
+    """Compose the account row from cached truth, never a broker refresh."""
+
+    identity = compute_account_identity(
+        dict(instance_account_ids),
+        broker_connected_account,
+        broker_account_known=broker_account_known,
+    )
+    identity_account_id = identity["account_id"]
+    resolved_account_id = requested_account_id or (
+        identity_account_id if isinstance(identity_account_id, str) else None
+    )
+    context = build_account_fleet_read_contexts(
+        root,
+        [resolved_account_id],
+        snapshot_provider=snapshot_provider,
+        observed_at_ms=observed_at_ms,
+    ).get(resolved_account_id)
+    contamination = (
+        context.contamination
+        if context is not None
+        else FleetContamination(
+            **compute_fleet_contamination(
+                None,
+                collect_fleet_position_explanations(root, account_id=resolved_account_id),
+                policy_blocks_starts=True,
+            )
+        )
+    )
+    return FleetAccountSummary(
+        account_id=requested_account_id or resolved_account_id,
+        account_identity=identity["account_identity"],
+        account_identity_reason_codes=identity["account_identity_reason_codes"],
+        contamination=contamination,
+    )
 
 
 def _cached_net_positions(

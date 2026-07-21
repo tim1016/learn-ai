@@ -72,9 +72,6 @@ from app.engine.live.engine_runtime import (
     EngineRuntimeSnapshot,
     read_engine_runtime_snapshot,
 )
-from app.engine.live.fleet import (
-    compute_fleet_account_summary,
-)
 from app.engine.live.halt import read_poisoned_flag
 from app.engine.live.intent_events import IntentEvent, IntentEventType
 from app.engine.live.intent_wal import IntentWal, IntentWalCorruptError
@@ -264,9 +261,6 @@ from app.services.deploy_admission import (
     SymbolResolution,
     evaluate_deploy_start_admission,
     resolve_symbol_from_ledger,
-)
-from app.services.fleet_contamination import (
-    collect_fleet_position_explanations,
 )
 from app.services.fleet_contamination import (
     fetch_net_positions as _fetch_net_positions,
@@ -1952,6 +1946,7 @@ def _broker_free_fleet_read_service() -> BrokerFreeFleetReadService:
             read_sidecar=_read_sidecar,
             live_config_for_run_dir=_live_config_for_run_dir,
             status_is_roll_call_eligible=status_is_roll_call_eligible,
+            fetch_broker_connected_account=_fetch_broker_connected_account,
         )
     )
 
@@ -2826,12 +2821,10 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
     daemon's statuses propagate verbatim: bad ``strategy``/spec mismatch -> 400,
     missing run -> 404, subprocess/daemon unreachable -> 503.
 
-    Before forwarding, the data plane re-evaluates the same start gates the
-    cockpit's ``host_process.start_capability`` projection used (ADR 0013
-    amendment 2026-06-22): poisoned-flag, account freeze, daemon ``running`` /
-    ``stopping``, host service unreachable, roll-call offer, and session
-    boundary. A stale ``enabled=true`` projection cannot bypass them — the
-    typed start-admission policy re-evaluates the interactive gate chain.
+    The typed admission policy selects the gate set. Interactive starts recheck
+    the complete fail-closed chain; a receipt-authorized cohort slot trusts its
+    durable pin and rechecks only named dynamic safety state. Recovery of an
+    already-running exact pinned run is an accepted idempotent replay.
 
     Slice 3 (ADR 0011 amendment) — broker-activity publisher start. After
     a successful start the broker-activity publisher is registered for
@@ -2861,12 +2854,16 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
     with scope:
         scope.stage = "persist_start_intent"
         previous_start_intent = _persist_start_intent(root, sid)
-        scope.stage = "daemon_start"
+        scope.stage = "idempotent_start" if admission.idempotent_process is not None else "daemon_start"
         try:
-            result = await host_daemon_client.start_run(
-                settings.live_runner_daemon_url,
-                run_id,
-                body.model_dump(exclude={"roll_call_offer_id"}),
+            result = (
+                {"accepted": True, "process": admission.idempotent_process}
+                if admission.idempotent_process is not None
+                else await host_daemon_client.start_run(
+                    settings.live_runner_daemon_url,
+                    run_id,
+                    body.model_dump(exclude={"roll_call_offer_id"}),
+                )
             )
         except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
             unknown = scope.unknown(error=exc)
@@ -3681,7 +3678,12 @@ async def get_account_fleet() -> FleetContamination:
     """
     settings = get_settings()
     root = Path(settings.live_runs_root)
-    return await _compute_account_fleet_contamination(root)
+    return (
+        await _broker_free_fleet_read_service().account_summary(
+            root,
+            requested_account_id=None,
+        )
+    ).contamination
 
 
 @router.get("/account-summary", response_model=FleetAccountSummary)
@@ -3699,32 +3701,10 @@ async def get_account_summary(account_id: str | None = Query(default=None)) -> F
         requested_account_id = normalize_account_id(account_id) if account_id is not None else None
     except InvalidAccountIdError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-    account_ids: dict[str, str | None] = {}
-    for sid in _scan_runs_by_instance(root):
-        instance_account_id = _instance_ledger_account_id(root, sid)
-        if requested_account_id is None or instance_account_id == requested_account_id:
-            account_ids[sid] = instance_account_id
-    data_plane_snapshot = snapshot_data_plane_broker()
-    broker_account, broker_known = await _fetch_broker_connected_account(data_plane_snapshot)
-    explained_by_instance = collect_fleet_position_explanations(root, account_id=requested_account_id)
-    net_positions = None if requested_account_id is not None else await _fetch_net_positions()
-    payload = compute_fleet_account_summary(
-        net_positions=net_positions,
-        explained_by_instance=explained_by_instance,
-        instance_account_ids=account_ids,
-        broker_connected_account=broker_account,
-        broker_account_known=broker_known,
-        policy_blocks_starts=True,
+    return await _broker_free_fleet_read_service().account_summary(
+        root,
+        requested_account_id=requested_account_id,
     )
-    if requested_account_id is not None:
-        payload["account_id"] = requested_account_id
-        payload["contamination"] = await _compute_account_fleet_contamination(
-            root,
-            account_id=requested_account_id,
-        )
-    else:
-        payload["contamination"] = FleetContamination(**payload["contamination"])
-    return FleetAccountSummary(**payload)
 
 
 def _surface_snapshot_unavailable(strategy_instance_id: str) -> HTTPException:

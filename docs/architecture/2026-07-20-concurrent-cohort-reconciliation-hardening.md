@@ -132,9 +132,11 @@ but serialize on the one IBKR connection, so concurrency does not help.
 **Real Fix C:** serve the read paths from the **cached** Account Truth snapshot (the 15s
 `AccountTruthRefreshLoop` already maintains one) instead of triggering a fresh per-bot
 `reqPositions`; compute account-level state (truth, exposure, fleet contamination) **once
-per request** and share it across all bot rows. Expected: `/catalog` and roll-call drop
-from ~12s to sub-second, the roll-call reliably offers every member, and 5-concurrent
-becomes reachable. This supersedes the probe-timeout band-aid as the primary C fix.
+per request** and share it across all bot rows. This broker-free invariant is shipped and
+slot dispatch no longer depends on roll-call latency. Measured reads remain 4.7–10.0s due
+to synchronous local composition and large journal parsing; that is monitoring/UX debt,
+not a cohort-member admission dependency (tracked by #1149). This supersedes the probe-timeout band-aid as
+the primary C fix.
 
 ## Adjacent issues found in the bot-control read/storage layer (2026-07-20)
 
@@ -248,14 +250,14 @@ eligibility under load.
 |---|---|---|
 | Run exists / exact `strategy_instance_id` and account | Admission-proved | The receipt is selected only when its account, member pin, and scheduled `run_id` exactly match the resolved run. Unknown runs remain the daemon's 404 authority. |
 | Persisted start request | Admission-proved | The request excluding transport-only offer/cohort fields must equal the V2 schedule's immutable start request. |
-| Roll-call offer and Ready eligibility | Admission-proved | The original offer was pinned when the receipt was authorized. A slot must not re-derive fleet eligibility. The coordinator's temporary retry remains outside this policy until the dedicated dispatch slice removes it. |
+| Roll-call offer and Ready eligibility | Admission-proved | The original offer was pinned when the receipt was authorized. A slot does not re-derive fleet eligibility; the dedicated dispatch slice removed the temporary retry. |
 | Cohort session window / effective stop | Admission-proved | Authorization proves the whole receipt schedule and validation window fit before effective stop; the slot does not recompute it. |
 | Account observation lease, connected-account identity, and fleet contamination | Intentionally removed | The authorization validates target paper posture and pins membership; re-running these checks can refresh/query broker state and recreates the contention this change removes. A stale or unavailable observation stays honest for reads; it is not repaired synchronously by a slot. |
 | Account freeze | Dynamic | A freeze can be written after authorization and must block every later slot. |
 | Soft deletion and lifecycle retirement | Dynamic | A bot can be removed or retired after authorization; a durable pin never overrides a later retirement decision. |
 | Crash-recovery block | Dynamic | A crash or recovery-required binding can appear after authorization. |
 | `poisoned.flag` | Dynamic | A later fatal run state must continue to require redeploy. |
-| Host daemon reachability and process state | Dynamic | The daemon can go offline, start, or stop between slots; only an idle/startable process reaches the POST. |
+| Host daemon reachability and process state | Dynamic | The daemon can go offline, start, or stop between slots. Idle proceeds to the POST; an exact receipt-pinned run already active is accepted as an idempotent recovery; any other running or stopping process blocks. |
 | Daemon run-dir/request validation, desired-state/idempotency lock, client-id allocation, account binding/freeze write, Clerk readiness, spawn and runtime pre-flight | Daemon-delegated | These are the host's atomic start boundary and remain idempotently enforced even after data-plane admission. |
 
 ## Alternative — one IBKR paper account per bot

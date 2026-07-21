@@ -15,9 +15,9 @@ via a certified cohort. **User's late reframe (important):** *concurrency matter
 duration/runway does NOT.* So a short-overlap run that simply gets 5 bots **up at once** is
 a win — do not chase the 45-min certificate window or the 15:55 ET force-flat.
 
-**Status:** peaked at **4/5 concurrent** live. Two real bugs fixed; the **true**
-concurrency ceiling is now diagnosed but **not yet fixed** (see §3). Everything durable is
-committed + in memory.
+**Status (updated after PRD #1136 implementation):** peaked at **4/5 concurrent** live.
+Broker-free fleet reads, durable-receipt slot dispatch, and immediate reason-coded outcomes
+are implemented; the market-hours 5-up acceptance run remains outstanding.
 
 ---
 
@@ -47,7 +47,7 @@ committed + in memory.
 
 ---
 
-## 3. THE next thing to do: fix the true concurrency blocker (root cause C-true)
+## 3. Root cause C-true — fixed; residual read latency is follow-up debt
 
 **Diagnosis (solid, evidence in the design doc):** the fleet read paths — `/catalog` and
 the **roll-call** — fire repeated IBKR `reqPositions` **per bot**, serializing on the single
@@ -57,7 +57,7 @@ ineligible bots at the `if not status_is_roll_call_eligible(...): continue` line
 (all fast, <0.2s): daemon `/instances`, container→host hop, volume I/O, journal parsing,
 daemon in-memory bloat, fleet-contamination compute.
 
-**Recommended fix:** route the read paths through the **cached** Account Truth snapshot (the
+**Implemented fix:** route the read paths through the **cached** Account Truth snapshot (the
 15 s `AccountTruthRefreshLoop` in `main.py` already maintains one) instead of triggering a
 fresh per-bot `reqPositions`; compute account-level state (truth/exposure/fleet-contamination)
 **once per request** and share across bot rows. Files: `app/routers/live_instances.py`
@@ -66,8 +66,10 @@ fresh per-bot `reqPositions`; compute account-level state (truth/exposure/fleet-
 `_compute_account_fleet_contamination`. **CAUTION:** `live_instances.py` is a **frozen
 >1k-line router** (`.claude/rules/python.md` — net physical lines may not increase; offset
 any addition with a same-PR extraction). Prefer putting new logic in a service module.
-**Expected result:** `/catalog` + roll-call drop to sub-second → roll-call offers all members
-→ **5 concurrent reachable**.
+**Verified result:** request paths make zero broker-position calls, account truth is read once
+per distinct account, and scheduled slots no longer invoke roll call. Catalog/roll-call still
+measure 4.7–10.0s because synchronous local composition and the large Clerk journal contend on
+the event loop; #1149 tracks it separately because it can no longer drop a scheduled cohort member.
 
 **Verify with:** time `/catalog` before/after (should go ~12 s → <1 s), then re-run a 5-bot
 cohort (short overlap is fine) and watch for ALL_UP.
@@ -115,6 +117,9 @@ cohort (short overlap is fine) and watch for ALL_UP.
 - **Hot-reload is broken** (macOS+podman): after editing data-plane code,
   `podman restart polygon-data-service`. Bot subprocess code (`live_engine`/`halt`) loads
   fresh on each spawn (no restart needed). Daemon code needs `./bootstrap-host-daemon.sh --restart`.
+- **After a data-plane restart, wait for Account Truth offers:** the cache is honestly empty
+  until the refresh loop completes its first sweep (normally about 15 seconds). Do not authorize
+  a cohort until roll call exposes the expected offers.
 - **Deploy a bot (UI `/broker/deploy`):** name → Strategy "Deployment Validation" → signal
   symbol → add ON-ENTER stock leg via ticker search (pick NASDAQ/ARCA primary) → SIZING "One
   share per signal" (=FixedShares 1) → LAUNCH SETTINGS **"Paper orders"** (= submit-to-paper;
@@ -142,14 +147,12 @@ dominant cost and the real fix.
 
 ## 8. Prioritized next steps
 
-1. **Build the §3 fix** (cached account-truth in read paths) — highest leverage; likely
-   unlocks 5-concurrent. TDD; mind the frozen router.
-2. **Re-run a 5-bot cohort** (short overlap OK per the reframe) → confirm ALL_UP / 5 concurrent.
+1. **Run the 5-bot market-hours acceptance** (short overlap OK) and record ALL_UP / 5 concurrent,
+   then stop gracefully.
+2. Address residual catalog/roll-call latency separately: add per-stage timing and evaluate
+   journal compaction or exposure memoization plus offloading synchronous composition.
 3. Then **Phase 2**: UI-driven crash-and-recover test (design in memory; retire-and-replace flow).
-4. Opportunistically: journal compaction, log verbosity, N+1 memoization, Fix B / one-account-per-bot decision.
-5. Before the user PRs the 9 commits: run **thermo-nuclear-code-quality-review** (already run
-   once this session — PASS + 1 applied simplification); note **148 pre-existing frontend
-   eslint warnings** in untouched files (inherited debt, surface in PR).
+4. Opportunistically: log verbosity, Fix B / one-account-per-bot decision.
 
 ---
 

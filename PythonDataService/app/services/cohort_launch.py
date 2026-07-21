@@ -27,6 +27,7 @@ from app.engine.live.account_artifacts import (
 from app.schemas.cohort_batch_launch import (
     COHORT_EVIDENCE_CADENCE_MS,
     COHORT_STAGGER_PROFILES,
+    CohortBatchLaunchMemberOutcomeReason,
     CohortBatchLaunchStatusResponse,
 )
 from app.schemas.live_runs import (
@@ -68,16 +69,6 @@ class _PinnedCohortMember:
 # stagger/overlap timing. See app/schemas/cohort_batch_launch.py.
 _COHORT_EVIDENCE_CADENCE_MS = COHORT_EVIDENCE_CADENCE_MS
 _COHORT_VALIDATION_WINDOW_MS = 60 * 60 * 1_000
-
-# A scheduled cohort member can momentarily drop out of the roll call at its slot
-# instant — e.g. its start capability blips while the daemon is busy dispatching an
-# earlier member's fills. A single missed roll call used to hard-block that member
-# and cascade-skip the rest of the cohort. Re-run the slot roll call a bounded
-# number of times before giving up so a transient eligibility flip does not fail
-# an otherwise-ready launch.
-_SLOT_PREFLIGHT_MAX_ATTEMPTS = 4
-_SLOT_PREFLIGHT_RETRY_DELAY_S = 3.0
-
 
 class CohortLaunchSchedulerRegistry:
     """Own server-owned V2 start schedulers for the life of this process."""
@@ -387,23 +378,7 @@ class CohortLaunchCoordinator:
                     next_safe_action="Inspect the recorded member blocker before authorizing a new cohort.",
                 )
             else:
-                try:
-                    await self._assert_target_account_posture(receipt.account_id)
-                except HTTPException as exc:
-                    detail = exc.detail if isinstance(exc.detail, dict) else {}
-                    outcome = CohortBatchLaunchMemberOutcome(
-                        strategy_instance_id=slot.strategy_instance_id,
-                        state="blocked",
-                        reason="COHORT_POSTURE_MISMATCH",
-                        next_safe_action=str(
-                            detail.get(
-                                "message",
-                                "Refresh broker connection evidence before authorizing a new cohort.",
-                            )
-                        ),
-                    )
-                else:
-                    outcome = await self._start_scheduled_member(receipt, slot)
+                outcome = await self._start_scheduled_member(receipt, slot)
             recorded_at_ms = self._now_ms()
             await service.record_scheduled_member_outcome(
                 account_id=receipt.account_id,
@@ -455,62 +430,40 @@ class CohortLaunchCoordinator:
                 recorded_at_ms=recorded_at_ms,
             )
 
-    async def _resolve_scheduled_offer(
-        self,
-        slot: CohortBatchLaunchMemberSchedule,
-    ) -> BotRollCallOffer | None:
-        """Re-run the slot roll call, tolerating a transient eligibility flip.
-
-        Returns the pinned member's current offer, retrying a bounded number of
-        times if the first roll call omits it (a momentary start-capability blip
-        under daemon load). Returns ``None`` only when the member stays absent
-        across every attempt, i.e. the blocker is not transient.
-        """
-
-        for attempt in range(_SLOT_PREFLIGHT_MAX_ATTEMPTS):
-            roll_call = await self._run_roll_call()
-            offer = next(
-                (
-                    candidate
-                    for candidate in roll_call.offers
-                    if candidate.strategy_instance_id == slot.strategy_instance_id
-                    and candidate.run_id == slot.run_id
-                ),
-                None,
-            )
-            if offer is not None:
-                return offer
-            if attempt < _SLOT_PREFLIGHT_MAX_ATTEMPTS - 1:
-                logger.info(
-                    "cohort slot roll call missed pinned offer; retrying",
-                    extra={
-                        "strategy_instance_id": slot.strategy_instance_id,
-                        "run_id": slot.run_id,
-                        "attempt": attempt + 1,
-                        "max_attempts": _SLOT_PREFLIGHT_MAX_ATTEMPTS,
-                    },
-                )
-                await asyncio.sleep(_SLOT_PREFLIGHT_RETRY_DELAY_S)
-        return None
-
     async def _start_scheduled_member(
         self,
         receipt: CohortBatchLaunchReceipt,
         slot: CohortBatchLaunchMemberSchedule,
     ) -> CohortBatchLaunchMemberOutcome:
-        """Refresh only the ephemeral offer; receipt membership and settings stay pinned."""
+        """Start from the receipt's exact pin and immutable request settings."""
 
-        offer = await self._resolve_scheduled_offer(slot)
-        if offer is None:
+        pin = next(
+            (
+                candidate
+                for candidate in receipt.member_pins
+                if candidate.strategy_instance_id == slot.strategy_instance_id
+                and candidate.run_id == slot.run_id
+            ),
+            None,
+        )
+        if pin is None:
+            logger.error(
+                "V2 cohort receipt has no matching member pin",
+                extra={
+                    "cohort_id": receipt.cohort_id,
+                    "strategy_instance_id": slot.strategy_instance_id,
+                    "run_id": slot.run_id,
+                },
+            )
             return CohortBatchLaunchMemberOutcome(
                 strategy_instance_id=slot.strategy_instance_id,
                 state="blocked",
-                reason="COHORT_SLOT_PREFLIGHT_NOT_READY",
-                next_safe_action="Resolve the current server preflight blocker before authorizing a new cohort.",
+                reason="COHORT_START_SETTINGS_UNREADABLE",
+                next_safe_action="Repair the durable cohort receipt before authorizing a new cohort.",
             )
         try:
             start_request = HostRunnerStartRequest.model_validate(slot.start_request).model_copy(
-                update={"roll_call_offer_id": offer.offer_id, "cohort_id": receipt.cohort_id}
+                update={"roll_call_offer_id": pin.roll_call_offer_id, "cohort_id": receipt.cohort_id}
             )
         except ValueError:
             return CohortBatchLaunchMemberOutcome(
@@ -521,15 +474,11 @@ class CohortLaunchCoordinator:
             )
         return await self._start_member(
             _PinnedCohortMember(
-                pin=CohortBatchLaunchMemberPin(
-                    strategy_instance_id=slot.strategy_instance_id,
-                    run_id=slot.run_id,
-                    roll_call_offer_id=offer.offer_id,
-                ),
+                pin=pin,
                 start_request=start_request,
-                # Admission already proved the persisted policy can support
-                # the entire cohort window. A scheduled retry refreshes only
-                # the ephemeral roll-call offer and does not re-admit it.
+                # Authorization already proved the cohort window and immutable
+                # start settings. The router's receipt policy rechecks only
+                # dynamic safety state before the daemon's atomic start boundary.
                 live_config={},
             ),
             cohort_id=receipt.cohort_id,
@@ -624,14 +573,17 @@ class CohortLaunchCoordinator:
             )
         except HTTPException as exc:
             next_safe_action = "Refresh roll call and resolve the backend blocker before authorizing a new cohort."
-            if isinstance(exc.detail, dict) and isinstance(exc.detail.get("message"), str):
-                next_safe_action = exc.detail["message"]
+            reason: CohortBatchLaunchMemberOutcomeReason = "COHORT_START_REJECTED"
+            if isinstance(exc.detail, dict):
+                reason = _cohort_outcome_reason(exc.detail.get("reason_code"))
+                if isinstance(exc.detail.get("message"), str):
+                    next_safe_action = exc.detail["message"]
             elif isinstance(exc.detail, str) and exc.detail:
                 next_safe_action = exc.detail
             return CohortBatchLaunchMemberOutcome(
                 strategy_instance_id=member.pin.strategy_instance_id,
                 state="blocked",
-                reason="COHORT_START_REJECTED",
+                reason=reason,
                 next_safe_action=next_safe_action,
             )
         except Exception:
@@ -684,6 +636,23 @@ class CohortLaunchCoordinator:
                 ),
             },
         )
+
+
+def _cohort_outcome_reason(reason_code: object) -> CohortBatchLaunchMemberOutcomeReason:
+    """Map named dynamic start-gate refusals to the closed outcome vocabulary."""
+
+    if not isinstance(reason_code, str):
+        return "COHORT_START_REJECTED"
+    return {
+        "ACCOUNT_FROZEN": "COHORT_ACCOUNT_FROZEN",
+        "BOT_SOFT_DELETED": "COHORT_MEMBER_DELETED",
+        "BOT_RETIRED": "COHORT_MEMBER_RETIRED",
+        "CRASH_RECOVERY_REQUIRED": "COHORT_CRASH_RECOVERY_BLOCKED",
+        "STOPPED_REQUIRES_REDEPLOY": "COHORT_MEMBER_POISONED",
+        "HOST_SERVICE_OFFLINE": "COHORT_DAEMON_UNAVAILABLE",
+        "ALREADY_RUNNING": "COHORT_DAEMON_NOT_STARTABLE",
+        "STOPPING": "COHORT_DAEMON_NOT_STARTABLE",
+    }.get(reason_code, "COHORT_START_REJECTED")
 
 
 async def resume_open_cohort_launch_schedulers(

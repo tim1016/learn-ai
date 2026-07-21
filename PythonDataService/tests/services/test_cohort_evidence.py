@@ -29,7 +29,6 @@ from app.schemas.live_runs import (
     BotRollCallSummary,
     HostRunnerStartRequest,
 )
-from app.services import cohort_launch
 from app.services.cohort_batch_launch import CohortBatchLaunchService, parse_cohort_evidence_sample
 from app.services.cohort_evidence import (
     CohortEvidenceSample,
@@ -77,6 +76,14 @@ def _three_bot_stagger_receipt(*, first_start_ms: int = 1_780_000_000_000) -> Co
         window_end_ms=first_start_ms + 1_805_000 + 3_600_000,
         authorized_by="operator.alice",
         recorded_at_ms=first_start_ms,
+        member_pins=tuple(
+            CohortBatchLaunchMemberPin(
+                strategy_instance_id=member_id,
+                run_id=f"run-{member_id}",
+                roll_call_offer_id=f"offer-{member_id}",
+            )
+            for member_id in members
+        ),
         member_schedule=tuple(
             CohortBatchLaunchMemberSchedule(
                 strategy_instance_id=member_id,
@@ -97,6 +104,17 @@ def test_cohort_member_outcome_rejects_an_unknown_reason_code() -> None:
             reason="ACCOUNT_FROZEN",
             next_safe_action="Clear the account freeze.",
         )
+
+
+def test_cohort_member_outcome_preserves_legacy_reason_codes_for_historical_receipts() -> None:
+    outcome = CohortBatchLaunchMemberOutcome(
+        strategy_instance_id="bot-a",
+        state="blocked",
+        reason="COHORT_SLOT_PREFLIGHT_NOT_READY",
+        next_safe_action="Resolve the recorded preflight blocker before authorizing a new cohort.",
+    )
+
+    assert outcome.reason == "COHORT_SLOT_PREFLIGHT_NOT_READY"
 
 
 def test_scheduled_outcomes_project_partial_receipt_immediately(tmp_path: Path) -> None:
@@ -329,6 +347,7 @@ def test_three_bot_stagger_dispatches_from_durable_schedule(tmp_path: Path) -> N
     clock = {"ms": initial_now_ms}
     starts: list[tuple[str, str | None]] = []
     posture_checks: list[str] = []
+    roll_call_count = 0
     offers = [
         BotRollCallOffer(
             offer_id=f"offer-{member}",
@@ -342,6 +361,8 @@ def test_three_bot_stagger_dispatches_from_durable_schedule(tmp_path: Path) -> N
     ]
 
     async def roll_call() -> BotRollCallResponse:
+        nonlocal roll_call_count
+        roll_call_count += 1
         return BotRollCallResponse(summary=BotRollCallSummary(ready=3), offers=offers)
 
     async def start_run(run_id: str, request: HostRunnerStartRequest) -> SimpleNamespace:
@@ -404,7 +425,8 @@ def test_three_bot_stagger_dispatches_from_durable_schedule(tmp_path: Path) -> N
         ("run-b", "offer-b"),
         ("run-c", "offer-c"),
     ]
-    assert posture_checks == ["DU123456", "DU123456", "DU123456", "DU123456"]
+    assert roll_call_count == 1
+    assert posture_checks == ["DU123456"]
     status = asyncio.run(
         CohortBatchLaunchService(artifacts_root=tmp_path).get_status(
             account_id="DU123456",
@@ -419,21 +441,8 @@ def test_staggered_cohort_cascades_skips_without_waiting_for_later_slots(tmp_pat
     receipt = _three_bot_stagger_receipt(first_start_ms=0)
     starts: list[str] = []
 
-    async def roll_call() -> BotRollCallResponse:
-        return BotRollCallResponse(
-            summary=BotRollCallSummary(ready=3),
-            offers=[
-                BotRollCallOffer(
-                    offer_id=f"offer-{member}",
-                    strategy_instance_id=member,
-                    run_id=f"run-{member}",
-                    session_date="2026-07-20",
-                    issued_at_ms=0,
-                    expires_at_ms=9_999_999,
-                )
-                for member in receipt.member_strategy_instance_ids
-            ],
-        )
+    async def unexpected_roll_call() -> BotRollCallResponse:
+        raise AssertionError("scheduled dispatch must use the durable receipt, not a roll call")
 
     async def start_run(run_id: str, _request: HostRunnerStartRequest) -> SimpleNamespace:
         starts.append(run_id)
@@ -442,7 +451,7 @@ def test_staggered_cohort_cascades_skips_without_waiting_for_later_slots(tmp_pat
     coordinator = CohortLaunchCoordinator(
         artifacts_root=tmp_path,
         live_runs_root=tmp_path / "runs",
-        run_roll_call=roll_call,
+        run_roll_call=unexpected_roll_call,
         start_run=start_run,
         visible_runs_by_instance=lambda _root: {},
         run_account_id=lambda _run_dir: None,
@@ -869,72 +878,119 @@ def test_runtime_observer_requires_fresh_running_runtime_and_ready_vector(
     assert sample.reason == "RUNTIME_READINESS_BLOCKED"
 
 
-def _retry_coordinator(tmp_path, roll_call):
-    async def _unused_start(_run_id, _request):
-        raise AssertionError("start_run must not be called during offer resolution")
+def test_restarted_scheduler_uses_remaining_durable_slots_without_duplicate_start(tmp_path: Path) -> None:
+    receipt = _three_bot_stagger_receipt(first_start_ms=0)
+    record_cohort_batch_launch_receipt(tmp_path, receipt)
+    service = CohortBatchLaunchService(artifacts_root=tmp_path)
+    asyncio.run(
+        service.record_scheduled_member_outcome(
+            account_id=receipt.account_id,
+            cohort_id=receipt.cohort_id,
+            outcome=CohortBatchLaunchMemberOutcome(
+                strategy_instance_id="bot-a",
+                state="accepted",
+                reason="COHORT_START_ACCEPTED",
+                next_safe_action="Monitor the bot receipt state and account exposure.",
+            ),
+            recorded_at_ms=1,
+        )
+    )
+    starts: list[tuple[str, str | None]] = []
 
-    async def _unused_posture(_account_id):
-        raise AssertionError("posture must not be called during offer resolution")
+    async def unexpected_roll_call() -> BotRollCallResponse:
+        raise AssertionError("scheduler recovery must not rebuild eligibility with a roll call")
 
-    return CohortLaunchCoordinator(
+    async def start_run(run_id: str, request: HostRunnerStartRequest) -> SimpleNamespace:
+        starts.append((run_id, request.roll_call_offer_id))
+        return SimpleNamespace(accepted=True)
+
+    coordinator = CohortLaunchCoordinator(
         artifacts_root=tmp_path,
         live_runs_root=tmp_path / "runs",
-        run_roll_call=roll_call,
-        start_run=_unused_start,
+        run_roll_call=unexpected_roll_call,
+        start_run=start_run,
         visible_runs_by_instance=lambda _root: {},
         run_account_id=lambda _run_dir: None,
         run_live_config=lambda _run_dir: {},
         start_request_for_run=lambda _run_dir: None,
-        target_account_posture=_unused_posture,
-        now_ms=lambda: 0,
+        target_account_posture=_paper_target_account_posture,
+        now_ms=lambda: 1_800_000,
         evidence_samplers=CohortEvidenceSamplerRegistry(),
         launch_schedulers=CohortLaunchSchedulerRegistry(),
     )
 
+    async def no_evidence(_receipt: CohortBatchLaunchReceipt) -> None:
+        return None
 
-def test_slot_preflight_retries_a_transient_roll_call_miss(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(cohort_launch, "_SLOT_PREFLIGHT_RETRY_DELAY_S", 0)
-    slot = CohortBatchLaunchMemberSchedule(
-        strategy_instance_id="bot-nvda", run_id="run-nvda", scheduled_start_at_ms=0, start_request={}
+    coordinator._start_evidence_sampler = no_evidence  # type: ignore[method-assign]
+    asyncio.run(coordinator._run_staggered_cohort(receipt, asyncio.Event()))
+
+    assert starts == [("run-bot-b", "offer-bot-b"), ("run-bot-c", "offer-bot-c")]
+    status = asyncio.run(
+        service.get_status(account_id=receipt.account_id, cohort_id=receipt.cohort_id)
     )
-    offer = BotRollCallOffer(
-        offer_id="offer-nvda",
-        strategy_instance_id="bot-nvda",
-        run_id="run-nvda",
-        session_date="2026-07-20",
-        issued_at_ms=0,
-        expires_at_ms=9_999_999,
+    assert status is not None
+    assert [outcome.state for outcome in status.outcomes] == ["accepted", "accepted", "accepted"]
+
+
+@pytest.mark.parametrize(
+    ("dynamic_reason", "outcome_reason"),
+    [
+        ("ACCOUNT_FROZEN", "COHORT_ACCOUNT_FROZEN"),
+        ("BOT_SOFT_DELETED", "COHORT_MEMBER_DELETED"),
+        ("BOT_RETIRED", "COHORT_MEMBER_RETIRED"),
+        ("CRASH_RECOVERY_REQUIRED", "COHORT_CRASH_RECOVERY_BLOCKED"),
+        ("STOPPED_REQUIRES_REDEPLOY", "COHORT_MEMBER_POISONED"),
+        ("HOST_SERVICE_OFFLINE", "COHORT_DAEMON_UNAVAILABLE"),
+        ("ALREADY_RUNNING", "COHORT_DAEMON_NOT_STARTABLE"),
+        ("STOPPING", "COHORT_DAEMON_NOT_STARTABLE"),
+    ],
+)
+def test_scheduled_dynamic_refusals_record_closed_outcome_reasons(
+    tmp_path: Path,
+    dynamic_reason: str,
+    outcome_reason: str,
+) -> None:
+    receipt = _three_bot_stagger_receipt(first_start_ms=0)
+    record_cohort_batch_launch_receipt(tmp_path, receipt)
+
+    async def unexpected_roll_call() -> BotRollCallResponse:
+        raise AssertionError("dynamic slot checks must not run a roll call")
+
+    async def refuse_start(_run_id: str, _request: HostRunnerStartRequest) -> SimpleNamespace:
+        detail: dict[str, str] = {"reason_code": dynamic_reason}
+        if dynamic_reason != "CRASH_RECOVERY_REQUIRED":
+            detail["message"] = "dynamic safety changed"
+        raise HTTPException(
+            status_code=409,
+            detail=detail,
+        )
+
+    coordinator = CohortLaunchCoordinator(
+        artifacts_root=tmp_path,
+        live_runs_root=tmp_path / "runs",
+        run_roll_call=unexpected_roll_call,
+        start_run=refuse_start,
+        visible_runs_by_instance=lambda _root: {},
+        run_account_id=lambda _run_dir: None,
+        run_live_config=lambda _run_dir: {},
+        start_request_for_run=lambda _run_dir: None,
+        target_account_posture=_paper_target_account_posture,
+        now_ms=lambda: 0,
+        evidence_samplers=CohortEvidenceSamplerRegistry(),
+        launch_schedulers=CohortLaunchSchedulerRegistry(),
     )
-    calls = {"n": 0}
+    asyncio.run(coordinator._run_staggered_cohort(receipt, asyncio.Event()))
 
-    async def roll_call() -> BotRollCallResponse:
-        calls["n"] += 1
-        # The pinned member is omitted on the first two slot roll calls (a
-        # transient eligibility flip) and only appears on the third.
-        offers = [offer] if calls["n"] >= 3 else []
-        return BotRollCallResponse(summary=BotRollCallSummary(ready=len(offers)), offers=offers)
-
-    coordinator = _retry_coordinator(tmp_path, roll_call)
-    resolved = asyncio.run(coordinator._resolve_scheduled_offer(slot))
-
-    assert resolved is not None
-    assert resolved.offer_id == "offer-nvda"
-    assert calls["n"] == 3
-
-
-def test_slot_preflight_gives_up_after_max_attempts(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(cohort_launch, "_SLOT_PREFLIGHT_RETRY_DELAY_S", 0)
-    slot = CohortBatchLaunchMemberSchedule(
-        strategy_instance_id="bot-nvda", run_id="run-nvda", scheduled_start_at_ms=0, start_request={}
+    status = asyncio.run(
+        CohortBatchLaunchService(artifacts_root=tmp_path).get_status(
+            account_id=receipt.account_id,
+            cohort_id=receipt.cohort_id,
+        )
     )
-    calls = {"n": 0}
-
-    async def roll_call() -> BotRollCallResponse:
-        calls["n"] += 1
-        return BotRollCallResponse(summary=BotRollCallSummary(ready=0), offers=[])
-
-    coordinator = _retry_coordinator(tmp_path, roll_call)
-    resolved = asyncio.run(coordinator._resolve_scheduled_offer(slot))
-
-    assert resolved is None
-    assert calls["n"] == cohort_launch._SLOT_PREFLIGHT_MAX_ATTEMPTS
+    assert status is not None
+    assert [outcome.reason for outcome in status.outcomes] == [
+        outcome_reason,
+        "COHORT_PRIOR_MEMBER_BLOCKED",
+        "COHORT_PRIOR_MEMBER_BLOCKED",
+    ]
