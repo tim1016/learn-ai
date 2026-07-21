@@ -1,6 +1,11 @@
 # Concurrent-cohort reconciliation hardening
 
-**Status:** Active (2026-07-20). Fix A and the partial C mitigations are implemented and live-validated; steps 1-2 of the target shape are specified as PRD #1136 (rev 2, reviewed); Fix B and retention remain future work.
+**Status:** Implemented; awaiting market-hours acceptance (2026-07-20). Fix A is
+live-validated. PR #1143 delivered broker-free fleet reads, typed admission, and
+partial reason-coded outcomes; PR #1148 delivered durable-receipt slot dispatch
+plus the adversarial-review fixes. The remaining five-bot `ALL_UP` proof is now
+the separate operator PRD #1142. Residual read latency is tracked by #1149 and is
+not a cohort-dispatch dependency. Fix B and retention remain future work.
 **Owner:** (pending)
 **Motivation:** Two live paper attempts to certify a 5-bot concurrent cohort on
 DUM284968 (`paper_five_bot_stagger_v2`, 5-min stagger, 45-min overlap) both failed
@@ -9,6 +14,16 @@ are **reconciliation/orchestration fragility under concurrent load on a single
 shared IBKR account**, not the cohort launcher (the launcher + receipt + schedule
 are correct — verified). This doc scopes the hardening so 5-concurrent is reliably
 reachable and the eventual crash-recovery test (Phase 2) has a stable substrate.
+
+## Closeout ledger
+
+| Scope | Disposition |
+|---|---|
+| FR1 — broker-free account-scoped reads | Merged in #1143; `/account` and `/account-summary` coverage completed in #1148 |
+| FR2 — receipt-driven slot dispatch | Merged in #1148, including exact-run restart idempotency |
+| FR3 — immediate reason-coded outcomes | Merged in #1143 and carried into the consolidated master history |
+| FR4 — five simultaneously On duty | Extracted to the market-hours acceptance PRD #1142 |
+| Residual 4.7–10.0s read latency | Non-blocking performance debt in #1149 |
 
 ## Evidence
 
