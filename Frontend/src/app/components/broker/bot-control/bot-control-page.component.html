@@ -66,8 +66,11 @@
       <app-trader-view
         [status]="s"
         [busy]="busyAction() !== null || readOnly()"
+        [gracefulStopAvailable]="gracefulStopAvailable()"
+        [gracefulStopLivenessUnproven]="gracefulStopLivenessUnproven()"
         [renderedRemediation]="renderedPrimaryRemediation()"
         (lifecycleAction)="dispatchOverviewAction($event)"
+        (gracefulStopRequested)="dispatchStop()"
         (remediationInvoked)="invokePrimaryRemediation()"
         (crashRecoveryRequested)="dispatchCrashRecoveryOverride()"
         (blockerMoveRequested)="invokeBlockerMove($event)"

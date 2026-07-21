@@ -37,6 +37,34 @@
         }
         <button type="button" class="secondary-action" (click)="operationsRequested.emit()">View operations</button>
       </div>
+      @if (gracefulStopAvailable()) {
+        <section class="graceful-stop" aria-labelledby="graceful-stop-title">
+          <div>
+            <h3 id="graceful-stop-title">End this bot safely</h3>
+            @if (gracefulStopLivenessUnproven()) {
+              <p>
+                No live process can be confirmed. Graceful stop records durable STOPPED intent and
+                blocks a future start; verify process exit and positions when control-plane proof returns.
+                It does not submit orders or flatten the account.
+              </p>
+            } @else {
+              <p>
+                Graceful stop records durable STOPPED intent and asks the bound host process to exit.
+                It does not submit orders or flatten the account; confirm positions are flat after exit.
+              </p>
+            }
+          </div>
+          <button
+            type="button"
+            class="secondary-action"
+            data-testid="trader-graceful-stop"
+            [disabled]="busy()"
+            (click)="gracefulStopRequested.emit()"
+          >
+            Stop bot gracefully
+          </button>
+        </section>
+      }
     </div>
     <dl class="trader-hero__proofs" aria-label="Current trading proofs">
       <div><dt>Broker</dt><dd>{{ m.trustRows[0].value }}</dd></div>

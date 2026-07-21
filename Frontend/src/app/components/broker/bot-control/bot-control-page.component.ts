@@ -246,6 +246,18 @@ export class BotControlPageComponent {
     if (verdict === 'UNSAFE') return 'Live';
     return 'Mode unknown';
   });
+  readonly gracefulStopAvailable = computed(() => {
+    const status = this.status();
+    const lifecycle = status?.daily_lifecycle.display_status;
+    return (
+      status?.desired_state?.state === 'RUNNING' &&
+      (lifecycle === 'On duty' ||
+        (lifecycle === 'Sick bay' && status.operator_surface.host_process.state === 'UNREACHABLE'))
+    );
+  });
+  readonly gracefulStopLivenessUnproven = computed(
+    () => this.status()?.operator_surface.host_process.state === 'UNREACHABLE',
+  );
 
   constructor() {
     effect(() => {

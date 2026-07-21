@@ -8,6 +8,7 @@ import type {
 } from '../../../api/live-instances.types';
 import {
   makeBotLifecycleMutationResponse,
+  makeDesiredStateResponse,
   makeHostRunnerHealth,
   makeRuntimeFreshnessWithLeaseAction,
   makeStatus,
@@ -36,6 +37,20 @@ function offDutyNeedsRollCallStatus(): LiveInstanceStatus {
   status.daily_lifecycle.attention_badge = null;
   status.daily_lifecycle.reason = 'Run roll call to issue a start offer.';
   status.daily_lifecycle.primary_action = null;
+  return status;
+}
+
+function onDutyStatus(): LiveInstanceStatus {
+  const status = makeStatus({ hostState: 'RUNNING' });
+  status.daily_lifecycle.display_status = 'On duty';
+  status.daily_lifecycle.reason = 'The bot is running.';
+  return status;
+}
+
+function unreachableSickBayStatus(): LiveInstanceStatus {
+  const status = makeStatus({ hostState: 'UNREACHABLE' });
+  status.daily_lifecycle.display_status = 'Sick bay';
+  status.daily_lifecycle.reason = 'The host process cannot be confirmed.';
   return status;
 }
 
@@ -334,6 +349,37 @@ describe('BotControlPageComponent', () => {
       ibkr_host: '127.0.0.1',
       roll_call_offer_id: 'offer-run-x',
     });
+  });
+
+  it('guides an on-duty bot through graceful stop and records durable STOPPED intent', async () => {
+    const { fixture, element, liveRuns } = await setupBotControlPage({
+      status: onDutyStatus(),
+      mutationResponses: { setInstanceDesiredState: makeDesiredStateResponse() },
+    });
+
+    expect(element.textContent).toContain('End this bot safely');
+    expect(element.textContent).toContain('does not submit orders or flatten the account');
+
+    const stop = element.querySelector<HTMLButtonElement>('[data-testid="trader-graceful-stop"]');
+    expect(stop?.disabled).toBe(false);
+    stop?.click();
+    await flush(fixture);
+
+    expect(liveRuns.setInstanceDesiredState).toHaveBeenCalledWith('sid-x', {
+      action: 'stop',
+      reason: 'Stop',
+      updated_by: 'operator',
+    });
+  });
+
+  it('keeps graceful stop available when a sick-bay bot has unproven host liveness', async () => {
+    const { element } = await setupBotControlPage({
+      status: unreachableSickBayStatus(),
+    });
+
+    expect(element.textContent).toContain('No live process can be confirmed.');
+    expect(element.textContent).toContain('blocks a future start');
+    expect(element.querySelector('[data-testid="trader-graceful-stop"]')).not.toBeNull();
   });
 
   it('prepares a roll-call start offer in the bot cockpit when the bot is off duty', async () => {
