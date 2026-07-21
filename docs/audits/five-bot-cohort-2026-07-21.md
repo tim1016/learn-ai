@@ -52,3 +52,16 @@ Authoritative execution record for GitHub issue #1142, rev 2. Times are CDT unle
 - **Change and safety rationale:** The child loop now uses the existing reconciliation success and failure observers. This renews the durable lease only after a clean, current Account Truth projection and stable accepting Clerk generation; failures still revoke proof. No gate threshold, bypass, order path, or operator authorization behavior changed.
 - **Regression coverage and verification:** Extended `test_cmd_start_runs_account_truth_refresh_loop_for_durable_submit_child` to require both observer bindings. The focused runner test passed, followed by the relevant reconciliation, Account Truth refresh, and runner suites: `169 passed`; Ruff and `git diff --check` passed.
 - **Commit SHA:** `3e994594` (`fix(live): renew account proof from runner refresh`). The fix remains local; no push was attempted.
+
+### 12:07–12:13 — bounded admission-timeout correction
+
+- **Safe failed retry:** The UI preflight cleared all hard blockers for exactly `cohort5-aapl`, `cohort5-msft2`, `cohort5-nvda`, `cohort5-qqq`, and `cohort5-spy`; the Sick-bay `cohort5-msft` was excluded. Receipt `paper-validation-1784653635663-fc46c59312a1` recorded AAPL `Blocked — Cohort Start Rejected — connect_timeout` at 12:07:32 CDT. The remaining four members were safely `Skipped — Cohort Prior Member Blocked`, so no member was ambiguously started.
+- **Root cause:** Host logs showed both the account-clerk ensure and run-start requests using the generic two-second action deadline while the host reconciled broker state. The host returned the safe `connect_timeout`; this was not evidence of an uncertain start or a reason to weaken admission checks.
+- **Change and verification:** Start and clerk-ensure admission calls now use the already-established bounded 10-second timeout; probe reads retain their own timeout policy. Regression coverage pins both action paths. Focused client, probe-timeout, and cohort-evidence suites passed (`56 passed`); Ruff and `git diff --check` passed. The data service was restarted to load the change.
+- **Commit SHA:** `ea096e39` (`fix(live): bound cohort admission actions`). The fix is local; no push was attempted.
+
+### 12:15 onward — current UI-authorized staggered retry (in progress)
+
+- **Authorization and first outcome:** The UI again reported zero hard blockers across the same five eligible bots, applied its five-bot stagger preset, and recorded durable receipt `paper-validation-1784654129416-51dcf1fd55d4` at 12:15:29 CDT. AAPL was accepted at 12:15:48 CDT. MSFT2, NVDA, QQQ, and SPY remain deliberately pending at five-minute stagger intervals; no duplicate start request was sent.
+- **Current evidence:** The receipt has no runtime samples or healthy overlap yet, so its evidence verdict remains `Unknown` and no certificate can mint. Account Desk's broker-attested snapshot at 12:17:17 CDT reports `Positions (0)`, zero initial margin, and zero maintenance margin. The Account-roster label saying three bots are on duty conflicts with the receipt and is not treated as broker truth.
+- **Status:** This is a partial admission success, not a successful five-bot validation. Continue through the UI cohort monitor and declare success only after all members have server-recorded outcomes and the required healthy-overlap evidence is present.
