@@ -20,3 +20,11 @@ Authoritative execution record for GitHub issue #1142, rev 2. Times are CDT unle
 - **Change and why:** No code, profile, safety gate, or service restart was changed. Used the normal UI preflight/reload path, then selected the server-owned five-bot preset.
 - **Verification:** The dialog now has exactly `cohort5-aapl`, `cohort5-msft2`, `cohort5-nvda`, `cohort5-qqq`, and `cohort5-spy` selected; `cohort5-msft` remains excluded in Sick bay. `Authorize 5 selected bots` is enabled. This selection has not been submitted.
 - **Commit SHA:** `5a4fa7c6` (`docs(audit): record cohort UI preflight`); no code or safety-gate behavior changed.
+
+### 08:20–08:42 — staggered launch and evidence failure
+
+- **Launch evidence:** UI-authorized receipt `paper-validation-1784640014429-8a0e511ba315` used the required `paper_five_bot_stagger_v3` profile. The service accepted exactly `cohort5-aapl` (+0), `cohort5-msft2` (+5), `cohort5-nvda` (+10), `cohort5-qqq` (+15), and `cohort5-spy` (+20); the poisoned original `cohort5-msft` was never included. The final acceptance was recorded at 08:40:18 CDT.
+- **Failure and reason code:** At 08:41 CDT the authoritative cohort evidence was `failed` with `COHORT_ACCOUNT_PROOF_FAILED` (14 samples, then 25 on the UI refresh), not a member-runtime failure. Healthy overlap remained `0 s`, so no certificate can mint.
+- **Member and exposure evidence:** Every accepted member reported `healthy`, `0 / 2000` orders used, and flat/zero positions. The live roster showed five on-duty bots; no member was blocked, skipped, or dropped.
+- **Required response:** Per #1142, the failed attempt is complete and must be gracefully stopped without bypassing or weakening the account-proof gate. No service restart, gate change, crash, emergency flatten, or direct actuation has been performed.
+- **UI stop-path finding:** After the UI refreshed to the current server state, the selected-cohort actions exposed only `Soft delete`; the individual Operations view exposed `Take off roster` and account-wide `Emergency flatten`. Neither is a graceful stop. The operator manual still says to request `Stop`, while the referenced Bot Control start/stop card has been removed. A normal direct fallback exists (`POST /api/live-instances/runs/{run_id}/stop`) but has not been invoked because the authorized path was UI-primary.
