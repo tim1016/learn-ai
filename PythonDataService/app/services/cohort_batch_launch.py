@@ -255,6 +255,7 @@ class CohortBatchLaunchService:
     ) -> tuple[CohortBatchLaunchOutcomesReceipt | None, str | None]:
         """Project immutable per-slot V2 outcomes into the shared status shape."""
 
+        expected_members = set(receipt.member_strategy_instance_ids)
         outcomes_by_member: dict[str, CohortBatchLaunchMemberOutcome] = {}
         recorded_at_ms = 0
         for event in events:
@@ -279,13 +280,11 @@ class CohortBatchLaunchService:
             except (KeyError, TypeError, ValueError, ValidationError):
                 return None, "A persisted staggered cohort outcome is unreadable."
             member_id = outcome.strategy_instance_id
-            if member_id not in set(receipt.member_strategy_instance_ids) or member_id in outcomes_by_member:
+            if member_id not in expected_members or member_id in outcomes_by_member:
                 return None, "The persisted staggered cohort outcomes do not match this authorization receipt."
             outcomes_by_member[member_id] = outcome
             recorded_at_ms = max(recorded_at_ms, recorded_at)
         if not outcomes_by_member:
-            return None, None
-        if set(outcomes_by_member) != set(receipt.member_strategy_instance_ids):
             return None, None
         return (
             CohortBatchLaunchOutcomesReceipt(
@@ -295,6 +294,7 @@ class CohortBatchLaunchService:
                 outcomes=tuple(
                     outcomes_by_member[member_id]
                     for member_id in receipt.member_strategy_instance_ids
+                    if member_id in outcomes_by_member
                 ),
                 recorded_at_ms=recorded_at_ms,
             ),

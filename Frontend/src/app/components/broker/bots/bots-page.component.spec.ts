@@ -340,7 +340,7 @@ async function setup(options: { triage?: AccountTriageResponse } = {}) {
     schema_version: 1,
     account_id: 'DU1234567',
     cohort_id: 'paper-validation-test',
-    member_strategy_instance_ids: ['live-idle-spy', 'live-running-aapl'],
+    member_strategy_instance_ids: ['live-idle-spy', 'live-idle-qqq'],
     window_start_ms: NEW_RUN,
     window_end_ms: NEW_RUN + 300_000,
     authorized_by: 'local-operator',
@@ -350,13 +350,13 @@ async function setup(options: { triage?: AccountTriageResponse } = {}) {
       {
         strategy_instance_id: 'live-idle-spy',
         state: 'accepted',
-        reason: 'START_ACCEPTED',
+        reason: 'COHORT_START_ACCEPTED',
         next_safe_action: 'Monitor the bot receipt state and account exposure.',
       },
       {
         strategy_instance_id: 'live-idle-qqq',
         state: 'accepted',
-        reason: 'START_ACCEPTED',
+        reason: 'COHORT_START_ACCEPTED',
         next_safe_action: 'Monitor the bot receipt state and account exposure.',
       },
     ],
@@ -560,7 +560,7 @@ describe('BotsPageComponent', () => {
         {
           strategy_instance_id: 'live-idle-spy',
           state: 'blocked',
-          reason: 'ACCOUNT_FROZEN',
+          reason: 'COHORT_START_REJECTED',
           next_safe_action: 'Clear the account freeze.',
         },
       ],
@@ -576,8 +576,8 @@ describe('BotsPageComponent', () => {
     const rendered = (fixture.nativeElement as HTMLElement).textContent ?? '';
     expect(fixture.componentInstance.launchProgress().title).toBe('Cohort start needs attention');
     expect(rendered).toContain('The server did not accept this cohort member.');
-    expect(rendered).toContain('Account Frozen');
-    expect(rendered).not.toContain('ACCOUNT_FROZEN');
+    expect(rendered).toContain('Cohort Start Rejected');
+    expect(rendered).not.toContain('COHORT_START_REJECTED');
   });
 
   it('keeps the launch at batch-level pending until durable member outcomes arrive', async () => {
@@ -598,6 +598,41 @@ describe('BotsPageComponent', () => {
       evidence: COHORT_EVIDENCE,
     };
     service.launchCohort.mockResolvedValue(pendingCohort);
+
+    await fixture.componentInstance.startReadyBots();
+    await settle(fixture);
+
+    const rendered = fixture.nativeElement.textContent ?? '';
+    expect(fixture.componentInstance.launchProgress().phase).toBe('running');
+    expect(fixture.componentInstance.launchProgress().title).toBe('Cohort start pending');
+    expect(rendered).toContain('server has not yet recorded this member outcome');
+    expect(rendered).not.toContain('server did not record a cohort outcome');
+  });
+
+  it('keeps a partially recorded staggered cohort running until every member has an outcome', async () => {
+    const { fixture, service } = await setup();
+    const partialCohort: CohortBatchLaunchStatus = {
+      schema_version: 2,
+      launch_profile: 'paper_three_bot_stagger_v2',
+      account_id: 'DU1234567',
+      cohort_id: 'paper-validation-partial',
+      member_strategy_instance_ids: ['live-idle-spy', 'live-idle-qqq', 'live-idle-iwm'],
+      window_start_ms: NEW_RUN,
+      window_end_ms: NEW_RUN + 3_600_000,
+      authorized_by: 'local-operator',
+      authorized_recorded_at_ms: NEW_RUN,
+      outcomes_state: 'recorded',
+      outcomes: [{
+        strategy_instance_id: 'live-idle-spy',
+        state: 'accepted',
+        reason: 'COHORT_START_ACCEPTED',
+        next_safe_action: 'Monitor the bot receipt state and account exposure.',
+      }],
+      outcomes_recorded_at_ms: NEW_RUN,
+      outcomes_error: null,
+      evidence: COHORT_EVIDENCE,
+    };
+    service.launchCohort.mockResolvedValue(partialCohort);
 
     await fixture.componentInstance.startReadyBots();
     await settle(fixture);

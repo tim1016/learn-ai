@@ -77,13 +77,13 @@ describe('CohortLaunchMonitorComponent', () => {
         {
           strategy_instance_id: 'spy-a',
           state: 'accepted',
-          reason: 'start.request.accepted',
+          reason: 'COHORT_START_ACCEPTED',
           next_safe_action: 'Monitor receipt state.',
         },
         {
           strategy_instance_id: 'spy-b',
           state: 'blocked',
-          reason: 'ACCOUNT_FROZEN',
+          reason: 'COHORT_START_REJECTED',
           next_safe_action: 'Clear the account freeze.',
         },
       ],
@@ -160,7 +160,7 @@ describe('CohortLaunchMonitorComponent', () => {
 
     const root = fixture.nativeElement as HTMLElement;
     expect(root.textContent).toContain('Evidence verdict');
-    expect(root.textContent).toContain('Account Frozen');
+    expect(root.textContent).toContain('Cohort Start Rejected');
     expect(root.textContent).toContain('Clear the account freeze.');
     expect(root.textContent).toContain('run-spy-a');
     expect(root.textContent).toContain('Cohort Member Halted');
@@ -170,6 +170,61 @@ describe('CohortLaunchMonitorComponent', () => {
     expect(root.querySelector('table caption')?.textContent).toContain('latest server observation');
     expect(root.querySelectorAll('th[scope="col"]').length).toBe(5);
     expect(root.querySelector<HTMLButtonElement>('[aria-label="Refresh cohort monitor"]')).toBeTruthy();
+  });
+
+  it('renders a recorded partial outcome while later members remain pending', async () => {
+    const liveRuns = new FakeLiveRunsService();
+    liveRuns.getLatestCohortBatchLaunch.mockResolvedValue({
+      schema_version: 2,
+      launch_profile: 'paper_three_bot_stagger_v2',
+      account_id: 'DU1234567',
+      cohort_id: 'paper-validation-partial',
+      member_strategy_instance_ids: ['spy-a', 'spy-b', 'spy-c'],
+      window_start_ms: 1_780_000_000_000,
+      window_end_ms: 1_780_003_600_000,
+      authorized_by: 'operator.alice',
+      authorized_recorded_at_ms: 1_780_000_000_000,
+      outcomes_state: 'recorded',
+      outcomes: [{
+        strategy_instance_id: 'spy-a',
+        state: 'blocked',
+        reason: 'COHORT_START_REJECTED',
+        next_safe_action: 'Resolve the blocker before authorizing a new cohort.',
+      }],
+      outcomes_recorded_at_ms: 1_780_000_001_000,
+      outcomes_error: null,
+      evidence: {
+        sample_count: 0,
+        cadence_ms: 5_000,
+        healthy_overlap_ms: 0,
+        verdict: 'unknown',
+        reason: 'COHORT_EVIDENCE_MISSING',
+        source: 'account_event.cohort_evidence_sample',
+        members: [],
+      },
+      member_scheduled_start_at_ms: {
+        'spy-a': 1_780_000_000_000,
+        'spy-b': 1_780_000_900_000,
+        'spy-c': 1_780_001_800_000,
+      },
+    });
+    liveRuns.getCohortValidationCertificate.mockResolvedValue(null);
+    await TestBed.configureTestingModule({
+      imports: [CohortLaunchMonitorComponent],
+      providers: [provideZonelessChangeDetection(), { provide: LiveRunsService, useValue: liveRuns }],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(CohortLaunchMonitorComponent);
+    fixture.componentRef.setInput('accountId', 'DU1234567');
+    fixture.detectChanges();
+    await fixture.componentInstance.refresh();
+    fixture.detectChanges();
+
+    const root = fixture.nativeElement as HTMLElement;
+    const rows = Array.from(root.querySelectorAll('tbody tr'));
+    expect(rows).toHaveLength(3);
+    expect(rows[0].textContent).toContain('Cohort Start Rejected');
+    expect(rows[1].textContent).toContain('Pending');
+    expect(rows[2].textContent).toContain('Pending');
   });
 
   it('surfaces certificate retrieval failures instead of presenting absence', async () => {
