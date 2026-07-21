@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, status
@@ -75,6 +77,13 @@ def _expected_token() -> str:
     return ensure_launcher_token(_artifacts_root())
 
 
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Materialize mandatory launcher auth before the first client request."""
+    _expected_token()
+    yield
+
+
 app = FastAPI(
     title="LEAN Sidecar Launcher",
     description=(
@@ -83,6 +92,7 @@ app = FastAPI(
         "with the security shape from lean-sidecar-lab.md."
     ),
     version=LAUNCHER_VERSION,
+    lifespan=_lifespan,
 )
 
 

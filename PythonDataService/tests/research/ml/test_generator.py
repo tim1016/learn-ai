@@ -168,17 +168,27 @@ import sys  # noqa: E402
 
 @pytest.mark.slow
 def test_cli_generates_real_artifact_for_one_day(tmp_path: Path) -> None:
-    """Smoke test: run the CLI against the real LEAN reader for one trading day."""
+    """Smoke test: run the CLI against one locally cached LEAN session."""
+    cache_root = Path(__file__).resolve().parents[3] / "lean-cache"
+    spy_minute_dir = cache_root / "equity" / "usa" / "minute" / "spy"
+    archives = sorted(spy_minute_dir.glob("2*_trade.zip"))
+    if not archives:
+        pytest.skip("local LEAN SPY minute cache unavailable; export a session to run this smoke test")
+
+    session_date = Date.fromisoformat(
+        f"{archives[0].name[:4]}-{archives[0].name[4:6]}-{archives[0].name[6:8]}"
+    )
     cmd = [
         sys.executable, "-m", "app.research.ml.generate_prediction_set",
         "--rule", "rsi_14_centered",
         "--symbol", "SPY",
-        "--start", "2024-05-01",
-        "--end", "2024-05-02",
+        "--start", session_date.isoformat(),
+        "--end", session_date.isoformat(),
         "--resolution-minutes", "15",
         "--artifacts-root", str(tmp_path),
     ]
     env = os.environ.copy()
+    env["LEAN_DATA_CACHE"] = str(cache_root)
     result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=120)
     assert result.returncode == 0, result.stderr
     set_id = result.stdout.strip()
