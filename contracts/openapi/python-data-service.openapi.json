@@ -8800,7 +8800,11 @@
           "launch_profile": {
             "anyOf": [
               {
-                "const": "paper_three_bot_stagger_v2"
+                "enum": [
+                  "paper_three_bot_stagger_v2",
+                  "paper_five_bot_stagger_v2"
+                ],
+                "type": "string"
               },
               {
                 "type": "null"
@@ -8906,7 +8910,11 @@
           "launch_profile": {
             "anyOf": [
               {
-                "const": "paper_three_bot_stagger_v2"
+                "enum": [
+                  "paper_three_bot_stagger_v2",
+                  "paper_five_bot_stagger_v2"
+                ],
+                "type": "string"
               },
               {
                 "type": "null"
@@ -45264,7 +45272,7 @@
     },
     "/api/live-instances/roll-call": {
       "post": {
-        "description": "Persist start offers for all eligible non-retired bots.\n\nThe daemon bulk snapshot may omit idle instances, so resolving each fleet\nrow can fall back to one daemon process probe per omitted bot. Keep those\nprobes concurrent; otherwise a morning roll call degrades into an\noperator-visible sequential N-call path.",
+        "description": "Persist offers projected from cached account truth and durable state.",
         "operationId": "run_roll_call_api_live_instances_roll_call_post",
         "parameters": [
           {
@@ -45315,7 +45323,7 @@
     },
     "/api/live-instances/runs/{run_id}/start": {
       "post": {
-        "description": "Launch the host runner for ``run_id`` by forwarding to the daemon (ADR 0007).\n\nStart/Stop are routed through the data plane \u2014 not called from the browser \u2014\nbecause the daemon now enforces a mandatory ``X-Live-Runner-Token`` on every\nactuation route, and the browser must never hold that shared secret. The data\nplane reads the token from the artifacts bind mount and forwards it. The\ndaemon's statuses propagate verbatim: bad ``strategy``/spec mismatch -> 400,\nmissing run -> 404, subprocess/daemon unreachable -> 503.\n\nBefore forwarding, the data plane re-evaluates the same start gates the\ncockpit's ``host_process.start_capability`` projection used (ADR 0013\namendment 2026-06-22): poisoned-flag, account freeze, daemon ``running`` /\n``stopping``, host service unreachable, roll-call offer, and session\nboundary. A stale ``enabled=true`` projection cannot bypass them \u2014 see\n``_assert_start_allowed``.\n\nSlice 3 (ADR 0011 amendment) \u2014 broker-activity publisher start. After\na successful start the broker-activity publisher is registered for\nthe running instance. Failure to bootstrap (broker disconnected,\nenvelope not yet visible) is logged but does NOT roll back the\nstart: the lazy ``_ensure_publisher`` fallback in\n``broker_activity.py`` re-attempts on the cockpit's first hit.",
+        "description": "Launch the host runner for ``run_id`` by forwarding to the daemon (ADR 0007).\n\nStart/Stop are routed through the data plane \u2014 not called from the browser \u2014\nbecause the daemon now enforces a mandatory ``X-Live-Runner-Token`` on every\nactuation route, and the browser must never hold that shared secret. The data\nplane reads the token from the artifacts bind mount and forwards it. The\ndaemon's statuses propagate verbatim: bad ``strategy``/spec mismatch -> 400,\nmissing run -> 404, subprocess/daemon unreachable -> 503.\n\nBefore forwarding, the data plane re-evaluates the same start gates the\ncockpit's ``host_process.start_capability`` projection used (ADR 0013\namendment 2026-06-22): poisoned-flag, account freeze, daemon ``running`` /\n``stopping``, host service unreachable, roll-call offer, and session\nboundary. A stale ``enabled=true`` projection cannot bypass them \u2014 the\ntyped start-admission policy re-evaluates the interactive gate chain.\n\nSlice 3 (ADR 0011 amendment) \u2014 broker-activity publisher start. After\na successful start the broker-activity publisher is registered for\nthe running instance. Failure to bootstrap (broker disconnected,\nenvelope not yet visible) is logged but does NOT roll back the\nstart: the lazy ``_ensure_publisher`` fallback in\n``broker_activity.py`` re-attempts on the cockpit's first hit.",
         "operationId": "start_run_api_live_instances_runs__run_id__start_post",
         "parameters": [
           {

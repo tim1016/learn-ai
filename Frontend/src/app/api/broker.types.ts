@@ -2909,12 +2909,7 @@ export interface paths {
         put?: never;
         /**
          * Run Roll Call
-         * @description Persist start offers for all eligible non-retired bots.
-         *
-         *     The daemon bulk snapshot may omit idle instances, so resolving each fleet
-         *     row can fall back to one daemon process probe per omitted bot. Keep those
-         *     probes concurrent; otherwise a morning roll call degrades into an
-         *     operator-visible sequential N-call path.
+         * @description Persist offers projected from cached account truth and durable state.
          */
         post: operations["run_roll_call_api_live_instances_roll_call_post"];
         delete?: never;
@@ -2947,8 +2942,8 @@ export interface paths {
          *     cockpit's ``host_process.start_capability`` projection used (ADR 0013
          *     amendment 2026-06-22): poisoned-flag, account freeze, daemon ``running`` /
          *     ``stopping``, host service unreachable, roll-call offer, and session
-         *     boundary. A stale ``enabled=true`` projection cannot bypass them — see
-         *     ``_assert_start_allowed``.
+         *     boundary. A stale ``enabled=true`` projection cannot bypass them — the
+         *     typed start-admission policy re-evaluates the interactive gate chain.
          *
          *     Slice 3 (ADR 0011 amendment) — broker-activity publisher start. After
          *     a successful start the broker-activity publisher is registered for
@@ -8944,7 +8939,7 @@ export interface components {
          */
         CohortBatchLaunchCommandRequest: {
             /** Launch Profile */
-            launch_profile?: "paper_three_bot_stagger_v2" | null;
+            launch_profile?: ("paper_three_bot_stagger_v2" | "paper_five_bot_stagger_v2") | null;
             /** Member Strategy Instance Ids */
             member_strategy_instance_ids: string[];
         };
@@ -8983,7 +8978,7 @@ export interface components {
             cohort_id: string;
             evidence?: components["schemas"]["CohortEvidenceSummaryResponse"];
             /** Launch Profile */
-            launch_profile?: "paper_three_bot_stagger_v2" | null;
+            launch_profile?: ("paper_three_bot_stagger_v2" | "paper_five_bot_stagger_v2") | null;
             /** Member Scheduled Start At Ms */
             member_scheduled_start_at_ms?: {
                 [key: string]: number;
