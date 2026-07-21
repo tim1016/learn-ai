@@ -134,7 +134,7 @@ def test_admit_valid_pinned_cohort_bypasses_interactive_broker_and_roll_call_gua
             "run-a",
             HostRunnerStartRequest(
                 strategy="spy_ema_crossover",
-                roll_call_offer_id="fresh-offer",
+                roll_call_offer_id="offer-a",
                 cohort_id=receipt.cohort_id,
             ),
         )
@@ -159,7 +159,7 @@ def test_admit_pinned_cohort_rechecks_daemon_startability_at_slot(tmp_path: Path
             "run-a",
             HostRunnerStartRequest(
                 strategy="spy_ema_crossover",
-                roll_call_offer_id="fresh-offer",
+                roll_call_offer_id="offer-a",
                 cohort_id=receipt.cohort_id,
             ),
         )
@@ -242,7 +242,7 @@ def test_admit_pinned_cohort_rechecks_each_dynamic_safety_gate(
             "run-a",
             HostRunnerStartRequest(
                 strategy="spy_ema_crossover",
-                roll_call_offer_id="fresh-offer",
+                roll_call_offer_id="offer-a",
                 cohort_id=receipt.cohort_id,
             ),
         )
@@ -280,6 +280,33 @@ def test_admit_client_cohort_id_without_a_matching_durable_pin_uses_interactive_
     assert decision.refusal.detail["reason_code"] == "ROLL_CALL_OFFER_EXPIRED"
 
 
+def test_admit_cohort_with_nonpinned_offer_uses_interactive_policy(tmp_path: Path) -> None:
+    receipt = _receipt(now_ms=1_000)
+    interactive_calls: list[str] = []
+    service = StartAdmissionService(
+        artifacts_root=tmp_path,
+        live_runs_root=tmp_path / "runs",
+        settings=IbkrSettings(broker_enabled=False),
+        dependencies=_dependencies(receipt=receipt, interactive_calls=interactive_calls),
+    )
+
+    decision = asyncio.run(
+        service.admit(
+            "run-a",
+            HostRunnerStartRequest(
+                strategy="spy_ema_crossover",
+                roll_call_offer_id="not-the-durable-offer",
+                cohort_id=receipt.cohort_id,
+            ),
+        )
+    )
+
+    assert decision.policy == "interactive"
+    assert interactive_calls == ["observation", "fleet"]
+    assert decision.refusal is not None
+    assert decision.refusal.detail["reason_code"] == "ROLL_CALL_OFFER_EXPIRED"
+
+
 def test_admit_recorded_cohort_member_cannot_reuse_its_receipt_pin(tmp_path: Path) -> None:
     receipt = _receipt(now_ms=1_000)
     interactive_calls: list[str] = []
@@ -299,7 +326,7 @@ def test_admit_recorded_cohort_member_cannot_reuse_its_receipt_pin(tmp_path: Pat
             "run-a",
             HostRunnerStartRequest(
                 strategy="spy_ema_crossover",
-                roll_call_offer_id="fresh-offer",
+                roll_call_offer_id="offer-a",
                 cohort_id=receipt.cohort_id,
             ),
         )

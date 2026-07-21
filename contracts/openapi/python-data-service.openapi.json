@@ -8840,8 +8840,15 @@
           },
           "reason": {
             "enum": [
-              "COHORT_POSTURE_MISMATCH",
+              "COHORT_ACCOUNT_FROZEN",
+              "COHORT_CRASH_RECOVERY_BLOCKED",
+              "COHORT_DAEMON_NOT_STARTABLE",
+              "COHORT_DAEMON_UNAVAILABLE",
+              "COHORT_MEMBER_DELETED",
+              "COHORT_MEMBER_POISONED",
+              "COHORT_MEMBER_RETIRED",
               "COHORT_PRIOR_MEMBER_BLOCKED",
+              "COHORT_POSTURE_MISMATCH",
               "COHORT_SLOT_PREFLIGHT_NOT_READY",
               "COHORT_START_ACCEPTED",
               "COHORT_START_FAILED",

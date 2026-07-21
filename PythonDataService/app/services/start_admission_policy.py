@@ -138,7 +138,7 @@ class StartAdmissionService:
         resolved: _ResolvedStart,
         request: HostRunnerStartRequest,
     ) -> bool:
-        """Prove that a V2 receipt, not a client id, selects the cohort policy."""
+        """Prove that a V2 receipt, including its offer pin, selects the policy."""
 
         if request.cohort_id is None or resolved.account_id is None:
             return False
@@ -182,7 +182,7 @@ class StartAdmissionService:
                 # A receipt authorizes one scheduled start attempt, not a
                 # client-selectable bypass that can revive a finished slot.
                 return False
-        return slot.start_request == request.model_dump(
+        return pin.roll_call_offer_id == request.roll_call_offer_id and slot.start_request == request.model_dump(
             mode="json",
             exclude={"roll_call_offer_id", "cohort_id"},
         )

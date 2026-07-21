@@ -56,8 +56,17 @@ COHORT_STAGGER_PROFILES: dict[str, CohortStaggerProfile] = {
 
 CohortStaggerProfileName = Literal["paper_three_bot_stagger_v2", "paper_five_bot_stagger_v2"]
 CohortBatchLaunchMemberOutcomeReason = Literal[
-    "COHORT_POSTURE_MISMATCH",
+    "COHORT_ACCOUNT_FROZEN",
+    "COHORT_CRASH_RECOVERY_BLOCKED",
+    "COHORT_DAEMON_NOT_STARTABLE",
+    "COHORT_DAEMON_UNAVAILABLE",
+    "COHORT_MEMBER_DELETED",
+    "COHORT_MEMBER_POISONED",
+    "COHORT_MEMBER_RETIRED",
     "COHORT_PRIOR_MEMBER_BLOCKED",
+    # Historical receipt events remain readable after slot dispatch retires
+    # these outcomes. New V2 scheduler code must not emit them.
+    "COHORT_POSTURE_MISMATCH",
     "COHORT_SLOT_PREFLIGHT_NOT_READY",
     "COHORT_START_ACCEPTED",
     "COHORT_START_FAILED",
