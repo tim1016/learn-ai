@@ -2653,12 +2653,18 @@ def cmd_start(args: argparse.Namespace) -> int:
                 # four blocks. ``finally`` below stops it bounded so
                 # a final snapshot is flushed.
                 if client is not None and getattr(broker, "requires_durable_submit", False):
+                    from app.services.account_reconciliation import AccountReconciliationService
                     from app.services.account_truth_refresh import AccountTruthRefreshLoop
                     from app.services.fleet_contamination import record_account_journal_parity_observation
 
+                    reconciliation_service = AccountReconciliationService(
+                        artifacts_root=_artifacts_root
+                    )
                     account_truth_refresh_loop = AccountTruthRefreshLoop(
                         client=client,
                         artifacts_root=_artifacts_root,
+                        account_truth_observer=reconciliation_service.observe_account_truth,
+                        account_truth_failure_observer=reconciliation_service.observe_account_truth_failure,
                         account_journal_observer=lambda account_id: record_account_journal_parity_observation(
                             _artifacts_root / "live_runs",
                             account_id=account_id,
