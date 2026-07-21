@@ -49,14 +49,11 @@ type BotLaunchProgressPhase = 'idle' | 'preparing' | 'running' | 'blocked' | 'co
 type BotLaunchRowStatus = 'queued' | 'starting' | 'accepted' | 'blocked';
 type TagSeverity = 'success' | 'warn' | 'danger' | 'secondary';
 
-// Member counts that map to a server-owned staggered validation profile. Any
-// other selected count launches via the generic (unstaggered) cohort path.
 const STAGGER_PROFILE_BY_MEMBER_COUNT: Record<number, CohortStaggerProfileName> = {
   3: 'paper_three_bot_stagger_v2',
   5: 'paper_five_bot_stagger_v3',
 };
 
-// Sanctioned cohort sizes, ascending — one preset button per count in the dialog.
 const STAGGER_PRESET_COUNTS: readonly number[] = Object.keys(STAGGER_PROFILE_BY_MEMBER_COUNT)
   .map(Number)
   .sort((a, b) => a - b);
@@ -592,6 +589,10 @@ export class BotsPageComponent {
   openAccounts(event?: Event): void {
     event?.stopPropagation();
     void this.router.navigate(['/broker/accounts']);
+  }
+
+  openDeploy(): void {
+    void this.router.navigate(['/broker/deploy']);
   }
 
   async runConditionCure(row: BotTableRow, event: Event): Promise<void> {

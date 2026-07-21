@@ -2096,22 +2096,37 @@ async def test_start_falls_back_to_run_id_key_without_ledger_binding(
 
 
 async def test_start_injects_sibling_managed_symbols(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Starting a second instance injects the running sibling's symbol via
-    --managed-symbols so the unexpected-position gate excludes it (#395/#398)."""
+    """Sibling symbols come from each run's live configuration, not its shared spec.
+
+    Deployment-validation runs share a spec whose default symbol is SPY while
+    their persisted live configuration can target a different stock.  A
+    sibling MSFT position must therefore be declared as managed when NVDA
+    starts (#395/#398).
+    """
     from app.engine.strategy.spec import schema as spec_schema
 
-    fixture = Path(spec_schema.__file__).parent / "fixtures" / "spy_ema_crossover.spec.json"
-    expected_symbol = json.loads(fixture.read_text(encoding="utf-8"))["symbols"][0]
+    fixture = Path(spec_schema.__file__).parent / "fixtures" / "deployment_validation.spec.json"
+    assert json.loads(fixture.read_text(encoding="utf-8"))["symbols"] == ["SPY"]
+    expected_symbol = "MSFT"
 
     repo_root = tmp_path / "repo"
     live_runs_root = repo_root / "PythonDataService" / "artifacts" / "live_runs"
     ema_run = "run-ema-" + "a" * 54
     vwap_run = "run-vwap-" + "b" * 52
-    for run_id, sid in ((ema_run, "spy_ema"), (vwap_run, "spy_vwap")):
+    for run_id, sid, symbol in (
+        (ema_run, "deployment_validation_msft", "MSFT"),
+        (vwap_run, "deployment_validation_nvda", "NVDA"),
+    ):
         run_dir = live_runs_root / run_id
         run_dir.mkdir(parents=True)
         (run_dir / "run_ledger.json").write_text(
-            json.dumps({"strategy_instance_id": sid, "strategy_spec_path": str(fixture)}),
+            json.dumps(
+                {
+                    "strategy_instance_id": sid,
+                    "strategy_spec_path": str(fixture),
+                    "live_config": {"symbol": symbol},
+                }
+            ),
             encoding="utf-8",
         )
 

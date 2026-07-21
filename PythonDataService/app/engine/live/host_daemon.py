@@ -1435,9 +1435,19 @@ class RunnerProcessManager:
         return command
 
     def _resolve_symbol(self, run_dir: Path) -> str | None:
-        """Best-effort: the single trading symbol of a run, from its spec."""
+        """Best-effort: resolve a run's effective trading symbol.
+
+        Live configuration is authoritative because a deployment-validation
+        run can override the shared strategy spec's default symbol.  The spec
+        remains the fallback for legacy runs without an explicit live symbol.
+        """
         try:
             data = json.loads((run_dir / "run_ledger.json").read_text(encoding="utf-8"))
+            live_config = data.get("live_config")
+            if isinstance(live_config, dict):
+                live_symbol = live_config.get("symbol")
+                if isinstance(live_symbol, str) and live_symbol.strip():
+                    return live_symbol.strip().upper()
             spec_path = Path(data["strategy_spec_path"])
             if not spec_path.is_absolute():
                 spec_path = self.repo_root / spec_path
