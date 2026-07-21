@@ -53,7 +53,7 @@ type TagSeverity = 'success' | 'warn' | 'danger' | 'secondary';
 // other selected count launches via the generic (unstaggered) cohort path.
 const STAGGER_PROFILE_BY_MEMBER_COUNT: Record<number, CohortStaggerProfileName> = {
   3: 'paper_three_bot_stagger_v2',
-  5: 'paper_five_bot_stagger_v2',
+  5: 'paper_five_bot_stagger_v3',
 };
 
 // Sanctioned cohort sizes, ascending — one preset button per count in the dialog.

@@ -8802,7 +8802,8 @@
               {
                 "enum": [
                   "paper_three_bot_stagger_v2",
-                  "paper_five_bot_stagger_v2"
+                  "paper_five_bot_stagger_v2",
+                  "paper_five_bot_stagger_v3"
                 ],
                 "type": "string"
               },
@@ -8919,7 +8920,8 @@
               {
                 "enum": [
                   "paper_three_bot_stagger_v2",
-                  "paper_five_bot_stagger_v2"
+                  "paper_five_bot_stagger_v2",
+                  "paper_five_bot_stagger_v3"
                 ],
                 "type": "string"
               },

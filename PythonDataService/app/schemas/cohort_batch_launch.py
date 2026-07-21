@@ -52,9 +52,19 @@ COHORT_STAGGER_PROFILES: dict[str, CohortStaggerProfile] = {
     "paper_five_bot_stagger_v2": CohortStaggerProfile(
         member_count=5, stagger_ms=5 * 60 * 1_000, overlap_ms=45 * 60 * 1_000
     ),
+    # v3 shortens the certified overlap to 15 minutes (operator decision,
+    # PRD #1142): five bots proven simultaneously on duty for 15 clean
+    # minutes certifies concurrency; v2's 45-minute window stays available.
+    "paper_five_bot_stagger_v3": CohortStaggerProfile(
+        member_count=5, stagger_ms=5 * 60 * 1_000, overlap_ms=15 * 60 * 1_000
+    ),
 }
 
-CohortStaggerProfileName = Literal["paper_three_bot_stagger_v2", "paper_five_bot_stagger_v2"]
+CohortStaggerProfileName = Literal[
+    "paper_three_bot_stagger_v2",
+    "paper_five_bot_stagger_v2",
+    "paper_five_bot_stagger_v3",
+]
 CohortBatchLaunchMemberOutcomeReason = Literal[
     "COHORT_ACCOUNT_FROZEN",
     "COHORT_CRASH_RECOVERY_BLOCKED",

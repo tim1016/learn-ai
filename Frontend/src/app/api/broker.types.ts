@@ -8937,7 +8937,7 @@ export interface components {
          */
         CohortBatchLaunchCommandRequest: {
             /** Launch Profile */
-            launch_profile?: ("paper_three_bot_stagger_v2" | "paper_five_bot_stagger_v2") | null;
+            launch_profile?: ("paper_three_bot_stagger_v2" | "paper_five_bot_stagger_v2" | "paper_five_bot_stagger_v3") | null;
             /** Member Strategy Instance Ids */
             member_strategy_instance_ids: string[];
         };
@@ -8976,7 +8976,7 @@ export interface components {
             cohort_id: string;
             evidence?: components["schemas"]["CohortEvidenceSummaryResponse"];
             /** Launch Profile */
-            launch_profile?: ("paper_three_bot_stagger_v2" | "paper_five_bot_stagger_v2") | null;
+            launch_profile?: ("paper_three_bot_stagger_v2" | "paper_five_bot_stagger_v2" | "paper_five_bot_stagger_v3") | null;
             /** Member Scheduled Start At Ms */
             member_scheduled_start_at_ms?: {
                 [key: string]: number;

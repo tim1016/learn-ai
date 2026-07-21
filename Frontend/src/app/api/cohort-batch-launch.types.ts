@@ -1,7 +1,10 @@
 import type { components } from './broker.types';
 
 /** Server-owned staggered cohort validation profiles. */
-export type CohortStaggerProfileName = 'paper_three_bot_stagger_v2' | 'paper_five_bot_stagger_v2';
+export type CohortStaggerProfileName =
+  | 'paper_three_bot_stagger_v2'
+  | 'paper_five_bot_stagger_v2'
+  | 'paper_five_bot_stagger_v3';
 
 export type CohortBatchLaunchMemberOutcomeReason =
   components['schemas']['CohortBatchLaunchMemberOutcomeRequest']['reason'];

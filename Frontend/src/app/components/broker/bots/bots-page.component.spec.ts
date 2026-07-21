@@ -765,7 +765,7 @@ describe('BotsPageComponent', () => {
         'live-idle-qqq',
         'live-idle-spy',
       ],
-      launch_profile: 'paper_five_bot_stagger_v2',
+      launch_profile: 'paper_five_bot_stagger_v3',
     });
   });
 

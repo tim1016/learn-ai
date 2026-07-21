@@ -762,6 +762,16 @@ def test_v2_cohort_receipt_accepts_five_bot_stagger_profile() -> None:
     assert receipt.window_end_ms - receipt.window_start_ms == 45 * 60 * 1_000
 
 
+def test_v3_cohort_receipt_accepts_five_bot_short_overlap_profile() -> None:
+    receipt = _staggered_receipt("paper_five_bot_stagger_v3")
+
+    assert len(receipt.member_schedule) == 5
+    first_start = receipt.member_schedule[0].scheduled_start_at_ms
+    offsets = tuple(slot.scheduled_start_at_ms - first_start for slot in receipt.member_schedule)
+    assert offsets == (0, 300_000, 600_000, 900_000, 1_200_000)
+    assert receipt.window_end_ms - receipt.window_start_ms == 15 * 60 * 1_000
+
+
 def test_v2_cohort_receipt_rejects_five_bot_stagger_with_wrong_spacing() -> None:
     profile = COHORT_STAGGER_PROFILES["paper_five_bot_stagger_v2"]
     ids = tuple(f"bot-{index}" for index in range(profile.member_count))
