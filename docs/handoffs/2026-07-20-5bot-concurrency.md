@@ -2,8 +2,8 @@
 
 **For:** a fresh agent (or the user) continuing the "run N concurrent bots" work on
 learn-ai in a new session.
-**Repo:** `/Users/inkant/learn-ai` (branch `master`; user authorized committing directly
-to master this session — they turn the commits into a PR later).
+**Repo:** `/Users/inkant/learn-ai`; implementation baseline is merged `master`
+through PR #1148 (`487680ccc`).
 
 ---
 
@@ -15,9 +15,11 @@ via a certified cohort. **User's late reframe (important):** *concurrency matter
 duration/runway does NOT.* So a short-overlap run that simply gets 5 bots **up at once** is
 a win — do not chase the 45-min certificate window or the 15:55 ET force-flat.
 
-**Status (updated after PRD #1136 implementation):** peaked at **4/5 concurrent** live.
-Broker-free fleet reads, durable-receipt slot dispatch, and immediate reason-coded outcomes
-are implemented; the market-hours 5-up acceptance run remains outstanding.
+**Status (today's closeout):** implementation and adversarial review are complete on
+`master`. Broker-free fleet reads, durable-receipt slot dispatch, exact-run restart
+idempotency, and immediate reason-coded outcomes are merged. Prior live attempts peaked
+at **4/5 concurrent**; the market-hours 5-up proof is intentionally deferred to the
+standalone acceptance PRD #1142.
 
 ---
 
@@ -35,7 +37,7 @@ are implemented; the market-hours 5-up acceptance run remains outstanding.
   all 4 run attempts, operational gotchas, 9-commit list. Plus linked memories:
   `project_live_fleet_reconciliation`, `feedback_flag_readonly_gotcha`,
   `project_dataplane_host_vs_container_control`, `project_python_service_hot_reload_broken`.
-- **Prerequisite commits:** branch `handoff/5-concurrent-cohort-base` (also on local master). Highlights:
+- **Delivery history:** consolidated PR #1143 plus dispatch/review-fix PR #1148. Earlier highlights:
   `aed255536` 5-bot profile · `e7ec572b3`/`1d1f0c594` UI+preset · `62ffb97d1` slot retry ·
   `7e22f1dce` **Fix A** · `357609b9d` probe-timeout (symptom band-aid) ·
   `2320da708`/`9a4b5da5a`/`b34e255ac` design+diagnosis docs.
@@ -71,8 +73,9 @@ per distinct account, and scheduled slots no longer invoke roll call. Catalog/ro
 measure 4.7–10.0s because synchronous local composition and the large Clerk journal contend on
 the event loop; #1149 tracks it separately because it can no longer drop a scheduled cohort member.
 
-**Verify with:** time `/catalog` before/after (should go ~12 s → <1 s), then re-run a 5-bot
-cohort (short overlap is fine) and watch for ALL_UP.
+**Acceptance treatment:** capture `/catalog` and roll-call timings as evidence, but do not
+patch or block the five-bot run on their current latency. Broker call-count is the FR1
+correctness invariant; #1149 owns the separate sub-second performance target.
 
 ---
 
@@ -82,8 +85,9 @@ cohort (short overlap is fine) and watch for ALL_UP.
   `check_outside_mutation` now recognizes a fill whose echoed `order_ref` is in the run's own
   namespace as owned (3rd signal beside client_order_id/perm_id), closing the perm-id race.
   Proven: `cohort5-msft2` survived where `cohort5-msft` crashed. **Don't touch.**
-- **Slot-preflight retry (`62ffb97d1`)** and **probe timeout (`357609b9d`)** — both help but
-  are **band-aids** for C; the §3 fix supersedes them.
+- **Slot-preflight retry (`62ffb97d1`)** was removed by durable-receipt dispatch in #1148.
+  The dedicated probe timeout (`357609b9d`) remains a bounded transport safeguard, not a
+  fleet-eligibility retry.
 
 ---
 
@@ -95,7 +99,8 @@ cohort (short overlap is fine) and watch for ALL_UP.
 2. **Unbounded never-compacted journals** re-parsed every read: `_broker/session_roster_history.jsonl`
    **58 MB**, `accounts/DUM284968/clerk_journal.jsonl` **8.6 MB**, `account_events.jsonl` 3.8 MB.
 3. **Per-run `host_daemon.log` = 24 MB** (daemon dumps every execDetails/commission/position).
-4. **N+1 fleet contamination** — recomputed per bot, no memoization.
+4. **Residual synchronous composition cost** — broker-free reads still parse and compose
+   substantial local evidence on the event loop; tracked by #1149.
 5. **Fix B (open, delicate):** runtime `outside_mutation` is not sibling-aware on a shared
    account (only cold-start reconciliation is). See design doc.
 6. **Alternative to A/B entirely:** one IBKR paper account per bot (needs more DU accounts).
@@ -136,37 +141,32 @@ cohort (short overlap is fine) and watch for ALL_UP.
 
 ---
 
-## 7. Cheap unblock to try first (before/with the §3 fix)
+## 7. Historical cleanup idea — not an acceptance shortcut
 
 The read path also scans **20 accumulated run dirs** (today's + prior sessions). Pruning the
-old/retired run dirs (keep the 5 current `cohort5-*` runs' dirs) may reduce the per-bot work
-and is worth timing `/catalog` before/after. But §3 (per-bot IBKR serialization) is the
-dominant cost and the real fix.
+old/retired run dirs may reduce local composition cost. Do not prune evidence ad hoc for the
+acceptance run: retain the artifacts, record observed timings, and route performance work to
+#1149.
 
 ---
 
 ## 8. Prioritized next steps
 
-1. **Run the 5-bot market-hours acceptance** (short overlap OK) and record ALL_UP / 5 concurrent,
-   then stop gracefully.
-2. Address residual catalog/roll-call latency separately: add per-stage timing and evaluate
-   journal compaction or exposure memoization plus offloading synchronous composition.
-3. Then **Phase 2**: UI-driven crash-and-recover test (design in memory; retire-and-replace flow).
-4. Opportunistically: log verbosity, Fix B / one-account-per-bot decision.
+1. Execute PRD #1142 during market hours: verify preconditions, authorize the unchanged
+   five-bot profile, record `ALL_UP`, stop all five gracefully, and preserve final account proof.
+2. Address residual catalog/roll-call latency only under #1149; it does not block #1142.
+3. Treat **Phase 2** crash-and-recover, Fix B, and one-account-per-bot as later programs.
 
 ---
 
-## Suggested skills
+## 9. Closeout boundary
 
-- **`systematic-debugging`** — for building/verifying the §3 fix (it's a perf/behavior bug).
-- **`test-driven-development`** — Fix §3 and any new fix ships red→green (repo mandates a
-  regression test per bug fix).
-- **`verification-before-completion`** — before claiming the concurrency fix works, verify
-  live (time `/catalog`, watch a cohort reach ALL_UP).
-- **`thermo-nuclear-code-quality-review`** — before the user opens the PR from the 9 commits.
-- **`brainstorming`** — if reconsidering the architecture (shared-account vs one-account-per-bot).
-
+- **Done today:** all code, contracts, generated types, tests, review fixes, and merged PRs
+  required for #1136 FR1–FR3.
+- **Tomorrow:** PRD #1142 is the sole five-bot acceptance authority.
+- **Separate debt:** #1149 owns read latency; it must not expand tomorrow's live run.
 
 ---
 
-> **Superseded planning note:** §3 and §8 of this handoff are now formalized (and tightened) as **PRD #1136 rev 2** — that issue is the authoritative spec; this document remains the operational playbook.
+> **Closeout note:** #1136 remains the implementation rationale. PRD #1142 now owns the
+> market-hours evidence run, so tomorrow's operator work does not reopen today's code scope.
