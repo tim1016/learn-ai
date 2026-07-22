@@ -102,7 +102,7 @@ def _forbid_account_truth_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fail_if_called(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("broker-free read attempted an Account Truth refresh")
 
-    monkeypatch.setattr(live_instances, "refresh_account_truth_now", fail_if_called)
+    monkeypatch.setattr(account_start_gate, "refresh_account_truth_now", fail_if_called)
 
 
 async def _capture_first_asgi_stream_body(
@@ -738,17 +738,17 @@ def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(live_instances, "get_settings", lambda: stub)
 
     _remember_clean_account_truth(monkeypatch)
-    account_truth_provider = live_instances.get_account_truth_snapshot_provider()
     monkeypatch.setattr(
         account_start_gate,
         "get_account_truth_snapshot_provider",
-        lambda: account_truth_provider,
+        lambda: live_instances.get_account_truth_snapshot_provider(),
     )
 
     async def fresh_account_truth(*_args, **_kwargs):
         return object()
 
     monkeypatch.setattr(account_start_gate, "refresh_account_truth_now", fresh_account_truth)
+    monkeypatch.setattr(live_instances, "require_connected_client", lambda: object())
 
     async def connected_broker_account() -> tuple[str | None, bool]:
         return "DU111", True
@@ -1963,7 +1963,9 @@ async def test_chart_snapshot_today_returns_bars_and_runs(app_with_root, monkeyp
     from zoneinfo import ZoneInfo
 
     ny_tz = ZoneInfo("America/New_York")
-    today = datetime.now(ny_tz).date()
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    today = datetime.fromtimestamp(now_ms / 1000, tz=UTC).astimezone(ny_tz).date()
+    monkeypatch.setattr(live_instances, "_now_ms", lambda: now_ms)
     today_start_ms = int(datetime(today.year, today.month, today.day, tzinfo=ny_tz).timestamp() * 1000)
 
     run_dir = root / "run-chart"
@@ -6068,6 +6070,7 @@ async def test_start_run_rejects_when_crash_recovery_required(
         recorded_at_ms=1_700_000_000_000,
     )
     _set_connected_broker_account(monkeypatch, account_id)
+    _remember_clean_account_truth(monkeypatch, account_id=account_id)
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     called = False
@@ -6295,7 +6298,7 @@ async def test_start_run_rejects_at_effective_stop_boundary(app_with_root, monke
     app, root = app_with_root
     _write_ledger(root, "run-stop-boundary", "spy_ema_paper", 100)
     offer_id = _write_roll_call_offer(root.parent, run_id="run-stop-boundary")
-    monkeypatch.setattr(live_instances, "_now_ms", lambda: 1_783_540_500_000)
+    _remember_clean_account_truth(monkeypatch, observed_at_ms=1_783_540_500_000)
     _set_daemon(monkeypatch, process={"state": "idle"})
 
     called = False
