@@ -55,6 +55,11 @@ from app.engine.live.account_clerk_supervisor import (
 )
 from app.engine.live.broker_socket_probe import BrokerSocketProbeError, LsofSocketEnumerator
 from app.engine.live.daemon_auth import TOKEN_HEADER, ensure_daemon_token, token_file_path
+from app.engine.live.daemon_command_idempotency import (
+    DaemonCommandIdempotencyService,
+    DaemonCommandOutcome,
+    validate_idempotency_key,
+)
 from app.engine.live.deploy import (
     ActionPlanReadinessError,
     DeployIOError,
@@ -262,6 +267,44 @@ class HostRunnerError(RuntimeError):
         )
         self.status_code = status_code
         self.detail = detail
+
+
+def _manager_command_outcome(
+    action: Callable[[], HostRunnerActionResponse | AccountEmergencyFlattenResponse],
+) -> DaemonCommandOutcome:
+    """Adapt a manager command into a persistable daemon-boundary outcome."""
+
+    try:
+        response = action()
+    except HostRunnerError as exc:
+        return DaemonCommandOutcome(
+            status_code=exc.status_code,
+            body={"detail": exc.detail},
+            replayed=False,
+        )
+    return DaemonCommandOutcome(
+        status_code=status.HTTP_200_OK,
+        body=response.model_dump(mode="json"),
+        replayed=False,
+    )
+
+
+def _command_outcome_body(outcome: DaemonCommandOutcome) -> dict[str, object]:
+    """Return an outcome body or re-raise its durable HTTP failure."""
+
+    if outcome.status_code >= status.HTTP_400_BAD_REQUEST:
+        detail = outcome.body.get("detail", outcome.body)
+        raise HTTPException(outcome.status_code, detail=detail)
+    return outcome.body
+
+
+def _daemon_idempotency_key(raw: str | None) -> str:
+    """Translate the required opaque command key into a normal daemon 400."""
+
+    try:
+        return validate_idempotency_key(raw)
+    except ValueError as exc:
+        raise HostRunnerError(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
 
 @dataclass
@@ -1445,6 +1488,12 @@ class RunnerProcessManager:
             return None, None
         return account_id, strategy_instance_id
 
+    def command_account_id(self, run_id: str) -> str | None:
+        """Resolve the account policy subject for one daemon command."""
+
+        account_id, _strategy_instance_id = self._account_registry_identity(self._validate_run_dir(run_id))
+        return account_id
+
     def _enforce_crash_retired_recovery(self, run_dir: Path) -> None:
         account_id, strategy_instance_id = self._account_registry_identity(run_dir)
         if account_id is None or strategy_instance_id is None:
@@ -2361,6 +2410,7 @@ def create_app(
     token too.
     """
     process_manager = manager if manager is not None else _manager_from_env()
+    command_idempotency = DaemonCommandIdempotencyService(process_manager.artifacts_root)
     token = auth_token if auth_token is not None else ensure_daemon_token(_artifacts_root_from_env())
 
     # PRD #619-B — daemon lease lifespan. On startup: classify orphan
@@ -2628,14 +2678,40 @@ def create_app(
     @app.post("/runs/{run_id}/start", response_model=HostRunnerActionResponse, dependencies=auth)
     async def start_run(run_id: str, request: HostRunnerStartRequest) -> HostRunnerActionResponse:
         try:
-            return await run_in_threadpool(process_manager.start, run_id, request)
+            key = _daemon_idempotency_key(request.idempotency_key)
+            outcome = await run_in_threadpool(
+                command_idempotency.execute,
+                idempotency_key=key,
+                command="start",
+                account_id=process_manager.command_account_id(run_id),
+                semantic_payload={
+                    "run_id": run_id,
+                    "request": request.model_dump(mode="json", exclude={"idempotency_key"}),
+                },
+                invoke=lambda: _manager_command_outcome(lambda: process_manager.start(run_id, request)),
+            )
+            response = HostRunnerActionResponse.model_validate(_command_outcome_body(outcome))
+            return response.model_copy(update={"idempotency_key": key, "idempotency_replayed": outcome.replayed})
         except HostRunnerError as exc:
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
     @app.post("/runs/{run_id}/stop", response_model=HostRunnerActionResponse, dependencies=auth)
     async def stop_run(run_id: str, request: HostRunnerStopRequest) -> HostRunnerActionResponse:
         try:
-            return await run_in_threadpool(process_manager.stop, run_id, request)
+            key = _daemon_idempotency_key(request.idempotency_key)
+            outcome = await run_in_threadpool(
+                command_idempotency.execute,
+                idempotency_key=key,
+                command="stop",
+                account_id=process_manager.command_account_id(run_id),
+                semantic_payload={
+                    "run_id": run_id,
+                    "request": request.model_dump(mode="json", exclude={"idempotency_key"}),
+                },
+                invoke=lambda: _manager_command_outcome(lambda: process_manager.stop(run_id, request)),
+            )
+            response = HostRunnerActionResponse.model_validate(_command_outcome_body(outcome))
+            return response.model_copy(update={"idempotency_key": key, "idempotency_replayed": outcome.replayed})
         except HostRunnerError as exc:
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
@@ -2648,7 +2724,22 @@ def create_app(
         if not request.confirm:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="emergency-flatten requires confirm=true")
         try:
-            return await run_in_threadpool(process_manager.emergency_flatten, run_id, request.account)
+            key = _daemon_idempotency_key(request.idempotency_key)
+            outcome = await run_in_threadpool(
+                command_idempotency.execute,
+                idempotency_key=key,
+                command="emergency_flatten_run",
+                account_id=request.account,
+                semantic_payload={
+                    "run_id": run_id,
+                    "request": request.model_dump(mode="json", exclude={"idempotency_key"}),
+                },
+                invoke=lambda: _manager_command_outcome(
+                    lambda: process_manager.emergency_flatten(run_id, request.account)
+                ),
+            )
+            response = HostRunnerActionResponse.model_validate(_command_outcome_body(outcome))
+            return response.model_copy(update={"idempotency_key": key, "idempotency_replayed": outcome.replayed})
         except HostRunnerError as exc:
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
@@ -2666,7 +2757,17 @@ def create_app(
         if request.account != account_id:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="request account does not match path")
         try:
-            return await run_in_threadpool(process_manager.emergency_flatten_account, account_id)
+            key = _daemon_idempotency_key(request.idempotency_key)
+            outcome = await run_in_threadpool(
+                command_idempotency.execute,
+                idempotency_key=key,
+                command="emergency_flatten_account",
+                account_id=account_id,
+                semantic_payload={"account_id": account_id, "request": request.model_dump(mode="json", exclude={"idempotency_key"})},
+                invoke=lambda: _manager_command_outcome(lambda: process_manager.emergency_flatten_account(account_id)),
+            )
+            response = AccountEmergencyFlattenResponse.model_validate(_command_outcome_body(outcome))
+            return response.model_copy(update={"idempotency_key": key, "idempotency_replayed": outcome.replayed})
         except HostRunnerError as exc:
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
 

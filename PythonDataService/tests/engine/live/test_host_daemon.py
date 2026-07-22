@@ -69,6 +69,7 @@ from app.schemas.bot_events import (
 )
 from app.schemas.broker_session import GatewaySocketRow
 from app.schemas.live_runs import (
+    AccountEmergencyFlattenResponse,
     ExitReason,
     HostRunnerActionResponse,
     HostRunnerProcessState,
@@ -1482,6 +1483,7 @@ async def test_start_launches_existing_run_with_host_env(
                 "strategy": "spy_ema_crossover",
                 "max_orders_per_day": 3,
                 "ibkr_host": "127.0.0.1",
+                "idempotency_key": "start-host-env",
             },
         )
 
@@ -2163,7 +2165,7 @@ async def test_start_writes_account_registry_before_spawn(
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         response = await client.post(
             f"/runs/{RUN_ID}/start",
-            json={},
+            json={"idempotency_key": "start-account-binding"},
         )
 
     assert response.status_code == 200
@@ -2483,7 +2485,7 @@ async def test_start_blocks_when_restart_intensity_freezes_account(
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
-        response = await client.post(f"/runs/{RUN_ID}/start", json={})
+        response = await client.post(f"/runs/{RUN_ID}/start", json={"idempotency_key": "start-freeze"})
 
     assert response.status_code == 409
     freeze = read_account_freeze(manager.artifacts_root, "DU111")
@@ -2503,8 +2505,8 @@ async def test_start_rejects_second_active_run(
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
-        first = await client.post(f"/runs/{RUN_ID}/start", json={})
-        second = await client.post(f"/runs/{RUN_ID}/start", json={})
+        first = await client.post(f"/runs/{RUN_ID}/start", json={"idempotency_key": "start-first"})
+        second = await client.post(f"/runs/{RUN_ID}/start", json={"idempotency_key": "start-second"})
 
     assert first.status_code == 200
     assert second.status_code == 409
@@ -2515,7 +2517,7 @@ async def test_start_rejects_missing_run(daemon_context: tuple[RunnerProcessMana
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
-        response = await client.post("/runs/missing-run/start", json={})
+        response = await client.post("/runs/missing-run/start", json={"idempotency_key": "start-missing"})
 
     assert response.status_code == 404
 
@@ -2530,8 +2532,8 @@ async def test_stop_force_kills_when_graceful_signal_does_not_exit(
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
-        start = await client.post(f"/runs/{RUN_ID}/start", json={})
-        stop = await client.post(f"/runs/{RUN_ID}/stop", json={"force": True})
+        start = await client.post(f"/runs/{RUN_ID}/start", json={"idempotency_key": "start-force"})
+        stop = await client.post(f"/runs/{RUN_ID}/stop", json={"force": True, "idempotency_key": "stop-force"})
 
     assert start.status_code == 200
     assert stop.status_code == 200
@@ -2558,12 +2560,158 @@ async def test_stop_handles_process_exiting_between_poll_and_signal(
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
-        start = await client.post(f"/runs/{RUN_ID}/start", json={})
-        stop = await client.post(f"/runs/{RUN_ID}/stop", json={"force": False})
+        start = await client.post(f"/runs/{RUN_ID}/start", json={"idempotency_key": "start-racing"})
+        stop = await client.post(f"/runs/{RUN_ID}/stop", json={"force": False, "idempotency_key": "stop-racing"})
 
     assert start.status_code == 200
     assert stop.status_code == 200
     assert stop.json()["accepted"] is False
+
+
+async def test_daemon_boundary_replays_matching_start_stop_and_flatten_without_reinvoking(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1156: all broker/process commands replay only at the host boundary."""
+
+    manager, run_dir = daemon_context
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps({"run_id": RUN_ID, "strategy_instance_id": "bot-1", "account_id": "DU123"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LIVE_RUNNER_DAEMON_COMMAND_IDEMPOTENCY_ENFORCED_ACCOUNTS", "DU123")
+    calls = {"start": 0, "stop": 0, "flatten": 0}
+    process = HostRunnerProcessStatus(state=HostRunnerProcessState.running, run_id=RUN_ID, pid=42)
+
+    def start(_run_id: str, _request: HostRunnerStartRequest) -> HostRunnerActionResponse:
+        calls["start"] += 1
+        return HostRunnerActionResponse(accepted=True, process=process)
+
+    def stop(_run_id: str, _request) -> HostRunnerActionResponse:
+        calls["stop"] += 1
+        return HostRunnerActionResponse(accepted=True, process=process, command_id="stop-1")
+
+    def flatten(_run_id: str, _account: str) -> HostRunnerActionResponse:
+        calls["flatten"] += 1
+        return HostRunnerActionResponse(accepted=True, process=process)
+
+    monkeypatch.setattr(manager, "start", start)
+    monkeypatch.setattr(manager, "stop", stop)
+    monkeypatch.setattr(manager, "emergency_flatten", flatten)
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
+        missing_key = await client.post(f"/runs/{RUN_ID}/start", json={})
+        start_first = await client.post(f"/runs/{RUN_ID}/start", json={"idempotency_key": "start-key"})
+        start_replay = await client.post(f"/runs/{RUN_ID}/start", json={"idempotency_key": "start-key"})
+        stop_first = await client.post(f"/runs/{RUN_ID}/stop", json={"idempotency_key": "stop-key"})
+        stop_replay = await client.post(f"/runs/{RUN_ID}/stop", json={"idempotency_key": "stop-key"})
+        flatten_first = await client.post(
+            f"/runs/{RUN_ID}/emergency-flatten",
+            json={"account": "DU123", "confirm": True, "idempotency_key": "flatten-key"},
+        )
+        flatten_replay = await client.post(
+            f"/runs/{RUN_ID}/emergency-flatten",
+            json={"account": "DU123", "confirm": True, "idempotency_key": "flatten-key"},
+        )
+        conflict = await client.post(
+            f"/runs/{RUN_ID}/start",
+            json={"readonly": False, "idempotency_key": "start-key"},
+        )
+
+    assert missing_key.status_code == 400
+    assert [response.status_code for response in (start_first, start_replay, stop_first, stop_replay, flatten_first, flatten_replay)] == [200] * 6
+    assert [start_replay.json()["idempotency_replayed"], stop_replay.json()["idempotency_replayed"], flatten_replay.json()["idempotency_replayed"]] == [True] * 3
+    assert calls == {"start": 1, "stop": 1, "flatten": 1}
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["reason_code"] == "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_COMMAND"
+
+
+async def test_daemon_boundary_replays_account_emergency_flatten_without_reinvoking(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The account-scoped flatten is also a broker command boundary."""
+
+    manager, _ = daemon_context
+    monkeypatch.setenv("LIVE_RUNNER_DAEMON_COMMAND_IDEMPOTENCY_ENFORCED_ACCOUNTS", "DU123")
+    calls = 0
+
+    def flatten_account(account_id: str) -> AccountEmergencyFlattenResponse:
+        nonlocal calls
+        calls += 1
+        return AccountEmergencyFlattenResponse(
+            accepted=True,
+            account_id=account_id,
+            audit_run_id="eflat-audit-1",
+            completed_at_ms=1_700_000_000_000,
+        )
+
+    monkeypatch.setattr(manager, "emergency_flatten_account", flatten_account)
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
+        first = await client.post(
+            "/accounts/DU123/emergency-flatten",
+            json={"account": "DU123", "confirm": True, "idempotency_key": "account-flatten-key"},
+        )
+        replay = await client.post(
+            "/accounts/DU123/emergency-flatten",
+            json={"account": "DU123", "confirm": True, "idempotency_key": "account-flatten-key"},
+        )
+
+    assert first.status_code == 200
+    assert replay.status_code == 200
+    assert replay.json()["idempotency_replayed"] is True
+    assert calls == 1
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "method_name"),
+    [
+        (f"/runs/{RUN_ID}/start", {"idempotency_key": "unknown-start"}, "start"),
+        (f"/runs/{RUN_ID}/stop", {"idempotency_key": "unknown-stop"}, "stop"),
+        (
+            f"/runs/{RUN_ID}/emergency-flatten",
+            {"account": "DU123", "confirm": True, "idempotency_key": "unknown-flatten"},
+            "emergency_flatten",
+        ),
+    ],
+)
+async def test_daemon_boundary_pending_command_never_reinvokes_after_uncertain_delivery(
+    path: str,
+    body: dict[str, object],
+    method_name: str,
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A daemon crash after command execution yields unknown, never a retry."""
+
+    manager, run_dir = daemon_context
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps({"run_id": RUN_ID, "strategy_instance_id": "bot-1", "account_id": "DU123"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LIVE_RUNNER_DAEMON_COMMAND_IDEMPOTENCY_ENFORCED_ACCOUNTS", "DU123")
+    calls = 0
+
+    def lose_outcome(*_args: object, **_kwargs: object) -> HostRunnerActionResponse:
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("simulated daemon process exit after effect")
+
+    monkeypatch.setattr(manager, method_name, lose_outcome)
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+
+    async with AsyncClient(transport=transport, base_url="http://test", headers=_AUTH) as client:
+        first = await client.post(path, json=body)
+        duplicate = await client.post(path, json=body)
+
+    assert first.status_code == 500
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"]["reason_code"] == "IDEMPOTENCY_OUTCOME_UNKNOWN"
+    assert calls == 1
 
 
 async def test_instances_lists_each_managed_strategy_instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2586,7 +2734,7 @@ async def test_instances_lists_each_managed_strategy_instance(tmp_path: Path, mo
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         for run_id in runs:
-            started = await client.post(f"/runs/{run_id}/start", json={})
+            started = await client.post(f"/runs/{run_id}/start", json={"idempotency_key": f"start-{run_id}"})
             assert started.status_code == 200  # different instances coexist
         listing = await client.get("/instances")
         exec_process = await client.get("/instances/spy_ema_paper/process")
@@ -2620,7 +2768,7 @@ async def test_start_falls_back_to_run_id_key_without_ledger_binding(
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
-        started = await client.post(f"/runs/{RUN_ID}/start", json={})
+        started = await client.post(f"/runs/{RUN_ID}/start", json={"idempotency_key": "start-legacy"})
         listing = await client.get("/instances")
 
     assert started.status_code == 200
@@ -2676,8 +2824,8 @@ async def test_start_injects_sibling_managed_symbols(tmp_path: Path, monkeypatch
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
-        await client.post(f"/runs/{ema_run}/start", json={})
-        await client.post(f"/runs/{vwap_run}/start", json={})
+        await client.post(f"/runs/{ema_run}/start", json={"idempotency_key": "start-ema-symbol"})
+        await client.post(f"/runs/{vwap_run}/start", json={"idempotency_key": "start-vwap-symbol"})
 
     # First start has no running sibling -> no --managed-symbols.
     assert "--managed-symbols" not in captured[0]
@@ -2739,8 +2887,8 @@ async def test_sibling_symbols_resolves_relative_spec_paths_from_repo_root(
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
-        await client.post(f"/runs/{ema_run}/start", json={})
-        await client.post(f"/runs/{vwap_run}/start", json={})
+        await client.post(f"/runs/{ema_run}/start", json={"idempotency_key": "start-ema-sizing"})
+        await client.post(f"/runs/{vwap_run}/start", json={"idempotency_key": "start-vwap-sizing"})
 
     assert "--managed-symbols" in captured[1]
     idx = captured[1].index("--managed-symbols")

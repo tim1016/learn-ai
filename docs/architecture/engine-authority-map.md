@@ -1,7 +1,7 @@
 # Engine authority map
 
 **Status:** Active
-**Last reviewed:** 2026-07-21 (Clerk S2 lifecycle-honesty boundary added; LEAN sidecar row 19 remains shipped through Phase 5g.3)
+**Last reviewed:** 2026-07-21 (Clerk S3 daemon-command idempotency boundary added; LEAN sidecar row 19 remains shipped through Phase 5g.3)
 **Pairs with:** `docs/math-sources-of-truth.md` (concept-level registry), `docs/architecture/numerical-authority-migration-plan.md` (migration sequencing)
 
 This document answers exactly one question: **which engine owns which job?**
@@ -36,6 +36,19 @@ If two docs disagree, `math-sources-of-truth.md` wins for math and this doc wins
 | Live account contamination verdict | **Account Clerk journal + fleet residual projector** | `PythonDataService/app/engine/live/account_clerk.py` is the sole account-rooted intent and broker-event journal. `app/engine/live/journal_exposure.py::project_journal_exposure` is the sole fill fold: it validates the shared `IbkrOrderEvent` shape, keys effects by `(account_id, exec_id)`, groups by namespace or strategy instance, signs BUY/SELL quantities, and omits zero balances. `account_clerk_reconciler.namespace_expected_exposure` and `app/services/fleet_contamination.py::collect_fleet_position_explanations` consume it; `app/engine/live/fleet.py::compute_fleet_contamination` derives `broker net − Σ managed exposure`. Per-run `LiveStateEnvelope.expected_position_by_symbol` is a shadow-only migration comparator. | Account-level exposure belongs to the Clerk, not individual run sidecars. A caller with more than one journal account must supply an account scope; otherwise collection raises `ACCOUNT_JOURNAL_SCOPE_REQUIRED` rather than cross-netting. #1050 owns translating that fail-closed condition into account-scoped broker truth and admission responses. A legacy three-observation cutover is invalidated once; requalification requires 10 account-scoped, alarm-free parity observations spanning 15 minutes and proving a nonzero-to-zero transition. The durable `account_clerk_journal_authority_requalified` marker grants authority; any later parity or alarm drift records an operator-visible freeze and never restores sidecar authority. The frontend and .NET transport render/pass through this projection only. | **canonical** — ADR 0030, issues #1024, #1039, and #1068. Validated by `PythonDataService/tests/engine/live/test_journal_exposure.py` and `PythonDataService/tests/services/test_fleet_contamination.py`. |
 
 > **Shared artifact seam under the four research-run rows above.** The storage / id-validation / atomic-write / list-by-parent code under `runs/`, `walk_forward/`, `monte_carlo/`, and `baselines/` is being consolidated into one `app/research/artifact/` module (descriptor-backed `ArtifactStore`). Design ratified 2026-05-26; strangler PR plan starts with `monte_carlo` and finishes with `runs/`. See `docs/architecture/research-artifact-seam.md` for the seven decisions, on-disk-compatibility contract, and per-PR acceptance bar.
+
+### Clerk S3 daemon-command boundary
+
+The host daemon owns the durable Start, Stop, and emergency-flatten command
+ledger at `app/engine/live/daemon_command_idempotency.py`. One opaque key binds
+one canonical command fingerprint and one outcome. A matching duplicate replays
+only for an account named in the reversible host rollout setting; shadow
+accounts retain and log the first outcome. A command without a final durable
+outcome is unknown and is never retried in enforced mode. The data plane only
+forwards the key and renders `idempotency_replayed`. This is the canonical S3
+authority for issue #1156; its primary seams are
+`test_daemon_command_idempotency.py`, `test_host_daemon.py`, and
+`test_live_instances.py`.
 
 ## Deprecated engines (scheduled for removal)
 

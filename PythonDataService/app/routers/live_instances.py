@@ -2761,7 +2761,7 @@ async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActi
                 else await host_daemon_client.start_run(
                     settings.live_runner_daemon_url,
                     run_id,
-                    body.model_dump(exclude={"roll_call_offer_id"}),
+                    scope.daemon_payload(body, exclude={"roll_call_offer_id"}),
                 )
             )
         except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
@@ -2885,7 +2885,7 @@ async def stop_run(run_id: str, body: HostRunnerStopRequest) -> HostRunnerAction
     with scope:
         scope.stage = "daemon_stop"
         try:
-            result = await host_daemon_client.stop_run(settings.live_runner_daemon_url, run_id, body.model_dump())
+            result = await host_daemon_client.stop_run(settings.live_runner_daemon_url, run_id, scope.daemon_payload(body))
         except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
             unknown = scope.unknown(error=exc)
             await _ensure_surface_hub_started(sid)
@@ -5593,7 +5593,7 @@ async def emergency_flatten_instance(
             body_json = await host_daemon_client.emergency_flatten_run(
                 settings.live_runner_daemon_url,
                 run_id,
-                {"account": body.account, "confirm": True},
+                scope.daemon_payload(body),
             )
         except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
             unknown = scope.unknown(error=exc)

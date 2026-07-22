@@ -458,7 +458,9 @@ async def test_account_emergency_flatten_works_without_surviving_bot_run(
 
     async def flatten(_base_url: str, account_id: str, payload: dict) -> dict:
         assert account_id == "DU1234567"
-        assert payload == {"account": "DU1234567", "confirm": True}
+        assert payload["account"] == "DU1234567"
+        assert payload["confirm"] is True
+        assert payload["idempotency_key"].startswith("account-emergency-flatten-")
         return {
             "accepted": True,
             "account_id": account_id,
@@ -483,6 +485,7 @@ async def test_account_emergency_flatten_works_without_surviving_bot_run(
 
     assert response.status_code == 200
     assert response.json()["audit_run_id"] == "eflat-audit-1"
+    assert response.json()["idempotency_key"].startswith("account-emergency-flatten-")
     assert any(
         event.get("event_type") == "account_emergency_flatten_completed"
         for event in read_account_events(tmp_path, "DU1234567")

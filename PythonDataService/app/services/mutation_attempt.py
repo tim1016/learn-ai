@@ -414,6 +414,20 @@ class MutationAttemptScope:
         )
         return self.attempt
 
+    def daemon_payload(self, request: BaseModel, *, exclude: set[str] | None = None) -> dict:
+        """Serialize a daemon mutation with a stable boundary idempotency key.
+
+        A caller-supplied key is preserved verbatim.  When the public API did
+        not supply one, the durable mutation-attempt identity is the retry key
+        surfaced on an uncertain outcome.  This keeps the data-plane request
+        and daemon command ledger correlated without making router handlers
+        construct transport-only fields themselves.
+        """
+        payload = request.model_dump(exclude=exclude)
+        supplied_key = getattr(request, "idempotency_key", None)
+        payload["idempotency_key"] = supplied_key or self.attempt.mutation_attempt_id
+        return payload
+
     def reject_not_observed(self, *, outcome: dict) -> MutationAttempt:
         self.confirm(outcome=outcome)
         self.attempt = persist_attempt_transition(

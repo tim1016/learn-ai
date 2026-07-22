@@ -359,6 +359,7 @@ class EmergencyFlattenRequest(BaseModel):
 
     account: str = Field(..., min_length=2, max_length=32)
     confirm: bool = Field(..., description="Must be true; typo-proofing gate.")
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 class AccountEmergencyFlattenResponse(BaseModel):
@@ -370,6 +371,8 @@ class AccountEmergencyFlattenResponse(BaseModel):
     account_id: str = Field(min_length=2, max_length=32)
     audit_run_id: str = Field(min_length=2, max_length=128)
     completed_at_ms: int = Field(ge=0)
+    idempotency_key: str | None = None
+    idempotency_replayed: bool = False
 
 
 class HostRunnerInstance(BaseModel):
@@ -429,6 +432,7 @@ class HostRunnerStartRequest(BaseModel):
     max_orders_per_day: int = Field(default=DEFAULT_MAX_ORDERS_PER_DAY, ge=0, le=100_000)
     ibkr_host: str = Field(default="127.0.0.1", min_length=1, max_length=255)
     roll_call_offer_id: str | None = Field(default=None, min_length=1, max_length=128)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=256)
 
     @field_validator("ibkr_host")
     @classmethod
@@ -440,6 +444,7 @@ class HostRunnerStopRequest(BaseModel):
     """Request body for stopping the active host runner subprocess."""
 
     force: bool = False
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 class MutationOutcomeUnknownResponse(BaseModel):
@@ -635,6 +640,8 @@ class HostRunnerActionResponse(BaseModel):
     rung_receipt_warnings: list[MutationRungReceipt] = Field(default_factory=list)
     mutation_attempt_id: str | None = None
     mutation_dispatch_state: MutationAttemptDispatchState | None = None
+    idempotency_key: str | None = None
+    idempotency_replayed: bool = False
 
 
 class IdentityCoherenceConfirmation(BaseModel):

@@ -203,6 +203,30 @@ async def test_emergency_flatten_read_timeout_raises_outcome_unknown() -> None:
         await emergency_flatten_run(BASE, "run-A", {})
 
 
+@pytest.mark.asyncio
+@respx.mock
+async def test_persisted_daemon_idempotency_unknown_maps_to_outcome_unknown() -> None:
+    """A daemon crash after command execution is not a normal 409 rejection."""
+
+    respx.post(f"{BASE}/runs/run-A/stop").mock(
+        return_value=httpx.Response(
+            409,
+            json={
+                "detail": {
+                    "reason_code": "IDEMPOTENCY_OUTCOME_UNKNOWN",
+                    "message": "reconcile before retrying",
+                    "idempotency_key": "opaque-key",
+                }
+            },
+        )
+    )
+
+    with pytest.raises(HostDaemonOutcomeUnknownError) as exc_info:
+        await stop_run(BASE, "run-A", {"idempotency_key": "opaque-key"})
+
+    assert exc_info.value.error_category == "idempotency_outcome_unknown"
+
+
 # ---------------------------------------------------------------------------
 # 503 — unambiguous unreachable (clean pre-send failure)
 # ---------------------------------------------------------------------------

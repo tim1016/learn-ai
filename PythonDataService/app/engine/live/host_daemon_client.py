@@ -329,11 +329,24 @@ async def _post_action(url: str, payload: dict, *, timeout: httpx.Timeout = _TIM
         )
 
     if result.response_status is not None and result.response_status >= 400:
-        raise HostDaemonError(
-            result.response_status,
+        detail = (
             _error_detail_of(response)
             if response is not None
-            else (result.detail or f"host daemon returned {result.response_status}"),
+            else (result.detail or f"host daemon returned {result.response_status}")
+        )
+        if (
+            result.response_status == 409
+            and isinstance(detail, dict)
+            and detail.get("reason_code") == "IDEMPOTENCY_OUTCOME_UNKNOWN"
+        ):
+            message = detail.get("message")
+            raise HostDaemonOutcomeUnknownError(
+                error_category="idempotency_outcome_unknown",
+                detail=message if isinstance(message, str) else None,
+            )
+        raise HostDaemonError(
+            result.response_status,
+            detail,
         )
 
     raise HostDaemonError(

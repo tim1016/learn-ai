@@ -2945,7 +2945,12 @@ async def test_emergency_flatten_works_without_live_binding(app_with_root, monke
     async def fake_flatten(base_url: str, run_id: str, payload: dict) -> dict:
         captured["run_id"] = run_id
         captured["payload"] = payload
-        return {"accepted": True, "process": {"state": "idle"}}
+        return {
+            "accepted": True,
+            "process": {"state": "idle"},
+            "idempotency_key": payload["idempotency_key"],
+            "idempotency_replayed": False,
+        }
 
     monkeypatch.setattr(host_daemon_client, "emergency_flatten_run", fake_flatten)
 
@@ -2961,7 +2966,11 @@ async def test_emergency_flatten_works_without_live_binding(app_with_root, monke
     assert body["mutation_attempt_id"].startswith("mutation-")
     assert body["mutation_dispatch_state"] == "RESPONSE_CONFIRMED"
     assert captured["run_id"] == "run-flat"
-    assert captured["payload"] == {"account": "DU123", "confirm": True}
+    assert captured["payload"]["account"] == "DU123"
+    assert captured["payload"]["confirm"] is True
+    assert captured["payload"]["idempotency_key"] == body["mutation_attempt_id"]
+    assert body["idempotency_key"] == body["mutation_attempt_id"]
+    assert body["idempotency_replayed"] is False
 
 
 async def test_emergency_flatten_requires_confirm(app_with_root, monkeypatch: pytest.MonkeyPatch) -> None:

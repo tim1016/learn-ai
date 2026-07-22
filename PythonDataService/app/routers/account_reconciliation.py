@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Annotated
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from starlette.concurrency import run_in_threadpool
@@ -123,15 +124,22 @@ def get_journal_cure_service(artifacts_root: AccountArtifactsRoot) -> JournalCur
     return JournalCureService(artifacts_root=artifacts_root)
 
 
-def _outcome_unknown_http_error(exc: host_daemon_client.HostDaemonOutcomeUnknownError) -> HTTPException:
+def _outcome_unknown_http_error(
+    exc: host_daemon_client.HostDaemonOutcomeUnknownError,
+    *,
+    idempotency_key: str | None = None,
+) -> HTTPException:
     """Preserve ambiguous daemon mutations as a refresh-before-retry response."""
 
+    detail: dict[str, str] = {
+        "reason_code": "OUTCOME_UNKNOWN",
+        "message": exc.detail or "The Clerk readiness request may have completed; refresh before retrying.",
+    }
+    if idempotency_key is not None:
+        detail["idempotency_key"] = idempotency_key
     return HTTPException(
         status.HTTP_409_CONFLICT,
-        detail={
-            "reason_code": "OUTCOME_UNKNOWN",
-            "message": exc.detail or "The Clerk readiness request may have completed; refresh before retrying.",
-        },
+        detail=detail,
     )
 
 
@@ -425,6 +433,7 @@ async def emergency_flatten_account_endpoint(
                 "message": "Fresh paper-account evidence does not declare an emergency flatten safe.",
             },
         )
+    idempotency_key = request.idempotency_key or f"account-emergency-flatten-{uuid4().hex}"
     try:
         settings = get_settings()
         await host_daemon_client.ensure_account_clerk(
@@ -434,9 +443,16 @@ async def emergency_flatten_account_endpoint(
         payload = await host_daemon_client.emergency_flatten_account(
             settings.live_runner_daemon_url,
             canonical_account_id,
-            {"account": canonical_account_id, "confirm": True},
+            {
+                "account": canonical_account_id,
+                "confirm": True,
+                "idempotency_key": idempotency_key,
+            },
         )
         response = AccountEmergencyFlattenResponse.model_validate(payload)
+        response = response.model_copy(
+            update={"idempotency_key": response.idempotency_key or idempotency_key}
+        )
         append_account_event(
             artifacts_root,
             canonical_account_id,
@@ -450,7 +466,7 @@ async def emergency_flatten_account_endpoint(
         )
         return response
     except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
-        raise _outcome_unknown_http_error(exc) from exc
+        raise _outcome_unknown_http_error(exc, idempotency_key=idempotency_key) from exc
     except host_daemon_client.HostDaemonError as exc:
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
 

@@ -200,6 +200,26 @@ The relevant regression seams are
 `test_live_engine_command_channel.py`, `test_host_daemon.py`,
 `test_bot_daily_lifecycle.py`, and `test_live_instances.py`.
 
+## Clerk S3 daemon-command idempotency boundary (2026-07-21)
+
+Issue #1156 makes the host daemon's Start, Stop, and emergency-flatten routes
+the durable idempotency boundary. Every command carries an opaque
+`idempotency_key`; the daemon records its command name, canonical semantic
+payload hash, account scope, and exactly one response before it returns. A
+matching duplicate replays the recorded outcome without repeating process or
+broker work. Reusing a key for a different command or payload is a durable,
+operator-visible `IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_COMMAND` conflict.
+
+The staged rollout is intentionally account-scoped. The host's
+`LIVE_RUNNER_DAEMON_COMMAND_IDEMPOTENCY_ENFORCED_ACCOUNTS` setting is empty by
+default, which preserves one durable outcome and logs matching duplicates in
+shadow mode. Naming a specific account turns replay enforcement on; removing
+it reverses that decision without erasing the forensic record. If a daemon
+dies after claiming a key but before persisting an outcome, enforcement returns
+`IDEMPOTENCY_OUTCOME_UNKNOWN` and never re-executes the potentially effected
+command. Operator-facing responses preserve the opaque key and mark a replay
+with `idempotency_replayed=true`.
+
 ## Issue #1044 callback-stream hardening traceability
 
 | Requirement | Verification |
