@@ -749,21 +749,25 @@ class RunnerProcessManager:
         with bot_lifecycle_operation_fence(self.artifacts_root, strategy_instance_id):
             yield
 
+    def _instance_start_lock(self, key: str) -> threading.RLock:
+        """Return the stable in-memory lock for one bot identity."""
+
+        with self._start_lock_table_lock:
+            lock = self._start_lock_per_instance.get(key)
+            if lock is None:
+                lock = threading.RLock()
+                self._start_lock_per_instance[key] = lock
+            return lock
+
     @contextlib.contextmanager
-    def _instance_start_lock(self, key: str, strategy_instance_id: str | None):
-        """Fence a Start through admission, registry activation, and spawn.
+    def _instance_start_operation_fence(self, key: str, strategy_instance_id: str | None):
+        """Fence Start through admission, registry activation, and spawn.
 
         The in-memory lock prevents duplicate starts in this daemon. The
         durable fence adds the retirement and Clerk writers in other processes
         to the same critical section.
         """
-        with self._start_lock_table_lock:
-            lock = self._start_lock_per_instance.get(key)
-            if lock is None:
-                import threading as _threading
-
-                lock = _threading.RLock()
-                self._start_lock_per_instance[key] = lock
+        lock = self._instance_start_lock(key)
         with lock, self._bot_lifecycle_operation_fence(strategy_instance_id):
             yield
 
@@ -818,7 +822,7 @@ class RunnerProcessManager:
         account_id, _ = self._account_registry_identity(run_dir)
         self._reject_start_during_legacy_emergency(account_id)
 
-        with self._instance_start_lock(key, sid):
+        with self._instance_start_operation_fence(key, sid):
             clerk_client_ids = self._clerk_supervisor.in_use_client_ids()
             # Reserve the bot's client ID under the registry lock, then release
             # it before any filesystem/broker readiness work.  The reservation
