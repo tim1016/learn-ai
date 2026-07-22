@@ -887,7 +887,7 @@ def evaluate_restart_intensity(
         and window_start_ms <= int(event.get("recorded_at_ms") or -1) <= now_ms
     ]
     restart_groups = _restart_intensity_groups(restart_events)
-    observed_count = len(restart_groups)
+    observed_count = _restart_intensity_count(restart_groups)
     reason = _restart_intensity_reason(
         observed_count=observed_count,
         threshold=policy.threshold,
@@ -979,7 +979,10 @@ def project_restart_intensity_gate(
         and event.get("lifecycle_state") == "ACTIVE"
         and window_start_ms <= int(event.get("recorded_at_ms") or -1) <= now_ms
     ]
-    projected_count = len(_restart_intensity_groups(restart_events)) + additional_start_groups
+    # Dead pre-start projection retained for parity with ``evaluate``: it treats
+    # the proposed start(s) as repeat activations of the busiest bot, a
+    # conservative upper bound that never under-reports intensity.
+    projected_count = _restart_intensity_count(_restart_intensity_groups(restart_events)) + additional_start_groups
     reason = _restart_intensity_reason(
         observed_count=projected_count,
         threshold=policy.threshold,
@@ -1021,9 +1024,26 @@ def _restart_intensity_reason(
 
 
 def _restart_intensity_groups(restart_events: list[dict]) -> dict[str, list[dict]]:
-    """Treat every accepted start as a separate restart-intensity event."""
+    """Group ACTIVE activations by bot identity.
 
-    return {f"binding:{event.get('seq')}": [event] for event in restart_events}
+    Restart intensity is one bot restarted repeatedly (crash-churn), not a batch
+    of distinct freshly-deployed bots each starting once.  Grouping by
+    ``strategy_instance_id`` lets the caller measure the busiest bot's activation
+    count (:func:`_restart_intensity_count`), so deploying N distinct bots does
+    not read as N restarts of one account.
+    """
+
+    groups: dict[str, list[dict]] = {}
+    for event in restart_events:
+        instance = str(event.get("strategy_instance_id") or f"seq:{event.get('seq')}")
+        groups.setdefault(instance, []).append(event)
+    return groups
+
+
+def _restart_intensity_count(groups: dict[str, list[dict]]) -> int:
+    """Intensity = the most activations any single bot accrued in the window."""
+
+    return max((len(events) for events in groups.values()), default=0)
 
 
 def _latest_restart_intensity_clear_ms(events: list[dict]) -> int | None:

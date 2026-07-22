@@ -1101,6 +1101,100 @@ async def test_ensure_clerk_endpoint_runs_generation_handshake(
     assert ensured == [("DU123", "127.0.0.1")]
 
 
+async def test_operator_adjustment_endpoint_forwards_cure_to_host_clerk(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live import host_daemon as hd
+    from app.schemas.journal_cures import JournalCureReceipt
+
+    manager, _ = daemon_context
+    monkeypatch.setattr(manager, "_ensure_account_clerk", lambda _account_id, **_kwargs: None)
+
+    class FakeRpcClient:
+        def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
+            self._account_id = account_id
+
+        async def apply_operator_adjustment(self, request: object) -> JournalCureReceipt:
+            return JournalCureReceipt(
+                account_id=self._account_id,
+                bot_order_namespace=request.bot_order_namespace,
+                symbol=request.symbol,
+                signed_quantity=request.signed_quantity,
+                request_provenance=request.request_provenance,
+                reason=request.reason,
+                evidence_refs=request.evidence_refs,
+                idempotency_key=request.idempotency_key,
+                recorded_at_ms=101,
+                journal_seq=3,
+            )
+
+    monkeypatch.setattr(hd, "AccountClerkRpcClient", FakeRpcClient)
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
+        response = await client.post(
+            "/accounts/DU123/clerk/operator-adjustment",
+            json={
+                "bot_order_namespace": "learn-ai/bot-a/v1",
+                "symbol": "SPY",
+                "signed_quantity": -1,
+                "reason": "operator verified stale claim",
+                "evidence_refs": ["account-reconciliation:receipt-1"],
+                "request_provenance": "account-monitor/cure",
+                "idempotency_key": "cure-daemon-1",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["signed_quantity"] == -1
+
+
+async def test_operator_adjustment_endpoint_maps_clerk_rejection_to_409(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live import host_daemon as hd
+    from app.engine.live.account_clerk_rpc import (
+        AccountClerkRpcRejectedError,
+        AccountClerkRpcRequestIdentity,
+    )
+
+    manager, _ = daemon_context
+    monkeypatch.setattr(manager, "_ensure_account_clerk", lambda _account_id, **_kwargs: None)
+
+    class FakeRpcClient:
+        def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
+            pass
+
+        async def apply_operator_adjustment(self, _request: object) -> None:
+            raise AccountClerkRpcRejectedError(
+                reason="JOURNAL_CURE_IDEMPOTENCY_CONFLICT",
+                operation="operator_adjustment",
+                request_identity=AccountClerkRpcRequestIdentity(intent_id=None, order_ref=None),
+            )
+
+    monkeypatch.setattr(hd, "AccountClerkRpcClient", FakeRpcClient)
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
+        response = await client.post(
+            "/accounts/DU123/clerk/operator-adjustment",
+            json={
+                "bot_order_namespace": "learn-ai/bot-a/v1",
+                "symbol": "SPY",
+                "signed_quantity": -1,
+                "reason": "operator verified stale claim",
+                "evidence_refs": ["account-reconciliation:receipt-1"],
+                "request_provenance": "account-monitor/cure",
+                "idempotency_key": "cure-daemon-1",
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "JOURNAL_CURE_IDEMPOTENCY_CONFLICT"
+
+
 async def test_release_clerk_endpoint_detaches_account_service(
     daemon_context: tuple[RunnerProcessManager, Path],
     monkeypatch: pytest.MonkeyPatch,
@@ -2329,19 +2423,34 @@ async def test_start_blocks_when_restart_intensity_freezes_account(
         ),
         encoding="utf-8",
     )
-    for index, recorded_at_ms in enumerate((fixed_now_ms - 20_000, fixed_now_ms - 10_000), start=1):
+    # Restart intensity is one bot restarted repeatedly, not distinct bots each
+    # starting once. Churn spy_ema_paper twice (activate then retire) so the run
+    # under test is its third activation in the window and breaches the gate.
+    for index, active_ms in enumerate((fixed_now_ms - 30_000, fixed_now_ms - 20_000), start=1):
         write_account_instance_binding(
             manager.artifacts_root,
             AccountInstanceBinding(
                 account_id="DU111",
-                strategy_instance_id=f"prior-{index}",
+                strategy_instance_id="spy_ema_paper",
                 run_id=f"prior-run-{index}",
-                bot_order_namespace=bot_order_namespace_for_instance(f"prior-{index}"),
+                bot_order_namespace=bot_order_namespace_for_instance("spy_ema_paper"),
                 lifecycle_state="ACTIVE",
-                recorded_at_ms=recorded_at_ms,
+                recorded_at_ms=active_ms,
                 source="test",
             ),
-    )
+        )
+        write_account_instance_binding(
+            manager.artifacts_root,
+            AccountInstanceBinding(
+                account_id="DU111",
+                strategy_instance_id="spy_ema_paper",
+                run_id=f"prior-run-{index}",
+                bot_order_namespace=bot_order_namespace_for_instance("spy_ema_paper"),
+                lifecycle_state="RETIRED",
+                recorded_at_ms=active_ms + 1_000,
+                source="test",
+            ),
+        )
 
     def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
         if "app.engine.live.account_clerk" in command:

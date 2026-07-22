@@ -621,6 +621,7 @@ def _binding(
 
 
 def test_restart_intensity_passes_below_threshold_from_durable_account_events(tmp_path: Path) -> None:
+    # One bot restarted twice is below the threshold of three activations.
     policy = RestartIntensityPolicy(threshold=3, window_ms=60_000)
     write_account_instance_binding(
         tmp_path,
@@ -628,7 +629,7 @@ def test_restart_intensity_passes_below_threshold_from_durable_account_events(tm
     )
     write_account_instance_binding(
         tmp_path,
-        _binding(sid="spy-b", run_id="run-b", namespace="learn-ai/spy-b/v1", recorded_at_ms=1_700_000_010_000),
+        _binding(sid="spy-a", run_id="run-b", namespace="learn-ai/spy-a/v1", recorded_at_ms=1_700_000_010_000),
     )
 
     gate = evaluate_restart_intensity(
@@ -641,6 +642,33 @@ def test_restart_intensity_passes_below_threshold_from_durable_account_events(tm
     assert gate.status == "pass"
     assert "observed=2" in gate.operator_reason
     assert "threshold=3" in gate.operator_reason
+    assert read_account_freeze(tmp_path, "DU123456") is None
+
+
+def test_restart_intensity_ignores_distinct_bot_first_starts(tmp_path: Path) -> None:
+    # Deploying five distinct bots (each a single first-start) is initial
+    # deployment, not restart-intensity churn; it must not freeze the account.
+    policy = RestartIntensityPolicy(threshold=3, window_ms=300_000)
+    for index, sid in enumerate(("aapl", "msft", "nvda", "qqq", "spy"), start=1):
+        write_account_instance_binding(
+            tmp_path,
+            _binding(
+                sid=f"cohort5-{sid}",
+                run_id=f"run-{sid}",
+                namespace=f"learn-ai/cohort5-{sid}/v1",
+                recorded_at_ms=1_700_000_000_000 + index * 10_000,
+            ),
+        )
+
+    gate = evaluate_restart_intensity(
+        tmp_path,
+        account_id="DU123456",
+        now_ms=1_700_000_060_000,
+        policy=policy,
+    )
+
+    assert gate.status == "pass"
+    assert "observed=1" in gate.operator_reason
     assert read_account_freeze(tmp_path, "DU123456") is None
 
 
@@ -659,6 +687,7 @@ def test_restart_intensity_passes_below_threshold_from_durable_account_events(tm
 
 
 def test_restart_intensity_breach_records_account_freeze_with_threshold_details(tmp_path: Path) -> None:
+    # One bot restarted three times in the window breaches restart intensity.
     policy = RestartIntensityPolicy(threshold=3, window_ms=60_000)
     for index, recorded_at_ms in enumerate(
         (1_700_000_000_000, 1_700_000_010_000, 1_700_000_020_000),
@@ -667,9 +696,9 @@ def test_restart_intensity_breach_records_account_freeze_with_threshold_details(
         write_account_instance_binding(
             tmp_path,
             _binding(
-                sid=f"spy-{index}",
+                sid="spy-1",
                 run_id=f"run-{index}",
-                namespace=f"learn-ai/spy-{index}/v1",
+                namespace="learn-ai/spy-1/v1",
                 recorded_at_ms=recorded_at_ms,
             ),
         )
@@ -693,7 +722,7 @@ def test_restart_intensity_breach_records_account_freeze_with_threshold_details(
     assert breach["threshold"] == 3
     assert breach["window_start_ms"] == 1_699_999_960_001
     assert breach["window_end_ms"] == 1_700_000_020_001
-    assert breach["affected_instance_ids"] == ["spy-1", "spy-2", "spy-3"]
+    assert breach["affected_instance_ids"] == ["spy-1"]
 
 
 def test_restart_intensity_refolds_after_process_restart_without_reset(tmp_path: Path) -> None:
@@ -705,9 +734,9 @@ def test_restart_intensity_refolds_after_process_restart_without_reset(tmp_path:
         write_account_instance_binding(
             tmp_path,
             _binding(
-                sid=f"spy-{index}",
+                sid="spy-1",
                 run_id=f"run-{index}",
-                namespace=f"learn-ai/spy-{index}/v1",
+                namespace="learn-ai/spy-1/v1",
                 recorded_at_ms=recorded_at_ms,
             ),
         )
@@ -740,9 +769,9 @@ def test_restart_intensity_recovery_clear_starts_a_new_window(tmp_path: Path) ->
         write_account_instance_binding(
             tmp_path,
             _binding(
-                sid=f"spy-{index}",
+                sid="spy-1",
                 run_id=f"run-{index}",
-                namespace=f"learn-ai/spy-{index}/v1",
+                namespace="learn-ai/spy-1/v1",
                 recorded_at_ms=recorded_at_ms,
             ),
         )

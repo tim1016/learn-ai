@@ -52,6 +52,7 @@ from app.engine.live.account_clerk_rpc_protocol import (
     AccountClerkRpcTimeoutError,
     AccountClerkRpcUnavailableError,
     _AccountClerkRpcRequestRejected,
+    clerk_rejection_reason,
     decode_generation_handshake,
     decode_request,
     decode_response,
@@ -1001,4 +1002,5 @@ __all__ = [
     "AccountClerkRpcSuccessEnvelope",
     "AccountClerkRpcTimeoutError",
     "AccountClerkRpcUnavailableError",
+    "clerk_rejection_reason",
 ]

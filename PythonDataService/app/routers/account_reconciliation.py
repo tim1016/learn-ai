@@ -17,10 +17,14 @@ from app.engine.live.account_artifacts import AccountArtifactError, append_accou
 from app.engine.live.account_clerk_rpc import (
     AccountClerkRpcClient,
     AccountClerkRpcError,
-    AccountClerkRpcRejectedError,
+    clerk_rejection_reason,
 )
 from app.engine.live.account_identity import normalize_account_id
-from app.engine.live.account_registry import backfill_false_crash_registry_rows
+from app.engine.live.account_registry import (
+    account_binding_ledger_parity,
+    backfill_false_crash_registry_rows,
+    baseline_account_binding_ledger,
+)
 from app.engine.live.daemon_command_idempotency import (
     DaemonCommandIdempotencyService,
     DaemonCommandOutcome,
@@ -48,6 +52,7 @@ from app.schemas.account_reconciliation import (
     AccountSessionPolicyUpdateRequest,
     AccountSessionPolicyUpdateResponse,
     AccountTriageResponse,
+    BindingLedgerBaselineReceipt,
     LegacyStaleClaimCandidatesResponse,
     LegacyStaleClaimRetirementReceipt,
     LegacyStaleClaimRetireRequest,
@@ -77,7 +82,7 @@ from app.services.account_gate_policy import AccountGatePolicyService
 from app.services.account_gate_promotion import AccountGatePromotionError
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.account_truth_refresh import account_truth_artifacts_root, refresh_account_truth_now
-from app.services.journal_cures import JournalCureError, JournalCureService
+from app.services.journal_cures import JournalCureService
 from app.services.journal_recovery import JournalRecoveryError, JournalRecoveryService
 from app.services.legacy_stale_claim_retirement import (
     LegacyStaleClaimRetirementError,
@@ -201,10 +206,9 @@ def _outcome_unknown_http_error(
 def _clerk_rpc_http_error(exc: AccountClerkRpcError) -> HTTPException:
     """Expose normal Clerk rejections without collapsing them into a server error."""
 
-    unavailable = exc.reason_code.startswith("ACCOUNT_CLERK_UNAVAILABLE:")
-    reason_code = exc.reason if isinstance(exc, AccountClerkRpcRejectedError) else exc.reason_code
+    retry_safe, reason_code = clerk_rejection_reason(exc)
     return HTTPException(
-        status.HTTP_503_SERVICE_UNAVAILABLE if unavailable else status.HTTP_409_CONFLICT,
+        status.HTTP_503_SERVICE_UNAVAILABLE if retry_safe else status.HTTP_409_CONFLICT,
         detail={"reason_code": reason_code, "message": "Clerk rejected or could not complete the request."},
     )
 
@@ -401,6 +405,39 @@ async def rebaseline_account_clerk_journal_endpoint(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail={"reason_code": "JOURNAL_RECOVERY_BROKER_SNAPSHOT_UNAVAILABLE", "message": str(exc)}) from exc
 
 
+@router.post(
+    "/{account_id}/binding-ledger/baseline",
+    response_model=BindingLedgerBaselineReceipt,
+    status_code=status.HTTP_201_CREATED,
+)
+async def baseline_account_binding_ledger_endpoint(
+    account_id: str,
+    artifacts_root: AccountArtifactsRoot,
+) -> BindingLedgerBaselineReceipt:
+    """Seed the command ledger from the legacy registry to clear dirty parity.
+
+    An account whose registry rows predate the binding-command ledger stays
+    fail-closed on 'binding ledger parity is dirty' with no forward writer to
+    close the legacy-only bindings. This idempotent, non-destructive recovery
+    action folds the current registry into the ledger; it never removes rows and
+    leaves any genuine ledger-only anomaly visible.
+    """
+
+    canonical_account_id = _canonical_account_id(account_id)
+
+    def _baseline() -> BindingLedgerBaselineReceipt:
+        result = baseline_account_binding_ledger(artifacts_root, account_id=canonical_account_id)
+        parity = account_binding_ledger_parity(artifacts_root, account_id=canonical_account_id)
+        return BindingLedgerBaselineReceipt(
+            account_id=canonical_account_id,
+            baselined_instances=list(result.baselined_instances),
+            parity_clean=parity.is_clean,
+            unresolved_ledger_only_instances=list(parity.ledger_only_instances),
+        )
+
+    return await run_in_threadpool(_baseline)
+
+
 class _AccountClerkRestoreUnconfirmedError(RuntimeError):
     """A claimed restore cannot safely be called complete without a re-observation."""
 
@@ -581,27 +618,26 @@ async def retire_legacy_stale_claim_endpoint(
 async def apply_journal_cure_endpoint(
     account_id: str,
     request: JournalCureRequest,
-    artifacts_root: AccountArtifactsRoot,
 ) -> JournalCureReceipt:
-    """Append a claim-reducing cure only after the account Clerk is healthy."""
+    """Append a claim-reducing cure through the host daemon's host-local Clerk RPC.
+
+    The Clerk's Unix socket lives on the host and cannot be reached from this
+    container across the podman VM boundary, so the cure RPC is delegated to the
+    daemon rather than opened here. The daemon authors the Clerk-rejection status
+    and reason_code, which propagate back verbatim.
+    """
 
     canonical_account_id = _canonical_account_id(account_id)
+    settings = get_settings()
     try:
-        settings = get_settings()
-        await host_daemon_client.ensure_account_clerk(settings.live_runner_daemon_url, canonical_account_id)
-        return await AccountClerkRpcClient(
-            artifacts_root=artifacts_root,
-            account_id=canonical_account_id,
-        ).apply_operator_adjustment(request)
-    except JournalCureError as exc:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={"reason_code": exc.reason_code, "message": exc.detail},
-        ) from exc
+        body = await host_daemon_client.apply_operator_adjustment(
+            settings.live_runner_daemon_url,
+            canonical_account_id,
+            request.model_dump(mode="json"),
+        )
+        return JournalCureReceipt.model_validate(body)
     except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
         raise _outcome_unknown_http_error(exc) from exc
-    except AccountClerkRpcError as exc:
-        raise _clerk_rpc_http_error(exc) from exc
     except host_daemon_client.HostDaemonError as exc:
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
 

@@ -5695,6 +5695,47 @@
         "title": "BatchSummaryResponse",
         "type": "object"
       },
+      "BindingLedgerBaselineReceipt": {
+        "additionalProperties": false,
+        "description": "Result of seeding the binding-command ledger from the legacy registry.\n\nCompletes the reversible migration for an account whose registry predates\nthe ledger, clearing the fail-closed 'binding ledger parity is dirty'\nposture. ``unresolved_ledger_only_instances`` stays non-empty only when a\ngenuine dual-write anomaly remains that baseline must not mask.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "baselined_instances": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Baselined Instances",
+            "type": "array"
+          },
+          "parity_clean": {
+            "title": "Parity Clean",
+            "type": "boolean"
+          },
+          "schema_version": {
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "unresolved_ledger_only_instances": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unresolved Ledger Only Instances",
+            "type": "array"
+          }
+        },
+        "required": [
+          "account_id",
+          "parity_clean"
+        ],
+        "title": "BindingLedgerBaselineReceipt",
+        "type": "object"
+      },
       "Body_download_validation_report_api_dataset_validation_report_download_post": {
         "properties": {
           "our_csv": {
@@ -38125,6 +38166,65 @@
         ]
       }
     },
+    "/api/accounts/{account_id}/binding-ledger/baseline": {
+      "post": {
+        "description": "Seed the command ledger from the legacy registry to clear dirty parity.\n\nAn account whose registry rows predate the binding-command ledger stays\nfail-closed on 'binding ledger parity is dirty' with no forward writer to\nclose the legacy-only bindings. This idempotent, non-destructive recovery\naction folds the current registry into the ledger; it never removes rows and\nleaves any genuine ledger-only anomaly visible.",
+        "operationId": "baseline_account_binding_ledger_endpoint_api_accounts__account_id__binding_ledger_baseline_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BindingLedgerBaselineReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Baseline Account Binding Ledger Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
     "/api/accounts/{account_id}/clerk": {
       "get": {
         "description": "Return the immutable Account service projection for one known account.",
@@ -38736,7 +38836,7 @@
     },
     "/api/accounts/{account_id}/journal-cures": {
       "post": {
-        "description": "Append a claim-reducing cure only after the account Clerk is healthy.",
+        "description": "Append a claim-reducing cure through the host daemon's host-local Clerk RPC.\n\nThe Clerk's Unix socket lives on the host and cannot be reached from this\ncontainer across the podman VM boundary, so the cure RPC is delegated to the\ndaemon rather than opened here. The daemon authors the Clerk-rejection status\nand reason_code, which propagate back verbatim.",
         "operationId": "apply_journal_cure_endpoint_api_accounts__account_id__journal_cures_post",
         "parameters": [
           {

@@ -212,6 +212,22 @@ class AccountClerkRpcCancelNamespaceUncertainError(AccountClerkRpcError):
         )
 
 
+def clerk_rejection_reason(exc: AccountClerkRpcError) -> tuple[bool, str]:
+    """Classify a Clerk RPC error for surfacing to an operator.
+
+    Returns ``(retry_safe, reason_code)``. An ``ACCOUNT_CLERK_UNAVAILABLE:*``
+    error means the Clerk could not be reached, so the operation is retry-safe
+    (transport layers map this to HTTP 503); every other error is a durable
+    Clerk decision (HTTP 409). A deliberate rejection surfaces its domain
+    ``reason``; every other error surfaces its transport ``reason_code``. This is
+    the single home for that policy so the router and daemon can't drift.
+    """
+
+    retry_safe = exc.reason_code.startswith("ACCOUNT_CLERK_UNAVAILABLE:")
+    reason_code = exc.reason if isinstance(exc, AccountClerkRpcRejectedError) else exc.reason_code
+    return retry_safe, reason_code
+
+
 class _AccountClerkRpcRequestRejected(ValueError):
     """Safe server-side rejection for malformed or unsupported requests."""
 

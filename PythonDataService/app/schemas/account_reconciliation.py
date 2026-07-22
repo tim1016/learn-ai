@@ -285,6 +285,24 @@ class LegacyStaleClaimRetirementReceipt(BaseModel):
     retired_at_ms: int = Field(ge=0)
 
 
+class BindingLedgerBaselineReceipt(BaseModel):
+    """Result of seeding the binding-command ledger from the legacy registry.
+
+    Completes the reversible migration for an account whose registry predates
+    the ledger, clearing the fail-closed 'binding ledger parity is dirty'
+    posture. ``unresolved_ledger_only_instances`` stays non-empty only when a
+    genuine dual-write anomaly remains that baseline must not mask.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    baselined_instances: list[str] = Field(default_factory=list)
+    parity_clean: bool
+    unresolved_ledger_only_instances: list[str] = Field(default_factory=list)
+
+
 class AccountClearFreezeRequest(BaseModel):
     """Operator request to clear an active freeze using the latest clean receipt."""
 

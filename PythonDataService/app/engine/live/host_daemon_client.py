@@ -268,6 +268,21 @@ async def release_account_clerk(base_url: str, account_id: str) -> dict:
     )
 
 
+async def apply_operator_adjustment(base_url: str, account_id: str, payload: dict) -> dict:
+    """POST an operator claim-cure to the daemon so the Clerk RPC stays host-local.
+
+    The Clerk's Unix socket is on the host and unreachable from the container
+    across the podman VM boundary; the daemon runs the cure RPC and returns the
+    JournalCureReceipt body verbatim.
+    """
+
+    return await _post_action(
+        f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/operator-adjustment",
+        payload,
+        timeout=_START_ADMISSION_TIMEOUT,
+    )
+
+
 async def _post_action(url: str, payload: dict, *, timeout: httpx.Timeout = _TIMEOUT) -> dict:
     """Typed POST core for the four mutation forwards.
 
