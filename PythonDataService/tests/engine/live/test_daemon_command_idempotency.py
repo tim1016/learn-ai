@@ -161,13 +161,11 @@ def test_prepare_directory_sync_failure_leaves_a_claim_that_blocks_restart_repla
     repo = DaemonCommandIdempotencyRepo(tmp_path)
     key = "directory-sync-failure"
     payload = {"run_id": "run-1"}
-    record_path = repo._path_for_key(key)
 
-    def fail_record_directory_sync(path: Path) -> None:
-        if path == record_path:
-            raise OSError("simulated directory fsync loss")
+    def fail_record_directory_sync(_directory_fd: int) -> None:
+        raise OSError("simulated directory fsync loss")
 
-    monkeypatch.setattr(durable_append_log, "_fsync_parent_dir", fail_record_directory_sync)
+    monkeypatch.setattr(durable_append_log, "_fsync_directory", fail_record_directory_sync)
     with pytest.raises(OSError, match="simulated directory fsync loss"):
         repo.prepare(
             idempotency_key=key,
