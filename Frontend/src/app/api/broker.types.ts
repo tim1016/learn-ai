@@ -2839,25 +2839,7 @@ export interface paths {
         put?: never;
         /**
          * Start Run
-         * @description Launch the host runner for ``run_id`` by forwarding to the daemon (ADR 0007).
-         *
-         *     Start/Stop are routed through the data plane — not called from the browser —
-         *     because the daemon now enforces a mandatory ``X-Live-Runner-Token`` on every
-         *     actuation route, and the browser must never hold that shared secret. The data
-         *     plane reads the token from the artifacts bind mount and forwards it. The
-         *     daemon's statuses propagate verbatim: bad ``strategy``/spec mismatch -> 400,
-         *     missing run -> 404, subprocess/daemon unreachable -> 503.
-         *
-         *     The typed admission policy rechecks the complete fail-closed chain for every
-         *     start. Recovery of an already-running exact run is an accepted idempotent
-         *     replay.
-         *
-         *     Slice 3 (ADR 0011 amendment) — broker-activity publisher start. After
-         *     a successful start the broker-activity publisher is registered for
-         *     the running instance. Failure to bootstrap (broker disconnected,
-         *     envelope not yet visible) is logged but does NOT roll back the
-         *     start: the lazy ``_ensure_publisher`` fallback in
-         *     ``broker_activity.py`` re-attempts on the cockpit's first hit.
+         * @description Launch the host runner for ``run_id`` by forwarding to the daemon.
          */
         post: operations["start_run_api_live_instances_runs__run_id__start_post"];
         delete?: never;
@@ -3170,7 +3152,7 @@ export interface paths {
         put?: never;
         /**
          * End Day Now
-         * @description Instance-addressed clean exit request for the daily lifecycle toolbar.
+         * @description Queue Clerk-owned clean exit; only broker evidence can finish the day.
          */
         post: operations["end_day_now_api_live_instances__strategy_instance_id__end_day_now_post"];
         delete?: never;
@@ -7503,6 +7485,12 @@ export interface components {
             ambient_actions?: components["schemas"]["BotLifecycleAction"][];
             /** Attention Badge */
             attention_badge?: ("Sick bay" | "Ready" | "Off roster") | null;
+            /**
+             * Carryover Policy
+             * @default FORBID
+             * @constant
+             */
+            carryover_policy?: "FORBID";
             /** Conditions */
             conditions?: components["schemas"]["BotLifecycleCondition"][];
             /**
@@ -7515,6 +7503,7 @@ export interface components {
              * @default false
              */
             drift_detected?: boolean;
+            duty_outcome?: components["schemas"]["BotDutyOutcomeView"] | null;
             /** Latest Run Id */
             latest_run_id?: string | null;
             /**
@@ -7586,6 +7575,23 @@ export interface components {
             reason?: string | null;
             /** Strategy Instance Id */
             strategy_instance_id: string;
+        };
+        /**
+         * BotDutyOutcomeView
+         * @description Durable terminal duty evidence rendered by the operator surface.
+         */
+        BotDutyOutcomeView: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "CLOCKED_OUT_FLAT" | "STOPPED" | "HALTED" | "CRASHED" | "FAILED_LAUNCH" | "EXITED_UNVERIFIED" | "RETIRED";
+            /** Reason Code */
+            reason_code: string;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /** Run Id */
+            run_id?: string | null;
         };
         /**
          * BotEveningReport
