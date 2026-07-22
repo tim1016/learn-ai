@@ -6667,6 +6667,98 @@
         "title": "BreachProbability",
         "type": "object"
       },
+      "BrokerAccountSnapshot": {
+        "additionalProperties": false,
+        "description": "Account-level state for the account card (equity/cash/buying power).",
+        "properties": {
+          "account_blocked": {
+            "title": "Account Blocked",
+            "type": "boolean"
+          },
+          "account_id": {
+            "title": "Account Id",
+            "type": "string"
+          },
+          "account_status": {
+            "title": "Account Status",
+            "type": "string"
+          },
+          "broker": {
+            "title": "Broker",
+            "type": "string"
+          },
+          "buying_power": {
+            "title": "Buying Power",
+            "type": "number"
+          },
+          "cash": {
+            "title": "Cash",
+            "type": "number"
+          },
+          "created_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At Ms"
+          },
+          "currency": {
+            "title": "Currency",
+            "type": "string"
+          },
+          "equity": {
+            "title": "Equity",
+            "type": "number"
+          },
+          "long_market_value": {
+            "title": "Long Market Value",
+            "type": "number"
+          },
+          "observed_at_ms": {
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "pattern_day_trader": {
+            "title": "Pattern Day Trader",
+            "type": "boolean"
+          },
+          "portfolio_value": {
+            "title": "Portfolio Value",
+            "type": "number"
+          },
+          "short_market_value": {
+            "title": "Short Market Value",
+            "type": "number"
+          },
+          "trading_blocked": {
+            "title": "Trading Blocked",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "broker",
+          "account_id",
+          "account_status",
+          "currency",
+          "cash",
+          "equity",
+          "buying_power",
+          "portfolio_value",
+          "long_market_value",
+          "short_market_value",
+          "pattern_day_trader",
+          "trading_blocked",
+          "account_blocked",
+          "created_at_ms",
+          "observed_at_ms"
+        ],
+        "title": "BrokerAccountSnapshot",
+        "type": "object"
+      },
       "BrokerActivityHealth": {
         "additionalProperties": false,
         "description": "PR 5 \u2014 broker-activity publisher health surface.\n\nA single typed verdict (``state``) plus an optional operator-facing\nnotice (``headline``) and a list of all active notices (``notices``).\n``facts`` carries the raw diagnostics; the cockpit never derives\nstate from them.\n\nStates:\n- ``ready``       \u2014 publisher registered + running + emitting rows (or\n                    still within the silent-boot window).\n- ``starting``    \u2014 publisher registered but not yet running; within\n                    the starting-timeout window.\n- ``degraded``    \u2014 publisher registered + running but no rows recently.\n- ``unavailable`` \u2014 publisher not registered or timed out while starting.",
@@ -41867,6 +41959,64 @@
         "summary": "Symbols Search Endpoint",
         "tags": [
           "broker"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/account": {
+      "get": {
+        "operationId": "get_account_api_brokers__broker__account_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrokerAccountSnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Account",
+        "tags": [
+          "brokers-v2"
         ]
       }
     },

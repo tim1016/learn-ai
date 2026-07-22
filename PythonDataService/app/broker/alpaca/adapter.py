@@ -21,6 +21,9 @@ from datetime import UTC, date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from app.broker.alpaca.config import BROKER_ID
+from app.broker.contract.models import BrokerAccountSnapshot
+
 # DST-correct ET zone for anchoring bare dates (never a fixed offset).
 _ET = ZoneInfo("America/New_York")
 
@@ -96,3 +99,36 @@ def occurred_at_ms(payload: Mapping[str, Any]) -> int | None:
     if payload.get("date"):
         return et_date_to_ms(str(payload["date"]))
     return None
+
+
+def _observed(observed_at_ms: int | None) -> int:
+    """Resolve the ingestion instant (injectable for deterministic tests)."""
+    return observed_at_ms if observed_at_ms is not None else now_ms()
+
+
+# ── Per-model mappers ───────────────────────────────────────────────────────
+
+
+def from_alpaca_account(
+    payload: Mapping[str, Any],
+    *,
+    observed_at_ms: int | None = None,
+) -> BrokerAccountSnapshot:
+    """Map a raw Alpaca account payload to a ``BrokerAccountSnapshot``."""
+    return BrokerAccountSnapshot(
+        broker=BROKER_ID,
+        account_id=str(payload["account_number"]),
+        account_status=str(payload["status"]),
+        currency=str(payload.get("currency") or "USD"),
+        cash=to_float(payload["cash"]),
+        equity=to_float(payload["equity"]),
+        buying_power=to_float(payload["buying_power"]),
+        portfolio_value=to_float(payload["portfolio_value"]),
+        long_market_value=to_float(payload["long_market_value"]),
+        short_market_value=to_float(payload["short_market_value"]),
+        pattern_day_trader=bool(payload["pattern_day_trader"]),
+        trading_blocked=bool(payload["trading_blocked"]),
+        account_blocked=bool(payload["account_blocked"]),
+        created_at_ms=opt_rfc3339_to_ms(payload.get("created_at")),
+        observed_at_ms=_observed(observed_at_ms),
+    )

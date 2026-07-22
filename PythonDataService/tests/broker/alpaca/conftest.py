@@ -4,10 +4,25 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from alpaca.common.exceptions import APIError
+
+# tests/broker/alpaca/conftest.py → tests/fixtures/alpaca/
+_ALPACA_FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "alpaca"
+
+
+@pytest.fixture
+def load_alpaca_fixture() -> Callable[[str, str], Any]:
+    """Load a committed Alpaca payload fixture: (family, filename) → parsed JSON."""
+
+    def _load(family: str, filename: str) -> Any:
+        return json.loads((_ALPACA_FIXTURES / family / filename).read_text())
+
+    return _load
 
 
 @pytest.fixture

@@ -201,6 +201,14 @@ export const routes: Routes = [
     pathMatch: "full",
   },
   {
+    // Broker System v2 read-only desk — separate from every v1 broker page.
+    path: "brokers/alpaca",
+    loadComponent: () =>
+      import("./components/brokers/alpaca-desk/alpaca-desk.component").then(
+        (m) => m.AlpacaDeskComponent,
+      ),
+  },
+  {
     path: "broker/options-chain",
     loadComponent: () =>
       import(

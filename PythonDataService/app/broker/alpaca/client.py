@@ -35,12 +35,10 @@ from pydantic import ValidationError
 from requests.exceptions import RequestException
 
 from app.broker.alpaca.capture_hook import install_capture_hook
-from app.broker.alpaca.config import AlpacaSettings, get_alpaca_settings
+from app.broker.alpaca.config import BROKER_ID, AlpacaSettings, get_alpaca_settings
 from app.broker.alpaca.errors import map_api_error
 from app.broker.capture.journal import CaptureJournal, get_capture_journal
 from app.broker.contract.errors import BrokerAuthError, BrokerUnavailable
-
-BROKER_ID = "alpaca"
 
 
 def _config_detail(exc: ValidationError) -> str:

@@ -27,6 +27,7 @@ from app.routers import (
     broker_account_truth,
     broker_capability,
     broker_session,
+    brokers,
     chart,
     cohort_batch_launch,
     data_quality,
@@ -96,6 +97,18 @@ async def lifespan(app: FastAPI):
     """
     logger.info(f"Starting Polygon Data Service on {settings.HOST}:{settings.PORT}")
     logger.info(f"Polygon API Key configured: {bool(settings.POLYGON_API_KEY)}")
+
+    # Broker System v2 — register the phase-1 read brokers (Alpaca only) so
+    # /api/brokers/{broker}/... can resolve them. Cheap and keyless: the client
+    # builds credentials and network lazily on first call. Independent of the
+    # IBKR (v1) lifecycle below.
+    from app.broker.alpaca.broker import register_default_brokers
+    from app.broker.contract.registry import get_broker_registry
+
+    register_default_brokers()
+    logger.info(
+        "Broker v2 registry ready: %s", get_broker_registry().registered_brokers()
+    )
 
     from app.broker.ibkr.config import get_settings as get_ibkr_settings
 
@@ -449,6 +462,10 @@ app.include_router(account_reconciliation.router, dependencies=DATA_PLANE_CONTRO
 app.include_router(cohort_batch_launch.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 # Broker session mirror — read-only roster/SSE observatory with sensitive runtime data.
 app.include_router(broker_session.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
+# Broker System v2 read surface (/api/brokers/{broker}/...). GET-only reads;
+# the control-secret dep gates only unsafe methods, so phase-1 reads are open
+# and the phase-2 write path is gated by the same dependency.
+app.include_router(brokers.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 # Golden fixture catalog — reads manifest.json + artifacts/fixture-validation/latest.json.
 # No live computation at request time (see docs/process/autonomous-decisions.md D-010).
 app.include_router(golden_fixtures.router, prefix="/api", tags=["golden-fixtures"])

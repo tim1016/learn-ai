@@ -22,6 +22,9 @@ from typing import Literal
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# The registry key and ``{broker}`` path segment for this vendor.
+BROKER_ID = "alpaca"
+
 # Base URL per mode. Derived, never independently configurable (spec §7).
 _BASE_URL_BY_MODE: dict[str, str] = {
     "paper": "https://paper-api.alpaca.markets",

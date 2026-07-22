@@ -1209,6 +1209,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Account */
+        get: operations["get_account_api_brokers__broker__account_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/chart/allowed-timeframes": {
         parameters: {
             query?: never;
@@ -8023,6 +8040,42 @@ export interface components {
             probability: number;
             /** Threshold */
             threshold: number;
+        };
+        /**
+         * BrokerAccountSnapshot
+         * @description Account-level state for the account card (equity/cash/buying power).
+         */
+        BrokerAccountSnapshot: {
+            /** Account Blocked */
+            account_blocked: boolean;
+            /** Account Id */
+            account_id: string;
+            /** Account Status */
+            account_status: string;
+            /** Broker */
+            broker: string;
+            /** Buying Power */
+            buying_power: number;
+            /** Cash */
+            cash: number;
+            /** Created At Ms */
+            created_at_ms: number | null;
+            /** Currency */
+            currency: string;
+            /** Equity */
+            equity: number;
+            /** Long Market Value */
+            long_market_value: number;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Pattern Day Trader */
+            pattern_day_trader: boolean;
+            /** Portfolio Value */
+            portfolio_value: number;
+            /** Short Market Value */
+            short_market_value: number;
+            /** Trading Blocked */
+            trading_blocked: boolean;
         };
         /**
          * BrokerActivityHealth
@@ -24366,6 +24419,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": Record<string, never>;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_account_api_brokers__broker__account_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrokerAccountSnapshot"];
                 };
             };
             /** @description Validation Error */
