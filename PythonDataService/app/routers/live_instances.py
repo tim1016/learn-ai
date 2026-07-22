@@ -2208,7 +2208,8 @@ async def delete_instance(
 
     run_ids = [str(run["run_id"]) for run in runs]
     try:
-        record = soft_delete_and_retire_bot_runs(
+        record = await asyncio.to_thread(
+            soft_delete_and_retire_bot_runs,
             root.parent,
             sid,
             run_ids=run_ids,

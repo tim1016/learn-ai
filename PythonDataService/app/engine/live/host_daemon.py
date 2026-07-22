@@ -1666,41 +1666,41 @@ class RunnerProcessManager:
                             "message": "The host still manages this binding as an active process.",
                         },
                     )
-            try:
-                binding = index_account_instance_bindings(
-                    read_account_instance_registry(self.artifacts_root, account_id),
-                    account_id=account_id,
-                ).latest_by_instance.get(strategy_instance_id)
-            except (AccountArtifactError, OSError, ValueError) as exc:
-                raise HostRunnerError(
-                    status.HTTP_503_SERVICE_UNAVAILABLE,
-                    "could not read account instance registry for retirement",
-                ) from exc
-            if binding is None or binding.run_id != run_id:
-                raise HostRunnerError(
-                    status.HTTP_409_CONFLICT,
-                    {
-                        "reason_code": "STALE_BINDING_NOT_CURRENT",
-                        "message": "The requested binding is no longer the account registry's current row.",
-                    },
-                )
-            if binding.lifecycle_state == "RETIRED":
-                return binding
-            retired = binding.model_copy(
-                update={
-                    "lifecycle_state": "RETIRED",
-                    "recorded_at_ms": max(self._clock_ms(), binding.recorded_at_ms + 1),
-                    "source": "operator.stale_binding_retirement",
-                }
+        try:
+            binding = index_account_instance_bindings(
+                read_account_instance_registry(self.artifacts_root, account_id),
+                account_id=account_id,
+            ).latest_by_instance.get(strategy_instance_id)
+        except (AccountArtifactError, OSError, ValueError) as exc:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "could not read account instance registry for retirement",
+            ) from exc
+        if binding is None or binding.run_id != run_id:
+            raise HostRunnerError(
+                status.HTTP_409_CONFLICT,
+                {
+                    "reason_code": "STALE_BINDING_NOT_CURRENT",
+                    "message": "The requested binding is no longer the account registry's current row.",
+                },
             )
-            try:
-                write_account_instance_binding(self.artifacts_root, retired)
-            except (AccountArtifactError, OSError, ValueError) as exc:
-                raise HostRunnerError(
-                    status.HTTP_503_SERVICE_UNAVAILABLE,
-                    "could not write retired account instance binding",
-                ) from exc
-            return retired
+        if binding.lifecycle_state == "RETIRED":
+            return binding
+        retired = binding.model_copy(
+            update={
+                "lifecycle_state": "RETIRED",
+                "recorded_at_ms": max(self._clock_ms(), binding.recorded_at_ms + 1),
+                "source": "operator.stale_binding_retirement",
+            }
+        )
+        try:
+            write_account_instance_binding(self.artifacts_root, retired)
+        except (AccountArtifactError, OSError, ValueError) as exc:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "could not write retired account instance binding",
+            ) from exc
+        return retired
 
     @staticmethod
     def _verify_account_clerk_generation(

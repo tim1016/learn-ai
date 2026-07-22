@@ -660,12 +660,11 @@ async def test_operator_adjustment_endpoint_relays_only_from_the_host_artifacts_
     from app.engine.live import host_daemon
 
     manager, _ = daemon_context
-    ensured: list[str] = []
+    ensured: list[tuple[str, str | None]] = []
     client_roots: list[Path] = []
 
     def ensure(account_id: str, *, ibkr_host: str | None = None) -> None:
-        assert ibkr_host is None
-        ensured.append(account_id)
+        ensured.append((account_id, ibkr_host))
 
     class FakeClerkClient:
         def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
@@ -706,7 +705,7 @@ async def test_operator_adjustment_endpoint_relays_only_from_the_host_artifacts_
         )
 
     assert response.status_code == 200
-    assert ensured == ["DU123"]
+    assert ensured == [("DU123", "127.0.0.1")]
     assert client_roots == [manager.artifacts_root]
     assert response.json()["journal_seq"] == 2
 
@@ -743,6 +742,48 @@ def test_retire_stale_binding_appends_one_host_owned_retirement_row(
     rows = read_account_instance_registry(manager.artifacts_root, "DU123")
     assert len(rows) == 2
     assert rows[-1] == retired
+
+
+def test_retire_stale_binding_releases_managed_lock_before_registry_io(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live import account_registry
+
+    manager, _ = daemon_context
+    binding = AccountInstanceBinding(
+        account_id="DU123",
+        strategy_instance_id="stale-bot",
+        run_id="stale-run",
+        bot_order_namespace="learn-ai/stale-bot/v1",
+        lifecycle_state="DEPLOYED",
+        recorded_at_ms=100,
+        source="deploy.strategy",
+    )
+    write_account_instance_binding(manager.artifacts_root, binding)
+    managed_lock = threading.Lock()
+    monkeypatch.setattr(manager, "_managed_lock", managed_lock)
+    read_registry = account_registry.read_account_instance_registry
+    write_binding = account_registry.write_account_instance_binding
+
+    def assert_unlocked_read(artifacts_root: Path, account_id: str) -> list[AccountInstanceBinding]:
+        assert not managed_lock.locked()
+        return read_registry(artifacts_root, account_id)
+
+    def assert_unlocked_write(artifacts_root: Path, row: AccountInstanceBinding) -> Path:
+        assert not managed_lock.locked()
+        return write_binding(artifacts_root, row)
+
+    monkeypatch.setattr(account_registry, "read_account_instance_registry", assert_unlocked_read)
+    monkeypatch.setattr(account_registry, "write_account_instance_binding", assert_unlocked_write)
+
+    retired = manager.retire_stale_account_binding(
+        account_id="DU123",
+        strategy_instance_id="stale-bot",
+        run_id="stale-run",
+    )
+
+    assert retired.lifecycle_state == "RETIRED"
 
 
 def test_instances_prunes_exited_records_by_ttl_and_count(tmp_path: Path) -> None:

@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -4045,6 +4046,17 @@ async def test_delete_instance_soft_deletes_bot_from_catalog_list_and_status(
     )
     _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1}, process={"state": "idle"})
     monkeypatch.setattr(live_instances, "_now_ms", lambda: 100)
+    worker_calls: list[Callable[..., object]] = []
+
+    async def run_in_worker(
+        function: Callable[..., object],
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        worker_calls.append(function)
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(live_instances.asyncio, "to_thread", run_in_worker)
     from app.services.surface_hub import SurfaceHubRegistry
 
     registry = SurfaceHubRegistry()
@@ -4064,6 +4076,7 @@ async def test_delete_instance_soft_deletes_bot_from_catalog_list_and_status(
         status_response = await client.get("/api/live-instances/delete-me/status")
 
     assert delete_response.status_code == 200
+    assert live_instances.soft_delete_and_retire_bot_runs in worker_calls
     delete_body = delete_response.json()
     assert delete_body["mode"] == "soft"
     assert delete_body["deleted_run_ids"] == ["run-delete"]

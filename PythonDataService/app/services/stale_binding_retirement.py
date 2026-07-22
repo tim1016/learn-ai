@@ -13,6 +13,7 @@ from app.engine.live.account_registry import (
     read_account_instance_registry,
 )
 from app.engine.live.daemon_transport import DaemonResult
+from app.engine.live.order_identity import order_ref_namespace_matches
 from app.schemas.account_reconciliation import (
     StaleBindingRetirementCandidate,
     StaleBindingRetirementReceipt,
@@ -68,7 +69,11 @@ class StaleBindingRetirementService:
                 continue
             try:
                 candidates.append(
-                    await self._prove_binding(binding=binding, fetch_run_process=fetch_run_process)
+                    await self._prove_binding(
+                        binding=binding,
+                        account_truth=account_truth,
+                        fetch_run_process=fetch_run_process,
+                    )
                 )
             except StaleBindingRetirementError:
                 continue
@@ -94,6 +99,7 @@ class StaleBindingRetirementService:
             strategy_instance_id=strategy_instance_id,
             run_id=run_id,
         )
+        self._validate_binding_open_orders(binding, account_truth)
         await self._verify_terminal_process(binding=binding, fetch_run_process=fetch_run_process)
         if binding.lifecycle_state == "RETIRED":
             if binding.source != _STALE_BINDING_RETIREMENT_SOURCE:
@@ -180,8 +186,10 @@ class StaleBindingRetirementService:
         self,
         *,
         binding: AccountInstanceBinding,
+        account_truth: AccountTruthResponse,
         fetch_run_process: RunProcessFetcher,
     ) -> StaleBindingRetirementCandidate:
+        self._validate_binding_open_orders(binding, account_truth)
         process = await self._verify_terminal_process(
             binding=binding,
             fetch_run_process=fetch_run_process,
@@ -243,8 +251,32 @@ class StaleBindingRetirementService:
                 "STALE_BINDING_BROKER_POSITION_UNPROVEN",
                 "Broker position evidence is missing or stale.",
             )
+        open_orders = next(
+            (source for source in account_truth.source_freshness if source.source == "open_orders"),
+            None,
+        )
+        if open_orders is None or open_orders.status != "fresh":
+            raise StaleBindingRetirementError(
+                "STALE_BINDING_BROKER_OPEN_ORDERS_UNPROVEN",
+                "Broker open-order evidence is missing or stale.",
+            )
         if any(position.quantity != 0 for position in account_truth.positions):
             raise StaleBindingRetirementError(
                 "STALE_BINDING_BROKER_NOT_FLAT",
                 "The broker account is not flat, so stale deployment bindings cannot be retired.",
+            )
+
+    @staticmethod
+    def _validate_binding_open_orders(
+        binding: AccountInstanceBinding,
+        account_truth: AccountTruthResponse,
+    ) -> None:
+        if any(
+            order.fact_kind == "open_order"
+            and order_ref_namespace_matches(order.order_ref, {binding.bot_order_namespace})
+            for order in account_truth.orders
+        ):
+            raise StaleBindingRetirementError(
+                "STALE_BINDING_BROKER_OPEN_ORDER_LIVE",
+                "A working broker order still belongs to the binding being retired.",
             )

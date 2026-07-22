@@ -15,6 +15,18 @@
       >
         <span class="p-button-label">Roll call</span>
       </button>
+      @if (readyRows().length > 0) {
+        <button
+          pButton
+          type="button"
+          icon="pi pi-play"
+          [loading]="isStartingReady()"
+          data-testid="select-ready-cohort"
+          (click)="requestCohortStart()"
+        >
+          <span class="p-button-label">Select ready cohort</span>
+        </button>
+      }
       <button
         pButton
         type="button"

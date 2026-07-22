@@ -508,19 +508,25 @@ describe('BotsPageComponent', () => {
     expect(navigate).not.toHaveBeenCalledWith(['/broker/bots', 'live-running-aapl']);
   });
 
-  it('routes new bot launches to Deploy & run instead of cohort selection', async () => {
+  it('keeps separate deploy and ready-cohort launch actions', async () => {
     const { fixture, router } = await setup();
     const navigate = vi.spyOn(router, 'navigate').mockResolvedValue(true);
     const root = fixture.nativeElement as HTMLElement;
 
     const deployButton = root.querySelector<HTMLButtonElement>('[data-testid="deploy-and-run-bot"]');
+    const cohortButton = root.querySelector<HTMLButtonElement>('[data-testid="select-ready-cohort"]');
     expect(deployButton?.textContent).toContain('Deploy & run bot');
-    expect(root.textContent).not.toContain('Select ready cohort');
+    expect(cohortButton?.textContent).toContain('Select ready cohort');
 
     deployButton?.click();
     await settle(fixture);
 
     expect(navigate).toHaveBeenCalledWith(['/broker/deploy']);
+
+    cohortButton?.click();
+    await settle(fixture);
+
+    expect(root.querySelector('[role="alertdialog"]')?.textContent).toContain('Authorize ready bots');
   });
 
   it('sends the displayed cohort once and renders server-derived outcomes', async () => {

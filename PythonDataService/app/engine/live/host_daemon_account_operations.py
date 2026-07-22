@@ -66,7 +66,11 @@ def install_account_operation_routes(
         operation: Callable[[AccountClerkRpcClient], Awaitable[_ClerkMutationResult]],
     ) -> _ClerkMutationResult:
         try:
-            await run_in_threadpool(process_manager._ensure_account_clerk, account_id)
+            await run_in_threadpool(
+                process_manager._ensure_account_clerk,
+                account_id,
+                ibkr_host="127.0.0.1",
+            )
             client = clerk_client_factory(
                 artifacts_root=process_manager.artifacts_root,
                 account_id=account_id,

@@ -346,6 +346,11 @@ async def stale_binding_retirement_candidates_endpoint(
         )
     except BrokerError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    except StaleBindingRetirementError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={"reason_code": exc.reason_code, "message": exc.detail},
+        ) from exc
     except AccountArtifactError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 

@@ -94,7 +94,7 @@ def test_daemon_down_is_blocking_fix_elsewhere() -> None:
     assert ids["daemon_down"].primary_move is not None
 
 
-def test_stale_daemon_code_blocks_deploy_and_run() -> None:
+def test_author_deploy_blockers_blocks_stale_daemon_code() -> None:
     blockers = author_deploy_blockers(_healthy().model_copy(update={"daemon_code_current": False}))
 
     blocker = next(blocker for blocker in blockers if blocker.condition.id == "daemon_code_stale")
@@ -222,7 +222,10 @@ async def test_instance_running_check_uses_single_instance_probe(
         lambda: SimpleNamespace(live_runner_daemon_url="http://daemon"),
     )
 
-    async def fake_fetch_instance_process(daemon_url: str, instance_id: str):
+    async def fake_fetch_instance_process(
+        daemon_url: str,
+        instance_id: str,
+    ) -> tuple[DaemonResult, dict[str, str]]:
         calls.append((daemon_url, instance_id))
         return DaemonResult.connected(), {"state": "running"}
 

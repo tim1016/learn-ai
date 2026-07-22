@@ -61,6 +61,7 @@ from app.services.account_reconciliation import AccountReconciliationService
 from app.services.cohort_batch_launch import CohortBatchLaunchService
 from app.services.cohort_evidence import CohortEvidenceSample, CohortMemberSample
 from app.services.legacy_stale_claim_retirement import LegacyStaleClaimRetirementService
+from app.services.stale_binding_retirement import StaleBindingRetirementError
 from app.utils.timestamps import now_ms_utc
 
 
@@ -307,6 +308,35 @@ async def test_legacy_stale_claim_route_refuses_live_process_with_specific_reaso
 
     assert response.status_code == 409
     assert response.json()["detail"]["reason_code"] == "LEGACY_CLAIM_RUN_PROCESS_LIVE"
+
+
+async def test_stale_binding_candidates_preserve_structured_retirement_reason_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.main import app
+
+    async def candidates(**_kwargs: object) -> list[object]:
+        raise StaleBindingRetirementError(
+            "STALE_BINDING_BROKER_NOT_FLAT",
+            "The broker account is not flat, so stale deployment bindings cannot be retired.",
+        )
+
+    app.dependency_overrides[account_reconciliation.require_connected_client] = lambda: object()
+    app.dependency_overrides[account_reconciliation.get_stale_binding_retirement_service] = lambda: SimpleNamespace(
+        candidates=candidates
+    )
+    monkeypatch.setattr(account_reconciliation, "refresh_account_truth_now", lambda *_args, **_kwargs: _async_truth())
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/accounts/DU1234567/stale-bindings/candidates")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "reason_code": "STALE_BINDING_BROKER_NOT_FLAT",
+        "message": "The broker account is not flat, so stale deployment bindings cannot be retired.",
+    }
 
 
 async def _async_truth():
