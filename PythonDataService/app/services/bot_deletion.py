@@ -36,7 +36,10 @@ from app.engine.live.bot_lifecycle_state import (
     BotLifecycleStateRepo,
     stable_bot_lifecycle_state_path,
 )
-from app.engine.live.identity import validate_strategy_instance_id
+from app.engine.live.identity import (
+    safe_strategy_instance_path_segment,
+    strategy_instance_artifact_dir,
+)
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
 
 BOT_DELETION_FILENAME = "bot_deletion.json"
@@ -103,13 +106,27 @@ class BotRetirementTransitionRecord(BaseModel):
 
 
 def stable_bot_deletion_path(artifacts_root: Path, strategy_instance_id: str) -> Path:
-    validate_strategy_instance_id(strategy_instance_id)
-    return artifacts_root / "live_state" / strategy_instance_id / BOT_DELETION_FILENAME
+    safe_strategy_instance_id = safe_strategy_instance_path_segment(strategy_instance_id)
+    return (
+        strategy_instance_artifact_dir(
+            artifacts_root,
+            "live_state",
+            safe_strategy_instance_id,
+        )
+        / BOT_DELETION_FILENAME
+    )
 
 
 def stable_bot_retirement_transition_path(artifacts_root: Path, strategy_instance_id: str) -> Path:
-    validate_strategy_instance_id(strategy_instance_id)
-    return artifacts_root / "live_state" / strategy_instance_id / BOT_RETIREMENT_TRANSITION_FILENAME
+    safe_strategy_instance_id = safe_strategy_instance_path_segment(strategy_instance_id)
+    return (
+        strategy_instance_artifact_dir(
+            artifacts_root,
+            "live_state",
+            safe_strategy_instance_id,
+        )
+        / BOT_RETIREMENT_TRANSITION_FILENAME
+    )
 
 
 def read_bot_deletion(artifacts_root: Path, strategy_instance_id: str) -> BotDeletionRecord | None:
@@ -214,7 +231,7 @@ def retire_bot_lifecycle_and_bindings_under_operation_fence(
     that check and the retirement commit must share one fence with Start.
     """
 
-    validate_strategy_instance_id(strategy_instance_id)
+    strategy_instance_id = safe_strategy_instance_path_segment(strategy_instance_id)
     path = stable_bot_retirement_transition_path(artifacts_root, strategy_instance_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     with _file_lock(path):
@@ -257,17 +274,18 @@ def recover_pending_bot_retirements(artifacts_root: Path) -> tuple[str, ...]:
     for entry in sorted(live_state_root.iterdir(), key=lambda path: path.name):
         if not entry.is_dir() or entry.is_symlink():
             continue
-        path = entry / BOT_RETIREMENT_TRANSITION_FILENAME
+        strategy_instance_id = safe_strategy_instance_path_segment(entry.name)
+        path = stable_bot_retirement_transition_path(artifacts_root, strategy_instance_id)
         if not path.exists():
             continue
-        with bot_lifecycle_operation_fence(artifacts_root, entry.name), _file_lock(path):
+        with bot_lifecycle_operation_fence(artifacts_root, strategy_instance_id), _file_lock(path):
             transition = _read_retirement_transition_locked(path)
             if transition is None or transition.state == "COMMITTED":
                 continue
-            if transition.strategy_instance_id != entry.name:
+            if transition.strategy_instance_id != strategy_instance_id:
                 raise OSError(
                     "retirement transition identity does not match its artifact directory: "
-                    f"{transition.strategy_instance_id!r} != {entry.name!r}"
+                    f"{transition.strategy_instance_id!r} != {strategy_instance_id!r}"
                 )
             _complete_retirement_transition_locked(artifacts_root, path, transition)
             recovered.append(transition.strategy_instance_id)

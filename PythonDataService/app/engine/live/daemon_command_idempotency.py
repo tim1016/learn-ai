@@ -124,7 +124,11 @@ class DaemonCommandIdempotencyRepo:
         if root_was_missing:
             fsync_parent_dir(self._root)
         try:
-            durable_append_log.create_exclusive_durable_file(path, record.model_dump_json())
+            durable_append_log.create_exclusive_durable_file(
+                path,
+                record.model_dump_json(),
+                trusted_root=self._root,
+            )
         except FileExistsError:
             return _PreparedCommand(record=self._read_existing(path), created=False)
         return _PreparedCommand(record=record, created=True)

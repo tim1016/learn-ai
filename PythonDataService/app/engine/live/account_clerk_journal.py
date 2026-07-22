@@ -17,7 +17,10 @@ from pydantic import ValidationError
 
 from app.broker.ibkr.models import IbkrOrderEvent
 from app.engine.live import durable_append_log
-from app.engine.live.account_artifacts import account_artifacts_root
+from app.engine.live.account_artifacts import (
+    account_artifact_file_path,
+    safe_account_artifact_id,
+)
 from app.engine.live.account_clerk_journal_models import (
     AccountClerkBrokerAckReceipt,
     AccountClerkBrokerEventReceipt,
@@ -68,7 +71,7 @@ class AccountClerkJournal:
         now_ms: Callable[[], int] = _now_ms,
     ) -> None:
         self._artifacts_root = artifacts_root
-        self._account_id = account_id
+        self._account_id = safe_account_artifact_id(account_id)
         self._now_ms = now_ms
         self._entries: list[AccountClerkJournalEntry] | None = None
         self._journal_identity: tuple[int, int, int, int] | None = None
@@ -666,11 +669,19 @@ class AccountClerkJournal:
 
 
 def account_clerk_inbox_path(artifacts_root: Path, account_id: str) -> Path:
-    return account_artifacts_root(artifacts_root, account_id) / ACCOUNT_CLERK_INBOX_FILENAME
+    return account_artifact_file_path(
+        artifacts_root,
+        safe_account_artifact_id(account_id),
+        ACCOUNT_CLERK_INBOX_FILENAME,
+    )
 
 
 def account_clerk_journal_path(artifacts_root: Path, account_id: str) -> Path:
-    return account_artifacts_root(artifacts_root, account_id) / ACCOUNT_CLERK_JOURNAL_FILENAME
+    return account_artifact_file_path(
+        artifacts_root,
+        safe_account_artifact_id(account_id),
+        ACCOUNT_CLERK_JOURNAL_FILENAME,
+    )
 
 
 def read_account_clerk_inbox(
@@ -788,8 +799,9 @@ def inspect_account_clerk_journal(
     never parses a partially appended JSONL row.
     """
 
-    inbox_path = account_clerk_inbox_path(artifacts_root, account_id)
-    journal_path = account_clerk_journal_path(artifacts_root, account_id)
+    safe_account_id = safe_account_artifact_id(account_id)
+    inbox_path = account_clerk_inbox_path(artifacts_root, safe_account_id)
+    journal_path = account_clerk_journal_path(artifacts_root, safe_account_id)
     if not journal_path.exists() and not inbox_path.exists():
         return []
     # The sibling lock already exists for an established journal; taking it
@@ -911,13 +923,21 @@ def _validate_inbox_replayable(
 
 
 def _append_jsonl(path: Path, entry: AccountClerkInboxEntry | AccountClerkJournalEntry) -> None:
-    durable_append_log.append_jsonl_record(path, entry.model_dump_json())
+    durable_append_log.append_jsonl_record(
+        path,
+        entry.model_dump_json(),
+        trusted_root=path.parent.parent,
+    )
 
 
 def _rewrite_jsonl(path: Path, entries: list[AccountClerkInboxEntry]) -> None:
     """Atomically compact acknowledged inbox rows after journal durability."""
 
-    durable_append_log.rewrite_jsonl_records(path, (entry.model_dump_json() for entry in entries))
+    durable_append_log.rewrite_jsonl_records(
+        path,
+        (entry.model_dump_json() for entry in entries),
+        trusted_root=path.parent.parent,
+    )
 
 
 def _journal_entry_for_intent(

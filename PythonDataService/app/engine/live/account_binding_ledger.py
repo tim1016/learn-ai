@@ -297,7 +297,11 @@ def _append_command_locked(
         proposal_seq=proposal_seq,
         **payload,
     )
-    durable_append_log.append_jsonl_record(path, command.model_dump_json())
+    durable_append_log.append_jsonl_record(
+        path,
+        command.model_dump_json(),
+        trusted_root=path.parent.parent,
+    )
     return command
 
 

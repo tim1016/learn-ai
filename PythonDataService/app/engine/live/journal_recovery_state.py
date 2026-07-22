@@ -9,7 +9,10 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from app.engine.live.account_artifacts import account_artifacts_root
+from app.engine.live.account_artifacts import (
+    account_artifact_file_path,
+    safe_account_artifact_id,
+)
 from app.engine.live.live_state_sidecar import _file_lock
 from app.schemas.journal_recovery import JournalRecoveryState
 
@@ -41,13 +44,21 @@ class JournalRecoveryFence:
 def journal_recovery_state_path(artifacts_root: Path, account_id: str) -> Path:
     """Return the account-scoped ceremony record without creating a directory."""
 
-    return account_artifacts_root(artifacts_root, account_id) / JOURNAL_RECOVERY_STATE_FILENAME
+    return account_artifact_file_path(
+        artifacts_root,
+        safe_account_artifact_id(account_id),
+        JOURNAL_RECOVERY_STATE_FILENAME,
+    )
 
 
 def journal_recovery_admission_path(artifacts_root: Path, account_id: str) -> Path:
     """Return the shared broker-write/recovery exclusion target for an account."""
 
-    return account_artifacts_root(artifacts_root, account_id) / JOURNAL_RECOVERY_ADMISSION_FILENAME
+    return account_artifact_file_path(
+        artifacts_root,
+        safe_account_artifact_id(account_id),
+        JOURNAL_RECOVERY_ADMISSION_FILENAME,
+    )
 
 
 @contextmanager

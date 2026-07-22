@@ -13,7 +13,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.engine.live.account_artifacts import account_artifacts_root
+from app.engine.live.account_artifacts import (
+    account_artifact_file_path,
+    account_artifacts_root,
+    safe_account_artifact_id,
+)
 from app.engine.live.account_identity import normalize_account_id
 from app.engine.live.live_state_sidecar import _file_lock
 from app.lean_sidecar.trading_calendar import session_state_at_ms
@@ -78,21 +82,29 @@ class AccountLiveSessionAssessment(BaseModel):
 def account_session_policy_path(artifacts_root: Path, account_id: str) -> Path:
     """Return the durable policy path for one canonical account."""
 
-    canonical_account_id = normalize_account_id(account_id)
-    return account_artifacts_root(artifacts_root, canonical_account_id) / ACCOUNT_SESSION_POLICY_FILENAME
+    canonical_account_id = safe_account_artifact_id(normalize_account_id(account_id))
+    return account_artifact_file_path(
+        artifacts_root,
+        canonical_account_id,
+        ACCOUNT_SESSION_POLICY_FILENAME,
+    )
 
 
 def account_live_feed_evidence_path(artifacts_root: Path, account_id: str) -> Path:
     """Return the durable live-feed evidence path for one canonical account."""
 
-    canonical_account_id = normalize_account_id(account_id)
-    return account_artifacts_root(artifacts_root, canonical_account_id) / ACCOUNT_LIVE_FEED_EVIDENCE_FILENAME
+    canonical_account_id = safe_account_artifact_id(normalize_account_id(account_id))
+    return account_artifact_file_path(
+        artifacts_root,
+        canonical_account_id,
+        ACCOUNT_LIVE_FEED_EVIDENCE_FILENAME,
+    )
 
 
 def read_account_session_policy(artifacts_root: Path, account_id: str) -> AccountSessionPolicy:
     """Read policy without making a missing file look like an unsafe override."""
 
-    canonical_account_id = normalize_account_id(account_id)
+    canonical_account_id = safe_account_artifact_id(normalize_account_id(account_id))
     policy = read_pydantic_artifact(
         account_session_policy_path(artifacts_root, canonical_account_id),
         AccountSessionPolicy,
@@ -113,7 +125,7 @@ def write_account_session_policy(
 ) -> AccountSessionPolicy:
     """Persist the explicit account-level outside-session override."""
 
-    canonical_account_id = normalize_account_id(account_id)
+    canonical_account_id = safe_account_artifact_id(normalize_account_id(account_id))
     policy = AccountSessionPolicy(
         account_id=canonical_account_id,
         allow_outside_live_session=allow_outside_live_session,
@@ -137,9 +149,12 @@ def write_account_live_feed_evidence(
     by a replacement write.
     """
 
-    canonical_account_id = normalize_account_id(account_id)
+    canonical_account_id = safe_account_artifact_id(normalize_account_id(account_id))
     path = account_live_feed_evidence_path(artifacts_root, canonical_account_id)
-    with _file_lock(path, trusted_root=account_artifacts_root(artifacts_root, canonical_account_id)):
+    with _file_lock(
+        path,
+        trusted_root=account_artifacts_root(artifacts_root, canonical_account_id),
+    ):
         current = read_account_live_feed_evidence(artifacts_root, canonical_account_id)
         evidence = AccountLiveFeedEvidence(
             account_id=canonical_account_id,

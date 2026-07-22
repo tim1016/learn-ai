@@ -241,10 +241,10 @@ def test_interrupted_receipt_is_reconciled_from_the_atomic_state_witness(
     evaluator = BotLifecycleEvaluator(tmp_path, _SID)
     append = evaluator_module.append_jsonl_record
 
-    def fail_only_commit(path: Path, row: str) -> None:
+    def fail_only_commit(path: Path, row: str, *, trusted_root: Path) -> None:
         if '"status":"COMMITTED"' in row:
             raise OSError("injected append failure after state write")
-        append(path, row)
+        append(path, row, trusted_root=trusted_root)
 
     monkeypatch.setattr(evaluator_module, "append_jsonl_record", fail_only_commit)
     with pytest.raises(OSError, match="injected append failure"):
@@ -278,10 +278,10 @@ def test_interrupted_control_receipt_is_reconciled_from_the_desired_state_witnes
     evaluator = BotLifecycleEvaluator(tmp_path, _SID)
     append = evaluator_module.append_jsonl_record
 
-    def fail_only_commit(path: Path, row: str) -> None:
+    def fail_only_commit(path: Path, row: str, *, trusted_root: Path) -> None:
         if '"status":"COMMITTED"' in row:
             raise OSError("injected control commit failure")
-        append(path, row)
+        append(path, row, trusted_root=trusted_root)
 
     monkeypatch.setattr(evaluator_module, "append_jsonl_record", fail_only_commit)
     with pytest.raises(OSError, match="injected control commit failure"):
@@ -381,10 +381,10 @@ def test_idempotent_retire_repairs_its_interrupted_receipt_before_returning(tmp_
     evaluator = BotLifecycleEvaluator(tmp_path, _SID)
     append = evaluator_module.append_jsonl_record
 
-    def fail_only_commit(path: Path, row: str) -> None:
+    def fail_only_commit(path: Path, row: str, *, trusted_root: Path) -> None:
         if '"status":"COMMITTED"' in row:
             raise OSError("injected retirement commit failure")
-        append(path, row)
+        append(path, row, trusted_root=trusted_root)
 
     monkeypatch.setattr(evaluator_module, "append_jsonl_record", fail_only_commit)
     with pytest.raises(OSError, match="injected retirement commit failure"):
@@ -404,7 +404,7 @@ def test_corrupt_duplicate_receipt_completion_fails_closed(tmp_path: Path) -> No
     evaluator.set_roster(False, now_ms=10, updated_by="operator")
     path = stable_bot_lifecycle_disposition_log_path(tmp_path, _SID)
     completion = path.read_text().splitlines()[1]
-    append_jsonl_record(path, completion)
+    append_jsonl_record(path, completion, trusted_root=tmp_path / "live_state")
 
     with pytest.raises(LifecycleDispositionCorruptError, match="completion"):
         evaluator.set_desired_state(DesiredState.PAUSED, now_ms=20, updated_by="operator")
@@ -422,8 +422,8 @@ def test_corrupt_second_prepare_before_completion_fails_closed(tmp_path: Path) -
         updated_by="operator",
     )
     second = first.model_copy(update={"sequence": 2, "receipt_id": f"{_SID}:2"})
-    append_jsonl_record(path, first.model_dump_json())
-    append_jsonl_record(path, second.model_dump_json())
+    append_jsonl_record(path, first.model_dump_json(), trusted_root=tmp_path / "live_state")
+    append_jsonl_record(path, second.model_dump_json(), trusted_root=tmp_path / "live_state")
 
     with pytest.raises(LifecycleDispositionCorruptError, match="prepare arrived before"):
         BotLifecycleEvaluator(tmp_path, _SID).set_roster(False, now_ms=20, updated_by="operator")

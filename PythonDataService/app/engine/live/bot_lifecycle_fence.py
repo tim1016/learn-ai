@@ -6,7 +6,10 @@ import contextlib
 from collections.abc import Iterable
 from pathlib import Path
 
-from app.engine.live.identity import validate_strategy_instance_id
+from app.engine.live.identity import (
+    safe_strategy_instance_path_segment,
+    strategy_instance_artifact_dir,
+)
 from app.engine.live.live_state_sidecar import _file_lock
 
 BOT_LIFECYCLE_OPERATION_FENCE_FILENAME = "lifecycle_operation_fence"
@@ -18,8 +21,15 @@ def stable_bot_lifecycle_operation_fence_path(
 ) -> Path:
     """Return the durable cross-writer fence for one bot identity."""
 
-    validate_strategy_instance_id(strategy_instance_id)
-    return artifacts_root / "live_state" / strategy_instance_id / BOT_LIFECYCLE_OPERATION_FENCE_FILENAME
+    safe_strategy_instance_id = safe_strategy_instance_path_segment(strategy_instance_id)
+    return (
+        strategy_instance_artifact_dir(
+            artifacts_root,
+            "live_state",
+            safe_strategy_instance_id,
+        )
+        / BOT_LIFECYCLE_OPERATION_FENCE_FILENAME
+    )
 
 
 @contextlib.contextmanager

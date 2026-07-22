@@ -31,7 +31,10 @@ from app.engine.live.desired_state import (
     stable_desired_state_path,
 )
 from app.engine.live.durable_append_log import append_jsonl_record
-from app.engine.live.identity import strategy_instance_artifact_dir, validate_strategy_instance_id
+from app.engine.live.identity import (
+    safe_strategy_instance_path_segment,
+    strategy_instance_artifact_dir,
+)
 from app.engine.live.live_state_sidecar import _file_lock
 
 
@@ -110,9 +113,10 @@ def stable_bot_lifecycle_disposition_log_path(
     artifacts_root: Path,
     strategy_instance_id: str,
 ) -> Path:
+    safe_strategy_instance_id = safe_strategy_instance_path_segment(strategy_instance_id)
     return (
         strategy_instance_artifact_dir(
-            artifacts_root, "live_state", strategy_instance_id
+            artifacts_root, "live_state", safe_strategy_instance_id
         )
         / "lifecycle_dispositions.jsonl"
     )
@@ -122,9 +126,8 @@ class BotLifecycleEvaluator:
     """Serialize and durably explain every duty/control-plane transition."""
 
     def __init__(self, artifacts_root: Path, strategy_instance_id: str) -> None:
-        validate_strategy_instance_id(strategy_instance_id)
         self._artifacts_root = artifacts_root
-        self._strategy_instance_id = strategy_instance_id
+        self._strategy_instance_id = safe_strategy_instance_path_segment(strategy_instance_id)
         self._state_repo = BotLifecycleStateRepo(
             stable_bot_lifecycle_state_path(artifacts_root, strategy_instance_id)
         )
@@ -668,7 +671,11 @@ class BotLifecycleEvaluator:
             reason=reason,
             admission=admission,
         )
-        append_jsonl_record(self._receipt_path, pending.model_dump_json())
+        append_jsonl_record(
+            self._receipt_path,
+            pending.model_dump_json(),
+            trusted_root=self._artifacts_root / "live_state",
+        )
         return pending
 
     def _append_terminal_locked(
@@ -696,7 +703,11 @@ class BotLifecycleEvaluator:
                 "failure": failure,
             }
         )
-        append_jsonl_record(self._receipt_path, receipt.model_dump_json())
+        append_jsonl_record(
+            self._receipt_path,
+            receipt.model_dump_json(),
+            trusted_root=self._artifacts_root / "live_state",
+        )
         return receipt
 
     def _recover_pending_receipts_locked(self) -> None:

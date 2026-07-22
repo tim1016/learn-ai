@@ -80,7 +80,9 @@ class AccountClerkLeaseUnavailableError(RuntimeError):
         self.reason = reason
 
 
-def _safe_account_path_segment(account_id: str) -> str:
+def safe_account_artifact_id(account_id: str) -> str:
+    """Return an account id that is safe to use as one artifact path segment."""
+
     if account_id != account_id.strip():
         raise AccountArtifactError(f"invalid account_id: {account_id!r}")
     match = _ACCOUNT_ID_RE.fullmatch(account_id)
@@ -91,6 +93,11 @@ def _safe_account_path_segment(account_id: str) -> str:
     if safe_account_id != matched_account_id:
         raise AccountArtifactError(f"invalid account_id: {account_id!r}")
     return safe_account_id
+
+
+# Private compatibility alias for the older binding-ledger import. New callers
+# should use the public name so the path-boundary contract is explicit.
+_safe_account_path_segment = safe_account_artifact_id
 
 
 class AccountEventRecord(BaseModel):
@@ -265,6 +272,22 @@ def account_artifacts_root(artifacts_root: Path, account_id: str) -> Path:
     if not str(resolved).startswith(str(resolved_root) + os.sep):
         raise AccountArtifactError(f"path traversal detected for account_id: {account_id!r}")
     return Path(resolved)
+
+
+def account_artifact_file_path(
+    artifacts_root: Path,
+    account_id: str,
+    filename: str,
+) -> Path:
+    """Return a static artifact filename confined below one account root.
+
+    This is the public filesystem boundary for account-scoped artifacts. The
+    account id is regex-captured in :func:`account_artifacts_root`; the static
+    filename and resolved prefix check also reject a leaf symlink that escapes
+    the account directory.
+    """
+
+    return _account_artifact_file_path(artifacts_root, account_id, filename)
 
 
 def list_account_artifact_ids(artifacts_root: Path) -> tuple[str, ...]:
