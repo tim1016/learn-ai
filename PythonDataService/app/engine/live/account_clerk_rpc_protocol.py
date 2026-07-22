@@ -19,21 +19,33 @@ ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S: Final = 120.0
 
 AccountClerkRpcOperation = Literal[
     "submit",
-    "register_emergency_flatten",
+    "authorize_emergency_flatten",
+    "emergency_flatten_account",
+    "prepare_emergency_flatten",
+    "mark_emergency_bots_paused",
+    "mark_emergency_requires_reconciliation",
     "cancel_namespace",
     "recovery_flatten",
     "recovery_flatten_batch",
     "operator_adjustment",
+    "record_binding_decision",
+    "fold_binding_retirements",
     "drain_events",
 ]
 WRITE_OPERATIONS = frozenset(
     {
         "submit",
-        "register_emergency_flatten",
+        "authorize_emergency_flatten",
+        "emergency_flatten_account",
+        "prepare_emergency_flatten",
+        "mark_emergency_bots_paused",
+        "mark_emergency_requires_reconciliation",
         "cancel_namespace",
         "recovery_flatten",
         "recovery_flatten_batch",
         "operator_adjustment",
+        "record_binding_decision",
+        "fold_binding_retirements",
     }
 )
 AccountClerkRpcServerErrorCode = Literal[
@@ -214,11 +226,17 @@ def request_operation(request: Mapping[str, object]) -> AccountClerkRpcOperation
     operation = request.get("operation")
     if operation not in (
         "submit",
-        "register_emergency_flatten",
+        "authorize_emergency_flatten",
+        "emergency_flatten_account",
+        "prepare_emergency_flatten",
+        "mark_emergency_bots_paused",
+        "mark_emergency_requires_reconciliation",
         "cancel_namespace",
         "recovery_flatten",
         "recovery_flatten_batch",
         "operator_adjustment",
+        "record_binding_decision",
+        "fold_binding_retirements",
         "drain_events",
     ):
         raise _AccountClerkRpcRequestRejected("UNKNOWN_OPERATION")
@@ -228,7 +246,7 @@ def request_operation(request: Mapping[str, object]) -> AccountClerkRpcOperation
 def request_timeout_s(operation: AccountClerkRpcOperation) -> float:
     return (
         ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S
-        if operation in ("recovery_flatten", "recovery_flatten_batch")
+        if operation in ("authorize_emergency_flatten", "emergency_flatten_account", "prepare_emergency_flatten", "mark_emergency_bots_paused", "mark_emergency_requires_reconciliation", "recovery_flatten", "recovery_flatten_batch")
         else ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S
     )
 

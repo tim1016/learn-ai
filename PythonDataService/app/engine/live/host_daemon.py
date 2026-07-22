@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import hmac
 import ipaddress
 import json
@@ -25,17 +26,23 @@ import subprocess
 import sys
 import threading
 import time
-import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from subprocess import Popen as _RealPopen
-from typing import TextIO
+from typing import TextIO, TypeVar
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
+from app.engine.live.account_clerk_rpc import (
+    AccountClerkHostRpcClient,
+    AccountClerkRpcClient,
+    AccountClerkRpcError,
+    AccountClerkRpcRejectedError,
+)
 from app.engine.live.account_clerk_supervisor import (
     AccountClerkProcessEvidence,
     AccountClerkSupervisor,
@@ -48,7 +55,18 @@ from app.engine.live.account_clerk_supervisor import (
     inspect_account_clerk_process as _inspect_account_clerk_process,
 )
 from app.engine.live.broker_socket_probe import BrokerSocketProbeError, LsofSocketEnumerator
-from app.engine.live.daemon_auth import TOKEN_HEADER, ensure_daemon_token, token_file_path
+from app.engine.live.daemon_auth import (
+    CLERK_HOST_BINDING_CAPABILITY_ENV,
+    TOKEN_HEADER,
+    ensure_clerk_host_binding_capability,
+    ensure_daemon_token,
+    token_file_path,
+)
+from app.engine.live.daemon_command_idempotency import (
+    DaemonCommandIdempotencyService,
+    DaemonCommandOutcome,
+    validate_idempotency_key,
+)
 from app.engine.live.deploy import (
     ActionPlanReadinessError,
     DeployIOError,
@@ -84,14 +102,18 @@ from app.engine.live.host_runner_policy import (
     load_policy_env_file,
     validate_ibkr_host_allowed,
 )
+from app.engine.live.lifecycle_exit_finalizer import (
+    record_failed_launch_outcome,
+    record_terminal_lifecycle_outcome,
+)
 from app.engine.live.run_ledger import LiveRunStartDefaults
 from app.engine.strategy.spec.schema import load_spec_from_path
 from app.schemas.broker_session import GatewaySocketsSnapshot
 from app.schemas.live_runs import (
     AccountClerkHealth,
+    AccountEmergencyFlattenDispatchRequest,
     AccountEmergencyFlattenResponse,
     AuditCopySizingLookup,
-    EmergencyFlattenRequest,
     HostRunnerActionResponse,
     HostRunnerClerkEnsureRequest,
     HostRunnerDeployRequest,
@@ -244,6 +266,7 @@ def _exit_reason_from_code(returncode: int | None) -> str:
 
 
 HostRunnerErrorDetail = str | dict[str, object]
+_CommandResponse = TypeVar("_CommandResponse", bound=BaseModel)
 
 
 class HostRunnerError(RuntimeError):
@@ -255,6 +278,44 @@ class HostRunnerError(RuntimeError):
         )
         self.status_code = status_code
         self.detail = detail
+
+
+def _manager_command_outcome(
+    action: Callable[[], HostRunnerActionResponse | AccountEmergencyFlattenResponse],
+) -> DaemonCommandOutcome:
+    """Adapt a manager command into a persistable daemon-boundary outcome."""
+
+    try:
+        response = action()
+    except HostRunnerError as exc:
+        return DaemonCommandOutcome(
+            status_code=exc.status_code,
+            body={"detail": exc.detail},
+            replayed=False,
+        )
+    return DaemonCommandOutcome(
+        status_code=status.HTTP_200_OK,
+        body=response.model_dump(mode="json"),
+        replayed=False,
+    )
+
+
+def _command_outcome_body(outcome: DaemonCommandOutcome) -> dict[str, object]:
+    """Return an outcome body or re-raise its durable HTTP failure."""
+
+    if outcome.status_code >= status.HTTP_400_BAD_REQUEST:
+        detail = outcome.body.get("detail", outcome.body)
+        raise HTTPException(outcome.status_code, detail=detail)
+    return outcome.body
+
+
+def _daemon_idempotency_key(raw: str | None) -> str:
+    """Translate the required opaque command key into a normal daemon 400."""
+
+    try:
+        return validate_idempotency_key(raw)
+    except ValueError as exc:
+        raise HostRunnerError(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
 
 @dataclass
@@ -273,6 +334,7 @@ class ManagedProcess:
     stopping: bool = False
     ended_at_ms: int | None = None
     registry_retired_at_ms: int | None = None
+    lifecycle_outcome_recorded_at_ms: int | None = None
     launch_failure_recorded_at_ms: int | None = None
 
 
@@ -317,6 +379,24 @@ class RunnerProcessManager:
         # ``artifacts_root`` is ``<live_runs_root>/..`` per the daemon's
         # existing convention (token + cache live alongside live_runs).
         self.artifacts_root: Path = self.live_runs_root.parent
+        # This is distinct from the data-plane HTTP token. It persists solely
+        # to preserve control of a healthy Clerk that survives daemon restart,
+        # and is inherited only by Clerk/emergency subprocesses.
+        self._clerk_host_binding_capability = ensure_clerk_host_binding_capability(
+            self.artifacts_root
+        )
+        # A retirement prepares a durable fail-closed fence before touching
+        # multiple account registries. Complete any interrupted transaction on
+        # daemon boot so an AFK recovery cannot strand a bot between registry
+        # and lifecycle state. A failed replay remains PENDING and therefore
+        # continues to reject starts and Clerk intake for that identity.
+        from app.services.bot_deletion import BotDeletionCorruptError, recover_pending_bot_retirements
+
+        try:
+            self._recovered_bot_retirements = recover_pending_bot_retirements(self.artifacts_root)
+        except (BotDeletionCorruptError, OSError):
+            self._recovered_bot_retirements = ()
+            logger.exception("failed to recover pending bot retirement transitions")
         # PRD #619-B — periodic lease writer + the orphan-candidates list
         # the data plane reads via /health. Both are populated during the
         # FastAPI lifespan (``create_app``); ``None`` here until startup
@@ -366,6 +446,7 @@ class RunnerProcessManager:
             creation_flags=_creation_flags,
             terminate_wait_seconds=lambda: _ACCOUNT_CLERK_TERMINATE_WAIT_SECONDS,
             kill_wait_seconds=lambda: _ACCOUNT_CLERK_KILL_WAIT_SECONDS,
+            host_binding_capability=self._clerk_host_binding_capability,
         )
         # The git SHA of the code THIS process is running, captured ONCE at
         # launch. The daemon does not reload on `git pull`, so the running code
@@ -375,12 +456,12 @@ class RunnerProcessManager:
         # report the on-disk HEAD (which moves on pull), masking stale code —
         # the bug this fixes.
         self._launch_git_sha = self._compute_git_sha()
-        # Serialize emergency-flatten per account: each runs the CLI, which
-        # fetches positions then submits liquidating market orders, so two
-        # concurrent runs for one account (retry / double-click / second tab)
-        # could both act on the same pre-fill snapshot and double-liquidate.
+        # Serialize the host-side pause/envelope per account. The Clerk owns
+        # broker writes, while this prevents two daemon requests from racing
+        # its one durable emergency operation identity.
         self._flatten_lock = threading.Lock()
         self._flatten_in_flight: set[str] = set()
+        self._account_starts_in_flight: dict[str, int] = {}
 
     @property
     def _clerks(self) -> dict[str, ManagedClerk]:
@@ -517,8 +598,10 @@ class RunnerProcessManager:
         """All managed instances with their live binding (registry authority)."""
         out: list[HostRunnerInstance] = []
         with self._managed_lock:
-            for managed in self._managed.values():
-                self._refresh(managed)
+            to_refresh = tuple(self._managed.values())
+        for managed in to_refresh:
+            self._refresh(managed)
+        with self._managed_lock:
             self._prune_exited_records_locked()
             exited_record_count = 0
             for managed in self._managed.values():
@@ -558,22 +641,30 @@ class RunnerProcessManager:
     def reap_exited_processes(self) -> None:
         """Settle every exited child independently of status read traffic."""
         with self._managed_lock:
-            for managed in self._managed.values():
-                self._refresh(managed)
+            to_refresh = tuple(self._managed.values())
+        for managed in to_refresh:
+            self._refresh(managed)
+        with self._managed_lock:
             self._prune_exited_records_locked()
         self._supervise_account_clerks()
+        self.reconcile_pending_account_binding_retirements()
 
     def instance_status(self, strategy_instance_id: str) -> HostRunnerProcessStatus:
-        """Live process status for one strategy instance (idle if untracked)."""
+        """Return a pure process observation for one strategy instance.
+
+        This endpoint is also used by retirement while it holds the durable
+        per-bot fence. It must never trigger lifecycle reaping, otherwise the
+        daemon would wait for that fence while the router waits for this read.
+        Background reaping owns terminal persistence.
+        """
         with self._managed_lock:
             managed = self._managed.get(strategy_instance_id)
-            if managed is None:
-                return HostRunnerProcessStatus(
-                    state=HostRunnerProcessState.idle,
-                    message=f"No managed process for strategy_instance_id {strategy_instance_id!r}.",
-                )
-            self._refresh(managed)
-            return self._status_of(managed)
+        if managed is None:
+            return HostRunnerProcessStatus(
+                state=HostRunnerProcessState.idle,
+                message=f"No managed process for strategy_instance_id {strategy_instance_id!r}.",
+            )
+        return self._status_of(managed)
 
     def process_status(self, run_id: str | None = None) -> HostRunnerProcessStatus:
         """Return a run's subprocess state (back-compat, run-addressed).
@@ -583,24 +674,24 @@ class RunnerProcessManager:
         tracks it, else idle — so selected-run controls don't inherit another
         run's status.
         """
-        with self._managed_lock:
-            if run_id is None:
-                process_status = self._first_process_status()
-            else:
-                managed = self._by_run_id(run_id)
-                process_status = (
-                    self._persisted_terminal_process_status(run_id)
-                    or HostRunnerProcessStatus(
-                        state=HostRunnerProcessState.idle,
-                        message=f"No host runner process for {run_id}.",
-                    )
-                    if managed is None
-                    else self._status_of(managed)
+        if run_id is None:
+            process_status = self._first_process_status()
+        else:
+            managed = self._by_run_id(run_id)
+            process_status = (
+                self._persisted_terminal_process_status(run_id)
+                or HostRunnerProcessStatus(
+                    state=HostRunnerProcessState.idle,
+                    message=f"No host runner process for {run_id}.",
                 )
+                if managed is None
+                else self._status_of(managed)
+            )
         # The compatibility status endpoint historically performed the idle
         # Clerk reap after observing a bot exit.  Keep that behavior, but do
         # the bounded process work after releasing the registry lock.
         self._supervise_account_clerks()
+        self.reconcile_pending_account_binding_retirements()
         return process_status
 
     def _persisted_terminal_process_status(self, run_id: str) -> HostRunnerProcessStatus | None:
@@ -682,8 +773,10 @@ class RunnerProcessManager:
 
     def _first_process_status(self) -> HostRunnerProcessStatus:
         with self._managed_lock:
-            for managed in self._managed.values():
-                self._refresh(managed)
+            to_refresh = tuple(self._managed.values())
+        for managed in to_refresh:
+            self._refresh(managed)
+        with self._managed_lock:
             for managed in self._managed.values():
                 if managed.process.poll() is None:
                     return self._status_of(managed)
@@ -693,27 +786,87 @@ class RunnerProcessManager:
         with self._managed_lock:
             for managed in self._managed.values():
                 if managed.run_id == run_id:
-                    self._refresh(managed)
-                    return managed
-            return None
+                    break
+            else:
+                return None
+        self._refresh(managed)
+        return managed
 
-    def _instance_start_lock(self, key: str):
-        """VCR-P3-P / Phase 6D — return the RLock for ``key``, creating one
-        lazily under a table-level guard so two concurrent first-time starts
-        for the same instance share the same lock."""
+    @contextlib.contextmanager
+    def _bot_lifecycle_operation_fence(self, strategy_instance_id: str | None):
+        """Use the durable cross-writer fence when this is a valid bot ID."""
+
+        if not strategy_instance_id:
+            yield
+            return
+        from app.engine.live.identity import validate_strategy_instance_id
+        from app.services.bot_deletion import bot_lifecycle_operation_fence
+
+        try:
+            validate_strategy_instance_id(strategy_instance_id)
+        except ValueError:
+            # Keep legacy/invalid-id errors at the existing admission
+            # boundary; an unsafe value must never become a lock path.
+            yield
+            return
+        with bot_lifecycle_operation_fence(self.artifacts_root, strategy_instance_id):
+            yield
+
+    def _instance_start_lock(self, key: str) -> threading.RLock:
+        """Return the stable in-memory lock for one bot identity."""
+
         with self._start_lock_table_lock:
             lock = self._start_lock_per_instance.get(key)
             if lock is None:
-                import threading as _threading
-
-                lock = _threading.RLock()
+                lock = threading.RLock()
                 self._start_lock_per_instance[key] = lock
             return lock
+
+    @contextlib.contextmanager
+    def _instance_start_operation_fence(self, key: str, strategy_instance_id: str | None):
+        """Fence Start through admission, registry activation, and spawn.
+
+        The in-memory lock prevents duplicate starts in this daemon. The
+        durable fence adds the retirement and Clerk writers in other processes
+        to the same critical section.
+        """
+        lock = self._instance_start_lock(key)
+        with lock, self._bot_lifecycle_operation_fence(strategy_instance_id):
+            yield
 
     def _account_clerk_lock(self, account_id: str):
         """Return the supervisor-owned lifecycle lock for one Clerk account."""
 
         return self._clerk_supervisor.account_lock(account_id)
+
+    @contextlib.contextmanager
+    def _account_start_admission_fence(self, account_id: str | None):
+        """Serialize account admission with the complete emergency envelope."""
+
+        if account_id is None:
+            yield
+            return
+        with self._flatten_lock:
+            if account_id in self._flatten_in_flight:
+                raise HostRunnerError(
+                    status.HTTP_409_CONFLICT,
+                    {
+                        "reason_code": "CLERK_EMERGENCY_ADMISSION_CLOSED",
+                        "account_id": account_id,
+                    },
+                )
+            self._account_starts_in_flight[account_id] = (
+                self._account_starts_in_flight.get(account_id, 0) + 1
+            )
+        try:
+            yield
+        finally:
+            with self._flatten_lock:
+                remaining_starts = self._account_starts_in_flight[account_id] - 1
+                if remaining_starts:
+                    self._account_starts_in_flight[account_id] = remaining_starts
+                else:
+                    del self._account_starts_in_flight[account_id]
 
     def start(self, run_id: str, request: HostRunnerStartRequest) -> HostRunnerActionResponse:
         """Start ``app.engine.live.run start`` for an existing run directory.
@@ -735,8 +888,9 @@ class RunnerProcessManager:
             raise HostRunnerError(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
         sid = self._resolve_strategy_instance_id(run_dir)
         key = sid or run_id
+        account_id = self.command_account_id(run_id)
 
-        with self._instance_start_lock(key):
+        with self._account_start_admission_fence(account_id), self._instance_start_operation_fence(key, sid):
             clerk_client_ids = self._clerk_supervisor.in_use_client_ids()
             # Reserve the bot's client ID under the registry lock, then release
             # it before any filesystem/broker readiness work.  The reservation
@@ -744,7 +898,7 @@ class RunnerProcessManager:
             with self._managed_lock:
                 existing = self._managed.get(key)
                 if existing is not None:
-                    self._refresh(existing)
+                    self._refresh(existing, operation_fence_held=True)
                     if existing.process.poll() is None:
                         raise HostRunnerError(
                             status.HTTP_409_CONFLICT,
@@ -752,23 +906,37 @@ class RunnerProcessManager:
                             "Stop it before starting another run for this instance.",
                         )
 
-                self._enforce_desired_state_allows_start(sid)
-                self._enforce_crash_retired_recovery(run_dir)
-                command = self._build_start_command(
-                    run_dir,
-                    request,
-                    self._sibling_symbols(key),
-                    self._sibling_all_in_symbols(key),
-                )
-                ibkr_client_id = self._allocate_ibkr_client_id(
-                    exclude_key=key,
-                    clerk_client_ids=clerk_client_ids,
-                )
-                self._reserved_ibkr_client_ids.add(ibkr_client_id)
+            self._enforce_desired_state_allows_start(sid)
+            self._enforce_lifecycle_allows_start(sid)
+            if sid:
+                from app.services.bot_deletion import BotDeletionCorruptError, bot_retirement_is_pending
+
+                try:
+                    retirement_pending = bot_retirement_is_pending(self.artifacts_root, sid)
+                except BotDeletionCorruptError as exc:
+                    raise HostRunnerError(
+                        status.HTTP_409_CONFLICT,
+                        "bot retirement transition is unreadable; repair it before starting",
+                    ) from exc
+                if retirement_pending:
+                    raise HostRunnerError(
+                        status.HTTP_409_CONFLICT,
+                        "bot retirement transition is pending; wait for recovery before starting",
+                    )
+            self._enforce_crash_retired_recovery(run_dir)
+            command = self._build_start_command(
+                run_dir,
+                request,
+                self._sibling_symbols(key),
+                self._sibling_all_in_symbols(key),
+            )
+            ibkr_client_id = self._allocate_ibkr_client_id(
+                exclude_key=key,
+                clerk_client_ids=clerk_client_ids,
+            )
 
             env = self._build_child_env(request, ibkr_client_id=ibkr_client_id)
             log_path = run_dir / "host_daemon.log"
-            account_id: str | None = None
             active_binding_written = False
             try:
                 log_handle = log_path.open("a", encoding="utf-8")
@@ -783,7 +951,7 @@ class RunnerProcessManager:
                     run_id=run_id,
                     lifecycle_state="ACTIVE",
                     source="host_daemon.start",
-                    cohort_id=request.cohort_id,
+                    ibkr_host=request.ibkr_host,
                 )
                 active_binding_written = True
                 if account_freeze is not None:
@@ -791,13 +959,6 @@ class RunnerProcessManager:
                         status.HTTP_409_CONFLICT,
                         f"Account is frozen by {account_freeze.source}: {account_freeze.reason}",
                     )
-                account_id, _ = self._account_registry_identity(run_dir)
-                if account_id is not None:
-                    # The initial lease is synchronously persisted by
-                    # ``_ensure_account_clerk`` before the bot is allowed to
-                    # reach any submit surface.  A bot must never race ahead
-                    # of the account authority it depends on.
-                    self._ensure_account_clerk(account_id, ibkr_host=request.ibkr_host)
                 process = subprocess.Popen(
                     command,
                     cwd=str(self.repo_root),
@@ -818,13 +979,23 @@ class RunnerProcessManager:
                             run_id=run_id,
                             lifecycle_state="RETIRED",
                             source="host_daemon.start_rejected_before_spawn",
-                            cohort_id=request.cohort_id,
                         )
                     except HostRunnerError:
                         logger.exception(
                             "Failed to retire account registry binding after rejected pre-spawn start",
                             extra={"run_id": run_id, "strategy_instance_id": key},
                         )
+                try:
+                    self._record_failed_launch_outcome(
+                        run_id=run_id,
+                        strategy_instance_id=sid,
+                        source="host_daemon.start_rejected_before_spawn",
+                    )
+                except (OSError, ValueError, RuntimeError):
+                    logger.exception(
+                        "Failed to record rejected launch lifecycle outcome",
+                        extra={"run_id": run_id, "strategy_instance_id": key},
+                    )
                 raise
             except OSError as exc:
                 log_handle.close()
@@ -849,6 +1020,17 @@ class RunnerProcessManager:
                 except HostRunnerError:
                     logger.exception(
                         "Failed to retire account registry binding after host runner spawn failure",
+                        extra={"run_id": run_id, "strategy_instance_id": key},
+                    )
+                try:
+                    self._record_failed_launch_outcome(
+                        run_id=run_id,
+                        strategy_instance_id=sid,
+                        source="host_daemon.start_failed",
+                    )
+                except (OSError, ValueError, RuntimeError):
+                    logger.exception(
+                        "Failed to record spawn-failure lifecycle outcome",
                         extra={"run_id": run_id, "strategy_instance_id": key},
                     )
                 raise HostRunnerError(
@@ -877,94 +1059,147 @@ class RunnerProcessManager:
             )
             return HostRunnerActionResponse(accepted=True, process=self.process_status(run_id))
 
-    def emergency_flatten(self, run_id: str, account: str) -> HostRunnerActionResponse:
-        """Account-wide emergency flatten via the existing one-shot CLI (§ 7.2 #6).
+    def emergency_flatten_account(
+        self,
+        account: str,
+        *,
+        operation_id: str,
+        authorization_id: str,
+    ) -> AccountEmergencyFlattenResponse:
+        """Flatten an account through its sole held Clerk broker session."""
 
-        Independent of any live binding — after a halt/poison the binding is gone,
-        so the binding-gated console FLATTEN command is unavailable exactly when
-        an operator wants to flatten. This reuses ``app.engine.live.run
-        emergency-flatten`` (paper-guarded, ``--confirm`` + ``--account`` gated),
-        run synchronously so the CLI's exit code drives the HTTP response. It is
-        the blunt account-wide liquidate only; namespace-attributed
-        reconciliation stays fail-closed (we don't best-guess broker ownership).
-        """
-        run_dir = self._validate_run_dir(run_id)
-        self._execute_emergency_flatten(run_id=run_id, run_dir=run_dir, account=account)
-        return HostRunnerActionResponse(accepted=True, process=self.process_status(run_id))
-
-    def emergency_flatten_account(self, account: str) -> AccountEmergencyFlattenResponse:
-        """Mint an audit run and flatten a paper account without a surviving bot run."""
-
-        run_id = f"eflat-{uuid.uuid4().hex}"
-        run_dir = self.live_runs_root / run_id
-        run_dir.mkdir(parents=True, exist_ok=False)
-        self._execute_emergency_flatten(run_id=run_id, run_dir=run_dir, account=account)
+        receipt = self._run_clerk_emergency_flatten(
+            account=account,
+            operation_id=operation_id,
+            authorization_id=authorization_id,
+        )
         return AccountEmergencyFlattenResponse(
             accepted=True,
             account_id=account,
-            audit_run_id=run_id,
-            completed_at_ms=_now_ms(),
+            audit_run_id=receipt.operation_id,
+            completed_at_ms=receipt.observed_at_ms,
         )
 
-    def _execute_emergency_flatten(self, *, run_id: str, run_dir: Path, account: str) -> None:
-        """Run the canonical one-shot CLI under the per-account exclusion fence."""
+    def _run_clerk_emergency_flatten(
+        self,
+        *,
+        account: str,
+        operation_id: str,
+        authorization_id: str,
+    ):
+        """Close Clerk intake, pause bots, then let the same Clerk flatten."""
 
-        # Claim the account so a concurrent flatten for it is rejected rather than
-        # run against the same pre-fill position snapshot (double-liquidate). The
-        # CLI runs OUTSIDE the lock, so a 120s flatten never blocks the daemon.
         with self._flatten_lock:
             if account in self._flatten_in_flight:
                 raise HostRunnerError(
                     status.HTTP_409_CONFLICT,
                     f"emergency-flatten already in progress for account {account}",
                 )
+            if account in self._account_starts_in_flight:
+                raise HostRunnerError(
+                    status.HTTP_409_CONFLICT,
+                    {
+                        "reason_code": "CLERK_EMERGENCY_START_IN_FLIGHT",
+                        "account_id": account,
+                    },
+                )
             self._flatten_in_flight.add(account)
         try:
-            command = [
-                sys.executable,
-                "-m",
-                "app.engine.live.run",
-                "emergency-flatten",
-                "--run-dir",
-                str(run_dir),
-                "--account",
-                account,
-                "--confirm",
-            ]
-            env = os.environ.copy()
-            python_path = str(self.repo_root / "PythonDataService")
-            existing = env.get("PYTHONPATH")
-            env["PYTHONPATH"] = python_path if not existing else f"{python_path}{os.pathsep}{existing}"
+            self._ensure_account_clerk(account)
+            client = AccountClerkHostRpcClient(
+                artifacts_root=self.artifacts_root,
+                account_id=account,
+                host_capability=self._clerk_host_binding_capability,
+            )
+            asyncio.run(
+                client.prepare_emergency_flatten(
+                    operation_id=operation_id,
+                    authorization_id=authorization_id,
+                )
+            )
             try:
-                proc = subprocess.run(
-                    command,
-                    cwd=str(self.repo_root),
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
+                self._pause_on_duty_account_bots(account)
+            except HostRunnerError:
+                # The intake closure is durable already.  Preserve the host
+                # actuator failure in the same operation before returning; a
+                # restart must not mistake an unproved bot stop for quiescence.
+                asyncio.run(
+                    client.mark_emergency_requires_reconciliation(
+                        operation_id=operation_id,
+                        reason="CLERK_EMERGENCY_BOT_PAUSE_UNPROVEN",
+                    )
                 )
-            except subprocess.TimeoutExpired as exc:
-                raise HostRunnerError(
-                    status.HTTP_504_GATEWAY_TIMEOUT,
-                    f"emergency-flatten timed out after {exc.timeout}s",
-                ) from exc
-            except OSError as exc:
-                raise HostRunnerError(
-                    status.HTTP_503_SERVICE_UNAVAILABLE, f"could not run emergency-flatten: {exc}"
-                ) from exc
-            if proc.returncode != 0:
-                # CLI exit codes: 2 = operator precondition (account mismatch / no
-                # --confirm) -> 400; everything else (3 = broker/runtime) -> 502.
-                http_code = status.HTTP_400_BAD_REQUEST if proc.returncode == 2 else status.HTTP_502_BAD_GATEWAY
-                detail = (proc.stderr or proc.stdout or "").strip()[:500] or (
-                    f"emergency-flatten exited {proc.returncode}"
+                raise
+            asyncio.run(
+                client.mark_emergency_bots_paused(
+                    operation_id=operation_id,
+                    authorization_id=authorization_id,
                 )
-                raise HostRunnerError(http_code, f"emergency-flatten failed: {detail}")
-            logger.info("emergency-flatten completed for run=%s account=%s", run_id, account)
+            )
+            return asyncio.run(
+                client.emergency_flatten_account(
+                    operation_id=operation_id,
+                    authorization_id=authorization_id,
+                )
+            )
+        except AccountClerkRpcError as exc:
+            unavailable = exc.reason_code.startswith("ACCOUNT_CLERK_UNAVAILABLE:")
+            reason_code = exc.reason if isinstance(exc, AccountClerkRpcRejectedError) else exc.reason_code
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE if unavailable else status.HTTP_409_CONFLICT,
+                {
+                    "reason_code": reason_code,
+                    "message": "The Account Clerk could not prove the emergency account recovery complete.",
+                },
+            ) from exc
+        except OSError as exc:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "Emergency flatten could not start the account Clerk.",
+            ) from exc
         finally:
             with self._flatten_lock:
                 self._flatten_in_flight.discard(account)
+
+    def _pause_on_duty_account_bots(self, account_id: str) -> None:
+        """Prove every managed on-duty bot has exited before broker recovery."""
+
+        with self._managed_lock:
+            managed = tuple(self._managed.values())
+        for candidate in managed:
+            if candidate.process.poll() is not None:
+                continue
+            try:
+                candidate_account_id = self.command_account_id(candidate.run_id)
+            except HostRunnerError as exc:
+                raise HostRunnerError(
+                    status.HTTP_409_CONFLICT,
+                    {
+                        "reason_code": "CLERK_EMERGENCY_BOT_ACCOUNT_UNPROVEN",
+                        "run_id": candidate.run_id,
+                    },
+                ) from exc
+            if candidate_account_id != account_id:
+                continue
+            try:
+                stopped = self.stop(candidate.run_id, HostRunnerStopRequest(force=False))
+            except (HostRunnerError, OSError) as exc:
+                raise HostRunnerError(
+                    status.HTTP_409_CONFLICT,
+                    {
+                        "reason_code": "CLERK_EMERGENCY_BOT_PAUSE_UNPROVEN",
+                        "run_id": candidate.run_id,
+                    },
+                ) from exc
+            if stopped.stop_outcome != "exited" or candidate.process.poll() is None:
+                raise HostRunnerError(
+                    status.HTTP_409_CONFLICT,
+                    {
+                        "reason_code": "CLERK_EMERGENCY_BOT_PAUSE_UNPROVEN",
+                        "run_id": candidate.run_id,
+                        "stop_outcome": stopped.stop_outcome,
+                    },
+                )
 
     def deploy(self, request: HostRunnerDeployRequest) -> HostRunnerDeployResponse:
         """Create a run on the host via ``deploy_run`` (ADR 0006), optionally
@@ -1003,7 +1238,7 @@ class RunnerProcessManager:
             idempotent=True,
         )
         try:
-            result = deploy_run(params)
+            result = self._deploy_and_persist_lifecycle(request, params)
         except DirtyTreeError as exc:
             raise HostRunnerError(
                 status.HTTP_409_CONFLICT,
@@ -1055,13 +1290,6 @@ class RunnerProcessManager:
         except DeployIOError as exc:
             raise HostRunnerError(status.HTTP_503_SERVICE_UNAVAILABLE, f"deploy filesystem error: {exc}") from exc
 
-        self._write_account_registry_binding(
-            result.run_dir,
-            run_id=result.run_id,
-            lifecycle_state="DEPLOYED",
-            source="host_daemon.deploy",
-        )
-
         start_action: HostRunnerActionResponse | None = None
         if request.start:
             start_action = self.start(result.run_id, request.start_options)
@@ -1080,6 +1308,61 @@ class RunnerProcessManager:
             start=start_action,
         )
 
+    def _deploy_and_persist_lifecycle(
+        self,
+        request: HostRunnerDeployRequest,
+        params: DeployParams,
+    ):
+        """Make the deliberate deploy/reopen successor atomic with retirement."""
+
+        with self._bot_lifecycle_operation_fence(request.strategy_instance_id):
+            result = deploy_run(params)
+            if request.strategy_instance_id:
+                self._reopen_retired_lifecycle_for_deploy(request.strategy_instance_id, result.run_id)
+            self._write_account_registry_binding(
+                result.run_dir,
+                run_id=result.run_id,
+                lifecycle_state="DEPLOYED",
+                source="host_daemon.deploy",
+            )
+            return result
+
+    def _reopen_retired_lifecycle_for_deploy(self, strategy_instance_id: str, run_id: str) -> None:
+        """Record the explicit deploy successor while its operation fence is held."""
+
+        from app.engine.live.bot_lifecycle_evaluator import BotLifecycleEvaluator
+        from app.engine.live.bot_lifecycle_state import (
+            BotLifecyclePhase,
+            BotLifecycleStateCorruptError,
+            BotLifecycleStateRepo,
+            stable_bot_lifecycle_state_path,
+        )
+
+        try:
+            repo = BotLifecycleStateRepo(
+                stable_bot_lifecycle_state_path(self.artifacts_root, strategy_instance_id)
+            )
+            current = repo.read()
+            if current is not None and current.phase is BotLifecyclePhase.RETIRED:
+                BotLifecycleEvaluator(
+                    self.artifacts_root, strategy_instance_id
+                ).reopen_for_deploy_if_retired(
+                    now_ms=self._clock_ms(),
+                    updated_by="host_daemon",
+                    reason="deploy.replacement",
+                    operation_fence_held=True,
+                )
+        except (BotLifecycleStateCorruptError, OSError) as exc:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                {
+                    "reason_code": "BOT_LIFECYCLE_REOPEN_FAILED",
+                    "message": "The deploy could not reopen the bot lifecycle marker.",
+                    "strategy_instance_id": strategy_instance_id,
+                    "run_id": run_id,
+                },
+            ) from exc
+
     def _write_account_registry_binding(
         self,
         run_dir: Path,
@@ -1087,7 +1370,7 @@ class RunnerProcessManager:
         run_id: str,
         lifecycle_state: str,
         source: str,
-        cohort_id: str | None = None,
+        ibkr_host: str | None = None,
     ):
         account_id, strategy_instance_id = self._account_registry_identity(run_dir)
         if account_id is None or strategy_instance_id is None:
@@ -1098,24 +1381,43 @@ class RunnerProcessManager:
         )
         from app.engine.live.account_registry import (
             AccountInstanceBinding,
+            account_binding_ledger_parity,
             bot_order_namespace_for_instance,
-            write_account_instance_binding,
+            pending_account_binding_retirements,
         )
 
         try:
             recorded_at_ms = self._clock_ms()
-            write_account_instance_binding(
+            if lifecycle_state == "ACTIVE":
+                self.reconcile_pending_account_binding_retirements(account_id=account_id)
+                if not account_binding_ledger_parity(
+                    self.artifacts_root,
+                    account_id=account_id,
+                ).is_clean:
+                    raise HostRunnerError(
+                        status.HTTP_409_CONFLICT,
+                        "Account binding ledger parity is dirty; repair the dual-write evidence before admitting a bot.",
+                    )
+            if lifecycle_state == "ACTIVE" and pending_account_binding_retirements(
                 self.artifacts_root,
+                account_id=account_id,
+                strategy_instance_id=strategy_instance_id,
+            ):
+                raise HostRunnerError(
+                    status.HTTP_409_CONFLICT,
+                    "Account binding retirement reconciliation is pending; wait for the Account Clerk before starting this bot.",
+                )
+            self._record_account_binding_decision_via_clerk(
                 AccountInstanceBinding(
                     account_id=account_id,
                     strategy_instance_id=strategy_instance_id,
                     run_id=run_id,
                     bot_order_namespace=bot_order_namespace_for_instance(strategy_instance_id),
-                    cohort_id=cohort_id,
                     lifecycle_state=lifecycle_state,
                     recorded_at_ms=recorded_at_ms,
                     source=source,
                 ),
+                ibkr_host=ibkr_host,
             )
             if lifecycle_state == "ACTIVE":
                 evaluate_restart_intensity(
@@ -1129,6 +1431,94 @@ class RunnerProcessManager:
             raise HostRunnerError(
                 status.HTTP_503_SERVICE_UNAVAILABLE,
                 f"could not write account instance registry: {exc}",
+            ) from exc
+
+    def _record_account_binding_decision_via_clerk(
+        self,
+        binding: object,
+        *,
+        ibkr_host: str | None = None,
+    ) -> None:
+        """Submit a daemon lifecycle fact to the Clerk's serialized decision seam."""
+
+        from app.engine.live.account_registry import AccountInstanceBinding
+
+        if not isinstance(binding, AccountInstanceBinding):
+            raise TypeError("binding must be an AccountInstanceBinding")
+        try:
+            self._ensure_account_clerk(binding.account_id, ibkr_host=ibkr_host)
+            asyncio.run(
+                AccountClerkHostRpcClient(
+                    artifacts_root=self.artifacts_root,
+                    account_id=binding.account_id,
+                    host_capability=self._clerk_host_binding_capability,
+                ).record_binding_decision(binding)
+            )
+        except AccountClerkRpcRejectedError as exc:
+            if exc.reason == "CLERK_EMERGENCY_ADMISSION_CLOSED":
+                raise HostRunnerError(
+                    status.HTTP_409_CONFLICT,
+                    {
+                        "reason_code": exc.reason,
+                        "account_id": binding.account_id,
+                    },
+                ) from exc
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "Account Clerk rejected the binding transition.",
+            ) from exc
+        except (AccountClerkRpcError, OSError) as exc:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "Account Clerk is unavailable to record the binding transition.",
+            ) from exc
+
+    def _propose_account_registry_retirement(
+        self,
+        run_dir: Path,
+        *,
+        run_id: str,
+        source: str,
+    ) -> None:
+        """Persist an exited-child fact for the Clerk, never a daemon retirement decision."""
+
+        account_id, strategy_instance_id = self._account_registry_identity(run_dir)
+        if account_id is None or strategy_instance_id is None:
+            return
+        from app.engine.live.account_artifacts import append_account_event
+        from app.engine.live.account_binding_ledger import append_binding_retirement_proposal
+        from app.engine.live.account_registry import AccountInstanceBinding, bot_order_namespace_for_instance
+
+        try:
+            proposal = AccountInstanceBinding(
+                account_id=account_id,
+                strategy_instance_id=strategy_instance_id,
+                run_id=run_id,
+                bot_order_namespace=bot_order_namespace_for_instance(strategy_instance_id),
+                lifecycle_state="RETIRED",
+                recorded_at_ms=self._clock_ms(),
+                source=source,
+            )
+            append_binding_retirement_proposal(
+                self.artifacts_root,
+                binding=proposal.model_dump(mode="json"),
+            )
+            append_account_event(
+                self.artifacts_root,
+                account_id,
+                {
+                    "event_type": "account_binding_retirement_proposed",
+                    "strategy_instance_id": strategy_instance_id,
+                    "run_id": run_id,
+                    "bot_order_namespace": proposal.bot_order_namespace,
+                    "recorded_at_ms": proposal.recorded_at_ms,
+                    "source": source,
+                },
+            )
+        except (OSError, ValueError) as exc:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                f"could not record account binding retirement proposal: {exc}",
             ) from exc
 
     def _account_registry_identity(self, run_dir: Path) -> tuple[str | None, str | None]:
@@ -1149,6 +1539,12 @@ class RunnerProcessManager:
         if not isinstance(strategy_instance_id, str) or not strategy_instance_id:
             return None, None
         return account_id, strategy_instance_id
+
+    def command_account_id(self, run_id: str) -> str | None:
+        """Resolve the account policy subject for one daemon command."""
+
+        account_id, _strategy_instance_id = self._account_registry_identity(self._validate_run_dir(run_id))
+        return account_id
 
     def _enforce_crash_retired_recovery(self, run_dir: Path) -> None:
         account_id, strategy_instance_id = self._account_registry_identity(run_dir)
@@ -1214,6 +1610,40 @@ class RunnerProcessManager:
                     ),
                     "gate_id": "desired_state.start",
                     "desired_state": "STOPPED",
+                    "strategy_instance_id": strategy_instance_id,
+                },
+            )
+
+    def _enforce_lifecycle_allows_start(self, strategy_instance_id: str | None) -> None:
+        """Do not resurrect a retirement unless deploy reopened it under the fence."""
+
+        if not strategy_instance_id:
+            return
+        from app.engine.live.bot_lifecycle_state import (
+            BotLifecyclePhase,
+            BotLifecycleStateCorruptError,
+            BotLifecycleStateRepo,
+            stable_bot_lifecycle_state_path,
+        )
+
+        try:
+            lifecycle = BotLifecycleStateRepo(
+                stable_bot_lifecycle_state_path(self.artifacts_root, strategy_instance_id)
+            ).read()
+        except (BotLifecycleStateCorruptError, OSError, ValueError) as exc:
+            raise HostRunnerError(
+                status.HTTP_409_CONFLICT,
+                f"bot lifecycle state is unreadable for {strategy_instance_id!r}: {exc}",
+            ) from exc
+        if lifecycle is not None and lifecycle.phase is BotLifecyclePhase.RETIRED:
+            raise HostRunnerError(
+                status.HTTP_409_CONFLICT,
+                {
+                    "reason_code": "RETIRED_REQUIRES_DEPLOY",
+                    "message": (
+                        f"{strategy_instance_id} is retired. Deploy its deliberate replacement "
+                        "before attempting to start it."
+                    ),
                     "strategy_instance_id": strategy_instance_id,
                 },
             )
@@ -1429,9 +1859,19 @@ class RunnerProcessManager:
         return command
 
     def _resolve_symbol(self, run_dir: Path) -> str | None:
-        """Best-effort: the single trading symbol of a run, from its spec."""
+        """Best-effort: resolve a run's effective trading symbol.
+
+        Live configuration is authoritative because a deployment-validation
+        run can override the shared strategy spec's default symbol.  The spec
+        remains the fallback for legacy runs without an explicit live symbol.
+        """
         try:
             data = json.loads((run_dir / "run_ledger.json").read_text(encoding="utf-8"))
+            live_config = data.get("live_config")
+            if isinstance(live_config, dict):
+                live_symbol = live_config.get("symbol")
+                if isinstance(live_symbol, str) and live_symbol.strip():
+                    return live_symbol.strip().upper()
             spec_path = Path(data["strategy_spec_path"])
             if not spec_path.is_absolute():
                 spec_path = self.repo_root / spec_path
@@ -1444,14 +1884,15 @@ class RunnerProcessManager:
         """Symbols owned by other currently-running managed instances."""
         symbols: set[str] = set()
         with self._managed_lock:
-            for key, managed in self._managed.items():
-                if key == exclude_key:
-                    continue
-                self._refresh(managed)
-                if managed.process.poll() is None:
-                    symbol = self._resolve_symbol(managed.run_dir)
-                    if symbol:
-                        symbols.add(symbol)
+            siblings = tuple(
+                managed for key, managed in self._managed.items() if key != exclude_key
+            )
+        for managed in siblings:
+            self._refresh(managed)
+            if managed.process.poll() is None:
+                symbol = self._resolve_symbol(managed.run_dir)
+                if symbol:
+                    symbols.add(symbol)
         return symbols
 
     def _sibling_all_in_symbols(self, exclude_key: str) -> set[str]:
@@ -1467,14 +1908,17 @@ class RunnerProcessManager:
 
         symbols: set[str] = set()
         with self._managed_lock:
-            for key, managed in self._managed.items():
-                if key == exclude_key:
-                    continue
-                self._refresh(managed)
-                if managed.process.poll() is None and _is_set_holdings_full(self._read_sibling_sizing(managed.run_dir)):
-                    symbol = self._resolve_symbol(managed.run_dir)
-                    if symbol:
-                        symbols.add(symbol)
+            siblings = tuple(
+                managed for key, managed in self._managed.items() if key != exclude_key
+            )
+        for managed in siblings:
+            self._refresh(managed)
+            if managed.process.poll() is None and _is_set_holdings_full(
+                self._read_sibling_sizing(managed.run_dir)
+            ):
+                symbol = self._resolve_symbol(managed.run_dir)
+                if symbol:
+                    symbols.add(symbol)
         return symbols
 
     @staticmethod
@@ -1512,12 +1956,13 @@ class RunnerProcessManager:
         with self._managed_lock:
             active.update(self._rejected_ibkr_client_ids)
             active.update(self._reserved_ibkr_client_ids)
-            for key, managed in self._managed.items():
-                if key == exclude_key:
-                    continue
-                self._refresh(managed)
-                if managed.process.poll() is None and managed.ibkr_client_id is not None:
-                    active.add(managed.ibkr_client_id)
+            managed_snapshot = tuple(
+                managed for key, managed in self._managed.items() if key != exclude_key
+            )
+        for managed in managed_snapshot:
+            self._refresh(managed)
+            if managed.process.poll() is None and managed.ibkr_client_id is not None:
+                active.add(managed.ibkr_client_id)
         return active
 
     def _active_ibkr_client_ids(self, *, exclude_key: str) -> set[int]:
@@ -1532,9 +1977,20 @@ class RunnerProcessManager:
             if clerk_client_ids is None
             else clerk_client_ids
         )
-        for client_id in self._ibkr_client_id_pool():
-            if client_id not in active:
-                return client_id
+        with self._managed_lock:
+            active.update(self._rejected_ibkr_client_ids)
+            active.update(self._reserved_ibkr_client_ids)
+            active.update(
+                managed.ibkr_client_id
+                for key, managed in self._managed.items()
+                if key != exclude_key
+                and managed.process.poll() is None
+                and managed.ibkr_client_id is not None
+            )
+            for client_id in self._ibkr_client_id_pool():
+                if client_id not in active:
+                    self._reserved_ibkr_client_ids.add(client_id)
+                    return client_id
         raise HostRunnerError(
             status.HTTP_409_CONFLICT,
             (
@@ -1554,6 +2010,8 @@ class RunnerProcessManager:
         # A bot submits only through the Account Clerk RPC boundary.  Override
         # any write-capable value inherited from the daemon environment.
         env["IBKR_READONLY"] = "true"
+        env.pop("LIVE_RUNNER_DAEMON_TOKEN", None)
+        env.pop(CLERK_HOST_BINDING_CAPABILITY_ENV, None)
         # PRD #619-B — propagate this daemon's boot_id so the spawned
         # child captures it as ``expected_daemon_boot_id`` and the
         # watchdog can detect daemon restart.
@@ -1675,10 +2133,65 @@ class RunnerProcessManager:
 
         self._clerk_supervisor.supervise(account_ids=account_ids)
 
-    def _refresh(self, managed: ManagedProcess) -> None:
+    def reconcile_pending_account_binding_retirements(
+        self,
+        *,
+        account_id: str | None = None,
+    ) -> int:
+        """Converge daemon liveness proposals through each account's live Clerk.
+
+        A proposal is safe to retry: a Clerk appends its folded marker under
+        the same ledger lock as the retirement decision, so a later reaper or
+        daemon restart observes no work once the fold has committed.
+        """
+
+        from app.engine.live.account_artifacts import list_account_artifact_ids
+        from app.engine.live.account_registry import pending_account_binding_retirements
+
+        try:
+            account_ids = (account_id,) if account_id is not None else list_account_artifact_ids(self.artifacts_root)
+        except (OSError, ValueError) as exc:
+            logger.warning(
+                "Could not enumerate account binding retirement proposals",
+                extra={"reason_code": "ACCOUNT_BINDING_PROPOSAL_ENUMERATION_FAILED", "error_type": type(exc).__name__},
+            )
+            return 0
+
+        folded_count = 0
+        for candidate_account_id in account_ids:
+            try:
+                if not pending_account_binding_retirements(
+                    self.artifacts_root,
+                    account_id=candidate_account_id,
+                ):
+                    continue
+                self._ensure_account_clerk(candidate_account_id)
+                result = asyncio.run(
+                    AccountClerkRpcClient(
+                        artifacts_root=self.artifacts_root,
+                        account_id=candidate_account_id,
+                    ).fold_binding_retirements()
+                )
+                folded_count += result.retirements_applied + result.superseded_proposals
+            except (AccountClerkRpcError, OSError, ValueError) as exc:
+                logger.warning(
+                    "Account binding retirement reconciliation remains pending",
+                    extra={
+                        "reason_code": "ACCOUNT_BINDING_RETIREMENT_PENDING",
+                        "account_id": candidate_account_id,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+        return folded_count
+
+    def _refresh(self, managed: ManagedProcess, *, operation_fence_held: bool = False) -> None:
         """Settle a managed process if it has exited: stamp ``ended_at_ms``
         and close its log handle exactly once."""
         if managed.process.poll() is None:
+            return
+        if managed.strategy_instance_id and not operation_fence_held:
+            with self._bot_lifecycle_operation_fence(managed.strategy_instance_id):
+                self._refresh(managed, operation_fence_held=True)
             return
         if self._should_record_child_launch_failure(managed) and managed.launch_failure_recorded_at_ms is None:
             recorded_at_ms = _now_ms()
@@ -1696,16 +2209,36 @@ class RunnerProcessManager:
         self._quarantine_rejected_ibkr_client_id(managed)
         if managed.registry_retired_at_ms is None:
             try:
-                self._write_account_registry_binding(
-                    managed.run_dir,
-                    run_id=managed.run_id,
-                    lifecycle_state="RETIRED",
-                    source=self._account_registry_retirement_source(managed),
-                )
+                if self._can_retire_account_registry_binding(managed):
+                    self._propose_account_registry_retirement(
+                        managed.run_dir,
+                        run_id=managed.run_id,
+                        source=self._account_registry_retirement_source(managed),
+                    )
+                else:
+                    logger.warning(
+                        "Skipped stale host runner registry retirement after a newer binding",
+                        extra={
+                            "run_id": managed.run_id,
+                            "strategy_instance_id": managed.strategy_instance_id,
+                        },
+                    )
                 managed.registry_retired_at_ms = self._clock_ms()
             except HostRunnerError:
                 logger.exception(
                     "Failed to retire account registry binding for exited host runner",
+                    extra={
+                        "run_id": managed.run_id,
+                        "strategy_instance_id": managed.strategy_instance_id,
+                    },
+                )
+        if managed.lifecycle_outcome_recorded_at_ms is None:
+            try:
+                self._record_terminal_lifecycle_outcome(managed, operation_fence_held=True)
+                managed.lifecycle_outcome_recorded_at_ms = self._clock_ms()
+            except (OSError, ValueError, RuntimeError):
+                logger.exception(
+                    "Failed to record terminal lifecycle outcome for exited host runner",
                     extra={
                         "run_id": managed.run_id,
                         "strategy_instance_id": managed.strategy_instance_id,
@@ -1790,6 +2323,71 @@ class RunnerProcessManager:
         )
         return verdict.registry_source
 
+    def _can_retire_account_registry_binding(self, managed: ManagedProcess) -> bool:
+        """Never let a late reaper supersede a newer DEPLOYED/ACTIVE run."""
+
+        account_id, strategy_instance_id = self._account_registry_identity(managed.run_dir)
+        if account_id is None or strategy_instance_id is None:
+            return True
+        from app.engine.live.account_registry import (
+            index_account_instance_bindings,
+            read_account_instance_registry,
+        )
+
+        try:
+            latest = index_account_instance_bindings(
+                read_account_instance_registry(self.artifacts_root, account_id),
+                account_id=account_id,
+            ).latest_by_instance.get(strategy_instance_id)
+        except (OSError, ValueError) as exc:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                f"could not read account registry before reaping {managed.run_id}: {exc}",
+            ) from exc
+        return latest is None or latest.run_id == managed.run_id or latest.lifecycle_state not in {
+            "DEPLOYED",
+            "ACTIVE",
+        }
+
+    def _record_failed_launch_outcome(
+        self,
+        *,
+        run_id: str,
+        strategy_instance_id: str,
+        source: str,
+    ) -> None:
+        """Record an unspawned run as a terminal lifecycle fact when identifiable."""
+
+        record_failed_launch_outcome(
+            self.artifacts_root,
+            now_ms=self._clock_ms(),
+            run_id=run_id,
+            strategy_instance_id=strategy_instance_id,
+            source=source,
+            operation_fence_held=True,
+        )
+
+    def _record_terminal_lifecycle_outcome(
+        self,
+        managed: ManagedProcess,
+        *,
+        operation_fence_held: bool = False,
+    ) -> None:
+        """Project a reaped process into durable duty state without guessing success."""
+
+        if not managed.strategy_instance_id:
+            return
+        if not operation_fence_held:
+            with self._bot_lifecycle_operation_fence(managed.strategy_instance_id):
+                self._record_terminal_lifecycle_outcome(managed, operation_fence_held=True)
+            return
+        record_terminal_lifecycle_outcome(
+            self.artifacts_root,
+            managed,
+            now_ms=self._clock_ms(),
+            operation_fence_held=True,
+        )
+
     def _resolve_strategy_instance_id(self, run_dir: Path) -> str:
         """Read ``strategy_instance_id`` from the run ledger (UI-0 binding).
 
@@ -1826,6 +2424,7 @@ def create_app(
     token too.
     """
     process_manager = manager if manager is not None else _manager_from_env()
+    command_idempotency = DaemonCommandIdempotencyService(process_manager.artifacts_root)
     token = auth_token if auth_token is not None else ensure_daemon_token(_artifacts_root_from_env())
 
     # PRD #619-B — daemon lease lifespan. On startup: classify orphan
@@ -1869,27 +2468,28 @@ def create_app(
             )
         except Exception:
             logger.exception("orphan classification on boot failed")
-        try:
-            # RPC handshakes and bounded process waits are synchronous host
-            # operations.  Keep them off the FastAPI loop while ensuring this
-            # happens before the daemon accepts a start request.
-            await asyncio.to_thread(process_manager.reconcile_account_clerks_on_boot)
-        except Exception:
-            logger.exception("account Clerk reconciliation on boot failed")
         boot_reconcile = retire_unmanaged_active_bindings_on_daemon_boot(
             process_manager.artifacts_root,
             managed_run_ids=process_manager.running_managed_run_ids(),
             now_ms=_now_ms(),
         )
-        if boot_reconcile.bindings_retired:
+        if boot_reconcile.retirement_proposals_recorded:
             logger.warning(
-                "Retired account bindings with unproven daemon-boot liveness",
+                "Recorded account binding retirement proposals with unproven daemon-boot liveness",
                 extra={
                     "accounts_scanned": boot_reconcile.accounts_scanned,
                     "active_bindings_found": boot_reconcile.active_bindings_found,
-                    "bindings_retired": boot_reconcile.bindings_retired,
+                    "retirement_proposals_recorded": boot_reconcile.retirement_proposals_recorded,
                 },
             )
+        try:
+            # RPC handshakes and bounded process waits are synchronous host
+            # operations.  Keep them off the FastAPI loop. A newly started
+            # Clerk folds boot proposals before this daemon accepts requests.
+            await asyncio.to_thread(process_manager.reconcile_account_clerks_on_boot)
+            await asyncio.to_thread(process_manager.reconcile_pending_account_binding_retirements)
+        except Exception:
+            logger.exception("account Clerk reconciliation on boot failed")
         reaper_stop = asyncio.Event()
         reaper_task = asyncio.create_task(
             _process_reaper(reaper_stop),
@@ -1953,6 +2553,29 @@ def create_app(
             )
 
     auth = [Depends(_verify_token)]
+
+    async def _run_idempotent_command(
+        *,
+        idempotency_key: str | None,
+        command: str,
+        account_id: str | None,
+        semantic_payload: dict[str, object],
+        invoke: Callable[[], DaemonCommandOutcome],
+        response_model: type[_CommandResponse],
+    ) -> _CommandResponse:
+        """Execute one host command through the sole durable envelope."""
+
+        key = _daemon_idempotency_key(idempotency_key)
+        outcome = await run_in_threadpool(
+            command_idempotency.execute,
+            idempotency_key=key,
+            command=command,
+            account_id=account_id,
+            semantic_payload=semantic_payload,
+            invoke=invoke,
+        )
+        response = response_model.model_validate(_command_outcome_body(outcome))
+        return response.model_copy(update={"idempotency_key": key, "idempotency_replayed": outcome.replayed})
 
     @app.get("/health", response_model=HostRunnerHealth, dependencies=auth)
     async def health() -> HostRunnerHealth:
@@ -2093,27 +2716,34 @@ def create_app(
     @app.post("/runs/{run_id}/start", response_model=HostRunnerActionResponse, dependencies=auth)
     async def start_run(run_id: str, request: HostRunnerStartRequest) -> HostRunnerActionResponse:
         try:
-            return await run_in_threadpool(process_manager.start, run_id, request)
+            return await _run_idempotent_command(
+                idempotency_key=request.idempotency_key,
+                command="start",
+                account_id=process_manager.command_account_id(run_id),
+                semantic_payload={
+                    "run_id": run_id,
+                    "request": request.model_dump(mode="json", exclude={"idempotency_key"}),
+                },
+                invoke=lambda: _manager_command_outcome(lambda: process_manager.start(run_id, request)),
+                response_model=HostRunnerActionResponse,
+            )
         except HostRunnerError as exc:
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
     @app.post("/runs/{run_id}/stop", response_model=HostRunnerActionResponse, dependencies=auth)
     async def stop_run(run_id: str, request: HostRunnerStopRequest) -> HostRunnerActionResponse:
         try:
-            return await run_in_threadpool(process_manager.stop, run_id, request)
-        except HostRunnerError as exc:
-            raise HTTPException(exc.status_code, detail=exc.detail) from exc
-
-    @app.post(
-        "/runs/{run_id}/emergency-flatten",
-        response_model=HostRunnerActionResponse,
-        dependencies=auth,
-    )
-    async def emergency_flatten_run(run_id: str, request: EmergencyFlattenRequest) -> HostRunnerActionResponse:
-        if not request.confirm:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="emergency-flatten requires confirm=true")
-        try:
-            return await run_in_threadpool(process_manager.emergency_flatten, run_id, request.account)
+            return await _run_idempotent_command(
+                idempotency_key=request.idempotency_key,
+                command="stop",
+                account_id=process_manager.command_account_id(run_id),
+                semantic_payload={
+                    "run_id": run_id,
+                    "request": request.model_dump(mode="json", exclude={"idempotency_key"}),
+                },
+                invoke=lambda: _manager_command_outcome(lambda: process_manager.stop(run_id, request)),
+                response_model=HostRunnerActionResponse,
+            )
         except HostRunnerError as exc:
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
@@ -2124,14 +2754,28 @@ def create_app(
     )
     async def emergency_flatten_account(
         account_id: str,
-        request: EmergencyFlattenRequest,
+        request: AccountEmergencyFlattenDispatchRequest,
     ) -> AccountEmergencyFlattenResponse:
-        if not request.confirm:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="emergency-flatten requires confirm=true")
         if request.account != account_id:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="request account does not match path")
         try:
-            return await run_in_threadpool(process_manager.emergency_flatten_account, account_id)
+            return await _run_idempotent_command(
+                idempotency_key=request.idempotency_key,
+                command="emergency_flatten_account",
+                account_id=account_id,
+                semantic_payload={
+                    "account_id": account_id,
+                    "request": request.model_dump(mode="json", exclude={"idempotency_key"}),
+                },
+                invoke=lambda: _manager_command_outcome(
+                    lambda: process_manager.emergency_flatten_account(
+                        account_id,
+                        operation_id=request.idempotency_key,
+                        authorization_id=request.authorization_id,
+                    )
+                ),
+                response_model=AccountEmergencyFlattenResponse,
+            )
         except HostRunnerError as exc:
             raise HTTPException(exc.status_code, detail=exc.detail) from exc
 

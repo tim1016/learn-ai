@@ -187,7 +187,6 @@ The checked-in baseline must yield `171`. Every row below belongs to exactly one
 | 5989 | `_read_owned_positions_empty` | reconciliation surfaces | services.fleet_contamination.instance_broker | — | future LiveInstanceReconciliationService |
 | 6001 | `get_instance_commands` | reconciliation surfaces | broker.ibkr.config.get_settings<br>pathlib.Path<br>schemas.live_runs.CommandsTimeline<br>engine.live.host_daemon_client | — | future LiveInstanceReconciliationService |
 | 6021 | `issue_instance_command` | reconciliation surfaces | broker.ibkr.config.get_settings<br>pathlib.Path<br>engine.live.command_channel.CommandVerb<br>fastapi.HTTPException | — | future LiveInstanceReconciliationService |
-| 6114 | `emergency_flatten_instance` | reconciliation surfaces | broker.ibkr.config.get_settings<br>pathlib.Path<br>fastapi.HTTPException<br>schemas.live_runs.HostRunnerActionResponse | — | future LiveInstanceReconciliationService |
 
 ## Domain-level characterization net
 
@@ -196,7 +195,7 @@ The checked-in baseline must yield `171`. Every row below belongs to exactly one
 | instance status | `test_live_instances.py` status, provenance, start-default, and surface payload cases; `test_live_instances_operator_surface.py` | `tests/fixtures/surface_hub/status_payload_parity.json`, `tests/services/test_surface_hub.py` |
 | SSE / surface hubs | `test_live_instances.py` surface-hub and stream cases | `tests/services/test_surface_hub.py` lifecycle, generation, and cache tests |
 | fleet roster | catalog, roll-call, deletion, account-summary, and fleet-stream cases in `test_live_instances.py` | surface roster and daemon-provider tests |
-| deployment / launch | deploy preflight, deploy/start, and cohort-launch cases in `test_live_instances.py` | deploy-preflight service tests plus host-daemon contract tests |
+| deployment / launch | deploy preflight, deploy/start, rolling one-bot admission, and retired cohort-route cases in `test_live_instances.py` | deploy-preflight service tests plus host-daemon contract tests |
 | lifecycle mutation | start/stop/end-day, roster, retire/replace, desired-state, and flatten cases in `test_live_instances.py` | desired-state, lifecycle, and mutation-attempt service tests |
 | diagnostics | daemon-health, daemon-diagnose, and lease-renewal cases in `test_live_instances.py` | `tests/services/test_daemon_diagnostics.py` |
 | activity / events projection | chart, activity, active-date, evidence, repair, and DST cases in `test_live_instances.py` | activity projection, repair, and lifecycle-consistency service tests |

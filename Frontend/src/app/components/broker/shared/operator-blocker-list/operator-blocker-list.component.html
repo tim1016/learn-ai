@@ -8,7 +8,7 @@
       >
         <div class="operator-blocker-list__copy">
           <p class="operator-blocker-list__meta">
-            {{ blocker.condition.scope | receiptLabel }} · {{ blocker.disposition | receiptLabel }}
+            {{ blocker.condition.id | receiptLabel }} · {{ blocker.condition.scope | receiptLabel }} · {{ blocker.disposition | receiptLabel }}
           </p>
           <p class="operator-blocker-list__headline">{{ blocker.headline }}</p>
           @if (blocker.detail; as detail) {

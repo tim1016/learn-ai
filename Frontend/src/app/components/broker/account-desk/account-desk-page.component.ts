@@ -28,6 +28,7 @@ import {
 import { AccountDeskEventsStore } from "./account-desk-events-store.service";
 import { AccountDeskAccountSwitcherComponent } from "./account-desk-account-switcher.component";
 import { AccountDeskBrokerSessionComponent } from "./account-desk-broker-session.component";
+import { AccountDeskCockpitStatusComponent } from "./account-desk-cockpit-status.component";
 import { AccountDeskBrokerSnapshotComponent } from "./account-desk-broker-snapshot.component";
 import { AccountDeskDirectoryStore } from "./account-desk-directory-store.service";
 import { AccountDeskOperatorWorkspaceComponent } from "./account-desk-operator-workspace.component";
@@ -35,6 +36,7 @@ import { AccountDeskFleetStore } from "./account-desk-fleet-store.service";
 import { AccountDeskGuidanceComponent } from "./account-desk-guidance.component";
 import { AccountDeskGuidanceStore } from "./account-desk-guidance-store.service";
 import { AccountDeskRecoveryStore } from "./account-desk-recovery-store.service";
+import { AccountDeskRecoveryConfirmDialogComponent } from "./account-desk-recovery-confirm-dialog.component";
 import { AccountDeskSurfaceStore } from "./account-desk-surface-store.service";
 import { AccountDeskTraderEventsComponent } from "./account-desk-trader-events.component";
 import { AccountDeskVerdictComponent } from "./account-desk-verdict.component";
@@ -53,6 +55,8 @@ import { accountDeskFragmentTarget } from "./account-desk-legacy-fragments";
     AccountDeskTraderEventsComponent,
     ButtonModule,
     AccountDeskBrokerSessionComponent,
+    AccountDeskCockpitStatusComponent,
+    AccountDeskRecoveryConfirmDialogComponent,
     AccountDeskBrokerSnapshotComponent,
     MessageModule,
     PageHeaderComponent,

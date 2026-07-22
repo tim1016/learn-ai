@@ -37,14 +37,37 @@ describe('AccountDeskOperatorServiceComponent', () => {
 
 function status(): AccountServiceStatusResponse {
   return {
-    schema_version: 2,
+    schema_version: 3,
     account_id: 'DU1234567',
     attachment: 'ATTACHED',
     phase: 'accepting',
     generation: 2,
     generation_recorded_at_ms: 1_780_000_000_100,
     source: 'host_daemon.clerk_spawn',
-    binding: { state: 'ATTACHED', generation: 2, lease_generation: 2 },
+    binding: {
+      state: 'ATTACHED',
+      generation: 2,
+      lease_generation: 2,
+      pending_retirement_proposals: 0,
+      ledger_read_authority: 'legacy_registry',
+      ledger_parity: 'clean',
+      ledger_parity_issue_count: 0,
+    },
+    gate_authority: {
+      requested_authority: 'account_truth', effective_authority: 'account_truth', promotion_state: 'SAFE_DEFAULT',
+      reason_code: 'ACCOUNT_GATE_SAFE_DEFAULT', disposition: null, action_authority: 'account_truth',
+      action_gate: {
+        gate_id: 'account.account_truth', status: 'pass', source: 'test', operator_reason: 'PASS',
+        operator_next_step: 'No action.', evidence_at_ms: 1_780_000_000_100,
+      }, observed_session_dates: [], lease_weaker_comparison_count: 0, restart_smoke_recorded_at_ms: null,
+    },
+    session_policy: {
+      allow_outside_live_session: false,
+      gate_result: {
+        gate_id: 'account.live_session', status: 'pass', source: 'test', operator_reason: 'PASS',
+        operator_next_step: 'No action.', evidence_at_ms: 1_780_000_000_100,
+      },
+    },
     lease: {
       status: 'RUNNING',
       generation: 2,

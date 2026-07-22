@@ -106,6 +106,6 @@ ADR 0014 now introduces `run_dir/broker_callbacks.jsonl` as the authoritative ra
 - `PythonDataService/app/engine/live/live_state_sidecar.py` — projection envelope (`submitted_orders` re-keyed by `intent_id`; WAL-fold cursor `last_intent_wal_seq`; `last_artifact_flush_ms` demoted to diagnostic + `reqExecutions` `since` hint).
 - `PythonDataService/app/engine/live/halt.py`, `live_engine.py` — ownership / outside-mutation checks migrating off `live-{order_id}` onto the `order_ref` ladder.
 - `PythonDataService/app/broker/ibkr/orders.py` — submit path; `order.orderRef` write and `OrderEvent.order_ref` capture (migration stages 11–12).
-- `PythonDataService/app/engine/live/run.py` — `_recovery_flatten`, `cmd_emergency_flatten`; `bot_order_namespace` construction (run.py:622).
+- `PythonDataService/app/engine/live/run.py` — `_recovery_flatten`; `bot_order_namespace` construction. Account-wide emergency flatten is Clerk-owned (ADR 0030).
 - `CONTEXT.md` — identity ladder, owned-orphan vs outside-mutation, submit-uncertain halt, uniform ownership ladder.
 - ADR 0001 — substrate decision this ADR reaffirms.

@@ -4,7 +4,9 @@
       <h2>Account recovery</h2>
       <p>Safe, server-declared actions for this account. Each action is confirmed before it is sent.</p>
     </header>
-    @if (surface.loading() && !surface.triage()) {
+    @if (!ordinaryCuresAvailable()) {
+      <p class="state">Recovery choices are limited to the current Account Clerk cockpit card above.</p>
+    } @else if (surface.loading() && !surface.triage()) {
       <p class="state">Loading recovery controls…</p>
     } @else if (surface.error() && !surface.triage()) {
       <div class="state state-error" role="alert">
@@ -72,14 +74,5 @@
     } @else {
       <p class="state">No recovery projection is available for this account.</p>
     }
-    <app-account-desk-recovery-confirm-dialog
-      [confirmation]="recovery.confirmation()"
-      [busy]="recovery.busy()"
-      [errorMessage]="recovery.errorMessage()"
-      (cancelled)="recovery.cancelConfirmation()"
-      (confirmed)="recovery.confirm()"
-      (exposureReasonChanged)="recovery.setExposureOverrideReason($event)"
-      (confirmationTokenChanged)="recovery.setConfirmationToken($event)"
-    />
   </section>
 </p-card>

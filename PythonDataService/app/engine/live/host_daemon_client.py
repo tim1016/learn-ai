@@ -46,6 +46,11 @@ _SOCKET_PROBE_TIMEOUT = httpx.Timeout(10.0)
 # call at its slot. A startability probe can afford to wait longer than a liveness
 # GET; keep it bounded so a genuinely wedged daemon still surfaces.
 _INSTANCE_PROBE_TIMEOUT = httpx.Timeout(10.0)
+# Starting a run and ensuring its account Clerk can both wait behind
+# the host daemon's broker reconciliation work. They are admission operations,
+# not low-latency liveness reads: keep a bounded deadline so a busy but healthy
+# daemon does not turn a safe launch into a false ``connect_timeout``.
+_START_ADMISSION_TIMEOUT = httpx.Timeout(10.0)
 # Deploy runs git + file hashing on the host; allow more headroom than the
 # liveness GETs, but still bounded so a wedged daemon surfaces as 503.
 _DEPLOY_TIMEOUT = httpx.Timeout(15.0)
@@ -211,28 +216,16 @@ async def start_run(base_url: str, run_id: str, payload: dict) -> dict:
     plane (which forwards the token from the artifacts bind mount)
     rather than calling the daemon directly (ADR 0007).
     """
-    return await _post_action(f"{base_url.rstrip('/')}/runs/{run_id}/start", payload)
+    return await _post_action(
+        f"{base_url.rstrip('/')}/runs/{run_id}/start",
+        payload,
+        timeout=_START_ADMISSION_TIMEOUT,
+    )
 
 
 async def stop_run(base_url: str, run_id: str, payload: dict) -> dict:
     """POST /runs/{run_id}/stop. Same contract as :func:`start_run`."""
     return await _post_action(f"{base_url.rstrip('/')}/runs/{run_id}/stop", payload)
-
-
-async def emergency_flatten_run(base_url: str, run_id: str, payload: dict) -> dict:
-    """POST /runs/{run_id}/emergency-flatten.
-
-    Same contract as :func:`start_run` but with a longer timeout — the
-    daemon round-trips to the broker synchronously. A read-timeout here
-    is far more likely than for the lighter mutations, and the
-    consequence (broker positions in an unknown post-mutation state) is
-    the highest-stakes ambiguous-outcome case 619-C5 surfaces.
-    """
-    return await _post_action(
-        f"{base_url.rstrip('/')}/runs/{run_id}/emergency-flatten",
-        payload,
-        timeout=_FLATTEN_TIMEOUT,
-    )
 
 
 async def emergency_flatten_account(base_url: str, account_id: str, payload: dict) -> dict:
@@ -261,6 +254,7 @@ async def ensure_account_clerk(
     return await _post_action(
         f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/ensure",
         {"ibkr_host": ibkr_host},
+        timeout=_START_ADMISSION_TIMEOUT,
     )
 
 
@@ -319,11 +313,24 @@ async def _post_action(url: str, payload: dict, *, timeout: httpx.Timeout = _TIM
         )
 
     if result.response_status is not None and result.response_status >= 400:
-        raise HostDaemonError(
-            result.response_status,
+        detail = (
             _error_detail_of(response)
             if response is not None
-            else (result.detail or f"host daemon returned {result.response_status}"),
+            else (result.detail or f"host daemon returned {result.response_status}")
+        )
+        if (
+            result.response_status == 409
+            and isinstance(detail, dict)
+            and detail.get("reason_code") == "IDEMPOTENCY_OUTCOME_UNKNOWN"
+        ):
+            message = detail.get("message")
+            raise HostDaemonOutcomeUnknownError(
+                error_category="idempotency_outcome_unknown",
+                detail=message if isinstance(message, str) else None,
+            )
+        raise HostDaemonError(
+            result.response_status,
+            detail,
         )
 
     raise HostDaemonError(
@@ -435,8 +442,24 @@ async def fetch_health(
     - ``pydantic.ValidationError`` → ``DaemonResult.incompatible_contract(...)``
     - JSON decode ``ValueError`` → ``DaemonResult.malformed_body(...)``
     """
+    return await _fetch_health(base_url, timeout=_TIMEOUT)
+
+
+async def fetch_startability_health(
+    base_url: str,
+) -> tuple[DaemonResult, HostRunnerHealth | None]:
+    """GET /health with the bounded deadline used for start admission."""
+
+    return await _fetch_health(base_url, timeout=_INSTANCE_PROBE_TIMEOUT)
+
+
+async def _fetch_health(
+    base_url: str,
+    *,
+    timeout: httpx.Timeout,
+) -> tuple[DaemonResult, HostRunnerHealth | None]:
     result, response = await _classify_http(
-        f"{base_url.rstrip('/')}/health", method="GET"
+        f"{base_url.rstrip('/')}/health", method="GET", timeout=timeout
     )
     if response is None:
         return result, None

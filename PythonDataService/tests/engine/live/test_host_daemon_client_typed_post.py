@@ -1,7 +1,7 @@
 """PRD #619-C5 — typed POST + ambiguous-outcome classification.
 
-Exercises the four mutation forwarders (``deploy`` / ``start_run`` /
-``stop_run`` / ``emergency_flatten_run``) end-to-end through the typed
+Exercises the control-plane mutation forwarders (``deploy`` / ``start_run`` /
+``stop_run``) end-to-end through the typed
 POST core. Mocks the daemon HTTP layer with respx so the real
 ``httpx.AsyncClient`` exercises the request/response path.
 
@@ -31,7 +31,6 @@ from app.engine.live.host_daemon_client import (
     HostDaemonError,
     HostDaemonOutcomeUnknownError,
     deploy,
-    emergency_flatten_run,
     ensure_account_clerk,
     release_account_clerk,
     start_run,
@@ -73,6 +72,24 @@ async def test_start_run_returns_parsed_body_on_2xx() -> None:
 
 
 @pytest.mark.asyncio
+async def test_start_run_uses_bounded_admission_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_timeout: list[httpx.Timeout] = []
+
+    async def post(_url: str, _payload: dict, *, timeout: httpx.Timeout) -> dict:
+        observed_timeout.append(timeout)
+        return {"accepted": True}
+
+    monkeypatch.setattr(host_daemon_client, "_post_action", post)
+
+    await start_run(BASE, "run-A", {})
+
+    assert observed_timeout == [host_daemon_client._START_ADMISSION_TIMEOUT]
+    assert observed_timeout[0].read > host_daemon_client._TIMEOUT.read
+
+
+@pytest.mark.asyncio
 @respx.mock
 async def test_ensure_account_clerk_sends_host_side_broker_address() -> None:
     route = respx.post(f"{BASE}/accounts/DU123/clerk/ensure").mock(
@@ -87,6 +104,24 @@ async def test_ensure_account_clerk_sends_host_side_broker_address() -> None:
 
     assert result == {"clerks": []}
     assert route.calls.last.request.content == b'{"ibkr_host":"127.0.0.1"}'
+
+
+@pytest.mark.asyncio
+async def test_ensure_account_clerk_uses_bounded_admission_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_timeout: list[httpx.Timeout] = []
+
+    async def post(_url: str, _payload: dict, *, timeout: httpx.Timeout) -> dict:
+        observed_timeout.append(timeout)
+        return {"clerks": []}
+
+    monkeypatch.setattr(host_daemon_client, "_post_action", post)
+
+    await ensure_account_clerk(BASE, "DU123")
+
+    assert observed_timeout == [host_daemon_client._START_ADMISSION_TIMEOUT]
+    assert observed_timeout[0].read > host_daemon_client._TIMEOUT.read
 
 
 @pytest.mark.asyncio
@@ -155,16 +190,26 @@ async def test_remote_protocol_error_raises_outcome_unknown() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_emergency_flatten_read_timeout_raises_outcome_unknown() -> None:
-    """The 130s flatten timeout is the most common place a ReadTimeout
-    fires; the broker round-trip means an ambiguous outcome here has
-    the highest stakes."""
-    respx.post(f"{BASE}/runs/run-A/emergency-flatten").mock(
-        side_effect=httpx.ReadTimeout("read")
+async def test_persisted_daemon_idempotency_unknown_maps_to_outcome_unknown() -> None:
+    """A daemon crash after command execution is not a normal 409 rejection."""
+
+    respx.post(f"{BASE}/runs/run-A/stop").mock(
+        return_value=httpx.Response(
+            409,
+            json={
+                "detail": {
+                    "reason_code": "IDEMPOTENCY_OUTCOME_UNKNOWN",
+                    "message": "reconcile before retrying",
+                    "idempotency_key": "opaque-key",
+                }
+            },
+        )
     )
 
-    with pytest.raises(HostDaemonOutcomeUnknownError):
-        await emergency_flatten_run(BASE, "run-A", {})
+    with pytest.raises(HostDaemonOutcomeUnknownError) as exc_info:
+        await stop_run(BASE, "run-A", {"idempotency_key": "opaque-key"})
+
+    assert exc_info.value.error_category == "idempotency_outcome_unknown"
 
 
 # ---------------------------------------------------------------------------

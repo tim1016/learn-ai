@@ -508,6 +508,207 @@
         "title": "AccountClerkRecoveryFlattenReceipt",
         "type": "object"
       },
+      "AccountClerkRestartSmokeRequest": {
+        "additionalProperties": false,
+        "description": "Typed acknowledgement that the current Clerk passed its restart smoke.",
+        "properties": {
+          "confirmation": {
+            "const": "CLERK_RESTART_SMOKE",
+            "title": "Confirmation"
+          }
+        },
+        "required": [
+          "confirmation"
+        ],
+        "title": "AccountClerkRestartSmokeRequest",
+        "type": "object"
+      },
+      "AccountClerkRestartSmokeResponse": {
+        "description": "Durable Clerk-restart smoke receipt used by gate promotion.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "clerk_generation": {
+            "minimum": 1.0,
+            "title": "Clerk Generation",
+            "type": "integer"
+          },
+          "recorded_at_ms": {
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account_id",
+          "clerk_generation",
+          "recorded_at_ms"
+        ],
+        "title": "AccountClerkRestartSmokeResponse",
+        "type": "object"
+      },
+      "AccountClerkRestoreReceipt": {
+        "description": "Durable account-event receipt for a completed Clerk restore.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "clerk_generation": {
+            "minimum": 1.0,
+            "title": "Clerk Generation",
+            "type": "integer"
+          },
+          "receipt_id": {
+            "maxLength": 320,
+            "minLength": 1,
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version"
+          }
+        },
+        "required": [
+          "receipt_id",
+          "account_id",
+          "clerk_generation",
+          "recorded_at_ms"
+        ],
+        "title": "AccountClerkRestoreReceipt",
+        "type": "object"
+      },
+      "AccountClerkRestoreRequest": {
+        "description": "Typed confirmation for the daemon-supervised Clerk restore operation.",
+        "properties": {
+          "confirmation_token": {
+            "const": "RESTORE",
+            "title": "Confirmation Token"
+          },
+          "idempotency_key": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirmation_token",
+          "idempotency_key"
+        ],
+        "title": "AccountClerkRestoreRequest",
+        "type": "object"
+      },
+      "AccountCockpitDaemon": {
+        "description": "Host-daemon observation used only for honest cockpit guidance.",
+        "properties": {
+          "availability": {
+            "enum": [
+              "AVAILABLE",
+              "DOWN",
+              "UNREADABLE"
+            ],
+            "title": "Availability",
+            "type": "string"
+          },
+          "detail": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Detail",
+            "type": "string"
+          },
+          "observed_at_ms": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "reason_code": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Reason Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "availability",
+          "reason_code",
+          "detail",
+          "observed_at_ms"
+        ],
+        "title": "AccountCockpitDaemon",
+        "type": "object"
+      },
+      "AccountCockpitResponse": {
+        "description": "One display/control projection for a single account cockpit page.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "blockers": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorBlocker"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "clerk": {
+            "$ref": "#/components/schemas/AccountServiceStatusResponse"
+          },
+          "daemon": {
+            "$ref": "#/components/schemas/AccountCockpitDaemon"
+          },
+          "generated_at_ms": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Generated At Ms",
+            "type": "integer"
+          },
+          "mode": {
+            "enum": [
+              "NORMAL",
+              "CLERK_DOWN",
+              "JOURNAL_CORRUPT",
+              "JOURNAL_EVIDENCE_HOLD",
+              "DAEMON_DOWN",
+              "DAEMON_UNREADABLE"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version"
+          }
+        },
+        "required": [
+          "account_id",
+          "generated_at_ms",
+          "mode",
+          "clerk",
+          "daemon"
+        ],
+        "title": "AccountCockpitResponse",
+        "type": "object"
+      },
       "AccountConditionOwner": {
         "additionalProperties": false,
         "description": "Owner of a derived sick-bay condition.",
@@ -690,7 +891,7 @@
       },
       "AccountEmergencyFlattenResponse": {
         "additionalProperties": false,
-        "description": "Receipt returned after the account-scoped emergency CLI completes.",
+        "description": "Receipt returned after the Clerk re-observes the account flat.",
         "properties": {
           "accepted": {
             "title": "Accepted",
@@ -712,6 +913,22 @@
             "minimum": 0.0,
             "title": "Completed At Ms",
             "type": "integer"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "idempotency_replayed": {
+            "default": false,
+            "title": "Idempotency Replayed",
+            "type": "boolean"
           }
         },
         "required": [
@@ -1489,6 +1706,33 @@
             ],
             "title": "Lease Generation"
           },
+          "ledger_parity": {
+            "enum": [
+              "clean",
+              "dirty"
+            ],
+            "title": "Ledger Parity",
+            "type": "string"
+          },
+          "ledger_parity_issue_count": {
+            "minimum": 0.0,
+            "title": "Ledger Parity Issue Count",
+            "type": "integer"
+          },
+          "ledger_read_authority": {
+            "enum": [
+              "legacy_registry",
+              "clerk_ledger"
+            ],
+            "title": "Ledger Read Authority",
+            "type": "string"
+          },
+          "pending_retirement_proposals": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Pending Retirement Proposals",
+            "type": "integer"
+          },
           "state": {
             "enum": [
               "ATTACHED",
@@ -1500,14 +1744,134 @@
           }
         },
         "required": [
-          "state"
+          "state",
+          "ledger_read_authority",
+          "ledger_parity",
+          "ledger_parity_issue_count"
         ],
         "title": "AccountServiceBinding",
+        "type": "object"
+      },
+      "AccountServiceGateAuthority": {
+        "description": "Exact backend-authoritative account-gate promotion state.",
+        "properties": {
+          "action_authority": {
+            "enum": [
+              "account_truth",
+              "observation_lease"
+            ],
+            "title": "Action Authority",
+            "type": "string"
+          },
+          "action_gate": {
+            "$ref": "#/components/schemas/GateResult"
+          },
+          "disposition": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disposition"
+          },
+          "effective_authority": {
+            "enum": [
+              "account_truth",
+              "observation_lease"
+            ],
+            "title": "Effective Authority",
+            "type": "string"
+          },
+          "lease_weaker_comparison_count": {
+            "minimum": 0.0,
+            "title": "Lease Weaker Comparison Count",
+            "type": "integer"
+          },
+          "observed_session_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Observed Session Dates",
+            "type": "array"
+          },
+          "promotion_state": {
+            "enum": [
+              "SAFE_DEFAULT",
+              "WAITING_FOR_SHADOW_PARITY",
+              "WAITING_FOR_CLERK_RESTART_SMOKE",
+              "CLERK_PROOF_ACTIVE"
+            ],
+            "title": "Promotion State",
+            "type": "string"
+          },
+          "reason_code": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "requested_authority": {
+            "enum": [
+              "account_truth",
+              "observation_lease"
+            ],
+            "title": "Requested Authority",
+            "type": "string"
+          },
+          "restart_smoke_recorded_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restart Smoke Recorded At Ms"
+          }
+        },
+        "required": [
+          "requested_authority",
+          "effective_authority",
+          "promotion_state",
+          "reason_code",
+          "action_authority",
+          "action_gate",
+          "lease_weaker_comparison_count"
+        ],
+        "title": "AccountServiceGateAuthority",
         "type": "object"
       },
       "AccountServiceJournalWatermark": {
         "description": "Newest durable Account Clerk journal entry, if any.",
         "properties": {
+          "corruption_detail": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Corruption Detail"
+          },
+          "integrity": {
+            "default": "healthy",
+            "enum": [
+              "healthy",
+              "corrupt",
+              "broker_evidence_only"
+            ],
+            "title": "Integrity",
+            "type": "string"
+          },
           "last_seq": {
             "anyOf": [
               {
@@ -1532,6 +1896,24 @@
               }
             ],
             "title": "Last Write Ms"
+          },
+          "recovery_phase": {
+            "anyOf": [
+              {
+                "enum": [
+                  "QUARANTINE_REQUIRED",
+                  "QUARANTINE_PENDING",
+                  "REBASELINE_REQUIRED",
+                  "REBASELINE_PENDING",
+                  "COMPLETE"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery Phase"
           }
         },
         "title": "AccountServiceJournalWatermark",
@@ -1582,6 +1964,24 @@
         "title": "AccountServiceLease",
         "type": "object"
       },
+      "AccountServiceSessionPolicy": {
+        "description": "The account-wide live-session enforcement verdict and exception flag.",
+        "properties": {
+          "allow_outside_live_session": {
+            "title": "Allow Outside Live Session",
+            "type": "boolean"
+          },
+          "gate_result": {
+            "$ref": "#/components/schemas/GateResult"
+          }
+        },
+        "required": [
+          "allow_outside_live_session",
+          "gate_result"
+        ],
+        "title": "AccountServiceSessionPolicy",
+        "type": "object"
+      },
       "AccountServiceStatusResponse": {
         "description": "Full read-only Account service status for one known account.",
         "properties": {
@@ -1608,6 +2008,9 @@
             "minLength": 1,
             "title": "Detail",
             "type": "string"
+          },
+          "gate_authority": {
+            "$ref": "#/components/schemas/AccountServiceGateAuthority"
           },
           "generation": {
             "anyOf": [
@@ -1680,9 +2083,12 @@
             "title": "Phase"
           },
           "schema_version": {
-            "const": 2,
-            "default": 2,
+            "const": 3,
+            "default": 3,
             "title": "Schema Version"
+          },
+          "session_policy": {
+            "$ref": "#/components/schemas/AccountServiceSessionPolicy"
           },
           "source": {
             "anyOf": [
@@ -1701,6 +2107,8 @@
           "account_id",
           "attachment",
           "binding",
+          "gate_authority",
+          "session_policy",
           "journal",
           "operating_state",
           "headline",
@@ -1772,6 +2180,48 @@
           "headline"
         ],
         "title": "AccountServiceSummary",
+        "type": "object"
+      },
+      "AccountSessionPolicyUpdateRequest": {
+        "additionalProperties": false,
+        "description": "Explicit account-level future hook for outside-live-session actions.",
+        "properties": {
+          "allow_outside_live_session": {
+            "title": "Allow Outside Live Session",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "allow_outside_live_session"
+        ],
+        "title": "AccountSessionPolicyUpdateRequest",
+        "type": "object"
+      },
+      "AccountSessionPolicyUpdateResponse": {
+        "description": "Durable receipt for an account session-policy change.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "allow_outside_live_session": {
+            "title": "Allow Outside Live Session",
+            "type": "boolean"
+          },
+          "updated_at_ms": {
+            "minimum": 0.0,
+            "title": "Updated At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account_id",
+          "allow_outside_live_session",
+          "updated_at_ms"
+        ],
+        "title": "AccountSessionPolicyUpdateResponse",
         "type": "object"
       },
       "AccountTriageBotRef": {
@@ -5702,6 +6152,11 @@
             ],
             "title": "Attention Badge"
           },
+          "carryover_policy": {
+            "const": "FORBID",
+            "default": "FORBID",
+            "title": "Carryover Policy"
+          },
           "conditions": {
             "items": {
               "$ref": "#/components/schemas/BotLifecycleCondition"
@@ -5726,6 +6181,16 @@
             "default": false,
             "title": "Drift Detected",
             "type": "boolean"
+          },
+          "duty_outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BotDutyOutcomeView"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "latest_run_id": {
             "anyOf": [
@@ -5878,6 +6343,51 @@
           "marker_path"
         ],
         "title": "BotDeleteResponse",
+        "type": "object"
+      },
+      "BotDutyOutcomeView": {
+        "additionalProperties": false,
+        "description": "Durable terminal duty evidence rendered by the operator surface.",
+        "properties": {
+          "kind": {
+            "enum": [
+              "CLOCKED_OUT_FLAT",
+              "STOPPED",
+              "HALTED",
+              "CRASHED",
+              "FAILED_LAUNCH",
+              "EXITED_UNVERIFIED",
+              "RETIRED"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "reason_code": {
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          }
+        },
+        "required": [
+          "kind",
+          "reason_code",
+          "recorded_at_ms"
+        ],
+        "title": "BotDutyOutcomeView",
         "type": "object"
       },
       "BotEveningReport": {
@@ -8793,672 +9303,6 @@
         "title": "CloseLegExit",
         "type": "object"
       },
-      "CohortBatchLaunchCommandRequest": {
-        "additionalProperties": false,
-        "description": "Client selection for one server-authored cohort launch command.\n\nThe member IDs are a compare-and-swap token for the displayed roll-call\nset, not authority to select stale offers, invent a window, or author an\noutcome.  The data plane refreshes and pins every other field.",
-        "properties": {
-          "launch_profile": {
-            "anyOf": [
-              {
-                "enum": [
-                  "paper_three_bot_stagger_v2",
-                  "paper_five_bot_stagger_v2"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Launch Profile"
-          },
-          "member_strategy_instance_ids": {
-            "items": {
-              "type": "string"
-            },
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Member Strategy Instance Ids",
-            "type": "array"
-          }
-        },
-        "required": [
-          "member_strategy_instance_ids"
-        ],
-        "title": "CohortBatchLaunchCommandRequest",
-        "type": "object"
-      },
-      "CohortBatchLaunchMemberOutcomeRequest": {
-        "additionalProperties": false,
-        "description": "One client-observed start result, retained with its safe follow-up.",
-        "properties": {
-          "next_safe_action": {
-            "maxLength": 512,
-            "minLength": 1,
-            "title": "Next Safe Action",
-            "type": "string"
-          },
-          "reason": {
-            "enum": [
-              "COHORT_ACCOUNT_FROZEN",
-              "COHORT_CRASH_RECOVERY_BLOCKED",
-              "COHORT_DAEMON_NOT_STARTABLE",
-              "COHORT_DAEMON_UNAVAILABLE",
-              "COHORT_MEMBER_DELETED",
-              "COHORT_MEMBER_POISONED",
-              "COHORT_MEMBER_RETIRED",
-              "COHORT_PRIOR_MEMBER_BLOCKED",
-              "COHORT_POSTURE_MISMATCH",
-              "COHORT_SLOT_PREFLIGHT_NOT_READY",
-              "COHORT_START_ACCEPTED",
-              "COHORT_START_FAILED",
-              "COHORT_START_NOT_ACCEPTED",
-              "COHORT_START_REJECTED",
-              "COHORT_START_SETTINGS_UNREADABLE"
-            ],
-            "title": "Reason",
-            "type": "string"
-          },
-          "state": {
-            "enum": [
-              "accepted",
-              "blocked",
-              "skipped"
-            ],
-            "title": "State",
-            "type": "string"
-          },
-          "strategy_instance_id": {
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Strategy Instance Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "strategy_instance_id",
-          "state",
-          "reason",
-          "next_safe_action"
-        ],
-        "title": "CohortBatchLaunchMemberOutcomeRequest",
-        "type": "object"
-      },
-      "CohortBatchLaunchStatusResponse": {
-        "additionalProperties": false,
-        "description": "Durable cohort authorization plus the latest exact member outcomes.",
-        "properties": {
-          "account_id": {
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Account Id",
-            "type": "string"
-          },
-          "authorized_by": {
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Authorized By",
-            "type": "string"
-          },
-          "authorized_recorded_at_ms": {
-            "minimum": 0.0,
-            "title": "Authorized Recorded At Ms",
-            "type": "integer"
-          },
-          "cohort_id": {
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Cohort Id",
-            "type": "string"
-          },
-          "evidence": {
-            "$ref": "#/components/schemas/CohortEvidenceSummaryResponse"
-          },
-          "launch_profile": {
-            "anyOf": [
-              {
-                "enum": [
-                  "paper_three_bot_stagger_v2",
-                  "paper_five_bot_stagger_v2"
-                ],
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Launch Profile"
-          },
-          "member_scheduled_start_at_ms": {
-            "additionalProperties": {
-              "type": "integer"
-            },
-            "title": "Member Scheduled Start At Ms",
-            "type": "object"
-          },
-          "member_strategy_instance_ids": {
-            "items": {
-              "type": "string"
-            },
-            "maxItems": 128,
-            "minItems": 1,
-            "title": "Member Strategy Instance Ids",
-            "type": "array"
-          },
-          "outcomes": {
-            "items": {
-              "$ref": "#/components/schemas/CohortBatchLaunchMemberOutcomeRequest"
-            },
-            "title": "Outcomes",
-            "type": "array"
-          },
-          "outcomes_error": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Outcomes Error"
-          },
-          "outcomes_recorded_at_ms": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Outcomes Recorded At Ms"
-          },
-          "outcomes_state": {
-            "enum": [
-              "pending",
-              "recorded",
-              "unreadable"
-            ],
-            "title": "Outcomes State",
-            "type": "string"
-          },
-          "schema_version": {
-            "default": 1,
-            "title": "Schema Version",
-            "type": "integer"
-          },
-          "window_end_ms": {
-            "minimum": 0.0,
-            "title": "Window End Ms",
-            "type": "integer"
-          },
-          "window_start_ms": {
-            "minimum": 0.0,
-            "title": "Window Start Ms",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "account_id",
-          "cohort_id",
-          "member_strategy_instance_ids",
-          "window_start_ms",
-          "window_end_ms",
-          "authorized_by",
-          "authorized_recorded_at_ms",
-          "outcomes_state"
-        ],
-        "title": "CohortBatchLaunchStatusResponse",
-        "type": "object"
-      },
-      "CohortCertificateRoundTrip": {
-        "additionalProperties": false,
-        "properties": {
-          "bot_order_namespace": {
-            "title": "Bot Order Namespace",
-            "type": "string"
-          },
-          "closed": {
-            "title": "Closed",
-            "type": "boolean"
-          },
-          "exec_ids": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Exec Ids",
-            "type": "array"
-          },
-          "order_ids": {
-            "items": {
-              "type": "integer"
-            },
-            "title": "Order Ids",
-            "type": "array"
-          },
-          "order_refs": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Order Refs",
-            "type": "array"
-          },
-          "perm_ids": {
-            "items": {
-              "type": "integer"
-            },
-            "title": "Perm Ids",
-            "type": "array"
-          },
-          "round_trip_count": {
-            "default": 0,
-            "minimum": 0.0,
-            "title": "Round Trip Count",
-            "type": "integer"
-          },
-          "saw_nonzero_exposure": {
-            "title": "Saw Nonzero Exposure",
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "bot_order_namespace",
-          "order_refs",
-          "order_ids",
-          "perm_ids",
-          "exec_ids",
-          "saw_nonzero_exposure",
-          "closed"
-        ],
-        "title": "CohortCertificateRoundTrip",
-        "type": "object"
-      },
-      "CohortCertificateSample": {
-        "additionalProperties": false,
-        "properties": {
-          "account_truth": {
-            "enum": [
-              "healthy",
-              "failed",
-              "unknown"
-            ],
-            "title": "Account Truth",
-            "type": "string"
-          },
-          "broker_net_positions": {
-            "anyOf": [
-              {
-                "additionalProperties": {
-                  "type": "integer"
-                },
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Broker Net Positions"
-          },
-          "broker_residual": {
-            "anyOf": [
-              {
-                "additionalProperties": {
-                  "type": "integer"
-                },
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Broker Residual"
-          },
-          "expected_at_ms": {
-            "minimum": 0.0,
-            "title": "Expected At Ms",
-            "type": "integer"
-          },
-          "fleet": {
-            "enum": [
-              "healthy",
-              "failed",
-              "unknown"
-            ],
-            "title": "Fleet",
-            "type": "string"
-          },
-          "members": {
-            "items": {
-              "$ref": "#/components/schemas/CohortEvidenceMemberResponse"
-            },
-            "title": "Members",
-            "type": "array"
-          },
-          "observed_at_ms": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Observed At Ms"
-          }
-        },
-        "required": [
-          "expected_at_ms",
-          "account_truth",
-          "fleet",
-          "members"
-        ],
-        "title": "CohortCertificateSample",
-        "type": "object"
-      },
-      "CohortEvidenceMemberResponse": {
-        "additionalProperties": false,
-        "description": "Latest server observation for one receipt-pinned cohort member.",
-        "properties": {
-          "orders_cap": {
-            "anyOf": [
-              {
-                "exclusiveMinimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Orders Cap"
-          },
-          "orders_used": {
-            "anyOf": [
-              {
-                "minimum": 0.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Orders Used"
-          },
-          "reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reason"
-          },
-          "run_id": {
-            "anyOf": [
-              {
-                "maxLength": 128,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Run Id"
-          },
-          "strategy_instance_id": {
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Strategy Instance Id",
-            "type": "string"
-          },
-          "verdict": {
-            "enum": [
-              "healthy",
-              "failed",
-              "unknown"
-            ],
-            "title": "Verdict",
-            "type": "string"
-          }
-        },
-        "required": [
-          "strategy_instance_id",
-          "verdict"
-        ],
-        "title": "CohortEvidenceMemberResponse",
-        "type": "object"
-      },
-      "CohortEvidenceSummaryResponse": {
-        "additionalProperties": false,
-        "description": "Server-authored cohort-window evidence with its calculation provenance.",
-        "properties": {
-          "cadence_ms": {
-            "exclusiveMinimum": 0.0,
-            "title": "Cadence Ms",
-            "type": "integer"
-          },
-          "healthy_overlap_ms": {
-            "minimum": 0.0,
-            "title": "Healthy Overlap Ms",
-            "type": "integer"
-          },
-          "members": {
-            "items": {
-              "$ref": "#/components/schemas/CohortEvidenceMemberResponse"
-            },
-            "title": "Members",
-            "type": "array"
-          },
-          "reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reason"
-          },
-          "sample_count": {
-            "minimum": 0.0,
-            "title": "Sample Count",
-            "type": "integer"
-          },
-          "source": {
-            "const": "account_event.cohort_evidence_sample",
-            "title": "Source"
-          },
-          "verdict": {
-            "enum": [
-              "healthy",
-              "failed",
-              "unknown"
-            ],
-            "title": "Verdict",
-            "type": "string"
-          }
-        },
-        "required": [
-          "sample_count",
-          "cadence_ms",
-          "healthy_overlap_ms",
-          "verdict",
-          "source"
-        ],
-        "title": "CohortEvidenceSummaryResponse",
-        "type": "object"
-      },
-      "CohortValidationCertificate": {
-        "additionalProperties": false,
-        "description": "Stable JSON artifact; generation time is intentionally not part of it.",
-        "properties": {
-          "account_id": {
-            "title": "Account Id",
-            "type": "string"
-          },
-          "cohort_id": {
-            "title": "Cohort Id",
-            "type": "string"
-          },
-          "evidence_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Evidence Reason"
-          },
-          "evidence_verdict": {
-            "enum": [
-              "healthy",
-              "failed",
-              "unknown"
-            ],
-            "title": "Evidence Verdict",
-            "type": "string"
-          },
-          "final_broker_net_positions": {
-            "anyOf": [
-              {
-                "additionalProperties": {
-                  "type": "integer"
-                },
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Final Broker Net Positions"
-          },
-          "final_broker_residual": {
-            "anyOf": [
-              {
-                "additionalProperties": {
-                  "type": "integer"
-                },
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Final Broker Residual"
-          },
-          "final_journal_exposure": {
-            "additionalProperties": {
-              "additionalProperties": {
-                "type": "number"
-              },
-              "type": "object"
-            },
-            "title": "Final Journal Exposure",
-            "type": "object"
-          },
-          "healthy_overlap_ms": {
-            "minimum": 0.0,
-            "title": "Healthy Overlap Ms",
-            "type": "integer"
-          },
-          "incidents": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Incidents",
-            "type": "array"
-          },
-          "member_run_ids": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "title": "Member Run Ids",
-            "type": "object"
-          },
-          "member_strategy_instance_ids": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Member Strategy Instance Ids",
-            "type": "array"
-          },
-          "reasons": {
-            "items": {
-              "type": "string"
-            },
-            "title": "Reasons",
-            "type": "array"
-          },
-          "round_trips": {
-            "items": {
-              "$ref": "#/components/schemas/CohortCertificateRoundTrip"
-            },
-            "title": "Round Trips",
-            "type": "array"
-          },
-          "samples": {
-            "items": {
-              "$ref": "#/components/schemas/CohortCertificateSample"
-            },
-            "title": "Samples",
-            "type": "array"
-          },
-          "schema_version": {
-            "default": 2,
-            "enum": [
-              1,
-              2
-            ],
-            "title": "Schema Version",
-            "type": "integer"
-          },
-          "verdict": {
-            "enum": [
-              "passed",
-              "failed",
-              "incomplete"
-            ],
-            "title": "Verdict",
-            "type": "string"
-          },
-          "window_end_ms": {
-            "minimum": 0.0,
-            "title": "Window End Ms",
-            "type": "integer"
-          },
-          "window_start_ms": {
-            "minimum": 0.0,
-            "title": "Window Start Ms",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "account_id",
-          "cohort_id",
-          "member_strategy_instance_ids",
-          "member_run_ids",
-          "window_start_ms",
-          "window_end_ms",
-          "healthy_overlap_ms",
-          "evidence_verdict",
-          "samples",
-          "round_trips",
-          "incidents",
-          "final_journal_exposure",
-          "verdict",
-          "reasons"
-        ],
-        "title": "CohortValidationCertificate",
-        "type": "object"
-      },
       "CommandSummary": {
         "description": "Pending/ack counts + latest verb for a run's command channel.",
         "properties": {
@@ -12080,7 +11924,7 @@
         "type": "object"
       },
       "EmergencyFlattenRequest": {
-        "description": "Body for the account-wide emergency flatten (\u00a7 7.2 #6).\n\nReaches the daemon's one-shot ``emergency-flatten`` CLI independent of any\nlive binding, so an operator can flatten after a halt/poison (when the\nbinding-gated console FLATTEN command is unavailable). ``account`` must echo\nthe IBKR account id \u2014 defense-in-depth mirroring the CLI ``--account`` gate,\nwhich refuses if it does not match the connected account.",
+        "description": "Body for the account-wide emergency flatten (\u00a7 7.2 #6).\n\nReaches the held Account Clerk independent of any live binding, so an\noperator can flatten after a halt/poison. The Clerk closes intake, records\ncancellation uncertainty, writes any liquidations under its own broker\nsession, and only completes after a fresh paper-account snapshot is flat.",
         "properties": {
           "account": {
             "maxLength": 32,
@@ -12088,15 +11932,23 @@
             "title": "Account",
             "type": "string"
           },
-          "confirm": {
-            "description": "Must be true; typo-proofing gate.",
-            "title": "Confirm",
-            "type": "boolean"
+          "confirmation_token": {
+            "const": "FLATTEN",
+            "description": "Exact typed confirmation required for the destructive account action.",
+            "title": "Confirmation Token"
+          },
+          "idempotency_key": {
+            "description": "Public emergency operation identity.",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
           }
         },
         "required": [
           "account",
-          "confirm"
+          "confirmation_token",
+          "idempotency_key"
         ],
         "title": "EmergencyFlattenRequest",
         "type": "object"
@@ -15044,6 +14896,22 @@
             ],
             "title": "Exit Reason"
           },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "idempotency_replayed": {
+            "default": false,
+            "title": "Idempotency Replayed",
+            "type": "boolean"
+          },
           "mutation_attempt_id": {
             "anyOf": [
               {
@@ -15461,19 +15329,6 @@
       "HostRunnerStartRequest": {
         "description": "Request body for starting one existing run from the host daemon.",
         "properties": {
-          "cohort_id": {
-            "anyOf": [
-              {
-                "maxLength": 128,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Cohort Id"
-          },
           "hydrate_policy": {
             "default": "require",
             "enum": [
@@ -15490,6 +15345,19 @@
             "minLength": 1,
             "title": "Ibkr Host",
             "type": "string"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
           },
           "max_orders_per_day": {
             "default": 2000,
@@ -15533,6 +15401,19 @@
             "default": false,
             "title": "Force",
             "type": "boolean"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
           }
         },
         "title": "HostRunnerStopRequest",
@@ -19566,6 +19447,109 @@
           "idempotency_key"
         ],
         "title": "JournalCureRequest",
+        "type": "object"
+      },
+      "JournalRecoveryPosition": {
+        "description": "One broker-observed holding retained without guessed bot ownership.",
+        "properties": {
+          "signed_quantity": {
+            "title": "Signed Quantity",
+            "type": "number"
+          },
+          "symbol": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "signed_quantity"
+        ],
+        "title": "JournalRecoveryPosition",
+        "type": "object"
+      },
+      "JournalRecoveryReceipt": {
+        "description": "Durable evidence returned after one recovery step completes.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "broker_evidence_positions": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/JournalRecoveryPosition"
+            },
+            "title": "Broker Evidence Positions",
+            "type": "array"
+          },
+          "phase": {
+            "enum": [
+              "REBASELINE_REQUIRED",
+              "COMPLETE"
+            ],
+            "title": "Phase",
+            "type": "string"
+          },
+          "quarantined_journal_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quarantined Journal Name"
+          },
+          "receipt_id": {
+            "maxLength": 320,
+            "minLength": 1,
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "receipt_id",
+          "account_id",
+          "phase",
+          "recorded_at_ms"
+        ],
+        "title": "JournalRecoveryReceipt",
+        "type": "object"
+      },
+      "JournalRecoveryRequest": {
+        "description": "A typed confirmation for exactly one irreversible ceremony step.",
+        "properties": {
+          "confirmation_token": {
+            "enum": [
+              "QUARANTINE",
+              "REBASELINE"
+            ],
+            "title": "Confirmation Token",
+            "type": "string"
+          },
+          "idempotency_key": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirmation_token",
+          "idempotency_key"
+        ],
+        "title": "JournalRecoveryRequest",
         "type": "object"
       },
       "JsonValue": {},
@@ -38200,211 +38184,10 @@
         ]
       }
     },
-    "/api/accounts/{account_id}/cohort-batch-launches/latest": {
-      "get": {
-        "description": "Return the most recent account-rooted cohort receipt and outcomes.",
-        "operationId": "get_latest_cohort_batch_launch_status_endpoint_api_accounts__account_id__cohort_batch_launches_latest_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "account_id",
-            "required": true,
-            "schema": {
-              "title": "Account Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/CohortBatchLaunchStatusResponse"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ],
-                  "title": "Response Get Latest Cohort Batch Launch Status Endpoint Api Accounts  Account Id  Cohort Batch Launches Latest Get"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Latest Cohort Batch Launch Status Endpoint",
-        "tags": [
-          "accounts"
-        ]
-      }
-    },
-    "/api/accounts/{account_id}/cohort-batch-launches/{cohort_id}": {
-      "get": {
-        "description": "Return one durable cohort receipt and its exact persisted outcomes.",
-        "operationId": "get_cohort_batch_launch_status_endpoint_api_accounts__account_id__cohort_batch_launches__cohort_id__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "account_id",
-            "required": true,
-            "schema": {
-              "title": "Account Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "cohort_id",
-            "required": true,
-            "schema": {
-              "title": "Cohort Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CohortBatchLaunchStatusResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Cohort Batch Launch Status Endpoint",
-        "tags": [
-          "accounts"
-        ]
-      }
-    },
-    "/api/accounts/{account_id}/cohort-batch-launches/{cohort_id}/certificate": {
-      "get": {
-        "description": "Read the immutable server-authored certificate without recomputation.",
-        "operationId": "get_cohort_validation_certificate_endpoint_api_accounts__account_id__cohort_batch_launches__cohort_id__certificate_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "account_id",
-            "required": true,
-            "schema": {
-              "title": "Account Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "cohort_id",
-            "required": true,
-            "schema": {
-              "title": "Cohort Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CohortValidationCertificate"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Cohort Validation Certificate Endpoint",
-        "tags": [
-          "accounts"
-        ]
-      },
+    "/api/accounts/{account_id}/clerk/restore": {
       "post": {
-        "description": "Generate once from durable evidence; never overwrite a certificate.",
-        "operationId": "create_cohort_validation_certificate_endpoint_api_accounts__account_id__cohort_batch_launches__cohort_id__certificate_post",
+        "description": "Restore the sole Clerk through the daemon and leave a durable receipt.",
+        "operationId": "restore_account_clerk_endpoint_api_accounts__account_id__clerk_restore_post",
         "parameters": [
           {
             "in": "path",
@@ -38416,11 +38199,71 @@
             }
           },
           {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountClerkRestoreRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountClerkRestoreReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Restore Account Clerk Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/cockpit": {
+      "get": {
+        "description": "Return the account cockpit's authoritative posture and degraded mode.",
+        "operationId": "account_cockpit_endpoint_api_accounts__account_id__cockpit_get",
+        "parameters": [
+          {
             "in": "path",
-            "name": "cohort_id",
+            "name": "account_id",
             "required": true,
             "schema": {
-              "title": "Cohort Id",
+              "title": "Account Id",
               "type": "string"
             }
           },
@@ -38442,11 +38285,11 @@
           }
         ],
         "responses": {
-          "201": {
+          "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CohortValidationCertificate"
+                  "$ref": "#/components/schemas/AccountCockpitResponse"
                 }
               }
             },
@@ -38463,7 +38306,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Create Cohort Validation Certificate Endpoint",
+        "summary": "Account Cockpit Endpoint",
         "tags": [
           "accounts"
         ]
@@ -38471,7 +38314,7 @@
     },
     "/api/accounts/{account_id}/emergency-flatten": {
       "post": {
-        "description": "Run the audited account-wide paper flatten without a surviving bot run.",
+        "description": "Authorize and dispatch one Clerk-owned account-wide paper flatten.",
         "operationId": "emergency_flatten_account_endpoint_api_accounts__account_id__emergency_flatten_post",
         "parameters": [
           {
@@ -38822,6 +38665,75 @@
         ]
       }
     },
+    "/api/accounts/{account_id}/gate-promotion/restart-smoke": {
+      "post": {
+        "description": "Record the typed restart smoke for the current accepting Clerk.",
+        "operationId": "record_account_clerk_restart_smoke_endpoint_api_accounts__account_id__gate_promotion_restart_smoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountClerkRestartSmokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountClerkRestartSmokeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Record Account Clerk Restart Smoke Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
     "/api/accounts/{account_id}/journal-cures": {
       "post": {
         "description": "Append a claim-reducing cure only after the account Clerk is healthy.",
@@ -38963,6 +38875,144 @@
           }
         },
         "summary": "Journal Cure Preview Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/journal-recovery/quarantine": {
+      "post": {
+        "description": "Permanently rename aside corrupt journal evidence after typed confirmation.",
+        "operationId": "quarantine_account_clerk_journal_endpoint_api_accounts__account_id__journal_recovery_quarantine_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JournalRecoveryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JournalRecoveryReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Quarantine Account Clerk Journal Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/journal-recovery/rebaseline": {
+      "post": {
+        "description": "Seed a fresh journal from a fresh broker snapshot; never infer bot ownership.",
+        "operationId": "rebaseline_account_clerk_journal_endpoint_api_accounts__account_id__journal_recovery_rebaseline_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JournalRecoveryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JournalRecoveryReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rebaseline Account Clerk Journal Endpoint",
         "tags": [
           "accounts"
         ]
@@ -39406,6 +39456,75 @@
           }
         },
         "summary": "Backfill False Crash Registry Rows Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/session-policy": {
+      "put": {
+        "description": "Set the account-wide outside-live-session exception explicitly.",
+        "operationId": "update_account_session_policy_endpoint_api_accounts__account_id__session_policy_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountSessionPolicyUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountSessionPolicyUpdateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Account Session Policy Endpoint",
         "tags": [
           "accounts"
         ]
@@ -44672,76 +44791,6 @@
         ]
       }
     },
-    "/api/live-instances/accounts/{account_id}/cohort-launch": {
-      "post": {
-        "description": "Atomically admit then start one exact, server-pinned cohort.\n\nThe browser provides only the member IDs it displayed.  The server refreshes\nroll call under an account admission lock, rejects any changed candidate\nset, persists the authorization before side effects, and derives every\noutcome from its own ``start_run`` calls.  Starts are intentionally not\nrolled back: an accepted sibling remains managed after a partial launch.",
-        "operationId": "launch_cohort_api_live_instances_accounts__account_id__cohort_launch_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "account_id",
-            "required": true,
-            "schema": {
-              "title": "Account Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CohortBatchLaunchCommandRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CohortBatchLaunchStatusResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Launch Cohort",
-        "tags": [
-          "live-instances",
-          "live-instances"
-        ]
-      }
-    },
     "/api/live-instances/audit-copy-sizing-lookup": {
       "get": {
         "description": "ADR 0009 \u00a7 3 \u2014 proxy the daemon's Reference parity gate to the cockpit.\n\nThe deploy form calls this on (1) initial audit-copy pick (no\n``proposed_sizing``, to learn the registered rule) and (2) on the\nReference parity preset click (with ``proposed_sizing``). The daemon\nreturns one of three verdicts (proven_match / proven_mismatch /\ncannot_prove); we propagate it verbatim.\n\nFails closed when the daemon is unreachable \u2014 the response carries\n``cannot_prove`` so the deploy form's gate banner reads \"Reference\nparity unavailable\" rather than silently enabling a preset that the\noperator believes is gated.",
@@ -45330,7 +45379,7 @@
     },
     "/api/live-instances/runs/{run_id}/start": {
       "post": {
-        "description": "Launch the host runner for ``run_id`` by forwarding to the daemon (ADR 0007).\n\nStart/Stop are routed through the data plane \u2014 not called from the browser \u2014\nbecause the daemon now enforces a mandatory ``X-Live-Runner-Token`` on every\nactuation route, and the browser must never hold that shared secret. The data\nplane reads the token from the artifacts bind mount and forwards it. The\ndaemon's statuses propagate verbatim: bad ``strategy``/spec mismatch -> 400,\nmissing run -> 404, subprocess/daemon unreachable -> 503.\n\nThe typed admission policy selects the gate set. Interactive starts recheck\nthe complete fail-closed chain; a receipt-authorized cohort slot trusts its\ndurable pin and rechecks only named dynamic safety state. Recovery of an\nalready-running exact pinned run is an accepted idempotent replay.\n\nSlice 3 (ADR 0011 amendment) \u2014 broker-activity publisher start. After\na successful start the broker-activity publisher is registered for\nthe running instance. Failure to bootstrap (broker disconnected,\nenvelope not yet visible) is logged but does NOT roll back the\nstart: the lazy ``_ensure_publisher`` fallback in\n``broker_activity.py`` re-attempts on the cockpit's first hit.",
+        "description": "Launch the host runner for ``run_id`` by forwarding to the daemon.",
         "operationId": "start_run_api_live_instances_runs__run_id__start_post",
         "parameters": [
           {
@@ -46378,79 +46427,9 @@
         ]
       }
     },
-    "/api/live-instances/{strategy_instance_id}/emergency-flatten": {
-      "post": {
-        "description": "Account-wide emergency flatten (\u00a7 7.2 #6), independent of a live binding.\n\nThe console FLATTEN *command* needs a live binding (it writes to the run's\ncommand channel for the engine to drain) \u2014 but after a halt/poison the\nbinding is gone, exactly when an operator most wants to flatten. This reaches\nthe daemon's one-shot ``emergency-flatten`` on the instance's latest run,\nreusing the existing paper-guarded CLI. It connects its own broker session,\nso it works with no live process. Account-wide only; namespace-attributed\nreconciliation stays fail-closed. The operator must echo the account id\n(defense-in-depth, mirrors the CLI ``--account`` gate).",
-        "operationId": "emergency_flatten_instance_api_live_instances__strategy_instance_id__emergency_flatten_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "strategy_instance_id",
-            "required": true,
-            "schema": {
-              "title": "Strategy Instance Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Data-Plane-Control-Secret",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Data-Plane-Control-Secret"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/EmergencyFlattenRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HostRunnerActionResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Emergency Flatten Instance",
-        "tags": [
-          "live-instances",
-          "live-instances"
-        ]
-      }
-    },
     "/api/live-instances/{strategy_instance_id}/end-day-now": {
       "post": {
-        "description": "Instance-addressed clean exit request for the daily lifecycle toolbar.",
+        "description": "Queue Clerk-owned clean exit; only broker evidence can finish the day.",
         "operationId": "end_day_now_api_live_instances__strategy_instance_id__end_day_now_post",
         "parameters": [
           {

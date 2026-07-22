@@ -28,7 +28,6 @@ from app.routers import (
     broker_capability,
     broker_session,
     chart,
-    cohort_batch_launch,
     data_quality,
     dataset,
     edge,
@@ -266,47 +265,9 @@ async def lifespan(app: FastAPI):
     # its stored document.
     await live_instances_router.start_surface_hubs()
 
-    from app.services.cohort_evidence import get_cohort_evidence_sampler_registry
-    from app.services.cohort_launch import (
-        get_cohort_launch_scheduler_registry,
-        resume_open_cohort_evidence_samplers,
-        resume_open_cohort_launch_schedulers,
-    )
-
-    readonly_default = live_instances_router._resolve_readonly_default(ibkr_settings)
-
-    await resume_open_cohort_launch_schedulers(
-        artifacts_root=account_truth_artifacts_root(ibkr_settings),
-        live_runs_root=Path(ibkr_settings.live_runs_root),
-        run_roll_call=live_instances_router.run_roll_call,
-        start_run=live_instances_router.start_run,
-        visible_runs_by_instance=live_instances_router._visible_runs_by_instance,
-        run_account_id=live_instances_router._run_dir_account_id,
-        run_live_config=live_instances_router._cohort_live_config_for_run,
-        start_request_for_run=lambda run_dir: live_instances_router._cohort_start_request_for_run(
-            run_dir,
-            readonly_default=readonly_default,
-        ),
-        # Re-check the broker-owned posture before every resumed start slot.
-        target_account_posture=live_instances_router._cohort_target_account_posture,
-        now_ms=lambda: int(time.time() * 1_000),
-        evidence_samplers=get_cohort_evidence_sampler_registry(),
-        launch_schedulers=get_cohort_launch_scheduler_registry(),
-    )
-
-    await resume_open_cohort_evidence_samplers(
-        artifacts_root=account_truth_artifacts_root(ibkr_settings),
-        live_runs_root=Path(ibkr_settings.live_runs_root),
-        visible_runs_by_instance=live_instances_router._visible_runs_by_instance,
-        now_ms=lambda: int(time.time() * 1_000),
-        evidence_samplers=get_cohort_evidence_sampler_registry(),
-    )
-
     try:
         yield
     finally:
-        await get_cohort_launch_scheduler_registry().stop_all()
-        await get_cohort_evidence_sampler_registry().stop_all()
         await live_instances_router.stop_surface_hubs()
         await bot_events.get_bot_event_stream_service().stop_all()
         # Stop the daemon monitor first — its probe traffic stops cleanly
@@ -445,8 +406,6 @@ app.include_router(broker_capability.router, dependencies=DATA_PLANE_CONTROL_DEP
 app.include_router(broker_account_truth.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 # Account-scoped reconciliation and recovery triage endpoints.
 app.include_router(account_reconciliation.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
-# Operator-authorized deliberate cohort batch launch receipts.
-app.include_router(cohort_batch_launch.router, dependencies=DATA_PLANE_CONTROL_DEPENDENCIES)
 # Broker session mirror — read-only roster/SSE observatory with sensitive runtime data.
 app.include_router(broker_session.router, dependencies=PROTECTED_DATA_PLANE_READ_DEPENDENCIES)
 # Golden fixture catalog — reads manifest.json + artifacts/fixture-validation/latest.json.

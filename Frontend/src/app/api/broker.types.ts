@@ -64,27 +64,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/accounts/{account_id}/cohort-batch-launches/latest": {
+    "/api/accounts/{account_id}/clerk/restore": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /**
-         * Get Latest Cohort Batch Launch Status Endpoint
-         * @description Return the most recent account-rooted cohort receipt and outcomes.
-         */
-        get: operations["get_latest_cohort_batch_launch_status_endpoint_api_accounts__account_id__cohort_batch_launches_latest_get"];
+        get?: never;
         put?: never;
-        post?: never;
+        /**
+         * Restore Account Clerk Endpoint
+         * @description Restore the sole Clerk through the daemon and leave a durable receipt.
+         */
+        post: operations["restore_account_clerk_endpoint_api_accounts__account_id__clerk_restore_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/accounts/{account_id}/cohort-batch-launches/{cohort_id}": {
+    "/api/accounts/{account_id}/cockpit": {
         parameters: {
             query?: never;
             header?: never;
@@ -92,36 +92,12 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get Cohort Batch Launch Status Endpoint
-         * @description Return one durable cohort receipt and its exact persisted outcomes.
+         * Account Cockpit Endpoint
+         * @description Return the account cockpit's authoritative posture and degraded mode.
          */
-        get: operations["get_cohort_batch_launch_status_endpoint_api_accounts__account_id__cohort_batch_launches__cohort_id__get"];
+        get: operations["account_cockpit_endpoint_api_accounts__account_id__cockpit_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/accounts/{account_id}/cohort-batch-launches/{cohort_id}/certificate": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Cohort Validation Certificate Endpoint
-         * @description Read the immutable server-authored certificate without recomputation.
-         */
-        get: operations["get_cohort_validation_certificate_endpoint_api_accounts__account_id__cohort_batch_launches__cohort_id__certificate_get"];
-        put?: never;
-        /**
-         * Create Cohort Validation Certificate Endpoint
-         * @description Generate once from durable evidence; never overwrite a certificate.
-         */
-        post: operations["create_cohort_validation_certificate_endpoint_api_accounts__account_id__cohort_batch_launches__cohort_id__certificate_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -139,7 +115,7 @@ export interface paths {
         put?: never;
         /**
          * Emergency Flatten Account Endpoint
-         * @description Run the audited account-wide paper flatten without a surviving bot run.
+         * @description Authorize and dispatch one Clerk-owned account-wide paper flatten.
          */
         post: operations["emergency_flatten_account_endpoint_api_accounts__account_id__emergency_flatten_post"];
         delete?: never;
@@ -208,6 +184,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/{account_id}/gate-promotion/restart-smoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record Account Clerk Restart Smoke Endpoint
+         * @description Record the typed restart smoke for the current accepting Clerk.
+         */
+        post: operations["record_account_clerk_restart_smoke_endpoint_api_accounts__account_id__gate_promotion_restart_smoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}/journal-cures": {
         parameters: {
             query?: never;
@@ -242,6 +238,46 @@ export interface paths {
         get: operations["journal_cure_preview_endpoint_api_accounts__account_id__journal_cures_preview_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/journal-recovery/quarantine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Quarantine Account Clerk Journal Endpoint
+         * @description Permanently rename aside corrupt journal evidence after typed confirmation.
+         */
+        post: operations["quarantine_account_clerk_journal_endpoint_api_accounts__account_id__journal_recovery_quarantine_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/journal-recovery/rebaseline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rebaseline Account Clerk Journal Endpoint
+         * @description Seed a fresh journal from a fresh broker snapshot; never infer bot ownership.
+         */
+        post: operations["rebaseline_account_clerk_journal_endpoint_api_accounts__account_id__journal_recovery_rebaseline_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -382,6 +418,26 @@ export interface paths {
          * @description Repair latest crash-retired registry rows disproven by durable run status.
          */
         post: operations["backfill_false_crash_registry_rows_endpoint_api_accounts__account_id__registry_backfill_false_crashes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/session-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update Account Session Policy Endpoint
+         * @description Set the account-wide outside-live-session exception explicitly.
+         */
+        put: operations["update_account_session_policy_endpoint_api_accounts__account_id__session_policy_put"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2643,32 +2699,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/live-instances/accounts/{account_id}/cohort-launch": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Launch Cohort
-         * @description Atomically admit then start one exact, server-pinned cohort.
-         *
-         *     The browser provides only the member IDs it displayed.  The server refreshes
-         *     roll call under an account admission lock, rejects any changed candidate
-         *     set, persists the authorization before side effects, and derives every
-         *     outcome from its own ``start_run`` calls.  Starts are intentionally not
-         *     rolled back: an accepted sibling remains managed after a partial launch.
-         */
-        post: operations["launch_cohort_api_live_instances_accounts__account_id__cohort_launch_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/live-instances/audit-copy-sizing-lookup": {
         parameters: {
             query?: never;
@@ -2929,26 +2959,7 @@ export interface paths {
         put?: never;
         /**
          * Start Run
-         * @description Launch the host runner for ``run_id`` by forwarding to the daemon (ADR 0007).
-         *
-         *     Start/Stop are routed through the data plane — not called from the browser —
-         *     because the daemon now enforces a mandatory ``X-Live-Runner-Token`` on every
-         *     actuation route, and the browser must never hold that shared secret. The data
-         *     plane reads the token from the artifacts bind mount and forwards it. The
-         *     daemon's statuses propagate verbatim: bad ``strategy``/spec mismatch -> 400,
-         *     missing run -> 404, subprocess/daemon unreachable -> 503.
-         *
-         *     The typed admission policy selects the gate set. Interactive starts recheck
-         *     the complete fail-closed chain; a receipt-authorized cohort slot trusts its
-         *     durable pin and rechecks only named dynamic safety state. Recovery of an
-         *     already-running exact pinned run is an accepted idempotent replay.
-         *
-         *     Slice 3 (ADR 0011 amendment) — broker-activity publisher start. After
-         *     a successful start the broker-activity publisher is registered for
-         *     the running instance. Failure to bootstrap (broker disconnected,
-         *     envelope not yet visible) is logged but does NOT roll back the
-         *     start: the lazy ``_ensure_publisher`` fallback in
-         *     ``broker_activity.py`` re-attempts on the cockpit's first hit.
+         * @description Launch the host runner for ``run_id`` by forwarding to the daemon.
          */
         post: operations["start_run_api_live_instances_runs__run_id__start_post"];
         delete?: never;
@@ -3221,35 +3232,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/live-instances/{strategy_instance_id}/emergency-flatten": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Emergency Flatten Instance
-         * @description Account-wide emergency flatten (§ 7.2 #6), independent of a live binding.
-         *
-         *     The console FLATTEN *command* needs a live binding (it writes to the run's
-         *     command channel for the engine to drain) — but after a halt/poison the
-         *     binding is gone, exactly when an operator most wants to flatten. This reaches
-         *     the daemon's one-shot ``emergency-flatten`` on the instance's latest run,
-         *     reusing the existing paper-guarded CLI. It connects its own broker session,
-         *     so it works with no live process. Account-wide only; namespace-attributed
-         *     reconciliation stays fail-closed. The operator must echo the account id
-         *     (defense-in-depth, mirrors the CLI ``--account`` gate).
-         */
-        post: operations["emergency_flatten_instance_api_live_instances__strategy_instance_id__emergency_flatten_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/live-instances/{strategy_instance_id}/end-day-now": {
         parameters: {
             query?: never;
@@ -3261,7 +3243,7 @@ export interface paths {
         put?: never;
         /**
          * End Day Now
-         * @description Instance-addressed clean exit request for the daily lifecycle toolbar.
+         * @description Queue Clerk-owned clean exit; only broker evidence can finish the day.
          */
         post: operations["end_day_now_api_live_instances__strategy_instance_id__end_day_now_post"];
         delete?: never;
@@ -5359,6 +5341,104 @@ export interface components {
             status?: "recovery_flattened";
         };
         /**
+         * AccountClerkRestartSmokeRequest
+         * @description Typed acknowledgement that the current Clerk passed its restart smoke.
+         */
+        AccountClerkRestartSmokeRequest: {
+            /**
+             * Confirmation
+             * @constant
+             */
+            confirmation: "CLERK_RESTART_SMOKE";
+        };
+        /**
+         * AccountClerkRestartSmokeResponse
+         * @description Durable Clerk-restart smoke receipt used by gate promotion.
+         */
+        AccountClerkRestartSmokeResponse: {
+            /** Account Id */
+            account_id: string;
+            /** Clerk Generation */
+            clerk_generation: number;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+        };
+        /**
+         * AccountClerkRestoreReceipt
+         * @description Durable account-event receipt for a completed Clerk restore.
+         */
+        AccountClerkRestoreReceipt: {
+            /** Account Id */
+            account_id: string;
+            /** Clerk Generation */
+            clerk_generation: number;
+            /** Receipt Id */
+            receipt_id: string;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version?: 1;
+        };
+        /**
+         * AccountClerkRestoreRequest
+         * @description Typed confirmation for the daemon-supervised Clerk restore operation.
+         */
+        AccountClerkRestoreRequest: {
+            /**
+             * Confirmation Token
+             * @constant
+             */
+            confirmation_token: "RESTORE";
+            /** Idempotency Key */
+            idempotency_key: string;
+        };
+        /**
+         * AccountCockpitDaemon
+         * @description Host-daemon observation used only for honest cockpit guidance.
+         */
+        AccountCockpitDaemon: {
+            /**
+             * Availability
+             * @enum {string}
+             */
+            availability: "AVAILABLE" | "DOWN" | "UNREADABLE";
+            /** Detail */
+            detail: string;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Reason Code */
+            reason_code: string;
+        };
+        /**
+         * AccountCockpitResponse
+         * @description One display/control projection for a single account cockpit page.
+         */
+        AccountCockpitResponse: {
+            /** Account Id */
+            account_id: string;
+            /** Blockers */
+            blockers?: components["schemas"]["OperatorBlocker"][];
+            clerk: components["schemas"]["AccountServiceStatusResponse"];
+            daemon: components["schemas"]["AccountCockpitDaemon"];
+            /** Generated At Ms */
+            generated_at_ms: number;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "NORMAL" | "CLERK_DOWN" | "JOURNAL_CORRUPT" | "JOURNAL_EVIDENCE_HOLD" | "DAEMON_DOWN" | "DAEMON_UNREADABLE";
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version?: 1;
+        };
+        /**
          * AccountConditionOwner
          * @description Owner of a derived sick-bay condition.
          */
@@ -5422,7 +5502,7 @@ export interface components {
         };
         /**
          * AccountEmergencyFlattenResponse
-         * @description Receipt returned after the account-scoped emergency CLI completes.
+         * @description Receipt returned after the Clerk re-observes the account flat.
          */
         AccountEmergencyFlattenResponse: {
             /** Accepted */
@@ -5433,6 +5513,13 @@ export interface components {
             audit_run_id: string;
             /** Completed At Ms */
             completed_at_ms: number;
+            /** Idempotency Key */
+            idempotency_key?: string | null;
+            /**
+             * Idempotency Replayed
+             * @default false
+             */
+            idempotency_replayed?: boolean;
         };
         /**
          * AccountEventEvidenceRef
@@ -5750,20 +5837,84 @@ export interface components {
             /** Lease Generation */
             lease_generation?: number | null;
             /**
+             * Ledger Parity
+             * @enum {string}
+             */
+            ledger_parity: "clean" | "dirty";
+            /** Ledger Parity Issue Count */
+            ledger_parity_issue_count: number;
+            /**
+             * Ledger Read Authority
+             * @enum {string}
+             */
+            ledger_read_authority: "legacy_registry" | "clerk_ledger";
+            /**
+             * Pending Retirement Proposals
+             * @default 0
+             */
+            pending_retirement_proposals?: number;
+            /**
              * State
              * @enum {string}
              */
             state: "ATTACHED" | "UNATTACHED" | "FENCED";
         };
         /**
+         * AccountServiceGateAuthority
+         * @description Exact backend-authoritative account-gate promotion state.
+         */
+        AccountServiceGateAuthority: {
+            /**
+             * Action Authority
+             * @enum {string}
+             */
+            action_authority: "account_truth" | "observation_lease";
+            action_gate: components["schemas"]["GateResult"];
+            /** Disposition */
+            disposition?: string | null;
+            /**
+             * Effective Authority
+             * @enum {string}
+             */
+            effective_authority: "account_truth" | "observation_lease";
+            /** Lease Weaker Comparison Count */
+            lease_weaker_comparison_count: number;
+            /** Observed Session Dates */
+            observed_session_dates?: string[];
+            /**
+             * Promotion State
+             * @enum {string}
+             */
+            promotion_state: "SAFE_DEFAULT" | "WAITING_FOR_SHADOW_PARITY" | "WAITING_FOR_CLERK_RESTART_SMOKE" | "CLERK_PROOF_ACTIVE";
+            /** Reason Code */
+            reason_code: string;
+            /**
+             * Requested Authority
+             * @enum {string}
+             */
+            requested_authority: "account_truth" | "observation_lease";
+            /** Restart Smoke Recorded At Ms */
+            restart_smoke_recorded_at_ms?: number | null;
+        };
+        /**
          * AccountServiceJournalWatermark
          * @description Newest durable Account Clerk journal entry, if any.
          */
         AccountServiceJournalWatermark: {
+            /** Corruption Detail */
+            corruption_detail?: string | null;
+            /**
+             * Integrity
+             * @default healthy
+             * @enum {string}
+             */
+            integrity?: "healthy" | "corrupt" | "broker_evidence_only";
             /** Last Seq */
             last_seq?: number | null;
             /** Last Write Ms */
             last_write_ms?: number | null;
+            /** Recovery Phase */
+            recovery_phase?: ("QUARANTINE_REQUIRED" | "QUARANTINE_PENDING" | "REBASELINE_REQUIRED" | "REBASELINE_PENDING" | "COMPLETE") | null;
         };
         /**
          * AccountServiceLease
@@ -5785,6 +5936,15 @@ export interface components {
             valid_until_ms: number;
         };
         /**
+         * AccountServiceSessionPolicy
+         * @description The account-wide live-session enforcement verdict and exception flag.
+         */
+        AccountServiceSessionPolicy: {
+            /** Allow Outside Live Session */
+            allow_outside_live_session: boolean;
+            gate_result: components["schemas"]["GateResult"];
+        };
+        /**
          * AccountServiceStatusResponse
          * @description Full read-only Account service status for one known account.
          */
@@ -5799,6 +5959,7 @@ export interface components {
             binding: components["schemas"]["AccountServiceBinding"];
             /** Detail */
             detail: string;
+            gate_authority: components["schemas"]["AccountServiceGateAuthority"];
             /** Generation */
             generation?: number | null;
             /** Generation Recorded At Ms */
@@ -5816,10 +5977,11 @@ export interface components {
             phase?: ("accepting" | "reconnecting" | "draining" | "frozen") | null;
             /**
              * Schema Version
-             * @default 2
+             * @default 3
              * @constant
              */
-            schema_version?: 2;
+            schema_version?: 3;
+            session_policy: components["schemas"]["AccountServiceSessionPolicy"];
             /** Source */
             source?: string | null;
         };
@@ -5844,6 +6006,26 @@ export interface components {
             operating_state: "READY" | "STANDBY" | "ATTENTION";
             /** Phase */
             phase?: ("accepting" | "reconnecting" | "draining" | "frozen") | null;
+        };
+        /**
+         * AccountSessionPolicyUpdateRequest
+         * @description Explicit account-level future hook for outside-live-session actions.
+         */
+        AccountSessionPolicyUpdateRequest: {
+            /** Allow Outside Live Session */
+            allow_outside_live_session: boolean;
+        };
+        /**
+         * AccountSessionPolicyUpdateResponse
+         * @description Durable receipt for an account session-policy change.
+         */
+        AccountSessionPolicyUpdateResponse: {
+            /** Account Id */
+            account_id: string;
+            /** Allow Outside Live Session */
+            allow_outside_live_session: boolean;
+            /** Updated At Ms */
+            updated_at_ms: number;
         };
         /**
          * AccountTriageBotRef
@@ -7594,6 +7776,12 @@ export interface components {
             ambient_actions?: components["schemas"]["BotLifecycleAction"][];
             /** Attention Badge */
             attention_badge?: ("Sick bay" | "Ready" | "Off roster") | null;
+            /**
+             * Carryover Policy
+             * @default FORBID
+             * @constant
+             */
+            carryover_policy?: "FORBID";
             /** Conditions */
             conditions?: components["schemas"]["BotLifecycleCondition"][];
             /**
@@ -7606,6 +7794,7 @@ export interface components {
              * @default false
              */
             drift_detected?: boolean;
+            duty_outcome?: components["schemas"]["BotDutyOutcomeView"] | null;
             /** Latest Run Id */
             latest_run_id?: string | null;
             /**
@@ -7677,6 +7866,23 @@ export interface components {
             reason?: string | null;
             /** Strategy Instance Id */
             strategy_instance_id: string;
+        };
+        /**
+         * BotDutyOutcomeView
+         * @description Durable terminal duty evidence rendered by the operator surface.
+         */
+        BotDutyOutcomeView: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "CLOCKED_OUT_FLAT" | "STOPPED" | "HALTED" | "CRASHED" | "FAILED_LAUNCH" | "EXITED_UNVERIFIED" | "RETIRED";
+            /** Reason Code */
+            reason_code: string;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /** Run Id */
+            run_id?: string | null;
         };
         /**
          * BotEveningReport
@@ -8926,241 +9132,6 @@ export interface components {
              * @constant
              */
             kind: "close_leg";
-        };
-        /**
-         * CohortBatchLaunchCommandRequest
-         * @description Client selection for one server-authored cohort launch command.
-         *
-         *     The member IDs are a compare-and-swap token for the displayed roll-call
-         *     set, not authority to select stale offers, invent a window, or author an
-         *     outcome.  The data plane refreshes and pins every other field.
-         */
-        CohortBatchLaunchCommandRequest: {
-            /** Launch Profile */
-            launch_profile?: ("paper_three_bot_stagger_v2" | "paper_five_bot_stagger_v2") | null;
-            /** Member Strategy Instance Ids */
-            member_strategy_instance_ids: string[];
-        };
-        /**
-         * CohortBatchLaunchMemberOutcomeRequest
-         * @description One client-observed start result, retained with its safe follow-up.
-         */
-        CohortBatchLaunchMemberOutcomeRequest: {
-            /** Next Safe Action */
-            next_safe_action: string;
-            /**
-             * Reason
-             * @enum {string}
-             */
-            reason: "COHORT_ACCOUNT_FROZEN" | "COHORT_CRASH_RECOVERY_BLOCKED" | "COHORT_DAEMON_NOT_STARTABLE" | "COHORT_DAEMON_UNAVAILABLE" | "COHORT_MEMBER_DELETED" | "COHORT_MEMBER_POISONED" | "COHORT_MEMBER_RETIRED" | "COHORT_PRIOR_MEMBER_BLOCKED" | "COHORT_POSTURE_MISMATCH" | "COHORT_SLOT_PREFLIGHT_NOT_READY" | "COHORT_START_ACCEPTED" | "COHORT_START_FAILED" | "COHORT_START_NOT_ACCEPTED" | "COHORT_START_REJECTED" | "COHORT_START_SETTINGS_UNREADABLE";
-            /**
-             * State
-             * @enum {string}
-             */
-            state: "accepted" | "blocked" | "skipped";
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-        };
-        /**
-         * CohortBatchLaunchStatusResponse
-         * @description Durable cohort authorization plus the latest exact member outcomes.
-         */
-        CohortBatchLaunchStatusResponse: {
-            /** Account Id */
-            account_id: string;
-            /** Authorized By */
-            authorized_by: string;
-            /** Authorized Recorded At Ms */
-            authorized_recorded_at_ms: number;
-            /** Cohort Id */
-            cohort_id: string;
-            evidence?: components["schemas"]["CohortEvidenceSummaryResponse"];
-            /** Launch Profile */
-            launch_profile?: ("paper_three_bot_stagger_v2" | "paper_five_bot_stagger_v2") | null;
-            /** Member Scheduled Start At Ms */
-            member_scheduled_start_at_ms?: {
-                [key: string]: number;
-            };
-            /** Member Strategy Instance Ids */
-            member_strategy_instance_ids: string[];
-            /** Outcomes */
-            outcomes?: components["schemas"]["CohortBatchLaunchMemberOutcomeRequest"][];
-            /** Outcomes Error */
-            outcomes_error?: string | null;
-            /** Outcomes Recorded At Ms */
-            outcomes_recorded_at_ms?: number | null;
-            /**
-             * Outcomes State
-             * @enum {string}
-             */
-            outcomes_state: "pending" | "recorded" | "unreadable";
-            /**
-             * Schema Version
-             * @default 1
-             */
-            schema_version?: number;
-            /** Window End Ms */
-            window_end_ms: number;
-            /** Window Start Ms */
-            window_start_ms: number;
-        };
-        /** CohortCertificateRoundTrip */
-        CohortCertificateRoundTrip: {
-            /** Bot Order Namespace */
-            bot_order_namespace: string;
-            /** Closed */
-            closed: boolean;
-            /** Exec Ids */
-            exec_ids: string[];
-            /** Order Ids */
-            order_ids: number[];
-            /** Order Refs */
-            order_refs: string[];
-            /** Perm Ids */
-            perm_ids: number[];
-            /**
-             * Round Trip Count
-             * @default 0
-             */
-            round_trip_count?: number;
-            /** Saw Nonzero Exposure */
-            saw_nonzero_exposure: boolean;
-        };
-        /** CohortCertificateSample */
-        CohortCertificateSample: {
-            /**
-             * Account Truth
-             * @enum {string}
-             */
-            account_truth: "healthy" | "failed" | "unknown";
-            /** Broker Net Positions */
-            broker_net_positions?: {
-                [key: string]: number;
-            } | null;
-            /** Broker Residual */
-            broker_residual?: {
-                [key: string]: number;
-            } | null;
-            /** Expected At Ms */
-            expected_at_ms: number;
-            /**
-             * Fleet
-             * @enum {string}
-             */
-            fleet: "healthy" | "failed" | "unknown";
-            /** Members */
-            members: components["schemas"]["CohortEvidenceMemberResponse"][];
-            /** Observed At Ms */
-            observed_at_ms?: number | null;
-        };
-        /**
-         * CohortEvidenceMemberResponse
-         * @description Latest server observation for one receipt-pinned cohort member.
-         */
-        CohortEvidenceMemberResponse: {
-            /** Orders Cap */
-            orders_cap?: number | null;
-            /** Orders Used */
-            orders_used?: number | null;
-            /** Reason */
-            reason?: string | null;
-            /** Run Id */
-            run_id?: string | null;
-            /** Strategy Instance Id */
-            strategy_instance_id: string;
-            /**
-             * Verdict
-             * @enum {string}
-             */
-            verdict: "healthy" | "failed" | "unknown";
-        };
-        /**
-         * CohortEvidenceSummaryResponse
-         * @description Server-authored cohort-window evidence with its calculation provenance.
-         */
-        CohortEvidenceSummaryResponse: {
-            /** Cadence Ms */
-            cadence_ms: number;
-            /** Healthy Overlap Ms */
-            healthy_overlap_ms: number;
-            /** Members */
-            members?: components["schemas"]["CohortEvidenceMemberResponse"][];
-            /** Reason */
-            reason?: string | null;
-            /** Sample Count */
-            sample_count: number;
-            /**
-             * Source
-             * @constant
-             */
-            source: "account_event.cohort_evidence_sample";
-            /**
-             * Verdict
-             * @enum {string}
-             */
-            verdict: "healthy" | "failed" | "unknown";
-        };
-        /**
-         * CohortValidationCertificate
-         * @description Stable JSON artifact; generation time is intentionally not part of it.
-         */
-        CohortValidationCertificate: {
-            /** Account Id */
-            account_id: string;
-            /** Cohort Id */
-            cohort_id: string;
-            /** Evidence Reason */
-            evidence_reason?: string | null;
-            /**
-             * Evidence Verdict
-             * @enum {string}
-             */
-            evidence_verdict: "healthy" | "failed" | "unknown";
-            /** Final Broker Net Positions */
-            final_broker_net_positions?: {
-                [key: string]: number;
-            } | null;
-            /** Final Broker Residual */
-            final_broker_residual?: {
-                [key: string]: number;
-            } | null;
-            /** Final Journal Exposure */
-            final_journal_exposure: {
-                [key: string]: {
-                    [key: string]: number;
-                };
-            };
-            /** Healthy Overlap Ms */
-            healthy_overlap_ms: number;
-            /** Incidents */
-            incidents: string[];
-            /** Member Run Ids */
-            member_run_ids: {
-                [key: string]: string;
-            };
-            /** Member Strategy Instance Ids */
-            member_strategy_instance_ids: string[];
-            /** Reasons */
-            reasons: string[];
-            /** Round Trips */
-            round_trips: components["schemas"]["CohortCertificateRoundTrip"][];
-            /** Samples */
-            samples: components["schemas"]["CohortCertificateSample"][];
-            /**
-             * Schema Version
-             * @default 2
-             * @enum {integer}
-             */
-            schema_version?: 1 | 2;
-            /**
-             * Verdict
-             * @enum {string}
-             */
-            verdict: "passed" | "failed" | "incomplete";
-            /** Window End Ms */
-            window_end_ms: number;
-            /** Window Start Ms */
-            window_start_ms: number;
         };
         /**
          * CommandSummary
@@ -10565,20 +10536,25 @@ export interface components {
          * EmergencyFlattenRequest
          * @description Body for the account-wide emergency flatten (§ 7.2 #6).
          *
-         *     Reaches the daemon's one-shot ``emergency-flatten`` CLI independent of any
-         *     live binding, so an operator can flatten after a halt/poison (when the
-         *     binding-gated console FLATTEN command is unavailable). ``account`` must echo
-         *     the IBKR account id — defense-in-depth mirroring the CLI ``--account`` gate,
-         *     which refuses if it does not match the connected account.
+         *     Reaches the held Account Clerk independent of any live binding, so an
+         *     operator can flatten after a halt/poison. The Clerk closes intake, records
+         *     cancellation uncertainty, writes any liquidations under its own broker
+         *     session, and only completes after a fresh paper-account snapshot is flat.
          */
         EmergencyFlattenRequest: {
             /** Account */
             account: string;
             /**
-             * Confirm
-             * @description Must be true; typo-proofing gate.
+             * Confirmation Token
+             * @description Exact typed confirmation required for the destructive account action.
+             * @constant
              */
-            confirm: boolean;
+            confirmation_token: "FLATTEN";
+            /**
+             * Idempotency Key
+             * @description Public emergency operation identity.
+             */
+            idempotency_key: string;
         };
         /**
          * EngineBacktestJobRequest
@@ -12011,6 +11987,13 @@ export interface components {
             command_id?: string | null;
             /** Exit Reason */
             exit_reason?: string | null;
+            /** Idempotency Key */
+            idempotency_key?: string | null;
+            /**
+             * Idempotency Replayed
+             * @default false
+             */
+            idempotency_replayed?: boolean;
             /** Mutation Attempt Id */
             mutation_attempt_id?: string | null;
             /** Mutation Dispatch State */
@@ -12130,8 +12113,6 @@ export interface components {
          * @description Request body for starting one existing run from the host daemon.
          */
         HostRunnerStartRequest: {
-            /** Cohort Id */
-            cohort_id?: string | null;
             /**
              * Hydrate Policy
              * @default require
@@ -12143,6 +12124,8 @@ export interface components {
              * @default 127.0.0.1
              */
             ibkr_host?: string;
+            /** Idempotency Key */
+            idempotency_key?: string | null;
             /**
              * Max Orders Per Day
              * @default 2000
@@ -12171,6 +12154,8 @@ export interface components {
              * @default false
              */
             force?: boolean;
+            /** Idempotency Key */
+            idempotency_key?: string | null;
         };
         /**
          * IbkrAccountSummary
@@ -13998,6 +13983,53 @@ export interface components {
             signed_quantity: number;
             /** Symbol */
             symbol: string;
+        };
+        /**
+         * JournalRecoveryPosition
+         * @description One broker-observed holding retained without guessed bot ownership.
+         */
+        JournalRecoveryPosition: {
+            /** Signed Quantity */
+            signed_quantity: number;
+            /** Symbol */
+            symbol: string;
+        };
+        /**
+         * JournalRecoveryReceipt
+         * @description Durable evidence returned after one recovery step completes.
+         */
+        JournalRecoveryReceipt: {
+            /** Account Id */
+            account_id: string;
+            /**
+             * Broker Evidence Positions
+             * @default []
+             */
+            broker_evidence_positions?: components["schemas"]["JournalRecoveryPosition"][];
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "REBASELINE_REQUIRED" | "COMPLETE";
+            /** Quarantined Journal Name */
+            quarantined_journal_name?: string | null;
+            /** Receipt Id */
+            receipt_id: string;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+        };
+        /**
+         * JournalRecoveryRequest
+         * @description A typed confirmation for exactly one irreversible ceremony step.
+         */
+        JournalRecoveryRequest: {
+            /**
+             * Confirmation Token
+             * @enum {string}
+             */
+            confirmation_token: "QUARANTINE" | "REBASELINE";
+            /** Idempotency Key */
+            idempotency_key: string;
         };
         JsonValue: unknown;
         /**
@@ -22507,7 +22539,44 @@ export interface operations {
             };
         };
     };
-    get_latest_cohort_batch_launch_status_endpoint_api_accounts__account_id__cohort_batch_launches_latest_get: {
+    restore_account_clerk_endpoint_api_accounts__account_id__clerk_restore_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountClerkRestoreRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountClerkRestoreReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    account_cockpit_endpoint_api_accounts__account_id__cockpit_get: {
         parameters: {
             query?: never;
             header?: {
@@ -22526,109 +22595,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["CohortBatchLaunchStatusResponse"] | null;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_cohort_batch_launch_status_endpoint_api_accounts__account_id__cohort_batch_launches__cohort_id__get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-                cohort_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CohortBatchLaunchStatusResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_cohort_validation_certificate_endpoint_api_accounts__account_id__cohort_batch_launches__cohort_id__certificate_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-                cohort_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CohortValidationCertificate"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_cohort_validation_certificate_endpoint_api_accounts__account_id__cohort_batch_launches__cohort_id__certificate_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-                cohort_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CohortValidationCertificate"];
+                    "application/json": components["schemas"]["AccountCockpitResponse"];
                 };
             };
             /** @description Validation Error */
@@ -22792,6 +22759,43 @@ export interface operations {
             };
         };
     };
+    record_account_clerk_restart_smoke_endpoint_api_accounts__account_id__gate_promotion_restart_smoke_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountClerkRestartSmokeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountClerkRestartSmokeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     apply_journal_cure_endpoint_api_accounts__account_id__journal_cures_post: {
         parameters: {
             query?: never;
@@ -22852,6 +22856,80 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JournalCurePreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    quarantine_account_clerk_journal_endpoint_api_accounts__account_id__journal_recovery_quarantine_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JournalRecoveryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JournalRecoveryReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rebaseline_account_clerk_journal_endpoint_api_accounts__account_id__journal_recovery_rebaseline_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JournalRecoveryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JournalRecoveryReceipt"];
                 };
             };
             /** @description Validation Error */
@@ -23095,6 +23173,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountFalseCrashBackfillResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_account_session_policy_endpoint_api_accounts__account_id__session_policy_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountSessionPolicyUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountSessionPolicyUpdateResponse"];
                 };
             };
             /** @description Validation Error */
@@ -26268,43 +26383,6 @@ export interface operations {
             };
         };
     };
-    launch_cohort_api_live_instances_accounts__account_id__cohort_launch_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                account_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CohortBatchLaunchCommandRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CohortBatchLaunchStatusResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_audit_copy_sizing_lookup_api_live_instances_audit_copy_sizing_lookup_get: {
         parameters: {
             query: {
@@ -27089,43 +27167,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SetInstanceDesiredStateResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    emergency_flatten_instance_api_live_instances__strategy_instance_id__emergency_flatten_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-Data-Plane-Control-Secret"?: string | null;
-            };
-            path: {
-                strategy_instance_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EmergencyFlattenRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HostRunnerActionResponse"];
                 };
             };
             /** @description Validation Error */

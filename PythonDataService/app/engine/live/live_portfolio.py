@@ -28,6 +28,7 @@ from app.broker.ibkr.client import BrokerError, IbkrClient
 from app.broker.ibkr.models import IbkrOrderAck, IbkrOrderEvent, IbkrOrderSpec
 from app.broker.ibkr.orders import (
     cancel_paper_order,
+    executions_for_reconnect_recovery,
     list_open_orders,
     place_paper_order,
     stream_order_events,
@@ -48,6 +49,7 @@ from app.engine.live.account_owner_fence import (
 from app.engine.live.intent_events import DropReason
 from app.schemas.broker_capability import SessionKind
 from app.schemas.live_runs import GateResult
+from app.services.account_gate_promotion import resolve_action_gate
 from app.services.session_authority import (
     SessionAuthorityState,
     evaluate_session_submit,
@@ -197,6 +199,14 @@ class AccountTruthBlockError(SubmitGateBlockError):
     def __init__(self, *, gate_result: object) -> None:
         reason = getattr(gate_result, "operator_reason", None)
         super().__init__(f"AccountTruthBlockError(reason={reason!r})")
+        self.gate_result = gate_result
+
+
+class AccountLiveSessionBlockError(SubmitGateBlockError):
+    """Raised when account-wide live-session policy blocks submit or flatten."""
+
+    def __init__(self, *, gate_result: GateResult) -> None:
+        super().__init__(f"AccountLiveSessionBlockError(reason={gate_result.operator_reason!r})")
         self.gate_result = gate_result
 
 
@@ -483,6 +493,44 @@ class IbkrBrokerAdapter(BrokerAdapter):
             await self._wait_for_terminal_fills(targeted_set)
         return targeted
 
+    async def cancel_open_orders_for_refs(self, order_refs: tuple[str, ...]) -> list[int]:
+        """Cancel only the exact broker references selected by Clerk recovery.
+
+        Emergency operations share a reserved namespace, so a namespace prefix
+        is too broad when resuming one interrupted operation.  The Clerk has
+        already durably selected these exact refs; this adapter rechecks that
+        exact broker echo and cancels no sibling operation's order.
+        """
+
+        self._enforce_account_owner_write_fence("broker.cancel_open_orders_for_refs")
+        expected_refs = set(order_refs)
+        if not expected_refs:
+            return []
+        open_orders = await list_open_orders(self._client)
+        targeted = [
+            int(order.order_id)
+            for order in open_orders
+            if order.order_ref in expected_refs
+        ]
+        if not targeted:
+            return []
+        targeted_set = set(targeted)
+        for order in open_orders:
+            if int(order.order_id) in targeted_set:
+                await cancel_paper_order(self._client, order.order_id)
+        while True:
+            remaining = {
+                order.order_ref
+                for order in await list_open_orders(self._client)
+                if order.order_ref in expected_refs
+            }
+            if not remaining:
+                break
+            await asyncio.sleep(0.05)
+        if self._event_task is not None:
+            await self._wait_for_terminal_fills(targeted_set)
+        return targeted
+
     async def probe_intent_status(self, intent_id: str, order_ref: str) -> str:
         """Return ``PRESENT`` only when IBKR still echoes this exact order ref.
 
@@ -497,6 +545,21 @@ class IbkrBrokerAdapter(BrokerAdapter):
         if any(order.order_ref == order_ref for order in open_orders):
             return "PRESENT"
         return "NOT_PROVABLE"
+
+    async def fetch_execution_evidence(self) -> list[IbkrOrderEvent]:
+        """Fetch broker execution rows used to prove Clerk position ownership.
+
+        A recorded intent or matching symbol is never sufficient at restart.
+        The Clerk needs IBKR's exact ``orderRef`` and execution identifiers
+        before it can hold a position instead of freezing account admission.
+        """
+
+        return list(await executions_for_reconnect_recovery(self._client))
+
+    async def list_open_orders(self) -> list[object]:
+        """Read current broker orders for Clerk startup reconciliation only."""
+
+        return list(await list_open_orders(self._client))
 
     async def probe_namespace_cancel_status(self, bot_order_namespace: str) -> str:
         """Prove whether a fenced namespace still has broker open orders.
@@ -740,12 +803,22 @@ class LivePortfolio:
     account_gate_authority: Literal["account_truth", "observation_lease"] = (
         "account_truth"
     )
+    # Promotion evidence can change while a portfolio is alive (notably after
+    # a Clerk restart), so pending actions resolve authority at their broker
+    # boundary rather than trusting the authority selected at startup.
+    account_gate_authority_provider: (
+        Callable[[], Literal["account_truth", "observation_lease"]] | None
+    ) = None
     # Durable account-event writer owned by the engine. It records every
     # paired shadow comparison at an actual submit boundary so parity evidence
     # survives child-process restarts without introducing a second scheduler.
     account_observation_lease_shadow_comparison_observer: (
         Callable[[GateResult, GateResult], object] | None
     ) = None
+    # S5: one account-level live-session verdict gates all normal broker
+    # actions, including liquidation because it ultimately drains through this
+    # same submit path.  It intentionally has no bot-specific override.
+    account_live_session_gate_provider: GateResultProvider | None = None
     # PRD #1005 Slice 2 — centralized session-authority submit gate. When
     # wired, pending orders are refused before any broker call unless the
     # current phase is both strategy-declared and supported by the active order
@@ -1150,6 +1223,10 @@ class LivePortfolio:
                 )
                 raise AccountRegistryBlockError(gate_result=registry_gate)
 
+        account_gate_authority = self.account_gate_authority
+        if self.account_gate_authority_provider is not None:
+            account_gate_authority = self.account_gate_authority_provider()
+
         account_truth_gate = None
         if self.account_truth_gate_provider is not None:
             account_truth_gate = self.account_truth_gate_provider()
@@ -1159,7 +1236,7 @@ class LivePortfolio:
                 lease_gate = self.account_observation_lease_gate_provider()
             except Exception:
                 logger.exception("account observation lease shadow gate read failed")
-                if self.account_gate_authority == "observation_lease":
+                if account_gate_authority == "observation_lease":
                     lease_gate = GateResult(
                         gate_id="account.observation_lease",
                         status="block",
@@ -1168,7 +1245,7 @@ class LivePortfolio:
                         operator_next_step="RECONCILE_NOW",
                         evidence_at_ms=now_ms_utc(),
                     )
-        elif self.account_gate_authority == "observation_lease":
+        elif account_gate_authority == "observation_lease":
             lease_gate = GateResult(
                 gate_id="account.observation_lease",
                 status="block",
@@ -1212,11 +1289,14 @@ class LivePortfolio:
                     ],
                 },
             )
-        account_verification_gate = (
-            lease_gate
-            if self.account_gate_authority == "observation_lease"
-            else account_truth_gate
+        action_gate = resolve_action_gate(
+            account_gate_authority,
+            account_truth_gate=account_truth_gate,
+            observation_lease_gate=lease_gate,
         )
+        account_gate_authority = action_gate.authority
+        account_verification_gate = action_gate.gate
+        current_clerk_proof_is_weaker = action_gate.current_clerk_proof_is_weaker
         if (
             account_verification_gate is not None
             and getattr(account_verification_gate, "status", None) == "pass"
@@ -1225,17 +1305,21 @@ class LivePortfolio:
         elif account_verification_gate is not None:
             submitted_at_ms = now_ms_utc()
             outage_reason = (
-                self.account_gate_authority == "account_truth"
+                account_gate_authority == "account_truth"
                 and getattr(account_verification_gate, "operator_reason", None)
                 in {
                 "ACCOUNT_TRUTH_NOT_AVAILABLE",
                 "ACCOUNT_TRUTH_STALE",
                 }
             )
-            if (not outage_reason or not requires_durable) and not self._pending_orders_reduce_exposure_only():
+            if (
+                current_clerk_proof_is_weaker
+                or not outage_reason
+                or not requires_durable
+            ) and not self._pending_orders_reduce_exposure_only():
                 drop_reason = (
                     "account_observation_lease_block"
-                    if self.account_gate_authority == "observation_lease"
+                    if account_gate_authority == "observation_lease"
                     else "account_truth_block"
                 )
                 self.drop_pending_before_submit(drop_reason=drop_reason, ts_ms=submitted_at_ms)
@@ -1251,6 +1335,15 @@ class LivePortfolio:
                     ts_ms=submitted_at_ms,
                 )
                 raise AccountTruthBlockError(gate_result=account_verification_gate)
+
+        if self.pending_orders and self.account_live_session_gate_provider is not None:
+            live_session_gate = self.account_live_session_gate_provider()
+            if live_session_gate is not None and live_session_gate.status != "pass":
+                self.drop_pending_before_submit(
+                    drop_reason="account_live_session_block",
+                    ts_ms=now_ms_utc(),
+                )
+                raise AccountLiveSessionBlockError(gate_result=live_session_gate)
 
         session_state_for_submit: SessionAuthorityState | None = None
         if self.pending_orders and self.session_gate_provider is not None:

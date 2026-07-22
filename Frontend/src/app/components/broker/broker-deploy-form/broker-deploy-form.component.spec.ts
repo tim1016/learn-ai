@@ -398,7 +398,7 @@ describe('BrokerDeployFormComponent', () => {
     expect(component.maxOrdersPerDay()).toBe(2000);
     expect(fixture.nativeElement.textContent).toContain('Paper orders');
     expect(fixture.nativeElement.textContent).toContain('Daily order limit');
-    expect(deployButton(fixture).textContent).toContain('Launch strategy');
+    expect(deployButton(fixture).textContent).toContain('Deploy & run');
   });
 
   it('renders a single trade ticket with all required trading decisions visible', async () => {
@@ -495,28 +495,6 @@ describe('BrokerDeployFormComponent', () => {
     );
   });
 
-  it('prepares a fresh run for a cohort without starting its runner', async () => {
-    const { fixture, svc, component } = setup();
-    await flush();
-    fillRequired(component);
-    await settleResource(fixture);
-
-    await component.prepareForCohort();
-    fixture.detectChanges();
-
-    expect(svc.deployInstance).toHaveBeenCalledTimes(1);
-    expect(svc.deployInstance.mock.calls[0][0]).toMatchObject({
-      strategy_instance_id: 'deployment-validation-paper',
-      start: false,
-      start_options: {
-        readonly: false,
-        hydrate_policy: 'require',
-        strategy: 'deployment_validation',
-      },
-    });
-    expect(fixture.nativeElement.textContent).toContain('Prepared for cohort; no runner was started.');
-  });
-
   it('shows a coherent accepted-start state after the submitted instance becomes running', async () => {
     const { fixture, svc, component } = setup();
     svc.deployInstance.mockResolvedValueOnce({
@@ -539,11 +517,27 @@ describe('BrokerDeployFormComponent', () => {
     const text = fixture.nativeElement.textContent ?? '';
     expect(text).toContain('Deployment created');
     expect(text).toContain('Start accepted: Host runner process is active.');
-    expect(text).toContain('Start accepted for run run-started. View deployment to monitor the live run.');
+    expect(text).toContain(
+      'Launch request accepted for run run-started. Confirm On duty and fresh runtime evidence in Bot Operations before deploying another bot.',
+    );
     expect(text).not.toContain('"deployment-validation-paper" is already running');
     expect(component.commandState().kind).toBe('accepted');
     expect(blockerText(component)).toBeNull();
     expect(deployButton(fixture).disabled).toBe(true);
+  });
+
+  it('uses Deploy & run as the only launch action and reviews the trade asset', async () => {
+    const { fixture, component } = setup();
+    await flush();
+    fillRequired(component);
+    await settleResource(fixture);
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent ?? '';
+    expect(text).toContain('Deploy & run');
+    expect(text).toContain('Trade asset');
+    expect(text).toContain('SPY · Stock');
+    expect(text).not.toContain('Prepare for cohort');
   });
 
   it('formats a code-like start state when the server does not supply a message', async () => {

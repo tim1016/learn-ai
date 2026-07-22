@@ -104,7 +104,12 @@
           <dd>
             {{ status.binding.state | receiptLabel }} · generation
             {{ status.binding.generation ?? "—" }} · lease
-            {{ status.binding.lease_generation ?? "—" }}
+            {{ status.binding.lease_generation ?? "—" }} · ledger
+            {{ status.binding.ledger_read_authority | receiptLabel }} · parity
+            {{ status.binding.ledger_parity | receiptLabel }}
+            @if (status.binding.ledger_parity_issue_count > 0) {
+              ({{ status.binding.ledger_parity_issue_count }} differences)
+            }
           </dd>
         </div>
       </dl>

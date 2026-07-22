@@ -31,6 +31,7 @@ from app.engine.live.account_clerk_rpc import (
     ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S,
     ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S,
     ACCOUNT_CLERK_RPC_SCHEMA_VERSION,
+    AccountClerkHostRpcClient,
     AccountClerkRpcCancelNamespaceUncertainError,
     AccountClerkRpcClient,
     AccountClerkRpcGenerationHandshake,
@@ -48,6 +49,10 @@ from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
     bot_order_namespace_for_instance,
+    latest_account_instance_binding,
+    pending_account_binding_retirements,
+    read_account_instance_registry,
+    retire_unmanaged_active_bindings_on_daemon_boot,
     write_account_instance_binding,
 )
 from app.engine.live.live_portfolio import LivePortfolio, SubmitUncertainHaltError
@@ -67,6 +72,7 @@ START_MS = 1_784_000_000_000
 class _Broker:
     def __init__(self) -> None:
         self._client = SimpleNamespace(settings=SimpleNamespace(mode="paper"))
+        self.open_orders: list[object] = []
 
     async def place_order(self, _order: object) -> object:
         return SimpleNamespace(order_id=101, perm_id=201, exec_id="exec-1040")
@@ -74,10 +80,67 @@ class _Broker:
     async def cancel_open_orders_for_namespace(self, _namespace: str) -> list[int]:
         return [1046]
 
+    async def fetch_positions(self) -> object:
+        return SimpleNamespace(account_id=ACCOUNT, is_paper=True, positions=[], fetched_at_ms=START_MS)
+
+    async def list_open_orders(self) -> list[object]:
+        return self.open_orders
+
+    async def cancel_open_orders_for_refs(self, order_refs: tuple[str, ...]) -> list[int]:
+        targets = [
+            int(order.order_id)
+            for order in self.open_orders
+            if getattr(order, "order_ref", None) in set(order_refs)
+        ]
+        self.open_orders = [
+            order
+            for order in self.open_orders
+            if getattr(order, "order_ref", None) not in set(order_refs)
+        ]
+        return targets
+
 
 class _FailingBroker(_Broker):
     async def place_order(self, _order: object) -> object:
         raise ValueError("broker secret must not reach the socket response")
+
+
+def _allow_emergency_reconciliation(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    receipt_id: str,
+) -> None:
+    """Install the canonical reconciliation artifact seen by the Clerk RPC server."""
+
+    from app.services import account_reconciliation as reconciliation_module
+
+    receipt = SimpleNamespace(
+        receipt_id=receipt_id,
+        account_id=ACCOUNT,
+        connected_account_id=ACCOUNT,
+        account_truth_generated_at_ms=START_MS,
+        expires_at_ms=START_MS + 300_000,
+        account_truth=SimpleNamespace(account=SimpleNamespace(is_paper=True)),
+    )
+
+    class _CanonicalReconciliation:
+        def __init__(self, *, artifacts_root: Path) -> None:
+            assert artifacts_root
+
+        def read_latest_receipt(self, account_id: str) -> object:
+            assert account_id == ACCOUNT
+            return receipt
+
+        def triage(self, *, account_id: str, now_ms: int) -> object:
+            assert account_id == ACCOUNT
+            assert now_ms == START_MS
+            return SimpleNamespace(
+                account_reconciliation_receipt=receipt,
+                emergency_flatten_confirmation=object(),
+                recovery_flatten_candidates=[],
+            )
+
+    monkeypatch.setattr(reconciliation_module, "AccountReconciliationService", _CanonicalReconciliation)
 
 
 class _UncertainCancelBroker(_Broker):
@@ -298,55 +361,133 @@ async def _close_raw_server(server: asyncio.AbstractServer, path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_register_emergency_flatten_persists_attribution_before_external_submit(tmp_path: Path) -> None:
-    _write_active_binding(tmp_path, "eflat-DU1040", "eflat-run")
+async def test_authorize_emergency_flatten_persists_typed_receipt_before_host_action(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     generation = 1
-    intent = _emergency_flatten_intent()
     server = AccountClerkRpcServer(
-        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, clerk_generation=generation)
-    )
-    await server.start()
-    try:
-        receipt = await AccountClerkRpcClient(
+        AccountClerk(
             artifacts_root=tmp_path,
             account_id=ACCOUNT,
-        ).register_emergency_flatten(intent)
+            broker=_Broker(),
+            clerk_generation=generation,
+            now_ms=lambda: START_MS,
+        )
+    )
+    _allow_emergency_reconciliation(monkeypatch, receipt_id="receipt-1040")
+    await server.start()
+    try:
+        authorization = await AccountClerkRpcClient(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+        ).authorize_emergency_flatten(
+            operation_id="emergency-1040",
+            reconciliation_evidence_version="receipt-1040",
+        )
     finally:
         await server.close()
 
-    assert receipt.intent_id == intent.intent_id
+    assert authorization.confirmation_token == "FLATTEN"
     [recorded] = [
         entry
         for entry in read_account_clerk_journal(tmp_path, ACCOUNT)
-        if entry.entry_kind == "recorded"
+        if entry.entry_kind == "emergency_operation"
     ]
-    assert recorded.intent == intent
+    assert recorded.emergency_operation is not None
+    assert recorded.emergency_operation.authorization == authorization
 
 
 @pytest.mark.asyncio
-async def test_register_emergency_flatten_rejects_non_emergency_intent(tmp_path: Path) -> None:
-    _write_active_binding(tmp_path)
+async def test_authorize_emergency_flatten_rejects_uncorroborated_reconciliation_evidence(tmp_path: Path) -> None:
     generation = 1
     server = AccountClerkRpcServer(
-        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, clerk_generation=generation)
+        AccountClerk(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+            broker=_Broker(),
+            clerk_generation=generation,
+            now_ms=lambda: START_MS + 120_001,
+        )
     )
     await server.start()
     try:
         with pytest.raises(AccountClerkRpcRejectedError) as exc_info:
-            await AccountClerkRpcClient(
-                artifacts_root=tmp_path,
-                account_id=ACCOUNT,
-            ).register_emergency_flatten(_intent())
+            await AccountClerkRpcClient(artifacts_root=tmp_path, account_id=ACCOUNT).authorize_emergency_flatten(
+                operation_id="emergency-stale",
+                reconciliation_evidence_version="receipt-stale",
+            )
     finally:
         await server.close()
 
-    assert exc_info.value.reason == "CLERK_EMERGENCY_FLATTEN_INTENT_KIND_REQUIRED"
+    assert exc_info.value.reason == "CLERK_EMERGENCY_RECONCILIATION_EVIDENCE_INVALID"
+
+
+@pytest.mark.asyncio
+async def test_emergency_rpc_requires_authorization_then_intake_then_bot_quiescence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = AccountClerkRpcServer(
+        AccountClerk(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+            broker=_Broker(),
+            clerk_generation=1,
+            now_ms=lambda: START_MS,
+            host_binding_capability="test-host-capability",
+        )
+    )
+    _allow_emergency_reconciliation(monkeypatch, receipt_id="receipt-sequence")
+    await server.start()
+    try:
+        client = AccountClerkRpcClient(artifacts_root=tmp_path, account_id=ACCOUNT)
+        host_client = AccountClerkHostRpcClient(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+            host_capability="test-host-capability",
+        )
+        authorization = await client.authorize_emergency_flatten(
+            operation_id="emergency-sequence",
+            reconciliation_evidence_version="receipt-sequence",
+        )
+
+        with pytest.raises(AccountClerkRpcRejectedError) as skipped_intake:
+            await host_client.mark_emergency_bots_paused(
+                operation_id="emergency-sequence",
+                authorization_id=authorization.authorization_id,
+            )
+        assert skipped_intake.value.reason == "CLERK_EMERGENCY_SEQUENCE_INVALID"
+
+        await host_client.prepare_emergency_flatten(
+            operation_id="emergency-sequence",
+            authorization_id=authorization.authorization_id,
+        )
+        with pytest.raises(AccountClerkRpcRejectedError) as missing_pause:
+            await host_client.emergency_flatten_account(
+                operation_id="emergency-sequence",
+                authorization_id=authorization.authorization_id,
+            )
+        assert missing_pause.value.reason == "CLERK_EMERGENCY_SEQUENCE_INVALID"
+
+        await host_client.mark_emergency_bots_paused(
+            operation_id="emergency-sequence",
+            authorization_id=authorization.authorization_id,
+        )
+        with pytest.raises(AccountClerkRpcRejectedError) as stale_prepare:
+            await host_client.prepare_emergency_flatten(
+                operation_id="emergency-sequence",
+                authorization_id=authorization.authorization_id,
+            )
+        assert stale_prepare.value.reason == "CLERK_EMERGENCY_FLATTEN_INTAKE_UNAVAILABLE"
+    finally:
+        await server.close()
 
 
 @pytest.mark.asyncio
 async def test_historical_emergency_receipt_stops_unattributed_callback_replay(tmp_path: Path) -> None:
-    _write_active_binding(tmp_path, "eflat-DU1040", "eflat-run")
-    intent = _emergency_flatten_intent()
+    _write_active_binding(tmp_path)
+    intent = _intent()
     callback = IbkrOrderEvent(
         account_id=ACCOUNT,
         order_id=1040,
@@ -361,7 +502,7 @@ async def test_historical_emergency_receipt_stops_unattributed_callback_replay(t
     first = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT)
 
     initial = await first.record_broker_event(callback)
-    await first.register_emergency_flatten_intent(intent)
+    await first.record_intent(intent)
     alarm_count_before_restart = len(read_account_events(tmp_path, ACCOUNT))
 
     restarted = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT)
@@ -403,6 +544,144 @@ async def test_success_envelope_round_trips_over_real_unix_socket(tmp_path: Path
     assert envelope.schema_version == ACCOUNT_CLERK_RPC_SCHEMA_VERSION
     assert envelope.outcome == "success"
     assert envelope.payload["broker_acked"]["order_id"] == 101
+
+
+@pytest.mark.asyncio
+async def test_clerk_start_folds_daemon_retirement_proposal_before_serving_socket(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path)
+    retire_unmanaged_active_bindings_on_daemon_boot(
+        tmp_path,
+        managed_run_ids=frozenset(),
+        now_ms=START_MS + 1,
+    )
+
+    server = AccountClerkRpcServer(
+        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_Broker(), clerk_generation=1)
+    )
+    await server.start()
+    try:
+        latest = latest_account_instance_binding(
+            read_account_instance_registry(tmp_path, ACCOUNT),
+            account_id=ACCOUNT,
+            strategy_instance_id="bot-a",
+        )
+        assert latest is not None
+        assert latest.lifecycle_state == "RETIRED"
+        assert pending_account_binding_retirements(tmp_path, account_id=ACCOUNT) == ()
+    finally:
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_running_clerk_folds_a_reaper_proposal_without_a_process_restart(tmp_path: Path) -> None:
+    """An already-serving Clerk is the convergent recovery authority."""
+
+    _write_active_binding(tmp_path)
+    server = AccountClerkRpcServer(
+        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_Broker(), clerk_generation=1)
+    )
+    await server.start()
+    try:
+        retire_unmanaged_active_bindings_on_daemon_boot(
+            tmp_path,
+            managed_run_ids=frozenset(),
+            now_ms=START_MS + 1,
+        )
+
+        folded = await AccountClerkRpcClient(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+        ).fold_binding_retirements()
+        latest = latest_account_instance_binding(
+            read_account_instance_registry(tmp_path, ACCOUNT),
+            account_id=ACCOUNT,
+            strategy_instance_id="bot-a",
+        )
+    finally:
+        await server.close()
+
+    assert folded.retirements_applied == 1
+    assert latest is not None
+    assert latest.lifecycle_state == "RETIRED"
+    assert pending_account_binding_retirements(tmp_path, account_id=ACCOUNT) == ()
+
+
+@pytest.mark.asyncio
+async def test_host_binding_transition_round_trips_through_the_clerk_rpc(tmp_path: Path) -> None:
+    """The daemon-facing RPC makes the Clerk the only durable transition writer."""
+
+    binding = AccountInstanceBinding(
+        account_id=ACCOUNT,
+        strategy_instance_id="bot-a",
+        run_id="rpc-run",
+        bot_order_namespace=bot_order_namespace_for_instance("bot-a"),
+        lifecycle_state="DEPLOYED",
+        recorded_at_ms=START_MS + 1,
+        source="host_daemon.deploy",
+    )
+    server = AccountClerkRpcServer(
+        AccountClerk(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+            broker=_Broker(),
+            clerk_generation=1,
+            host_binding_capability="test-host-capability",
+        )
+    )
+    await server.start()
+    try:
+        recorded = await AccountClerkHostRpcClient(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+            host_capability="test-host-capability",
+        ).record_binding_decision(binding)
+    finally:
+        await server.close()
+
+    assert recorded == binding
+    assert read_account_instance_registry(tmp_path, ACCOUNT) == [binding]
+
+
+@pytest.mark.asyncio
+async def test_bot_rpc_cannot_record_an_account_binding_transition(tmp_path: Path) -> None:
+    """The shared bot client socket cannot mutate its own or a sibling binding."""
+
+    binding = AccountInstanceBinding(
+        account_id=ACCOUNT,
+        strategy_instance_id="bot-a",
+        run_id="forged-run",
+        bot_order_namespace=bot_order_namespace_for_instance("bot-a"),
+        lifecycle_state="RETIRED",
+        recorded_at_ms=START_MS + 1,
+        source="forged-bot-request",
+    )
+    server = AccountClerkRpcServer(
+        AccountClerk(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+            broker=_Broker(),
+            clerk_generation=1,
+            host_binding_capability="test-host-capability",
+        )
+    )
+    await server.start()
+    try:
+        with pytest.raises(AccountClerkRpcRejectedError) as exc_info:
+            await AccountClerkRpcClient(
+                artifacts_root=tmp_path,
+                account_id=ACCOUNT,
+            )._request(
+                    {
+                        "operation": "record_binding_decision",
+                        "binding": binding.model_dump(mode="json"),
+                        "host_capability": "bot-client-does-not-have-the-host-secret",
+                    }
+            )
+    finally:
+        await server.close()
+
+    assert exc_info.value.reason == "CLERK_HOST_BINDING_CAPABILITY_REQUIRED"
+    assert read_account_instance_registry(tmp_path, ACCOUNT) == []
 
 
 @pytest.mark.asyncio

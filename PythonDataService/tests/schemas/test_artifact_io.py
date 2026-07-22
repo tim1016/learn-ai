@@ -8,8 +8,8 @@ does not have to be re-proven through every caller's test surface.
 
 Three writer concerns are pinned:
 
-1. **Atomicity** — no ``.tmp`` debris on success; a partial reader
-   cannot observe a torn intermediate state.
+1. **Atomicity** — no writer-owned temporary debris on success; a partial
+   reader cannot observe a torn intermediate state.
 2. **Parent directory autocreation** — callers don't have to mkdir
    defensively before each write.
 3. **Byte-stable output** — sorted keys, no whitespace; the on-disk
@@ -29,6 +29,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas import artifact_io
 from app.schemas.artifact_io import (
     atomic_write_pydantic_artifact,
     read_pydantic_artifact,
@@ -59,7 +60,7 @@ def test_write_leaves_no_tmp_debris_on_success(tmp_path: Path) -> None:
     atomic_write_pydantic_artifact(path, _Sample(name="alpha", value=1))
 
     assert path.exists()
-    assert not path.with_suffix(path.suffix + ".tmp").exists()
+    assert not list(tmp_path.glob(".sample.json.*.tmp"))
 
 
 def test_write_creates_parent_directory(tmp_path: Path) -> None:
@@ -68,6 +69,16 @@ def test_write_creates_parent_directory(tmp_path: Path) -> None:
     atomic_write_pydantic_artifact(path, _Sample(name="alpha", value=1))
 
     assert path.exists()
+
+
+def test_write_fsyncs_parent_after_atomic_replace(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "sample.json"
+    synced_paths: list[Path] = []
+    monkeypatch.setattr(artifact_io, "fsync_parent_dir", synced_paths.append)
+
+    atomic_write_pydantic_artifact(path, _Sample(name="alpha", value=1))
+
+    assert synced_paths == [path]
 
 
 def test_write_overwrites_existing_file_atomically(tmp_path: Path) -> None:
@@ -81,16 +92,17 @@ def test_write_overwrites_existing_file_atomically(tmp_path: Path) -> None:
     assert loaded.value == 2
 
 
-def test_write_consumes_leftover_tmp_file(tmp_path: Path) -> None:
-    # A prior crashed write may leave a tmp sibling on disk.  The next
-    # write must overwrite the tmp, then replace cleanly.
+def test_write_ignores_leftover_legacy_tmp_file(tmp_path: Path) -> None:
+    # A prior writer may have used the old deterministic tmp name.  A new
+    # unique-temp write must still publish without sharing that unsafe name.
     path = tmp_path / "sample.json"
-    (tmp_path / "sample.json.tmp").write_text("debris from a crashed write")
+    legacy_tmp = tmp_path / "sample.json.tmp"
+    legacy_tmp.write_text("debris from a crashed write")
 
     atomic_write_pydantic_artifact(path, _Sample(name="alpha", value=1))
 
     assert path.exists()
-    assert not path.with_suffix(path.suffix + ".tmp").exists()
+    assert legacy_tmp.read_text(encoding="utf-8") == "debris from a crashed write"
 
 
 def test_serialized_output_is_sorted_and_whitespace_free(tmp_path: Path) -> None:

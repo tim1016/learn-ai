@@ -13,6 +13,10 @@ from app.broker.runtime_snapshot import BrokerRuntimeSnapshot, snapshot_data_pla
 from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import read_account_freeze
 from app.engine.live.account_observation_lease import assess_account_observation_lease
+from app.engine.live.journal_recovery_state import (
+    JournalRecoveryStateCorruptError,
+    assess_journal_recovery_fence,
+)
 from app.schemas.operator_blocker import (
     SURFACE_ANCHOR,
     NavigateAction,
@@ -92,16 +96,11 @@ def _strategy_is_deployable(strategy_key: str) -> bool:
 
 async def _instance_is_running_or_stopping(instance_id: str) -> bool:
     settings = get_settings()
-    _result, daemon = await host_daemon_client.fetch_instances(settings.live_runner_daemon_url)
-    if daemon is None:
-        return False
-    for inst in daemon.get("instances", []):
-        if inst.get("strategy_instance_id") != instance_id:
-            continue
-        process = inst.get("process")
-        if isinstance(process, dict) and process.get("state") in _LIVE_PROCESS_STATES:
-            return True
-    return False
+    _result, process = await host_daemon_client.fetch_instance_process(
+        settings.live_runner_daemon_url,
+        instance_id,
+    )
+    return isinstance(process, dict) and process.get("state") in _LIVE_PROCESS_STATES
 
 
 def _account_proof_is_current(
@@ -136,8 +135,18 @@ async def gather_deploy_preflight_signals(
     root = Path(settings.live_runs_root)
     artifacts_root = root.parent
 
-    daemon_result, _health = await host_daemon_client.fetch_health(settings.live_runner_daemon_url)
+    daemon_result, _health = await host_daemon_client.fetch_startability_health(
+        settings.live_runner_daemon_url
+    )
     account_freeze = read_account_freeze(artifacts_root, account_id)
+    try:
+        journal_recovery_fence = assess_journal_recovery_fence(artifacts_root, account_id)
+    except JournalRecoveryStateCorruptError:
+        # The deploy form has no authority to repair recovery evidence. Treat
+        # unreadable ceremony state as the same fail-closed admission posture.
+        journal_recovery_blocks_admission = True
+    else:
+        journal_recovery_blocks_admission = journal_recovery_fence.blocks_broker_writes
     account_truth = get_account_truth_snapshot_provider().get(account_id)
     now_ms = _now_ms()
     account_proven = _account_proof_is_current(
@@ -152,7 +161,7 @@ async def gather_deploy_preflight_signals(
     return DeployPreflightSignals(
         daemon_reachable=daemon_result.kind == "CONNECTED",
         broker_connection_state=_runtime_connection_state_value(snapshot_data_plane_broker()),
-        account_frozen=account_freeze is not None,
+        account_frozen=account_freeze is not None or journal_recovery_blocks_admission,
         account_proven=account_proven,
         fleet_blocks_starts=fleet.policy_blocks_starts,
         strategy_deployable=_strategy_is_deployable(strategy_key),

@@ -562,6 +562,15 @@ The full session record lives in `docs/architecture/adrs/000{1,2,3}-*.md` for th
 
 § 8 (open questions in the pre-implementation draft) is superseded: items #1 (always-on machine), #4 (paper market data), #5 (one Gateway vs two) are all resolved above. Items #2 (reconcile existing repo), #3 (long-only vs long/short for VWAP) — the first is done by the design-lock reconnaissance; the second is left to the VWAP `port-indicator` session along with bar size, band formula, k, session filter, and position sizing.
 
+**Clerk artifact-root security (T3):** On the Windows host, the entire
+Clerk artifact root must be a service-owned local directory. Only the Windows
+service identity and administrators may create, modify, rename, or create
+reparse points beneath it; do not place it on a user-writable share, synced
+folder, or a volume with inherited write access for interactive users. The
+Windows durability implementation rejects pre-existing traversal/reparse
+escapes but, unlike the POSIX deployment, cannot use directory-handle-relative
+operations to make a no-swap guarantee against a concurrent local writer.
+
 ### 16.2. PR queue
 
 Suggested batching. Each PR ends with documentation per "documentation is part of done". The Phase 10 prereq RTH dry-run is an operational event, not a PR — it sits between PR-D and PR-E in the queue as a gating activity.

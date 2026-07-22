@@ -18,9 +18,12 @@ import { MARKET_PHASES, resolveTraderViewModel } from './trader-view.model';
 export class TraderViewComponent {
   readonly status = input.required<LiveInstanceStatus>();
   readonly busy = input<boolean>(false);
+  readonly gracefulStopAvailable = input<boolean>(false);
+  readonly gracefulStopLivenessUnproven = input<boolean>(false);
   readonly renderedRemediation = input<PresentedAction | null>(null);
 
   readonly lifecycleAction = output<BotLifecycleActionId>();
+  readonly gracefulStopRequested = output();
   readonly remediationInvoked = output();
   readonly crashRecoveryRequested = output();
   readonly blockerMoveRequested = output<OperatorMove>();
