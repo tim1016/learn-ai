@@ -8,7 +8,6 @@ the durable recorded-intent rows.
 
 from __future__ import annotations
 
-import os
 import time
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
@@ -34,7 +33,8 @@ from app.engine.live.account_clerk_journal_models import (
 )
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.broker_callbacks import broker_callback_idempotency_key
-from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
+from app.engine.live import durable_append_log
+from app.engine.live.live_state_sidecar import _file_lock
 
 ACCOUNT_CLERK_INBOX_FILENAME = "clerk_inbox.jsonl"
 ACCOUNT_CLERK_JOURNAL_FILENAME = "clerk_journal.jsonl"
@@ -725,30 +725,13 @@ def _read_journal_jsonl(path: Path) -> list[AccountClerkJournalEntry]:
 
 
 def _append_jsonl(path: Path, entry: AccountClerkInboxEntry | AccountClerkJournalEntry) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as file_handle:
-        file_handle.write(entry.model_dump_json() + "\n")
-        file_handle.flush()
-        os.fsync(file_handle.fileno())
-    _fsync_parent_dir(path)
+    durable_append_log.append_jsonl_record(path, entry.model_dump_json())
 
 
 def _rewrite_jsonl(path: Path, entries: list[AccountClerkInboxEntry]) -> None:
     """Atomically compact acknowledged inbox rows after journal durability."""
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    try:
-        with temporary_path.open("w", encoding="utf-8") as file_handle:
-            for entry in entries:
-                file_handle.write(entry.model_dump_json() + "\n")
-            file_handle.flush()
-            os.fsync(file_handle.fileno())
-        os.replace(temporary_path, path)
-        _fsync_parent_dir(path)
-    finally:
-        if temporary_path.exists():
-            temporary_path.unlink()
+    durable_append_log.rewrite_jsonl_records(path, (entry.model_dump_json() for entry in entries))
 
 
 def _journal_entry_for_intent(

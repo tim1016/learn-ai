@@ -26,7 +26,8 @@ from app.engine.live.account_artifacts import (
     _safe_account_path_segment,
     account_artifacts_root,
 )
-from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
+from app.engine.live import durable_append_log
+from app.engine.live.live_state_sidecar import _file_lock
 
 BINDING_COMMAND_LEDGER_FILENAME = "binding_commands.jsonl"
 ACCOUNT_BINDING_LEDGER_READ_ENABLED_ENV = "ACCOUNT_BINDING_LEDGER_READ_ENABLED"
@@ -296,11 +297,7 @@ def _append_command_locked(
         proposal_seq=proposal_seq,
         **payload,
     )
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(command.model_dump_json() + "\n")
-        fh.flush()
-        os.fsync(fh.fileno())
-    _fsync_parent_dir(path)
+    durable_append_log.append_jsonl_record(path, command.model_dump_json())
     return command
 
 

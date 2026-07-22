@@ -33,6 +33,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from app.engine.live import durable_append_log
 from app.schemas.artifact_io import atomic_write_pydantic_artifact
 
 logger = logging.getLogger(__name__)
@@ -119,19 +120,9 @@ class DaemonCommandIdempotencyRepo:
         path = self._path_for_key(idempotency_key)
         self._root.mkdir(parents=True, exist_ok=True)
         try:
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            durable_append_log.create_exclusive_durable_file(path, record.model_dump_json())
         except FileExistsError:
             return _PreparedCommand(record=self._read_existing(path), created=False)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(record.model_dump_json())
-                handle.flush()
-                os.fsync(handle.fileno())
-        except BaseException:
-            # A partial exclusive file is still a claim.  Do not remove it: a
-            # future caller must fail closed rather than risk re-running a
-            # command that escaped before this process died.
-            raise
         return _PreparedCommand(record=record, created=True)
 
     def complete(
