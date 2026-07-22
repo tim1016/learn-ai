@@ -712,6 +712,22 @@
             "minimum": 0.0,
             "title": "Completed At Ms",
             "type": "integer"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "idempotency_replayed": {
+            "default": false,
+            "title": "Idempotency Replayed",
+            "type": "boolean"
           }
         },
         "required": [
@@ -11486,6 +11502,19 @@
             "description": "Must be true; typo-proofing gate.",
             "title": "Confirm",
             "type": "boolean"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
           }
         },
         "required": [
@@ -14438,6 +14467,22 @@
             ],
             "title": "Exit Reason"
           },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "idempotency_replayed": {
+            "default": false,
+            "title": "Idempotency Replayed",
+            "type": "boolean"
+          },
           "mutation_attempt_id": {
             "anyOf": [
               {
@@ -14872,6 +14917,19 @@
             "title": "Ibkr Host",
             "type": "string"
           },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
           "max_orders_per_day": {
             "default": 2000,
             "maximum": 100000.0,
@@ -14914,6 +14972,19 @@
             "default": false,
             "title": "Force",
             "type": "boolean"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
           }
         },
         "title": "HostRunnerStopRequest",

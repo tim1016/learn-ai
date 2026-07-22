@@ -5324,6 +5324,13 @@ export interface components {
             audit_run_id: string;
             /** Completed At Ms */
             completed_at_ms: number;
+            /** Idempotency Key */
+            idempotency_key?: string | null;
+            /**
+             * Idempotency Replayed
+             * @default false
+             */
+            idempotency_replayed?: boolean;
         };
         /**
          * AccountEventEvidenceRef
@@ -10259,6 +10266,8 @@ export interface components {
              * @description Must be true; typo-proofing gate.
              */
             confirm: boolean;
+            /** Idempotency Key */
+            idempotency_key?: string | null;
         };
         /**
          * EngineBacktestJobRequest
@@ -11691,6 +11700,13 @@ export interface components {
             command_id?: string | null;
             /** Exit Reason */
             exit_reason?: string | null;
+            /** Idempotency Key */
+            idempotency_key?: string | null;
+            /**
+             * Idempotency Replayed
+             * @default false
+             */
+            idempotency_replayed?: boolean;
             /** Mutation Attempt Id */
             mutation_attempt_id?: string | null;
             /** Mutation Dispatch State */
@@ -11821,6 +11837,8 @@ export interface components {
              * @default 127.0.0.1
              */
             ibkr_host?: string;
+            /** Idempotency Key */
+            idempotency_key?: string | null;
             /**
              * Max Orders Per Day
              * @default 2000
@@ -11849,6 +11867,8 @@ export interface components {
              * @default false
              */
             force?: boolean;
+            /** Idempotency Key */
+            idempotency_key?: string | null;
         };
         /**
          * IbkrAccountSummary
