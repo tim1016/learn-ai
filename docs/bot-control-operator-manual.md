@@ -62,7 +62,7 @@ plane is this telling me about?" before touching the Clerk.
 
 The stack straddles **containers** (data/UI plane) and **host processes** (the live
 control plane + IB Gateway). This split is the #1 source of "why doesn't this work"
-surprises — read §11.2.
+surprises — read §12.2.
 
 | Component | Port | Runs in | Responsibility |
 |---|---|---|---|
@@ -469,7 +469,78 @@ platform owner; verify refreshed daemon/Clerk evidence before restarting a bot.
 
 ---
 
-## 10. Troubleshooting quick reference
+## 10. Terminal incident procedures
+
+The Activity tab is stream-first. When a terminal row appears, expand it before taking
+action: the row and its deduplicated incident are one visible story, carrying the
+authored summary, identity ladder (`evaluation_id`, `intent_id`, `order_ref`, `req_id`,
+`order_id`, `perm_id`, `exec_id`), gate walk, and terminal evidence. Do not create a
+parallel ad-hoc checklist for the same failure.
+
+<!-- terminal-runbook-slug: ibkr-order-rejection -->
+### IBKR order rejection
+
+Triggered by `order.rejected` / `order_rejected`.
+
+1. Capture the IBKR `external_code`, `external_message`, `req_id`, and `order_ref`.
+2. Verify in IBKR / TWS whether the order is absent, cancelled, or still working. Do
+   not retry from the bot until the broker state is known.
+3. If the broker message identifies a fix (buying power, contract qualification,
+   account restriction, order attribute), resolve that cause and redeploy or resume
+   only after Bot Control shows the required readiness gates are clear.
+4. If the wording is unmapped or not actionable, preserve the evidence and escalate
+   the classifier gap; do not invent operator copy in the UI.
+
+<!-- terminal-runbook-slug: submit-outcome-uncertain -->
+### Submit outcome uncertain
+
+Triggered by `submit.uncertain` / `submit_uncertain`.
+
+1. Assume the order may exist until proven otherwise.
+2. Use the row identity (`order_ref`, `req_id`, `order_id`, `perm_id`) to verify order
+   status in IBKR / TWS.
+3. Do not submit a replacement until the original order is confirmed absent, cancelled,
+   or reconciled into the bot's state.
+4. Preserve the incident evidence if manual reconciliation is required; it records why
+   the bot refused to continue.
+
+<!-- terminal-runbook-slug: bot-halted -->
+### Bot halted
+
+Triggered by `submit.halted` / `halted`.
+
+1. Inspect the blocking gate or fatal halt trigger in the expanded row.
+2. Preserve any surfaced `halt.flag` evidence. A halt caused by broker safety, Account
+   Truth, Clerk fencing, or submit uncertainty must not be manually cleared.
+3. Resolve the underlying gate, then redeploy or resume only when the backend-authored
+   cockpit verdict agrees.
+
+<!-- terminal-runbook-slug: bot-launch-failed -->
+### Bot launch failed
+
+Triggered by `submit.launch_failed` / `launch_failed`.
+
+1. Inspect the terminal error source (`daemon`, `os`, or `broker_session`) in the row.
+2. For daemon or OS failures, preserve the redacted log path and stderr tail from the
+   evidence and escalate to the platform owner.
+3. For broker-session failures, resolve the concrete connection cause (for example, a
+   client-id collision or account-sentinel refusal) before redeploying.
+4. Prefer redeploy after the cause is fixed; do not hand-edit run artifacts or event
+   journals.
+
+<!-- terminal-runbook-slug: unmapped-terminal-diagnostic -->
+### Unmapped terminal diagnostic
+
+Triggered by `submit.unmapped_diagnostic` / `unmapped_diagnostic`.
+
+1. Treat the row as a classifier gap, not an operator-fixable condition.
+2. Preserve the stream-drawer evidence and the run logs.
+3. Add or correct the backend classifier/template so the same failure becomes a mapped
+   terminal outcome with specific operator copy.
+
+---
+
+## 11. Troubleshooting quick reference
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
@@ -486,81 +557,81 @@ platform owner; verify refreshed daemon/Clerk evidence before restarting a bot.
 
 ---
 
-## 11. Blindspots — the things that bite
+## 12. Blindspots — the things that bite
 
-**11.1 Read-only vs. Paper orders is an explicit launch choice.** **Read-only** runs the
+**12.1 Read-only vs. Paper orders is an explicit launch choice.** **Read-only** runs the
 strategy without broker orders; **Paper orders** enables paper execution; **Live orders**
 is displayed but blocked. A bot can run all day and place zero orders when Read-only was
 selected. **Check effective posture before waiting for fills.**
 
-**11.2 Host vs. container is a boundary, not an operator fork.** The data plane and UI
+**12.2 Host vs. container is a boundary, not an operator fork.** The data plane and UI
 delegate deploy/start/stop and Clerk-only recovery work to the authenticated host daemon.
 The Clerk socket remains host-local; the UI never opens it directly. If that delegation
 is unhealthy, Account Desk reports the condition and the operator escalates rather than
 trying a second control path.
 
-**11.3 clean ≠ flat.** A CLEAN receipt only says the broker snapshot is flat. A bot that
+**12.3 clean ≠ flat.** A CLEAN receipt only says the broker snapshot is flat. A bot that
 exited holding a position whose close never journaled leaves a stale per-instance claim
 → fleet `contaminated` → new starts blocked. The receipt and the fleet "explained" sum
 are two different truths (broker snapshot vs. journal fold). Cure the ledger; don't
 "re-flatten" a position the broker doesn't hold.
 
-**11.4 A transient freeze used to kill healthy bots; now it pauses them.** Before the
+**12.4 A transient freeze used to kill healthy bots; now it pauses them.** Before the
 2026-07-17 fix, a restart-intensity freeze (caused by *your other* rapid starts)
 cascade-**halted** every running bot. Now they **pause submits and survive**. But the
 freeze still blocks *new* starts. Don't churn faster than 2 starts/5 min.
 
-**11.5 A Clerk restart invalidates shadow lease proof.** Generation bumps revoke the
+**12.5 A Clerk restart invalidates shadow lease proof.** Generation bumps revoke the
 observation lease. That matters only after its promotion; **Account Truth remains the
 effective authority today**. In either case, re-observe the Account Desk before a new
 start after a Clerk bounce.
 
-**11.6 End day, Stop, and crash are different.** **End day now** is the normal
+**12.6 End day, Stop, and crash are different.** **End day now** is the normal
 session-close path: after Clerk-owned clean-exit proof it becomes OFF_DUTY and can be
 re-offered. **Stop bot gracefully** writes a STOPPED latch and later needs **Resume**.
 A crash leads to sick bay plus `CRASH_RECOVERY_REQUIRED`; the bot will not roll-call
 until recovery evidence is recorded or you use Retire & Replace. Do not use emergency
 flatten for a normal day end.
 
-**11.7 Roll-call offers are per-session and single-use.** A start needs a fresh offer;
+**12.7 Roll-call offers are per-session and single-use.** A start needs a fresh offer;
 they expire at the session's `effective_stop`. A stale "Ready" chip won't start a bot —
 run roll-call.
 
-**11.8 Host services do not hot-reload.** The running daemon/Clerk evidence, not the
+**12.8 Host services do not hot-reload.** The running daemon/Clerk evidence, not the
 working tree, proves what is live. A host-service restart is a platform-owner operation;
 after one, re-observe the Account Desk before admitting a bot.
 
-**11.9 A dirty-tree deploy block is an engineering handoff.** Unexpected generated or
+**12.9 A dirty-tree deploy block is an engineering handoff.** Unexpected generated or
 nested files can trip the deploy clean-tree gate. Do not bypass the gate; hand the
 reported path to the platform owner and retry only after a clean preflight.
 
-**11.10 Emergency flatten is blunt and account-wide.** It market-closes *every* position
+**12.10 Emergency flatten is blunt and account-wide.** It market-closes *every* position
 and is suppressed when an exact per-namespace recovery candidate exists. Prefer the
 surgical **operator recovery flatten** when a candidate is offered. Both are paper-only;
 the typed `FLATTEN` token is client-side UX friction, not a server contract — the real
 guard is the fresh-paper-evidence + non-zero-position + no-exact-candidate declaration.
 
-**11.11 Unattributed broker events freeze the account.** A fill callback with no Clerk
+**12.11 Unattributed broker events freeze the account.** A fill callback with no Clerk
 intent (manual order, foreign flow, an out-of-band tool) is recorded but triggers an
 `exposure` freeze (`RECONCILE_UNATTRIBUTED_BROKER_EVENT`). Don't place orders on a
 Clerk-owned account outside the Clerk.
 
-**11.12 Time is `int64 ms UTC` everywhere.** Every timestamp on the wire/at rest is
+**12.12 Time is `int64 ms UTC` everywhere.** Every timestamp on the wire/at rest is
 integer ms UTC. Don't compare or render raw values in feature code — render through the
 shared timestamp component with an explicit mode (`local`/`et`/`date-et`). Session
 structure comes from the canonical calendar, never hardcoded `09:30`/`16:00`.
 
-**11.13 IBKR client-id pool is finite.** Bots/Clerks draw from a fixed client-id pool
+**12.13 IBKR client-id pool is finite.** Bots/Clerks draw from a fixed client-id pool
 (50–99); a second competing IBKR connection (e.g. a stray host data plane alongside the
 container) can exhaust subscriptions (error 322). Run **one** data plane.
 
-**11.14 The restart-intensity threshold is hard-coded.** `threshold=3`,
+**12.14 The restart-intensity threshold is hard-coded.** `threshold=3`,
 `window=300_000ms` are not env-configurable (`account_artifacts.py:221`). To change the
 churn envelope you change code + ship it; don't expect a knob.
 
 ---
 
-## 12. Glossary
+## 13. Glossary
 - **Daemon** — the single host process owning bot subprocesses and run bindings (`:8765`).
 - **Clerk** — the per-account, single-writer broker authority + journal.
 - **Generation** — integer fencing a Clerk incarnation; bumps on spawn.
