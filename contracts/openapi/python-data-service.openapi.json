@@ -508,6 +508,49 @@
         "title": "AccountClerkRecoveryFlattenReceipt",
         "type": "object"
       },
+      "AccountClerkRestartSmokeRequest": {
+        "additionalProperties": false,
+        "description": "Typed acknowledgement that the current Clerk passed its restart smoke.",
+        "properties": {
+          "confirmation": {
+            "const": "CLERK_RESTART_SMOKE",
+            "title": "Confirmation"
+          }
+        },
+        "required": [
+          "confirmation"
+        ],
+        "title": "AccountClerkRestartSmokeRequest",
+        "type": "object"
+      },
+      "AccountClerkRestartSmokeResponse": {
+        "description": "Durable Clerk-restart smoke receipt used by gate promotion.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "clerk_generation": {
+            "minimum": 1.0,
+            "title": "Clerk Generation",
+            "type": "integer"
+          },
+          "recorded_at_ms": {
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account_id",
+          "clerk_generation",
+          "recorded_at_ms"
+        ],
+        "title": "AccountClerkRestartSmokeResponse",
+        "type": "object"
+      },
       "AccountConditionOwner": {
         "additionalProperties": false,
         "description": "Owner of a derived sick-bay condition.",
@@ -1551,6 +1594,92 @@
         "title": "AccountServiceBinding",
         "type": "object"
       },
+      "AccountServiceGateAuthority": {
+        "description": "Exact backend-authoritative account-gate promotion state.",
+        "properties": {
+          "disposition": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disposition"
+          },
+          "effective_authority": {
+            "enum": [
+              "account_truth",
+              "observation_lease"
+            ],
+            "title": "Effective Authority",
+            "type": "string"
+          },
+          "gate_result": {
+            "$ref": "#/components/schemas/GateResult"
+          },
+          "lease_weaker_comparison_count": {
+            "minimum": 0.0,
+            "title": "Lease Weaker Comparison Count",
+            "type": "integer"
+          },
+          "observed_session_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Observed Session Dates",
+            "type": "array"
+          },
+          "promotion_state": {
+            "enum": [
+              "SAFE_DEFAULT",
+              "WAITING_FOR_SHADOW_PARITY",
+              "WAITING_FOR_CLERK_RESTART_SMOKE",
+              "CLERK_PROOF_ACTIVE"
+            ],
+            "title": "Promotion State",
+            "type": "string"
+          },
+          "reason_code": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Reason Code",
+            "type": "string"
+          },
+          "requested_authority": {
+            "enum": [
+              "account_truth",
+              "observation_lease"
+            ],
+            "title": "Requested Authority",
+            "type": "string"
+          },
+          "restart_smoke_recorded_at_ms": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Restart Smoke Recorded At Ms"
+          }
+        },
+        "required": [
+          "requested_authority",
+          "effective_authority",
+          "promotion_state",
+          "reason_code",
+          "gate_result",
+          "lease_weaker_comparison_count"
+        ],
+        "title": "AccountServiceGateAuthority",
+        "type": "object"
+      },
       "AccountServiceJournalWatermark": {
         "description": "Newest durable Account Clerk journal entry, if any.",
         "properties": {
@@ -1628,6 +1757,24 @@
         "title": "AccountServiceLease",
         "type": "object"
       },
+      "AccountServiceSessionPolicy": {
+        "description": "The account-wide live-session enforcement verdict and exception flag.",
+        "properties": {
+          "allow_outside_live_session": {
+            "title": "Allow Outside Live Session",
+            "type": "boolean"
+          },
+          "gate_result": {
+            "$ref": "#/components/schemas/GateResult"
+          }
+        },
+        "required": [
+          "allow_outside_live_session",
+          "gate_result"
+        ],
+        "title": "AccountServiceSessionPolicy",
+        "type": "object"
+      },
       "AccountServiceStatusResponse": {
         "description": "Full read-only Account service status for one known account.",
         "properties": {
@@ -1654,6 +1801,9 @@
             "minLength": 1,
             "title": "Detail",
             "type": "string"
+          },
+          "gate_authority": {
+            "$ref": "#/components/schemas/AccountServiceGateAuthority"
           },
           "generation": {
             "anyOf": [
@@ -1726,9 +1876,12 @@
             "title": "Phase"
           },
           "schema_version": {
-            "const": 2,
-            "default": 2,
+            "const": 3,
+            "default": 3,
             "title": "Schema Version"
+          },
+          "session_policy": {
+            "$ref": "#/components/schemas/AccountServiceSessionPolicy"
           },
           "source": {
             "anyOf": [
@@ -1747,6 +1900,8 @@
           "account_id",
           "attachment",
           "binding",
+          "gate_authority",
+          "session_policy",
           "journal",
           "operating_state",
           "headline",
@@ -1818,6 +1973,48 @@
           "headline"
         ],
         "title": "AccountServiceSummary",
+        "type": "object"
+      },
+      "AccountSessionPolicyUpdateRequest": {
+        "additionalProperties": false,
+        "description": "Explicit account-level future hook for outside-live-session actions.",
+        "properties": {
+          "allow_outside_live_session": {
+            "title": "Allow Outside Live Session",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "allow_outside_live_session"
+        ],
+        "title": "AccountSessionPolicyUpdateRequest",
+        "type": "object"
+      },
+      "AccountSessionPolicyUpdateResponse": {
+        "description": "Durable receipt for an account session-policy change.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "allow_outside_live_session": {
+            "title": "Allow Outside Live Session",
+            "type": "boolean"
+          },
+          "updated_at_ms": {
+            "minimum": 0.0,
+            "title": "Updated At Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account_id",
+          "allow_outside_live_session",
+          "updated_at_ms"
+        ],
+        "title": "AccountSessionPolicyUpdateResponse",
         "type": "object"
       },
       "AccountTriageBotRef": {
@@ -38035,6 +38232,75 @@
         ]
       }
     },
+    "/api/accounts/{account_id}/gate-promotion/restart-smoke": {
+      "post": {
+        "description": "Record the typed restart smoke for the current accepting Clerk.",
+        "operationId": "record_account_clerk_restart_smoke_endpoint_api_accounts__account_id__gate_promotion_restart_smoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountClerkRestartSmokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountClerkRestartSmokeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Record Account Clerk Restart Smoke Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
     "/api/accounts/{account_id}/journal-cures": {
       "post": {
         "description": "Append a claim-reducing cure only after the account Clerk is healthy.",
@@ -38619,6 +38885,75 @@
           }
         },
         "summary": "Backfill False Crash Registry Rows Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/session-policy": {
+      "put": {
+        "description": "Set the account-wide outside-live-session exception explicitly.",
+        "operationId": "update_account_session_policy_endpoint_api_accounts__account_id__session_policy_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountSessionPolicyUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountSessionPolicyUpdateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Account Session Policy Endpoint",
         "tags": [
           "accounts"
         ]

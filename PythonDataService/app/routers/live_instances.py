@@ -189,8 +189,7 @@ from app.services.account_crash_recovery import (
     record_crash_recovery_override_evidence,
 )
 from app.services.account_fleet_read_context import AccountFleetReadContext
-from app.services.account_reconciliation import AccountReconciliationService
-from app.services.account_truth_refresh import refresh_account_truth_now
+from app.services.account_start_gate import AccountStartGateError, ensure_account_start_gate
 from app.services.account_truth_snapshot import get_account_truth_snapshot_provider
 from app.services.activity_evidence_matching import (
     activity_evidence_ref_from_event,
@@ -2511,69 +2510,18 @@ async def _ensure_account_observation_lease_allows_start(
     *,
     now_ms: int,
 ) -> None:
-    """Prepare and apply durable account proof at the Start mutation boundary."""
-
-    if settings.account_gate_authority != "observation_lease":
-        return
-    assessment = assess_account_observation_lease(
-        artifacts_root,
-        account_id,
-        now_ms=now_ms,
-    )
-    if assessment.state == "VERIFIED":
-        return
-
     try:
-        await host_daemon_client.ensure_account_clerk(
-            settings.live_runner_daemon_url,
-            account_id,
-        )
-    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "OUTCOME_UNKNOWN",
-                "message": exc.detail
-                or "The Clerk readiness request may have completed; refresh before retrying.",
-            },
-        ) from exc
-    except host_daemon_client.HostDaemonError as exc:
-        raise HTTPException(exc.status_code, detail=exc.detail) from exc
-
-    service = AccountReconciliationService(artifacts_root=artifacts_root)
-    try:
-        await refresh_account_truth_now(
-            require_connected_client(),
+        await ensure_account_start_gate(
+            artifacts_root,
             account_id=account_id,
-            artifacts_root=artifacts_root,
-            context="start account verification",
-            account_truth_observer=service.observe_account_truth,
-            account_truth_failure_observer=service.observe_account_truth_failure,
+            daemon_url=settings.live_runner_daemon_url,
+            requested_authority=settings.account_gate_authority,
+            client=require_connected_client(),
+            now_ms=now_ms,
+            current_now_ms=_now_ms,
         )
-    except BrokerError:
-        logger.warning(
-            "start account verification refresh failed",
-            extra={"account_id": account_id},
-            exc_info=True,
-        )
-
-    assessment = assess_account_observation_lease(
-        artifacts_root,
-        account_id,
-        now_ms=_now_ms(),
-    )
-    if assessment.state == "VERIFIED":
-        return
-    gate = account_observation_lease_gate_result(assessment)
-    raise HTTPException(
-        status.HTTP_409_CONFLICT,
-        detail={
-            "reason_code": assessment.reason_code,
-            "message": assessment.reason,
-            "gate_result": gate.model_dump(mode="json"),
-            "operator_next_step": "RECONCILE_NOW",
-        },
-    )
+    except AccountStartGateError as exc:
+        raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
 
 def _start_request_with_ledger_strategy_default(

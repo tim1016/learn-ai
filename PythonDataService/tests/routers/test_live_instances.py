@@ -62,6 +62,7 @@ from app.operator.notices.schema import (
     OperatorNoticeAction,
 )
 from app.routers import live_instances
+from app.services import account_start_gate
 from app.schemas.account_truth import AccountTruthResponse
 from app.schemas.broker_activity import BrokerActivityRow
 from app.schemas.live_runs import (
@@ -69,9 +70,17 @@ from app.schemas.live_runs import (
     LiveBinding,
 )
 from app.services import account_fleet_read_context
+from app.services.account_gate_promotion import (
+    CLERK_RESTART_SMOKE_CONFIRMATION,
+    record_clerk_restart_smoke,
+)
 from app.services.account_truth_snapshot import AccountTruthSnapshotProvider
 from app.services.live_chart_window import ChartTimeframe, ChartWindowResult
 from app.services.mutation_attempt import MutationAttemptRepo
+from app.services.observation_lease_parity import (
+    OBSERVATION_LEASE_GENERATION_AUTHORITY,
+    OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION,
+)
 from app.services.start_admission_policy import StartAdmissionDecision
 from tests._fixtures.daemon_transport import as_typed_get
 from tests._helpers.account_truth import fresh_account_truth_source_freshness
@@ -249,6 +258,59 @@ def _remember_clean_account_truth(
     )
     monkeypatch.setattr(live_instances, "get_account_truth_snapshot_provider", lambda: provider)
     monkeypatch.setattr(live_instances, "_now_ms", lambda: observed_at_ms)
+
+
+def _qualify_clerk_gate_promotion(root: Path, *, account_id: str) -> int:
+    """Write the durable proof needed before tests may request Clerk authority."""
+
+    now_ms = live_instances._now_ms()
+    clerk = advance_account_clerk_generation(
+        root,
+        account_id,
+        phase="accepting",
+        recorded_at_ms=now_ms,
+        source="test",
+    )
+    write_account_clerk_lease(
+        root,
+        AccountClerkLease(
+            account_id=account_id,
+            generation=clerk.generation,
+            pid=123,
+            ibkr_client_id=51,
+            status="RUNNING",
+            started_at_ms=now_ms,
+            renewed_at_ms=now_ms,
+            valid_until_ms=now_ms + 60_000,
+        ),
+    )
+    for recorded_at_ms in (1_704_209_400_000, 1_704_295_800_000, 1_704_382_200_000):
+        append_account_event(
+            root,
+            account_id,
+            {
+                "event_type": "account_observation_lease_shadow_comparison",
+                "comparison_schema_version": OBSERVATION_LEASE_SHADOW_COMPARISON_SCHEMA_VERSION,
+                "recorded_at_ms": recorded_at_ms,
+                "strategy_instance_id": "spy_ema_paper",
+                "run_id": "run-gate-proof",
+                "truth_gate_id": "account.account_truth",
+                "truth_source": "account_truth_snapshot",
+                "truth_status": "pass",
+                "lease_gate_id": "account.observation_lease",
+                "lease_source": "account_observation_lease",
+                "lease_status": "pass",
+                "lease_schema_version": 2,
+                "lease_generation_authority": OBSERVATION_LEASE_GENERATION_AUTHORITY,
+            },
+        )
+    record_clerk_restart_smoke(
+        root,
+        account_id=account_id,
+        confirmation=CLERK_RESTART_SMOKE_CONFIRMATION,
+        recorded_at_ms=now_ms,
+    )
+    return clerk.generation
 
 
 def _write_crash_retired_binding(
@@ -675,6 +737,19 @@ def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         account_gate_authority="account_truth",
     )
     monkeypatch.setattr(live_instances, "get_settings", lambda: stub)
+
+    _remember_clean_account_truth(monkeypatch)
+    account_truth_provider = live_instances.get_account_truth_snapshot_provider()
+    monkeypatch.setattr(
+        account_start_gate,
+        "get_account_truth_snapshot_provider",
+        lambda: account_truth_provider,
+    )
+
+    async def fresh_account_truth(*_args, **_kwargs):
+        return object()
+
+    monkeypatch.setattr(account_start_gate, "refresh_account_truth_now", fresh_account_truth)
 
     async def connected_broker_account() -> tuple[str | None, bool]:
         return "DU111", True
@@ -3152,6 +3227,7 @@ async def test_bot_catalog_reads_account_truth_once_per_distinct_account(
 
     provider = CountingAccountTruthProvider()
     monkeypatch.setattr(live_instances, "get_account_truth_snapshot_provider", lambda: provider)
+    monkeypatch.setattr(account_start_gate, "get_account_truth_snapshot_provider", lambda: provider)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.get("/api/live-instances/catalog")
@@ -5466,6 +5542,7 @@ async def test_start_run_rejects_absent_lease_after_authority_switch(
     offer_id = _write_roll_call_offer(root.parent, run_id="run-lease-absent")
     _set_startable_now(monkeypatch)
     _set_daemon(monkeypatch, process={"state": "idle"})
+    _qualify_clerk_gate_promotion(root.parent, account_id="DU111")
     live_instances.get_settings().account_gate_authority = "observation_lease"
     called = False
 
@@ -5482,7 +5559,7 @@ async def test_start_run_rejects_absent_lease_after_authority_switch(
 
     monkeypatch.setattr(host_daemon_client, "ensure_account_clerk", fake_ensure)
     monkeypatch.setattr(live_instances, "require_connected_client", lambda: object())
-    monkeypatch.setattr(live_instances, "refresh_account_truth_now", fake_refresh)
+    monkeypatch.setattr(account_start_gate, "refresh_account_truth_now", fake_refresh)
     monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(
@@ -5497,6 +5574,48 @@ async def test_start_run_rejects_absent_lease_after_authority_switch(
     assert called is False
 
 
+async def test_start_run_safe_default_refuses_when_fresh_account_truth_is_absent(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Safe pre-cutover Start cannot skip the same Account Truth gate as submit."""
+
+    app, root = app_with_root
+    _write_ledger(root, "run-truth-absent", "spy_ema_paper", 100)
+    offer_id = _write_roll_call_offer(root.parent, run_id="run-truth-absent")
+    _set_startable_now(monkeypatch)
+    _set_daemon(monkeypatch, process={"state": "idle"})
+    monkeypatch.setattr(
+        account_start_gate,
+        "get_account_truth_snapshot_provider",
+        AccountTruthSnapshotProvider,
+    )
+    refresh_called = False
+    started = False
+
+    async def fake_refresh(*_args, **_kwargs):
+        nonlocal refresh_called
+        refresh_called = True
+        return object()
+
+    async def fake_start(_base_url: str, _run_id: str, _payload: dict) -> dict:
+        nonlocal started
+        started = True
+        return {"accepted": True, "process": _running_process("run-truth-absent")}
+
+    monkeypatch.setattr(account_start_gate, "refresh_account_truth_now", fake_refresh)
+    monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/live-instances/runs/run-truth-absent/start",
+            json={"roll_call_offer_id": offer_id},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "ACCOUNT_TRUTH_NOT_AVAILABLE"
+    assert refresh_called is True
+    assert started is False
+
+
 async def test_start_run_bootstraps_clerk_and_refreshes_absent_lease_after_authority_switch(
     app_with_root, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -5505,6 +5624,7 @@ async def test_start_run_bootstraps_clerk_and_refreshes_absent_lease_after_autho
     offer_id = _write_roll_call_offer(root.parent, run_id="run-lease-bootstrap")
     _set_startable_now(monkeypatch)
     _set_daemon(monkeypatch, process={"state": "idle"})
+    _qualify_clerk_gate_promotion(root.parent, account_id="DU111")
     settings = live_instances.get_settings()
     settings.account_gate_authority = "observation_lease"
     calls: list[str] = []
@@ -5555,7 +5675,7 @@ async def test_start_run_bootstraps_clerk_and_refreshes_absent_lease_after_autho
 
     monkeypatch.setattr(host_daemon_client, "ensure_account_clerk", fake_ensure)
     monkeypatch.setattr(live_instances, "require_connected_client", lambda: object())
-    monkeypatch.setattr(live_instances, "refresh_account_truth_now", fake_refresh)
+    monkeypatch.setattr(account_start_gate, "refresh_account_truth_now", fake_refresh)
     monkeypatch.setattr(host_daemon_client, "start_run", fake_start)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post(
@@ -5579,31 +5699,12 @@ async def test_start_run_accepts_verified_clerk_keyed_lease_after_authority_swit
     settings = live_instances.get_settings()
     settings.account_gate_authority = "observation_lease"
     now_ms = live_instances._now_ms()
-    clerk = advance_account_clerk_generation(
-        root.parent,
-        "DU111",
-        phase="accepting",
-        recorded_at_ms=now_ms,
-        source="test",
-    )
-    write_account_clerk_lease(
-        root.parent,
-        AccountClerkLease(
-            account_id="DU111",
-            generation=clerk.generation,
-            pid=123,
-            ibkr_client_id=51,
-            status="RUNNING",
-            started_at_ms=now_ms,
-            renewed_at_ms=now_ms,
-            valid_until_ms=now_ms + 60_000,
-        ),
-    )
+    clerk_generation = _qualify_clerk_gate_promotion(root.parent, account_id="DU111")
     AccountObservationLeaseRepo(root.parent).renew(
         account_id="DU111",
         observed_at_ms=now_ms,
         now_ms=now_ms,
-        clerk_generation=clerk.generation,
+        clerk_generation=clerk_generation,
     )
 
     async def unexpected_ensure(_base_url: str, _account_id: str) -> dict:

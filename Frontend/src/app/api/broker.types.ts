@@ -144,6 +144,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/{account_id}/gate-promotion/restart-smoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record Account Clerk Restart Smoke Endpoint
+         * @description Record the typed restart smoke for the current accepting Clerk.
+         */
+        post: operations["record_account_clerk_restart_smoke_endpoint_api_accounts__account_id__gate_promotion_restart_smoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}/journal-cures": {
         parameters: {
             query?: never;
@@ -318,6 +338,26 @@ export interface paths {
          * @description Repair latest crash-retired registry rows disproven by durable run status.
          */
         post: operations["backfill_false_crash_registry_rows_endpoint_api_accounts__account_id__registry_backfill_false_crashes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/session-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update Account Session Policy Endpoint
+         * @description Set the account-wide outside-live-session exception explicitly.
+         */
+        put: operations["update_account_session_policy_endpoint_api_accounts__account_id__session_policy_put"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5250,6 +5290,29 @@ export interface components {
             status?: "recovery_flattened";
         };
         /**
+         * AccountClerkRestartSmokeRequest
+         * @description Typed acknowledgement that the current Clerk passed its restart smoke.
+         */
+        AccountClerkRestartSmokeRequest: {
+            /**
+             * Confirmation
+             * @constant
+             */
+            confirmation: "CLERK_RESTART_SMOKE";
+        };
+        /**
+         * AccountClerkRestartSmokeResponse
+         * @description Durable Clerk-restart smoke receipt used by gate promotion.
+         */
+        AccountClerkRestartSmokeResponse: {
+            /** Account Id */
+            account_id: string;
+            /** Clerk Generation */
+            clerk_generation: number;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+        };
+        /**
          * AccountConditionOwner
          * @description Owner of a derived sick-bay condition.
          */
@@ -5671,6 +5734,38 @@ export interface components {
             state: "ATTACHED" | "UNATTACHED" | "FENCED";
         };
         /**
+         * AccountServiceGateAuthority
+         * @description Exact backend-authoritative account-gate promotion state.
+         */
+        AccountServiceGateAuthority: {
+            /** Disposition */
+            disposition?: string | null;
+            /**
+             * Effective Authority
+             * @enum {string}
+             */
+            effective_authority: "account_truth" | "observation_lease";
+            gate_result: components["schemas"]["GateResult"];
+            /** Lease Weaker Comparison Count */
+            lease_weaker_comparison_count: number;
+            /** Observed Session Dates */
+            observed_session_dates?: string[];
+            /**
+             * Promotion State
+             * @enum {string}
+             */
+            promotion_state: "SAFE_DEFAULT" | "WAITING_FOR_SHADOW_PARITY" | "WAITING_FOR_CLERK_RESTART_SMOKE" | "CLERK_PROOF_ACTIVE";
+            /** Reason Code */
+            reason_code: string;
+            /**
+             * Requested Authority
+             * @enum {string}
+             */
+            requested_authority: "account_truth" | "observation_lease";
+            /** Restart Smoke Recorded At Ms */
+            restart_smoke_recorded_at_ms?: number | null;
+        };
+        /**
          * AccountServiceJournalWatermark
          * @description Newest durable Account Clerk journal entry, if any.
          */
@@ -5700,6 +5795,15 @@ export interface components {
             valid_until_ms: number;
         };
         /**
+         * AccountServiceSessionPolicy
+         * @description The account-wide live-session enforcement verdict and exception flag.
+         */
+        AccountServiceSessionPolicy: {
+            /** Allow Outside Live Session */
+            allow_outside_live_session: boolean;
+            gate_result: components["schemas"]["GateResult"];
+        };
+        /**
          * AccountServiceStatusResponse
          * @description Full read-only Account service status for one known account.
          */
@@ -5714,6 +5818,7 @@ export interface components {
             binding: components["schemas"]["AccountServiceBinding"];
             /** Detail */
             detail: string;
+            gate_authority: components["schemas"]["AccountServiceGateAuthority"];
             /** Generation */
             generation?: number | null;
             /** Generation Recorded At Ms */
@@ -5731,10 +5836,11 @@ export interface components {
             phase?: ("accepting" | "reconnecting" | "draining" | "frozen") | null;
             /**
              * Schema Version
-             * @default 2
+             * @default 3
              * @constant
              */
-            schema_version?: 2;
+            schema_version?: 3;
+            session_policy: components["schemas"]["AccountServiceSessionPolicy"];
             /** Source */
             source?: string | null;
         };
@@ -5759,6 +5865,26 @@ export interface components {
             operating_state: "READY" | "STANDBY" | "ATTENTION";
             /** Phase */
             phase?: ("accepting" | "reconnecting" | "draining" | "frozen") | null;
+        };
+        /**
+         * AccountSessionPolicyUpdateRequest
+         * @description Explicit account-level future hook for outside-live-session actions.
+         */
+        AccountSessionPolicyUpdateRequest: {
+            /** Allow Outside Live Session */
+            allow_outside_live_session: boolean;
+        };
+        /**
+         * AccountSessionPolicyUpdateResponse
+         * @description Durable receipt for an account session-policy change.
+         */
+        AccountSessionPolicyUpdateResponse: {
+            /** Account Id */
+            account_id: string;
+            /** Allow Outside Live Session */
+            allow_outside_live_session: boolean;
+            /** Updated At Ms */
+            updated_at_ms: number;
         };
         /**
          * AccountTriageBotRef
@@ -22372,6 +22498,43 @@ export interface operations {
             };
         };
     };
+    record_account_clerk_restart_smoke_endpoint_api_accounts__account_id__gate_promotion_restart_smoke_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountClerkRestartSmokeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountClerkRestartSmokeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     apply_journal_cure_endpoint_api_accounts__account_id__journal_cures_post: {
         parameters: {
             query?: never;
@@ -22675,6 +22838,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountFalseCrashBackfillResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_account_session_policy_endpoint_api_accounts__account_id__session_policy_put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountSessionPolicyUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountSessionPolicyUpdateResponse"];
                 };
             };
             /** @description Validation Error */

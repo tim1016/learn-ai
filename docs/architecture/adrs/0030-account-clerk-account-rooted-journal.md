@@ -91,12 +91,13 @@ schema v2 make that boundary explicit. Owner-keyed v1 lease artifacts fail
 closed, and owner-keyed comparison rows are classified as legacy evidence that
 cannot authorize promotion.
 
-One process-wide setting, `IBKR_ACCOUNT_GATE_AUTHORITY`, selects the account
-proof consumed by both Start and submit. Its default remains `account_truth`.
-The `observation_lease` branch is deliberately dormant until three distinct
-canonical NYSE paper sessions produce valid v2 comparisons with no
-lease-weaker result and the Clerk-restart HITL smoke passes. Per-bot selection
-is forbidden because it would create split account authority.
+One process-wide setting, `IBKR_ACCOUNT_GATE_AUTHORITY`, requests the account
+proof for both Start and submit; the promotion resolver selects the effective
+authority. Its default remains `account_truth`. The `observation_lease` branch
+is deliberately dormant until three distinct canonical NYSE paper sessions
+produce valid v2 comparisons with no lease-weaker result and the typed
+current-generation Clerk-restart HITL smoke passes. Per-bot selection is
+forbidden because it would create split account authority.
 
 The obsolete, zero-production-caller owner-generation advance writer and
 startup recording method are removed. Remaining owner-generation reads are
@@ -274,6 +275,34 @@ and both emergency-flatten binding transitions use the host-authorized Clerk
 RPC and fail closed when it is unavailable. These two explicitly audited
 compatibility seams are scheduled for removal once direct CLI starts and the
 lifecycle retirement commit are Clerk-native end to end.
+
+## Clerk S5 account-gate promotion and live-session boundary (2026-07-21)
+
+Issue #1158 keeps `IBKR_ACCOUNT_GATE_AUTHORITY` as a requested deployment
+mode, never as a direct bypass. `account_truth` remains the effective safe
+default. A request for the Clerk-keyed `observation_lease` proof becomes
+effective only after the durable shadow projection reports three distinct
+canonical NYSE sessions with no lease-weaker comparison **and** an operator
+records the exact `CLERK_RESTART_SMOKE` confirmation for the current accepting
+Clerk generation. A new accepting generation invalidates the prior smoke and
+immediately returns both Start and normal submit to Account Truth. The account
+desk exposes the requested/effective authority, the blocker reason and
+disposition, parity dates, weaker-comparison count, and smoke timestamp. It
+also exposes the separately selected current action gate; promotion state is
+not mislabeled as a blocking enforcement verdict. The desk does not let a bot
+select the account proof.
+
+Normal account actions also have one account-level `account.live_session`
+verdict. The canonical NYSE calendar answers scheduled RTH structure and the
+durable live-engine feed observation independently proves current market-data
+liveness. Both are required by default for every normal submit, including a
+normal flatten that drains through the same submit queue. Outside-session
+action requires the explicit durable per-account
+`allow_outside_live_session` policy; there is no per-bot exception. The policy
+is reserved for a later deliberate carryover/overnight design and does not
+enable that behavior by itself. The Account desk returns the exact gate result
+and override state, so the cockpit renders enforcement rather than inferring
+it from clock time.
 
 ## Issue #1044 callback-stream hardening traceability
 

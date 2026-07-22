@@ -727,6 +727,7 @@ class LiveEngine:
         self._account_registry_gate_enabled = account_registry_gate_enabled
         self._account_gate_authority = account_gate_authority
         self._account_truth_gate_provider: Callable[[], object] | None = None
+        self._account_live_feed_evidence_write_failed = False
         self._owner_generation_provider = owner_generation_provider
         self._current_owner_generation_provider = (
             current_owner_generation_provider
@@ -1005,6 +1006,48 @@ class LiveEngine:
                     },
                 )
 
+        account_live_session_gate_provider = None
+        if (
+            self._artifacts_root is not None
+            and self._account_id
+            and getattr(self._broker, "requires_durable_submit", False)
+        ):
+            from app.engine.live.account_session_policy import assess_account_live_session
+            from app.schemas.live_runs import GateResult
+            from app.utils.timestamps import now_ms_utc
+
+            def account_live_session_gate_provider():
+                if self._account_live_feed_evidence_write_failed:
+                    return GateResult(
+                        gate_id="account.live_session",
+                        status="block",
+                        source="account_session_policy",
+                        operator_reason="LIVE_SESSION_EVIDENCE_WRITE_FAILED",
+                        operator_next_step="RESTORE_LIVE_FEED_AND_WAIT_FOR_FRESH_EVIDENCE",
+                        evidence_at_ms=now_ms_utc(),
+                    )
+                return assess_account_live_session(
+                    self._artifacts_root,
+                    account_id=self._account_id,
+                    now_ms=now_ms_utc(),
+                ).to_gate_result()
+
+        account_gate_authority_provider = None
+        effective_account_gate_authority = self._account_gate_authority
+        if self._artifacts_root is not None and self._account_id:
+            from app.services.account_gate_promotion import resolve_account_gate_authority
+            from app.utils.timestamps import now_ms_utc
+
+            def account_gate_authority_provider():
+                return resolve_account_gate_authority(
+                    self._artifacts_root,
+                    account_id=self._account_id,
+                    requested_authority=self._account_gate_authority,
+                    now_ms=now_ms_utc(),
+                ).effective_authority
+
+            effective_account_gate_authority = account_gate_authority_provider()
+
         session_gate_provider = None
         if getattr(self._broker, "requires_durable_submit", False):
             from app.services.broker_capability_service import get_broker_capability_service
@@ -1013,6 +1056,12 @@ class LiveEngine:
             capability_service = get_broker_capability_service()
 
             def session_gate_provider():
+                from app.engine.live.account_session_policy import read_account_session_policy
+
+                if self._artifacts_root is not None and self._account_id:
+                    policy = read_account_session_policy(self._artifacts_root, self._account_id)
+                    if policy.allow_outside_live_session:
+                        return None
                 capability = None
                 try:
                     matching = [
@@ -1056,10 +1105,12 @@ class LiveEngine:
             ),
             account_truth_gate_provider=self._account_truth_gate_provider,
             account_observation_lease_gate_provider=account_observation_lease_gate_provider,
-            account_gate_authority=self._account_gate_authority,
+            account_gate_authority=effective_account_gate_authority,
+            account_gate_authority_provider=account_gate_authority_provider,
             account_observation_lease_shadow_comparison_observer=(
                 account_observation_lease_shadow_comparison_observer
             ),
+            account_live_session_gate_provider=account_live_session_gate_provider,
             session_gate_provider=session_gate_provider,
             allowed_sessions=self._config.allowed_sessions,
             order_mechanism_sessions=order_mechanism_sessions,
@@ -1288,6 +1339,7 @@ class LiveEngine:
                     break
                 last_bar = minute_bar
                 bar_close_ms = int(minute_bar.end_time.timestamp() * 1000)
+                self._record_account_live_feed_evidence()
                 evaluation_id = evaluation_id_for_bar(bar_close_ms)
                 self._raise_if_event_stream_failed()
                 # PRD #619-B B3 — bar-loop heartbeat. ``heartbeat_at_ms``
@@ -1943,6 +1995,31 @@ class LiveEngine:
             run_id=self._run_id,
             bot_order_namespace=bot_order_namespace_for_instance(self._strategy_instance_id),
         )
+
+    def _record_account_live_feed_evidence(self) -> None:
+        """Refresh the account-wide liveness fact from an active live bar loop."""
+
+        if (
+            self._artifacts_root is None
+            or not self._account_id
+            or not getattr(self._broker, "requires_durable_submit", False)
+        ):
+            return
+        from app.engine.live.account_session_policy import write_account_live_feed_evidence
+        from app.utils.timestamps import now_ms_utc
+
+        try:
+            write_account_live_feed_evidence(
+                self._artifacts_root,
+                account_id=self._account_id,
+                observed_at_ms=now_ms_utc(),
+            )
+        except (OSError, ValueError):
+            self._account_live_feed_evidence_write_failed = True
+            logger.exception(
+                "account live-feed evidence write failed",
+                extra={"account_id": self._account_id},
+            )
 
     def _persist_live_state(
         self,

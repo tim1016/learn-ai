@@ -54,6 +54,7 @@ from app.services.account_directory import AccountDirectoryService, CurrentBroke
 from app.services.account_event_journal import AccountEventJournalService
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.legacy_stale_claim_retirement import LegacyStaleClaimRetirementService
+from app.utils.timestamps import now_ms_utc
 
 
 def _health() -> IbkrConnectionHealth:
@@ -1324,7 +1325,7 @@ async def test_accounts_roster_exposes_the_current_single_account_without_a_serv
     }
     assert status_response.status_code == 200
     assert status_response.json() == {
-        "schema_version": 2,
+        "schema_version": 3,
         "account_id": "DU1234567",
         "attachment": "UNATTACHED",
         "phase": None,
@@ -1339,6 +1340,36 @@ async def test_accounts_roster_exposes_the_current_single_account_without_a_serv
             "ledger_read_authority": "legacy_registry",
             "ledger_parity": "clean",
             "ledger_parity_issue_count": 0,
+        },
+        "gate_authority": {
+            "requested_authority": "account_truth",
+            "effective_authority": "account_truth",
+            "promotion_state": "SAFE_DEFAULT",
+            "reason_code": "ACCOUNT_GATE_SAFE_DEFAULT",
+            "disposition": None,
+            "action_authority": "account_truth",
+            "action_gate": {
+                "gate_id": "account.account_truth",
+                "status": "block",
+                "source": "account_truth_snapshot",
+                "operator_reason": "ACCOUNT_TRUTH_NOT_AVAILABLE",
+                "operator_next_step": "Refresh Account Truth from broker evidence before treating submit readiness as safe.",
+                "evidence_at_ms": 1_780_000_000_000,
+            },
+            "observed_session_dates": [],
+            "lease_weaker_comparison_count": 0,
+            "restart_smoke_recorded_at_ms": None,
+        },
+        "session_policy": {
+            "allow_outside_live_session": False,
+            "gate_result": {
+                "gate_id": "account.live_session",
+                "status": "block",
+                "source": "account_session_policy",
+                "operator_reason": "OUTSIDE_LIVE_TRADABLE_SESSION",
+                "operator_next_step": "WAIT_FOR_LIVE_TRADABLE_SESSION",
+                "evidence_at_ms": 1_780_000_000_000,
+            },
         },
         "lease": None,
         "journal": {"last_seq": None, "last_write_ms": None},
@@ -1527,7 +1558,7 @@ async def test_account_service_status_endpoint_projects_durable_service_evidence
 
     assert response.status_code == 200
     assert response.json() == {
-        "schema_version": 2,
+        "schema_version": 3,
         "account_id": account_id,
         "attachment": "ATTACHED",
         "phase": "accepting",
@@ -1542,6 +1573,36 @@ async def test_account_service_status_endpoint_projects_durable_service_evidence
             "ledger_read_authority": "legacy_registry",
             "ledger_parity": "clean",
             "ledger_parity_issue_count": 0,
+        },
+        "gate_authority": {
+            "requested_authority": "account_truth",
+            "effective_authority": "account_truth",
+            "promotion_state": "SAFE_DEFAULT",
+            "reason_code": "ACCOUNT_GATE_SAFE_DEFAULT",
+            "disposition": None,
+            "action_authority": "account_truth",
+            "action_gate": {
+                "gate_id": "account.account_truth",
+                "status": "block",
+                "source": "account_truth_snapshot",
+                "operator_reason": "ACCOUNT_TRUTH_NOT_AVAILABLE",
+                "operator_next_step": "Refresh Account Truth from broker evidence before treating submit readiness as safe.",
+                "evidence_at_ms": 1_780_000_000_200,
+            },
+            "observed_session_dates": [],
+            "lease_weaker_comparison_count": 0,
+            "restart_smoke_recorded_at_ms": None,
+        },
+        "session_policy": {
+            "allow_outside_live_session": False,
+            "gate_result": {
+                "gate_id": "account.live_session",
+                "status": "block",
+                "source": "account_session_policy",
+                "operator_reason": "OUTSIDE_LIVE_TRADABLE_SESSION",
+                "operator_next_step": "WAIT_FOR_LIVE_TRADABLE_SESSION",
+                "evidence_at_ms": 1_780_000_000_200,
+            },
         },
         "lease": {
             "status": "RUNNING",
@@ -1582,3 +1643,93 @@ async def test_account_service_status_endpoint_rejects_unknown_and_corrupt_artif
     assert corrupt.status_code == 409
     assert corrupt.json()["detail"]["reason_code"] == "ACCOUNT_SERVICE_ARTIFACT_CORRUPT"
     assert artifact.read_text(encoding="utf-8") == "{not valid json"
+
+
+async def test_account_service_status_endpoint_projects_corrupt_s5_session_evidence_as_typed_error(
+    tmp_path: Path,
+) -> None:
+    """The new session artifact keeps the existing account-desk error contract."""
+
+    from app.main import app
+
+    service = AccountDirectoryService(
+        artifacts_root=tmp_path,
+        current_account=CurrentBrokerAccount(account_id="DU1234567", is_paper=True),
+    )
+    evidence = tmp_path / "accounts" / "DU1234567" / "account_live_feed_evidence.json"
+    evidence.parent.mkdir(parents=True)
+    evidence.write_text("{not valid json", encoding="utf-8")
+    app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/api/accounts/DU1234567/clerk")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "ACCOUNT_SERVICE_ARTIFACT_CORRUPT"
+    assert evidence.read_text(encoding="utf-8") == "{not valid json"
+
+
+async def test_account_session_policy_endpoint_persists_explicit_outside_session_override(
+    tmp_path: Path,
+) -> None:
+    from app.main import app
+
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.put(
+                "/api/accounts/DU1234567/session-policy",
+                json={"allow_outside_live_session": True},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["account_id"] == "DU1234567"
+    assert body["allow_outside_live_session"] is True
+    assert isinstance(body["updated_at_ms"], int)
+
+
+async def test_clerk_restart_smoke_endpoint_records_current_accepting_generation(tmp_path: Path) -> None:
+    from app.main import app
+
+    account_id = "DU1234567"
+    now_ms = now_ms_utc()
+    generation = advance_account_clerk_generation(
+        tmp_path,
+        account_id,
+        phase="accepting",
+        recorded_at_ms=now_ms,
+        source="test",
+    )
+    write_account_clerk_lease(
+        tmp_path,
+        AccountClerkLease(
+            account_id=account_id,
+            generation=generation.generation,
+            pid=123,
+            ibkr_client_id=80,
+            status="RUNNING",
+            started_at_ms=now_ms,
+            renewed_at_ms=now_ms,
+            valid_until_ms=now_ms + 60_000,
+        ),
+    )
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                f"/api/accounts/{account_id}/gate-promotion/restart-smoke",
+                json={"confirmation": "CLERK_RESTART_SMOKE"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["account_id"] == account_id
+    assert body["clerk_generation"] == generation.generation
+    assert isinstance(body["recorded_at_ms"], int)

@@ -28,10 +28,14 @@ from app.schemas.account_reconciliation import (
     AccountAcceptExposureOverrideResponse,
     AccountClearFreezeRequest,
     AccountClearFreezeResponse,
+    AccountClerkRestartSmokeRequest,
+    AccountClerkRestartSmokeResponse,
     AccountFalseCrashBackfillResponse,
     AccountReconciliationAutomationPolicy,
     AccountReconciliationAutomationPolicyUpdate,
     AccountReconciliationReceipt,
+    AccountSessionPolicyUpdateRequest,
+    AccountSessionPolicyUpdateResponse,
     AccountTriageResponse,
     LegacyStaleClaimCandidatesResponse,
     LegacyStaleClaimRetirementReceipt,
@@ -52,6 +56,8 @@ from app.services.account_directory import (
     UnknownAccountError,
 )
 from app.services.account_event_journal import AccountEventJournalError, AccountEventJournalService
+from app.services.account_gate_policy import AccountGatePolicyService
+from app.services.account_gate_promotion import AccountGatePromotionError
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.account_truth_refresh import account_truth_artifacts_root, refresh_account_truth_now
 from app.services.journal_cures import JournalCureError, JournalCureService
@@ -111,7 +117,11 @@ def get_account_directory_service(
 ) -> AccountDirectoryService:
     """Build the read-only account directory from canonical broker/artifact facts."""
 
-    return AccountDirectoryService(artifacts_root=artifacts_root, current_account=current_account)
+    return AccountDirectoryService(
+        artifacts_root=artifacts_root,
+        current_account=current_account,
+        requested_account_gate_authority=get_settings().account_gate_authority,
+    )
 
 
 def get_legacy_stale_claim_retirement_service() -> LegacyStaleClaimRetirementService:
@@ -122,6 +132,12 @@ def get_journal_cure_service(artifacts_root: AccountArtifactsRoot) -> JournalCur
     """Build cure projection from the overridable account-artifact root."""
 
     return JournalCureService(artifacts_root=artifacts_root)
+
+
+def get_account_gate_policy_service(artifacts_root: AccountArtifactsRoot) -> AccountGatePolicyService:
+    """Build the narrow account-gate mutation facade."""
+
+    return AccountGatePolicyService(artifacts_root=artifacts_root)
 
 
 def _outcome_unknown_http_error(
@@ -189,6 +205,53 @@ async def account_service_status_endpoint(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"reason_code": "ACCOUNT_UNKNOWN"}) from exc
     except AccountDirectoryError as exc:
         raise _account_directory_http_error(exc) from exc
+
+
+@router.put("/{account_id}/session-policy", response_model=AccountSessionPolicyUpdateResponse)
+async def update_account_session_policy_endpoint(
+    account_id: str,
+    request: AccountSessionPolicyUpdateRequest,
+    service: Annotated[AccountGatePolicyService, Depends(get_account_gate_policy_service)],
+) -> AccountSessionPolicyUpdateResponse:
+    """Set the account-wide outside-live-session exception explicitly."""
+
+    policy = await run_in_threadpool(
+        service.update_session_policy,
+        account_id=_canonical_account_id(account_id),
+        allow_outside_live_session=request.allow_outside_live_session,
+    )
+    return AccountSessionPolicyUpdateResponse(
+        account_id=policy.account_id,
+        allow_outside_live_session=policy.allow_outside_live_session,
+        updated_at_ms=policy.updated_at_ms,
+    )
+
+
+@router.post("/{account_id}/gate-promotion/restart-smoke", response_model=AccountClerkRestartSmokeResponse)
+async def record_account_clerk_restart_smoke_endpoint(
+    account_id: str,
+    request: AccountClerkRestartSmokeRequest,
+    service: Annotated[AccountGatePolicyService, Depends(get_account_gate_policy_service)],
+) -> AccountClerkRestartSmokeResponse:
+    """Record the typed restart smoke for the current accepting Clerk."""
+
+    canonical_account_id = _canonical_account_id(account_id)
+    try:
+        smoke = await run_in_threadpool(
+            service.record_restart_smoke,
+            account_id=canonical_account_id,
+            confirmation=request.confirmation,
+        )
+    except AccountGatePromotionError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={"reason_code": str(exc), "message": "Clerk restart smoke cannot be recorded yet."},
+        ) from exc
+    return AccountClerkRestartSmokeResponse(
+        account_id=canonical_account_id,
+        clerk_generation=smoke.clerk_generation,
+        recorded_at_ms=smoke.recorded_at_ms,
+    )
 
 
 @router.post("/{account_id}/reconciliation", response_model=AccountReconciliationReceipt)

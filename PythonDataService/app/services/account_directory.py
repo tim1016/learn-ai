@@ -29,20 +29,40 @@ from app.engine.live.account_registry import (
     pending_account_binding_retirements,
     read_account_instance_registry,
 )
+from app.engine.live.account_observation_lease import (
+    account_observation_lease_gate_result,
+    assess_account_observation_lease,
+)
+from app.engine.live.account_session_policy import (
+    assess_account_live_session,
+    read_account_session_policy,
+)
 from app.schemas.account_directory import (
     AccountEffectivePosture,
     AccountRosterRow,
     AccountRosterVerdictSummary,
     AccountServiceAttachmentState,
     AccountServiceBinding,
+    AccountServiceGateAuthority,
     AccountServiceJournalWatermark,
     AccountServiceLease,
     AccountServiceOperatingState,
+    AccountServiceSessionPolicy,
     AccountServiceStatusResponse,
     AccountServiceSummary,
     AccountsRosterResponse,
 )
+from app.schemas.live_runs import GateResult
+from app.services.account_gate_promotion import (
+    AccountGateAuthority,
+    effective_account_gate_authority_for_current_evidence,
+    resolve_account_gate_authority,
+)
 from app.services.account_reconciliation import AccountReconciliationService
+from app.services.account_truth_snapshot import (
+    account_truth_gate_result,
+    get_account_truth_snapshot_provider,
+)
 from app.utils.timestamps import now_ms_utc
 
 
@@ -70,10 +90,12 @@ class AccountDirectoryService:
         *,
         artifacts_root: Path,
         current_account: CurrentBrokerAccount | None,
+        requested_account_gate_authority: AccountGateAuthority = "account_truth",
         now_ms: Callable[[], int] = now_ms_utc,
     ) -> None:
         self._artifacts_root = artifacts_root
         self._current_account = current_account
+        self._requested_account_gate_authority = requested_account_gate_authority
         self._now_ms = now_ms
         self._reconciliation = AccountReconciliationService(artifacts_root=artifacts_root)
 
@@ -125,13 +147,41 @@ class AccountDirectoryService:
         ) as exc:
             raise AccountDirectoryError(str(exc)) from exc
 
-        attachment = _attachment_state(generation, lease, now_ms=self._now_ms())
-        pending_retirement_proposals = len(
-            pending_account_binding_retirements(
+        try:
+            now_ms = self._now_ms()
+            attachment = _attachment_state(generation, lease, now_ms=now_ms)
+            gate_authority = resolve_account_gate_authority(
                 self._artifacts_root,
                 account_id=account_id,
+                requested_authority=self._requested_account_gate_authority,
+                now_ms=now_ms,
             )
-        )
+            action_authority, action_gate = _effective_account_action_gate(
+                self._artifacts_root,
+                account_id=account_id,
+                promoted_authority=gate_authority.effective_authority,
+                now_ms=now_ms,
+            )
+            session_policy = read_account_session_policy(self._artifacts_root, account_id)
+            session_assessment = assess_account_live_session(
+                self._artifacts_root,
+                account_id=account_id,
+                now_ms=now_ms,
+            )
+            pending_retirement_proposals = len(
+                pending_account_binding_retirements(
+                    self._artifacts_root,
+                    account_id=account_id,
+                )
+            )
+        except (
+            AccountArtifactError,
+            OSError,
+            json.JSONDecodeError,
+            ValidationError,
+            ValueError,
+        ) as exc:
+            raise AccountDirectoryError(str(exc)) from exc
         ledger_parity_issue_count = sum(
             len(instances)
             for instances in (
@@ -152,6 +202,7 @@ class AccountDirectoryService:
             bindings=bindings,
             pending_retirement_proposals=pending_retirement_proposals,
             ledger_parity_issue_count=ledger_parity_issue_count,
+            gate_authority_state=gate_authority.state,
         )
         return AccountServiceStatusResponse(
             account_id=account_id,
@@ -168,6 +219,30 @@ class AccountDirectoryService:
                 ledger_read_authority=ledger_read_authority,
                 ledger_parity=ledger_parity_state,
                 ledger_parity_issue_count=ledger_parity_issue_count,
+            ),
+            gate_authority=AccountServiceGateAuthority(
+                requested_authority=gate_authority.requested_authority,
+                effective_authority=gate_authority.effective_authority,
+                promotion_state=gate_authority.state,
+                reason_code=gate_authority.reason_code,
+                disposition=gate_authority.disposition,
+                action_authority=action_authority,
+                action_gate=action_gate,
+                observed_session_dates=(
+                    [] if gate_authority.parity is None else list(gate_authority.parity.observed_session_dates)
+                ),
+                lease_weaker_comparison_count=(
+                    0
+                    if gate_authority.parity is None
+                    else len(gate_authority.parity.lease_weaker_comparisons)
+                ),
+                restart_smoke_recorded_at_ms=(
+                    None if gate_authority.restart_smoke is None else gate_authority.restart_smoke.recorded_at_ms
+                ),
+            ),
+            session_policy=AccountServiceSessionPolicy(
+                allow_outside_live_session=session_policy.allow_outside_live_session,
+                gate_result=session_assessment.to_gate_result(),
             ),
             lease=None if lease is None else AccountServiceLease(
                 status=lease.status,
@@ -193,6 +268,7 @@ class AccountDirectoryService:
         bindings: list[AccountInstanceBinding] | None = None,
         pending_retirement_proposals: int = 0,
         ledger_parity_issue_count: int = 0,
+        gate_authority_state: str = "SAFE_DEFAULT",
     ) -> tuple[AccountServiceOperatingState, str, str]:
         if ledger_parity_issue_count:
             suffix = "difference" if ledger_parity_issue_count == 1 else "differences"
@@ -213,6 +289,15 @@ class AccountDirectoryService:
                 "ATTENTION",
                 "Account service needs attention",
                 "Account verification cannot stay current until the account service is attached.",
+            )
+        if gate_authority_state in {
+            "WAITING_FOR_SHADOW_PARITY",
+            "WAITING_FOR_CLERK_RESTART_SMOKE",
+        }:
+            return (
+                "ATTENTION",
+                "Account gate promotion pending",
+                "The proven Account Truth gate remains active until the Clerk proof promotion evidence is complete.",
             )
         if bindings is None:
             try:
@@ -295,6 +380,32 @@ class AccountDirectoryService:
         if self._current_account is None or self._current_account.account_id != account_id:
             return "UNKNOWN"
         return "PAPER_EXECUTION" if self._current_account.is_paper else "UNSAFE"
+
+
+def _effective_account_action_gate(
+    artifacts_root: Path,
+    *,
+    account_id: str,
+    promoted_authority: AccountGateAuthority,
+    now_ms: int,
+) -> tuple[AccountGateAuthority, GateResult]:
+    """Project the proof that would enforce a normal action right now."""
+
+    truth_gate = account_truth_gate_result(
+        get_account_truth_snapshot_provider().get(account_id),
+        now_ms=now_ms,
+    )
+    if promoted_authority == "account_truth":
+        return "account_truth", truth_gate
+    lease_gate = account_observation_lease_gate_result(
+        assess_account_observation_lease(artifacts_root, account_id, now_ms=now_ms)
+    )
+    action_authority = effective_account_gate_authority_for_current_evidence(
+        promoted_authority,
+        account_truth_gate_status=truth_gate.status,
+        observation_lease_gate_status=lease_gate.status,
+    )
+    return action_authority, lease_gate if action_authority == "observation_lease" else truth_gate
 
 
 def _attachment_state(

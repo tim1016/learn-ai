@@ -200,6 +200,14 @@ class AccountTruthBlockError(SubmitGateBlockError):
         self.gate_result = gate_result
 
 
+class AccountLiveSessionBlockError(SubmitGateBlockError):
+    """Raised when account-wide live-session policy blocks submit or flatten."""
+
+    def __init__(self, *, gate_result: GateResult) -> None:
+        super().__init__(f"AccountLiveSessionBlockError(reason={gate_result.operator_reason!r})")
+        self.gate_result = gate_result
+
+
 class SessionPolicyBlockError(SubmitGateBlockError):
     """Raised when the current session is outside the strategy submit policy."""
 
@@ -740,12 +748,22 @@ class LivePortfolio:
     account_gate_authority: Literal["account_truth", "observation_lease"] = (
         "account_truth"
     )
+    # Promotion evidence can change while a portfolio is alive (notably after
+    # a Clerk restart), so pending actions resolve authority at their broker
+    # boundary rather than trusting the authority selected at startup.
+    account_gate_authority_provider: (
+        Callable[[], Literal["account_truth", "observation_lease"]] | None
+    ) = None
     # Durable account-event writer owned by the engine. It records every
     # paired shadow comparison at an actual submit boundary so parity evidence
     # survives child-process restarts without introducing a second scheduler.
     account_observation_lease_shadow_comparison_observer: (
         Callable[[GateResult, GateResult], object] | None
     ) = None
+    # S5: one account-level live-session verdict gates all normal broker
+    # actions, including liquidation because it ultimately drains through this
+    # same submit path.  It intentionally has no bot-specific override.
+    account_live_session_gate_provider: GateResultProvider | None = None
     # PRD #1005 Slice 2 — centralized session-authority submit gate. When
     # wired, pending orders are refused before any broker call unless the
     # current phase is both strategy-declared and supported by the active order
@@ -1150,6 +1168,10 @@ class LivePortfolio:
                 )
                 raise AccountRegistryBlockError(gate_result=registry_gate)
 
+        account_gate_authority = self.account_gate_authority
+        if self.account_gate_authority_provider is not None:
+            account_gate_authority = self.account_gate_authority_provider()
+
         account_truth_gate = None
         if self.account_truth_gate_provider is not None:
             account_truth_gate = self.account_truth_gate_provider()
@@ -1159,7 +1181,7 @@ class LivePortfolio:
                 lease_gate = self.account_observation_lease_gate_provider()
             except Exception:
                 logger.exception("account observation lease shadow gate read failed")
-                if self.account_gate_authority == "observation_lease":
+                if account_gate_authority == "observation_lease":
                     lease_gate = GateResult(
                         gate_id="account.observation_lease",
                         status="block",
@@ -1168,7 +1190,7 @@ class LivePortfolio:
                         operator_next_step="RECONCILE_NOW",
                         evidence_at_ms=now_ms_utc(),
                     )
-        elif self.account_gate_authority == "observation_lease":
+        elif account_gate_authority == "observation_lease":
             lease_gate = GateResult(
                 gate_id="account.observation_lease",
                 status="block",
@@ -1212,9 +1234,23 @@ class LivePortfolio:
                     ],
                 },
             )
+        current_clerk_proof_is_weaker = (
+            account_gate_authority == "observation_lease"
+            and getattr(account_truth_gate, "status", None) == "block"
+            and getattr(lease_gate, "status", None) == "pass"
+        )
+        from app.services.account_gate_promotion import (
+            effective_account_gate_authority_for_current_evidence,
+        )
+
+        account_gate_authority = effective_account_gate_authority_for_current_evidence(
+            account_gate_authority,
+            account_truth_gate_status=getattr(account_truth_gate, "status", None),
+            observation_lease_gate_status=getattr(lease_gate, "status", None),
+        )
         account_verification_gate = (
             lease_gate
-            if self.account_gate_authority == "observation_lease"
+            if account_gate_authority == "observation_lease"
             else account_truth_gate
         )
         if (
@@ -1225,17 +1261,21 @@ class LivePortfolio:
         elif account_verification_gate is not None:
             submitted_at_ms = now_ms_utc()
             outage_reason = (
-                self.account_gate_authority == "account_truth"
+                account_gate_authority == "account_truth"
                 and getattr(account_verification_gate, "operator_reason", None)
                 in {
                 "ACCOUNT_TRUTH_NOT_AVAILABLE",
                 "ACCOUNT_TRUTH_STALE",
                 }
             )
-            if (not outage_reason or not requires_durable) and not self._pending_orders_reduce_exposure_only():
+            if (
+                current_clerk_proof_is_weaker
+                or not outage_reason
+                or not requires_durable
+            ) and not self._pending_orders_reduce_exposure_only():
                 drop_reason = (
                     "account_observation_lease_block"
-                    if self.account_gate_authority == "observation_lease"
+                    if account_gate_authority == "observation_lease"
                     else "account_truth_block"
                 )
                 self.drop_pending_before_submit(drop_reason=drop_reason, ts_ms=submitted_at_ms)
@@ -1251,6 +1291,15 @@ class LivePortfolio:
                     ts_ms=submitted_at_ms,
                 )
                 raise AccountTruthBlockError(gate_result=account_verification_gate)
+
+        if self.pending_orders and self.account_live_session_gate_provider is not None:
+            live_session_gate = self.account_live_session_gate_provider()
+            if live_session_gate is not None and live_session_gate.status != "pass":
+                self.drop_pending_before_submit(
+                    drop_reason="account_live_session_block",
+                    ts_ms=now_ms_utc(),
+                )
+                raise AccountLiveSessionBlockError(gate_result=live_session_gate)
 
         session_state_for_submit: SessionAuthorityState | None = None
         if self.pending_orders and self.session_gate_provider is not None:
