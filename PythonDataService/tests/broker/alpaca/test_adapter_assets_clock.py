@@ -7,6 +7,8 @@ asserted here at the model level).
 
 from __future__ import annotations
 
+import pytest
+
 from app.broker.alpaca.adapter import (
     from_alpaca_asset,
     from_alpaca_clock,
@@ -45,6 +47,21 @@ def test_from_alpaca_asset_inactive(load_alpaca_fixture) -> None:
     assert asset.status == "inactive"
     assert asset.tradable is False
     assert asset.shortable is False
+
+
+def test_from_alpaca_asset_accepts_the_sdk_alias_key() -> None:
+    # Robust to the SDK-serialized form (`asset_class`) as well as the raw `class`.
+    asset = from_alpaca_asset(
+        {"id": "a", "symbol": "AAPL", "asset_class": "us_equity", "status": "active"}
+    )
+
+    assert asset.asset_class == "us_equity"
+
+
+def test_from_alpaca_asset_missing_class_fails_loud() -> None:
+    # No sentinel default — a missing class raises, so a schema change surfaces.
+    with pytest.raises(KeyError):
+        from_alpaca_asset({"id": "a", "symbol": "AAPL", "status": "active"})
 
 
 def test_from_alpaca_clock_is_vendor_evidence(load_alpaca_fixture) -> None:

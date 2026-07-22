@@ -254,14 +254,16 @@ def from_alpaca_asset(payload: Mapping[str, Any]) -> BrokerAsset:
     """Map a raw Alpaca asset payload to a ``BrokerAsset``.
 
     Alpaca's ``/v2/assets`` payload names the asset class ``class`` (the SDK
-    aliases it to ``asset_class``); accept either raw key.
+    aliases it to ``asset_class``); prefer the raw key, fall back to the alias.
+    A missing class fails loudly like every other required field — no sentinel
+    default that would mask a schema change (the drift guard catches renames).
     """
     return BrokerAsset(
         broker=BROKER_ID,
         asset_id=str(payload["id"]),
         symbol=str(payload["symbol"]),
         name=opt_str(payload.get("name")),
-        asset_class=str(payload.get("asset_class") or payload.get("class") or "unknown"),
+        asset_class=str(payload["class"] if "class" in payload else payload["asset_class"]),
         exchange=opt_str(payload.get("exchange")),
         status=str(payload["status"]),
         tradable=bool(payload.get("tradable", False)),
