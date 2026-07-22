@@ -6,17 +6,13 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from app.broker.ibkr.client import BrokerError, IbkrClient, NotConnectedError, _is_paper_account, get_client
 from app.broker.ibkr.config import get_settings
 from app.engine.live import host_daemon_client
 from app.engine.live.account_artifacts import AccountArtifactError, append_account_event
-from app.engine.live.account_clerk_rpc import (
-    AccountClerkRpcClient,
-    AccountClerkRpcError,
-    AccountClerkRpcRejectedError,
-)
 from app.engine.live.account_identity import normalize_account_id
 from app.engine.live.account_registry import backfill_false_crash_registry_rows
 from app.routers.broker_dependencies import require_connected_client
@@ -35,15 +31,19 @@ from app.schemas.account_reconciliation import (
     LegacyStaleClaimCandidatesResponse,
     LegacyStaleClaimRetirementReceipt,
     LegacyStaleClaimRetireRequest,
+    StaleBindingRetirementCandidatesResponse,
+    StaleBindingRetirementReceipt,
+    StaleBindingRetirementRequest,
 )
 from app.schemas.journal_cures import (
+    AccountClerkTransportStatus,
     JournalCurePreview,
     JournalCureReceipt,
     JournalCureRequest,
     OperatorRecoveryFlattenRequest,
     OperatorRecoveryFlattenResponse,
 )
-from app.schemas.live_runs import AccountEmergencyFlattenResponse, EmergencyFlattenRequest
+from app.schemas.live_runs import AccountEmergencyFlattenResponse, EmergencyFlattenRequest, HostRunnerHealth
 from app.services.account_directory import (
     AccountDirectoryError,
     AccountDirectoryService,
@@ -53,10 +53,14 @@ from app.services.account_directory import (
 from app.services.account_event_journal import AccountEventJournalError, AccountEventJournalService
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.account_truth_refresh import account_truth_artifacts_root, refresh_account_truth_now
-from app.services.journal_cures import JournalCureError, JournalCureService
+from app.services.journal_cures import JournalCureService
 from app.services.legacy_stale_claim_retirement import (
     LegacyStaleClaimRetirementError,
     LegacyStaleClaimRetirementService,
+)
+from app.services.stale_binding_retirement import (
+    StaleBindingRetirementError,
+    StaleBindingRetirementService,
 )
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
@@ -117,6 +121,14 @@ def get_legacy_stale_claim_retirement_service() -> LegacyStaleClaimRetirementSer
     return LegacyStaleClaimRetirementService(artifacts_root=get_account_artifacts_root())
 
 
+def get_stale_binding_retirement_service(
+    artifacts_root: AccountArtifactsRoot,
+) -> StaleBindingRetirementService:
+    """Build stale-binding recovery from the overridable artifact root."""
+
+    return StaleBindingRetirementService(artifacts_root=artifacts_root)
+
+
 def get_journal_cure_service(artifacts_root: AccountArtifactsRoot) -> JournalCureService:
     """Build cure projection from the overridable account-artifact root."""
 
@@ -132,17 +144,6 @@ def _outcome_unknown_http_error(exc: host_daemon_client.HostDaemonOutcomeUnknown
             "reason_code": "OUTCOME_UNKNOWN",
             "message": exc.detail or "The Clerk readiness request may have completed; refresh before retrying.",
         },
-    )
-
-
-def _clerk_rpc_http_error(exc: AccountClerkRpcError) -> HTTPException:
-    """Expose normal Clerk rejections without collapsing them into a server error."""
-
-    unavailable = exc.reason_code.startswith("ACCOUNT_CLERK_UNAVAILABLE:")
-    reason_code = exc.reason if isinstance(exc, AccountClerkRpcRejectedError) else exc.reason_code
-    return HTTPException(
-        status.HTTP_503_SERVICE_UNAVAILABLE if unavailable else status.HTTP_409_CONFLICT,
-        detail={"reason_code": reason_code, "message": "Clerk rejected or could not complete the request."},
     )
 
 
@@ -308,33 +309,176 @@ async def retire_legacy_stale_claim_endpoint(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
 
-@router.post("/{account_id}/journal-cures", response_model=JournalCureReceipt, status_code=status.HTTP_201_CREATED)
-async def apply_journal_cure_endpoint(
+@router.get(
+    "/{account_id}/stale-bindings/candidates",
+    response_model=StaleBindingRetirementCandidatesResponse,
+)
+async def stale_binding_retirement_candidates_endpoint(
     account_id: str,
-    request: JournalCureRequest,
-    artifacts_root: AccountArtifactsRoot,
-) -> JournalCureReceipt:
-    """Append a claim-reducing cure only after the account Clerk is healthy."""
+    client: ConnectedIbkrClient,
+    service: Annotated[
+        StaleBindingRetirementService,
+        Depends(get_stale_binding_retirement_service),
+    ],
+) -> StaleBindingRetirementCandidatesResponse:
+    """Return only stale deployment bindings safe to retire now."""
 
     canonical_account_id = _canonical_account_id(account_id)
     try:
-        settings = get_settings()
-        await host_daemon_client.ensure_account_clerk(settings.live_runner_daemon_url, canonical_account_id)
-        return await AccountClerkRpcClient(
-            artifacts_root=artifacts_root,
+        account_truth = await refresh_account_truth_now(
+            client,
             account_id=canonical_account_id,
-        ).apply_operator_adjustment(request)
-    except JournalCureError as exc:
+            context="stale binding candidate proof",
+        )
+        settings = get_settings()
+        candidates = await service.candidates(
+            account_id=canonical_account_id,
+            account_truth=account_truth,
+            fetch_run_process=lambda run_id: host_daemon_client.fetch_run_process(
+                settings.live_runner_daemon_url,
+                run_id,
+            ),
+        )
+        return StaleBindingRetirementCandidatesResponse(
+            account_id=canonical_account_id,
+            generated_at_ms=account_truth.generated_at_ms,
+            candidates=candidates,
+        )
+    except BrokerError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    except AccountArtifactError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+
+@router.post(
+    "/{account_id}/stale-bindings/retire",
+    response_model=StaleBindingRetirementReceipt,
+)
+async def retire_stale_binding_endpoint(
+    account_id: str,
+    request: StaleBindingRetirementRequest,
+    client: ConnectedIbkrClient,
+    service: Annotated[
+        StaleBindingRetirementService,
+        Depends(get_stale_binding_retirement_service),
+    ],
+) -> StaleBindingRetirementReceipt:
+    """Retire one stale binding after refreshing every proof immediately before mutation."""
+
+    canonical_account_id = _canonical_account_id(account_id)
+    try:
+        account_truth = await refresh_account_truth_now(
+            client,
+            account_id=canonical_account_id,
+            context="stale binding retirement",
+        )
+        settings = get_settings()
+        return await service.retire(
+            account_id=canonical_account_id,
+            strategy_instance_id=request.strategy_instance_id,
+            run_id=request.run_id,
+            requested_by=request.requested_by,
+            account_truth=account_truth,
+            fetch_run_process=lambda run_id: host_daemon_client.fetch_run_process(
+                settings.live_runner_daemon_url,
+                run_id,
+            ),
+            retire_binding=lambda account, sid, run: host_daemon_client.retire_account_binding(
+                settings.live_runner_daemon_url,
+                account,
+                {
+                    "strategy_instance_id": sid,
+                    "run_id": run,
+                    "requested_by": request.requested_by,
+                },
+            ),
+        )
+    except BrokerError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    except StaleBindingRetirementError as exc:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             detail={"reason_code": exc.reason_code, "message": exc.detail},
         ) from exc
     except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
         raise _outcome_unknown_http_error(exc) from exc
-    except AccountClerkRpcError as exc:
-        raise _clerk_rpc_http_error(exc) from exc
     except host_daemon_client.HostDaemonError as exc:
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
+    except AccountArtifactError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+
+@router.post("/{account_id}/journal-cures", response_model=JournalCureReceipt, status_code=status.HTTP_201_CREATED)
+async def apply_journal_cure_endpoint(
+    account_id: str,
+    request: JournalCureRequest,
+) -> JournalCureReceipt:
+    """Relay a claim-reducing cure to the host-local account Clerk."""
+
+    canonical_account_id = _canonical_account_id(account_id)
+    try:
+        settings = get_settings()
+        response = await host_daemon_client.apply_operator_adjustment(
+            settings.live_runner_daemon_url,
+            canonical_account_id,
+            request.model_dump(mode="json"),
+        )
+        return JournalCureReceipt.model_validate(response)
+    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
+        raise _outcome_unknown_http_error(exc) from exc
+    except host_daemon_client.HostDaemonError as exc:
+        raise HTTPException(exc.status_code, detail=exc.detail) from exc
+    except ValidationError as exc:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "reason_code": "ACCOUNT_CLERK_RESPONSE_INVALID",
+                "message": "The Clerk returned an invalid cure receipt.",
+            },
+        ) from exc
+
+
+@router.post("/{account_id}/clerk/recheck", response_model=AccountClerkTransportStatus)
+async def recheck_account_clerk_transport_endpoint(account_id: str) -> AccountClerkTransportStatus:
+    """Ensure and host-verify the Clerk before the cure dialog permits confirmation."""
+
+    canonical_account_id = _canonical_account_id(account_id)
+    try:
+        settings = get_settings()
+        response = await host_daemon_client.ensure_account_clerk(
+            settings.live_runner_daemon_url,
+            canonical_account_id,
+        )
+        health = HostRunnerHealth.model_validate(response)
+        clerk = next(
+            (candidate for candidate in health.clerks if candidate.account_id == canonical_account_id),
+            None,
+        )
+        if clerk is None:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "reason_code": "ACCOUNT_CLERK_HEALTH_MISSING",
+                    "message": "The host did not confirm a ready Clerk for this account.",
+                },
+            )
+        return AccountClerkTransportStatus(
+            account_id=canonical_account_id,
+            generation=clerk.generation,
+            checked_at_ms=health.fetched_at_ms,
+        )
+    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
+        raise _outcome_unknown_http_error(exc) from exc
+    except host_daemon_client.HostDaemonError as exc:
+        raise HTTPException(exc.status_code, detail=exc.detail) from exc
+    except ValidationError as exc:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "reason_code": "ACCOUNT_CLERK_HEALTH_INVALID",
+                "message": "The host returned invalid Clerk health evidence.",
+            },
+        ) from exc
 
 
 @router.get("/{account_id}/journal-cures/preview", response_model=JournalCurePreview)
@@ -367,11 +511,12 @@ async def operator_recovery_flatten_endpoint(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "intent account_id does not match path")
     try:
         settings = get_settings()
-        await host_daemon_client.ensure_account_clerk(settings.live_runner_daemon_url, canonical_account_id)
-        receipt = await AccountClerkRpcClient(
-            artifacts_root=artifacts_root,
-            account_id=canonical_account_id,
-        ).submit_operator_recovery_flatten(request.intent)
+        response = await host_daemon_client.submit_operator_recovery_flatten(
+            settings.live_runner_daemon_url,
+            canonical_account_id,
+            request.model_dump(mode="json"),
+        )
+        receipt = OperatorRecoveryFlattenResponse.model_validate(response).recovery_flatten
         append_account_event(
             artifacts_root,
             canonical_account_id,
@@ -393,8 +538,14 @@ async def operator_recovery_flatten_endpoint(
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
     except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
         raise _outcome_unknown_http_error(exc) from exc
-    except AccountClerkRpcError as exc:
-        raise _clerk_rpc_http_error(exc) from exc
+    except ValidationError as exc:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "reason_code": "ACCOUNT_CLERK_RESPONSE_INVALID",
+                "message": "The Clerk returned an invalid recovery receipt.",
+            },
+        ) from exc
 
 
 @router.post(

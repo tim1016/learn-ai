@@ -13,6 +13,7 @@ import { AccountDeskRecoveryConfirmDialogComponent } from "./account-desk-recove
 import { AccountDeskRecoveryReceiptComponent } from "./account-desk-recovery-receipt.component";
 import { AccountDeskJournalCureComponent } from "./account-desk-journal-cure.component";
 import { AccountDeskLegacyClaimCureComponent } from "./account-desk-legacy-claim-cure.component";
+import { AccountDeskStaleBindingCureComponent } from "./account-desk-stale-binding-cure.component";
 import { AccountDeskRecoveryStore } from "./account-desk-recovery-store.service";
 import { AccountDeskSurfaceStore } from "./account-desk-surface-store.service";
 
@@ -24,6 +25,7 @@ import { AccountDeskSurfaceStore } from "./account-desk-surface-store.service";
     AccountDeskGuidanceComponent,
     AccountDeskJournalCureComponent,
     AccountDeskLegacyClaimCureComponent,
+    AccountDeskStaleBindingCureComponent,
     AccountDeskRecoveryConfirmDialogComponent,
     AccountDeskRecoveryReceiptComponent,
     ButtonModule,

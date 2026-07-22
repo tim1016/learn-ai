@@ -32,13 +32,17 @@ from app.schemas.account_reconciliation import (
     LegacyStaleClaimRetirementReceipt,
 )
 from app.schemas.account_truth import AccountTruthPositionRow, AccountTruthResponse
+from app.schemas.live_runs import HostRunnerProcessStatus
 from app.schemas.operator_blocker import OperatorConfirmationCopy
 from app.utils.timestamps import now_ms_utc
 
 LEGACY_STALE_CLAIM_RETIRED_EVENT = "legacy_stale_claim_retired"
 _SAFE_PROCESS_STATES = frozenset({"exited"})
 _KNOWN_ELSEWHERE_OWNER_CLASSES = frozenset({"bot", "manual"})
-RunProcessFetcher = Callable[[str], Awaitable[tuple[DaemonResult, dict | None]]]
+RunProcessFetcher = Callable[
+    [str],
+    Awaitable[tuple[DaemonResult, HostRunnerProcessStatus | None]],
+]
 
 
 class LegacyStaleClaimRetirementError(AccountArtifactError):
@@ -260,19 +264,19 @@ class LegacyStaleClaimRetirementService:
         self,
         claim: LegacyStaleClaim,
         result: DaemonResult,
-        process: dict | None,
+        process: HostRunnerProcessStatus | None,
     ) -> None:
         if result.kind != "CONNECTED" or process is None:
             raise LegacyStaleClaimRetirementError(
                 "LEGACY_CLAIM_RUN_PROCESS_UNPROVEN",
                 "The host daemon did not provide a current run-process proof.",
             )
-        if process.get("run_id") != claim.run_id:
+        if process.run_id != claim.run_id:
             raise LegacyStaleClaimRetirementError(
                 "LEGACY_CLAIM_RUN_PROCESS_UNPROVEN",
                 "The host daemon did not return a terminal process record for this run.",
             )
-        state = process.get("state")
+        state = process.state
         if state not in _SAFE_PROCESS_STATES:
             raise LegacyStaleClaimRetirementError(
                 "LEGACY_CLAIM_RUN_PROCESS_LIVE",

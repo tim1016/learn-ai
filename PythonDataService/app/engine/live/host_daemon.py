@@ -36,6 +36,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.engine.live.account_clerk_rpc import AccountClerkRpcClient
 from app.engine.live.account_clerk_supervisor import (
     AccountClerkProcessEvidence,
     AccountClerkSupervisor,
@@ -73,6 +74,7 @@ from app.engine.live.desired_state import (
     stable_desired_state_path,
 )
 from app.engine.live.exit_taxonomy import classify_run_exit, read_run_exit_evidence
+from app.engine.live.host_daemon_account_operations import install_account_operation_routes
 from app.engine.live.host_daemon_bot_events import (
     record_child_crash_launch_failure,
     record_spawn_launch_failure,
@@ -1636,6 +1638,70 @@ class RunnerProcessManager:
 
         return self._clerk_supervisor.release(account_id)
 
+    def retire_stale_account_binding(
+        self,
+        *,
+        account_id: str,
+        strategy_instance_id: str,
+        run_id: str,
+    ):
+        """Atomically retire one unowned current binding after host liveness proof."""
+
+        from app.engine.live.account_artifacts import AccountArtifactError
+        from app.engine.live.account_registry import (
+            index_account_instance_bindings,
+            read_account_instance_registry,
+            write_account_instance_binding,
+        )
+
+        with self._managed_lock:
+            managed = self._managed.get(strategy_instance_id)
+            if managed is not None:
+                self._refresh(managed)
+                if managed.process.poll() is None:
+                    raise HostRunnerError(
+                        status.HTTP_409_CONFLICT,
+                        {
+                            "reason_code": "STALE_BINDING_PROCESS_ACTIVE",
+                            "message": "The host still manages this binding as an active process.",
+                        },
+                    )
+            try:
+                binding = index_account_instance_bindings(
+                    read_account_instance_registry(self.artifacts_root, account_id),
+                    account_id=account_id,
+                ).latest_by_instance.get(strategy_instance_id)
+            except (AccountArtifactError, OSError, ValueError) as exc:
+                raise HostRunnerError(
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    "could not read account instance registry for retirement",
+                ) from exc
+            if binding is None or binding.run_id != run_id:
+                raise HostRunnerError(
+                    status.HTTP_409_CONFLICT,
+                    {
+                        "reason_code": "STALE_BINDING_NOT_CURRENT",
+                        "message": "The requested binding is no longer the account registry's current row.",
+                    },
+                )
+            if binding.lifecycle_state == "RETIRED":
+                return binding
+            retired = binding.model_copy(
+                update={
+                    "lifecycle_state": "RETIRED",
+                    "recorded_at_ms": max(self._clock_ms(), binding.recorded_at_ms + 1),
+                    "source": "operator.stale_binding_retirement",
+                }
+            )
+            try:
+                write_account_instance_binding(self.artifacts_root, retired)
+            except (AccountArtifactError, OSError, ValueError) as exc:
+                raise HostRunnerError(
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    "could not write retired account instance binding",
+                ) from exc
+            return retired
+
     @staticmethod
     def _verify_account_clerk_generation(
         *,
@@ -1969,6 +2035,21 @@ def create_app(
             )
 
     auth = [Depends(_verify_token)]
+
+    def _translate_host_runner_error(exc: Exception) -> HTTPException | None:
+        if isinstance(exc, HostRunnerError):
+            return HTTPException(exc.status_code, detail=exc.detail)
+        return None
+
+    install_account_operation_routes(
+        app,
+        process_manager=process_manager,
+        auth_dependencies=auth,
+        translate_host_error=_translate_host_runner_error,
+        # Tests patch the host module before creating the application, so pass
+        # the seam explicitly rather than hiding it in the route installer.
+        clerk_client_factory=AccountClerkRpcClient,
+    )
 
     @app.get("/health", response_model=HostRunnerHealth, dependencies=auth)
     async def health() -> HostRunnerHealth:

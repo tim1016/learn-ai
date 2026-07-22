@@ -508,6 +508,35 @@
         "title": "AccountClerkRecoveryFlattenReceipt",
         "type": "object"
       },
+      "AccountClerkTransportStatus": {
+        "additionalProperties": false,
+        "description": "A host-verified Clerk transport check for an operator recovery action.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "checked_at_ms": {
+            "minimum": 0.0,
+            "title": "Checked At Ms",
+            "type": "integer"
+          },
+          "generation": {
+            "minimum": 1.0,
+            "title": "Generation",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account_id",
+          "generation",
+          "checked_at_ms"
+        ],
+        "title": "AccountClerkTransportStatus",
+        "type": "object"
+      },
       "AccountConditionOwner": {
         "additionalProperties": false,
         "description": "Owner of a derived sick-bay condition.",
@@ -32939,6 +32968,206 @@
         "title": "StageAdvanceCriterionResponse",
         "type": "object"
       },
+      "StaleBindingRetirementCandidate": {
+        "additionalProperties": false,
+        "description": "A stale binding whose retirement is freshly proven safe.",
+        "properties": {
+          "bot_order_namespace": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Bot Order Namespace",
+            "type": "string"
+          },
+          "confirmation": {
+            "$ref": "#/components/schemas/OperatorConfirmationCopy"
+          },
+          "lifecycle_state": {
+            "enum": [
+              "DEPLOYED",
+              "ACTIVE"
+            ],
+            "title": "Lifecycle State",
+            "type": "string"
+          },
+          "proof_summary": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Proof Summary",
+            "type": "string"
+          },
+          "proved_at_ms": {
+            "minimum": 0.0,
+            "title": "Proved At Ms",
+            "type": "integer"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "source": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Source",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Strategy Instance Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "run_id",
+          "bot_order_namespace",
+          "lifecycle_state",
+          "source",
+          "proof_summary",
+          "proved_at_ms",
+          "confirmation"
+        ],
+        "title": "StaleBindingRetirementCandidate",
+        "type": "object"
+      },
+      "StaleBindingRetirementCandidatesResponse": {
+        "additionalProperties": false,
+        "description": "The Account desk's currently safe stale-binding recovery actions.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/StaleBindingRetirementCandidate"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "generated_at_ms": {
+            "minimum": 0.0,
+            "title": "Generated At Ms",
+            "type": "integer"
+          },
+          "schema_version": {
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "account_id",
+          "generated_at_ms"
+        ],
+        "title": "StaleBindingRetirementCandidatesResponse",
+        "type": "object"
+      },
+      "StaleBindingRetirementReceipt": {
+        "additionalProperties": false,
+        "description": "Proof that the host daemon atomically retired one stale binding.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "bot_order_namespace": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Bot Order Namespace",
+            "type": "string"
+          },
+          "receipt_id": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "requested_by": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Requested By",
+            "type": "string"
+          },
+          "retired_at_ms": {
+            "minimum": 0.0,
+            "title": "Retired At Ms",
+            "type": "integer"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "schema_version": {
+            "default": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "source": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Source",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Strategy Instance Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "receipt_id",
+          "account_id",
+          "strategy_instance_id",
+          "run_id",
+          "bot_order_namespace",
+          "requested_by",
+          "retired_at_ms",
+          "source"
+        ],
+        "title": "StaleBindingRetirementReceipt",
+        "type": "object"
+      },
+      "StaleBindingRetirementRequest": {
+        "additionalProperties": false,
+        "description": "Identity of one stale active registry binding an operator wants retired.",
+        "properties": {
+          "requested_by": {
+            "default": "account-desk.operator",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Requested By",
+            "type": "string"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "strategy_instance_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Strategy Instance Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "strategy_instance_id",
+          "run_id"
+        ],
+        "title": "StaleBindingRetirementRequest",
+        "type": "object"
+      },
       "StockEntryLeg": {
         "description": "Stock ``ActionEntity`` \u2014 Slice 1B.",
         "properties": {
@@ -38202,6 +38431,65 @@
         ]
       }
     },
+    "/api/accounts/{account_id}/clerk/recheck": {
+      "post": {
+        "description": "Ensure and host-verify the Clerk before the cure dialog permits confirmation.",
+        "operationId": "recheck_account_clerk_transport_endpoint_api_accounts__account_id__clerk_recheck_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountClerkTransportStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Recheck Account Clerk Transport Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
     "/api/accounts/{account_id}/cohort-batch-launches/latest": {
       "get": {
         "description": "Return the most recent account-rooted cohort receipt and outcomes.",
@@ -38826,7 +39114,7 @@
     },
     "/api/accounts/{account_id}/journal-cures": {
       "post": {
-        "description": "Append a claim-reducing cure only after the account Clerk is healthy.",
+        "description": "Relay a claim-reducing cure to the host-local account Clerk.",
         "operationId": "apply_journal_cure_endpoint_api_accounts__account_id__journal_cures_post",
         "parameters": [
           {
@@ -39408,6 +39696,134 @@
           }
         },
         "summary": "Backfill False Crash Registry Rows Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/stale-bindings/candidates": {
+      "get": {
+        "description": "Return only stale deployment bindings safe to retire now.",
+        "operationId": "stale_binding_retirement_candidates_endpoint_api_accounts__account_id__stale_bindings_candidates_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaleBindingRetirementCandidatesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stale Binding Retirement Candidates Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/stale-bindings/retire": {
+      "post": {
+        "description": "Retire one stale binding after refreshing every proof immediately before mutation.",
+        "operationId": "retire_stale_binding_endpoint_api_accounts__account_id__stale_bindings_retire_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StaleBindingRetirementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaleBindingRetirementReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retire Stale Binding Endpoint",
         "tags": [
           "accounts"
         ]
@@ -45472,7 +45888,7 @@
     },
     "/api/live-instances/{strategy_instance_id}": {
       "delete": {
-        "description": "Soft-delete a stopped bot from operator catalog/control surfaces.\n\nThe deletion marker is durable and run-id scoped. It hides every run that\ncurrently belongs to the instance while preserving the artifacts for audit.\nA later redeploy with a new run id is visible again.",
+        "description": "Soft-delete a stopped bot from operator catalog/control surfaces.\n\nThe deletion marker is durable and run-id scoped. It hides every run that\ncurrently belongs to the instance while preserving the artifacts for audit.",
         "operationId": "delete_instance_api_live_instances__strategy_instance_id__delete",
         "parameters": [
           {

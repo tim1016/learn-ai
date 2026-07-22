@@ -8,6 +8,7 @@ import type {
   AccountTriageResponse,
   JournalCurePreview,
   LegacyStaleClaimCandidate,
+  StaleBindingRetirementCandidate,
 } from '../../../api/account-reconciliation.types';
 import type { OperatorBlockerMoveEvent } from '../shared/operator-blocker-list/operator-blocker-list.component';
 import { BrokerService } from '../../../services/broker.service';
@@ -26,6 +27,8 @@ describe('AccountDeskRecoveryStore', () => {
     applyJournalCure: vi.fn(),
     legacyStaleClaimCandidates: vi.fn(),
     retireLegacyStaleClaim: vi.fn(),
+    staleBindingRetirementCandidates: vi.fn(),
+    retireStaleBinding: vi.fn(),
     submitOperatorRecoveryFlatten: vi.fn(),
     emergencyFlattenAccount: vi.fn(),
   };
@@ -35,6 +38,7 @@ describe('AccountDeskRecoveryStore', () => {
   beforeEach(() => {
     Object.values(broker).forEach((method) => method.mockReset());
     broker.legacyStaleClaimCandidates.mockResolvedValue({ account_id: 'DU1234567', candidates: [] });
+    broker.staleBindingRetirementCandidates.mockResolvedValue({ account_id: 'DU1234567', candidates: [] });
     surface.load.mockReset().mockResolvedValue(undefined);
     surface.triage = signal(null);
     events.load.mockReset().mockResolvedValue(undefined);
@@ -221,6 +225,23 @@ describe('AccountDeskRecoveryStore', () => {
     expect(events.load).not.toHaveBeenCalled();
   });
 
+  it('keeps a Clerk cure failure code beside the actionable confirmation so retry reuses its idempotency key', async () => {
+    const store = TestBed.inject(AccountDeskRecoveryStore);
+    broker.applyJournalCure.mockRejectedValue({
+      error: { detail: { reason_code: 'ACCOUNT_CLERK_UNAVAILABLE:SOCKET_MISSING', message: 'Host Clerk is unavailable.' } },
+    });
+    store.load('DU1234567');
+    store.requestJournalCure(journalPreview(), -2, 'Operator reviewed the fresh claim.', 'receipt:opaque/1');
+
+    await store.confirm();
+    const firstRequest = broker.applyJournalCure.mock.calls[0]?.[1];
+    await store.confirm();
+
+    expect(store.errorReasonCode()).toBe('ACCOUNT_CLERK_UNAVAILABLE:SOCKET_MISSING');
+    expect(store.confirmation()?.command).toBe('journal_cure');
+    expect(broker.applyJournalCure.mock.calls[1]?.[1].idempotency_key).toBe(firstRequest.idempotency_key);
+  });
+
   it('requires a currently returned legacy candidate and allows cancellation without a mutation', async () => {
     const candidate = legacyCandidate();
     broker.legacyStaleClaimCandidates.mockResolvedValue({
@@ -235,6 +256,32 @@ describe('AccountDeskRecoveryStore', () => {
     store.cancelConfirmation();
 
     expect(broker.retireLegacyStaleClaim).not.toHaveBeenCalled();
+  });
+
+  it('submits only a currently returned stale binding candidate and refreshes its proof after retirement', async () => {
+    const candidate = staleBindingCandidate();
+    broker.staleBindingRetirementCandidates.mockResolvedValue({
+      account_id: 'DU1234567', generated_at_ms: 1_780_000_000_000, candidates: [candidate],
+    });
+    broker.retireStaleBinding.mockResolvedValue({
+      schema_version: 1, receipt_id: 'stale-binding:1', account_id: 'DU1234567',
+      strategy_instance_id: candidate.strategy_instance_id, run_id: candidate.run_id,
+      bot_order_namespace: candidate.bot_order_namespace, requested_by: 'account-desk.operator',
+      retired_at_ms: 1_780_000_000_000, source: 'operator.stale_binding_retirement',
+    });
+    const store = TestBed.inject(AccountDeskRecoveryStore);
+    store.load('DU1234567');
+    await Promise.resolve();
+
+    store.requestStaleBindingRetirement(candidate);
+    await store.confirm();
+
+    expect(broker.retireStaleBinding).toHaveBeenCalledWith('DU1234567', {
+      strategy_instance_id: candidate.strategy_instance_id,
+      run_id: candidate.run_id,
+      requested_by: 'account-desk.operator',
+    });
+    expect(store.success()?.kind).toBe('stale_binding_retire');
   });
 
   it('submits recovery flatten only when its backend action target matches a current exact candidate', async () => {
@@ -325,6 +372,19 @@ function legacyCandidate(): LegacyStaleClaimCandidate {
     confirmation: {
       title: 'Retire legacy stale claim', body: 'Backend candidate body.', consequence: 'Backend consequence.',
       confirm_label: 'Retire stale claim', required_token: '',
+    },
+  };
+}
+
+function staleBindingCandidate(): StaleBindingRetirementCandidate {
+  return {
+    strategy_instance_id: 'audit-dep-only-0717', run_id: 'run-audit-dep-only-0717',
+    bot_order_namespace: 'learn-ai/audit-dep-only-0717/v1', lifecycle_state: 'DEPLOYED',
+    source: 'deploy.strategy', proof_summary: 'STALE_BINDING_BROKER_FLAT_AND_PROCESS_EXITED',
+    proved_at_ms: 1_780_000_000_000,
+    confirmation: {
+      title: 'Retire stale deployment binding', body: 'Backend candidate body.', consequence: 'Backend consequence.',
+      confirm_label: 'Retire stale binding', required_token: '',
     },
   };
 }

@@ -34,6 +34,7 @@ from app.engine.live.host_daemon_client import (
     emergency_flatten_run,
     ensure_account_clerk,
     release_account_clerk,
+    retire_account_binding,
     start_run,
     stop_run,
 )
@@ -141,6 +142,51 @@ async def test_release_account_clerk_uses_timeout_beyond_daemon_shutdown_budget(
 
     assert observed_timeout[0].read is not None
     assert observed_timeout[0].read > 4.0
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_retire_account_binding_returns_a_validated_receipt() -> None:
+    respx.post(f"{BASE}/accounts/DU123/bindings/retire").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "account_id": "DU123",
+                "strategy_instance_id": "stale-bot",
+                "run_id": "stale-run",
+                "bot_order_namespace": "learn-ai/stale-bot/v1",
+                "lifecycle_state": "RETIRED",
+                "recorded_at_ms": 100,
+                "source": "operator.stale_binding_retirement",
+            },
+        )
+    )
+
+    receipt = await retire_account_binding(
+        BASE,
+        "DU123",
+        {"strategy_instance_id": "stale-bot", "run_id": "stale-run"},
+    )
+
+    assert receipt.lifecycle_state == "RETIRED"
+    assert receipt.run_id == "stale-run"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_retire_account_binding_rejects_an_invalid_host_receipt() -> None:
+    respx.post(f"{BASE}/accounts/DU123/bindings/retire").mock(
+        return_value=httpx.Response(200, json={"not": "a binding"})
+    )
+
+    with pytest.raises(HostDaemonError) as exc_info:
+        await retire_account_binding(
+            BASE,
+            "DU123",
+            {"strategy_instance_id": "stale-bot", "run_id": "stale-run"},
+        )
+
+    assert exc_info.value.status_code == 502
 
 
 # ---------------------------------------------------------------------------

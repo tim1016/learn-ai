@@ -1,0 +1,25 @@
+<section class="stale-binding-cure" aria-labelledby="account-desk-stale-binding-title">
+  <header>
+    <h3 id="account-desk-stale-binding-title">Stale deployment bindings</h3>
+    <p>Only bindings with fresh broker-flat and host-terminal proof can be retired.</p>
+  </header>
+  @if (recovery.staleBindingLoading()) {
+    <p class="state">Loading stale binding candidates…</p>
+  } @else if (recovery.staleBindingErrorMessage(); as errorMessage) {
+    <p class="error" role="alert">{{ errorMessage }}</p>
+    <button type="button" [disabled]="recovery.busy()" (click)="recovery.refreshStaleBindingCandidates()">Retry candidates</button>
+  } @else if (recovery.staleBindingCandidates().length === 0) {
+    <p class="state">No stale deployment binding is currently eligible for retirement.</p>
+    <button type="button" [disabled]="recovery.busy()" (click)="recovery.refreshStaleBindingCandidates()">Refresh candidates</button>
+  } @else {
+    @for (candidate of recovery.staleBindingCandidates(); track candidate.run_id) {
+      <article class="candidate">
+        <p><code>{{ candidate.strategy_instance_id }}</code> · <span class="mono">{{ candidate.lifecycle_state | receiptLabel }}</span></p>
+        <p>Run <code>{{ candidate.run_id }}</code></p>
+        <p><span class="mono">{{ candidate.proof_summary | receiptLabel }}</span></p>
+        <p>Proved <app-timestamp-display [value]="candidate.proved_at_ms" mode="local" /></p>
+        <button type="button" [disabled]="recovery.busy()" (click)="requestRetirement(candidate)">Review retirement</button>
+      </article>
+    }
+  }
+</section>

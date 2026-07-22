@@ -21,7 +21,7 @@ import httpx
 import pytest
 import respx
 
-from app.engine.live.host_daemon_client import fetch_health
+from app.engine.live.host_daemon_client import fetch_health, fetch_run_process
 
 BASE = "http://daemon-host:8765"
 
@@ -86,6 +86,31 @@ async def test_probe_happy_path_extracts_daemon_boot_id() -> None:
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_probe_treats_a_200_with_an_invalid_health_contract_as_not_connected() -> None:
+    """A partial 200 response must not surface as a usable live engine."""
+
+    respx.get(f"{BASE}/health").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "ok": True,
+                "repo_root": "/r",
+                "live_runs_root": "/r/runs",
+                "fetched_at_ms": 1_700_000_000_000,
+                # The required process contract is deliberately absent.
+            },
+        )
+    )
+
+    result, health = await fetch_health(BASE)
+
+    assert result.kind == "INCOMPATIBLE_CONTRACT"
+    assert result.response_status == 200
+    assert health is None
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_probe_classifies_5xx_as_protocol_error() -> None:
     respx.get(f"{BASE}/health").mock(
         return_value=httpx.Response(503, json={"detail": "lifespan failed"})
@@ -108,3 +133,30 @@ async def test_probe_classifies_connect_error_as_unreachable() -> None:
     assert result.kind == "UNREACHABLE"
     assert result.outcome_ambiguous is False
     assert health is None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_run_process_probe_requires_the_host_process_contract() -> None:
+    respx.get(f"{BASE}/runs/run-a/process").mock(
+        return_value=httpx.Response(200, json={"state": "exited", "run_id": "run-a"})
+    )
+
+    result, process = await fetch_run_process(BASE, "run-a")
+
+    assert result.kind == "CONNECTED"
+    assert process is not None
+    assert process.state == "exited"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_run_process_probe_rejects_an_invalid_host_process_contract() -> None:
+    respx.get(f"{BASE}/runs/run-a/process").mock(
+        return_value=httpx.Response(200, json={"state": "unrecognised"})
+    )
+
+    result, process = await fetch_run_process(BASE, "run-a")
+
+    assert result.kind == "INCOMPATIBLE_CONTRACT"
+    assert process is None

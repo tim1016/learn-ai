@@ -56,9 +56,7 @@ from app.engine.live.bot_lifecycle_state import (
     stable_bot_lifecycle_state_path,
 )
 from app.engine.live.command_channel import CommandChannel, CommandVerb
-from app.engine.live.daemon_connectivity_monitor import (
-    get_monitor as get_daemon_connectivity_monitor,
-)
+from app.engine.live.daemon_connectivity_monitor import get_monitor as get_daemon_connectivity_monitor
 from app.engine.live.daemon_transport import DaemonResult
 from app.engine.live.desired_state import (
     DesiredState,
@@ -218,11 +216,12 @@ from app.services.bot_deletion import (
     BOT_DELETION_FILENAME,
     BotDeletionCorruptError,
     BotDeletionRecord,
+    BotDeletionRegistryRetirementError,
+    bot_delete_response,
     bot_has_soft_deletion,
     bot_run_is_soft_deleted,
     read_bot_deletion,
-    soft_delete_bot_runs,
-    stable_bot_deletion_path,
+    soft_delete_and_retire_bot_runs,
 )
 from app.services.bot_lifecycle_chart import compose_bot_lifecycle_chart
 from app.services.bot_lifecycle_conditions import lifecycle_conditions_for_instance
@@ -2170,7 +2169,6 @@ async def delete_instance(
 
     The deletion marker is durable and run-id scoped. It hides every run that
     currently belongs to the instance while preserving the artifacts for audit.
-    A later redeploy with a new run id is visible again.
     """
     sid = _validate_instance_id(strategy_instance_id)
     request = body or BotDeleteRequest()
@@ -2210,7 +2208,7 @@ async def delete_instance(
 
     run_ids = [str(run["run_id"]) for run in runs]
     try:
-        record = soft_delete_bot_runs(
+        record = soft_delete_and_retire_bot_runs(
             root.parent,
             sid,
             run_ids=run_ids,
@@ -2226,6 +2224,18 @@ async def delete_instance(
         raise HTTPException(
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="bot deletion marker could not be written",
+        ) from exc
+    except BotDeletionRegistryRetirementError as exc:
+        logger.error(
+            "soft delete marker was written but registry retirement could not be recorded",
+            extra={"strategy_instance_id": sid, "exception": repr(exc)},
+        )
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "reason_code": "ACCOUNT_REGISTRY_RETIRE_UNAVAILABLE",
+                "message": "The bot was hidden, but its account binding retirement is unconfirmed. Retry this action.",
+            },
         ) from exc
     await _SURFACE_RUNS_CACHE.invalidate(root)
     # Stop the producer before unregistering the publisher so an in-flight
@@ -2244,7 +2254,7 @@ async def delete_instance(
                     "exception": repr(cleanup_error),
                 },
             )
-    return _bot_delete_response(root.parent, record)
+    return bot_delete_response(root.parent, record)
 
 
 def _read_bot_deletion_for_endpoint(artifacts_root: Path, sid: str) -> BotDeletionRecord | None:
@@ -2259,18 +2269,6 @@ def _read_bot_deletion_for_endpoint(artifacts_root: Path, sid: str) -> BotDeleti
             status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="bot deletion marker could not be read",
         ) from exc
-
-
-def _bot_delete_response(artifacts_root: Path, record: BotDeletionRecord) -> BotDeleteResponse:
-    return BotDeleteResponse(
-        strategy_instance_id=record.strategy_instance_id,
-        deleted_at_ms=record.deleted_at_ms,
-        deleted_by=record.deleted_by,
-        reason=record.reason,
-        deleted_run_ids=list(record.deleted_run_ids),
-        marker_path=str(stable_bot_deletion_path(artifacts_root, record.strategy_instance_id)),
-    )
-
 
 def _raise_if_deploy_admission_blocks_start(
     live_runs_root: Path,

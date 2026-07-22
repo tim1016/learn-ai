@@ -14,8 +14,11 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from app.engine.live.account_artifacts import AccountArtifactError
+from app.engine.live.account_registry import retire_soft_deleted_instance_bindings
 from app.engine.live.identity import validate_strategy_instance_id
 from app.engine.live.live_state_sidecar import _file_lock, _fsync_parent_dir
+from app.schemas.live_runs import BotDeleteResponse
 
 BOT_DELETION_FILENAME = "bot_deletion.json"
 
@@ -26,6 +29,17 @@ class BotDeletionCorruptError(RuntimeError):
     def __init__(self, path: Path, cause: BaseException) -> None:
         super().__init__(f"bot deletion marker at {path} is unreadable: {cause}")
         self.path = path
+        self.__cause__ = cause
+
+
+class BotDeletionRegistryRetirementError(RuntimeError):
+    """The deletion marker was durable, but binding retirement was not."""
+
+    def __init__(self, record: BotDeletionRecord, cause: BaseException) -> None:
+        super().__init__(
+            "bot deletion marker was written but account binding retirement could not be recorded"
+        )
+        self.record = record
         self.__cause__ = cause
 
 
@@ -65,6 +79,19 @@ def bot_has_soft_deletion(artifacts_root: Path, strategy_instance_id: str) -> bo
     return read_bot_deletion(artifacts_root, strategy_instance_id) is not None
 
 
+def bot_delete_response(artifacts_root: Path, record: BotDeletionRecord) -> BotDeleteResponse:
+    """Project a durable marker into the stable operator delete receipt."""
+
+    return BotDeleteResponse(
+        strategy_instance_id=record.strategy_instance_id,
+        deleted_at_ms=record.deleted_at_ms,
+        deleted_by=record.deleted_by,
+        reason=record.reason,
+        deleted_run_ids=list(record.deleted_run_ids),
+        marker_path=str(stable_bot_deletion_path(artifacts_root, record.strategy_instance_id)),
+    )
+
+
 def soft_delete_bot_runs(
     artifacts_root: Path,
     strategy_instance_id: str,
@@ -89,6 +116,43 @@ def soft_delete_bot_runs(
         )
         _write_locked(path, record)
         return record
+
+
+def soft_delete_and_retire_bot_runs(
+    artifacts_root: Path,
+    strategy_instance_id: str,
+    *,
+    run_ids: list[str],
+    deleted_by: str,
+    reason: str | None,
+    now_ms: int,
+) -> BotDeletionRecord:
+    """Durably hide selected runs, then retire their current account bindings.
+
+    The marker is intentionally written first: hiding a stopped bot is safe on
+    its own, while a failed append-only registry retirement is visible to the
+    operator as a retryable partial outcome.  Keeping the ordering here makes
+    every delete caller preserve that crash-safe contract.
+    """
+
+    record = soft_delete_bot_runs(
+        artifacts_root,
+        strategy_instance_id,
+        run_ids=run_ids,
+        deleted_by=deleted_by,
+        reason=reason,
+        now_ms=now_ms,
+    )
+    try:
+        retire_soft_deleted_instance_bindings(
+            artifacts_root,
+            strategy_instance_id=strategy_instance_id,
+            run_ids=run_ids,
+            now_ms=record.deleted_at_ms,
+        )
+    except (AccountArtifactError, OSError, ValueError) as exc:
+        raise BotDeletionRegistryRetirementError(record, exc) from exc
+    return record
 
 
 def _read_locked(path: Path) -> BotDeletionRecord | None:

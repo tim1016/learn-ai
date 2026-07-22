@@ -64,6 +64,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/{account_id}/clerk/recheck": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Recheck Account Clerk Transport Endpoint
+         * @description Ensure and host-verify the Clerk before the cure dialog permits confirmation.
+         */
+        post: operations["recheck_account_clerk_transport_endpoint_api_accounts__account_id__clerk_recheck_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}/cohort-batch-launches/latest": {
         parameters: {
             query?: never;
@@ -219,7 +239,7 @@ export interface paths {
         put?: never;
         /**
          * Apply Journal Cure Endpoint
-         * @description Append a claim-reducing cure only after the account Clerk is healthy.
+         * @description Relay a claim-reducing cure to the host-local account Clerk.
          */
         post: operations["apply_journal_cure_endpoint_api_accounts__account_id__journal_cures_post"];
         delete?: never;
@@ -382,6 +402,46 @@ export interface paths {
          * @description Repair latest crash-retired registry rows disproven by durable run status.
          */
         post: operations["backfill_false_crash_registry_rows_endpoint_api_accounts__account_id__registry_backfill_false_crashes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/stale-bindings/candidates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stale Binding Retirement Candidates Endpoint
+         * @description Return only stale deployment bindings safe to retire now.
+         */
+        get: operations["stale_binding_retirement_candidates_endpoint_api_accounts__account_id__stale_bindings_candidates_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/stale-bindings/retire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Retire Stale Binding Endpoint
+         * @description Retire one stale binding after refreshing every proof immediately before mutation.
+         */
+        post: operations["retire_stale_binding_endpoint_api_accounts__account_id__stale_bindings_retire_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2995,7 +3055,6 @@ export interface paths {
          *
          *     The deletion marker is durable and run-id scoped. It hides every run that
          *     currently belongs to the instance while preserving the artifacts for audit.
-         *     A later redeploy with a new run id is visible again.
          */
         delete: operations["delete_instance_api_live_instances__strategy_instance_id__delete"];
         options?: never;
@@ -5357,6 +5416,18 @@ export interface components {
              * @constant
              */
             status?: "recovery_flattened";
+        };
+        /**
+         * AccountClerkTransportStatus
+         * @description A host-verified Clerk transport check for an operator recovery action.
+         */
+        AccountClerkTransportStatus: {
+            /** Account Id */
+            account_id: string;
+            /** Checked At Ms */
+            checked_at_ms: number;
+            /** Generation */
+            generation: number;
         };
         /**
          * AccountConditionOwner
@@ -20110,6 +20181,89 @@ export interface components {
             required_repr?: string;
         };
         /**
+         * StaleBindingRetirementCandidate
+         * @description A stale binding whose retirement is freshly proven safe.
+         */
+        StaleBindingRetirementCandidate: {
+            /** Bot Order Namespace */
+            bot_order_namespace: string;
+            confirmation: components["schemas"]["OperatorConfirmationCopy"];
+            /**
+             * Lifecycle State
+             * @enum {string}
+             */
+            lifecycle_state: "DEPLOYED" | "ACTIVE";
+            /** Proof Summary */
+            proof_summary: string;
+            /** Proved At Ms */
+            proved_at_ms: number;
+            /** Run Id */
+            run_id: string;
+            /** Source */
+            source: string;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+        };
+        /**
+         * StaleBindingRetirementCandidatesResponse
+         * @description The Account desk's currently safe stale-binding recovery actions.
+         */
+        StaleBindingRetirementCandidatesResponse: {
+            /** Account Id */
+            account_id: string;
+            /** Candidates */
+            candidates?: components["schemas"]["StaleBindingRetirementCandidate"][];
+            /** Generated At Ms */
+            generated_at_ms: number;
+            /**
+             * Schema Version
+             * @default 1
+             */
+            schema_version?: number;
+        };
+        /**
+         * StaleBindingRetirementReceipt
+         * @description Proof that the host daemon atomically retired one stale binding.
+         */
+        StaleBindingRetirementReceipt: {
+            /** Account Id */
+            account_id: string;
+            /** Bot Order Namespace */
+            bot_order_namespace: string;
+            /** Receipt Id */
+            receipt_id: string;
+            /** Requested By */
+            requested_by: string;
+            /** Retired At Ms */
+            retired_at_ms: number;
+            /** Run Id */
+            run_id: string;
+            /**
+             * Schema Version
+             * @default 1
+             */
+            schema_version?: number;
+            /** Source */
+            source: string;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+        };
+        /**
+         * StaleBindingRetirementRequest
+         * @description Identity of one stale active registry binding an operator wants retired.
+         */
+        StaleBindingRetirementRequest: {
+            /**
+             * Requested By
+             * @default account-desk.operator
+             */
+            requested_by?: string;
+            /** Run Id */
+            run_id: string;
+            /** Strategy Instance Id */
+            strategy_instance_id: string;
+        };
+        /**
          * StockEntryLeg
          * @description Stock ``ActionEntity`` — Slice 1B.
          */
@@ -22507,6 +22661,39 @@ export interface operations {
             };
         };
     };
+    recheck_account_clerk_transport_endpoint_api_accounts__account_id__clerk_recheck_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountClerkTransportStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_latest_cohort_batch_launch_status_endpoint_api_accounts__account_id__cohort_batch_launches_latest_get: {
         parameters: {
             query?: never;
@@ -23095,6 +23282,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountFalseCrashBackfillResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stale_binding_retirement_candidates_endpoint_api_accounts__account_id__stale_bindings_candidates_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaleBindingRetirementCandidatesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retire_stale_binding_endpoint_api_accounts__account_id__stale_bindings_retire_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StaleBindingRetirementRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StaleBindingRetirementReceipt"];
                 };
             };
             /** @description Validation Error */

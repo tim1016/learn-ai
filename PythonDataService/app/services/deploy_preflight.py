@@ -61,6 +61,7 @@ class DeployPreflightSignals(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     daemon_reachable: bool
+    daemon_code_current: bool
     broker_connection_state: BrokerDeployConnectionState | None
     account_frozen: bool
     account_proven: bool
@@ -131,7 +132,7 @@ async def gather_deploy_preflight_signals(
     root = Path(settings.live_runs_root)
     artifacts_root = root.parent
 
-    daemon_result, _health = await host_daemon_client.fetch_startability_health(
+    daemon_result, health = await host_daemon_client.fetch_startability_health(
         settings.live_runner_daemon_url
     )
     account_freeze = read_account_freeze(artifacts_root, account_id)
@@ -148,6 +149,7 @@ async def gather_deploy_preflight_signals(
 
     return DeployPreflightSignals(
         daemon_reachable=daemon_result.kind == "CONNECTED",
+        daemon_code_current=health is not None and not health.code_stale,
         broker_connection_state=_runtime_connection_state_value(snapshot_data_plane_broker()),
         account_frozen=account_freeze is not None,
         account_proven=account_proven,
@@ -207,6 +209,21 @@ def author_deploy_blockers(
                 headline="Live engine unavailable",
                 detail="Start the engine on this machine, then recheck.",
                 primary_move=_nav("Start the engine", "/engine"),
+                applies_to="both",
+            )
+        )
+    elif not signals.daemon_code_current:
+        blockers.append(
+            OperatorBlocker.for_host(
+                condition_id="daemon_code_stale",
+                scope="host",
+                host="deploy_preflight",
+                anchor=SURFACE_ANCHOR,
+                audience="operator",
+                disposition="fix_elsewhere",
+                headline="Live engine restart required",
+                detail="The running engine does not contain the current deployed code. Restart it, then recheck.",
+                primary_move=_nav("Open live engine recovery", "/engine"),
                 applies_to="both",
             )
         )

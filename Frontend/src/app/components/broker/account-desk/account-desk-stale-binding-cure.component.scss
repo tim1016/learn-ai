@@ -1,0 +1,19 @@
+.stale-binding-cure,
+header,
+.candidate {
+  display: grid;
+  gap: 0.5rem;
+}
+header,
+h3,
+p {
+  margin: 0;
+}
+.candidate {
+  border: 1px solid var(--border-light);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+}
+.error {
+  color: var(--bear);
+}

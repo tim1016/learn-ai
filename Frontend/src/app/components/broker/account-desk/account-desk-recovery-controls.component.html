@@ -39,6 +39,7 @@
       </section>
       <app-account-desk-journal-cure />
       <app-account-desk-legacy-claim-cure />
+      <app-account-desk-stale-binding-cure />
       @if (triage.emergency_flatten_confirmation) {
         <section class="emergency" aria-label="Emergency paper account flatten">
           <h3>Emergency paper account flatten</h3>
@@ -76,6 +77,7 @@
       [confirmation]="recovery.confirmation()"
       [busy]="recovery.busy()"
       [errorMessage]="recovery.errorMessage()"
+      [errorReasonCode]="recovery.errorReasonCode()"
       (cancelled)="recovery.cancelConfirmation()"
       (confirmed)="recovery.confirm()"
       (exposureReasonChanged)="recovery.setExposureOverrideReason($event)"

@@ -60,6 +60,7 @@ from app.schemas.bot_events import (
     TerminalErrorSource,
 )
 from app.schemas.broker_session import GatewaySocketRow
+from app.schemas.journal_cures import JournalCureReceipt, JournalCureRequest
 from app.schemas.live_runs import (
     ExitReason,
     HostRunnerActionResponse,
@@ -648,6 +649,100 @@ async def test_release_clerk_endpoint_detaches_account_service(
 
     assert response.status_code == 200
     assert released == ["DU123"]
+
+
+async def test_operator_adjustment_endpoint_relays_only_from_the_host_artifacts_root(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: the data plane must never open the host Clerk AF_UNIX socket."""
+
+    from app.engine.live import host_daemon
+
+    manager, _ = daemon_context
+    ensured: list[str] = []
+    client_roots: list[Path] = []
+
+    def ensure(account_id: str, *, ibkr_host: str | None = None) -> None:
+        assert ibkr_host is None
+        ensured.append(account_id)
+
+    class FakeClerkClient:
+        def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
+            client_roots.append(artifacts_root)
+            assert account_id == "DU123"
+
+        async def apply_operator_adjustment(self, request: JournalCureRequest) -> JournalCureReceipt:
+            assert request.idempotency_key == "host-relay-cure"
+            return JournalCureReceipt(
+                account_id="DU123",
+                bot_order_namespace="learn-ai/bot/v1",
+                symbol="SPY",
+                signed_quantity=-1,
+                request_provenance=request.request_provenance,
+                reason=request.reason,
+                evidence_refs=request.evidence_refs,
+                idempotency_key=request.idempotency_key,
+                recorded_at_ms=100,
+                journal_seq=2,
+            )
+
+    monkeypatch.setattr(manager, "_ensure_account_clerk", ensure)
+    monkeypatch.setattr(host_daemon, "AccountClerkRpcClient", FakeClerkClient)
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
+        response = await client.post(
+            "/accounts/DU123/clerk/operator-adjustment",
+            json={
+                "bot_order_namespace": "learn-ai/bot/v1",
+                "symbol": "SPY",
+                "signed_quantity": -1,
+                "reason": "Fresh proof supports this adjustment.",
+                "evidence_refs": ["account-desk:proof-1"],
+                "request_provenance": "account-desk/journal-cure",
+                "idempotency_key": "host-relay-cure",
+            },
+        )
+
+    assert response.status_code == 200
+    assert ensured == ["DU123"]
+    assert client_roots == [manager.artifacts_root]
+    assert response.json()["journal_seq"] == 2
+
+
+def test_retire_stale_binding_appends_one_host_owned_retirement_row(
+    daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    manager, _ = daemon_context
+    binding = AccountInstanceBinding(
+        account_id="DU123",
+        strategy_instance_id="stale-bot",
+        run_id="stale-run",
+        bot_order_namespace="learn-ai/stale-bot/v1",
+        lifecycle_state="DEPLOYED",
+        recorded_at_ms=100,
+        source="deploy.strategy",
+    )
+    write_account_instance_binding(manager.artifacts_root, binding)
+
+    retired = manager.retire_stale_account_binding(
+        account_id="DU123",
+        strategy_instance_id="stale-bot",
+        run_id="stale-run",
+    )
+    replay = manager.retire_stale_account_binding(
+        account_id="DU123",
+        strategy_instance_id="stale-bot",
+        run_id="stale-run",
+    )
+
+    assert retired.lifecycle_state == "RETIRED"
+    assert retired.source == "operator.stale_binding_retirement"
+    assert replay == retired
+    rows = read_account_instance_registry(manager.artifacts_root, "DU123")
+    assert len(rows) == 2
+    assert rows[-1] == retired
 
 
 def test_instances_prunes_exited_records_by_ttl_and_count(tmp_path: Path) -> None:

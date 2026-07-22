@@ -7,6 +7,7 @@ import type {
   AccountEmergencyFlattenResponse,
   AccountClearFreezeRequest,
   AccountClearFreezeResponse,
+  AccountClerkTransportStatus,
   JournalCurePreview,
   JournalCureReceipt,
   JournalCureRequest,
@@ -15,6 +16,9 @@ import type {
   LegacyStaleClaimCandidatesResponse,
   LegacyStaleClaimRetireRequest,
   LegacyStaleClaimRetirementReceipt,
+  StaleBindingRetirementCandidatesResponse,
+  StaleBindingRetirementReceipt,
+  StaleBindingRetirementRequest,
   AccountReconciliationAutomationPolicy,
   AccountReconciliationAutomationPolicyUpdate,
   AccountReconciliationReceipt,
@@ -221,6 +225,26 @@ export class BrokerService {
     );
   }
 
+  staleBindingRetirementCandidates(accountId: string): Promise<StaleBindingRetirementCandidatesResponse> {
+    return firstValueFrom(
+      this.http.get<StaleBindingRetirementCandidatesResponse>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/stale-bindings/candidates`,
+      ),
+    );
+  }
+
+  retireStaleBinding(
+    accountId: string,
+    payload: StaleBindingRetirementRequest,
+  ): Promise<StaleBindingRetirementReceipt> {
+    return firstValueFrom(
+      this.http.post<StaleBindingRetirementReceipt>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/stale-bindings/retire`,
+        payload,
+      ),
+    );
+  }
+
   previewJournalCure(
     accountId: string,
     botOrderNamespace: string,
@@ -239,6 +263,15 @@ export class BrokerService {
       this.http.post<JournalCureReceipt>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/journal-cures`,
         payload,
+      ),
+    );
+  }
+
+  recheckAccountClerk(accountId: string): Promise<AccountClerkTransportStatus> {
+    return firstValueFrom(
+      this.http.post<AccountClerkTransportStatus>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/clerk/recheck`,
+        {},
       ),
     );
   }

@@ -27,10 +27,11 @@ from typing import Literal
 import httpx
 from pydantic import ValidationError
 
+from app.engine.live.account_registry import AccountInstanceBinding
 from app.engine.live.daemon_auth import TOKEN_HEADER, read_daemon_token
 from app.engine.live.daemon_transport import DaemonResult
 from app.schemas.broker_session import GatewaySocketsSnapshot
-from app.schemas.live_runs import HostRunnerHealth
+from app.schemas.live_runs import HostRunnerHealth, HostRunnerProcessStatus
 
 logger = logging.getLogger(__name__)
 
@@ -284,6 +285,52 @@ async def release_account_clerk(base_url: str, account_id: str) -> dict:
     )
 
 
+async def apply_operator_adjustment(base_url: str, account_id: str, payload: dict) -> dict:
+    """Relay a cure to the host-local Account Clerk."""
+
+    return await _post_action(
+        f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/operator-adjustment",
+        payload,
+        timeout=_START_ADMISSION_TIMEOUT,
+    )
+
+
+async def submit_operator_recovery_flatten(base_url: str, account_id: str, payload: dict) -> dict:
+    """Relay a retired-namespace recovery flatten to the host-local Clerk."""
+
+    return await _post_action(
+        f"{base_url.rstrip('/')}/accounts/{account_id}/clerk/operator-recovery-flatten",
+        payload,
+        timeout=_FLATTEN_TIMEOUT,
+    )
+
+
+async def retire_account_binding(
+    base_url: str,
+    account_id: str,
+    payload: dict,
+) -> AccountInstanceBinding:
+    """Ask the host lifecycle authority to retire one stale binding.
+
+    This is the authority boundary for the append-only registry receipt: a
+    successful host response must already be a valid binding, never a loose
+    JSON object that a downstream recovery flow has to interpret again.
+    """
+
+    response = await _post_action(
+        f"{base_url.rstrip('/')}/accounts/{account_id}/bindings/retire",
+        payload,
+        timeout=_START_ADMISSION_TIMEOUT,
+    )
+    try:
+        return AccountInstanceBinding.model_validate(response)
+    except ValidationError as exc:
+        raise HostDaemonError(
+            502,
+            "host daemon returned an invalid stale-binding retirement receipt",
+        ) from exc
+
+
 async def _post_action(url: str, payload: dict, *, timeout: httpx.Timeout = _TIMEOUT) -> dict:
     """Typed POST core for the four mutation forwards.
 
@@ -391,9 +438,34 @@ async def fetch_instance_process(
 
 async def fetch_run_process(
     base_url: str, run_id: str
-) -> tuple[DaemonResult, dict | None]:
-    """GET /runs/{id}/process for proof about one immutable run identity."""
-    return await _typed_get_json(f"{base_url.rstrip('/')}/runs/{run_id}/process")
+) -> tuple[DaemonResult, HostRunnerProcessStatus | None]:
+    """GET a schema-validated host process proof for one immutable run."""
+
+    result, response = await _classify_http(
+        f"{base_url.rstrip('/')}/runs/{run_id}/process",
+        method="GET",
+    )
+    if response is None:
+        return result, None
+    try:
+        process = HostRunnerProcessStatus.model_validate_json(response.content)
+    except ValidationError as exc:
+        return (
+            DaemonResult.incompatible_contract(
+                status=response.status_code,
+                detail=str(exc),
+            ),
+            None,
+        )
+    except ValueError as exc:
+        return (
+            DaemonResult.malformed_body(
+                status=response.status_code,
+                detail=str(exc),
+            ),
+            None,
+        )
+    return DaemonResult.connected(status=response.status_code), process
 
 
 async def fetch_qc_audit_copies(base_url: str) -> tuple[DaemonResult, dict | None]:

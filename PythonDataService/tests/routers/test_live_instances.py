@@ -36,6 +36,7 @@ from app.engine.live.account_observation_lease import AccountObservationLeaseRep
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
     crash_retired_restart_blocking_binding,
+    read_account_instance_registry,
     write_account_instance_binding,
 )
 from app.engine.live.artifacts import ExecutionRow, ExecutionWriter, TradeRow, TradeWriter
@@ -697,6 +698,7 @@ def app_with_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         del live_config
         return DeployPreflightSignals(
             daemon_reachable=True,
+            daemon_code_current=True,
             broker_connection_state="connected",
             account_frozen=False,
             account_proven=True,
@@ -4029,7 +4031,20 @@ async def test_delete_instance_soft_deletes_bot_from_catalog_list_and_status(
 ) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-delete", "delete-me", 100)
+    write_account_instance_binding(
+        root.parent,
+        AccountInstanceBinding(
+            account_id="DU111",
+            strategy_instance_id="delete-me",
+            run_id="run-delete",
+            bot_order_namespace="learn-ai/delete-me/v1",
+            lifecycle_state="DEPLOYED",
+            recorded_at_ms=99,
+            source="deploy.strategy",
+        ),
+    )
     _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1}, process={"state": "idle"})
+    monkeypatch.setattr(live_instances, "_now_ms", lambda: 100)
     from app.services.surface_hub import SurfaceHubRegistry
 
     registry = SurfaceHubRegistry()
@@ -4054,6 +4069,17 @@ async def test_delete_instance_soft_deletes_bot_from_catalog_list_and_status(
     assert delete_body["deleted_run_ids"] == ["run-delete"]
     assert delete_body["reason"] == "bad deploy spec"
     assert (root.parent / "live_state" / "delete-me" / "bot_deletion.json").is_file()
+    assert read_account_instance_registry(root.parent, "DU111")[-1].model_dump() == {
+        "schema_version": 1,
+        "account_id": "DU111",
+        "strategy_instance_id": "delete-me",
+        "run_id": "run-delete",
+        "bot_order_namespace": "learn-ai/delete-me/v1",
+        "cohort_id": None,
+        "lifecycle_state": "RETIRED",
+        "recorded_at_ms": 100,
+        "source": "operator.bot_soft_delete",
+    }
     assert live_instances._scan_runs_by_instance(root)["delete-me"][0]["run_id"] == "run-delete"
     assert catalog_response.json()["bots"] == []
     assert list_response.json() == []
@@ -4061,6 +4087,30 @@ async def test_delete_instance_soft_deletes_bot_from_catalog_list_and_status(
     assert status_response.json()["detail"]["reason_code"] == "BOT_SOFT_DELETED"
     assert registry.get("delete-me") is None
     assert owned_hub.is_running is False
+
+
+async def test_delete_instance_surfaces_unconfirmed_binding_retirement_after_marker_write(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A registry append failure cannot hide the durable deletion marker."""
+
+    from app.services import bot_deletion
+
+    app, root = app_with_root
+    _write_ledger(root, "run-delete-partial", "delete-partial", 100)
+    _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1}, process={"state": "idle"})
+
+    def fail_registry_append(*_args: object, **_kwargs: object) -> None:
+        raise OSError("registry volume unavailable")
+
+    monkeypatch.setattr(bot_deletion, "retire_soft_deleted_instance_bindings", fail_registry_append)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.request("DELETE", "/api/live-instances/delete-partial")
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["reason_code"] == "ACCOUNT_REGISTRY_RETIRE_UNAVAILABLE"
+    assert (root.parent / "live_state" / "delete-partial" / "bot_deletion.json").is_file()
 
 
 def test_status_deletion_directory_scan_does_not_follow_instance_symlink(
@@ -4908,6 +4958,7 @@ async def test_deploy_and_start_rejects_backend_preflight_blocker(
         del live_config
         return DeployPreflightSignals(
             daemon_reachable=True,
+            daemon_code_current=True,
             broker_connection_state="disconnected",
             account_frozen=False,
             account_proven=True,
@@ -4960,6 +5011,7 @@ async def test_deploy_and_start_rejects_fleet_contamination_preflight(
         del live_config
         return DeployPreflightSignals(
             daemon_reachable=True,
+            daemon_code_current=True,
             broker_connection_state="connected",
             account_frozen=False,
             account_proven=True,

@@ -17,6 +17,7 @@ export class AccountDeskRecoveryConfirmDialogComponent {
   readonly confirmation = input<AccountDeskRecoveryConfirmation | null>(null);
   readonly busy = input(false);
   readonly errorMessage = input<string | null>(null);
+  readonly errorReasonCode = input<string | null>(null);
   readonly cancelled = output();
   readonly confirmed = output();
   readonly exposureReasonChanged = output<string>();

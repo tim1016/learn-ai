@@ -41,7 +41,6 @@ from app.engine.live.account_clerk_journal import (
     AccountClerkRecordedReceipt,
     AccountClerkRecoveryFlattenReceipt,
 )
-from app.engine.live.account_clerk_rpc import AccountClerkRpcRejectedError, AccountClerkRpcRequestIdentity
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
@@ -53,7 +52,8 @@ from app.engine.live.daemon_transport import DaemonResult
 from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarRepo, stable_live_state_path
 from app.engine.live.run_ledger import LiveRunLedger, write_ledger
 from app.routers import account_reconciliation, cohort_batch_launch
-from app.schemas.journal_cures import JournalCureReceipt, JournalCureRequest
+from app.schemas.journal_cures import JournalCureReceipt
+from app.schemas.live_runs import HostRunnerProcessStatus
 from app.services import cohort_batch_launch as cohort_batch_launch_service
 from app.services.account_directory import AccountDirectoryService, CurrentBrokerAccount
 from app.services.account_event_journal import AccountEventJournalService
@@ -161,12 +161,18 @@ def _seed_legacy_claim(root: Path, *, binding_state: str = "RETIRED") -> None:
     )
 
 
-async def _dead_run_process(_base_url: str, _run_id: str) -> tuple[DaemonResult, dict]:
-    return DaemonResult.connected(), {"state": "exited", "run_id": _run_id}
+async def _dead_run_process(
+    _base_url: str,
+    _run_id: str,
+) -> tuple[DaemonResult, HostRunnerProcessStatus]:
+    return DaemonResult.connected(), HostRunnerProcessStatus(state="exited", run_id=_run_id)
 
 
-async def _live_run_process(_base_url: str, _run_id: str) -> tuple[DaemonResult, dict]:
-    return DaemonResult.connected(), {"state": "running", "run_id": _run_id}
+async def _live_run_process(
+    _base_url: str,
+    _run_id: str,
+) -> tuple[DaemonResult, HostRunnerProcessStatus]:
+    return DaemonResult.connected(), HostRunnerProcessStatus(state="running", run_id=_run_id)
 
 
 async def test_latest_reconciliation_returns_404_when_missing(tmp_path: Path) -> None:
@@ -943,7 +949,7 @@ async def test_false_crash_backfill_endpoint_repairs_disproven_registry_row(
     assert repaired.source == "host_daemon.process_halted"
 
 
-async def test_journal_cure_endpoint_ensures_clerk_before_appending_adjustment(
+async def test_journal_cure_endpoint_relays_to_the_host_clerk_before_appending_adjustment(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -978,54 +984,57 @@ async def test_journal_cure_endpoint_ensures_clerk_before_appending_adjustment(
             ts_ms=100,
         )
     )
-    ensured: list[str] = []
+    relayed: list[tuple[str, dict]] = []
 
-    async def _ensure_clerk(_base_url: str, account_id: str) -> dict:
-        ensured.append(account_id)
-        return {}
+    async def apply_operator_adjustment(_base_url: str, account_id: str, payload: dict) -> dict:
+        relayed.append((account_id, payload))
+        return JournalCureReceipt(
+            account_id="DU1234567",
+            bot_order_namespace=namespace,
+            symbol="SPY",
+            signed_quantity=-1,
+            request_provenance=payload["request_provenance"],
+            reason=payload["reason"],
+            evidence_refs=tuple(payload["evidence_refs"]),
+            idempotency_key=payload["idempotency_key"],
+            recorded_at_ms=101,
+            journal_seq=3,
+        ).model_dump(mode="json")
 
-    class FakeRpcClient:
-        def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
-            assert artifacts_root == tmp_path
-            assert account_id == "DU1234567"
-
-        async def apply_operator_adjustment(self, request: JournalCureRequest) -> JournalCureReceipt:
-            assert request.idempotency_key == "cure-route-1"
-            return JournalCureReceipt(
-                account_id="DU1234567",
-                bot_order_namespace=namespace,
-                symbol="SPY",
-                signed_quantity=-1,
-                request_provenance=request.request_provenance,
-                reason=request.reason,
-                evidence_refs=request.evidence_refs,
-                idempotency_key=request.idempotency_key,
-                recorded_at_ms=101,
-                journal_seq=3,
-            )
-
-    monkeypatch.setattr(account_reconciliation.host_daemon_client, "ensure_account_clerk", _ensure_clerk)
-    monkeypatch.setattr(account_reconciliation, "AccountClerkRpcClient", FakeRpcClient)
-    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(
-                "/api/accounts/DU1234567/journal-cures",
-                json={
-                    "bot_order_namespace": namespace,
-                    "symbol": "SPY",
-                    "signed_quantity": -1,
-                    "reason": "operator verified stale claim",
-                    "evidence_refs": ["account-reconciliation:receipt-1"],
-                    "request_provenance": "account-monitor/cure",
-                    "idempotency_key": "cure-route-1",
-                },
-            )
-    finally:
-        app.dependency_overrides.clear()
+    monkeypatch.setattr(
+        account_reconciliation.host_daemon_client,
+        "apply_operator_adjustment",
+        apply_operator_adjustment,
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/accounts/DU1234567/journal-cures",
+            json={
+                "bot_order_namespace": namespace,
+                "symbol": "SPY",
+                "signed_quantity": -1,
+                "reason": "operator verified stale claim",
+                "evidence_refs": ["account-reconciliation:receipt-1"],
+                "request_provenance": "account-monitor/cure",
+                "idempotency_key": "cure-route-1",
+            },
+        )
 
     assert response.status_code == 201
-    assert ensured == ["DU1234567"]
+    assert relayed == [
+        (
+            "DU1234567",
+            {
+                "bot_order_namespace": namespace,
+                "symbol": "SPY",
+                "signed_quantity": -1.0,
+                "reason": "operator verified stale claim",
+                "evidence_refs": ["account-reconciliation:receipt-1"],
+                "request_provenance": "account-monitor/cure",
+                "idempotency_key": "cure-route-1",
+            },
+        )
+    ]
     assert response.json()["signed_quantity"] == -1
 
 
@@ -1037,43 +1046,81 @@ async def test_journal_cure_endpoint_preserves_clerk_rejection_reason(
 
     from app.main import app
 
-    async def _ensure_clerk(_base_url: str, _account_id: str) -> dict:
-        return {}
+    async def apply_operator_adjustment(_base_url: str, _account_id: str, _payload: dict) -> dict:
+        from app.engine.live.host_daemon_client import HostDaemonError
 
-    class FakeRpcClient:
-        def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
-            assert artifacts_root == tmp_path
-            assert account_id == "DU1234567"
+        raise HostDaemonError(
+            409,
+            {
+                "reason_code": "JOURNAL_CURE_IDEMPOTENCY_CONFLICT",
+                "message": "The Clerk already has a conflicting adjustment.",
+            },
+        )
 
-        async def apply_operator_adjustment(self, _request: JournalCureRequest) -> JournalCureReceipt:
-            raise AccountClerkRpcRejectedError(
-                reason="JOURNAL_CURE_IDEMPOTENCY_CONFLICT",
-                operation="operator_adjustment",
-                request_identity=AccountClerkRpcRequestIdentity(intent_id=None, order_ref=None),
-            )
-
-    monkeypatch.setattr(account_reconciliation.host_daemon_client, "ensure_account_clerk", _ensure_clerk)
-    monkeypatch.setattr(account_reconciliation, "AccountClerkRpcClient", FakeRpcClient)
-    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(
-                "/api/accounts/DU1234567/journal-cures",
-                json={
-                    "bot_order_namespace": "learn-ai/bot-a/v1",
-                    "symbol": "SPY",
-                    "signed_quantity": -1,
-                    "reason": "operator verified stale claim",
-                    "evidence_refs": ["account-reconciliation:receipt-1"],
-                    "request_provenance": "account-monitor/cure",
-                    "idempotency_key": "cure-route-1",
-                },
-            )
-    finally:
-        app.dependency_overrides.clear()
+    monkeypatch.setattr(
+        account_reconciliation.host_daemon_client,
+        "apply_operator_adjustment",
+        apply_operator_adjustment,
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/accounts/DU1234567/journal-cures",
+            json={
+                "bot_order_namespace": "learn-ai/bot-a/v1",
+                "symbol": "SPY",
+                "signed_quantity": -1,
+                "reason": "operator verified stale claim",
+                "evidence_refs": ["account-reconciliation:receipt-1"],
+                "request_provenance": "account-monitor/cure",
+                "idempotency_key": "cure-route-1",
+            },
+        )
 
     assert response.status_code == 409
     assert response.json()["detail"]["reason_code"] == "JOURNAL_CURE_IDEMPOTENCY_CONFLICT"
+
+
+async def test_recheck_clerk_endpoint_requires_host_health_for_the_requested_account(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.main import app
+
+    async def ensure_account_clerk(_base_url: str, account_id: str) -> dict:
+        assert account_id == "DU1234567"
+        return {
+            "ok": True,
+            "repo_root": "/repo",
+            "live_runs_root": "/repo/artifacts/live_runs",
+            "fetched_at_ms": 123,
+            "process": {"state": "idle"},
+            "clerks": [
+                {
+                    "account_id": "DU1234567",
+                    "generation": 52,
+                    "pid": 4147,
+                    "status": "RUNNING",
+                    "started_at_ms": 100,
+                    "renewed_at_ms": 123,
+                    "valid_until_ms": 60_123,
+                    "lease_valid": True,
+                }
+            ],
+        }
+
+    monkeypatch.setattr(
+        account_reconciliation.host_daemon_client,
+        "ensure_account_clerk",
+        ensure_account_clerk,
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/accounts/DU1234567/clerk/recheck", json={})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "account_id": "DU1234567",
+        "generation": 52,
+        "checked_at_ms": 123,
+    }
 
 
 async def test_journal_cure_preview_honors_artifact_root_dependency_override(
@@ -1121,7 +1168,7 @@ async def test_journal_cure_preview_honors_artifact_root_dependency_override(
     assert observed_roots == [tmp_path]
 
 
-async def test_operator_recovery_flatten_endpoint_ensures_clerk_and_appends_audit_event(
+async def test_operator_recovery_flatten_endpoint_relays_through_host_clerk_and_appends_audit_event(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1161,26 +1208,17 @@ async def test_operator_recovery_flatten_endpoint_ensures_clerk_and_appends_audi
         ),
         cancelled_order_ids=(11,),
     )
-    ensured: list[str] = []
+    relayed: list[tuple[str, dict]] = []
 
-    async def _ensure_clerk(_base_url: str, account_id: str) -> dict:
-        ensured.append(account_id)
-        return {}
+    async def submit_operator_recovery_flatten(_base_url: str, account_id: str, payload: dict) -> dict:
+        relayed.append((account_id, payload))
+        return {"recovery_flatten": receipt.model_dump(mode="json")}
 
-    class FakeRpcClient:
-        def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
-            assert artifacts_root == tmp_path
-            assert account_id == "DU1234567"
-
-        async def submit_operator_recovery_flatten(
-            self,
-            submitted_intent: AccountOwnerSubmitIntent,
-        ) -> AccountClerkRecoveryFlattenReceipt:
-            assert submitted_intent == intent
-            return receipt
-
-    monkeypatch.setattr(account_reconciliation.host_daemon_client, "ensure_account_clerk", _ensure_clerk)
-    monkeypatch.setattr(account_reconciliation, "AccountClerkRpcClient", FakeRpcClient)
+    monkeypatch.setattr(
+        account_reconciliation.host_daemon_client,
+        "submit_operator_recovery_flatten",
+        submit_operator_recovery_flatten,
+    )
     app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -1197,7 +1235,16 @@ async def test_operator_recovery_flatten_endpoint_ensures_clerk_and_appends_audi
 
     assert response.status_code == 200
     assert replay.status_code == 200
-    assert ensured == ["DU1234567", "DU1234567"]
+    assert relayed == [
+        (
+            "DU1234567",
+            {"intent": intent.model_dump(mode="json"), "request_provenance": "account-monitor/recovery"},
+        ),
+        (
+            "DU1234567",
+            {"intent": intent.model_dump(mode="json"), "request_provenance": "account-monitor/recovery"},
+        ),
+    ]
     [event] = read_account_events(tmp_path, "DU1234567")
     assert {
         key: event[key]

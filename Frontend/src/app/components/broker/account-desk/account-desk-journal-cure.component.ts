@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, effect, inject, signal } from '@ang
 
 import { ReceiptLabelPipe } from '../../../shared/pipes/receipt-label.pipe';
 import { BrokerService } from '../../../services/broker.service';
+import { extractServerMessage, extractServerReasonCode } from '../operation-error';
 import type { JournalCurePreview } from '../../../api/account-reconciliation.types';
 import { AccountDeskRecoveryStore } from './account-desk-recovery-store.service';
 import { AccountDeskSurfaceStore } from './account-desk-surface-store.service';
@@ -28,6 +29,10 @@ export class AccountDeskJournalCureComponent {
   readonly preview = signal<JournalCurePreview | null>(null);
   readonly loading = signal(false);
   readonly errorMessage = signal<string | null>(null);
+  readonly transportReady = signal(false);
+  readonly transportLoading = signal(false);
+  readonly transportErrorMessage = signal<string | null>(null);
+  readonly transportReasonCode = signal<string | null>(null);
 
   constructor() {
     effect(() => {
@@ -36,6 +41,10 @@ export class AccountDeskJournalCureComponent {
       this.preview.set(null);
       this.loading.set(false);
       this.errorMessage.set(null);
+      this.transportReady.set(false);
+      this.transportLoading.set(false);
+      this.transportErrorMessage.set(null);
+      this.transportReasonCode.set(null);
     });
   }
 
@@ -53,6 +62,10 @@ export class AccountDeskJournalCureComponent {
     const generation = ++this.requestGeneration;
     this.loading.set(true);
     this.errorMessage.set(null);
+    this.transportReady.set(false);
+    this.transportLoading.set(false);
+    this.transportErrorMessage.set(null);
+    this.transportReasonCode.set(null);
     try {
       const preview = await this.broker.previewJournalCure(accountId, namespace, symbol);
       if (!this.isCurrent(accountId, generation)) return;
@@ -67,9 +80,36 @@ export class AccountDeskJournalCureComponent {
     }
   }
 
+  async recheckClerk(): Promise<void> {
+    const accountId = this.surface.accountId();
+    const preview = this.preview();
+    if (accountId === null || preview === null || !preview.can_cure || this.transportLoading()) return;
+    const generation = this.requestGeneration;
+    this.transportLoading.set(true);
+    this.transportErrorMessage.set(null);
+    this.transportReasonCode.set(null);
+    try {
+      const status = await this.broker.recheckAccountClerk(accountId);
+      if (!this.isCurrent(accountId, generation)) return;
+      this.transportReady.set(status.account_id === accountId);
+      if (status.account_id !== accountId) {
+        this.transportErrorMessage.set('The Clerk attested a different account. Refresh the cure preview.');
+      }
+    } catch (error) {
+      if (!this.isCurrent(accountId, generation)) return;
+      this.transportReady.set(false);
+      this.transportErrorMessage.set(
+        extractServerMessage(error, 'The Clerk transport check failed. Recheck before requesting this cure.'),
+      );
+      this.transportReasonCode.set(extractServerReasonCode(error));
+    } finally {
+      if (this.isCurrent(accountId, generation)) this.transportLoading.set(false);
+    }
+  }
+
   requestConfirmation(): void {
     const preview = this.preview();
-    if (preview === null) return;
+    if (preview === null || !this.transportReady()) return;
     this.recovery.requestJournalCure(
       preview,
       Number(this.quantity()),

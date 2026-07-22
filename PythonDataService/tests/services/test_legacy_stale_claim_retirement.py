@@ -19,6 +19,7 @@ from app.engine.live.fleet import compute_fleet_contamination
 from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarRepo, stable_live_state_path
 from app.engine.live.run_ledger import LiveRunLedger, write_ledger
 from app.schemas.account_reconciliation import LegacyStaleClaimRetirementReceipt
+from app.schemas.live_runs import HostRunnerProcessStatus
 from app.services.fleet_contamination import collect_fleet_position_explanations
 from app.services.legacy_stale_claim_retirement import (
     LEGACY_STALE_CLAIM_RETIRED_EVENT,
@@ -122,20 +123,20 @@ def _seed_claim(
         )
 
 
-async def _dead_process(_run_id: str) -> tuple[DaemonResult, dict]:
-    return DaemonResult.connected(), {"state": "exited", "run_id": _run_id}
+async def _dead_process(_run_id: str) -> tuple[DaemonResult, HostRunnerProcessStatus]:
+    return DaemonResult.connected(), HostRunnerProcessStatus(state="exited", run_id=_run_id)
 
 
-async def _live_process(_run_id: str) -> tuple[DaemonResult, dict]:
-    return DaemonResult.connected(), {"state": "running", "run_id": _run_id}
+async def _live_process(_run_id: str) -> tuple[DaemonResult, HostRunnerProcessStatus]:
+    return DaemonResult.connected(), HostRunnerProcessStatus(state="running", run_id=_run_id)
 
 
-async def _idle_process(_run_id: str) -> tuple[DaemonResult, dict]:
-    return DaemonResult.connected(), {"state": "idle", "run_id": _run_id}
+async def _idle_process(_run_id: str) -> tuple[DaemonResult, HostRunnerProcessStatus]:
+    return DaemonResult.connected(), HostRunnerProcessStatus(state="idle", run_id=_run_id)
 
 
-async def _mismatched_exited_process(_run_id: str) -> tuple[DaemonResult, dict]:
-    return DaemonResult.connected(), {"state": "exited", "run_id": "another-run"}
+async def _mismatched_exited_process(_run_id: str) -> tuple[DaemonResult, HostRunnerProcessStatus]:
+    return DaemonResult.connected(), HostRunnerProcessStatus(state="exited", run_id="another-run")
 
 
 async def test_retire_refuses_live_process(tmp_path: Path) -> None:
@@ -268,7 +269,9 @@ async def test_retire_rejects_a_concurrent_duplicate_receipt(tmp_path: Path) -> 
     release_proofs = asyncio.Event()
     proof_calls = 0
 
-    async def simultaneous_terminal_proof(run_id: str) -> tuple[DaemonResult, dict]:
+    async def simultaneous_terminal_proof(
+        run_id: str,
+    ) -> tuple[DaemonResult, HostRunnerProcessStatus]:
         nonlocal proof_calls
         proof_calls += 1
         if proof_calls == 2:

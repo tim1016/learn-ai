@@ -22,6 +22,7 @@ NOW_MS = 1_780_000_000_000
 def _healthy() -> DeployPreflightSignals:
     return DeployPreflightSignals(
         daemon_reachable=True,
+        daemon_code_current=True,
         broker_connection_state="connected",
         account_frozen=False,
         account_proven=True,
@@ -91,6 +92,17 @@ def test_daemon_down_is_blocking_fix_elsewhere() -> None:
     assert ids["daemon_down"].condition.severity == "blocking"
     assert ids["daemon_down"].disposition == "fix_elsewhere"
     assert ids["daemon_down"].primary_move is not None
+
+
+def test_stale_daemon_code_blocks_deploy_and_run() -> None:
+    blockers = author_deploy_blockers(_healthy().model_copy(update={"daemon_code_current": False}))
+
+    blocker = next(blocker for blocker in blockers if blocker.condition.id == "daemon_code_stale")
+    assert blocker.headline == "Live engine restart required"
+    assert blocker.primary_move is not None
+    assert blocker.primary_move.action.kind == "navigate"
+    assert blocker.primary_move.action.route == "/engine"
+    assert blocker.applies_to == "both"
 
 
 def test_broker_disconnected_blocks_deploy() -> None:
@@ -175,6 +187,7 @@ def test_instance_already_running_blocks_deploy() -> None:
 def test_every_blocker_satisfies_pairing_invariant() -> None:
     unhealthy = DeployPreflightSignals(
         daemon_reachable=False,
+        daemon_code_current=False,
         broker_connection_state="disconnected",
         account_frozen=True,
         account_proven=False,

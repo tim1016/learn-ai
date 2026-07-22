@@ -97,6 +97,16 @@ function recoveryReceiptView(success: AccountDeskRecoverySuccess): RecoveryRecei
           field("Recorded", "", "text", success.receipt.retired_at_ms),
         ],
       };
+    case "stale_binding_retire":
+      return {
+        message: "Stale deployment binding was retired.",
+        fields: [
+          field("Receipt", success.receipt.receipt_id, "code"),
+          field("Strategy", success.receipt.strategy_instance_id, "code"),
+          field("Run", success.receipt.run_id, "code"),
+          field("Recorded", "", "text", success.receipt.retired_at_ms),
+        ],
+      };
     case "recovery_flatten":
       return {
         message: "Clerk recovery flatten was accepted.",
