@@ -64,6 +64,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/accounts/{account_id}/clerk/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore Account Clerk Endpoint
+         * @description Restore the sole Clerk through the daemon and leave a durable receipt.
+         */
+        post: operations["restore_account_clerk_endpoint_api_accounts__account_id__clerk_restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/accounts/{account_id}/cockpit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Account Cockpit Endpoint
+         * @description Return the account cockpit's authoritative posture and degraded mode.
+         */
+        get: operations["account_cockpit_endpoint_api_accounts__account_id__cockpit_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/accounts/{account_id}/emergency-flatten": {
         parameters: {
             query?: never;
@@ -5282,6 +5322,81 @@ export interface components {
             clerk_generation: number;
             /** Recorded At Ms */
             recorded_at_ms: number;
+        };
+        /**
+         * AccountClerkRestoreReceipt
+         * @description Durable account-event receipt for a completed Clerk restore.
+         */
+        AccountClerkRestoreReceipt: {
+            /** Account Id */
+            account_id: string;
+            /** Clerk Generation */
+            clerk_generation: number;
+            /** Receipt Id */
+            receipt_id: string;
+            /** Recorded At Ms */
+            recorded_at_ms: number;
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version?: 1;
+        };
+        /**
+         * AccountClerkRestoreRequest
+         * @description Typed confirmation for the daemon-supervised Clerk restore operation.
+         */
+        AccountClerkRestoreRequest: {
+            /**
+             * Confirmation Token
+             * @constant
+             */
+            confirmation_token: "RESTORE";
+            /** Idempotency Key */
+            idempotency_key: string;
+        };
+        /**
+         * AccountCockpitDaemon
+         * @description Host-daemon observation used only for honest cockpit guidance.
+         */
+        AccountCockpitDaemon: {
+            /**
+             * Availability
+             * @enum {string}
+             */
+            availability: "AVAILABLE" | "DOWN" | "UNREADABLE";
+            /** Detail */
+            detail: string;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Reason Code */
+            reason_code: string;
+        };
+        /**
+         * AccountCockpitResponse
+         * @description One display/control projection for a single account cockpit page.
+         */
+        AccountCockpitResponse: {
+            /** Account Id */
+            account_id: string;
+            /** Blockers */
+            blockers?: components["schemas"]["OperatorBlocker"][];
+            clerk: components["schemas"]["AccountServiceStatusResponse"];
+            daemon: components["schemas"]["AccountCockpitDaemon"];
+            /** Generated At Ms */
+            generated_at_ms: number;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "NORMAL" | "CLERK_DOWN" | "DAEMON_DOWN" | "DAEMON_UNREADABLE";
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version?: 1;
         };
         /**
          * AccountConditionOwner
@@ -22314,6 +22429,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountServiceStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restore_account_clerk_endpoint_api_accounts__account_id__clerk_restore_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountClerkRestoreRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountClerkRestoreReceipt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    account_cockpit_endpoint_api_accounts__account_id__cockpit_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountCockpitResponse"];
                 };
             };
             /** @description Validation Error */

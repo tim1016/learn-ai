@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Annotated
 
@@ -19,7 +20,16 @@ from app.engine.live.account_clerk_rpc import (
 )
 from app.engine.live.account_identity import normalize_account_id
 from app.engine.live.account_registry import backfill_false_crash_registry_rows
+from app.engine.live.daemon_command_idempotency import (
+    DaemonCommandIdempotencyService,
+    DaemonCommandOutcome,
+)
 from app.routers.broker_dependencies import require_connected_client
+from app.schemas.account_cockpit import (
+    AccountClerkRestoreReceipt,
+    AccountClerkRestoreRequest,
+    AccountCockpitResponse,
+)
 from app.schemas.account_directory import AccountServiceStatusResponse, AccountsRosterResponse
 from app.schemas.account_events import AccountEventKind, AccountEventsResponse, AccountEventView
 from app.schemas.account_reconciliation import (
@@ -52,6 +62,7 @@ from app.schemas.live_runs import (
     AccountEmergencyFlattenResponse,
     EmergencyFlattenRequest,
 )
+from app.services.account_cockpit import AccountCockpitService
 from app.services.account_directory import (
     AccountDirectoryError,
     AccountDirectoryService,
@@ -68,6 +79,7 @@ from app.services.legacy_stale_claim_retirement import (
     LegacyStaleClaimRetirementError,
     LegacyStaleClaimRetirementService,
 )
+from app.utils.timestamps import now_ms_utc
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 ConnectedIbkrClient = Annotated[IbkrClient, Depends(require_connected_client)]
@@ -78,6 +90,20 @@ def get_account_artifacts_root() -> Path:
 
 
 AccountArtifactsRoot = Annotated[Path, Depends(get_account_artifacts_root)]
+
+
+def get_account_clerk_restore_idempotency(
+    artifacts_root: AccountArtifactsRoot,
+) -> DaemonCommandIdempotencyService:
+    """Build the durable one-shot envelope for the Clerk restore control."""
+
+    return DaemonCommandIdempotencyService(artifacts_root)
+
+
+AccountClerkRestoreIdempotency = Annotated[
+    DaemonCommandIdempotencyService,
+    Depends(get_account_clerk_restore_idempotency),
+]
 
 
 def get_account_reconciliation_service(
@@ -208,6 +234,112 @@ async def account_service_status_endpoint(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"reason_code": "ACCOUNT_UNKNOWN"}) from exc
     except AccountDirectoryError as exc:
         raise _account_directory_http_error(exc) from exc
+
+
+@router.get("/{account_id}/cockpit", response_model=AccountCockpitResponse)
+async def account_cockpit_endpoint(
+    account_id: str,
+    directory: Annotated[AccountDirectoryService, Depends(get_account_directory_service)],
+) -> AccountCockpitResponse:
+    """Return the account cockpit's authoritative posture and degraded mode."""
+
+    canonical_account_id = _canonical_account_id(account_id)
+    try:
+        settings = get_settings()
+        return await AccountCockpitService(
+            directory=directory,
+            fetch_daemon_health=lambda: host_daemon_client.fetch_health(
+                settings.live_runner_daemon_url
+            ),
+        ).surface(account_id=canonical_account_id)
+    except UnknownAccountError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"reason_code": "ACCOUNT_UNKNOWN"}) from exc
+    except AccountDirectoryError as exc:
+        raise _account_directory_http_error(exc) from exc
+
+
+@router.post("/{account_id}/clerk/restore", response_model=AccountClerkRestoreReceipt)
+async def restore_account_clerk_endpoint(
+    account_id: str,
+    request: AccountClerkRestoreRequest,
+    artifacts_root: AccountArtifactsRoot,
+    directory: Annotated[AccountDirectoryService, Depends(get_account_directory_service)],
+    idempotency: AccountClerkRestoreIdempotency,
+) -> AccountClerkRestoreReceipt:
+    """Restore the sole Clerk through the daemon and leave a durable receipt."""
+
+    canonical_account_id = _canonical_account_id(account_id)
+
+    def restore_once() -> DaemonCommandOutcome:
+        """Invoke the host-only actuator after claiming this exact operation."""
+
+        settings = get_settings()
+        asyncio.run(
+            host_daemon_client.ensure_account_clerk(
+                settings.live_runner_daemon_url,
+                canonical_account_id,
+            )
+        )
+        clerk = directory.service_status(account_id=canonical_account_id)
+        if clerk.attachment != "ATTACHED" or clerk.generation is None:
+            raise _AccountClerkRestoreUnconfirmedError
+        recorded_at_ms = now_ms_utc()
+        receipt = AccountClerkRestoreReceipt(
+            receipt_id=f"account-clerk-restore:{request.idempotency_key}",
+            account_id=canonical_account_id,
+            clerk_generation=clerk.generation,
+            recorded_at_ms=recorded_at_ms,
+        )
+        append_account_event(
+            artifacts_root,
+            canonical_account_id,
+            {
+                "event_type": "account_clerk_restore_completed",
+                **receipt.model_dump(),
+            },
+            only_if_receipt_absent=True,
+        )
+        return DaemonCommandOutcome(
+            status_code=status.HTTP_200_OK,
+            body=receipt.model_dump(mode="json"),
+            replayed=False,
+        )
+
+    try:
+        outcome = await run_in_threadpool(
+            idempotency.execute,
+            idempotency_key=request.idempotency_key,
+            command="account_clerk_restore",
+            account_id=canonical_account_id,
+            semantic_payload={"confirmation_token": request.confirmation_token},
+            invoke=restore_once,
+            enforcement_enabled=True,
+        )
+        if outcome.status_code != status.HTTP_200_OK:
+            raise HTTPException(outcome.status_code, detail=outcome.body)
+        return AccountClerkRestoreReceipt.model_validate(outcome.body)
+    except _AccountClerkRestoreUnconfirmedError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": "ACCOUNT_CLERK_RESTORE_UNCONFIRMED",
+                "message": "The daemon returned, but a healthy Clerk generation was not re-observed.",
+            },
+        ) from exc
+    except HTTPException:
+        raise
+    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
+        raise _outcome_unknown_http_error(exc, idempotency_key=request.idempotency_key) from exc
+    except host_daemon_client.HostDaemonError as exc:
+        raise HTTPException(exc.status_code, detail=exc.detail) from exc
+    except UnknownAccountError as exc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={"reason_code": "ACCOUNT_UNKNOWN"}) from exc
+    except AccountDirectoryError as exc:
+        raise _account_directory_http_error(exc) from exc
+
+
+class _AccountClerkRestoreUnconfirmedError(RuntimeError):
+    """A claimed restore cannot safely be called complete without a re-observation."""
 
 
 @router.put("/{account_id}/session-policy", response_model=AccountSessionPolicyUpdateResponse)

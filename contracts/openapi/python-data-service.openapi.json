@@ -551,6 +551,162 @@
         "title": "AccountClerkRestartSmokeResponse",
         "type": "object"
       },
+      "AccountClerkRestoreReceipt": {
+        "description": "Durable account-event receipt for a completed Clerk restore.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "clerk_generation": {
+            "minimum": 1.0,
+            "title": "Clerk Generation",
+            "type": "integer"
+          },
+          "receipt_id": {
+            "maxLength": 320,
+            "minLength": 1,
+            "title": "Receipt Id",
+            "type": "string"
+          },
+          "recorded_at_ms": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Recorded At Ms",
+            "type": "integer"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version"
+          }
+        },
+        "required": [
+          "receipt_id",
+          "account_id",
+          "clerk_generation",
+          "recorded_at_ms"
+        ],
+        "title": "AccountClerkRestoreReceipt",
+        "type": "object"
+      },
+      "AccountClerkRestoreRequest": {
+        "description": "Typed confirmation for the daemon-supervised Clerk restore operation.",
+        "properties": {
+          "confirmation_token": {
+            "const": "RESTORE",
+            "title": "Confirmation Token"
+          },
+          "idempotency_key": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirmation_token",
+          "idempotency_key"
+        ],
+        "title": "AccountClerkRestoreRequest",
+        "type": "object"
+      },
+      "AccountCockpitDaemon": {
+        "description": "Host-daemon observation used only for honest cockpit guidance.",
+        "properties": {
+          "availability": {
+            "enum": [
+              "AVAILABLE",
+              "DOWN",
+              "UNREADABLE"
+            ],
+            "title": "Availability",
+            "type": "string"
+          },
+          "detail": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Detail",
+            "type": "string"
+          },
+          "observed_at_ms": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "reason_code": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Reason Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "availability",
+          "reason_code",
+          "detail",
+          "observed_at_ms"
+        ],
+        "title": "AccountCockpitDaemon",
+        "type": "object"
+      },
+      "AccountCockpitResponse": {
+        "description": "One display/control projection for a single account cockpit page.",
+        "properties": {
+          "account_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Account Id",
+            "type": "string"
+          },
+          "blockers": {
+            "items": {
+              "$ref": "#/components/schemas/OperatorBlocker"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "clerk": {
+            "$ref": "#/components/schemas/AccountServiceStatusResponse"
+          },
+          "daemon": {
+            "$ref": "#/components/schemas/AccountCockpitDaemon"
+          },
+          "generated_at_ms": {
+            "maximum": 9.223372036854776e+18,
+            "minimum": 0.0,
+            "title": "Generated At Ms",
+            "type": "integer"
+          },
+          "mode": {
+            "enum": [
+              "NORMAL",
+              "CLERK_DOWN",
+              "DAEMON_DOWN",
+              "DAEMON_UNREADABLE"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "default": 1,
+            "title": "Schema Version"
+          }
+        },
+        "required": [
+          "account_id",
+          "generated_at_ms",
+          "mode",
+          "clerk",
+          "daemon"
+        ],
+        "title": "AccountCockpitResponse",
+        "type": "object"
+      },
       "AccountConditionOwner": {
         "additionalProperties": false,
         "description": "Owner of a derived sick-bay condition.",
@@ -37878,6 +38034,134 @@
           }
         },
         "summary": "Account Service Status Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/clerk/restore": {
+      "post": {
+        "description": "Restore the sole Clerk through the daemon and leave a durable receipt.",
+        "operationId": "restore_account_clerk_endpoint_api_accounts__account_id__clerk_restore_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountClerkRestoreRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountClerkRestoreReceipt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Restore Account Clerk Endpoint",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/accounts/{account_id}/cockpit": {
+      "get": {
+        "description": "Return the account cockpit's authoritative posture and degraded mode.",
+        "operationId": "account_cockpit_endpoint_api_accounts__account_id__cockpit_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "title": "Account Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountCockpitResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Account Cockpit Endpoint",
         "tags": [
           "accounts"
         ]

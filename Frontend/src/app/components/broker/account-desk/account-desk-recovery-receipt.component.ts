@@ -116,5 +116,14 @@ function recoveryReceiptView(success: AccountDeskRecoverySuccess): RecoveryRecei
           field("Completed", "", "text", success.receipt.completed_at_ms),
         ],
       };
+    case "restore_clerk":
+      return {
+        message: "Account Clerk restore completed.",
+        fields: [
+          field("Receipt", success.receipt.receipt_id, "code"),
+          field("Clerk generation", success.receipt.clerk_generation),
+          field("Recorded", "", "text", success.receipt.recorded_at_ms),
+        ],
+      };
   }
 }

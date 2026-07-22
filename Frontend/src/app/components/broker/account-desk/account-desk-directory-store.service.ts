@@ -9,6 +9,7 @@ import type {
   AccountServiceStatusResponse,
   AccountsRosterResponse,
 } from '../../../api/account-directory.types';
+import type { AccountCockpitResponse } from '../../../api/account-cockpit.types';
 import type { AccountTriageVerdictState } from '../../../api/account-reconciliation.types';
 import { isRecord } from '../../../api/operator-blocker.types';
 import { BrokerService } from '../../../services/broker.service';
@@ -22,7 +23,7 @@ interface RosterState {
 }
 
 interface ServiceStatusState {
-  readonly response: AccountServiceStatusResponse | null;
+  readonly response: AccountCockpitResponse | null;
   readonly loading: boolean;
   readonly errorMessage: string | null;
   readonly lastGoodAtMs: number | null;
@@ -55,7 +56,8 @@ export class AccountDeskDirectoryStore {
   readonly rosterLastGoodAtMs = computed(() => this.rosterState().lastGoodAtMs);
   readonly rosterEmpty = computed(() => this.rosterState().response?.rows.length === 0);
   readonly statusAccountId = this.statusAccountKey.asReadonly();
-  readonly serviceStatus = computed(() => this.statusState().response);
+  readonly cockpit = computed(() => this.statusState().response);
+  readonly serviceStatus = computed(() => this.statusState().response?.clerk ?? null);
   readonly serviceStatusLoading = computed(() => this.statusState().loading);
   readonly serviceStatusErrorMessage = computed(() => this.statusState().errorMessage);
   readonly serviceStatusHasLastGood = computed(() => this.statusState().response !== null);
@@ -99,10 +101,10 @@ export class AccountDeskDirectoryStore {
     const generation = ++this.statusGeneration;
     this.statusState.update((state) => ({ ...state, loading: true, errorMessage: null }));
     try {
-      const response = await this.broker.accountServiceStatus(accountId);
+      const response = await this.broker.accountCockpit(accountId);
       if (!this.isCurrentStatusRequest(accountId, generation)) return;
-      if (!isAccountServiceStatusResponse(response, accountId)) {
-        throw new Error('Account service response did not attest this route.');
+      if (!isAccountCockpitResponse(response, accountId)) {
+        throw new Error('Account cockpit response did not attest this route.');
       }
       this.statusState.set({ response, loading: false, errorMessage: null, lastGoodAtMs: Date.now() });
     } catch (error) {
@@ -145,9 +147,20 @@ function isAccountRosterRow(value: unknown): value is AccountRosterRow {
     isNullableInt64Ms(value['last_verified_at_ms']);
 }
 
+function isAccountCockpitResponse(value: unknown, accountId: string): value is AccountCockpitResponse {
+  return isRecord(value) &&
+    value['schema_version'] === 1 &&
+    sameAccountId(value['account_id'], accountId) &&
+    isInt64Ms(value['generated_at_ms']) &&
+    isCockpitMode(value['mode']) &&
+    isAccountServiceStatusResponse(value['clerk'], accountId) &&
+    isDaemonStatus(value['daemon']) &&
+    Array.isArray(value['blockers']) && value['blockers'].every(isCockpitBlocker);
+}
+
 function isAccountServiceStatusResponse(value: unknown, accountId: string): value is AccountServiceStatusResponse {
   return isRecord(value) &&
-    value['schema_version'] === 2 &&
+    value['schema_version'] === 3 &&
     sameAccountId(value['account_id'], accountId) &&
     isAttachment(value['attachment']) &&
     isNullablePhase(value['phase']) &&
@@ -155,6 +168,8 @@ function isAccountServiceStatusResponse(value: unknown, accountId: string): valu
     isNullableInt64Ms(value['generation_recorded_at_ms']) &&
     isNullableString(value['source']) &&
     isBinding(value['binding']) &&
+    isGateAuthority(value['gate_authority']) &&
+    isSessionPolicy(value['session_policy']) &&
     isNullableLease(value['lease']) &&
     isJournalWatermark(value['journal']) &&
     isOperatingState(value['operating_state']) &&
@@ -216,6 +231,57 @@ function isJournalWatermark(value: unknown): boolean {
   return isRecord(value) &&
     isNullableGeneration(value['last_seq']) &&
     isNullableInt64Ms(value['last_write_ms']);
+}
+
+function isGateAuthority(value: unknown): boolean {
+  return isRecord(value) &&
+    (value['requested_authority'] === 'account_truth' || value['requested_authority'] === 'observation_lease') &&
+    (value['effective_authority'] === 'account_truth' || value['effective_authority'] === 'observation_lease') &&
+    isPromotionState(value['promotion_state']) &&
+    typeof value['reason_code'] === 'string' &&
+    isNullableString(value['disposition']) &&
+    (value['action_authority'] === 'account_truth' || value['action_authority'] === 'observation_lease') &&
+    isGateResult(value['action_gate']) &&
+    Array.isArray(value['observed_session_dates']) && value['observed_session_dates'].every((date) => typeof date === 'string') &&
+    isInt64Ms(value['lease_weaker_comparison_count']) &&
+    isNullableInt64Ms(value['restart_smoke_recorded_at_ms']);
+}
+
+function isSessionPolicy(value: unknown): boolean {
+  return isRecord(value) && typeof value['allow_outside_live_session'] === 'boolean' && isGateResult(value['gate_result']);
+}
+
+function isGateResult(value: unknown): boolean {
+  return isRecord(value) &&
+    typeof value['gate_id'] === 'string' &&
+    (value['status'] === 'pass' || value['status'] === 'block' || value['status'] === 'freeze') &&
+    typeof value['source'] === 'string' &&
+    typeof value['operator_reason'] === 'string' &&
+    typeof value['operator_next_step'] === 'string' &&
+    isNullableInt64Ms(value['evidence_at_ms']);
+}
+
+function isPromotionState(value: unknown): boolean {
+  return value === 'SAFE_DEFAULT' || value === 'WAITING_FOR_SHADOW_PARITY' ||
+    value === 'WAITING_FOR_CLERK_RESTART_SMOKE' || value === 'CLERK_PROOF_ACTIVE';
+}
+
+function isCockpitMode(value: unknown): boolean {
+  return value === 'NORMAL' || value === 'CLERK_DOWN' || value === 'DAEMON_DOWN' || value === 'DAEMON_UNREADABLE';
+}
+
+function isDaemonStatus(value: unknown): boolean {
+  return isRecord(value) &&
+    (value['availability'] === 'AVAILABLE' || value['availability'] === 'DOWN' || value['availability'] === 'UNREADABLE') &&
+    typeof value['reason_code'] === 'string' &&
+    typeof value['detail'] === 'string' &&
+    isInt64Ms(value['observed_at_ms']);
+}
+
+function isCockpitBlocker(value: unknown): boolean {
+  return isRecord(value) &&
+    isRecord(value['condition']) && typeof value['condition']['id'] === 'string' &&
+    typeof value['disposition'] === 'string' && typeof value['headline'] === 'string';
 }
 
 function isEffectivePosture(value: unknown): value is AccountEffectivePosture {

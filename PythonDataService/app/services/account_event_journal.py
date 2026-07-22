@@ -98,6 +98,11 @@ _EVENT_PRESENTATION: dict[str, tuple[AccountEventKind, str | None, str]] = {
         None,
         "Account service generation recorded.",
     ),
+    "account_clerk_restore_completed": (
+        "clerk",
+        "Account Clerk restore completed.",
+        "The host daemon restored the sole Account Clerk and the cockpit re-observed its generation.",
+    ),
     "account_observation_lease_verified": (
         "reconciliation",
         "Account verification is current.",

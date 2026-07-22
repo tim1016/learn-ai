@@ -84,6 +84,12 @@ function makeDirectoryStore(rows: readonly AccountRosterRow[] = []) {
     serviceStatusErrorMessage: signal<string | null>(null),
     serviceStatusHasLastGood: signal(false),
     serviceStatusShowingStaleLastGood: signal(false),
+    cockpit: signal({
+      mode: 'NORMAL',
+      clerk: { headline: 'Ready — no bots on duty', detail: 'Backend-authored posture.', generation: null, phase: null },
+      daemon: { availability: 'AVAILABLE', observed_at_ms: 1_780_000_000_000 },
+      blockers: [],
+    }),
   };
 }
 
@@ -111,11 +117,13 @@ function makeRecoveryStore() {
   return {
     load: vi.fn(),
     requestDeclaredMove: vi.fn(),
+    requestCockpitMove: vi.fn(),
     requestAutomationChange: vi.fn(),
     requestJournalCure: vi.fn(),
     requestLegacyRetirement: vi.fn(),
     refreshLegacyCandidates: vi.fn(),
     setExposureOverrideReason: vi.fn(),
+    setConfirmationToken: vi.fn(),
     cancelConfirmation: vi.fn(),
     confirm: vi.fn(),
     confirmation: signal(null),

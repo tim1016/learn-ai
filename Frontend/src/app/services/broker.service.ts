@@ -21,6 +21,11 @@ import type {
   AccountTriageResponse,
 } from '../api/account-reconciliation.types';
 import type { AccountsRosterResponse, AccountServiceStatusResponse } from '../api/account-directory.types';
+import type {
+  AccountClerkRestoreReceipt,
+  AccountClerkRestoreRequest,
+  AccountCockpitResponse,
+} from '../api/account-cockpit.types';
 import type { AccountEventsRequest, AccountEventsResponse } from '../api/account-events.types';
 import type {
   AccountTruthResponse,
@@ -181,6 +186,26 @@ export class BrokerService {
     return firstValueFrom(
       this.http.get<AccountServiceStatusResponse>(
         `${this.accountsBase}/${encodeURIComponent(accountId)}/clerk`,
+      ),
+    );
+  }
+
+  accountCockpit(accountId: string): Promise<AccountCockpitResponse> {
+    return firstValueFrom(
+      this.http.get<AccountCockpitResponse>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/cockpit`,
+      ),
+    );
+  }
+
+  restoreAccountClerk(
+    accountId: string,
+    payload: AccountClerkRestoreRequest,
+  ): Promise<AccountClerkRestoreReceipt> {
+    return firstValueFrom(
+      this.http.post<AccountClerkRestoreReceipt>(
+        `${this.accountsBase}/${encodeURIComponent(accountId)}/clerk/restore`,
+        payload,
       ),
     );
   }

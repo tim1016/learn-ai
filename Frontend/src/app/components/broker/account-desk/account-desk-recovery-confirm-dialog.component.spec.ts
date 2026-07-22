@@ -9,7 +9,7 @@ describe('AccountDeskRecoveryConfirmDialogComponent', () => {
       inputs: {
         confirmation: {
           command: 'exposure_override', accountId: 'DU1234567', title: 'Accept account exposure', body: 'Backend body.',
-          consequence: 'Backend consequence.', confirmLabel: 'Accept exposure', requiredToken: '', providedToken: '', desiredAutomationEnabled: null, reason: '', journalCure: null, legacyCandidate: null, recoveryFlatten: null, emergencyOperationId: null,
+          consequence: 'Backend consequence.', confirmLabel: 'Accept exposure', requiredToken: '', providedToken: '', desiredAutomationEnabled: null, reason: '', journalCure: null, legacyCandidate: null, recoveryFlatten: null, emergencyOperationId: null, restoreOperationId: null,
         },
         busy: false,
         errorMessage: null,
@@ -39,7 +39,7 @@ describe('AccountDeskRecoveryConfirmDialogComponent', () => {
       inputs: {
         confirmation: {
           command: 'reconcile', accountId: 'DU1234567', title: 'Run account reconciliation', body: 'Backend body.',
-          consequence: 'Backend consequence.', confirmLabel: 'Run account reconcile', requiredToken: '', providedToken: '', desiredAutomationEnabled: null, reason: '', journalCure: null, legacyCandidate: null, recoveryFlatten: null, emergencyOperationId: null,
+          consequence: 'Backend consequence.', confirmLabel: 'Run account reconcile', requiredToken: '', providedToken: '', desiredAutomationEnabled: null, reason: '', journalCure: null, legacyCandidate: null, recoveryFlatten: null, emergencyOperationId: null, restoreOperationId: null,
         },
         busy: false,
         errorMessage: null,
@@ -60,7 +60,7 @@ describe('AccountDeskRecoveryConfirmDialogComponent', () => {
       inputs: {
         confirmation: {
           command: 'reconcile', accountId: 'DU1234567', title: 'Run account reconciliation', body: 'Backend body.',
-          consequence: 'Backend consequence.', confirmLabel: 'Run account reconcile', requiredToken: 'HALT', providedToken: 'HALT', desiredAutomationEnabled: null, reason: '', journalCure: null, legacyCandidate: null, recoveryFlatten: null, emergencyOperationId: null,
+          consequence: 'Backend consequence.', confirmLabel: 'Run account reconcile', requiredToken: 'HALT', providedToken: 'HALT', desiredAutomationEnabled: null, reason: '', journalCure: null, legacyCandidate: null, recoveryFlatten: null, emergencyOperationId: null, restoreOperationId: null,
         },
         busy: false,
         errorMessage: null,

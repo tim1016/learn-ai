@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -1698,6 +1700,232 @@ async def test_account_service_status_endpoint_projects_corrupt_s5_session_evide
     assert response.status_code == 409
     assert response.json()["detail"]["reason_code"] == "ACCOUNT_SERVICE_ARTIFACT_CORRUPT"
     assert evidence.read_text(encoding="utf-8") == "{not valid json"
+
+
+async def test_account_cockpit_projects_restore_clerk_only_when_daemon_is_available(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Degraded-mode choices are backend-authored, not inferred by Angular."""
+
+    from app.engine.live import host_daemon_client
+    from app.main import app
+
+    service = AccountDirectoryService(
+        artifacts_root=tmp_path,
+        current_account=CurrentBrokerAccount(account_id="DU1234567", is_paper=True),
+        now_ms=lambda: 1_780_000_000_000,
+    )
+
+    async def daemon_is_reachable() -> tuple[DaemonResult, object]:
+        return DaemonResult.connected(), object()
+
+    monkeypatch.setattr(host_daemon_client, "fetch_health", lambda _url: daemon_is_reachable())
+    app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            clerk_down = await client.get("/api/accounts/DU1234567/cockpit")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert clerk_down.status_code == 200
+    assert clerk_down.json()["mode"] == "CLERK_DOWN"
+    assert clerk_down.json()["blockers"] == [
+        {
+            "condition": {
+                "id": "ACCOUNT_CLERK_UNAVAILABLE",
+                "severity": "blocking",
+                "scope": "account",
+                "evidence": {},
+            },
+            "host": "account_desk",
+            "anchor": {"kind": "surface", "subject_key": None},
+            "audience": "both",
+            "disposition": "fix_here",
+            "headline": "Account Clerk is unavailable",
+            "detail": "Restore the Clerk through the host daemon. No bypass broker writer is available.",
+            "primary_move": {
+                "label": "Restore Clerk",
+                "action": {"kind": "confirm_in_form", "anchor": "account-clerk-restore-action"},
+                "target": None,
+                "confirmation": {
+                    "title": "Restore Account Clerk",
+                    "body": "Ask the host daemon to restore the sole Account Clerk for this account.",
+                    "consequence": "The daemon records a new Clerk generation if it must replace the process. The cockpit will re-observe account evidence after the restore.",
+                    "confirm_label": "Restore Clerk",
+                    "required_token": "RESTORE",
+                },
+            },
+            "secondary_moves": [],
+            "applies_to": "both",
+        }
+    ]
+
+    async def daemon_is_down() -> tuple[DaemonResult, None]:
+        return DaemonResult(kind="UNREACHABLE", detail="connection refused", error_category="connect_error"), None
+
+    monkeypatch.setattr(host_daemon_client, "fetch_health", lambda _url: daemon_is_down())
+    app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            daemon_down = await client.get("/api/accounts/DU1234567/cockpit")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert daemon_down.status_code == 200
+    assert daemon_down.json()["mode"] == "DAEMON_DOWN"
+    [blocker] = daemon_down.json()["blockers"]
+    assert blocker["condition"]["id"] == "DAEMON_UNREACHABLE"
+    assert blocker["primary_move"]["label"] == "Open host recovery guidance"
+    assert "restart" not in blocker["primary_move"]["label"].lower()
+
+
+async def test_restore_account_clerk_writes_a_durable_receipt_and_reobserves_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live import host_daemon_client
+    from app.main import app
+
+    account_id = "DU1234567"
+    service = AccountDirectoryService(
+        artifacts_root=tmp_path,
+        current_account=CurrentBrokerAccount(account_id=account_id, is_paper=True),
+        now_ms=lambda: 1_780_000_000_000,
+    )
+    ensure_calls = 0
+
+    async def ensure_clerk(_base_url: str, restored_account_id: str) -> dict:
+        nonlocal ensure_calls
+        assert restored_account_id == account_id
+        ensure_calls += 1
+        generation = advance_account_clerk_generation(
+            tmp_path,
+            account_id,
+            phase="accepting",
+            recorded_at_ms=1_780_000_000_000,
+            source="test.restore",
+        )
+        write_account_clerk_lease(
+            tmp_path,
+            AccountClerkLease(
+                account_id=account_id,
+                generation=generation.generation,
+                pid=42,
+                ibkr_client_id=90,
+                status="RUNNING",
+                started_at_ms=1_780_000_000_000,
+                renewed_at_ms=1_780_000_000_000,
+                valid_until_ms=1_780_000_060_000,
+            ),
+        )
+        return {}
+
+    monkeypatch.setattr(host_daemon_client, "ensure_account_clerk", ensure_clerk)
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(
+                f"/api/accounts/{account_id}/clerk/restore",
+                json={"confirmation_token": "RESTORE", "idempotency_key": "restore-1"},
+            )
+            retry = await client.post(
+                f"/api/accounts/{account_id}/clerk/restore",
+                json={"confirmation_token": "RESTORE", "idempotency_key": "restore-1"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["receipt_id"] == "account-clerk-restore:restore-1"
+    assert response.json()["clerk_generation"] == 1
+    assert retry.status_code == 200
+    assert retry.json() == response.json()
+    assert ensure_calls == 1
+    events = read_account_events(tmp_path, account_id)
+    event = events[-1]
+    assert event["event_type"] == "account_clerk_restore_completed"
+    assert event["receipt_id"] == "account-clerk-restore:restore-1"
+    assert sum(event.get("receipt_id") == "account-clerk-restore:restore-1" for event in events) == 1
+
+
+async def test_restore_account_clerk_concurrent_duplicate_never_repeats_the_daemon_action(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.engine.live import host_daemon_client
+    from app.main import app
+
+    account_id = "DU1234567"
+    service = AccountDirectoryService(
+        artifacts_root=tmp_path,
+        current_account=CurrentBrokerAccount(account_id=account_id, is_paper=True),
+        now_ms=lambda: 1_780_000_000_000,
+    )
+    started = threading.Event()
+    release = threading.Event()
+    ensure_calls = 0
+
+    async def ensure_clerk(_base_url: str, restored_account_id: str) -> dict:
+        nonlocal ensure_calls
+        assert restored_account_id == account_id
+        ensure_calls += 1
+        started.set()
+        await asyncio.to_thread(release.wait)
+        generation = advance_account_clerk_generation(
+            tmp_path,
+            account_id,
+            phase="accepting",
+            recorded_at_ms=1_780_000_000_000,
+            source="test.restore.concurrent",
+        )
+        write_account_clerk_lease(
+            tmp_path,
+            AccountClerkLease(
+                account_id=account_id,
+                generation=generation.generation,
+                pid=42,
+                ibkr_client_id=90,
+                status="RUNNING",
+                started_at_ms=1_780_000_000_000,
+                renewed_at_ms=1_780_000_000_000,
+                valid_until_ms=1_780_000_060_000,
+            ),
+        )
+        return {}
+
+    monkeypatch.setattr(host_daemon_client, "ensure_account_clerk", ensure_clerk)
+    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
+    app.dependency_overrides[account_reconciliation.get_account_directory_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            first = asyncio.create_task(
+                client.post(
+                    f"/api/accounts/{account_id}/clerk/restore",
+                    json={"confirmation_token": "RESTORE", "idempotency_key": "restore-concurrent-1"},
+                )
+            )
+            await asyncio.to_thread(started.wait)
+            concurrent = await client.post(
+                f"/api/accounts/{account_id}/clerk/restore",
+                json={"confirmation_token": "RESTORE", "idempotency_key": "restore-concurrent-1"},
+            )
+            release.set()
+            completed = await first
+            retry = await client.post(
+                f"/api/accounts/{account_id}/clerk/restore",
+                json={"confirmation_token": "RESTORE", "idempotency_key": "restore-concurrent-1"},
+            )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert concurrent.status_code == 409
+    assert concurrent.json()["detail"]["reason_code"] == "IDEMPOTENCY_OUTCOME_UNKNOWN"
+    assert completed.status_code == 200
+    assert retry.status_code == 200
+    assert retry.json() == completed.json()
+    assert ensure_calls == 1
 
 
 async def test_account_session_policy_endpoint_persists_explicit_outside_session_override(

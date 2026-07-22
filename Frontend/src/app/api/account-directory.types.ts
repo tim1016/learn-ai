@@ -8,6 +8,11 @@ export type AccountServicePhase = 'accepting' | 'reconnecting' | 'draining' | 'f
 export type AccountServiceOperatingState = 'READY' | 'STANDBY' | 'ATTENTION';
 export type AccountBindingLedgerReadAuthority = 'legacy_registry' | 'clerk_ledger';
 export type AccountBindingLedgerParityState = 'clean' | 'dirty';
+export type AccountGatePromotionState =
+  | 'SAFE_DEFAULT'
+  | 'WAITING_FOR_SHADOW_PARITY'
+  | 'WAITING_FOR_CLERK_RESTART_SMOKE'
+  | 'CLERK_PROOF_ACTIVE';
 
 export interface AccountServiceSummary {
   readonly attachment: AccountServiceAttachment;
@@ -60,8 +65,35 @@ export interface AccountServiceJournalWatermark {
   readonly last_write_ms: number | null;
 }
 
+export interface AccountServiceGateResult {
+  readonly gate_id: string;
+  readonly status: 'pass' | 'block' | 'freeze';
+  readonly source: string;
+  readonly operator_reason: string;
+  readonly operator_next_step: string;
+  readonly evidence_at_ms: number | null;
+}
+
+export interface AccountServiceGateAuthority {
+  readonly requested_authority: 'account_truth' | 'observation_lease';
+  readonly effective_authority: 'account_truth' | 'observation_lease';
+  readonly promotion_state: AccountGatePromotionState;
+  readonly reason_code: string;
+  readonly disposition: string | null;
+  readonly action_authority: 'account_truth' | 'observation_lease';
+  readonly action_gate: AccountServiceGateResult;
+  readonly observed_session_dates: readonly string[];
+  readonly lease_weaker_comparison_count: number;
+  readonly restart_smoke_recorded_at_ms: number | null;
+}
+
+export interface AccountServiceSessionPolicy {
+  readonly allow_outside_live_session: boolean;
+  readonly gate_result: AccountServiceGateResult;
+}
+
 export interface AccountServiceStatusResponse {
-  readonly schema_version: 2;
+  readonly schema_version: 3;
   readonly account_id: string;
   readonly attachment: AccountServiceAttachment;
   readonly phase: AccountServicePhase | null;
@@ -69,6 +101,8 @@ export interface AccountServiceStatusResponse {
   readonly generation_recorded_at_ms: number | null;
   readonly source: string | null;
   readonly binding: AccountServiceBinding;
+  readonly gate_authority: AccountServiceGateAuthority;
+  readonly session_policy: AccountServiceSessionPolicy;
   readonly lease: AccountServiceLease | null;
   readonly journal: AccountServiceJournalWatermark;
   readonly operating_state: AccountServiceOperatingState;

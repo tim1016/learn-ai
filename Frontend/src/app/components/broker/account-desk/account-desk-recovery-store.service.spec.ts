@@ -9,10 +9,12 @@ import type {
   JournalCurePreview,
   LegacyStaleClaimCandidate,
 } from '../../../api/account-reconciliation.types';
+import type { AccountCockpitResponse } from '../../../api/account-cockpit.types';
 import type { OperatorBlockerMoveEvent } from '../shared/operator-blocker-list/operator-blocker-list.component';
 import { BrokerService } from '../../../services/broker.service';
 import { makeCleanAccountTriage } from '../testing/account-triage-fixtures';
 import { AccountDeskEventsStore } from './account-desk-events-store.service';
+import { AccountDeskDirectoryStore } from './account-desk-directory-store.service';
 import { AccountDeskRecoveryStore } from './account-desk-recovery-store.service';
 import { AccountDeskSurfaceStore } from './account-desk-surface-store.service';
 
@@ -28,9 +30,11 @@ describe('AccountDeskRecoveryStore', () => {
     retireLegacyStaleClaim: vi.fn(),
     submitOperatorRecoveryFlatten: vi.fn(),
     emergencyFlattenAccount: vi.fn(),
+    restoreAccountClerk: vi.fn(),
   };
   const surface = { load: vi.fn(), triage: signal<AccountTriageResponse | null>(null) };
   const events = { load: vi.fn() };
+  const directory = { cockpit: signal<AccountCockpitResponse | null>(null), loadServiceStatus: vi.fn() };
 
   beforeEach(() => {
     Object.values(broker).forEach((method) => method.mockReset());
@@ -38,6 +42,8 @@ describe('AccountDeskRecoveryStore', () => {
     surface.load.mockReset().mockResolvedValue(undefined);
     surface.triage = signal(null);
     events.load.mockReset().mockResolvedValue(undefined);
+    directory.cockpit = signal(null);
+    directory.loadServiceStatus.mockReset().mockResolvedValue(undefined);
     TestBed.configureTestingModule({
       providers: [
         provideZonelessChangeDetection(),
@@ -45,6 +51,7 @@ describe('AccountDeskRecoveryStore', () => {
         { provide: BrokerService, useValue: broker },
         { provide: AccountDeskSurfaceStore, useValue: surface },
         { provide: AccountDeskEventsStore, useValue: events },
+        { provide: AccountDeskDirectoryStore, useValue: directory },
       ],
     });
   });
@@ -172,6 +179,34 @@ describe('AccountDeskRecoveryStore', () => {
     await store.confirm();
 
     expect(broker.reconcileAccount).toHaveBeenCalledWith('DU1234567');
+  });
+
+  it('restores only the backend-declared Clerk card with its typed token, durable receipt, and re-observation', async () => {
+    const cockpit = restoreCockpit();
+    directory.cockpit.set(cockpit);
+    broker.restoreAccountClerk.mockResolvedValue({
+      schema_version: 1, receipt_id: 'account-clerk-restore:opaque/1', account_id: 'DU1234567',
+      clerk_generation: 3, recorded_at_ms: 1_780_000_000_000,
+    });
+    const store = TestBed.inject(AccountDeskRecoveryStore);
+    store.load('DU1234567');
+    const [blocker] = cockpit.blockers;
+    if (blocker.primary_move === null) throw new Error('Expected the backend restore move.');
+
+    store.requestCockpitMove({ blocker, move: blocker.primary_move });
+    expect(store.confirmation()?.command).toBe('restore_clerk');
+    await store.confirm();
+    expect(broker.restoreAccountClerk).not.toHaveBeenCalled();
+
+    store.setConfirmationToken('RESTORE');
+    await store.confirm();
+
+    expect(broker.restoreAccountClerk).toHaveBeenCalledWith('DU1234567', {
+      confirmation_token: 'RESTORE',
+      idempotency_key: expect.any(String),
+    });
+    expect(store.success()?.kind).toBe('restore_clerk');
+    expect(directory.loadServiceStatus).toHaveBeenCalledWith('DU1234567');
   });
 
   it('confirms the exact fresh journal preview, preserves its receipt, and refreshes shared proof', async () => {
@@ -307,6 +342,58 @@ function move(anchor: string, target: string | null = null, requiredToken = ''):
         title: 'Backend authored title', body: 'Backend authored body', consequence: 'Backend authored consequence', confirm_label: 'Confirm', required_token: requiredToken,
       },
     },
+  };
+}
+
+function restoreCockpit(): AccountCockpitResponse {
+  const confirmation = {
+    title: 'Restore Account Clerk', body: 'Backend preview.', consequence: 'Backend consequence.',
+    confirm_label: 'Restore Clerk', required_token: 'RESTORE',
+  };
+  return {
+    schema_version: 1,
+    account_id: 'DU1234567',
+    generated_at_ms: 1_780_000_000_000,
+    mode: 'CLERK_DOWN',
+    clerk: {
+      schema_version: 3, account_id: 'DU1234567', attachment: 'UNATTACHED', phase: null, generation: null,
+      generation_recorded_at_ms: null, source: null,
+      binding: {
+        state: 'UNATTACHED', generation: null, lease_generation: null, pending_retirement_proposals: 0,
+        ledger_read_authority: 'legacy_registry', ledger_parity: 'clean', ledger_parity_issue_count: 0,
+      },
+      gate_authority: {
+        requested_authority: 'account_truth', effective_authority: 'account_truth', promotion_state: 'SAFE_DEFAULT',
+        reason_code: 'ACCOUNT_GATE_SAFE_DEFAULT', disposition: null, action_authority: 'account_truth',
+        action_gate: {
+          gate_id: 'account.account_truth', status: 'block', source: 'test', operator_reason: 'ACCOUNT_TRUTH_NOT_AVAILABLE',
+          operator_next_step: 'Refresh Account Truth.', evidence_at_ms: 1_780_000_000_000,
+        }, observed_session_dates: [], lease_weaker_comparison_count: 0, restart_smoke_recorded_at_ms: null,
+      },
+      session_policy: {
+        allow_outside_live_session: false,
+        gate_result: {
+          gate_id: 'account.live_session', status: 'block', source: 'test', operator_reason: 'OUTSIDE_LIVE_TRADABLE_SESSION',
+          operator_next_step: 'Wait for a live session.', evidence_at_ms: 1_780_000_000_000,
+        },
+      },
+      lease: null, journal: { last_seq: null, last_write_ms: null }, operating_state: 'ATTENTION',
+      headline: 'Account Clerk is unavailable', detail: 'Backend-authored posture.',
+    },
+    daemon: {
+      availability: 'AVAILABLE', reason_code: 'DAEMON_CONNECTED', detail: 'The host daemon is reachable.',
+      observed_at_ms: 1_780_000_000_000,
+    },
+    blockers: [{
+      condition: { id: 'ACCOUNT_CLERK_UNAVAILABLE', severity: 'blocking', scope: 'account', evidence: {} },
+      host: 'account_desk', anchor: { kind: 'surface', subject_key: null }, audience: 'both',
+      disposition: 'fix_here', headline: 'Account Clerk is unavailable', detail: 'Backend-authored guidance.',
+      primary_move: {
+        label: 'Restore Clerk', action: { kind: 'confirm_in_form', anchor: 'account-clerk-restore-action' },
+        target: null, confirmation,
+      },
+      secondary_moves: [], applies_to: 'both',
+    }],
   };
 }
 

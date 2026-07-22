@@ -222,12 +222,23 @@ class DaemonCommandIdempotencyService:
         account_id: str | None,
         semantic_payload: dict[str, object],
         invoke: Callable[[], DaemonCommandOutcome],
+        enforcement_enabled: bool | None = None,
     ) -> DaemonCommandOutcome:
-        """Run once, replay once, or fail closed without repeating effects."""
+        """Run once, replay once, or fail closed without repeating effects.
+
+        Callers normally inherit the account-scoped rollout flag.  A local
+        control-plane command may explicitly require enforcement when it is
+        itself the durable recovery boundary; that must not be coupled to the
+        host daemon's staged rollout configuration.
+        """
 
         key = validate_idempotency_key(idempotency_key)
         request_sha256 = canonical_request_sha256(command, account_id, semantic_payload)
-        enforcement_enabled = daemon_command_enforcement_enabled(account_id)
+        effective_enforcement = (
+            daemon_command_enforcement_enabled(account_id)
+            if enforcement_enabled is None
+            else enforcement_enabled
+        )
         with self._lock_for(key):
             try:
                 prepared = self._repo.prepare(
@@ -235,7 +246,7 @@ class DaemonCommandIdempotencyService:
                     command=command,
                     request_sha256=request_sha256,
                     account_id=account_id,
-                    enforcement_enabled=enforcement_enabled,
+                    enforcement_enabled=effective_enforcement,
                     now_ms=self._now_ms(),
                 )
             except (OSError, DaemonCommandRecordCorruptError) as exc:
@@ -246,7 +257,7 @@ class DaemonCommandIdempotencyService:
                 conflict = _key_reuse_conflict(prepared.record, command, account_id, request_sha256)
                 if conflict is not None:
                     return conflict
-                if enforcement_enabled:
+                if effective_enforcement:
                     return _enforced_duplicate_outcome(prepared.record, key)
                 logger.warning(
                     "daemon command idempotency duplicate observed in shadow mode",
