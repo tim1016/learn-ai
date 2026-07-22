@@ -82,7 +82,7 @@ from app.services.account_gate_policy import AccountGatePolicyService
 from app.services.account_gate_promotion import AccountGatePromotionError
 from app.services.account_reconciliation import AccountReconciliationService
 from app.services.account_truth_refresh import account_truth_artifacts_root, refresh_account_truth_now
-from app.services.journal_cures import JournalCureError, JournalCureService
+from app.services.journal_cures import JournalCureService
 from app.services.journal_recovery import JournalRecoveryError, JournalRecoveryService
 from app.services.legacy_stale_claim_retirement import (
     LegacyStaleClaimRetirementError,
@@ -619,27 +619,26 @@ async def retire_legacy_stale_claim_endpoint(
 async def apply_journal_cure_endpoint(
     account_id: str,
     request: JournalCureRequest,
-    artifacts_root: AccountArtifactsRoot,
 ) -> JournalCureReceipt:
-    """Append a claim-reducing cure only after the account Clerk is healthy."""
+    """Append a claim-reducing cure through the host daemon's host-local Clerk RPC.
+
+    The Clerk's Unix socket lives on the host and cannot be reached from this
+    container across the podman VM boundary, so the cure RPC is delegated to the
+    daemon rather than opened here. The daemon authors the Clerk-rejection status
+    and reason_code, which propagate back verbatim.
+    """
 
     canonical_account_id = _canonical_account_id(account_id)
+    settings = get_settings()
     try:
-        settings = get_settings()
-        await host_daemon_client.ensure_account_clerk(settings.live_runner_daemon_url, canonical_account_id)
-        return await AccountClerkRpcClient(
-            artifacts_root=artifacts_root,
-            account_id=canonical_account_id,
-        ).apply_operator_adjustment(request)
-    except JournalCureError as exc:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={"reason_code": exc.reason_code, "message": exc.detail},
-        ) from exc
+        body = await host_daemon_client.apply_operator_adjustment(
+            settings.live_runner_daemon_url,
+            canonical_account_id,
+            request.model_dump(mode="json"),
+        )
+        return JournalCureReceipt.model_validate(body)
     except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
         raise _outcome_unknown_http_error(exc) from exc
-    except AccountClerkRpcError as exc:
-        raise _clerk_rpc_http_error(exc) from exc
     except host_daemon_client.HostDaemonError as exc:
         raise HTTPException(exc.status_code, detail=exc.detail) from exc
 

@@ -109,6 +109,7 @@ from app.engine.live.lifecycle_exit_finalizer import (
 from app.engine.live.run_ledger import LiveRunStartDefaults
 from app.engine.strategy.spec.schema import load_spec_from_path
 from app.schemas.broker_session import GatewaySocketsSnapshot
+from app.schemas.journal_cures import JournalCureReceipt, JournalCureRequest
 from app.schemas.live_runs import (
     AccountClerkHealth,
     AccountEmergencyFlattenDispatchRequest,
@@ -2632,6 +2633,42 @@ def create_app(
                 },
             ) from exc
         return process_manager.health()
+
+    @app.post(
+        "/accounts/{account_id}/clerk/operator-adjustment",
+        response_model=JournalCureReceipt,
+        dependencies=auth,
+    )
+    async def apply_account_operator_adjustment(
+        account_id: str,
+        request: JournalCureRequest,
+    ) -> JournalCureReceipt:
+        """Forward one operator claim-cure to the host-local Clerk RPC.
+
+        The Clerk's Unix-domain socket lives on the host and is unreachable from
+        the data-plane container across the podman VM boundary, so the cure RPC
+        must run here. The data-plane journal-cure endpoint delegates to this
+        route instead of opening the socket itself.
+        """
+
+        try:
+            await run_in_threadpool(process_manager._ensure_account_clerk, account_id)
+            return await AccountClerkRpcClient(
+                artifacts_root=process_manager.artifacts_root,
+                account_id=account_id,
+            ).apply_operator_adjustment(request)
+        except HostRunnerError as exc:
+            raise HTTPException(exc.status_code, detail=exc.detail) from exc
+        except AccountClerkRpcError as exc:
+            unavailable = exc.reason_code.startswith("ACCOUNT_CLERK_UNAVAILABLE:")
+            reason_code = exc.reason if isinstance(exc, AccountClerkRpcRejectedError) else exc.reason_code
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE if unavailable else status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": reason_code,
+                    "message": "Clerk rejected or could not complete the request.",
+                },
+            ) from exc
 
     @app.post("/accounts/{account_id}/clerk/release", response_model=HostRunnerHealth, dependencies=auth)
     async def release_account_clerk(account_id: str) -> HostRunnerHealth:

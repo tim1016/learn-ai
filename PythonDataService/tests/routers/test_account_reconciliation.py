@@ -19,7 +19,6 @@ from app.broker.ibkr.account_truth import compose_account_truth
 from app.broker.ibkr.models import (
     IbkrAccountSummary,
     IbkrConnectionHealth,
-    IbkrOrderEvent,
     IbkrPositionsSnapshot,
 )
 from app.engine.live.account_artifacts import (
@@ -40,7 +39,6 @@ from app.engine.live.account_clerk_journal import (
     AccountClerkRecoveryFlattenReceipt,
     account_clerk_journal_path,
 )
-from app.engine.live.account_clerk_rpc import AccountClerkRpcRejectedError, AccountClerkRpcRequestIdentity
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
@@ -53,7 +51,6 @@ from app.engine.live.journal_recovery_state import journal_recovery_state_path
 from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidecarRepo, stable_live_state_path
 from app.engine.live.run_ledger import LiveRunLedger, write_ledger
 from app.routers import account_reconciliation
-from app.schemas.journal_cures import JournalCureReceipt, JournalCureRequest
 from app.schemas.live_runs import HostRunnerProcessState, HostRunnerProcessStatus
 from app.services.account_directory import AccountDirectoryService, CurrentBrokerAccount
 from app.services.account_event_journal import AccountEventJournalService
@@ -881,134 +878,85 @@ async def test_false_crash_backfill_endpoint_repairs_disproven_registry_row(
     assert repaired.source == "host_daemon.process_halted"
 
 
-async def test_journal_cure_endpoint_ensures_clerk_before_appending_adjustment(
-    tmp_path: Path,
+async def test_journal_cure_endpoint_delegates_to_daemon_and_returns_receipt(
     monkeypatch,
 ) -> None:
+    """The cure RPC is host-local; the container forwards it to the daemon."""
+
     from app.main import app
 
     namespace = "learn-ai/bot-a/v1"
-    intent = AccountOwnerSubmitIntent(
-        trace_id="trace-cure-route",
-        account_id="DU1234567",
-        strategy_instance_id="bot-a",
-        run_id="run-a",
-        bot_order_namespace=namespace,
-        intent_id="intent-cure-route",
-        order_ref=f"{namespace}:intent-cure-route",
-        intent_kind="ORDER",
-        order_spec={},
-        owner_generation=1,
-        created_at_ms=100,
-    )
-    journal = AccountClerkJournal(artifacts_root=tmp_path, account_id="DU1234567", now_ms=lambda: 100)
-    journal.record_intent(intent, validate_intent=lambda _: None)
-    journal.record_broker_event(
-        IbkrOrderEvent(
-            account_id="DU1234567",
-            order_id=1,
-            event_type="fill",
-            order_ref=intent.order_ref,
-            symbol="SPY",
-            side="BUY",
-            fill_quantity=1,
-            exec_id="cure-route-fill",
-            ts_ms=100,
+    forwarded: list[tuple[str, dict]] = []
+
+    async def _apply(_base_url: str, account_id: str, payload: dict) -> dict:
+        forwarded.append((account_id, payload))
+        return {
+            "schema_version": 1,
+            "account_id": account_id,
+            "bot_order_namespace": payload["bot_order_namespace"],
+            "symbol": payload["symbol"],
+            "signed_quantity": payload["signed_quantity"],
+            "operator_attribution": "local-operator",
+            "request_provenance": payload["request_provenance"],
+            "reason": payload["reason"],
+            "evidence_refs": payload["evidence_refs"],
+            "idempotency_key": payload["idempotency_key"],
+            "recorded_at_ms": 101,
+            "journal_seq": 3,
+        }
+
+    monkeypatch.setattr(account_reconciliation.host_daemon_client, "apply_operator_adjustment", _apply)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/accounts/DU1234567/journal-cures",
+            json={
+                "bot_order_namespace": namespace,
+                "symbol": "SPY",
+                "signed_quantity": -1,
+                "reason": "operator verified stale claim",
+                "evidence_refs": ["account-reconciliation:receipt-1"],
+                "request_provenance": "account-monitor/cure",
+                "idempotency_key": "cure-route-1",
+            },
         )
-    )
-    ensured: list[str] = []
-
-    async def _ensure_clerk(_base_url: str, account_id: str) -> dict:
-        ensured.append(account_id)
-        return {}
-
-    class FakeRpcClient:
-        def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
-            assert artifacts_root == tmp_path
-            assert account_id == "DU1234567"
-
-        async def apply_operator_adjustment(self, request: JournalCureRequest) -> JournalCureReceipt:
-            assert request.idempotency_key == "cure-route-1"
-            return JournalCureReceipt(
-                account_id="DU1234567",
-                bot_order_namespace=namespace,
-                symbol="SPY",
-                signed_quantity=-1,
-                request_provenance=request.request_provenance,
-                reason=request.reason,
-                evidence_refs=request.evidence_refs,
-                idempotency_key=request.idempotency_key,
-                recorded_at_ms=101,
-                journal_seq=3,
-            )
-
-    monkeypatch.setattr(account_reconciliation.host_daemon_client, "ensure_account_clerk", _ensure_clerk)
-    monkeypatch.setattr(account_reconciliation, "AccountClerkRpcClient", FakeRpcClient)
-    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(
-                "/api/accounts/DU1234567/journal-cures",
-                json={
-                    "bot_order_namespace": namespace,
-                    "symbol": "SPY",
-                    "signed_quantity": -1,
-                    "reason": "operator verified stale claim",
-                    "evidence_refs": ["account-reconciliation:receipt-1"],
-                    "request_provenance": "account-monitor/cure",
-                    "idempotency_key": "cure-route-1",
-                },
-            )
-    finally:
-        app.dependency_overrides.clear()
 
     assert response.status_code == 201
-    assert ensured == ["DU1234567"]
     assert response.json()["signed_quantity"] == -1
+    assert forwarded[0][0] == "DU1234567"
+    assert forwarded[0][1]["idempotency_key"] == "cure-route-1"
 
 
-async def test_journal_cure_endpoint_preserves_clerk_rejection_reason(
-    tmp_path: Path,
+async def test_journal_cure_endpoint_propagates_daemon_clerk_rejection(
     monkeypatch,
 ) -> None:
-    """An operator needs the Clerk's actionable cure rejection, not a generic code."""
+    """The daemon authors the Clerk rejection; the container surfaces it verbatim."""
 
+    from app.engine.live import host_daemon_client
     from app.main import app
 
-    async def _ensure_clerk(_base_url: str, _account_id: str) -> dict:
-        return {}
+    async def _apply(_base_url: str, _account_id: str, _payload: dict) -> dict:
+        raise host_daemon_client.HostDaemonError(
+            409,
+            {
+                "reason_code": "JOURNAL_CURE_IDEMPOTENCY_CONFLICT",
+                "message": "Clerk rejected or could not complete the request.",
+            },
+        )
 
-    class FakeRpcClient:
-        def __init__(self, *, artifacts_root: Path, account_id: str) -> None:
-            assert artifacts_root == tmp_path
-            assert account_id == "DU1234567"
-
-        async def apply_operator_adjustment(self, _request: JournalCureRequest) -> JournalCureReceipt:
-            raise AccountClerkRpcRejectedError(
-                reason="JOURNAL_CURE_IDEMPOTENCY_CONFLICT",
-                operation="operator_adjustment",
-                request_identity=AccountClerkRpcRequestIdentity(intent_id=None, order_ref=None),
-            )
-
-    monkeypatch.setattr(account_reconciliation.host_daemon_client, "ensure_account_clerk", _ensure_clerk)
-    monkeypatch.setattr(account_reconciliation, "AccountClerkRpcClient", FakeRpcClient)
-    app.dependency_overrides[account_reconciliation.get_account_artifacts_root] = lambda: tmp_path
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(
-                "/api/accounts/DU1234567/journal-cures",
-                json={
-                    "bot_order_namespace": "learn-ai/bot-a/v1",
-                    "symbol": "SPY",
-                    "signed_quantity": -1,
-                    "reason": "operator verified stale claim",
-                    "evidence_refs": ["account-reconciliation:receipt-1"],
-                    "request_provenance": "account-monitor/cure",
-                    "idempotency_key": "cure-route-1",
-                },
-            )
-    finally:
-        app.dependency_overrides.clear()
+    monkeypatch.setattr(account_reconciliation.host_daemon_client, "apply_operator_adjustment", _apply)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/accounts/DU1234567/journal-cures",
+            json={
+                "bot_order_namespace": "learn-ai/bot-a/v1",
+                "symbol": "SPY",
+                "signed_quantity": -1,
+                "reason": "operator verified stale claim",
+                "evidence_refs": ["account-reconciliation:receipt-1"],
+                "request_provenance": "account-monitor/cure",
+                "idempotency_key": "cure-route-1",
+            },
+        )
 
     assert response.status_code == 409
     assert response.json()["detail"]["reason_code"] == "JOURNAL_CURE_IDEMPOTENCY_CONFLICT"
