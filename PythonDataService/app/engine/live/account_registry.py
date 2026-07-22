@@ -23,11 +23,13 @@ from app.engine.live.account_artifacts import (
 )
 from app.engine.live.account_binding_ledger import (
     AccountBindingCommand,
+    BindingLedgerBaselineResult,
     BindingLedgerParity,
     BindingRetirementFoldResult,
     account_binding_ledger_read_enabled,
     append_binding_decision,
     append_binding_retirement_proposal,
+    baseline_binding_ledger_from_registry,
     binding_ledger_parity,
     fold_binding_retirement_proposals,
     pending_binding_retirement_proposals,
@@ -581,6 +583,29 @@ def account_binding_ledger_parity(
     )
 
 
+def baseline_account_binding_ledger(
+    artifacts_root: Path,
+    *,
+    account_id: str,
+) -> BindingLedgerBaselineResult:
+    """Complete the binding-ledger migration for a pre-existing account.
+
+    Fold the current legacy registry (the migration read authority) into the
+    command ledger so parity is clean and admission is no longer fail-closed on
+    a ledger that was never seeded.  This is an operator recovery action, not a
+    forward binding decision: it mirrors bindings the registry already records.
+    """
+
+    return baseline_binding_ledger_from_registry(
+        artifacts_root,
+        account_id=account_id,
+        legacy_bindings=(
+            binding.model_dump(mode="json")
+            for binding in _read_legacy_account_instance_registry(artifacts_root, account_id)
+        ),
+    )
+
+
 def backfill_false_crash_registry_rows(
     artifacts_root: Path,
     *,
@@ -832,10 +857,12 @@ __all__ = [
     "AccountInstanceBindingIndex",
     "AccountRegistryBootReconcileResult",
     "AccountRegistryFalseCrashBackfillResult",
+    "BindingLedgerBaselineResult",
     "BindingLedgerParity",
     "BindingRetirementFoldResult",
     "account_binding_ledger_parity",
     "backfill_false_crash_registry_rows",
+    "baseline_account_binding_ledger",
     "bot_order_namespace_for_instance",
     "compute_reconcile_namespaces",
     "crash_retired_restart_blocking_binding",

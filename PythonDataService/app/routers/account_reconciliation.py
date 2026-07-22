@@ -20,7 +20,11 @@ from app.engine.live.account_clerk_rpc import (
     AccountClerkRpcRejectedError,
 )
 from app.engine.live.account_identity import normalize_account_id
-from app.engine.live.account_registry import backfill_false_crash_registry_rows
+from app.engine.live.account_registry import (
+    account_binding_ledger_parity,
+    backfill_false_crash_registry_rows,
+    baseline_account_binding_ledger,
+)
 from app.engine.live.daemon_command_idempotency import (
     DaemonCommandIdempotencyService,
     DaemonCommandOutcome,
@@ -48,6 +52,7 @@ from app.schemas.account_reconciliation import (
     AccountSessionPolicyUpdateRequest,
     AccountSessionPolicyUpdateResponse,
     AccountTriageResponse,
+    BindingLedgerBaselineReceipt,
     LegacyStaleClaimCandidatesResponse,
     LegacyStaleClaimRetirementReceipt,
     LegacyStaleClaimRetireRequest,
@@ -399,6 +404,39 @@ async def rebaseline_account_clerk_journal_endpoint(
         raise HTTPException(status.HTTP_409_CONFLICT, detail={"reason_code": str(exc)}) from exc
     except BrokerError as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, detail={"reason_code": "JOURNAL_RECOVERY_BROKER_SNAPSHOT_UNAVAILABLE", "message": str(exc)}) from exc
+
+
+@router.post(
+    "/{account_id}/binding-ledger/baseline",
+    response_model=BindingLedgerBaselineReceipt,
+    status_code=status.HTTP_201_CREATED,
+)
+async def baseline_account_binding_ledger_endpoint(
+    account_id: str,
+    artifacts_root: AccountArtifactsRoot,
+) -> BindingLedgerBaselineReceipt:
+    """Seed the command ledger from the legacy registry to clear dirty parity.
+
+    An account whose registry rows predate the binding-command ledger stays
+    fail-closed on 'binding ledger parity is dirty' with no forward writer to
+    close the legacy-only bindings. This idempotent, non-destructive recovery
+    action folds the current registry into the ledger; it never removes rows and
+    leaves any genuine ledger-only anomaly visible.
+    """
+
+    canonical_account_id = _canonical_account_id(account_id)
+
+    def _baseline() -> BindingLedgerBaselineReceipt:
+        result = baseline_account_binding_ledger(artifacts_root, account_id=canonical_account_id)
+        parity = account_binding_ledger_parity(artifacts_root, account_id=canonical_account_id)
+        return BindingLedgerBaselineReceipt(
+            account_id=canonical_account_id,
+            baselined_instances=list(result.baselined_instances),
+            parity_clean=parity.is_clean,
+            unresolved_ledger_only_instances=list(parity.ledger_only_instances),
+        )
+
+    return await run_in_threadpool(_baseline)
 
 
 class _AccountClerkRestoreUnconfirmedError(RuntimeError):

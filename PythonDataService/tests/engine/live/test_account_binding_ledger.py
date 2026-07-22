@@ -14,6 +14,7 @@ from app.engine.live.account_binding_ledger import read_account_binding_commands
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
     account_binding_ledger_parity,
+    baseline_account_binding_ledger,
     evaluate_account_instance_binding,
     fold_account_binding_retirements,
     latest_account_instance_binding,
@@ -141,6 +142,26 @@ def test_legacy_dual_write_failure_leaves_an_observable_ledger_parity_defect(
     assert [command.entry_kind for command in read_account_binding_commands(tmp_path, ACCOUNT)] == ["decision"]
     parity = account_binding_ledger_parity(tmp_path, account_id=ACCOUNT)
     assert parity.ledger_only_instances == (binding.strategy_instance_id,)
+
+
+def test_baseline_seeds_pre_migration_legacy_bindings_and_is_idempotent(tmp_path: Path) -> None:
+    # A registry row that predates the ledger is legacy-only and keeps parity
+    # dirty forever with no forward writer. Baseline folds it into the ledger so
+    # admission is no longer fail-closed, and re-running it changes nothing.
+    write_account_instance_binding(tmp_path, _binding())
+    legacy_only = _binding(strategy_instance_id="legacy-a", run_id="run-legacy", recorded_at_ms=200)
+    registry_path = tmp_path / "accounts" / ACCOUNT / "instance_registry.jsonl"
+    with registry_path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(legacy_only.model_dump(mode="json")) + "\n")
+
+    assert not account_binding_ledger_parity(tmp_path, account_id=ACCOUNT).is_clean
+
+    result = baseline_account_binding_ledger(tmp_path, account_id=ACCOUNT)
+
+    assert result.baselined_instances == ("legacy-a",)
+    assert account_binding_ledger_parity(tmp_path, account_id=ACCOUNT).is_clean
+    assert baseline_account_binding_ledger(tmp_path, account_id=ACCOUNT).baselined_instances == ()
+    assert account_binding_ledger_parity(tmp_path, account_id=ACCOUNT).is_clean
 
 
 def test_binding_write_rejects_a_completed_ledger_decision_without_legacy_projection(

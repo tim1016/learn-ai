@@ -2329,19 +2329,34 @@ async def test_start_blocks_when_restart_intensity_freezes_account(
         ),
         encoding="utf-8",
     )
-    for index, recorded_at_ms in enumerate((fixed_now_ms - 20_000, fixed_now_ms - 10_000), start=1):
+    # Restart intensity is one bot restarted repeatedly, not distinct bots each
+    # starting once. Churn spy_ema_paper twice (activate then retire) so the run
+    # under test is its third activation in the window and breaches the gate.
+    for index, active_ms in enumerate((fixed_now_ms - 30_000, fixed_now_ms - 20_000), start=1):
         write_account_instance_binding(
             manager.artifacts_root,
             AccountInstanceBinding(
                 account_id="DU111",
-                strategy_instance_id=f"prior-{index}",
+                strategy_instance_id="spy_ema_paper",
                 run_id=f"prior-run-{index}",
-                bot_order_namespace=bot_order_namespace_for_instance(f"prior-{index}"),
+                bot_order_namespace=bot_order_namespace_for_instance("spy_ema_paper"),
                 lifecycle_state="ACTIVE",
-                recorded_at_ms=recorded_at_ms,
+                recorded_at_ms=active_ms,
                 source="test",
             ),
-    )
+        )
+        write_account_instance_binding(
+            manager.artifacts_root,
+            AccountInstanceBinding(
+                account_id="DU111",
+                strategy_instance_id="spy_ema_paper",
+                run_id=f"prior-run-{index}",
+                bot_order_namespace=bot_order_namespace_for_instance("spy_ema_paper"),
+                lifecycle_state="RETIRED",
+                recorded_at_ms=active_ms + 1_000,
+                source="test",
+            ),
+        )
 
     def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
         if "app.engine.live.account_clerk" in command:

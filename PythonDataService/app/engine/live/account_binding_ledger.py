@@ -269,6 +269,67 @@ def binding_ledger_parity(
     )
 
 
+@dataclass(frozen=True)
+class BindingLedgerBaselineResult:
+    """Instances folded into an un-seeded ledger to complete the migration."""
+
+    baselined_instances: tuple[str, ...]
+
+
+def baseline_binding_ledger_from_registry(
+    artifacts_root: Path,
+    *,
+    account_id: str,
+    legacy_bindings: Iterable[dict[str, object]],
+) -> BindingLedgerBaselineResult:
+    """Seed a ledger that predates the migration from the legacy registry.
+
+    An account whose registry rows predate the command ledger has legacy-only
+    bindings that keep parity dirty forever with no forward writer to close
+    them.  Append one ``decision`` per latest-per-instance legacy binding the
+    ledger does not already record with byte-identical comparison fields.  The
+    registry row already exists, so this is a ledger-only write taken under the
+    same lock the Clerk uses.  Idempotent: a ledger already matching the
+    registry produces zero appends.  Ledger-only rows (present in the ledger,
+    absent from the registry) are left untouched so a genuine dual-write
+    anomaly still surfaces as parity-dirty instead of being silently masked.
+    """
+
+    path = binding_command_ledger_path(artifacts_root, account_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_latest: dict[str, dict[str, object]] = {}
+    for binding in legacy_bindings:
+        strategy_instance_id = _required_string(binding, "strategy_instance_id")
+        legacy_latest[strategy_instance_id] = dict(binding)
+    comparison_fields = (
+        "account_id",
+        "strategy_instance_id",
+        "run_id",
+        "bot_order_namespace",
+        "lifecycle_state",
+        "recorded_at_ms",
+        "source",
+    )
+    baselined: list[str] = []
+    with _file_lock(path):
+        ledger_latest: dict[str, AccountBindingCommand] = {}
+        for command in _read_commands_direct(path, account_id):
+            if command.entry_kind != "decision":
+                continue
+            ledger_latest[command.strategy_instance_id] = command
+        for strategy_instance_id in sorted(legacy_latest):
+            legacy = legacy_latest[strategy_instance_id]
+            existing = ledger_latest.get(strategy_instance_id)
+            if existing is not None and all(
+                legacy.get(field) == getattr(existing, field)
+                for field in comparison_fields
+            ):
+                continue
+            _append_command_locked(path, legacy, entry_kind="decision")
+            baselined.append(strategy_instance_id)
+    return BindingLedgerBaselineResult(baselined_instances=tuple(baselined))
+
+
 def _pending_from_commands(commands: Iterable[AccountBindingCommand]) -> tuple[AccountBindingCommand, ...]:
     pending: dict[int, AccountBindingCommand] = {}
     for command in commands:
@@ -360,11 +421,13 @@ __all__ = [
     "ACCOUNT_BINDING_LEDGER_READ_ENABLED_ENV",
     "BINDING_COMMAND_LEDGER_FILENAME",
     "AccountBindingCommand",
+    "BindingLedgerBaselineResult",
     "BindingLedgerParity",
     "BindingRetirementFoldResult",
     "account_binding_ledger_read_enabled",
     "append_binding_decision",
     "append_binding_retirement_proposal",
+    "baseline_binding_ledger_from_registry",
     "binding_command_ledger_path",
     "binding_ledger_parity",
     "fold_binding_retirement_proposals",

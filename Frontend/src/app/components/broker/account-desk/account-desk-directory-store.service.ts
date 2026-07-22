@@ -257,7 +257,7 @@ function isGateResult(value: unknown): boolean {
     (value['status'] === 'pass' || value['status'] === 'block' || value['status'] === 'freeze') &&
     typeof value['source'] === 'string' &&
     typeof value['operator_reason'] === 'string' &&
-    typeof value['operator_next_step'] === 'string' &&
+    isNullableString(value['operator_next_step']) &&
     isNullableInt64Ms(value['evidence_at_ms']);
 }
 
