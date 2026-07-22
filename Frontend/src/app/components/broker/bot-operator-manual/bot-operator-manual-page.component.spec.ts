@@ -20,7 +20,7 @@ describe('BotOperatorManualPageComponent', () => {
 
     expect(screen.getByRole('heading', { name: 'Operate the bot. Protect the account.' })).toBeTruthy();
     expect(screen.getByText('Create and start a bot')).toBeTruthy();
-    expect(screen.getByText('Stop a bot')).toBeTruthy();
+    expect(screen.getByText('End a bot safely')).toBeTruthy();
     expect(await screen.findByText('Everything in this system is one of three planes.')).toBeTruthy();
     const chapterLink = screen.getByRole('link', { name: /Know the system/ });
     expect(chapterLink.getAttribute('href')).toBe('/broker/bot-manual#document-1-mental-model-three-planes');
@@ -50,6 +50,7 @@ describe('BotOperatorManualPageComponent', () => {
     );
 
     expect(await screen.findByRole('heading', { name: 'Bot Control & Account Clerk — Operator Manual' })).toBeTruthy();
+    expect(screen.getByText('Code-grounded reference · updated 2026-07-22')).toBeTruthy();
     http.verify();
   });
 
@@ -86,7 +87,7 @@ Canonical shortcut targets.
 
 ### 5.2 Roll call — the offer gate
 
-### 5.4 Graceful stop vs halt/crash — the fork that decides your morning
+### 5.4 End day vs. Stop vs. halt/crash — the fork that decides your morning
 
 ## 7. Freezes & recovery
 

@@ -2,7 +2,7 @@
 
 **Status:** Accepted 2026-05-28
 **Decision drivers:** persistent paper-trading bot survival across app closures and reboots; shadow strategy onboarding; design-doc proposal of `gnzsnz/ib-gateway-docker` superseded by operational reality.
-**Related:** ADR 0001 (substrate), ADR 0002 (shadow mode), `docs/ibkr-integration-authority.md`, `docs/ibkr-paper-deployment-plan.md` § 16.
+**Related:** ADR 0001 (substrate), ADR 0002 (shadow mode), `docs/ibkr-integration-authority.md`, historical plan `docs/archive/plans/ibkr-paper-deployment-plan.md` § 16.
 
 ## Context
 
@@ -59,7 +59,7 @@ The migration is a deliberate project (Gateway+IBC reconfig on the new host, IBK
 ## References
 
 - `docs/ibkr-integration-authority.md` § 12 — operator path, host-venv constraint, error 420 history.
-- `docs/runbooks/ibkr-paper-dry-run.md` — current host-venv operator runbook.
+- `docs/bot-control-operator-manual.md` — current Bot Control operator manual.
 - `PythonDataService/app/engine/live/host_daemon.py` — supervisor to be extended to N processes.
 - `compose.yaml` — observability stack only; no Gateway or bot services.
-- `docs/ibkr-paper-deployment-plan.md` § 16 — design-lock resolutions and PR queue.
+- `docs/archive/plans/ibkr-paper-deployment-plan.md` § 16 — historical design-lock resolutions and PR queue.

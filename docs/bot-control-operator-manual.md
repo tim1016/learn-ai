@@ -5,13 +5,34 @@
 account honest; every gate that can block you; and the non-obvious blindspots that
 bite in practice.
 
-> This manual is grounded in the code as of 2026-07-17 with `file:line` citations
-> throughout. When code and manual disagree, the code wins — fix the manual.
-> Companion docs: `docs/known-gaps.md` (open defects), the dated audit under
-> `docs/audits/three-bot-concurrency-and-emergency-flatten-2026-07-17.md` (a live
-> walkthrough of most of this), and `docs/bot-cockpit-traffic-controller-guide.md`.
+> This manual is the current operator and trader-facing implementation snapshot as of
+> 2026-07-22. When code and manual disagree, the code wins — fix the manual.
+> The in-app page at `/broker/bot-manual` renders this exact source. Companion docs:
+> `docs/known-gaps.md` (open defects), ADR-0030 (Clerk authority), ADR-0026
+> (lifecycle authority), and the historical three-bot validation preserved under
+> `docs/archive/reports/three-bot-concurrency-and-emergency-flatten-2026-07-17.md`.
 
 ---
+
+## 0. Authority and implementation snapshot (2026-07-22)
+
+This is the sole current operating manual. The **Trader** view is not a
+separate, competing manual: it renders the same backend-authored lifecycle,
+account, and action facts that this manual describes. Angular does not derive a
+trading verdict from raw data.
+
+| Concern | Current authority | Implementation boundary |
+|---|---|---|
+| Normal account broker writes and account journal | **Account Clerk** | `app/engine/live/account_clerk.py`, `account_clerk_operations.py`, `account_clerk_rpc.py` |
+| Duty phase, roster, durable desired state | **Lifecycle evaluator** | `app/engine/live/bot_lifecycle_evaluator.py` |
+| Bot process actuation and observed process facts | **Host live-run daemon** | `app/engine/live/host_daemon.py` |
+| Start and submit account proof | **Account Truth** today | `app/services/account_gate_promotion.py`; the `observation_lease` branch is shadow-only until its promotion evidence exists |
+| Cockpit and Trader presentation | **Python-authored surface; Angular renders it** | `app/services/operator_surface.py`, `app/services/account_cockpit.py`, and `Frontend/src/app/components/broker/` |
+| Concurrent starts | **Individual fresh roll-call offers** | `app/routers/live_instances.py`; the cohort launcher is retired |
+
+For an operator, the result is simple: act from Bot Control or Account Desk,
+read the backend-authored reason and receipt, and do not use an archived guide,
+script, or alternate UI as a broker-control path.
 
 ## 1. Mental model — three planes
 
@@ -23,7 +44,7 @@ attributing a failure to the wrong plane.
    `strategy_instance_id → run_id` and owns the bot subprocesses. Deploy/start/stop
    all route through it. IB Gateway (`:4002` paper) is the broker socket behind it.
 2. **Account hygiene (the Clerk).** One **Account Clerk** process per account is the
-   *only* thing allowed to write to the broker for that account, and it keeps a
+   *normal* account broker-write authority, and it keeps a
    durable, append-only journal of everything. "Is this account clean/flat/verified?"
    is the Clerk's plane.
 3. **Bot lifecycle (the roster).** Each bot has a durable phase
@@ -41,7 +62,7 @@ plane is this telling me about?" before touching the Clerk.
 
 The stack straddles **containers** (data/UI plane) and **host processes** (the live
 control plane + IB Gateway). This split is the #1 source of "why doesn't this work"
-surprises — read §11.2.
+surprises — read §12.2.
 
 | Component | Port | Runs in | Responsibility |
 |---|---|---|---|
@@ -73,9 +94,9 @@ compose port — it's a host process the container reaches via
 ## 3. The Account Clerk
 
 ### 3.1 What it is
-One process per account, the *only* component permitted to touch the broker for that
-account. Every bot reaches the broker **only** by submitting an intent to the Clerk over
-RPC (the bot-side client never holds a broker adapter, `account_clerk_rpc.py:115-116`).
+One process per account, the **normal** account broker-write authority. Every bot reaches
+the normal broker-write lane by submitting an intent to the Clerk over RPC (the bot-side
+client never holds the normal account writer, `account_clerk_rpc.py:115-116`).
 The Clerk serializes all intake behind one append-only journal
 (`clerk_journal.jsonl`), which is the single source of truth for that account's
 exposure. It refuses to run or write unless the broker is in **paper** mode
@@ -98,8 +119,12 @@ and **generation fencing** on every broker write (a superseded Clerk raises
   verified clean *and still tied to this Clerk*?" `VERIFIED`/`REVOKED`, TTL = Account
   Truth readiness TTL, carries a `truth_watermark`. **It revokes on any Clerk
   generation change** (`ACCOUNT_CLERK_GENERATION_CHANGED`) or a dirty/stale sweep, and
-  is what the start gate consults under the `observation_lease` authority.
+  would be consulted only under the `observation_lease` authority.
   `account_observation_lease.py:166-210`.
+
+**Current gate selection:** `account_truth` is the effective start and submit authority.
+`observation_lease` remains a Clerk-fenced shadow comparison until its promotion
+criteria are met; do not treat a present lease as permission to start.
 
 > **Blindspot:** a Clerk restart bumps the generation → the observation lease revokes →
 > starts can be blocked with `ACCOUNT_OBSERVATION_LEASE_REVOKED` until you reconcile.
@@ -147,15 +172,16 @@ the difference matters enormously (§5.2):
   that carry a Clerk **intent** — it never invents an owner for unattributed flow.
 - **Account-truth fold** counts **all** fills including unattributed ones.
 
-### 3.5 Socket topology (why the container can't cure)
+### 3.5 Socket topology (why the data plane delegates cures)
 The Clerk RPC socket lives at
 `tempfile.gettempdir()/learn-ai-clerk/<sha256(artifacts_root + "\0" + account_id)>[:32].sock`
 (`account_clerk.py:725-734`). It's on the **host** `/tmp`. A containerized data plane
 has a *different* `/tmp` namespace (not bind-mounted) **and** computes a different hash
-(container artifacts path `/app/artifacts` ≠ host path). So the container sees the
-socket as absent → `ACCOUNT_CLERK_UNAVAILABLE:SOCKET_MISSING`. **Direct-RPC operator
-actions (journal cures) must run from a host-resident process.** Deploy/start/stop are
-unaffected because they route through the daemon over HTTP (§11.2).
+(container artifacts path `/app/artifacts` ≠ host path). The operator UI does not open
+that socket: its journal-cure route delegates to the authenticated host daemon, which
+performs the host-local Clerk RPC. Deploy/start/stop use the same daemon boundary.
+`SOCKET_MISSING` through the UI is therefore a host-delegation failure to escalate, not
+an instruction for the operator to run a direct socket command.
 
 ### 3.6 Managing the Clerk
 - Status: `GET /api/accounts/{account_id}/clerk`.
@@ -249,20 +275,24 @@ Summary counts: `ready` (offers minted) / `on_duty` (ON_DUTY + CLOCKING_OUT) /
 |---|---|---|
 | Deploy | `POST /api/live-instances` (201; 200 idempotent) | Needs `strategy_spec_path`, `qc_audit_copy_path`, `qc_cloud_backtest_id`, `strategy_key`, `live_config` (**must** have `sizing`), `start_date_ms`, `strategy_instance_id`, `start:bool`. Forwards to the daemon (git clean-tree check). |
 | Deploy-preflight | `GET /api/live-instances/deploy-preflight?strategy_key&instance_id&account_id` | Returns `{ready, blockers[]}`. |
-| Start | `POST /api/live-instances/runs/{run_id}/start` | `HostRunnerStartRequest`: **`readonly` default `True`** (observe-only!), `strategy` (must match the ledger's `strategy_key`), `ibkr_host`, `roll_call_offer_id`. |
-| Stop | `POST /api/live-instances/runs/{run_id}/stop` | Graceful (`force:false`) → `exit_reason=normal`. **Free — not rate-gated.** |
-| End day | `POST /api/live-instances/{sid}/end-day-now` | Graceful, sets OFF_DUTY. |
+| Start | `POST /api/live-instances/runs/{run_id}/start` | Start requires a matching fresh roll-call offer. In Bot Control, choose **Read-only** for no broker orders or **Paper orders** to enable paper execution; **Live orders** is visibly blocked. |
+| Stop bot gracefully | Lifecycle desired-state action | Writes a durable `STOPPED` intent and asks the bound host process to exit. It does **not** flatten and requires **Resume** before any later start. **Free — not rate-gated.** |
+| End day now | `POST /api/live-instances/{sid}/end-day-now` | Queues Clerk-owned `CLOCK_OUT`; it becomes OFF_DUTY only after durable clean-exit/account evidence. This is the re-offerable session-close path. |
 | Roster toggle | `POST /api/live-instances/{sid}/lifecycle/roster` | `on_roster:bool`. |
 | Retire & Replace | `POST /api/live-instances/{sid}/retire-and-replace` | **`confirm_account_flat:true` required**; refuses while running/stopping/unreachable. The cure path for a crashed bot. |
 | Delete (soft) | `DELETE /api/live-instances/{sid}` | Hides from surfaces, preserves artifacts for audit. Redeploy under a new run to un-hide. |
 | Catalog | `GET /api/live-instances/catalog` | `{bots, roll_call, evening_report}`. |
 
-### 5.4 Graceful stop vs. halt/crash — the fork that decides your morning
+### 5.4 End day vs. Stop vs. halt/crash — the fork that decides your morning
 This is the single most operationally important distinction.
 
-- **Graceful stop / end-day** → phase **OFF_DUTY**, registry source `stop_exited`/
-  `process_exited` (**non-blocking**) → the bot is **re-offered** by the next roll-call
-  and restartable. No residue if it was flat.
+- **End day now** → Clerk-owned clean exit → phase **OFF_DUTY** only after flat broker
+  proof and a durable receipt → the bot is **re-offered** by the next roll-call. Use
+  this for a normal session close.
+- **Stop bot gracefully** → durable **`STOPPED`** intent plus a request for the bound
+  process to exit. It does not place orders or flatten. A later start is refused with
+  `STOPPED_REQUIRES_RESUME` until you choose **Resume**, which restores `RUNNING`; then
+  take a fresh roll-call offer and start normally.
 - **Halt / crash** (process exits *not while stopping*, or nonzero/unproven exit) →
   the daemon writes a `RETIRED` binding with a recovery-required source
   (`process_crashed` / `ended_without_status` / `boot_liveness_unproven`). That
@@ -316,8 +346,9 @@ coherence, preflight, and start-boundary are gated on `start=true`.
 | `BOT_RETIRED` / `BOT_LIFECYCLE_STATE_UNREADABLE` | 409 | phase RETIRED / corrupt state | Deploy a replacement / repair state. |
 | `BOT_SOFT_DELETED` | 410 | deletion marker present | Redeploy under a new run. |
 | `ACCOUNT_OBSERVATION_LEASE_ABSENT/_EXPIRED/_REVOKED`, `ACCOUNT_CLERK_GENERATION_CHANGED` | 409 | *(only under `observation_lease` authority)* lease not VERIFIED | Reconcile now — a clean sweep re-verifies the lease. |
-| `STOPPED_REQUIRES_REDEPLOY` | 409 | `poisoned.flag` in the run dir | Redeploy. |
-| `HOST_SERVICE_OFFLINE` | 409 | daemon has no process view | Start the daemon on the host. |
+| `STOPPED_REQUIRES_RESUME` | 409 | A prior graceful Stop left the durable STOPPED latch | Choose Resume, then obtain a fresh roll-call offer and start normally. |
+| `REDEPLOY_REQUIRED` / failing `poison_sentinel` | 409 | A fatal halt or explicit Mark poisoned wrote `poisoned.flag` | Retire & Replace / deploy a fresh run; Resume cannot reuse the poisoned run. |
+| `HOST_SERVICE_OFFLINE` | 409 | daemon has no process view | Preserve the backend receipt and escalate to the platform owner; Bot Control has no host-restart bypass. |
 | `ALREADY_RUNNING` / `STOPPING` | 409 | already live/shutting down | Wait. |
 | `START_SETTINGS_INCOMPLETE` | 409 | ledger `strategy_key` can't hydrate a Start | Ensure a valid strategy key in the ledger. |
 
@@ -391,7 +422,8 @@ reads as absent. A live freeze projects a `FROZEN` triage verdict.
 **proven-RETIRED** binding, the cure may only **reduce toward zero** (never cross zero
 or overshoot), and it's idempotent on `idempotency_key`. It corrects the *ledger's
 memory*, not the *account* — never use it when the broker actually holds the position.
-**It must be driven from a host-resident process** (§3.5).
+Use the Account Desk; its authenticated route delegates the host-local Clerk operation
+for you.
 
 ---
 
@@ -405,12 +437,13 @@ memory*, not the *account* — never use it when the broker actually holds the p
 5. Run a fresh roll call before the next start. Never batch or stagger starts through
    a cohort launcher; it has been removed.
 
-**Stop-and-replace (churn):** graceful `stop` (free) + a replacement `start` (counts
-toward the rate limit). Gracefully-stopped bots are re-offered; crashed ones need
+**Stop-and-replace (churn):** use **End day now** for a clean/re-offerable session
+close, then start a replacement (which counts toward the rate limit). A deliberate
+**Stop bot gracefully** needs Resume before that bot can start again; crashed bots need
 Retire & Replace.
 
-**Submit vs observe:** start with `readonly:false` to submit to paper; the default
-`readonly:true` is **observe-only** — the bot runs and evaluates but places no orders.
+**Submit vs observe:** Bot Control labels the choice clearly: **Read-only** runs without
+broker orders, **Paper orders** enables paper execution, and **Live orders** is blocked.
 
 ---
 
@@ -423,123 +456,188 @@ Retire & Replace.
 **Cure a stale claim (clean≠flat):**
 confirm broker flat (`reconcile` positions 0) → preview the cure for the retired
 `(namespace, symbol)` → apply `signed_quantity` reducing toward zero, citing the CLEAN
-receipt id in `evidence_refs` → re-check fleet `clean`. **Run from the host.**
+receipt id in `evidence_refs` → re-check fleet `clean`. Use the Account Desk; it
+delegates the host-local Clerk operation.
 
 **Recover a crashed (sick-bay) bot:**
 verify account flat + no open orders → **Retire & Replace** (`confirm_account_flat:true`)
 → deploy the replacement.
 
-**Restart the daemon (after merging code):** the daemon does **not** reload on `git
-pull`; restart it (`./start-live-daemon.sh`, or `--background`). It logs its running git
-SHA at startup — that's your anchor for "what code is live." A Clerk spawned *after* the
-restart picks up new bot code (subprocesses import fresh from disk).
-
-**Restart the data plane after code changes:** `podman restart polygon-data-service`
-(uvicorn `--reload` is unreliable on macOS+podman — see §11).
+**Host service unavailable after a code change:** Bot Control and Account Desk do not
+offer a host restart or bypass. Preserve the surfaced receipt and escalate to the
+platform owner; verify refreshed daemon/Clerk evidence before restarting a bot.
 
 ---
 
-## 10. Troubleshooting quick reference
+## 10. Terminal incident procedures
+
+The Activity tab is stream-first. When a terminal row appears, expand it before taking
+action: the row and its deduplicated incident are one visible story, carrying the
+authored summary, identity ladder (`evaluation_id`, `intent_id`, `order_ref`, `req_id`,
+`order_id`, `perm_id`, `exec_id`), gate walk, and terminal evidence. Do not create a
+parallel ad-hoc checklist for the same failure.
+
+<!-- terminal-runbook-slug: ibkr-order-rejection -->
+### IBKR order rejection
+
+Triggered by `order.rejected` / `order_rejected`.
+
+1. Capture the IBKR `external_code`, `external_message`, `req_id`, and `order_ref`.
+2. Verify in IBKR / TWS whether the order is absent, cancelled, or still working. Do
+   not retry from the bot until the broker state is known.
+3. If the broker message identifies a fix (buying power, contract qualification,
+   account restriction, order attribute), resolve that cause and redeploy or resume
+   only after Bot Control shows the required readiness gates are clear.
+4. If the wording is unmapped or not actionable, preserve the evidence and escalate
+   the classifier gap; do not invent operator copy in the UI.
+
+<!-- terminal-runbook-slug: submit-outcome-uncertain -->
+### Submit outcome uncertain
+
+Triggered by `submit.uncertain` / `submit_uncertain`.
+
+1. Assume the order may exist until proven otherwise.
+2. Use the row identity (`order_ref`, `req_id`, `order_id`, `perm_id`) to verify order
+   status in IBKR / TWS.
+3. Do not submit a replacement until the original order is confirmed absent, cancelled,
+   or reconciled into the bot's state.
+4. Preserve the incident evidence if manual reconciliation is required; it records why
+   the bot refused to continue.
+
+<!-- terminal-runbook-slug: bot-halted -->
+### Bot halted
+
+Triggered by `submit.halted` / `halted`.
+
+1. Inspect the blocking gate or fatal halt trigger in the expanded row.
+2. Preserve any surfaced `halt.flag` evidence. A halt caused by broker safety, Account
+   Truth, Clerk fencing, or submit uncertainty must not be manually cleared.
+3. Resolve the underlying gate, then redeploy or resume only when the backend-authored
+   cockpit verdict agrees.
+
+<!-- terminal-runbook-slug: bot-launch-failed -->
+### Bot launch failed
+
+Triggered by `submit.launch_failed` / `launch_failed`.
+
+1. Inspect the terminal error source (`daemon`, `os`, or `broker_session`) in the row.
+2. For daemon or OS failures, preserve the redacted log path and stderr tail from the
+   evidence and escalate to the platform owner.
+3. For broker-session failures, resolve the concrete connection cause (for example, a
+   client-id collision or account-sentinel refusal) before redeploying.
+4. Prefer redeploy after the cause is fixed; do not hand-edit run artifacts or event
+   journals.
+
+<!-- terminal-runbook-slug: unmapped-terminal-diagnostic -->
+### Unmapped terminal diagnostic
+
+Triggered by `submit.unmapped_diagnostic` / `unmapped_diagnostic`.
+
+1. Treat the row as a classifier gap, not an operator-fixable condition.
+2. Preserve the stream-drawer evidence and the run logs.
+3. Add or correct the backend classifier/template so the same failure becomes a mapped
+   terminal outcome with specific operator copy.
+
+---
+
+## 11. Troubleshooting quick reference
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | Start → `409 ACCOUNT_FROZEN` right after several quick starts | Restart-intensity (3/5 min) tripped | Wait ~5 min or reconcile + clear-freeze; start ≤2/5 min. |
 | Start → `ROLL_CALL_OFFER_REQUIRED` | No fresh offer this session | Run `roll-call`, start from the offer. |
 | Deploy → `DirtyTreeError` naming a path you don't recognize | Stray file in scope (often test-artifact junk like `PythonDataService/PythonDataService/`) | Remove it; commit/stash real changes. |
-| Cure → `ACCOUNT_CLERK_UNAVAILABLE:SOCKET_MISSING` | Running the cure from the container against a host Clerk | Run it from a host process (host `.venv`) or a host-resident data plane. |
+| Cure → `ACCOUNT_CLERK_UNAVAILABLE:SOCKET_MISSING` | Host-daemon delegation to the host-local Clerk failed | Retry from Account Desk only after the backend advises it; otherwise preserve the receipt and escalate. |
 | Fleet `contaminated` but receipt `CLEAN` | clean≠flat: unjournaled close (stale per-instance claim) | Journal cure the retired namespace. |
-| Bot "running" but never trades | Strategy entry conditions unmet, **or** `readonly:true` (observe-only) | Check the strategy config; start `readonly:false` to submit. |
+| Bot "running" but never trades | Strategy entry conditions unmet, or **Read-only** was selected | Check its effective posture; use **Paper orders** only when paper execution is intended. |
 | Bot vanished from roll-call after a crash | Went to sick_bay (recovery-required) | Retire & Replace. |
-| Start → `ACCOUNT_OBSERVATION_LEASE_REVOKED` | Clerk generation changed (restart) | Reconcile to re-verify the lease. |
-| Deploy/start works but cure/status flaky | Data plane on container vs. host-only seams | Know which seam you need (§11.2). |
-| "It's the wrong code" | Daemon/data-plane don't hot-reload | Restart the daemon; `podman restart polygon-data-service`. |
+| Start → `ACCOUNT_OBSERVATION_LEASE_REVOKED` | Only possible when the observation-lease authority has been promoted | Reconcile and follow the backend-authored recovery; Account Truth is the effective authority today. |
+| Deploy/start works but cure/status flaky | Host-daemon delegation or Clerk health is degraded | Read the Account Desk posture and escalate if it cannot offer a restore path. |
+| "It's the wrong code" | Host services do not hot-reload automatically | Escalate to the platform owner; re-observe daemon and Clerk evidence before restarting a bot. |
 
 ---
 
-## 11. Blindspots — the things that bite
+## 12. Blindspots — the things that bite
 
-**11.1 `readonly` defaults to observe-only.** `HostRunnerStartRequest.readonly`
-defaults to **`True`**, and `IBKR_READONLY` defaults to `True`. "Paper" radio in the UI
-= observe-only; "Live" radio = submit-to-*paper*. A bot can run all day, look healthy,
-and place zero orders because it's read-only. **Check effective posture before
-babysitting for fills.** And the *container* doesn't read the host `.env` — flip
-`IBKR_READONLY` through compose and restart the container, or the `orders.py` refusal
-message will mislead you.
+**12.1 Read-only vs. Paper orders is an explicit launch choice.** **Read-only** runs the
+strategy without broker orders; **Paper orders** enables paper execution; **Live orders**
+is displayed but blocked. A bot can run all day and place zero orders when Read-only was
+selected. **Check effective posture before waiting for fills.**
 
-**11.2 Host vs. container is not cosmetic.** Deploy/start/stop work from the container
-(daemon over HTTP + token). But **journal cures need the host** (Unix socket in host
-`/tmp`), and the **deploy catalog** (`references/qc-shadow`) isn't mounted into the
-container (only served via the daemon). If cures fail `SOCKET_MISSING` or the catalog
-looks empty, you're on the container for a host-only job. The correct topology for full
-live control is a **host-resident data plane** co-located with the daemon + Clerk.
+**12.2 Host vs. container is a boundary, not an operator fork.** The data plane and UI
+delegate deploy/start/stop and Clerk-only recovery work to the authenticated host daemon.
+The Clerk socket remains host-local; the UI never opens it directly. If that delegation
+is unhealthy, Account Desk reports the condition and the operator escalates rather than
+trying a second control path.
 
-**11.3 clean ≠ flat.** A CLEAN receipt only says the broker snapshot is flat. A bot that
+**12.3 clean ≠ flat.** A CLEAN receipt only says the broker snapshot is flat. A bot that
 exited holding a position whose close never journaled leaves a stale per-instance claim
 → fleet `contaminated` → new starts blocked. The receipt and the fleet "explained" sum
 are two different truths (broker snapshot vs. journal fold). Cure the ledger; don't
 "re-flatten" a position the broker doesn't hold.
 
-**11.4 A transient freeze used to kill healthy bots; now it pauses them.** Before the
+**12.4 A transient freeze used to kill healthy bots; now it pauses them.** Before the
 2026-07-17 fix, a restart-intensity freeze (caused by *your other* rapid starts)
 cascade-**halted** every running bot. Now they **pause submits and survive**. But the
 freeze still blocks *new* starts. Don't churn faster than 2 starts/5 min.
 
-**11.5 A Clerk restart revokes the observation lease.** Generation bumps on spawn →
-`ACCOUNT_CLERK_GENERATION_CHANGED` revokes the lease → starts can block under the
-observation-lease authority until you reconcile. Expect a reconcile after any Clerk
-bounce.
+**12.5 A Clerk restart invalidates shadow lease proof.** Generation bumps revoke the
+observation lease. That matters only after its promotion; **Account Truth remains the
+effective authority today**. In either case, re-observe the Account Desk before a new
+start after a Clerk bounce.
 
-**11.6 Graceful stop vs. crash decides tomorrow.** Always prefer graceful `stop` /
-`end-day` (→ OFF_DUTY, re-offerable, no recovery block). A crash → sick_bay +
-`CRASH_RECOVERY_REQUIRED`; the bot won't roll-call until you record recovery evidence or
-Retire & Replace. At day end, **graceful-stop, do not force-flatten** — final Account
-Truth "proven" needs the Clerk alive at the post-stop sweep.
+**12.6 End day, Stop, and crash are different.** **End day now** is the normal
+session-close path: after Clerk-owned clean-exit proof it becomes OFF_DUTY and can be
+re-offered. **Stop bot gracefully** writes a STOPPED latch and later needs **Resume**.
+A crash leads to sick bay plus `CRASH_RECOVERY_REQUIRED`; the bot will not roll-call
+until recovery evidence is recorded or you use Retire & Replace. Do not use emergency
+flatten for a normal day end.
 
-**11.7 Roll-call offers are per-session and single-use.** A start needs a fresh offer;
+**12.7 Roll-call offers are per-session and single-use.** A start needs a fresh offer;
 they expire at the session's `effective_stop`. A stale "Ready" chip won't start a bot —
 run roll-call.
 
-**11.8 Neither the daemon nor the data plane hot-reloads.** The daemon logs its running
-git SHA at boot; that's the source of truth for "what code is live," not the files on
-disk. `uvicorn --reload` is unreliable on macOS+podman. Restart to pick up merges.
+**12.8 Host services do not hot-reload.** The running daemon/Clerk evidence, not the
+working tree, proves what is live. A host-service restart is a platform-owner operation;
+after one, re-observe the Account Desk before admitting a bot.
 
-**11.9 Never `podman cp` a directory into an existing container path, and beware
-relative-path test writes.** Both create nested dup dirs (e.g.
-`PythonDataService/PythonDataService/`) that then trip the deploy clean-tree gate. Clean
-them up before treating the tree as authoritative.
+**12.9 A dirty-tree deploy block is an engineering handoff.** Unexpected generated or
+nested files can trip the deploy clean-tree gate. Do not bypass the gate; hand the
+reported path to the platform owner and retry only after a clean preflight.
 
-**11.10 Emergency flatten is blunt and account-wide.** It market-closes *every* position
+**12.10 Emergency flatten is blunt and account-wide.** It market-closes *every* position
 and is suppressed when an exact per-namespace recovery candidate exists. Prefer the
 surgical **operator recovery flatten** when a candidate is offered. Both are paper-only;
 the typed `FLATTEN` token is client-side UX friction, not a server contract — the real
 guard is the fresh-paper-evidence + non-zero-position + no-exact-candidate declaration.
 
-**11.11 Unattributed broker events freeze the account.** A fill callback with no Clerk
+**12.11 Unattributed broker events freeze the account.** A fill callback with no Clerk
 intent (manual order, foreign flow, an out-of-band tool) is recorded but triggers an
 `exposure` freeze (`RECONCILE_UNATTRIBUTED_BROKER_EVENT`). Don't place orders on a
 Clerk-owned account outside the Clerk.
 
-**11.12 Time is `int64 ms UTC` everywhere.** Every timestamp on the wire/at rest is
+**12.12 Time is `int64 ms UTC` everywhere.** Every timestamp on the wire/at rest is
 integer ms UTC. Don't compare or render raw values in feature code — render through the
 shared timestamp component with an explicit mode (`local`/`et`/`date-et`). Session
 structure comes from the canonical calendar, never hardcoded `09:30`/`16:00`.
 
-**11.13 IBKR client-id pool is finite.** Bots/Clerks draw from a fixed client-id pool
+**12.13 IBKR client-id pool is finite.** Bots/Clerks draw from a fixed client-id pool
 (50–99); a second competing IBKR connection (e.g. a stray host data plane alongside the
 container) can exhaust subscriptions (error 322). Run **one** data plane.
 
-**11.14 The restart-intensity threshold is hard-coded.** `threshold=3`,
+**12.14 The restart-intensity threshold is hard-coded.** `threshold=3`,
 `window=300_000ms` are not env-configurable (`account_artifacts.py:221`). To change the
 churn envelope you change code + ship it; don't expect a knob.
 
 ---
 
-## 12. Glossary
+## 13. Glossary
 - **Daemon** — the single host process owning bot subprocesses and run bindings (`:8765`).
 - **Clerk** — the per-account, single-writer broker authority + journal.
 - **Generation** — integer fencing a Clerk incarnation; bumps on spawn.
 - **Clerk lease** — 5 s liveness lease for the Clerk process.
-- **Observation lease** — durable "exposure verified & tied to this generation" proof.
+- **Observation lease** — durable Clerk-fenced proof used only by the currently dormant
+  promotion branch; Account Truth is effective today.
 - **Roll-call offer** — a single-use, session-scoped permit to start one bot.
 - **Fleet residual** — `net_broker − Σ journal-explained`; non-zero = contaminated.
 - **clean ≠ flat** — broker snapshot flat but a journal claim still open.

@@ -2,10 +2,10 @@
 
 This directory holds documentation that has been superseded, completed, or determined to be ephemeral. Files here are preserved for provenance — not for active reference.
 
-**Frozen as of 2026-07-04.** This tree is the set that was archived *before* the
-2026-07-04 policy change. New point-in-time docs are no longer archived here —
-they are **pruned to git history** (see "What belongs here vs. deletion" below).
-Do not add new files to this directory.
+**Prune by default; archive deliberately.** The 2026-07-04 policy changed new
+point-in-time docs to hard deletion in git history. The 2026-07-22 Clerk/controller
+consolidation is a deliberate exception: obsolete operating material moved here because
+it remains useful audit evidence, but must never be mistaken for current procedure.
 
 ## Directory layout
 
@@ -15,6 +15,7 @@ Do not add new files to this directory.
 | `prompts/` | Verbatim LLM prompts stored as files — not design docs |
 | `plans/` | Implementation plans whose work has shipped and whose authority has been absorbed into a canonical doc |
 | `reports/` | One-time audit reports, phase snapshots, frozen reconciliation artifacts |
+| `runbooks/` | Superseded operator and recovery runbooks |
 
 ## Status banner convention
 
@@ -31,11 +32,11 @@ This convention exists so AI agents loading archived files get an immediate, una
 
 ## What belongs here vs. deletion
 
-**Policy change (2026-07-04).** Point-in-time working docs are now **hard-deleted
-to git history**, not archived. Git history is the provenance record; any open
-defects are lifted into `docs/known-gaps.md` before the source files are deleted.
-The older "archive, don't delete" rule was retired because the archive tree grew
-faster than it was read, and git history already preserves every deleted file.
+**Policy change (2026-07-04).** Point-in-time working docs normally **hard-delete
+to git history**, not archive. Git history is the provenance record; any open defects
+are lifted into `docs/known-gaps.md` before the source files are deleted. Archive only
+when a dated document has material operational/audit provenance that should remain
+readable, and give it the status banner above plus a current-authority pointer.
 
 - **Prune to git history** (provenance lives in git): completed implementation plans, design specs for shipped features, phase snapshots, session handoffs, LLM prompts, closed audit findings.
 - **Delete outright** (no provenance value at all): raw test-runner stdout, generated artifacts with no analytical content.

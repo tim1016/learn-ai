@@ -5,15 +5,20 @@
 > document — when this page disagrees with code, the code is right and
 > this page must be updated in the same PR.
 >
+> **Authority boundary (2026-07-22):** this document covers the IBKR integration.
+> The current Clerk, lifecycle, Bot Control, and trader-operating behavior is owned by
+> [`bot-control-operator-manual.md`](bot-control-operator-manual.md), ADR-0030,
+> ADR-0026, and the engine authority map. Do not use the historical deployment plan or
+> a changelog entry below as an operator procedure.
+>
 > **Sibling docs** (different jobs, do not duplicate):
 > - [`architecture/ibkr-integration-tdd.md`](architecture/ibkr-integration-tdd.md) — design rationale (why we chose `ib_async`, four-layer paper safety, SSE everywhere). Read first to understand "why."
-> - [`architecture/ibkr-integration-phase{1,2,3}.md`](architecture/) — frozen snapshots of what each integration phase shipped.
-> - [`ibkr-paper-deployment-plan.md`](ibkr-paper-deployment-plan.md) — Phase 6/7 replay-parity plan and Phase 8/9/10 paper-week roadmap.
+> - Archived phase and deployment records — historical provenance under `docs/archive/`, not current authority.
 > - [`codex-phase-1-4-audit.md`](codex-phase-1-4-audit.md) — most recent code audit; tracks Phase 10 prereqs.
 >
 > **Owner:** the engineer editing `PythonDataService/app/broker/ibkr/*` or `PythonDataService/app/engine/live/*`. Same-PR rule: if you touch those files, update the matching section here and bump **Last reviewed**.
 >
-> **Last reviewed:** 2026-07-17 (removed the unfinished standalone broker reconciliation page; account recovery and proof remain on the Account Desk).
+> **Last reviewed:** 2026-07-22 (Clerk/controller authority boundary reconciled).
 
 ---
 
@@ -46,7 +51,11 @@ It does **not** answer:
 - Whether multi-symbol live trading is supported. **It is not.** `LiveEngine` raises `NotImplementedError` if `len(ctx.symbols) != 1`. See `live_engine.py:106`.
 - Whether the backtest math is correct. That is the strategy / engine math layer's job; see [`feature-runner-authority.md`](feature-runner-authority.md) for research, and the SPY parity tests at `app/engine/tests/test_spy_*` for backtest math.
 
-**Authority precedence** when this doc, the TDD, and the code disagree: code wins, then this doc, then the TDD. The TDD captures design intent which can be older than the implementation; this doc is updated on every PR that touches the integration.
+**Authority precedence** for IBKR integration behavior when this doc, the TDD, and
+the code disagree: code wins, then this doc, then the TDD. For Clerk/lifecycle and
+operator behavior, ADR-0030/ADR-0026 and the Bot Control manual take precedence over
+this integration reference. The TDD captures design intent which can be older than the
+implementation.
 
 ---
 
@@ -245,7 +254,7 @@ The runtime that turns a `Strategy` into paper orders against IBKR.
 | `live_engine.py` | `LiveEngine`, `LiveRunResult`, `ReplayBrokerAdapter` Protocol. Per-minute bar loop driven by `_next_bar_or_shutdown` (PR #231) — races `source.__anext__()` against `shutdown_event.wait()` so SIGINT unwedges within bounded time even when the bar source is silent (Gateway stall, market halt, IP-binding rejection). Emits a `[BAR]` heartbeat per bar (PR #229) for operator-visible aliveness during the strategy's indicator warmup window. Eager four-layer paper-safety validation when an `IbkrClient` is supplied. |
 | `nyse_calendar.py` | `previous_completed_nyse_session_close_ms` — pandas_market_calendars NYSE schedule wrapper; consumed only by indicator-state validation (ladder check #3). |
 | `run.py` | Operator CLI. Four subcommands: `init-ledger` (writes the run identity at `artifacts/live_runs/<run_id>/run_ledger.json`), `pre-flight` (runs the 7 morning halt checks in `pre_flight.py`), `start` (wires `shutdown_event` + SIGINT/SIGTERM handlers + rotating file logger + unhandled-exception recovery flatten + `IbkrClient.connect()/disconnect()`), `emergency-flatten`. |
-| `reconcile.py` | Three-way daily reconciler — Python live ↔ QC Cloud ↔ IBKR fills. Per-bar `CrossEngineClass` (none/data/engine) and `FillClass` (none/within_tol/breach) classifications; writes `day-N.{md,json,parquet,hashes.json}`; emits `halt.flag` consumed by next morning's `check_no_halt_flag` pre-flight; SHA-256 manifest in the committed Markdown receipt. Implemented per `docs/superpowers/specs/2026-05-08-ibkr-paper-shadow-deployment-design.md` § 6. |
+| `reconcile.py` | Three-way daily reconciler — Python live ↔ QC Cloud ↔ IBKR fills. Per-bar `CrossEngineClass` (none/data/engine) and `FillClass` (none/within_tol/breach) classifications; writes `day-N.{md,json,parquet,hashes.json}`; emits `halt.flag` consumed by next morning's `check_no_halt_flag` pre-flight; SHA-256 manifest in the committed Markdown receipt. The original design is archived at `docs/archive/plans/2026-05-08-ibkr-paper-shadow-deployment-design.md` § 6. |
 | `run_logging.py` | Rotating file logger (`<run-dir>/live.log`, 10MB × 5 backups) plus console handler with `[STEP X]` formatting when callers pass `extra={"step": ...}`. Idempotent for repeat init on the same run-dir. |
 | `services/daily_session_schedule.py` | Start-boundary stop policy. RTH-only bots retain the default `force_flat_at=15:55 ET` stop clamped to the NYSE close. Bots declaring any extended session in `allowed_sessions` default to no daily stop so the process can continue through post/overnight; an explicit `force_flat_at` still blocks at that exchange-local time and is not clamped back to the RTH close. |
 | `pre_flight.py` | Seven morning halt checks: `clean_tree`, `run_state_intact`, `no_halt_flag` (reads `halt.flag` written by `reconcile.write_day_report`), `ntp_offset`, `no_unexpected_position`, `yesterday_artifacts_intact` (walks the SHA-256 sidecar), plus skip-gates. |
@@ -423,7 +432,7 @@ Tracked deliberately. None of these are accidental gaps; each is documented and 
 | Flex delayed audit import | NOT SHIPPED | `flex_audit_match` is reported as `not_applicable`. Flex remains the delayed official statement source for settled executions, commissions, cash, and positions. |
 | Client Portal account-truth cross-check | NOT SHIPPED | No `/iserver` calls are made in the live validation path. Any Client Portal use requires a separately documented session-safety decision and experimental/disabled labelling. |
 | Phase 10 prereq — `equity_curve.parquet` writer | NOT SHIPPED | `equity_curve` lives in `LiveRunResult` in memory; `artifacts.py` has writers for decisions / executions / trades but no `EquityWriter`. Reconcile cannot compare equity-over-time against QC's equity series. |
-| Phase 10 prereq — indicator-state-persistence across restarts | **SHIPPED** (2026-05-15) | Generic envelope + SpyEma-specific payload at `PythonDataService/artifacts/live_state/spy_ema_crossover/SPY_15m.json`. Three policies: `require` (default — paper-week gate), `optional` (seed-day cold-start), `disabled` (operator escape hatch). NYSE previous-completed-session staleness check. Per-run hydration receipt rolled into reconcile hash manifest. Design: `docs/superpowers/specs/2026-05-15-spy-ema-paper-dry-run-design.md`. |
+| Phase 10 prereq — indicator-state-persistence across restarts | **SHIPPED** (2026-05-15) | Generic envelope + SpyEma-specific payload at `PythonDataService/artifacts/live_state/spy_ema_crossover/SPY_15m.json`. Three policies: `require` (default — paper-week gate), `optional` (seed-day cold-start), `disabled` (operator escape hatch). NYSE previous-completed-session staleness check. Per-run hydration receipt rolled into reconcile hash manifest. Historical design: `docs/archive/plans/2026-05-15-spy-ema-paper-dry-run-design.md`. |
 | Phase 10 prereq — end-to-end producer test (LiveEngine → reconcile) | NOT SHIPPED | All 25 reconcile unit tests use synthetic parquets. No CI test proves `LiveEngine`'s artifact writers (`DecisionRow`/`ExecutionRow`/`TradeRow`) match what `reconcile.load_python_decisions` / `load_python_executions` expect. A small producer-consumer integration test (run a minimal LiveEngine session against `FakeBroker`, assert reconcile's loaders parse the resulting parquets) would close the contract. |
 | `IbkrMinuteBar` → `TradeBar` conversion in `stream_minute_bars` consumer | TRACKED | Real-IBKR path in `LiveEngine.run()` calls `stream_minute_bars` which yields `IbkrMinuteBar`, not `TradeBar`. The replay path supplies `TradeBar` directly so this is unexercised today. PR #76 review C1 — Phase 10 prereq. |
 | `client_order_id` per-session uniqueness | TRACKED | Counter resets per `LivePortfolio`; `place_paper_order` idempotency cache is process-scoped. PR #76 review C2 — Phase 10 prereq. |
@@ -436,32 +445,32 @@ Tracked deliberately. None of these are accidental gaps; each is documented and 
 
 ---
 
-## 12. Operational checklist (paper week pre-flight)
+## 12. Platform-owner integration preflight (not a Bot Control procedure)
 
-Run these in order before turning the runner loose:
+This is infrastructure context for the platform owner. Operators use the UI-first
+procedure in `docs/bot-control-operator-manual.md`; it is the only current Bot Control
+and Clerk operating manual.
 
-1. **`.env`** has `IBKR_MODE=paper`, `IBKR_PORT=4002` (or `7497`
-   for TWS), `IBKR_READONLY=false`, paper account `DU…` ID. If the Host
-   Runner will target anything outside the daemon defaults (`127.0.0.1`,
-   `::1`, `localhost`, `host.containers.internal`,
-   `host.docker.internal`), add it to `IBKR_HOST_ALLOWLIST`;
-   `./start-live-daemon.sh --print-launch-env` shows the effective daemon
-   policy without starting the daemon. Anything else and the four safety
-   layers will refuse.
+Run these checks before turning the runner loose:
+
+1. **Platform configuration** must select the paper account, paper port, and the
+   approved host allowlist. The deployed daemon policy is the authority; an operator
+   does not change it through the Bot Control surface.
 2. **NYSE/ARCA real-time market-data subscription** active on the linked live account. Paper inherits — see TDD §2.4.
 3. **IB Gateway** running, logged into the paper account, "Read-Only API" is OFF, and the API tab's "Trusted IPs" includes:
-   - **`127.0.0.1`** (host loopback) — required by the host-venv `cmd_start` (Step 7); without this, the dry-run client cannot connect.
-   - **The `polygon-data-service` container's WSL bridge IP** (e.g. `10.89.0.x`) — required only when the operator keeps the container running for the `/api/broker/health` and `/api/broker/diagnose` REST endpoints (used in Steps 4–5 of this checklist). Optional if those steps are skipped or run from the host venv directly.
+   - **`127.0.0.1`** (host loopback) — required by the host daemon and its bot children.
+   - The configured data-plane bridge address — required only when the platform's
+     infrastructure health/diagnostic routes use it.
 
-   The Step 7 invocation runs from the host, so `127.0.0.1` is the load-bearing entry; the container IP is for the optional pre-flight diagnose path. (Earlier revisions instructed only the container IP, which contradicted Step 7's host-venv path — corrected post PR #232 review.)
-
-   On day 1 of paper week (or the first-ever dry-run), pass `--hydrate-policy optional`
-   to seed the sidecar; on day 2+ omit the flag (default `require`). See the runbook
-   Step 3 "Hydrate policy" subsection.
+   The platform owner maintains these settings. Bot operators use the diagnostics and
+   launch evidence surfaced by the application rather than a host command.
 4. **`GET /api/broker/health`** returns `connected: true, is_paper: true` and the account ID begins with `DU`.
 5. **`GET /api/broker/diagnose`** returns `overall_status: pass` (or click the **Diagnose** button on `/broker`).
 6. **Project-scope tests** green: `pytest PythonDataService/tests/ -k "not slow"`. 1797+ pass; the replay parity test must skip with the `lean-cache` message on a clean CI runner or pass locally where the cache is materialized.
-7. **Operator path** runs entirely from the **host venv** (PR #230). The `start` subcommand cannot be run inside the `polygon-data-service` container — IBKR error 420 ("Trading TWS session is connected from a different IP address") rejects `reqRealTimeBars` whenever the API client's source IP differs from the Gateway's login IP, and the container always fails this check from the WSL bridge subnet. Manual one-off CLI starts must avoid colliding with the data-plane `IBKR_CLIENT_ID`; UI-launched children get distinct ids from `LIVE_RUNNER_IBKR_CLIENT_ID_POOL`. End-to-end operator steps are in [`docs/runbooks/ibkr-paper-dry-run.md`](runbooks/ibkr-paper-dry-run.md). Tail `live.log` for the per-minute `[BAR]` heartbeat to confirm bars are flowing — `decisions.parquet` stays empty during the ≥ 3 h 45 m indicator warmup window, but `[BAR]` lines appearing every minute prove the engine is alive (PR #229; see issue #228 / #227 for the misdiagnosis this prevents).
+7. **Operator path** uses Bot Control and Account Desk, never a one-off CLI start.
+   The authenticated host daemon owns process launch and allocates distinct client ids;
+   the UI/manual surface displays its evidence and directs recovery. See
+   `docs/bot-control-operator-manual.md`.
 
 If any of these fails, fix it before running. The diagnostic endpoint will tell you which layer is the blocker.
 
@@ -505,5 +514,5 @@ If any of these fails, fix it before running. The diagnostic endpoint will tell 
 | 2026-05-04 | Claude Opus 4.7 | Initial authority doc post PR #76, #77, #78. Captures Phase 1-7 live runtime, Diagnose endpoint + button, Phase 10 prereqs (`open_` fallback, force-flat, exit-side collapse). |
 | 2026-05-12 | Claude Opus 4.7 | Phase 8 hardening landed on `feat/ibkr-paper-runner-hardening`: `LiveEngine.shutdown_event` graceful exit, SIGINT/SIGTERM handlers in `cmd_start`, rotating file logger (`run_logging.py`, 10MB × 5 backups), unhandled-exception recovery flatten, `IbkrClient.connect()/disconnect()` wired. Phase 8 row in § 11 flipped from STUB → SHIPPED. Latent CLI bug (CLI never connected the client) fixed in the same commit. Deferred to follow-ups: equity-curve parquet writer, YAML config input, `LiveConfig` → `BaseSettings`. |
 | 2026-05-13 | Claude Opus 4.7 | Doc-rot refresh — three-way Phase 9 reconciliation pipeline (`reconcile.py`, per the 2026-05-08 shadow-deployment spec § 6) had shipped but this page still listed it as a stub. Updated § 6 surface table (`run.py`/`reconcile.py`/`run_logging.py`/`pre_flight.py`/`run_ledger.py` rows), § 6 force-flat residual paragraph (replaced "(when shipped)" with the actual classifier), § 11 status row (STUB → SHIPPED with note on deployment-plan's older paper-vs-backtest framing being superseded), and § 12 operational checklist item 7 (reconcile CLI command). Also surfaced the smoke-discovered `IbkrClient.disconnect()` latent bug (`ib_async.IB.disconnect` is synchronous; the code awaited a non-existent `disconnectAsync`) — fix landed in PR #225 commit `34ea0a1` and is regression-tested. |
-| 2026-05-28 | Claude Opus 4.7 | **Design-lock round** for the persistent paper-trading bot architecture and shadow VWAP onboarding (`docs/ibkr-paper-deployment-plan.md` § 16). Eight resolutions taken; three load-bearing as ADRs under `docs/architecture/adrs/`: (1) substrate stays JSON+Parquet+hash sidecars, Postgres only as a future projection layer with written triggers; (2) shadow mode is a broker-adapter-level `submit_mode` switch on the same engine in a separate process; (3) operational topology stays (T3) — Windows host-venv for Gateway/IBC/bots/host_daemon; Podman compose stays observability-only; (T4) Linux VPS migration deferred with five explicit triggers. The pre-implementation draft's proposal of a Postgres control plane and `gnzsnz/ib-gateway-docker` container topology is superseded. Cold-restart source of truth is the broker via namespaced ownership (`orderRef`/`client_order_id`), sidecar as cross-check, mismatch → poisoned. Divergence is split into two new layer-scoped enums (`ExecutionDivergence` for Layer A execution-quality, `ReplayDivergence` for Layer B canonical-baseline replay) with separate `day-N.exec.{...}` and `day-N.replay.{...}` report bundles; the existing three-way reconciler stays untouched. Operator control surface is a file-based command channel with durable per-strategy_instance desired-state and per-run command files; panic path remains direct-broker `emergency-flatten`. Phase 10 prereq RTH dry-run status is unchanged — still gating. § 11 Phase 10 prereq row, § 12 operator path, and § 13 cross-reference unaffected; the PR queue in § 16.2 of the deployment plan is the work order from here. |
+| 2026-05-28 | Claude Opus 4.7 | **Historical design-lock round** for the persistent paper-trading bot architecture and shadow VWAP onboarding ([archived plan](archive/plans/ibkr-paper-deployment-plan.md) § 16). Its former direct-broker emergency and command-channel statements are superseded for current operation by ADR-0030, ADR-0026, and the Bot Control manual. |
 | 2026-05-13 | Claude Opus 4.7 | Post-PR #229/#230/#231 refresh after a focused operator-path session. **PR #229** added the per-minute `[BAR]` heartbeat to `LiveEngine.run` so operators can distinguish "engine alive, strategy in indicator warmup" from "engine hung" — closes the issue #227 misdiagnosis. **PR #230** corrected three runbook bugs: dropped `client_id` from the `--live-config-json` example (rejected by `_live_config_from_ledger`), flipped Step 3 from container-side to host-venv (IBKR error 420 same-IP-binding makes container-side `start` impossible), added a Windows asyncio note for `loop.add_signal_handler` no-op fallback, and preserved the spec § 5 single-client invariant by stopping the container before Step 3. **PR #231** introduced `_next_bar_or_shutdown` so SIGINT unwedges the engine within bounded time even when the bar source is silent (Gateway stall, market halt, IP-binding rejection); follow-up commit ensures source-side exceptions propagate even when shutdown is concurrent (broker errors are no longer masked by graceful exit). § 6 surface table, bar-loop step list, and graceful-shutdown subsection updated. § 11 Phase 8 row notes the new heartbeat / wedge-fix / exception-propagation; Phase 10 row now points at four explicit prereq rows (full-RTH dry-run pass, `commissionReport` callback, `equity_curve.parquet` writer, indicator-state-persistence) plus an end-to-end producer-test gap. § 12 item 7 rewritten for the host-venv operator path. § 13 cross-reference updated. |
