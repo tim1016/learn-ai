@@ -17,6 +17,8 @@ from app.broker.contract.capabilities import BrokerCapabilities
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
+    BrokerAsset,
+    BrokerClockEvidence,
     BrokerOrder,
     BrokerPosition,
 )
@@ -79,6 +81,18 @@ class AlpacaBroker:
     ) -> list[BrokerActivity]:
         payloads = await self._client.list_activities(after_ms=after_ms)
         return [adapter.from_alpaca_activity(payload) for payload in payloads]
+
+    async def list_assets(
+        self,
+        *,
+        status: str | None = None,
+    ) -> list[BrokerAsset]:
+        payloads = await self._client.list_assets(status=status)
+        return [adapter.from_alpaca_asset(payload) for payload in payloads]
+
+    async def get_clock_evidence(self) -> BrokerClockEvidence:
+        payload = await self._client.get_clock()
+        return adapter.from_alpaca_clock(payload)
 
 
 def register_default_brokers(registry: BrokerRegistry | None = None) -> BrokerRegistry:

@@ -18,6 +18,8 @@ from app.broker.contract.errors import BrokerError, BrokerRateLimited
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
+    BrokerAsset,
+    BrokerClockEvidence,
     BrokerOrder,
     BrokerPosition,
 )
@@ -84,3 +86,18 @@ async def list_activities(
     after_ms: int | None = None,
 ) -> list[BrokerActivity]:
     return await _run(broker, lambda port: port.list_activities(after_ms=after_ms))
+
+
+@router.get("/{broker}/assets", response_model=list[BrokerAsset])
+async def list_assets(
+    broker: str,
+    status: Literal["active", "inactive"] | None = None,
+) -> list[BrokerAsset]:
+    return await _run(broker, lambda port: port.list_assets(status=status))
+
+
+@router.get("/{broker}/clock", response_model=BrokerClockEvidence)
+async def get_clock_evidence(broker: str) -> BrokerClockEvidence:
+    # Vendor evidence only — the canonical calendar module remains the sole
+    # authority for scheduled session structure (no authority change).
+    return await _run(broker, lambda port: port.get_clock_evidence())

@@ -7255,6 +7255,99 @@
         "title": "BrokerActivityRow",
         "type": "object"
       },
+      "BrokerAsset": {
+        "additionalProperties": false,
+        "description": "A tradable (or listed) instrument descriptor.",
+        "properties": {
+          "asset_class": {
+            "title": "Asset Class",
+            "type": "string"
+          },
+          "asset_id": {
+            "title": "Asset Id",
+            "type": "string"
+          },
+          "broker": {
+            "title": "Broker",
+            "type": "string"
+          },
+          "exchange": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exchange"
+          },
+          "fractionable": {
+            "title": "Fractionable",
+            "type": "boolean"
+          },
+          "marginable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Marginable"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "shortable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shortable"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "tradable": {
+            "title": "Tradable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "broker",
+          "asset_id",
+          "symbol",
+          "name",
+          "asset_class",
+          "exchange",
+          "status",
+          "tradable",
+          "fractionable",
+          "shortable",
+          "marginable"
+        ],
+        "title": "BrokerAsset",
+        "type": "object"
+      },
       "BrokerCapabilityProbeResponse": {
         "properties": {
           "snapshots": {
@@ -7285,6 +7378,60 @@
           "snapshots"
         ],
         "title": "BrokerCapabilityReadResponse",
+        "type": "object"
+      },
+      "BrokerClockEvidence": {
+        "additionalProperties": false,
+        "description": "Vendor clock/calendar reading \u2014 **evidence only, never authority**.\n\nThe canonical calendar module (``.claude/rules/temporal-rigor.md``) remains\nthe sole source of scheduled session structure. This model records what the\nbroker *claims* about market state so it can be displayed and, later,\ncompared against the calendar in a parity diagnostic. Nothing in session or\ncalendar logic may read these fields as authoritative.",
+        "properties": {
+          "broker": {
+            "title": "Broker",
+            "type": "string"
+          },
+          "is_open": {
+            "title": "Is Open",
+            "type": "boolean"
+          },
+          "next_close_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Close Ms"
+          },
+          "next_open_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Open Ms"
+          },
+          "observed_at_ms": {
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "vendor_timestamp_ms": {
+            "title": "Vendor Timestamp Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "broker",
+          "is_open",
+          "vendor_timestamp_ms",
+          "next_open_ms",
+          "next_close_ms",
+          "observed_at_ms"
+        ],
+        "title": "BrokerClockEvidence",
         "type": "object"
       },
       "BrokerHealthCondition": {
@@ -42561,6 +42708,146 @@
           }
         },
         "summary": "List Activities",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/assets": {
+      "get": {
+        "operationId": "list_assets_api_brokers__broker__assets_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "active",
+                    "inactive"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BrokerAsset"
+                  },
+                  "title": "Response List Assets Api Brokers  Broker  Assets Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Assets",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/clock": {
+      "get": {
+        "operationId": "get_clock_evidence_api_brokers__broker__clock_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrokerClockEvidence"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Clock Evidence",
         "tags": [
           "brokers-v2"
         ]

@@ -1243,6 +1243,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/assets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Assets */
+        get: operations["list_assets_api_brokers__broker__assets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/clock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Clock Evidence */
+        get: operations["get_clock_evidence_api_brokers__broker__clock_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/orders": {
         parameters: {
             query?: never;
@@ -8303,6 +8337,34 @@ export interface components {
             ts_ms: number;
             verdict: components["schemas"]["Verdict"];
         };
+        /**
+         * BrokerAsset
+         * @description A tradable (or listed) instrument descriptor.
+         */
+        BrokerAsset: {
+            /** Asset Class */
+            asset_class: string;
+            /** Asset Id */
+            asset_id: string;
+            /** Broker */
+            broker: string;
+            /** Exchange */
+            exchange: string | null;
+            /** Fractionable */
+            fractionable: boolean;
+            /** Marginable */
+            marginable: boolean | null;
+            /** Name */
+            name: string | null;
+            /** Shortable */
+            shortable: boolean | null;
+            /** Status */
+            status: string;
+            /** Symbol */
+            symbol: string;
+            /** Tradable */
+            tradable: boolean;
+        };
         /** BrokerCapabilityProbeResponse */
         BrokerCapabilityProbeResponse: {
             /** Snapshots */
@@ -8312,6 +8374,30 @@ export interface components {
         BrokerCapabilityReadResponse: {
             /** Snapshots */
             snapshots: components["schemas"]["SessionDataCapability"][];
+        };
+        /**
+         * BrokerClockEvidence
+         * @description Vendor clock/calendar reading — **evidence only, never authority**.
+         *
+         *     The canonical calendar module (``.claude/rules/temporal-rigor.md``) remains
+         *     the sole source of scheduled session structure. This model records what the
+         *     broker *claims* about market state so it can be displayed and, later,
+         *     compared against the calendar in a parity diagnostic. Nothing in session or
+         *     calendar logic may read these fields as authoritative.
+         */
+        BrokerClockEvidence: {
+            /** Broker */
+            broker: string;
+            /** Is Open */
+            is_open: boolean;
+            /** Next Close Ms */
+            next_close_ms: number | null;
+            /** Next Open Ms */
+            next_open_ms: number | null;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Vendor Timestamp Ms */
+            vendor_timestamp_ms: number;
         };
         /**
          * BrokerHealthCondition
@@ -24666,6 +24752,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BrokerActivity"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_assets_api_brokers__broker__assets_get: {
+        parameters: {
+            query?: {
+                status?: ("active" | "inactive") | null;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrokerAsset"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_clock_evidence_api_brokers__broker__clock_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrokerClockEvidence"];
                 };
             };
             /** @description Validation Error */

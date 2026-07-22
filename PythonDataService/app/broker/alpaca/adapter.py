@@ -25,6 +25,8 @@ from app.broker.alpaca.config import BROKER_ID
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
+    BrokerAsset,
+    BrokerClockEvidence,
     BrokerOrder,
     BrokerOrderEvent,
     BrokerPosition,
@@ -57,6 +59,11 @@ def opt_float(value: Any) -> float | None:
 def opt_str(value: Any) -> str | None:
     """Coerce an optional value to ``str``; ``None`` stays ``None``."""
     return None if value is None else str(value)
+
+
+def opt_bool(value: Any) -> bool | None:
+    """Coerce an optional value to ``bool``; ``None`` stays ``None``."""
+    return None if value is None else bool(value)
 
 
 def _parse_rfc3339(value: str) -> datetime:
@@ -239,5 +246,46 @@ def from_alpaca_activity(
         price=opt_float(payload.get("price")),
         net_amount=opt_float(payload.get("net_amount")),
         occurred_at_ms=occurred_at_ms(payload),
+        observed_at_ms=_observed(observed_at_ms),
+    )
+
+
+def from_alpaca_asset(payload: Mapping[str, Any]) -> BrokerAsset:
+    """Map a raw Alpaca asset payload to a ``BrokerAsset``.
+
+    Alpaca's ``/v2/assets`` payload names the asset class ``class`` (the SDK
+    aliases it to ``asset_class``); accept either raw key.
+    """
+    return BrokerAsset(
+        broker=BROKER_ID,
+        asset_id=str(payload["id"]),
+        symbol=str(payload["symbol"]),
+        name=opt_str(payload.get("name")),
+        asset_class=str(payload.get("asset_class") or payload.get("class") or "unknown"),
+        exchange=opt_str(payload.get("exchange")),
+        status=str(payload["status"]),
+        tradable=bool(payload.get("tradable", False)),
+        fractionable=bool(payload.get("fractionable", False)),
+        shortable=opt_bool(payload.get("shortable")),
+        marginable=opt_bool(payload.get("marginable")),
+    )
+
+
+def from_alpaca_clock(
+    payload: Mapping[str, Any],
+    *,
+    observed_at_ms: int | None = None,
+) -> BrokerClockEvidence:
+    """Map a raw Alpaca ``/v2/clock`` payload to ``BrokerClockEvidence``.
+
+    **Evidence only.** The canonical calendar module remains the sole authority
+    for scheduled session structure; nothing here feeds session/calendar logic.
+    """
+    return BrokerClockEvidence(
+        broker=BROKER_ID,
+        is_open=bool(payload["is_open"]),
+        vendor_timestamp_ms=rfc3339_to_ms(str(payload["timestamp"])),
+        next_open_ms=opt_rfc3339_to_ms(payload.get("next_open")),
+        next_close_ms=opt_rfc3339_to_ms(payload.get("next_close")),
         observed_at_ms=_observed(observed_at_ms),
     )

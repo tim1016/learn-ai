@@ -14,6 +14,8 @@ from app.broker.contract.errors import BrokerAuthError, BrokerRateLimited
 from app.broker.contract.models import (
     BrokerAccountSnapshot,
     BrokerActivity,
+    BrokerAsset,
+    BrokerClockEvidence,
     BrokerOrder,
     BrokerPosition,
 )
@@ -57,15 +59,26 @@ class _FakePort:
     broker_id = "alpaca"
 
     def __init__(
-        self, *, account=None, positions=None, orders=None, activities=None, error=None
+        self,
+        *,
+        account=None,
+        positions=None,
+        orders=None,
+        activities=None,
+        assets=None,
+        clock=None,
+        error=None,
     ) -> None:
         self._account = account
         self._positions = positions if positions is not None else []
         self._orders = orders if orders is not None else []
         self._activities = activities if activities is not None else []
+        self._assets = assets if assets is not None else []
+        self._clock = clock
         self._error = error
         self.orders_call = None
         self.activities_call = None
+        self.assets_call = None
 
     async def get_account(self) -> BrokerAccountSnapshot:
         if self._error is not None:
@@ -88,6 +101,17 @@ class _FakePort:
             raise self._error
         self.activities_call = {"after_ms": after_ms}
         return self._activities
+
+    async def list_assets(self, *, status=None):
+        if self._error is not None:
+            raise self._error
+        self.assets_call = {"status": status}
+        return self._assets
+
+    async def get_clock_evidence(self):
+        if self._error is not None:
+            raise self._error
+        return self._clock
 
 
 async def _get(path: str):
@@ -257,3 +281,64 @@ async def test_activities_endpoint_returns_list_and_forwards_after_ms() -> None:
     assert response.status_code == 200
     assert response.json()[0]["activity_id"] == "act-9"
     assert port.activities_call == {"after_ms": 999}
+
+
+def _asset(**overrides) -> BrokerAsset:
+    base = dict(
+        broker="alpaca",
+        asset_id="a-1",
+        symbol="AAPL",
+        name="Apple Inc.",
+        asset_class="us_equity",
+        exchange="NASDAQ",
+        status="active",
+        tradable=True,
+        fractionable=True,
+        shortable=True,
+        marginable=True,
+    )
+    base.update(overrides)
+    return BrokerAsset(**base)
+
+
+def _clock(**overrides) -> BrokerClockEvidence:
+    base = dict(
+        broker="alpaca",
+        is_open=True,
+        vendor_timestamp_ms=1_700_000_000_000,
+        next_open_ms=1_700_050_000_000,
+        next_close_ms=1_700_020_000_000,
+        observed_at_ms=1_700_000_000_000,
+    )
+    base.update(overrides)
+    return BrokerClockEvidence(**base)
+
+
+async def test_assets_endpoint_returns_list_and_forwards_status() -> None:
+    port = _FakePort(assets=[_asset(symbol="MSFT")])
+    get_broker_registry().register(port)
+
+    response = await _get("/api/brokers/alpaca/assets?status=active")
+
+    assert response.status_code == 200
+    assert response.json()[0]["symbol"] == "MSFT"
+    assert port.assets_call == {"status": "active"}
+
+
+async def test_assets_endpoint_rejects_invalid_status() -> None:
+    get_broker_registry().register(_FakePort(assets=[]))
+
+    response = await _get("/api/brokers/alpaca/assets?status=bogus")
+
+    assert response.status_code == 422
+
+
+async def test_clock_endpoint_returns_vendor_evidence() -> None:
+    get_broker_registry().register(_FakePort(clock=_clock(is_open=False)))
+
+    response = await _get("/api/brokers/alpaca/clock")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["is_open"] is False
+    assert body["vendor_timestamp_ms"] == 1_700_000_000_000
