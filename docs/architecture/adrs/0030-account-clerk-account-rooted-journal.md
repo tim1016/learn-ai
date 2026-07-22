@@ -161,6 +161,45 @@ needs an ADR-approved takeover/recovery policy, a Clerk-unavailable operator
 workflow, journal receipt semantics, and failure-injection tests for lock,
 session, and crash races.
 
+## Clerk S2 lifecycle-honesty boundary (2026-07-21)
+
+Issue #1155 establishes the daily-exit floor without creating a second
+broker writer or enabling overnight trading.
+
+- **Clock out is a Clerk-lane operation.** `CLOCK_OUT` makes the runner pause
+  new strategy work, flatten through its existing Clerk submit/cancel boundary,
+  and poll a broker-primary position snapshot. A cached snapshot cannot prove
+  flatness. Only an empty fresh snapshot, a durably persisted `STOPPED` latch,
+  and the completed command acknowledgement make `clock_out_receipt.json`
+  eligible for `CLOCKED_OUT_FLAT` / `OFF_DUTY` projection.
+- **Every dead child gets a fact, never an invented clean exit.** The daemon
+  maps a complete clock-out receipt to `CLOCKED_OUT_FLAT`; all other reaped,
+  crashed, halted, and failed-launch paths record their specific terminal
+  duty outcome. The cockpit renders that persisted outcome and reason rather
+  than holding a dead child in optimistic `RUNNING` copy.
+- **Carryover remains explicitly disabled.** Each bot lifecycle record now
+  reserves `carryover_policy=FORBID`. No extended-hours or overnight behavior
+  is activated by this field. A later policy must be Clerk-authored and opt in
+  deliberately.
+- **The STOPPED latch is one-way until Resume.** Start only reads the latch and
+  rejects a stopped bot; it cannot clear it as a side effect.
+- **Retirement is logically atomic across artifact roots.** A per-bot
+  `retirement_transition.json` is fsynced as `PENDING` before retirement
+  successor rows are written to every discovered account registry. While
+  pending, both Start and Clerk intake reject the identity. The durable
+  per-instance operation fence spans deploy/reopen, Start's ACTIVE
+  binding/spawn, Clerk's broker-write boundary, and terminal reaping, so a
+  retirement cannot interleave after an earlier admissibility check. Reaping
+  also refuses to overwrite a different active run. The daemon replays pending
+  transitions at boot, verifies every registry fold is `RETIRED`, then persists
+  lifecycle `RETIRED` with no roster membership or active duty and records
+  `COMMITTED`. This fence makes a crash between individual file writes
+  fail closed instead of leaving a usable stale binding or partial roster.
+
+The relevant regression seams are
+`test_live_engine_command_channel.py`, `test_host_daemon.py`,
+`test_bot_daily_lifecycle.py`, and `test_live_instances.py`.
+
 ## Issue #1044 callback-stream hardening traceability
 
 | Requirement | Verification |

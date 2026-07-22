@@ -11,6 +11,7 @@ import signal
 import subprocess
 import sys
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -36,6 +37,13 @@ from app.engine.live.account_registry import (
     read_account_instance_registry,
     write_account_instance_binding,
 )
+from app.engine.live.bot_lifecycle_state import (
+    BotLifecyclePhase,
+    BotLifecycleStateRepo,
+    stable_bot_lifecycle_state_path,
+)
+from app.engine.live.clock_out import ClockOutReceipt, write_clock_out_receipt
+from app.engine.live.command_channel import Command, CommandChannel, CommandVerb
 from app.engine.live.daemon_auth import TOKEN_HEADER
 from app.engine.live.desired_state import (
     DesiredState,
@@ -67,6 +75,14 @@ from app.schemas.live_runs import (
     HostRunnerProcessStatus,
     HostRunnerStartRequest,
     RunStatusSidecar,
+)
+from app.services.bot_deletion import (
+    BotRetirementBindingTarget,
+    BotRetirementTransitionRecord,
+    bot_lifecycle_operation_fence,
+    bot_retirement_is_pending,
+    retire_bot_lifecycle_and_bindings,
+    stable_bot_retirement_transition_path,
 )
 from app.services.bot_event_wal import BotEventRawWal, run_bot_event_wal_path
 
@@ -519,6 +535,361 @@ def daemon_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Run
     monkeypatch.setattr(manager, "_activate_legacy_emergency_fence", lambda _account, *, fence_id: None)
     monkeypatch.setattr(manager, "_release_legacy_emergency_fence", lambda _account, *, fence_id: None)
     return manager, run_dir
+
+
+def test_daemon_boot_replays_a_fenced_partial_bot_retirement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A crash between account rows cannot leave a later start or Clerk write live."""
+
+    from app.services import bot_deletion
+
+    repo_root = tmp_path / "repo"
+    live_runs_root = repo_root / "PythonDataService" / "artifacts" / "live_runs"
+    artifacts_root = live_runs_root.parent
+    run_id = "run-retirement-replay"
+    sid = "retirement-replay-bot"
+    run_dir = live_runs_root / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps({"run_id": run_id, "strategy_instance_id": sid, "account_id": "DU111"}),
+        encoding="utf-8",
+    )
+    for account_id in ("DU111", "DU222"):
+        write_account_instance_binding(
+            artifacts_root,
+            AccountInstanceBinding(
+                account_id=account_id,
+                strategy_instance_id=sid,
+                run_id=run_id,
+                bot_order_namespace=bot_order_namespace_for_instance(sid),
+                lifecycle_state="ACTIVE",
+                recorded_at_ms=10,
+                source="test",
+            ),
+        )
+
+    real_write = bot_deletion.write_account_instance_binding
+
+    def fail_second_registry(
+        root: Path,
+        binding: AccountInstanceBinding,
+    ) -> Path:
+        if binding.account_id == "DU222" and binding.lifecycle_state == "RETIRED":
+            raise OSError("injected second-registry failure")
+        return real_write(root, binding)
+
+    monkeypatch.setattr(bot_deletion, "write_account_instance_binding", fail_second_registry)
+    with pytest.raises(OSError, match="injected second-registry failure"):
+        retire_bot_lifecycle_and_bindings(
+            artifacts_root,
+            sid,
+            run_ids=[run_id],
+            updated_by="operator",
+            reason="test retirement",
+            now_ms=20,
+        )
+
+    assert bot_retirement_is_pending(artifacts_root, sid)
+    assert BotLifecycleStateRepo(stable_bot_lifecycle_state_path(artifacts_root, sid)).read() is None
+    assert read_account_instance_registry(artifacts_root, "DU111")[-1].lifecycle_state == "RETIRED"
+    assert read_account_instance_registry(artifacts_root, "DU222")[-1].lifecycle_state == "ACTIVE"
+
+    monkeypatch.setattr(bot_deletion, "write_account_instance_binding", real_write)
+    manager = RunnerProcessManager(repo_root=repo_root, live_runs_root=live_runs_root)
+
+    assert manager._recovered_bot_retirements == (sid,)
+    assert not bot_retirement_is_pending(artifacts_root, sid)
+    lifecycle = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(artifacts_root, sid)).read()
+    assert lifecycle is not None
+    assert lifecycle.phase is BotLifecyclePhase.RETIRED
+    assert lifecycle.on_roster is False
+    assert read_account_instance_registry(artifacts_root, "DU222")[-1].lifecycle_state == "RETIRED"
+
+
+def test_start_rechecks_retirement_after_waiting_for_the_operation_fence(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Start that was already in flight cannot append ACTIVE after PENDING."""
+
+    manager, run_dir = daemon_context
+    sid = "retirement-race-bot"
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps({"run_id": RUN_ID, "strategy_instance_id": sid, "account_id": "DU111"}),
+        encoding="utf-8",
+    )
+    from app.services import bot_deletion
+
+    original_pending = bot_deletion.bot_retirement_is_pending
+    checked_after_fence = threading.Event()
+    popen_called = threading.Event()
+    errors: list[BaseException] = []
+
+    def observe_pending(root: Path, instance_id: str) -> bool:
+        checked_after_fence.set()
+        return original_pending(root, instance_id)
+
+    def fake_popen(*_args: Any, **_kwargs: Any) -> FakeProcess:
+        popen_called.set()
+        return FakeProcess()
+
+    monkeypatch.setattr(bot_deletion, "bot_retirement_is_pending", observe_pending)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    def start() -> None:
+        try:
+            manager.start(RUN_ID, HostRunnerStartRequest())
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    transition_path = stable_bot_retirement_transition_path(manager.artifacts_root, sid)
+    with bot_lifecycle_operation_fence(manager.artifacts_root, sid):
+        starter = threading.Thread(target=start)
+        starter.start()
+        assert not checked_after_fence.wait(timeout=0.1)
+        transition_path.parent.mkdir(parents=True, exist_ok=True)
+        transition_path.write_text(
+            BotRetirementTransitionRecord(
+                strategy_instance_id=sid,
+                targets=(BotRetirementBindingTarget(account_id="DU111", run_id=RUN_ID),),
+                prepared_at_ms=10,
+                updated_by="operator",
+                reason="retire",
+            ).model_dump_json(),
+            encoding="utf-8",
+        )
+    starter.join(timeout=2.0)
+
+    assert not starter.is_alive()
+    assert checked_after_fence.is_set()
+    assert len(errors) == 1 and isinstance(errors[0], HostRunnerError)
+    assert not popen_called.is_set()
+    assert read_account_instance_registry(manager.artifacts_root, "DU111") == []
+
+
+def test_reaper_does_not_hold_manager_lock_while_waiting_for_another_bot_fence(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One blocked reaper cannot deadlock an unrelated Start admission."""
+
+    manager, run_dir = daemon_context
+    blocked_sid = "blocked-reaper-bot"
+    _add_managed_process(manager, key=blocked_sid, ended_at_ms=None, returncode=1)
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps({"run_id": RUN_ID, "strategy_instance_id": blocked_sid}),
+        encoding="utf-8",
+    )
+    start_has_fence = threading.Event()
+    allow_start_to_acquire_manager = threading.Event()
+    started: list[BaseException] = []
+    real_fence = manager._bot_lifecycle_operation_fence
+
+    @contextmanager
+    def observe_fence(strategy_instance_id: str | None):
+        with real_fence(strategy_instance_id):
+            if (
+                strategy_instance_id == blocked_sid
+                and threading.current_thread().name == "starter"
+            ):
+                start_has_fence.set()
+                assert allow_start_to_acquire_manager.wait(timeout=1.0)
+            yield
+
+    def start_independent() -> None:
+        try:
+            manager.start(RUN_ID, HostRunnerStartRequest())
+        except BaseException as exc:  # pragma: no cover - asserted below
+            started.append(exc)
+
+    monkeypatch.setattr(manager, "_bot_lifecycle_operation_fence", observe_fence)
+    monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+    starter = threading.Thread(target=start_independent, name="starter")
+    starter.start()
+    assert start_has_fence.wait(timeout=1.0)
+    reaper = threading.Thread(target=manager.reap_exited_processes)
+    reaper.start()
+    allow_start_to_acquire_manager.set()
+    starter.join(timeout=1.0)
+    assert not starter.is_alive()
+    assert started == []
+    reaper.join(timeout=1.0)
+    assert not reaper.is_alive()
+
+
+def test_instance_status_is_a_pure_observation_not_a_reaper(
+    daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    manager, _ = daemon_context
+    sid = "status-observation-bot"
+    _add_managed_process(manager, key=sid, ended_at_ms=None, returncode=1)
+
+    status_snapshot = manager.instance_status(sid)
+
+    assert status_snapshot.state is HostRunnerProcessState.exited
+    assert manager._managed[sid].lifecycle_outcome_recorded_at_ms is None
+    assert BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(manager.artifacts_root, sid)
+    ).read() is None
+
+
+def test_host_deploy_reopens_retired_lifecycle_inside_operation_fence(
+    daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    manager, _ = daemon_context
+    sid = "deploy-replacement-bot"
+    repo = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(manager.artifacts_root, sid))
+    repo.retire(now_ms=100, updated_by="operator", reason="replace")
+
+    with manager._bot_lifecycle_operation_fence(sid):
+        manager._reopen_retired_lifecycle_for_deploy(sid, "run-replacement")
+
+    reopened = repo.read()
+    assert reopened is not None
+    assert reopened.phase is BotLifecyclePhase.OFF_DUTY
+    assert reopened.on_roster is True
+    assert reopened.retired_at_ms is None
+    assert reopened.reason == "deploy.replacement"
+
+
+def test_host_deploy_surfaces_lifecycle_reopen_failure(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, _ = daemon_context
+    sid = "deploy-reopen-failure"
+    repo = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(manager.artifacts_root, sid))
+    repo.retire(now_ms=100, updated_by="operator", reason="replace")
+
+    def fail_reopen(_self: object, **_kwargs: object) -> None:
+        raise OSError("state file is not writable")
+
+    monkeypatch.setattr(BotLifecycleStateRepo, "reopen_for_deploy", fail_reopen)
+    with manager._bot_lifecycle_operation_fence(sid), pytest.raises(HostRunnerError) as exc_info:
+        manager._reopen_retired_lifecycle_for_deploy(sid, "run-replacement")
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail["reason_code"] == "BOT_LIFECYCLE_REOPEN_FAILED"
+
+
+def test_reaper_does_not_treat_a_partial_clock_out_receipt_as_clean_exit(
+    daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    """A flat receipt without the completed command ack cannot end duty cleanly."""
+
+    manager, _ = daemon_context
+    sid = "clock-out-partial"
+    _add_managed_process(manager, key=sid, ended_at_ms=None, returncode=0)
+    managed = manager._managed[sid]
+    write_clock_out_receipt(
+        managed.run_dir,
+        ClockOutReceipt(
+            run_id=managed.run_id,
+            strategy_instance_id=sid,
+            command_seq=1,
+            status="flat",
+            requested_at_ms=10,
+            completed_at_ms=11,
+            broker_evidence_at_ms=11,
+            stop_persisted_at_ms=12,
+            reason_code="CLOCK_OUT_FLAT",
+        ),
+    )
+    DesiredStateRepo(
+        stable_desired_state_path(manager.artifacts_root, sid),
+        trusted_root=manager.artifacts_root / "live_state",
+    ).set(DesiredState.STOPPED, updated_by="test", reason="test", now_ms=12)
+
+    manager._refresh(managed)
+
+    lifecycle = BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(manager.artifacts_root, sid)
+    ).read()
+    assert lifecycle is not None and lifecycle.duty_outcome is not None
+    assert lifecycle.duty_outcome.kind == "EXITED_UNVERIFIED"
+    assert lifecycle.duty_outcome.kind != "CLOCKED_OUT_FLAT"
+
+
+def test_late_reaper_cannot_replace_a_newer_active_duty(
+    daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    manager, _ = daemon_context
+    sid = "late-reaper-bot"
+    _add_managed_process(manager, key=sid, ended_at_ms=None, returncode=1)
+    managed = manager._managed[sid]
+    (managed.run_dir / "run_ledger.json").write_text(
+        json.dumps({"run_id": managed.run_id, "strategy_instance_id": sid, "account_id": "DU111"}),
+        encoding="utf-8",
+    )
+    write_account_instance_binding(
+        manager.artifacts_root,
+        AccountInstanceBinding(
+            account_id="DU111",
+            strategy_instance_id=sid,
+            run_id="run-new-duty",
+            bot_order_namespace=bot_order_namespace_for_instance(sid),
+            lifecycle_state="ACTIVE",
+            recorded_at_ms=20,
+            source="new-duty",
+        ),
+    )
+    repo = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(manager.artifacts_root, sid))
+    repo.set_phase(
+        BotLifecyclePhase.ON_DUTY,
+        now_ms=20,
+        updated_by="roll_call",
+        active_run_id="run-new-duty",
+    )
+
+    manager._refresh(managed)
+
+    current = repo.read()
+    assert current is not None
+    assert current.phase is BotLifecyclePhase.ON_DUTY
+    assert current.active_run_id == "run-new-duty"
+    assert current.duty_outcome is None
+    assert read_account_instance_registry(manager.artifacts_root, "DU111")[-1].run_id == "run-new-duty"
+
+
+def test_reaper_records_clocked_out_flat_only_after_complete_clock_out_evidence(
+    daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    manager, _ = daemon_context
+    sid = "clock-out-complete"
+    _add_managed_process(manager, key=sid, ended_at_ms=None, returncode=0)
+    managed = manager._managed[sid]
+    write_clock_out_receipt(
+        managed.run_dir,
+        ClockOutReceipt(
+            run_id=managed.run_id,
+            strategy_instance_id=sid,
+            command_seq=1,
+            status="flat",
+            requested_at_ms=10,
+            completed_at_ms=11,
+            broker_evidence_at_ms=11,
+            stop_persisted_at_ms=12,
+            reason_code="CLOCK_OUT_FLAT",
+        ),
+    )
+    CommandChannel(managed.run_dir / "commands").ack_completion(
+        Command(seq=1, verb=CommandVerb.CLOCK_OUT),
+        outcome={"status": "completed", "effect": "clocked_out_flat"},
+    )
+    DesiredStateRepo(
+        stable_desired_state_path(manager.artifacts_root, sid),
+        trusted_root=manager.artifacts_root / "live_state",
+    ).set(DesiredState.STOPPED, updated_by="test", reason="test", now_ms=12)
+
+    manager._refresh(managed)
+
+    lifecycle = BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(manager.artifacts_root, sid)
+    ).read()
+    assert lifecycle is not None and lifecycle.duty_outcome is not None
+    assert lifecycle.duty_outcome.kind == "CLOCKED_OUT_FLAT"
 
 
 async def test_health_reports_idle_process(daemon_context: tuple[RunnerProcessManager, Path]) -> None:
@@ -1833,6 +2204,12 @@ async def test_start_retires_account_registry_binding_when_spawn_fails(
     bindings = read_account_instance_registry(manager.artifacts_root, "DU111")
     assert [binding.lifecycle_state for binding in bindings[-2:]] == ["ACTIVE", "RETIRED"]
     assert bindings[-1].source == "host_daemon.start_failed"
+    lifecycle = BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(manager.artifacts_root, "spy_ema_paper")
+    ).read()
+    assert lifecycle is not None and lifecycle.duty_outcome is not None
+    assert lifecycle.duty_outcome.kind == "FAILED_LAUNCH"
+    assert lifecycle.active_run_id is None
     events = BotEventRawWal(run_bot_event_wal_path(run_dir)).read_all()
     assert len(events) == 1
     event = events[0]
@@ -1883,6 +2260,12 @@ async def test_child_without_status_retires_account_registry_binding_as_ended_wi
     bindings = read_account_instance_registry(manager.artifacts_root, "DU111")
     assert [binding.lifecycle_state for binding in bindings[-2:]] == ["ACTIVE", "RETIRED"]
     assert bindings[-1].source == "host_daemon.ended_without_status"
+    lifecycle = BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(manager.artifacts_root, "spy_ema_paper")
+    ).read()
+    assert lifecycle is not None and lifecycle.duty_outcome is not None
+    assert lifecycle.duty_outcome.kind == "EXITED_UNVERIFIED"
+    assert lifecycle.active_run_id is None
     events = BotEventRawWal(run_bot_event_wal_path(run_dir)).read_all()
     assert len(events) == 1
     event = events[0]

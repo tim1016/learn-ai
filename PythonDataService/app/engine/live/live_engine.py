@@ -28,7 +28,12 @@ if TYPE_CHECKING:
 from app.broker.ibkr.bars import stream_minute_bars
 from app.broker.ibkr.client import IbkrClient
 from app.broker.ibkr.config import PAPER_PORTS
-from app.broker.ibkr.models import IbkrMinuteBar, IbkrOrderAck, IbkrOrderEvent
+from app.broker.ibkr.models import (
+    IbkrMinuteBar,
+    IbkrOrderAck,
+    IbkrOrderEvent,
+    IbkrPositionsSnapshot,
+)
 from app.engine.data.trade_bar import TradeBar
 from app.engine.engine import EquitySnapshot
 from app.engine.execution.order import Direction, OrderEvent
@@ -57,6 +62,7 @@ from app.engine.live.broker_callbacks import (
 from app.engine.live.broker_callbacks import (
     broker_callbacks_wal_path as default_broker_callbacks_wal_path,
 )
+from app.engine.live.clock_out import ClockOutReceipt, write_clock_out_receipt
 from app.engine.live.command_channel import (
     Command,
     CommandChannel,
@@ -104,6 +110,8 @@ _ENGINE_TZ = ZoneInfo("America/New_York")
 LIVE_SOURCE_BAR_INTERVAL_MS = 60_000
 BAR_SOURCE_WATCHDOG_INTERVAL_S = 5.0
 BAR_SOURCE_FIRST_BAR_TIMEOUT_S = 120.0
+CLOCK_OUT_FLAT_EVIDENCE_TIMEOUT_S = 30.0
+CLOCK_OUT_FLAT_EVIDENCE_POLL_S = 0.5
 
 
 def broker_callbacks_wal_path_from_output(output_dir: Path | None) -> Path | None:
@@ -641,6 +649,7 @@ class LiveEngine:
         # invokes ``_flatten`` without terminating the process. The flag is
         # cleared after the flatten lands so a subsequent enqueue rearms it.
         self._flatten_now_requested = False
+        self._clock_out_command: Command | None = None
         # Reconciliation PR 2 / runtime RECONCILE wiring.
         # ``_submit_lock`` serialises the engine's submit critical sections
         # (bar-loop submit, _flatten liquidations) with the async reconcile
@@ -1309,6 +1318,18 @@ class LiveEngine:
                         reconcile_owned_state=reconcile_owned_state_after_cancel,
                     )
                     submitted_order_ids.extend(ack.order_id for ack in flat_acks)
+                if self._clock_out_command is not None:
+                    clock_out_command = self._clock_out_command
+                    self._clock_out_command = None
+                    clock_out_acks = await self._complete_clock_out(
+                        clock_out_command,
+                        portfolio=portfolio,
+                        ctx=ctx,
+                        bar_time=minute_bar.time,
+                        reconcile_owned_state=reconcile_owned_state_after_cancel,
+                        shutdown_event=shutdown_event,
+                    )
+                    submitted_order_ids.extend(ack.order_id for ack in clock_out_acks)
                 # Reset per-day order counter on session-date boundary.
                 bar_date = minute_bar.time.date()
                 if current_session_date is None or bar_date != current_session_date:
@@ -2234,6 +2255,16 @@ class LiveEngine:
                 # not "completed".
                 self._flatten_now_requested = True
                 return {"status": "accepted", "effect": "flatten_now_queued"}
+            if cmd.verb is CommandVerb.CLOCK_OUT:
+                if self._clock_out_command is not None:
+                    return {"status": "already_running", "effect": "clock_out_in_progress"}
+                self._persist_command_desired_state(
+                    DesiredState.PAUSED,
+                    "command_channel:CLOCK_OUT",
+                )
+                self._paused = True
+                self._clock_out_command = cmd
+                return {"status": "accepted", "effect": "clock_out_queued"}
             if cmd.verb is CommandVerb.MARK_POISONED:
                 if self._output_dir is None:
                     raise DurableControlWriteError(
@@ -2791,6 +2822,128 @@ class LiveEngine:
             flat_acks = await self._submit_pending_with_meta_locked(portfolio)
             ctx.log(f"[SHUTDOWN] {bar_time}: submitted {liquidations} liquidation order(s)")
             return flat_acks
+
+    async def _complete_clock_out(
+        self,
+        command: Command,
+        *,
+        portfolio: LivePortfolio,
+        ctx: LiveContext,
+        bar_time: datetime,
+        reconcile_owned_state: Callable[[], Awaitable[None]],
+        shutdown_event: asyncio.Event | None,
+    ) -> list[IbkrOrderAck]:
+        """Flatten through the normal Clerk lane and prove fresh broker flatness."""
+
+        if self._output_dir is None or not self._run_id or not self._strategy_instance_id:
+            raise RuntimeError("CLOCK_OUT_DURABLE_IDENTITY_REQUIRED")
+        if shutdown_event is None:
+            raise RuntimeError("CLOCK_OUT_SHUTDOWN_EVENT_REQUIRED")
+        requested_at_ms = now_ms_utc()
+        acks: list[IbkrOrderAck] = []
+        receipt: ClockOutReceipt | None = None
+        stop_ready = False
+        try:
+            acks = await self._flatten(
+                portfolio,
+                ctx,
+                bar_time=bar_time,
+                reconcile_owned_state=reconcile_owned_state,
+            )
+            snapshot = await self._await_fresh_flat_broker_evidence(portfolio)
+            positions = {
+                position.symbol: float(position.quantity)
+                for position in snapshot.positions
+                if position.quantity != 0
+            }
+            receipt = ClockOutReceipt(
+                run_id=self._run_id,
+                strategy_instance_id=self._strategy_instance_id,
+                command_seq=command.seq,
+                status="flat" if not positions else "not_flat",
+                requested_at_ms=requested_at_ms,
+                completed_at_ms=now_ms_utc(),
+                broker_evidence_at_ms=snapshot.fetched_at_ms,
+                broker_positions=positions,
+                clerk_order_count=len(acks),
+                reason_code="CLOCK_OUT_FLAT" if not positions else "CLOCK_OUT_BROKER_NOT_FLAT",
+            )
+            write_clock_out_receipt(self._output_dir, receipt)
+            if positions:
+                outcome = {
+                    "status": "failed",
+                    "effect": "clock_out_broker_not_flat",
+                    "reason_code": receipt.reason_code,
+                }
+            else:
+                self._persist_command_desired_state(
+                    DesiredState.STOPPED,
+                    "command_channel:CLOCK_OUT_FLAT",
+                )
+                # The restart latch is now durable. Even if the final receipt
+                # rewrite fails, this process must leave; the reaper will mark
+                # the incomplete finalization as unverified rather than leave
+                # a paused process stranded behind STOPPED.
+                stop_ready = True
+                receipt = receipt.model_copy(update={"stop_persisted_at_ms": now_ms_utc()})
+                write_clock_out_receipt(self._output_dir, receipt)
+                outcome = {
+                    "status": "completed",
+                    "effect": "clocked_out_flat",
+                    "broker_evidence_at_ms": receipt.broker_evidence_at_ms,
+                }
+        except Exception as exc:
+            failure_reason_code = (
+                f"CLOCK_OUT_FINALIZATION_FAILED_{type(exc).__name__.upper()}"
+                if stop_ready
+                else f"CLOCK_OUT_FAILED_{type(exc).__name__.upper()}"
+            )
+            if receipt is None:
+                receipt = ClockOutReceipt(
+                    run_id=self._run_id,
+                    strategy_instance_id=self._strategy_instance_id,
+                    command_seq=command.seq,
+                    status="failed",
+                    requested_at_ms=requested_at_ms,
+                    completed_at_ms=now_ms_utc(),
+                    broker_positions={},
+                    clerk_order_count=len(acks),
+                    reason_code=failure_reason_code,
+                )
+                try:
+                    write_clock_out_receipt(self._output_dir, receipt)
+                except OSError:
+                    logger.exception("failed to persist clock-out failure receipt")
+            outcome = {
+                "status": "failed",
+                "effect": "clock_out_failed",
+                "reason_code": failure_reason_code,
+            }
+        try:
+            if self._command_channel is not None:
+                self._command_channel.ack_completion(command, outcome=outcome)
+        except Exception:
+            logger.exception("failed to persist clock-out completion ack")
+        finally:
+            if stop_ready:
+                shutdown_event.set()
+        return acks
+
+    async def _await_fresh_flat_broker_evidence(
+        self, portfolio: LivePortfolio
+    ) -> IbkrPositionsSnapshot:
+        """Poll broker-primary positions without cache fallback until flat or bounded timeout."""
+
+        deadline = asyncio.get_running_loop().time() + CLOCK_OUT_FLAT_EVIDENCE_TIMEOUT_S
+        latest = await portfolio.broker.fetch_positions()
+        if latest.used_cache_fallback:
+            raise RuntimeError("CLOCK_OUT_BROKER_EVIDENCE_NOT_FRESH")
+        while latest.positions and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(CLOCK_OUT_FLAT_EVIDENCE_POLL_S)
+            latest = await portfolio.broker.fetch_positions()
+            if latest.used_cache_fallback:
+                raise RuntimeError("CLOCK_OUT_BROKER_EVIDENCE_NOT_FRESH")
+        return latest
 
     # ──────────────────── Watchdog position helpers ──────────────────
 

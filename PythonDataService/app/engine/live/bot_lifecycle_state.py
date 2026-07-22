@@ -44,6 +44,25 @@ class BotDisplayStatus(StrEnum):
     RETIRED = "Retired"
 
 
+class BotDutyOutcome(BaseModel):
+    """Last durable terminal duty fact; never inferred from process liveness."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal[
+        "CLOCKED_OUT_FLAT",
+        "STOPPED",
+        "HALTED",
+        "CRASHED",
+        "FAILED_LAUNCH",
+        "EXITED_UNVERIFIED",
+        "RETIRED",
+    ]
+    reason_code: str = Field(min_length=1, max_length=128)
+    recorded_at_ms: int = Field(ge=0)
+    run_id: str | None = None
+
+
 class BotLifecycleStateRecord(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -57,6 +76,10 @@ class BotLifecycleStateRecord(BaseModel):
     retired_at_ms: int | None = None
     retired_reason: str | None = None
     replacement_strategy_instance_id: str | None = None
+    # Reserved default-deny hook. S2 deliberately does not enable carryover
+    # trading; a future Clerk policy must opt in explicitly.
+    carryover_policy: Literal["FORBID"] = "FORBID"
+    duty_outcome: BotDutyOutcome | None = None
     version: int = 1
 
 
@@ -145,6 +168,7 @@ class BotLifecycleStateRepo:
             phase=phase,
             active_run_id=active_run_id,
             reason=reason,
+            clear_duty_outcome=phase is BotLifecyclePhase.ON_DUTY,
         )
 
     def retire(
@@ -165,6 +189,31 @@ class BotLifecycleStateRepo:
             retired_at_ms=now_ms,
             retired_reason=reason,
             replacement_strategy_instance_id=replacement_strategy_instance_id,
+            duty_outcome=BotDutyOutcome(
+                kind="RETIRED",
+                reason_code="BOT_RETIRED",
+                recorded_at_ms=now_ms,
+            ),
+        )
+
+    def record_terminal_outcome(
+        self,
+        outcome: BotDutyOutcome,
+        *,
+        updated_by: str,
+        reason: str,
+        expected_active_run_id: str | None = None,
+    ) -> BotLifecycleStateRecord:
+        """Record a dead process honestly without leaving it ON_DUTY."""
+
+        return self.update(
+            now_ms=outcome.recorded_at_ms,
+            updated_by=updated_by,
+            phase=BotLifecyclePhase.OFF_DUTY,
+            active_run_id=None,
+            reason=reason,
+            duty_outcome=outcome,
+            expected_active_run_id=expected_active_run_id,
         )
 
     def reopen_for_deploy(
@@ -182,6 +231,7 @@ class BotLifecycleStateRepo:
             active_run_id=None,
             reason=reason,
             clear_retirement=True,
+            clear_duty_outcome=True,
         )
 
     def update(
@@ -196,11 +246,21 @@ class BotLifecycleStateRepo:
         retired_at_ms: int | None = None,
         retired_reason: str | None = None,
         replacement_strategy_instance_id: str | None = None,
+        duty_outcome: BotDutyOutcome | None = None,
         clear_retirement: bool = False,
+        clear_duty_outcome: bool = False,
+        expected_active_run_id: str | None = None,
     ) -> BotLifecycleStateRecord:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with _file_lock(self._path):
             existing = self.read()
+            if (
+                expected_active_run_id is not None
+                and existing is not None
+                and existing.active_run_id is not None
+                and existing.active_run_id != expected_active_run_id
+            ):
+                return existing
             next_phase = (
                 phase
                 if phase is not None
@@ -247,6 +307,16 @@ class BotLifecycleStateRepo:
                         replacement_strategy_instance_id
                         if replacement_strategy_instance_id is not None
                         else (existing.replacement_strategy_instance_id if existing is not None else None)
+                    )
+                ),
+                carryover_policy=existing.carryover_policy if existing is not None else "FORBID",
+                duty_outcome=(
+                    None
+                    if clear_duty_outcome
+                    else (
+                        duty_outcome
+                        if duty_outcome is not None
+                        else (existing.duty_outcome if existing is not None else None)
                     )
                 ),
                 version=(existing.version + 1) if existing is not None else 1,
@@ -357,6 +427,7 @@ def _next_active_run_id(
 
 __all__ = [
     "BotDisplayStatus",
+    "BotDutyOutcome",
     "BotLifecyclePhase",
     "BotLifecycleStateCorruptError",
     "BotLifecycleStateRecord",

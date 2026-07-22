@@ -2465,6 +2465,15 @@ BotLifecycleDisplayStatus = Literal[
     "Off roster",
     "Retired",
 ]
+BotDutyOutcomeKind = Literal[
+    "CLOCKED_OUT_FLAT",
+    "STOPPED",
+    "HALTED",
+    "CRASHED",
+    "FAILED_LAUNCH",
+    "EXITED_UNVERIFIED",
+    "RETIRED",
+]
 BotLifecycleActionId = Literal[
     "confirm_start",
     "end_day_now",
@@ -2506,6 +2515,17 @@ class BotLifecycleCondition(BaseModel):
     cure_label: str
 
 
+class BotDutyOutcomeView(BaseModel):
+    """Durable terminal duty evidence rendered by the operator surface."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: BotDutyOutcomeKind
+    reason_code: str
+    recorded_at_ms: int
+    run_id: str | None = None
+
+
 class BotDailyLifecycleProjection(BaseModel):
     """Rev-3 daily lifecycle projection for one bot.
 
@@ -2521,6 +2541,8 @@ class BotDailyLifecycleProjection(BaseModel):
     display_status: BotLifecycleDisplayStatus
     attention_badge: Literal["Sick bay", "Ready", "Off roster"] | None = None
     reason: str | None = None
+    carryover_policy: Literal["FORBID"] = "FORBID"
+    duty_outcome: BotDutyOutcomeView | None = None
     on_roster: bool = True
     active_run_id: str | None = None
     latest_run_id: str | None = None

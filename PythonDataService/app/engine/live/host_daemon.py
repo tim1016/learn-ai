@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import hmac
 import ipaddress
 import json
@@ -279,6 +280,7 @@ class ManagedProcess:
     stopping: bool = False
     ended_at_ms: int | None = None
     registry_retired_at_ms: int | None = None
+    lifecycle_outcome_recorded_at_ms: int | None = None
     launch_failure_recorded_at_ms: int | None = None
 
 
@@ -323,6 +325,18 @@ class RunnerProcessManager:
         # ``artifacts_root`` is ``<live_runs_root>/..`` per the daemon's
         # existing convention (token + cache live alongside live_runs).
         self.artifacts_root: Path = self.live_runs_root.parent
+        # A retirement prepares a durable fail-closed fence before touching
+        # multiple account registries. Complete any interrupted transaction on
+        # daemon boot so an AFK recovery cannot strand a bot between registry
+        # and lifecycle state. A failed replay remains PENDING and therefore
+        # continues to reject starts and Clerk intake for that identity.
+        from app.services.bot_deletion import BotDeletionCorruptError, recover_pending_bot_retirements
+
+        try:
+            self._recovered_bot_retirements = recover_pending_bot_retirements(self.artifacts_root)
+        except (BotDeletionCorruptError, OSError):
+            self._recovered_bot_retirements = ()
+            logger.exception("failed to recover pending bot retirement transitions")
         # PRD #619-B — periodic lease writer + the orphan-candidates list
         # the data plane reads via /health. Both are populated during the
         # FastAPI lifespan (``create_app``); ``None`` here until startup
@@ -523,8 +537,10 @@ class RunnerProcessManager:
         """All managed instances with their live binding (registry authority)."""
         out: list[HostRunnerInstance] = []
         with self._managed_lock:
-            for managed in self._managed.values():
-                self._refresh(managed)
+            to_refresh = tuple(self._managed.values())
+        for managed in to_refresh:
+            self._refresh(managed)
+        with self._managed_lock:
             self._prune_exited_records_locked()
             exited_record_count = 0
             for managed in self._managed.values():
@@ -564,22 +580,29 @@ class RunnerProcessManager:
     def reap_exited_processes(self) -> None:
         """Settle every exited child independently of status read traffic."""
         with self._managed_lock:
-            for managed in self._managed.values():
-                self._refresh(managed)
+            to_refresh = tuple(self._managed.values())
+        for managed in to_refresh:
+            self._refresh(managed)
+        with self._managed_lock:
             self._prune_exited_records_locked()
         self._supervise_account_clerks()
 
     def instance_status(self, strategy_instance_id: str) -> HostRunnerProcessStatus:
-        """Live process status for one strategy instance (idle if untracked)."""
+        """Return a pure process observation for one strategy instance.
+
+        This endpoint is also used by retirement while it holds the durable
+        per-bot fence. It must never trigger lifecycle reaping, otherwise the
+        daemon would wait for that fence while the router waits for this read.
+        Background reaping owns terminal persistence.
+        """
         with self._managed_lock:
             managed = self._managed.get(strategy_instance_id)
-            if managed is None:
-                return HostRunnerProcessStatus(
-                    state=HostRunnerProcessState.idle,
-                    message=f"No managed process for strategy_instance_id {strategy_instance_id!r}.",
-                )
-            self._refresh(managed)
-            return self._status_of(managed)
+        if managed is None:
+            return HostRunnerProcessStatus(
+                state=HostRunnerProcessState.idle,
+                message=f"No managed process for strategy_instance_id {strategy_instance_id!r}.",
+            )
+        return self._status_of(managed)
 
     def process_status(self, run_id: str | None = None) -> HostRunnerProcessStatus:
         """Return a run's subprocess state (back-compat, run-addressed).
@@ -589,20 +612,19 @@ class RunnerProcessManager:
         tracks it, else idle — so selected-run controls don't inherit another
         run's status.
         """
-        with self._managed_lock:
-            if run_id is None:
-                process_status = self._first_process_status()
-            else:
-                managed = self._by_run_id(run_id)
-                process_status = (
-                    self._persisted_terminal_process_status(run_id)
-                    or HostRunnerProcessStatus(
-                        state=HostRunnerProcessState.idle,
-                        message=f"No host runner process for {run_id}.",
-                    )
-                    if managed is None
-                    else self._status_of(managed)
+        if run_id is None:
+            process_status = self._first_process_status()
+        else:
+            managed = self._by_run_id(run_id)
+            process_status = (
+                self._persisted_terminal_process_status(run_id)
+                or HostRunnerProcessStatus(
+                    state=HostRunnerProcessState.idle,
+                    message=f"No host runner process for {run_id}.",
                 )
+                if managed is None
+                else self._status_of(managed)
+            )
         # The compatibility status endpoint historically performed the idle
         # Clerk reap after observing a bot exit.  Keep that behavior, but do
         # the bounded process work after releasing the registry lock.
@@ -688,8 +710,10 @@ class RunnerProcessManager:
 
     def _first_process_status(self) -> HostRunnerProcessStatus:
         with self._managed_lock:
-            for managed in self._managed.values():
-                self._refresh(managed)
+            to_refresh = tuple(self._managed.values())
+        for managed in to_refresh:
+            self._refresh(managed)
+        with self._managed_lock:
             for managed in self._managed.values():
                 if managed.process.poll() is None:
                     return self._status_of(managed)
@@ -699,14 +723,40 @@ class RunnerProcessManager:
         with self._managed_lock:
             for managed in self._managed.values():
                 if managed.run_id == run_id:
-                    self._refresh(managed)
-                    return managed
-            return None
+                    break
+            else:
+                return None
+        self._refresh(managed)
+        return managed
 
-    def _instance_start_lock(self, key: str):
-        """VCR-P3-P / Phase 6D — return the RLock for ``key``, creating one
-        lazily under a table-level guard so two concurrent first-time starts
-        for the same instance share the same lock."""
+    @contextlib.contextmanager
+    def _bot_lifecycle_operation_fence(self, strategy_instance_id: str | None):
+        """Use the durable cross-writer fence when this is a valid bot ID."""
+
+        if not strategy_instance_id:
+            yield
+            return
+        from app.engine.live.identity import validate_strategy_instance_id
+        from app.services.bot_deletion import bot_lifecycle_operation_fence
+
+        try:
+            validate_strategy_instance_id(strategy_instance_id)
+        except ValueError:
+            # Keep legacy/invalid-id errors at the existing admission
+            # boundary; an unsafe value must never become a lock path.
+            yield
+            return
+        with bot_lifecycle_operation_fence(self.artifacts_root, strategy_instance_id):
+            yield
+
+    @contextlib.contextmanager
+    def _instance_start_lock(self, key: str, strategy_instance_id: str | None):
+        """Fence a Start through admission, registry activation, and spawn.
+
+        The in-memory lock prevents duplicate starts in this daemon. The
+        durable fence adds the retirement and Clerk writers in other processes
+        to the same critical section.
+        """
         with self._start_lock_table_lock:
             lock = self._start_lock_per_instance.get(key)
             if lock is None:
@@ -714,7 +764,8 @@ class RunnerProcessManager:
 
                 lock = _threading.RLock()
                 self._start_lock_per_instance[key] = lock
-            return lock
+        with lock, self._bot_lifecycle_operation_fence(strategy_instance_id):
+            yield
 
     def _account_clerk_lock(self, account_id: str):
         """Return the supervisor-owned lifecycle lock for one Clerk account."""
@@ -767,7 +818,7 @@ class RunnerProcessManager:
         account_id, _ = self._account_registry_identity(run_dir)
         self._reject_start_during_legacy_emergency(account_id)
 
-        with self._instance_start_lock(key):
+        with self._instance_start_lock(key, sid):
             clerk_client_ids = self._clerk_supervisor.in_use_client_ids()
             # Reserve the bot's client ID under the registry lock, then release
             # it before any filesystem/broker readiness work.  The reservation
@@ -775,7 +826,7 @@ class RunnerProcessManager:
             with self._managed_lock:
                 existing = self._managed.get(key)
                 if existing is not None:
-                    self._refresh(existing)
+                    self._refresh(existing, operation_fence_held=True)
                     if existing.process.poll() is None:
                         raise HostRunnerError(
                             status.HTTP_409_CONFLICT,
@@ -783,19 +834,34 @@ class RunnerProcessManager:
                             "Stop it before starting another run for this instance.",
                         )
 
-                self._enforce_desired_state_allows_start(sid)
-                self._enforce_crash_retired_recovery(run_dir)
-                command = self._build_start_command(
-                    run_dir,
-                    request,
-                    self._sibling_symbols(key),
-                    self._sibling_all_in_symbols(key),
-                )
-                ibkr_client_id = self._allocate_ibkr_client_id(
-                    exclude_key=key,
-                    clerk_client_ids=clerk_client_ids,
-                )
-                self._reserved_ibkr_client_ids.add(ibkr_client_id)
+            self._enforce_desired_state_allows_start(sid)
+            self._enforce_lifecycle_allows_start(sid)
+            if sid:
+                from app.services.bot_deletion import BotDeletionCorruptError, bot_retirement_is_pending
+
+                try:
+                    retirement_pending = bot_retirement_is_pending(self.artifacts_root, sid)
+                except BotDeletionCorruptError as exc:
+                    raise HostRunnerError(
+                        status.HTTP_409_CONFLICT,
+                        "bot retirement transition is unreadable; repair it before starting",
+                    ) from exc
+                if retirement_pending:
+                    raise HostRunnerError(
+                        status.HTTP_409_CONFLICT,
+                        "bot retirement transition is pending; wait for recovery before starting",
+                    )
+            self._enforce_crash_retired_recovery(run_dir)
+            command = self._build_start_command(
+                run_dir,
+                request,
+                self._sibling_symbols(key),
+                self._sibling_all_in_symbols(key),
+            )
+            ibkr_client_id = self._allocate_ibkr_client_id(
+                exclude_key=key,
+                clerk_client_ids=clerk_client_ids,
+            )
 
             env = self._build_child_env(request, ibkr_client_id=ibkr_client_id)
             log_path = run_dir / "host_daemon.log"
@@ -854,6 +920,18 @@ class RunnerProcessManager:
                             "Failed to retire account registry binding after rejected pre-spawn start",
                             extra={"run_id": run_id, "strategy_instance_id": key},
                         )
+                try:
+                    self._record_failed_launch_outcome(
+                        run_dir,
+                        run_id=run_id,
+                        strategy_instance_id=sid,
+                        source="host_daemon.start_rejected_before_spawn",
+                    )
+                except (OSError, ValueError, RuntimeError):
+                    logger.exception(
+                        "Failed to record rejected launch lifecycle outcome",
+                        extra={"run_id": run_id, "strategy_instance_id": key},
+                    )
                 raise
             except OSError as exc:
                 log_handle.close()
@@ -878,6 +956,18 @@ class RunnerProcessManager:
                 except HostRunnerError:
                     logger.exception(
                         "Failed to retire account registry binding after host runner spawn failure",
+                        extra={"run_id": run_id, "strategy_instance_id": key},
+                    )
+                try:
+                    self._record_failed_launch_outcome(
+                        run_dir,
+                        run_id=run_id,
+                        strategy_instance_id=sid,
+                        source="host_daemon.start_failed",
+                    )
+                except (OSError, ValueError, RuntimeError):
+                    logger.exception(
+                        "Failed to record spawn-failure lifecycle outcome",
                         extra={"run_id": run_id, "strategy_instance_id": key},
                     )
                 raise HostRunnerError(
@@ -1162,7 +1252,7 @@ class RunnerProcessManager:
             idempotent=True,
         )
         try:
-            result = deploy_run(params)
+            result = self._deploy_and_persist_lifecycle(request, params)
         except DirtyTreeError as exc:
             raise HostRunnerError(
                 status.HTTP_409_CONFLICT,
@@ -1214,13 +1304,6 @@ class RunnerProcessManager:
         except DeployIOError as exc:
             raise HostRunnerError(status.HTTP_503_SERVICE_UNAVAILABLE, f"deploy filesystem error: {exc}") from exc
 
-        self._write_account_registry_binding(
-            result.run_dir,
-            run_id=result.run_id,
-            lifecycle_state="DEPLOYED",
-            source="host_daemon.deploy",
-        )
-
         start_action: HostRunnerActionResponse | None = None
         if request.start:
             start_action = self.start(result.run_id, request.start_options)
@@ -1238,6 +1321,57 @@ class RunnerProcessManager:
             created=result.created,
             start=start_action,
         )
+
+    def _deploy_and_persist_lifecycle(
+        self,
+        request: HostRunnerDeployRequest,
+        params: DeployParams,
+    ):
+        """Make the deliberate deploy/reopen successor atomic with retirement."""
+
+        with self._bot_lifecycle_operation_fence(request.strategy_instance_id):
+            result = deploy_run(params)
+            if request.strategy_instance_id:
+                self._reopen_retired_lifecycle_for_deploy(request.strategy_instance_id, result.run_id)
+            self._write_account_registry_binding(
+                result.run_dir,
+                run_id=result.run_id,
+                lifecycle_state="DEPLOYED",
+                source="host_daemon.deploy",
+            )
+            return result
+
+    def _reopen_retired_lifecycle_for_deploy(self, strategy_instance_id: str, run_id: str) -> None:
+        """Record the explicit deploy successor while its operation fence is held."""
+
+        from app.engine.live.bot_lifecycle_state import (
+            BotLifecyclePhase,
+            BotLifecycleStateCorruptError,
+            BotLifecycleStateRepo,
+            stable_bot_lifecycle_state_path,
+        )
+
+        try:
+            repo = BotLifecycleStateRepo(
+                stable_bot_lifecycle_state_path(self.artifacts_root, strategy_instance_id)
+            )
+            current = repo.read()
+            if current is not None and current.phase is BotLifecyclePhase.RETIRED:
+                repo.reopen_for_deploy(
+                    now_ms=self._clock_ms(),
+                    updated_by="host_daemon",
+                    reason="deploy.replacement",
+                )
+        except (BotLifecycleStateCorruptError, OSError) as exc:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                {
+                    "reason_code": "BOT_LIFECYCLE_REOPEN_FAILED",
+                    "message": "The deploy could not reopen the bot lifecycle marker.",
+                    "strategy_instance_id": strategy_instance_id,
+                    "run_id": run_id,
+                },
+            ) from exc
 
     def _write_account_registry_binding(
         self,
@@ -1371,6 +1505,40 @@ class RunnerProcessManager:
                     ),
                     "gate_id": "desired_state.start",
                     "desired_state": "STOPPED",
+                    "strategy_instance_id": strategy_instance_id,
+                },
+            )
+
+    def _enforce_lifecycle_allows_start(self, strategy_instance_id: str | None) -> None:
+        """Do not resurrect a retirement unless deploy reopened it under the fence."""
+
+        if not strategy_instance_id:
+            return
+        from app.engine.live.bot_lifecycle_state import (
+            BotLifecyclePhase,
+            BotLifecycleStateCorruptError,
+            BotLifecycleStateRepo,
+            stable_bot_lifecycle_state_path,
+        )
+
+        try:
+            lifecycle = BotLifecycleStateRepo(
+                stable_bot_lifecycle_state_path(self.artifacts_root, strategy_instance_id)
+            ).read()
+        except (BotLifecycleStateCorruptError, OSError, ValueError) as exc:
+            raise HostRunnerError(
+                status.HTTP_409_CONFLICT,
+                f"bot lifecycle state is unreadable for {strategy_instance_id!r}: {exc}",
+            ) from exc
+        if lifecycle is not None and lifecycle.phase is BotLifecyclePhase.RETIRED:
+            raise HostRunnerError(
+                status.HTTP_409_CONFLICT,
+                {
+                    "reason_code": "RETIRED_REQUIRES_DEPLOY",
+                    "message": (
+                        f"{strategy_instance_id} is retired. Deploy its deliberate replacement "
+                        "before attempting to start it."
+                    ),
                     "strategy_instance_id": strategy_instance_id,
                 },
             )
@@ -1611,14 +1779,15 @@ class RunnerProcessManager:
         """Symbols owned by other currently-running managed instances."""
         symbols: set[str] = set()
         with self._managed_lock:
-            for key, managed in self._managed.items():
-                if key == exclude_key:
-                    continue
-                self._refresh(managed)
-                if managed.process.poll() is None:
-                    symbol = self._resolve_symbol(managed.run_dir)
-                    if symbol:
-                        symbols.add(symbol)
+            siblings = tuple(
+                managed for key, managed in self._managed.items() if key != exclude_key
+            )
+        for managed in siblings:
+            self._refresh(managed)
+            if managed.process.poll() is None:
+                symbol = self._resolve_symbol(managed.run_dir)
+                if symbol:
+                    symbols.add(symbol)
         return symbols
 
     def _sibling_all_in_symbols(self, exclude_key: str) -> set[str]:
@@ -1634,14 +1803,17 @@ class RunnerProcessManager:
 
         symbols: set[str] = set()
         with self._managed_lock:
-            for key, managed in self._managed.items():
-                if key == exclude_key:
-                    continue
-                self._refresh(managed)
-                if managed.process.poll() is None and _is_set_holdings_full(self._read_sibling_sizing(managed.run_dir)):
-                    symbol = self._resolve_symbol(managed.run_dir)
-                    if symbol:
-                        symbols.add(symbol)
+            siblings = tuple(
+                managed for key, managed in self._managed.items() if key != exclude_key
+            )
+        for managed in siblings:
+            self._refresh(managed)
+            if managed.process.poll() is None and _is_set_holdings_full(
+                self._read_sibling_sizing(managed.run_dir)
+            ):
+                symbol = self._resolve_symbol(managed.run_dir)
+                if symbol:
+                    symbols.add(symbol)
         return symbols
 
     @staticmethod
@@ -1679,12 +1851,13 @@ class RunnerProcessManager:
         with self._managed_lock:
             active.update(self._rejected_ibkr_client_ids)
             active.update(self._reserved_ibkr_client_ids)
-            for key, managed in self._managed.items():
-                if key == exclude_key:
-                    continue
-                self._refresh(managed)
-                if managed.process.poll() is None and managed.ibkr_client_id is not None:
-                    active.add(managed.ibkr_client_id)
+            managed_snapshot = tuple(
+                managed for key, managed in self._managed.items() if key != exclude_key
+            )
+        for managed in managed_snapshot:
+            self._refresh(managed)
+            if managed.process.poll() is None and managed.ibkr_client_id is not None:
+                active.add(managed.ibkr_client_id)
         return active
 
     def _active_ibkr_client_ids(self, *, exclude_key: str) -> set[int]:
@@ -1699,9 +1872,20 @@ class RunnerProcessManager:
             if clerk_client_ids is None
             else clerk_client_ids
         )
-        for client_id in self._ibkr_client_id_pool():
-            if client_id not in active:
-                return client_id
+        with self._managed_lock:
+            active.update(self._rejected_ibkr_client_ids)
+            active.update(self._reserved_ibkr_client_ids)
+            active.update(
+                managed.ibkr_client_id
+                for key, managed in self._managed.items()
+                if key != exclude_key
+                and managed.process.poll() is None
+                and managed.ibkr_client_id is not None
+            )
+            for client_id in self._ibkr_client_id_pool():
+                if client_id not in active:
+                    self._reserved_ibkr_client_ids.add(client_id)
+                    return client_id
         raise HostRunnerError(
             status.HTTP_409_CONFLICT,
             (
@@ -1842,10 +2026,14 @@ class RunnerProcessManager:
 
         self._clerk_supervisor.supervise(account_ids=account_ids)
 
-    def _refresh(self, managed: ManagedProcess) -> None:
+    def _refresh(self, managed: ManagedProcess, *, operation_fence_held: bool = False) -> None:
         """Settle a managed process if it has exited: stamp ``ended_at_ms``
         and close its log handle exactly once."""
         if managed.process.poll() is None:
+            return
+        if managed.strategy_instance_id and not operation_fence_held:
+            with self._bot_lifecycle_operation_fence(managed.strategy_instance_id):
+                self._refresh(managed, operation_fence_held=True)
             return
         if self._should_record_child_launch_failure(managed) and managed.launch_failure_recorded_at_ms is None:
             recorded_at_ms = _now_ms()
@@ -1863,16 +2051,37 @@ class RunnerProcessManager:
         self._quarantine_rejected_ibkr_client_id(managed)
         if managed.registry_retired_at_ms is None:
             try:
-                self._write_account_registry_binding(
-                    managed.run_dir,
-                    run_id=managed.run_id,
-                    lifecycle_state="RETIRED",
-                    source=self._account_registry_retirement_source(managed),
-                )
+                if self._can_retire_account_registry_binding(managed):
+                    self._write_account_registry_binding(
+                        managed.run_dir,
+                        run_id=managed.run_id,
+                        lifecycle_state="RETIRED",
+                        source=self._account_registry_retirement_source(managed),
+                    )
+                else:
+                    logger.warning(
+                        "Skipped stale host runner registry retirement after a newer binding",
+                        extra={
+                            "run_id": managed.run_id,
+                            "strategy_instance_id": managed.strategy_instance_id,
+                        },
+                    )
                 managed.registry_retired_at_ms = self._clock_ms()
             except HostRunnerError:
                 logger.exception(
                     "Failed to retire account registry binding for exited host runner",
+                    extra={
+                        "run_id": managed.run_id,
+                        "strategy_instance_id": managed.strategy_instance_id,
+                    },
+                )
+        if managed.lifecycle_outcome_recorded_at_ms is None:
+            try:
+                self._record_terminal_lifecycle_outcome(managed, operation_fence_held=True)
+                managed.lifecycle_outcome_recorded_at_ms = self._clock_ms()
+            except (OSError, ValueError, RuntimeError):
+                logger.exception(
+                    "Failed to record terminal lifecycle outcome for exited host runner",
                     extra={
                         "run_id": managed.run_id,
                         "strategy_instance_id": managed.strategy_instance_id,
@@ -1956,6 +2165,161 @@ class RunnerProcessManager:
             stopping=managed.stopping,
         )
         return verdict.registry_source
+
+    def _can_retire_account_registry_binding(self, managed: ManagedProcess) -> bool:
+        """Never let a late reaper supersede a newer DEPLOYED/ACTIVE run."""
+
+        account_id, strategy_instance_id = self._account_registry_identity(managed.run_dir)
+        if account_id is None or strategy_instance_id is None:
+            return True
+        from app.engine.live.account_registry import (
+            index_account_instance_bindings,
+            read_account_instance_registry,
+        )
+
+        try:
+            latest = index_account_instance_bindings(
+                read_account_instance_registry(self.artifacts_root, account_id),
+                account_id=account_id,
+            ).latest_by_instance.get(strategy_instance_id)
+        except (OSError, ValueError) as exc:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                f"could not read account registry before reaping {managed.run_id}: {exc}",
+            ) from exc
+        return latest is None or latest.run_id == managed.run_id or latest.lifecycle_state not in {
+            "DEPLOYED",
+            "ACTIVE",
+        }
+
+    def _record_failed_launch_outcome(
+        self,
+        run_dir: Path,
+        *,
+        run_id: str,
+        strategy_instance_id: str,
+        source: str,
+    ) -> None:
+        """Record an unspawned run as a terminal lifecycle fact when identifiable."""
+
+        if not strategy_instance_id:
+            return
+        from app.engine.live.bot_lifecycle_state import (
+            BotDutyOutcome,
+            BotLifecyclePhase,
+            BotLifecycleStateRepo,
+            stable_bot_lifecycle_state_path,
+        )
+
+        now_ms = self._clock_ms()
+        repo = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(self.artifacts_root, strategy_instance_id))
+        current = repo.read()
+        if current is not None and current.phase is BotLifecyclePhase.RETIRED:
+            return
+        repo.record_terminal_outcome(
+            BotDutyOutcome(
+                kind="FAILED_LAUNCH",
+                reason_code="FAILED_LAUNCH",
+                recorded_at_ms=now_ms,
+                run_id=run_id,
+            ),
+            updated_by="host_daemon",
+            reason=source,
+        )
+
+    def _record_terminal_lifecycle_outcome(
+        self,
+        managed: ManagedProcess,
+        *,
+        operation_fence_held: bool = False,
+    ) -> None:
+        """Project a reaped process into durable duty state without guessing success."""
+
+        if not managed.strategy_instance_id:
+            return
+        if not operation_fence_held:
+            with self._bot_lifecycle_operation_fence(managed.strategy_instance_id):
+                self._record_terminal_lifecycle_outcome(managed, operation_fence_held=True)
+            return
+        from app.engine.live.bot_lifecycle_state import (
+            BotDutyOutcome,
+            BotLifecyclePhase,
+            BotLifecycleStateRepo,
+            stable_bot_lifecycle_state_path,
+        )
+        from app.engine.live.clock_out import (
+            ClockOutReceiptCorruptError,
+            clock_out_completion_is_durable,
+            read_clock_out_receipt,
+        )
+
+        now_ms = self._clock_ms()
+        repo = BotLifecycleStateRepo(
+            stable_bot_lifecycle_state_path(self.artifacts_root, managed.strategy_instance_id)
+        )
+        current = repo.read()
+        if current is not None and current.phase is BotLifecyclePhase.RETIRED:
+            return
+        try:
+            receipt = read_clock_out_receipt(managed.run_dir)
+        except ClockOutReceiptCorruptError:
+            receipt = None
+            reason_code = "CLOCK_OUT_RECEIPT_CORRUPT"
+        else:
+            reason_code = ""
+        if (
+            receipt is not None
+            and receipt.run_id == managed.run_id
+            and clock_out_completion_is_durable(managed.run_dir, receipt)
+            and self._clock_out_stop_latch_is_durable(managed.strategy_instance_id)
+        ):
+            outcome = BotDutyOutcome(
+                kind="CLOCKED_OUT_FLAT",
+                reason_code=receipt.reason_code,
+                recorded_at_ms=receipt.completed_at_ms,
+                run_id=managed.run_id,
+            )
+            reason = "clock_out.flat_broker_evidence"
+        else:
+            verdict = classify_run_exit(
+                read_run_exit_evidence(managed.run_dir),
+                returncode=managed.process.returncode,
+                stopping=managed.stopping,
+            )
+            kind = {
+                "controlled_stop": "STOPPED",
+                "interrupted": "STOPPED",
+                "halted": "HALTED",
+                "poisoned": "HALTED",
+                "crashed": "CRASHED",
+            }.get(verdict.category, "EXITED_UNVERIFIED")
+            outcome = BotDutyOutcome(
+                kind=kind,
+                reason_code=reason_code or verdict.registry_source.upper().replace(".", "_"),
+                recorded_at_ms=now_ms,
+                run_id=managed.run_id,
+            )
+            reason = verdict.registry_source
+        repo.record_terminal_outcome(
+            outcome,
+            updated_by="host_daemon",
+            reason=reason,
+            expected_active_run_id=managed.run_id,
+        )
+
+    def _clock_out_stop_latch_is_durable(self, strategy_instance_id: str) -> bool:
+        """Require the completed command's STOPPED latch before a clean outcome."""
+
+        try:
+            return (
+                DesiredStateRepo(
+                    stable_desired_state_path(self.artifacts_root, strategy_instance_id),
+                    trusted_root=self.artifacts_root / "live_state",
+                ).read_state()
+                is DesiredState.STOPPED
+            )
+        except (DesiredStateCorruptError, OSError, ValueError):
+            return False
 
     def _resolve_strategy_instance_id(self, run_dir: Path) -> str:
         """Read ``strategy_instance_id`` from the run ledger (UI-0 binding).

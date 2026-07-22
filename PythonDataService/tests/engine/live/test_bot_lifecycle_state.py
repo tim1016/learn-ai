@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.engine.live.bot_lifecycle_state import (
+    BotDutyOutcome,
     BotLifecyclePhase,
     BotLifecycleStateRepo,
     BotRollCallOfferRecord,
@@ -90,6 +91,29 @@ def test_lifecycle_state_repo_reopen_for_deploy_clears_retirement(tmp_path: Path
     assert reopened.retired_reason is None
     assert reopened.replacement_strategy_instance_id is None
     assert repo.read() == reopened
+
+
+def test_lifecycle_state_repo_clears_terminal_outcome_for_new_duty_and_redeploy(tmp_path: Path) -> None:
+    repo = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(tmp_path, "paper-duty"))
+    terminal = BotDutyOutcome(
+        kind="CRASHED",
+        reason_code="RUNNER_CRASHED",
+        recorded_at_ms=100,
+        run_id="run-old",
+    )
+    repo.record_terminal_outcome(terminal, updated_by="daemon", reason="runner exited")
+
+    started = repo.set_phase(
+        BotLifecyclePhase.ON_DUTY,
+        now_ms=200,
+        updated_by="roll_call",
+        active_run_id="run-new",
+    )
+    assert started.duty_outcome is None
+
+    repo.retire(now_ms=300, updated_by="operator", reason="replace")
+    reopened = repo.reopen_for_deploy(now_ms=400, updated_by="deploy", reason="replacement")
+    assert reopened.duty_outcome is None
 
 
 def test_roll_call_offer_repo_round_trips_active_and_consumed_offers(tmp_path: Path) -> None:

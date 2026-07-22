@@ -80,6 +80,11 @@ from app.engine.live.account_registry import (
     read_account_instance_registry,
 )
 from app.engine.live.broker_callbacks import broker_callback_idempotency_key
+from app.services.bot_deletion import (
+    BotDeletionCorruptError,
+    bot_lifecycle_operation_fence,
+    bot_retirement_is_pending,
+)
 from app.utils.advisory_lock import advisory_file_lock
 
 if TYPE_CHECKING:
@@ -222,24 +227,28 @@ class AccountClerk:
             )
         await self._require_normal_submit_intake(intent)
         async with self._intake_lock:
-            await self._require_normal_submit_intake(intent)
-            recorded = await asyncio.to_thread(self._record_intent_locked, intent)
-            existing_ack = await asyncio.to_thread(self._journal.ack_for_intent, intent)
-            if existing_ack is not None:
-                return recorded, existing_ack
-            # A stream can die while the inbox/journal fsync is in flight.
-            # Never start the broker write after that closed the submit lane.
-            await self._require_normal_submit_intake(intent)
-            self._require_paper_broker()
-            spec = IbkrOrderSpec.model_validate(intent.order_spec)
-            await asyncio.to_thread(self._journal.append_broker_submitting, intent)
-            try:
-                ack = await self._place_under_clerk_grant(spec)
-            except Exception as exc:
-                await asyncio.to_thread(self._journal.append_broker_uncertain, intent, exc)
-                raise
-            broker_ack = await asyncio.to_thread(self._journal.append_broker_ack, intent, ack)
-            return recorded, broker_ack
+            # The fence spans identity validation, journal admission, and the
+            # broker write. A retirement cannot turn PENDING between those
+            # steps and let an already-admitted bot place one more order.
+            with bot_lifecycle_operation_fence(self._artifacts_root, intent.strategy_instance_id):
+                await self._require_normal_submit_intake(intent)
+                recorded = await asyncio.to_thread(self._record_intent_locked, intent)
+                existing_ack = await asyncio.to_thread(self._journal.ack_for_intent, intent)
+                if existing_ack is not None:
+                    return recorded, existing_ack
+                # A stream can die while the inbox/journal fsync is in flight.
+                # Never start the broker write after that closed the submit lane.
+                await self._require_normal_submit_intake(intent)
+                self._require_paper_broker()
+                spec = IbkrOrderSpec.model_validate(intent.order_spec)
+                await asyncio.to_thread(self._journal.append_broker_submitting, intent)
+                try:
+                    ack = await self._place_under_clerk_grant(spec)
+                except Exception as exc:
+                    await asyncio.to_thread(self._journal.append_broker_uncertain, intent, exc)
+                    raise
+                broker_ack = await asyncio.to_thread(self._journal.append_broker_ack, intent, ack)
+                return recorded, broker_ack
 
     async def submit_recovery_flatten(
         self,
@@ -601,8 +610,10 @@ class AccountClerk:
         await self._require_normal_submit_intake(intent)
         self._require_paper_broker()
         async with self._intake_lock:
-            await self._require_normal_submit_intake(intent)
-            return await self._retry_recorded_intent_locked(intent)
+            with bot_lifecycle_operation_fence(self._artifacts_root, intent.strategy_instance_id):
+                await self._require_normal_submit_intake(intent)
+                await asyncio.to_thread(self._validate_intent_identity, intent)
+                return await self._retry_recorded_intent_locked(intent)
 
     async def _retry_recorded_intent_locked(self, intent: AccountOwnerSubmitIntent) -> AccountClerkBrokerAckReceipt:
         """Retry an ordinary intent while the Clerk intake lock is held."""
@@ -645,6 +656,14 @@ class AccountClerk:
         self._reject(intent, "CLERK_RPC_CLOSED")
 
     def _validate_intent_identity(self, intent: AccountOwnerSubmitIntent) -> None:
+        try:
+            if bot_retirement_is_pending(
+                self._artifacts_root,
+                intent.strategy_instance_id,
+            ):
+                self._reject(intent, "CLERK_RETIREMENT_PENDING")
+        except (BotDeletionCorruptError, ValueError):
+            self._reject(intent, "CLERK_RETIREMENT_TRANSITION_UNREADABLE")
         binding = latest_account_instance_binding(
             read_account_instance_registry(self._artifacts_root, self._account_id),
             account_id=self._account_id,

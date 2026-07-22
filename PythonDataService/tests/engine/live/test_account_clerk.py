@@ -61,6 +61,12 @@ from app.engine.live.account_registry import (
     write_account_instance_binding,
 )
 from app.engine.live.order_identity import build_order_ref
+from app.services.bot_deletion import (
+    BotRetirementBindingTarget,
+    BotRetirementTransitionRecord,
+    bot_lifecycle_operation_fence,
+    stable_bot_retirement_transition_path,
+)
 
 ACCOUNT = "DU123456"
 START_MS = 1_784_000_000_000
@@ -211,6 +217,103 @@ def _intent(instance_id: str, run_id: str, intent_id: str) -> AccountOwnerSubmit
         owner_generation=99,
         created_at_ms=START_MS,
     )
+
+
+@pytest.mark.asyncio
+async def test_clerk_rejects_an_active_binding_while_retirement_is_pending(tmp_path: Path) -> None:
+    """The retirement transaction fence closes the normal writer before replay."""
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    transition_path = stable_bot_retirement_transition_path(tmp_path, "bot-a")
+    transition_path.parent.mkdir(parents=True)
+    transition_path.write_text(
+        BotRetirementTransitionRecord(
+            strategy_instance_id="bot-a",
+            targets=(BotRetirementBindingTarget(account_id=ACCOUNT, run_id="run-a"),),
+            prepared_at_ms=START_MS,
+            updated_by="test",
+            reason="injected interruption",
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+    broker = _FakeBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+
+    with pytest.raises(AccountClerkIntentRejected, match="CLERK_RETIREMENT_PENDING"):
+        await clerk.record_intent(_intent("bot-a", "run-a", "retirement-pending"))
+
+    assert broker.calls == []
+
+
+@pytest.mark.asyncio
+async def test_clerk_submit_rechecks_retirement_after_waiting_for_operation_fence(
+    tmp_path: Path,
+) -> None:
+    """An admitted submit cannot cross a retirement fence to the broker."""
+
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _FakeBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    errors: list[BaseException] = []
+    attempted = threading.Event()
+
+    def submit() -> None:
+        attempted.set()
+        try:
+            asyncio.run(clerk.submit_intent(_intent("bot-a", "run-a", "fenced-submit")))
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    transition_path = stable_bot_retirement_transition_path(tmp_path, "bot-a")
+    with bot_lifecycle_operation_fence(tmp_path, "bot-a"):
+        worker = threading.Thread(target=submit)
+        worker.start()
+        assert attempted.wait(timeout=1.0)
+        await asyncio.sleep(0.05)
+        transition_path.parent.mkdir(parents=True, exist_ok=True)
+        transition_path.write_text(
+            BotRetirementTransitionRecord(
+                strategy_instance_id="bot-a",
+                targets=(BotRetirementBindingTarget(account_id=ACCOUNT, run_id="run-a"),),
+                prepared_at_ms=START_MS,
+                updated_by="operator",
+                reason="retire",
+            ).model_dump_json(),
+            encoding="utf-8",
+        )
+    await asyncio.to_thread(worker.join, 2.0)
+
+    assert not worker.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], AccountClerkIntentRejected)
+    assert "CLERK_RETIREMENT_PENDING" in str(errors[0])
+    assert broker.calls == []
+
+
+@pytest.mark.asyncio
+async def test_clerk_retry_revalidates_retirement_before_broker_write(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path, "bot-a", "run-a")
+    broker = _FakeBroker()
+    clerk = AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=broker)
+    intent = _intent("bot-a", "run-a", "retired-retry")
+    await clerk.record_intent(intent)
+    transition_path = stable_bot_retirement_transition_path(tmp_path, "bot-a")
+    transition_path.parent.mkdir(parents=True)
+    transition_path.write_text(
+        BotRetirementTransitionRecord(
+            strategy_instance_id="bot-a",
+            targets=(BotRetirementBindingTarget(account_id=ACCOUNT, run_id="run-a"),),
+            prepared_at_ms=START_MS,
+            updated_by="operator",
+            reason="retire",
+        ).model_dump_json(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AccountClerkIntentRejected, match="CLERK_RETIREMENT_PENDING"):
+        await clerk.retry_recorded_intent(intent)
+
+    assert broker.calls == []
 
 
 def _recovery_intent(instance_id: str, run_id: str, intent_id: str) -> AccountOwnerSubmitIntent:

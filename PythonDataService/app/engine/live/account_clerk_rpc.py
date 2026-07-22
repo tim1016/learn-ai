@@ -73,6 +73,7 @@ from app.engine.live.account_registry import (
     read_account_instance_registry,
 )
 from app.schemas.journal_cures import JournalCureReceipt, JournalCureRequest
+from app.services.bot_deletion import BotDeletionCorruptError, bot_retirement_is_pending
 from app.services.journal_cures import JournalCureError, JournalCureHandler
 
 logger = logging.getLogger(__name__)
@@ -712,6 +713,14 @@ class AccountClerkRpcServer:
         )
         if consumer.account_id != self._clerk._account_id:
             raise _AccountClerkRpcRequestRejected("EVENT_CONSUMER_ACCOUNT_MISMATCH")
+        try:
+            if bot_retirement_is_pending(
+                self._clerk._artifacts_root,
+                consumer.strategy_instance_id,
+            ):
+                raise _AccountClerkRpcRequestRejected("RETIREMENT_PENDING")
+        except (BotDeletionCorruptError, ValueError) as exc:
+            raise _AccountClerkRpcRequestRejected("RETIREMENT_TRANSITION_UNREADABLE") from exc
         binding_index = index_account_instance_bindings(
             read_account_instance_registry(self._clerk._artifacts_root, self._clerk._account_id),
             account_id=self._clerk._account_id,

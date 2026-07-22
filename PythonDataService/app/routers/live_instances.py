@@ -55,6 +55,7 @@ from app.engine.live.bot_lifecycle_state import (
     BotRollCallOfferRecord,
     stable_bot_lifecycle_state_path,
 )
+from app.engine.live.clock_out import clock_out_is_in_progress
 from app.engine.live.command_channel import CommandChannel, CommandVerb
 from app.engine.live.daemon_connectivity_monitor import (
     get_monitor as get_daemon_connectivity_monitor,
@@ -218,9 +219,11 @@ from app.services.bot_deletion import (
     BotDeletionCorruptError,
     BotDeletionRecord,
     bot_has_soft_deletion,
+    bot_lifecycle_operation_fence,
     bot_run_is_soft_deleted,
     read_bot_deletion,
-    soft_delete_bot_runs,
+    retire_bot_lifecycle_and_bindings_under_operation_fence,
+    soft_delete_and_retire_bot_runs_under_operation_fence,
     stable_bot_deletion_path,
 )
 from app.services.bot_lifecycle_chart import compose_bot_lifecycle_chart
@@ -1851,6 +1854,7 @@ def _get_surface_assembler() -> LiveInstanceSurfaceAssembler:
             resolve_incident_headline=_resolve_incident_headline,
             resolve_bot_lifecycle_state=_resolve_bot_lifecycle_state,
             resolve_live_run_dir=_resolve_live_run_dir,
+            clock_out_in_progress=clock_out_is_in_progress,
             compute_operator_surface=compute_operator_surface,
             resolve_durable_control_write_failure_for_status=(_resolve_durable_control_write_failure_for_status),
             resolve_start_run_id=_resolve_start_run_id,
@@ -2118,60 +2122,60 @@ async def delete_instance(
     request = body or BotDeleteRequest()
     settings = get_settings()
     root = Path(settings.live_runs_root)
+    with bot_lifecycle_operation_fence(root.parent, sid):
+        _result, daemon = await host_daemon_client.fetch_instance_process(
+            settings.live_runner_daemon_url, sid
+        )
+        if daemon is None:
+            if not _is_retired_bot(root, sid):
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    detail={
+                        "reason_code": "HOST_SERVICE_OFFLINE",
+                        "message": "Cannot delete this bot because the bot service is offline; stopped state is unproven.",
+                    },
+                )
+        else:
+            process, _live_binding = _interpret_daemon_process(daemon, root)
+            if process.state in _LIVE_STATES:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    detail={
+                        "reason_code": "BOT_PROCESS_ACTIVE",
+                        "message": "Stop the bot process before deleting it from the catalog.",
+                        "process_state": process.state,
+                        "bound_run_id": process.bound_run_id,
+                    },
+                )
 
-    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
-    if daemon is None:
-        if not _is_retired_bot(root, sid):
+        runs = _scan_runs_by_instance(root).get(sid, [])
+        existing = _read_bot_deletion_for_endpoint(root.parent, sid)
+        if not runs and existing is None:
             raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                detail={
-                    "reason_code": "HOST_SERVICE_OFFLINE",
-                    "message": "Cannot delete this bot because the bot service is offline; stopped state is unproven.",
-                },
+                status.HTTP_404_NOT_FOUND,
+                detail={"reason_code": "BOT_NOT_FOUND", "message": f"No bot exists for {sid}."},
             )
-    else:
-        process, _live_binding = _interpret_daemon_process(daemon, root)
-        if process.state in _LIVE_STATES:
+
+        run_ids = [str(run["run_id"]) for run in runs]
+        try:
+            record = soft_delete_and_retire_bot_runs_under_operation_fence(
+                root.parent,
+                sid,
+                run_ids=run_ids,
+                deleted_by=request.deleted_by,
+                reason=request.reason,
+                now_ms=_now_ms(),
+            )
+        except (ValueError, BotDeletionCorruptError) as exc:
+            logger.warning(
+                "failed to soft-delete bot",
+                extra={"strategy_instance_id": sid, "exception": repr(exc)},
+            )
             raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                detail={
-                    "reason_code": "BOT_PROCESS_ACTIVE",
-                    "message": "Stop the bot process before deleting it from the catalog.",
-                    "process_state": process.state,
-                    "bound_run_id": process.bound_run_id,
-                },
-            )
-
-    runs = _scan_runs_by_instance(root).get(sid, [])
-    existing = _read_bot_deletion_for_endpoint(root.parent, sid)
-    if not runs and existing is None:
-        raise HTTPException(
-            status.HTTP_404_NOT_FOUND,
-            detail={"reason_code": "BOT_NOT_FOUND", "message": f"No bot exists for {sid}."},
-        )
-
-    run_ids = [str(run["run_id"]) for run in runs]
-    try:
-        record = soft_delete_bot_runs(
-            root.parent,
-            sid,
-            run_ids=run_ids,
-            deleted_by=request.deleted_by,
-            reason=request.reason,
-            now_ms=_now_ms(),
-        )
-    except (ValueError, BotDeletionCorruptError) as exc:
-        logger.warning(
-            "failed to soft-delete bot",
-            extra={"strategy_instance_id": sid, "exception": repr(exc)},
-        )
-        raise HTTPException(
-            status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="bot deletion marker could not be written",
-        ) from exc
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="bot deletion marker could not be written",
+            ) from exc
     await _SURFACE_RUNS_CACHE.invalidate(root)
-    # Stop the producer before unregistering the publisher so an in-flight
-    # snapshot observer cannot recreate publisher ownership after cleanup.
     for cleanup in (
         lambda: _SURFACE_HUBS.remove(sid),
         lambda: get_publisher_registry().unregister(sid),
@@ -2414,36 +2418,6 @@ async def deploy_instance(body: LiveInstanceDeployRequest, response: Response) -
     if not parsed.created:
         response.status_code = status.HTTP_200_OK
     if daemon_request.strategy_instance_id:
-        lifecycle_repo = _bot_lifecycle_state_repo(root, daemon_request.strategy_instance_id)
-        try:
-            lifecycle_state = lifecycle_repo.read()
-            if lifecycle_state is not None and lifecycle_state.phase == BotLifecyclePhase.RETIRED:
-                lifecycle_repo.reopen_for_deploy(
-                    now_ms=_now_ms(),
-                    updated_by="system",
-                    reason="deploy.replacement",
-                )
-        except (BotLifecycleStateCorruptError, OSError) as exc:
-            logger.error(
-                "failed to reopen retired bot lifecycle after deploy",
-                extra={
-                    "strategy_instance_id": daemon_request.strategy_instance_id,
-                    "run_id": parsed.run_id,
-                    "error": str(exc),
-                },
-            )
-            raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={
-                    "reason_code": "BOT_LIFECYCLE_REOPEN_FAILED",
-                    "message": (
-                        "The deploy was accepted, but the bot lifecycle marker could not be "
-                        "reopened. Retry deploy after repairing the lifecycle state."
-                    ),
-                    "strategy_instance_id": daemon_request.strategy_instance_id,
-                    "run_id": parsed.run_id,
-                },
-            ) from exc
         await _ensure_surface_hub_started(daemon_request.strategy_instance_id)
     return parsed
 
@@ -2651,17 +2625,21 @@ def _start_intent_repo(root: Path, sid: str) -> DesiredStateRepo:
 
 
 def _persist_start_intent(root: Path, sid: str) -> DesiredStateRecord | None:
-    """Persist the single Start path's durable intent before daemon launch."""
+    """Read the Start latch without letting Start itself clear STOPPED."""
 
     repo = _start_intent_repo(root, sid)
     try:
         previous = repo.read()
-        repo.set(
-            DesiredState.RUNNING,
-            updated_by="system",
-            reason="daily_lifecycle.start",
-            now_ms=_now_ms(),
-        )
+        if previous is not None and previous.desired_state is DesiredState.STOPPED:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": "STOPPED_REQUIRES_RESUME",
+                    "message": "This bot is durably STOPPED. Resume it before starting.",
+                    "gate_id": "desired_state.start",
+                    "strategy_instance_id": sid,
+                },
+            )
     except DesiredStateCorruptError as exc:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -2677,7 +2655,7 @@ def _persist_start_intent(root: Path, sid: str) -> DesiredStateRecord | None:
             status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
                 "reason_code": "DESIRED_STATE_WRITE_FAILED",
-                "message": "Could not persist the start intent before launching the bot.",
+                "message": "Could not read the start latch before launching the bot.",
                 "gate_id": "desired_state.start",
                 "strategy_instance_id": sid,
             },
@@ -2753,26 +2731,7 @@ def _start_admission_service(settings: IbkrSettings) -> StartAdmissionService:
 
 @router.post("/runs/{run_id}/start", response_model=HostRunnerActionResponse)
 async def start_run(run_id: str, body: HostRunnerStartRequest) -> HostRunnerActionResponse:
-    """Launch the host runner for ``run_id`` by forwarding to the daemon (ADR 0007).
-
-    Start/Stop are routed through the data plane — not called from the browser —
-    because the daemon now enforces a mandatory ``X-Live-Runner-Token`` on every
-    actuation route, and the browser must never hold that shared secret. The data
-    plane reads the token from the artifacts bind mount and forwards it. The
-    daemon's statuses propagate verbatim: bad ``strategy``/spec mismatch -> 400,
-    missing run -> 404, subprocess/daemon unreachable -> 503.
-
-    The typed admission policy rechecks the complete fail-closed chain for every
-    start. Recovery of an already-running exact run is an accepted idempotent
-    replay.
-
-    Slice 3 (ADR 0011 amendment) — broker-activity publisher start. After
-    a successful start the broker-activity publisher is registered for
-    the running instance. Failure to bootstrap (broker disconnected,
-    envelope not yet visible) is logged but does NOT roll back the
-    start: the lazy ``_ensure_publisher`` fallback in
-    ``broker_activity.py`` re-attempts on the cockpit's first hit.
-    """
+    """Launch the host runner for ``run_id`` by forwarding to the daemon."""
     try:
         run_id = _validate_path_segment(run_id, field="run_id")
     except ValueError as exc:
@@ -2946,14 +2905,6 @@ async def stop_run(run_id: str, body: HostRunnerStopRequest) -> HostRunnerAction
             ) from exc
         scope.stage = "stop_response_assembly"
         response = _parse_action_response(result)
-        if response.accepted:
-            _bot_lifecycle_state_repo(root, sid).set_phase(
-                BotLifecyclePhase.OFF_DUTY,
-                now_ms=_now_ms(),
-                updated_by="system",
-                active_run_id=None,
-                reason="stop_accepted",
-            )
         receipt, warnings = await _mutation_rung_receipts_from_process(
             sid,
             root,
@@ -2979,7 +2930,7 @@ async def end_day_now(
     strategy_instance_id: str,
     body: HostRunnerStopRequest | None = None,
 ) -> HostRunnerActionResponse:
-    """Instance-addressed clean exit request for the daily lifecycle toolbar."""
+    """Queue Clerk-owned clean exit; only broker evidence can finish the day."""
 
     sid = _validate_instance_id(strategy_instance_id)
     settings = get_settings()
@@ -2996,7 +2947,15 @@ async def end_day_now(
             },
         )
 
-    request = body or HostRunnerStopRequest()
+    live_run_dir = _visible_live_run_dir(root, live_binding)
+    if live_run_dir is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail={
+                "reason_code": "LIVE_RUN_ARTIFACTS_UNAVAILABLE",
+                "message": "The bound run is not visible locally, so clock-out cannot be queued.",
+            },
+        )
     scope = _operator_mutation_scope(
         root,
         instance_id=sid,
@@ -3004,45 +2963,50 @@ async def end_day_now(
         run_id=live_binding.run_id,
     )
     with scope:
-        scope.stage = "daemon_stop"
-        try:
-            result = await host_daemon_client.stop_run(
-                settings.live_runner_daemon_url,
-                live_binding.run_id,
-                request.model_dump(),
-            )
-        except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
-            unknown = scope.unknown(error=exc)
-            await _ensure_surface_hub_started(sid)
-            _raise_outcome_unknown("end_day_now", exc, mutation_attempt_id=unknown.mutation_attempt_id)
-        except host_daemon_client.HostDaemonError as exc:
-            rejected = scope.reject_not_observed(
-                outcome={"accepted": False, "status_code": exc.status_code},
-            )
-            await _ensure_surface_hub_started(sid)
-            raise HTTPException(
-                exc.status_code,
-                detail=_mutation_error_detail(exc.detail, rejected),
-            ) from exc
+        scope.stage = "clock_out_enqueue"
+        command_seq: int | None = None
+        if clock_out_is_in_progress(live_run_dir):
+            command_id = f"clock-out-{live_binding.run_id}-in-progress"
+            stop_outcome = "clock_out_already_queued"
+        else:
+            try:
+                command = CommandChannel(live_run_dir / "commands").write_from_operator(
+                    CommandVerb.CLOCK_OUT
+                )
+            except OSError as exc:
+                unknown = scope.unknown(error=exc)
+                await _ensure_surface_hub_started(sid)
+                raise HTTPException(
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=_mutation_error_detail("clock-out command could not be queued", unknown),
+                ) from exc
+            command_seq = command.seq
+            command_id = f"clock-out-{live_binding.run_id}-{command.seq}"
+            stop_outcome = "clock_out_queued"
         scope.stage = "end_day_response_assembly"
-        response = _parse_action_response(result)
-        if response.accepted:
-            _bot_lifecycle_state_repo(root, sid).set_phase(
-                BotLifecyclePhase.OFF_DUTY,
-                now_ms=_now_ms(),
-                updated_by="operator",
-                active_run_id=None,
-                reason="end_day_now",
-            )
+        response = _parse_action_response(
+            {
+                "accepted": True,
+                "command_id": command_id,
+                "stop_outcome": stop_outcome,
+                "process": {
+                    "state": process.state,
+                    "run_id": live_binding.run_id,
+                    "strategy_instance_id": sid,
+                    "pid": process.pid,
+                    "started_at_ms": process.started_at_ms,
+                },
+            }
+        )
         receipt, warnings = await _mutation_rung_receipts_from_process(
             sid,
             root,
             settings,
-            response.process.model_dump(mode="json"),
-            mutation_key="stop",
+            daemon,
+            mutation_key="clock_out",
         )
         confirmed = scope.confirm(
-            outcome={"accepted": response.accepted, "run_id": live_binding.run_id},
+            outcome={"accepted": True, "run_id": live_binding.run_id, "command_seq": command_seq},
         )
         response = response.model_copy(
             update={
@@ -3093,31 +3057,37 @@ async def retire_and_replace(
         )
     settings = get_settings()
     root = Path(settings.live_runs_root)
-    _result, daemon = await host_daemon_client.fetch_instance_process(settings.live_runner_daemon_url, sid)
-    process, _live_binding = _interpret_daemon_process(daemon, root)
-    if process.state == "unreachable":
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "HOST_SERVICE_OFFLINE",
-                "message": "The bot service is unreachable. Reconnect it before retiring and replacing this bot.",
-                "process_state": process.state,
-            },
+    with bot_lifecycle_operation_fence(root.parent, sid):
+        _result, daemon = await host_daemon_client.fetch_instance_process(
+            settings.live_runner_daemon_url, sid
         )
-    if process.state in {"running", "stopping"}:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={
-                "reason_code": "BOT_ON_DUTY",
-                "message": "End the day before retiring and replacing this bot.",
-                "process_state": process.state,
-            },
+        process, _live_binding = _interpret_daemon_process(daemon, root)
+        if process.state == "unreachable":
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": "HOST_SERVICE_OFFLINE",
+                    "message": "The bot service is unreachable. Reconnect it before retiring and replacing this bot.",
+                    "process_state": process.state,
+                },
+            )
+        if process.state in {"running", "stopping"}:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                detail={
+                    "reason_code": "BOT_ON_DUTY",
+                    "message": "End the day before retiring and replacing this bot.",
+                    "process_state": process.state,
+                },
+            )
+        retire_bot_lifecycle_and_bindings_under_operation_fence(
+            root.parent,
+            sid,
+            run_ids=[str(run["run_id"]) for run in _scan_runs_by_instance(root).get(sid, [])],
+            now_ms=_now_ms(),
+            updated_by=body.updated_by,
+            reason=body.reason,
         )
-    _bot_lifecycle_state_repo(root, sid).retire(
-        now_ms=_now_ms(),
-        updated_by=body.updated_by,
-        reason=body.reason,
-    )
     return await _daily_lifecycle_mutation_response(sid, root, settings)
 
 

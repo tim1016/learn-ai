@@ -18,12 +18,18 @@ from pathlib import Path
 
 import pytest
 
+from app.broker.ibkr.models import IbkrPositionsSnapshot
 from app.engine.data.trade_bar import TradeBar
+from app.engine.execution.portfolio import Position
+from app.engine.live.account_owner import AccountOwnerSubmitResult
+from app.engine.live.account_registry import bot_order_namespace_for_instance
+from app.engine.live.clock_out import clock_out_is_in_progress, read_clock_out_receipt
 from app.engine.live.command_channel import Command, CommandChannel, CommandVerb
 from app.engine.live.config import LiveConfig
 from app.engine.live.engine_runtime import CommandLoopBlock
 from app.engine.live.halt import PoisonedHaltTrigger, read_poisoned_flag
 from app.engine.live.live_engine import LiveEngine
+from app.engine.live.live_portfolio import LivePortfolio
 from app.engine.strategy.base import Strategy
 from app.operator.incidents.store import IncidentStore
 from tests.engine.live.fixtures.fake_broker import FakeBroker, iter_bars
@@ -84,10 +90,11 @@ async def test_command_poll_loop_refreshes_heartbeat_after_poll_cycle(
     timestamps = iter([10.0, 13.2, 14.0])
     monkeypatch.setattr(live_engine_mod.time, "time", lambda: next(timestamps))
     aggregator = _RuntimeAggregator()
+    broker = FakeBroker()
     engine = LiveEngine(
         None,
         LiveConfig(),
-        broker=FakeBroker(),
+        broker=broker,
         command_channel=_EmptyCommandChannel(),  # type: ignore[arg-type]
         runtime_aggregator=aggregator,
     )
@@ -240,6 +247,258 @@ def test_missing_run_directory_blocks_mark_poisoned() -> None:
     assert outcome["status"] == "error"
     assert outcome["reason_code"] == "DURABLE_CONTROL_WRITE_FAILED"
     assert "run output directory is not configured" in outcome["effect"]
+    assert not shutdown_event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_clock_out_only_stops_after_fresh_flat_broker_evidence(tmp_path: Path) -> None:
+    """Clock-out liquidates through Clerk intake before fresh flat proof ends duty."""
+
+    channel = CommandChannel(tmp_path / "commands")
+    command = channel.write_from_operator(CommandVerb.CLOCK_OUT)
+    durable_writes: list[tuple[object, str]] = []
+    broker = FakeBroker()
+    clerk_intents = []
+
+    async def clerk_submitter(intent) -> AccountOwnerSubmitResult:
+        clerk_intents.append(intent)
+        return AccountOwnerSubmitResult(
+            status="accepted",
+            trace_id=intent.trace_id,
+            account_id=intent.account_id,
+            strategy_instance_id=intent.strategy_instance_id,
+            run_id=intent.run_id,
+            intent_id=intent.intent_id,
+            order_ref=intent.order_ref,
+            owner_generation=intent.owner_generation,
+            order_id=77,
+        )
+
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        output_dir=tmp_path,
+        account_id="DU123",
+        command_channel=channel,
+        desired_state_writer=lambda state, reason: durable_writes.append((state, reason)),
+        run_id="run-clock-out",
+        strategy_instance_id="clock-out-bot",
+        account_owner_submitter=clerk_submitter,
+        owner_generation_provider=lambda: 3,
+    )
+    shutdown_event = asyncio.Event()
+
+    async def reconcile_owned_state() -> None:
+        return None
+
+    portfolio = LivePortfolio(
+        broker=broker,
+        account_owner_submitter=clerk_submitter,
+        account_id="DU123",
+        strategy_instance_id="clock-out-bot",
+        run_id="run-clock-out",
+        bot_order_namespace=bot_order_namespace_for_instance("clock-out-bot"),
+        owner_generation_provider=lambda: 3,
+    )
+    portfolio.positions["SPY"] = Position(symbol="SPY", quantity=2, average_price=Decimal("500"))
+
+    class _Context:
+        def log(self, _message: str) -> None:
+            return None
+
+    accepted = engine._dispatch_command(command, shutdown_event)
+    completed = await engine._complete_clock_out(
+        command,
+        portfolio=portfolio,
+        ctx=_Context(),
+        bar_time=_bar(0).time,
+        reconcile_owned_state=reconcile_owned_state,  # type: ignore[arg-type]
+        shutdown_event=shutdown_event,
+    )
+
+    receipt = read_clock_out_receipt(tmp_path)
+    ack = _json.loads(next((tmp_path / "commands").glob("*.ack.json")).read_text(encoding="utf-8"))
+    assert accepted == {"status": "accepted", "effect": "clock_out_queued"}
+    assert len(completed) == 1
+    assert shutdown_event.is_set()
+    assert receipt is not None and receipt.status == "flat"
+    assert ack["outcome"]["effect"] == "clocked_out_flat"
+    assert len(clerk_intents) == 1
+    assert clerk_intents[0].intent_kind == "STRATEGY"
+    assert clerk_intents[0].order_spec["action"] == "SELL"
+    assert clerk_intents[0].order_ref.startswith("learn-ai/clock-out-bot/v1:")
+    assert [reason for _state, reason in durable_writes] == [
+        "command_channel:CLOCK_OUT",
+        "command_channel:CLOCK_OUT_FLAT",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_clock_out_exits_after_stop_latch_when_final_receipt_rewrite_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A durable STOPPED latch must not strand a paused runner on I/O failure."""
+
+    from app.engine.live import live_engine as live_engine_mod
+    from app.engine.live.clock_out import write_clock_out_receipt as real_write_receipt
+
+    channel = CommandChannel(tmp_path / "commands")
+    command = channel.write_from_operator(CommandVerb.CLOCK_OUT)
+    writes = 0
+
+    def fail_second_receipt_write(run_dir: Path, receipt: object) -> Path:
+        nonlocal writes
+        writes += 1
+        if writes == 2:
+            raise OSError("injected final receipt rewrite failure")
+        return real_write_receipt(run_dir, receipt)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(live_engine_mod, "write_clock_out_receipt", fail_second_receipt_write)
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=FakeBroker(),
+        output_dir=tmp_path,
+        account_id="DU123",
+        command_channel=channel,
+        desired_state_writer=lambda _state, _reason: None,
+        run_id="run-finalization-failure",
+        strategy_instance_id="finalization-failure-bot",
+    )
+    shutdown_event = asyncio.Event()
+
+    async def reconcile_owned_state() -> None:
+        return None
+
+    engine._dispatch_command(command, shutdown_event)
+    await engine._complete_clock_out(
+        command,
+        portfolio=LivePortfolio(broker=engine._broker),  # type: ignore[arg-type]
+        ctx=object(),  # type: ignore[arg-type]
+        bar_time=_bar(0).time,
+        reconcile_owned_state=reconcile_owned_state,
+        shutdown_event=shutdown_event,
+    )
+
+    receipt = read_clock_out_receipt(tmp_path)
+    ack = _json.loads(next((tmp_path / "commands").glob("*.ack.json")).read_text(encoding="utf-8"))
+    assert shutdown_event.is_set()
+    assert receipt is not None and receipt.stop_persisted_at_ms is None
+    assert ack["outcome"]["status"] == "failed"
+    assert ack["outcome"]["reason_code"] == "CLOCK_OUT_FINALIZATION_FAILED_OSERROR"
+
+
+def test_failed_clock_out_settles_a_historical_already_running_follower(tmp_path: Path) -> None:
+    """A follower ack cannot hide the leader's durable failure forever."""
+
+    channel = CommandChannel(tmp_path / "commands")
+    leader = channel.write_from_operator(CommandVerb.CLOCK_OUT)
+    channel.ack(leader, outcome={"status": "accepted"})
+    follower = channel.write_from_operator(CommandVerb.CLOCK_OUT)
+    channel.ack(follower, outcome={"status": "already_running"})
+    assert clock_out_is_in_progress(tmp_path)
+
+    channel.ack_completion(
+        leader,
+        outcome={"status": "failed", "effect": "clock_out_failed", "reason_code": "BROKER_DOWN"},
+    )
+
+    assert not clock_out_is_in_progress(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_clock_out_exits_after_stop_latch_when_completion_ack_write_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The completion receipt is useful evidence, but cannot strand STOPPED."""
+
+    channel = CommandChannel(tmp_path / "commands")
+    command = channel.write_from_operator(CommandVerb.CLOCK_OUT)
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=FakeBroker(),
+        output_dir=tmp_path,
+        account_id="DU123",
+        command_channel=channel,
+        desired_state_writer=lambda _state, _reason: None,
+        run_id="run-ack-failure",
+        strategy_instance_id="ack-failure-bot",
+    )
+    shutdown_event = asyncio.Event()
+
+    def fail_completion_ack(*_args: object, **_kwargs: object) -> None:
+        raise OSError("injected completion ack failure")
+
+    async def reconcile_owned_state() -> None:
+        return None
+
+    monkeypatch.setattr(channel, "ack_completion", fail_completion_ack)
+    engine._dispatch_command(command, shutdown_event)
+    await engine._complete_clock_out(
+        command,
+        portfolio=LivePortfolio(broker=engine._broker),  # type: ignore[arg-type]
+        ctx=object(),  # type: ignore[arg-type]
+        bar_time=_bar(0).time,
+        reconcile_owned_state=reconcile_owned_state,
+        shutdown_event=shutdown_event,
+    )
+
+    receipt = read_clock_out_receipt(tmp_path)
+    assert shutdown_event.is_set()
+    assert receipt is not None and receipt.stop_persisted_at_ms is not None
+
+
+@pytest.mark.asyncio
+async def test_clock_out_refuses_cached_broker_positions(tmp_path: Path) -> None:
+    """A cache fallback cannot prove the account flat enough to stop the bot."""
+
+    channel = CommandChannel(tmp_path / "commands")
+    command = channel.write_from_operator(CommandVerb.CLOCK_OUT)
+    broker = FakeBroker()
+    broker.position_snapshot = IbkrPositionsSnapshot(
+        account_id="DU123",
+        is_paper=True,
+        positions=[],
+        fetched_at_ms=1,
+        used_cache_fallback=True,
+    )
+    engine = LiveEngine(
+        None,
+        LiveConfig(),
+        broker=broker,
+        output_dir=tmp_path,
+        account_id="DU123",
+        command_channel=channel,
+        desired_state_writer=lambda _state, _reason: None,
+        run_id="run-clock-out-cache",
+        strategy_instance_id="clock-out-cache-bot",
+    )
+    shutdown_event = asyncio.Event()
+
+    async def no_orders(*_args: object, **_kwargs: object) -> list:
+        return []
+
+    async def reconcile_owned_state() -> None:
+        return None
+
+    engine._flatten = no_orders  # type: ignore[method-assign]
+    engine._dispatch_command(command, shutdown_event)
+    await engine._complete_clock_out(
+        command,
+        portfolio=LivePortfolio(broker=broker),
+        ctx=object(),  # type: ignore[arg-type]
+        bar_time=_bar(0).time,
+        reconcile_owned_state=reconcile_owned_state,
+        shutdown_event=shutdown_event,
+    )
+
+    receipt = read_clock_out_receipt(tmp_path)
+    assert receipt is not None and receipt.status == "failed"
+    assert receipt.reason_code == "CLOCK_OUT_FAILED_RUNTIMEERROR"
     assert not shutdown_event.is_set()
 
 

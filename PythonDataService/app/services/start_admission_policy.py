@@ -20,6 +20,7 @@ from app.engine.live.bot_lifecycle_state import (
 )
 from app.schemas.live_runs import HostRunnerStartRequest
 from app.services.account_crash_recovery import crash_recovery_block_detail, crash_recovery_blocking_binding
+from app.services.bot_deletion import BotDeletionCorruptError, bot_retirement_is_pending
 from app.services.daily_session_schedule import StartBoundaryVerdict
 
 StartAdmissionPolicyName = Literal["interactive"]
@@ -370,6 +371,27 @@ class StartAdmissionService:
         )
 
     def _lifecycle_refusal(self, strategy_instance_id: str) -> StartAdmissionRefusal | None:
+        try:
+            if bot_retirement_is_pending(self._artifacts_root, strategy_instance_id):
+                return StartAdmissionRefusal(
+                    409,
+                    {
+                        "reason_code": "BOT_RETIREMENT_PENDING",
+                        "message": "This bot's retirement is being recovered. Wait for the durable transition to finish.",
+                        "gate_id": "daily_lifecycle.retirement_transition",
+                        "strategy_instance_id": strategy_instance_id,
+                    },
+                )
+        except (BotDeletionCorruptError, ValueError):
+            return StartAdmissionRefusal(
+                409,
+                {
+                    "reason_code": "BOT_RETIREMENT_TRANSITION_UNREADABLE",
+                    "message": "The bot retirement transition is unreadable. Repair it before starting.",
+                    "gate_id": "daily_lifecycle.retirement_transition",
+                    "strategy_instance_id": strategy_instance_id,
+                },
+            )
         try:
             path = stable_bot_lifecycle_state_path(self._artifacts_root, strategy_instance_id)
         except ValueError:
