@@ -11,6 +11,10 @@ import pytest
 
 import app.services.fleet_contamination as fleet_contamination
 from app.engine.live.account_clerk import AccountClerkJournalEntry
+from app.engine.live.account_clerk_journal_models import (
+    AccountClerkBrokerEvidenceBaseline,
+    AccountClerkPositionEvidence,
+)
 from app.engine.live.account_clerk_reconciler import namespace_expected_exposure
 from app.engine.live.journal_exposure import (
     project_journal_account_exposure,
@@ -112,6 +116,30 @@ def test_account_projection_includes_unattributed_callbacks() -> None:
     assert ("DUA", "SPY", 7.0) in {
         (exposure.account_id, exposure.symbol, exposure.quantity) for exposure in account_exposure
     }
+
+
+def test_broker_evidence_baseline_is_account_visible_but_never_given_a_bot_namespace() -> None:
+    baseline = AccountClerkJournalEntry(
+        seq=1,
+        entry_kind="broker_evidence_baseline",
+        recorded_at_ms=1_780_000_000_000,
+        broker_evidence_baseline=AccountClerkBrokerEvidenceBaseline(
+            account_id="DUA",
+            observed_at_ms=1_780_000_000_000,
+            positions=(
+                AccountClerkPositionEvidence(
+                    symbol="SPY",
+                    signed_quantity=2.0,
+                    evidence_observed_at_ms=1_780_000_000_000,
+                ),
+            ),
+        ),
+    )
+
+    account_rows = project_journal_account_exposure([baseline], account_id="DUA")
+
+    assert [(row.account_id, row.symbol, row.quantity) for row in account_rows] == [("DUA", "SPY", 2.0)]
+    assert project_journal_exposure([baseline], group_by="namespace") == ()
 
 
 def test_reconciler_and_contamination_share_the_journal_projection(

@@ -1,12 +1,12 @@
 """Tests for account-scoped live lifecycle artifacts."""
 
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
 from app.engine.live import account_artifacts, account_registry
 from app.engine.live.account_artifacts import (
@@ -15,21 +15,16 @@ from app.engine.live.account_artifacts import (
     AccountClerkLease,
     AccountFreezeEvidence,
     AccountRecoveryProof,
-    CohortBatchLaunchMemberPin,
-    CohortBatchLaunchMemberSchedule,
-    CohortBatchLaunchReceipt,
     RestartIntensityPolicy,
     account_artifacts_root,
     advance_account_clerk_generation,
     clear_account_freeze,
     evaluate_restart_intensity,
-    project_restart_intensity_gate,
     read_account_clerk_generation,
     read_account_clerk_lease,
     read_account_events,
     read_account_events_tolerant,
     read_account_freeze,
-    record_cohort_batch_launch_receipt,
     repair_account_event_sequence,
     require_active_account_clerk_generation,
     write_account_clerk_lease,
@@ -39,7 +34,6 @@ from app.engine.live.account_registry import (
     AccountInstanceBinding,
     write_account_instance_binding,
 )
-from app.schemas.cohort_batch_launch import COHORT_EVIDENCE_CADENCE_MS, COHORT_STAGGER_PROFILES
 from app.schemas.live_runs import GateResult
 
 
@@ -650,189 +644,18 @@ def test_restart_intensity_passes_below_threshold_from_durable_account_events(tm
     assert read_account_freeze(tmp_path, "DU123456") is None
 
 
-def test_restart_intensity_projection_refuses_a_cohort_that_would_breach_without_freezing(tmp_path: Path) -> None:
-    policy = RestartIntensityPolicy(threshold=3, window_ms=60_000)
-    for index, recorded_at_ms in enumerate((1_700_000_000_000, 1_700_000_010_000), start=1):
-        write_account_instance_binding(
-            tmp_path,
-            _binding(
-                sid=f"spy-{index}",
-                run_id=f"run-{index}",
-                namespace=f"learn-ai/spy-{index}/v1",
-                recorded_at_ms=recorded_at_ms,
-            ),
-        )
-
-    gate = project_restart_intensity_gate(
-        tmp_path,
-        account_id="DU123456",
-        now_ms=1_700_000_020_000,
-        policy=policy,
-    )
-
-    assert gate.status == "freeze"
-    assert "observed=3" in gate.operator_reason
-    assert read_account_freeze(tmp_path, "DU123456") is None
 
 
-def test_restart_intensity_counts_authorized_cohort_bindings_once(tmp_path: Path) -> None:
-    policy = RestartIntensityPolicy(threshold=3, window_ms=60_000)
-    receipt = CohortBatchLaunchReceipt(
-        account_id="DU123456",
-        cohort_id="opening-batch-1",
-        member_strategy_instance_ids=("spy-a", "spy-b", "spy-c"),
-        window_start_ms=1_700_000_000_000,
-        window_end_ms=1_700_000_030_000,
-        authorized_by="operator.alice",
-        recorded_at_ms=1_700_000_000_000,
-    )
-    record_cohort_batch_launch_receipt(tmp_path, receipt)
-    for index, recorded_at_ms in enumerate(
-        (1_700_000_001_000, 1_700_000_002_000, 1_700_000_003_000),
-        start=1,
-    ):
-        write_account_instance_binding(
-            tmp_path,
-            _binding(
-                sid=f"spy-{chr(96 + index)}",
-                run_id=f"run-{index}",
-                namespace=f"learn-ai/spy-{chr(96 + index)}/v1",
-                recorded_at_ms=recorded_at_ms,
-            ).model_copy(update={"cohort_id": "opening-batch-1"}),
-        )
-
-    gate = evaluate_restart_intensity(
-        tmp_path,
-        account_id="DU123456",
-        now_ms=1_700_000_004_000,
-        policy=policy,
-    )
-
-    assert gate.status == "pass"
-    assert "observed=1" in gate.operator_reason
-    event = next(event for event in read_account_events(tmp_path, "DU123456") if event["event_type"] == "cohort_batch_launch_authorized")
-    assert event["cohort_id"] == "opening-batch-1"
-    assert event["member_strategy_instance_ids"] == ["spy-a", "spy-b", "spy-c"]
-    assert event["window_start_ms"] == 1_700_000_000_000
-    assert event["window_end_ms"] == 1_700_000_030_000
-    assert event["authorized_by"] == "operator.alice"
 
 
-def _staggered_receipt(profile_name: str) -> CohortBatchLaunchReceipt:
-    profile = COHORT_STAGGER_PROFILES[profile_name]
-    ids = tuple(f"bot-{index}" for index in range(profile.member_count))
-    pins = tuple(
-        CohortBatchLaunchMemberPin(
-            strategy_instance_id=sid, run_id=f"run-{sid}", roll_call_offer_id=f"offer-{sid}"
-        )
-        for sid in ids
-    )
-    schedule = tuple(
-        CohortBatchLaunchMemberSchedule(
-            strategy_instance_id=sid,
-            run_id=f"run-{sid}",
-            scheduled_start_at_ms=1_700_000_000_000 + index * profile.stagger_ms,
-            start_request={"symbol": sid},
-        )
-        for index, sid in enumerate(ids)
-    )
-    window_start_ms = schedule[-1].scheduled_start_at_ms + COHORT_EVIDENCE_CADENCE_MS
-    return CohortBatchLaunchReceipt(
-        schema_version=2,
-        launch_profile=profile_name,
-        account_id="DU123456",
-        cohort_id="paper-validation-1-abc",
-        member_strategy_instance_ids=ids,
-        window_start_ms=window_start_ms,
-        window_end_ms=window_start_ms + profile.overlap_ms,
-        authorized_by="operator.alice",
-        recorded_at_ms=1_700_000_000_000,
-        member_pins=pins,
-        member_schedule=schedule,
-    )
 
 
-def test_v2_cohort_receipt_accepts_five_bot_stagger_profile() -> None:
-    receipt = _staggered_receipt("paper_five_bot_stagger_v2")
-
-    assert len(receipt.member_schedule) == 5
-    first_start = receipt.member_schedule[0].scheduled_start_at_ms
-    offsets = tuple(slot.scheduled_start_at_ms - first_start for slot in receipt.member_schedule)
-    assert offsets == (0, 300_000, 600_000, 900_000, 1_200_000)
-    assert receipt.window_end_ms - receipt.window_start_ms == 45 * 60 * 1_000
 
 
-def test_v2_cohort_receipt_rejects_five_bot_stagger_with_wrong_spacing() -> None:
-    profile = COHORT_STAGGER_PROFILES["paper_five_bot_stagger_v2"]
-    ids = tuple(f"bot-{index}" for index in range(profile.member_count))
-    pins = tuple(
-        CohortBatchLaunchMemberPin(
-            strategy_instance_id=sid, run_id=f"run-{sid}", roll_call_offer_id=f"offer-{sid}"
-        )
-        for sid in ids
-    )
-    schedule = tuple(
-        CohortBatchLaunchMemberSchedule(
-            strategy_instance_id=sid,
-            run_id=f"run-{sid}",
-            scheduled_start_at_ms=1_700_000_000_000 + index * 999,
-            start_request={},
-        )
-        for index, sid in enumerate(ids)
-    )
-    window_start_ms = schedule[-1].scheduled_start_at_ms + COHORT_EVIDENCE_CADENCE_MS
-
-    with pytest.raises(ValidationError, match="staggered evenly"):
-        CohortBatchLaunchReceipt(
-            schema_version=2,
-            launch_profile="paper_five_bot_stagger_v2",
-            account_id="DU123456",
-            cohort_id="paper-validation-1-abc",
-            member_strategy_instance_ids=ids,
-            window_start_ms=window_start_ms,
-            window_end_ms=window_start_ms + profile.overlap_ms,
-            authorized_by="operator.alice",
-            recorded_at_ms=1_700_000_000_000,
-            member_pins=pins,
-            member_schedule=schedule,
-        )
 
 
-def test_restart_intensity_counts_daemon_crash_restarts_individually_during_cohort_window(tmp_path: Path) -> None:
-    policy = RestartIntensityPolicy(threshold=3, window_ms=60_000)
-    receipt = CohortBatchLaunchReceipt(
-        account_id="DU123456",
-        cohort_id="opening-batch-1",
-        member_strategy_instance_ids=("spy-a", "spy-b", "spy-c"),
-        window_start_ms=1_700_000_000_000,
-        window_end_ms=1_700_000_030_000,
-        authorized_by="operator.alice",
-        recorded_at_ms=1_700_000_000_000,
-    )
-    record_cohort_batch_launch_receipt(tmp_path, receipt)
-    for index, recorded_at_ms in enumerate(
-        (1_700_000_001_000, 1_700_000_002_000, 1_700_000_003_000),
-        start=1,
-    ):
-        write_account_instance_binding(
-            tmp_path,
-            _binding(
-                sid=f"spy-{chr(96 + index)}",
-                run_id=f"run-{index}",
-                namespace=f"learn-ai/spy-{chr(96 + index)}/v1",
-                recorded_at_ms=recorded_at_ms,
-            ).model_copy(update={"source": "host_daemon.crash_restart"}),
-        )
 
-    gate = evaluate_restart_intensity(
-        tmp_path,
-        account_id="DU123456",
-        now_ms=1_700_000_004_000,
-        policy=policy,
-    )
 
-    assert gate.status == "freeze"
-    assert "observed=3" in gate.operator_reason
 
 
 def test_restart_intensity_breach_records_account_freeze_with_threshold_details(tmp_path: Path) -> None:

@@ -99,7 +99,6 @@ export class FakeLiveRunsService {
   retireAndReplace = vi.fn<LiveRunsService['retireAndReplace']>();
   setInstanceDesiredState = vi.fn<LiveRunsService['setInstanceDesiredState']>();
   flattenAndPause = vi.fn<LiveRunsService['flattenAndPause']>();
-  emergencyFlattenAccount = vi.fn<LiveRunsService['emergencyFlattenAccount']>();
   issueInstanceCommand = vi.fn<LiveRunsService['issueInstanceCommand']>();
   reconcileInstance = vi.fn<LiveRunsService['reconcileInstance']>();
   recordCrashRecoveryOverride = vi.fn<LiveRunsService['recordCrashRecoveryOverride']>();
@@ -181,13 +180,6 @@ export function allowFlattenAndPauseCall(
   response: SetInstanceDesiredStateResponse = makeDesiredStateResponse(),
 ): void {
   liveRuns.flattenAndPause.mockResolvedValue(response);
-}
-
-export function allowEmergencyFlattenAccountCall(
-  liveRuns: FakeLiveRunsService,
-  response: HostRunnerActionResponse,
-): void {
-  liveRuns.emergencyFlattenAccount.mockResolvedValue(response);
 }
 
 export function allowIssueInstanceCommandCall(
@@ -284,7 +276,6 @@ interface BotControlMutationResponses {
   botLifecycleMutation?: BotLifecycleMutationResponse;
   setInstanceDesiredState?: SetInstanceDesiredStateResponse;
   flattenAndPause?: SetInstanceDesiredStateResponse;
-  emergencyFlattenAccount?: HostRunnerActionResponse;
   issueInstanceCommand?: CommandWriteResponse;
   reconcileInstance?: ReconcileAckResponse;
   recordCrashRecoveryOverride?: CrashRecoveryOverrideResponse;
@@ -383,9 +374,6 @@ function applyMutationResponses(
   if (responses.flattenAndPause) {
     allowFlattenAndPauseCall(liveRuns, responses.flattenAndPause);
   }
-  if (responses.emergencyFlattenAccount) {
-    allowEmergencyFlattenAccountCall(liveRuns, responses.emergencyFlattenAccount);
-  }
   if (responses.issueInstanceCommand) {
     allowIssueInstanceCommandCall(liveRuns, responses.issueInstanceCommand);
   }
@@ -454,7 +442,6 @@ export function makeFailClosedLiveRuns(options: BotControlLiveRunsOptions = {}):
   liveRuns.retireAndReplace.mockRejectedValue(unexpectedMutation('retireAndReplace'));
   liveRuns.setInstanceDesiredState.mockRejectedValue(unexpectedMutation('setInstanceDesiredState'));
   liveRuns.flattenAndPause.mockRejectedValue(unexpectedMutation('flattenAndPause'));
-  liveRuns.emergencyFlattenAccount.mockRejectedValue(unexpectedMutation('emergencyFlattenAccount'));
   liveRuns.issueInstanceCommand.mockRejectedValue(unexpectedMutation('issueInstanceCommand'));
   liveRuns.reconcileInstance.mockRejectedValue(unexpectedMutation('reconcileInstance'));
   liveRuns.recordCrashRecoveryOverride.mockRejectedValue(unexpectedMutation('recordCrashRecoveryOverride'));

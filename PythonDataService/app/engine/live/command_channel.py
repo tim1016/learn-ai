@@ -43,6 +43,7 @@ class CommandVerb(StrEnum):
     FLATTEN = "FLATTEN"
     RECONCILE = "RECONCILE"
     MARK_POISONED = "MARK_POISONED"
+    CLOCK_OUT = "CLOCK_OUT"
 
 
 class Command(BaseModel):

@@ -18,9 +18,7 @@
         <h2 class="eyebrow"><i class="pi pi-check-circle" aria-hidden="true"></i>{{ deployment.created ? 'Deployment created' : 'Deployment already exists' }}</h2>
         <p>
           {{ deployment.created
-            ? preparedForCohort()
-              ? 'Prepared for cohort; no runner was started.'
-              : 'The strategy is now registered with the launch settings shown below.'
+            ? 'The strategy is registered and started with the launch settings shown below.'
             : 'Nothing changed; the existing deployment already matches this ticket.' }}
         </p>
         @if (deployment.start) {
@@ -221,6 +219,12 @@
           <dd>{{ resolvedSignalStream() || 'Add signal stream' }}</dd>
         </div>
         <div>
+          <dt>Trade asset</dt>
+          <dd>
+            {{ actionPlanTradeSymbol() ? actionPlanTradeSymbol() + ' · Stock' : 'Declare a stock entry leg' }}
+          </dd>
+        </div>
+        <div>
           <dt>Sizing</dt>
           <dd>{{ sizingSummary() }}</dd>
         </div>
@@ -388,19 +392,7 @@
           [loading]="busy()"
         >
           <i class="pi pi-send" aria-hidden="true"></i>
-          <span class="p-button-label">Launch strategy</span>
-        </button>
-        <button
-          pButton
-          type="button"
-          severity="secondary"
-          [outlined]="true"
-          [disabled]="!canSubmit()"
-          [loading]="busy()"
-          (click)="prepareForCohort()"
-        >
-          <i class="pi pi-users" aria-hidden="true"></i>
-          <span class="p-button-label">Prepare for cohort</span>
+          <span class="p-button-label">Deploy &amp; run</span>
         </button>
         <p
           class="command-status"

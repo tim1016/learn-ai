@@ -112,6 +112,7 @@ class LiveInstanceSurfaceDependencies:
     resolve_incident_headline: Callable[..., Any]
     resolve_bot_lifecycle_state: Callable[..., Any]
     resolve_live_run_dir: Callable[..., Any]
+    clock_out_in_progress: Callable[..., Any]
     compute_operator_surface: Callable[..., Any]
     resolve_durable_control_write_failure_for_status: Callable[..., Any]
     resolve_start_run_id: Callable[..., Any]
@@ -273,6 +274,7 @@ class LiveInstanceSurfaceAssembler:
         incident_headline = d.resolve_incident_headline(root, live_binding, runs)
         lifecycle_state = d.resolve_bot_lifecycle_state(root, sid)
         live_run_dir = d.resolve_live_run_dir(root, live_binding)
+        clock_out_in_progress = live_run_dir is not None and d.clock_out_in_progress(live_run_dir)
         symbol = d.resolve_symbol(root, live_binding, runs)
         session_capability = d.resolve_session_capability_for_symbol(symbol)
         operator_surface = d.compute_operator_surface(
@@ -345,6 +347,7 @@ class LiveInstanceSurfaceAssembler:
                 active_run_id=live_binding.run_id if live_binding is not None else None,
                 persisted_state=lifecycle_state,
                 roll_call_offer=roll_call_offer,
+                clock_out_in_progress=clock_out_in_progress,
                 conditions=tuple(lifecycle_conditions),
                 now_ms=observed_at_ms,
             )

@@ -139,12 +139,31 @@ export interface BotLifecycleCondition {
   cure_label: string;
 }
 
+/** Durable terminal evidence written by the lifecycle evaluator. */
+export type BotDutyOutcomeKind =
+  | 'CLOCKED_OUT_FLAT'
+  | 'STOPPED'
+  | 'HALTED'
+  | 'CRASHED'
+  | 'FAILED_LAUNCH'
+  | 'EXITED_UNVERIFIED'
+  | 'RETIRED';
+
+export interface BotDutyOutcomeView {
+  kind: BotDutyOutcomeKind;
+  reason_code: string;
+  recorded_at_ms: number;
+  run_id?: string | null;
+}
+
 export interface BotDailyLifecycleProjection {
   phase: BotLifecyclePhaseValue;
   presence_label: BotLifecyclePresenceLabel;
   display_status: BotLifecycleDisplayStatus;
   attention_badge: 'Sick bay' | 'Ready' | 'Off roster' | null;
   reason: string | null;
+  carryover_policy?: 'FORBID';
+  duty_outcome?: BotDutyOutcomeView | null;
   on_roster: boolean;
   active_run_id: string | null;
   latest_run_id: string | null;

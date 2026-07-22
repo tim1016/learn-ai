@@ -14,11 +14,13 @@ import type {
   LegacyStaleClaimRetirementReceipt,
   OperatorRecoveryFlattenResponse,
 } from '../../../api/account-reconciliation.types';
+import type { AccountClerkRestoreReceipt, JournalRecoveryReceipt } from '../../../api/account-cockpit.types';
 import type { OperatorConfirmationCopy } from '../../../api/operator-blocker.types';
 import { BrokerService } from '../../../services/broker.service';
 import { extractServerMessage } from '../operation-error';
 import type { OperatorBlockerMoveEvent } from '../shared/operator-blocker-list/operator-blocker-list.component';
 import { AccountDeskEventsStore } from './account-desk-events-store.service';
+import { AccountDeskDirectoryStore } from './account-desk-directory-store.service';
 import { AccountDeskSurfaceStore } from './account-desk-surface-store.service';
 
 export type AccountDeskRecoveryCommand =
@@ -29,7 +31,9 @@ export type AccountDeskRecoveryCommand =
   | 'journal_cure'
   | 'legacy_retire'
   | 'recovery_flatten'
-  | 'emergency_flatten';
+  | 'emergency_flatten'
+  | 'restore_clerk'
+  | 'journal_recovery';
 
 export interface AccountDeskRecoveryConfirmation {
   readonly command: AccountDeskRecoveryCommand;
@@ -45,6 +49,8 @@ export interface AccountDeskRecoveryConfirmation {
   readonly journalCure: { readonly preview: JournalCurePreview; readonly request: JournalCureRequest } | null;
   readonly legacyCandidate: LegacyStaleClaimCandidate | null;
   readonly recoveryFlatten: AccountRecoveryFlattenCandidate | null;
+  readonly emergencyOperationId: string | null;
+  readonly restoreOperationId: string | null;
 }
 
 export type AccountDeskRecoverySuccess =
@@ -55,7 +61,9 @@ export type AccountDeskRecoverySuccess =
   | { readonly kind: 'journal_cure'; readonly receipt: JournalCureReceipt }
   | { readonly kind: 'legacy_retire'; readonly receipt: LegacyStaleClaimRetirementReceipt }
   | { readonly kind: 'recovery_flatten'; readonly receipt: OperatorRecoveryFlattenResponse }
-  | { readonly kind: 'emergency_flatten'; readonly receipt: AccountEmergencyFlattenResponse };
+  | { readonly kind: 'emergency_flatten'; readonly receipt: AccountEmergencyFlattenResponse }
+  | { readonly kind: 'restore_clerk'; readonly receipt: AccountClerkRestoreReceipt }
+  | { readonly kind: 'journal_recovery'; readonly receipt: JournalRecoveryReceipt };
 
 /**
  * Executes only exact account-desk requests declared by backend projections.
@@ -67,6 +75,7 @@ export class AccountDeskRecoveryStore {
   private readonly broker = inject(BrokerService);
   private readonly surface = inject(AccountDeskSurfaceStore);
   private readonly events = inject(AccountDeskEventsStore);
+  private readonly directory = inject(AccountDeskDirectoryStore);
   private requestGeneration = 0;
   private readonly accountKey = signal<string | null>(null);
   private readonly confirmationState = signal<AccountDeskRecoveryConfirmation | null>(null);
@@ -130,6 +139,24 @@ export class AccountDeskRecoveryStore {
     this.openConfirmation(accountId, command, confirmation);
   }
 
+  requestCockpitMove(event: OperatorBlockerMoveEvent): void {
+    const accountId = this.accountKey();
+    const confirmation = event.move.confirmation;
+    const cockpit = this.directory.cockpit();
+    if (
+      this.busyState() ||
+      accountId === null ||
+      cockpit === null ||
+      (cockpit.mode !== 'CLERK_DOWN' && cockpit.mode !== 'JOURNAL_CORRUPT') ||
+      event.move.action.kind !== 'confirm_in_form' ||
+      (event.move.action.anchor !== 'account-clerk-restore-action' && event.move.action.anchor !== 'account-journal-recovery-action') ||
+      confirmation === null ||
+      confirmation === undefined ||
+      !cockpit.blockers.some((blocker) => blocker.condition.id === event.blocker.condition.id)
+    ) return;
+    this.openConfirmation(accountId, cockpit.mode === 'JOURNAL_CORRUPT' ? 'journal_recovery' : 'restore_clerk', confirmation);
+  }
+
   requestAutomationChange(policy: AccountReconciliationAutomationPolicy): void {
     const accountId = this.accountKey();
     if (this.busyState() || accountId === null || policy.account_id !== accountId) return;
@@ -148,6 +175,8 @@ export class AccountDeskRecoveryStore {
       journalCure: null,
       legacyCandidate: null,
       recoveryFlatten: null,
+      emergencyOperationId: null,
+      restoreOperationId: null,
     });
     this.errorMessageState.set(null);
   }
@@ -199,7 +228,7 @@ export class AccountDeskRecoveryStore {
 
   requestEmergencyFlatten(confirmation: OperatorConfirmationCopy): void {
     const accountId = this.accountKey();
-    if (this.busyState() || accountId === null || confirmation.required_token === '') return;
+    if (this.busyState() || accountId === null || confirmation.required_token !== 'FLATTEN') return;
     this.openConfirmation(accountId, 'emergency_flatten', confirmation);
   }
 
@@ -252,6 +281,7 @@ export class AccountDeskRecoveryStore {
       await Promise.all([
         this.surface.load(confirmation.accountId),
         this.events.load(confirmation.accountId),
+        this.directory.loadServiceStatus(confirmation.accountId),
         this.loadLegacyCandidates(confirmation.accountId, generation),
       ]);
     } catch {
@@ -286,6 +316,8 @@ export class AccountDeskRecoveryStore {
       journalCure: details.journalCure ?? null,
       legacyCandidate: details.legacyCandidate ?? null,
       recoveryFlatten: details.recoveryFlatten ?? null,
+      emergencyOperationId: command === 'emergency_flatten' ? crypto.randomUUID() : null,
+      restoreOperationId: (command === 'restore_clerk' || command === 'journal_recovery') ? crypto.randomUUID() : null,
     });
     this.errorMessageState.set(null);
   }
@@ -344,9 +376,40 @@ export class AccountDeskRecoveryStore {
           }),
         };
       case 'emergency_flatten':
+        if (confirmation.providedToken !== 'FLATTEN' || confirmation.emergencyOperationId === null) {
+          throw new Error('Emergency flatten confirmation is incomplete.');
+        }
         return {
           kind: 'emergency_flatten',
-          receipt: await this.broker.emergencyFlattenAccount(confirmation.accountId),
+          receipt: await this.broker.emergencyFlattenAccount(confirmation.accountId, {
+            account: confirmation.accountId,
+            confirmation_token: 'FLATTEN',
+            idempotency_key: confirmation.emergencyOperationId,
+          }),
+        };
+      case 'restore_clerk':
+        if (confirmation.providedToken !== 'RESTORE' || confirmation.restoreOperationId === null) {
+          throw new Error('Clerk restore confirmation is incomplete.');
+        }
+        return {
+          kind: 'restore_clerk',
+          receipt: await this.broker.restoreAccountClerk(confirmation.accountId, {
+            confirmation_token: 'RESTORE',
+            idempotency_key: confirmation.restoreOperationId,
+          }),
+        };
+      case 'journal_recovery':
+        if (
+          confirmation.restoreOperationId === null ||
+          (confirmation.providedToken !== 'QUARANTINE' && confirmation.providedToken !== 'REBASELINE')
+        ) throw new Error('Journal recovery confirmation is incomplete.');
+        return {
+          kind: 'journal_recovery',
+          receipt: await this.broker.recoverAccountJournal(
+            confirmation.accountId,
+            confirmation.providedToken === 'QUARANTINE' ? 'quarantine' : 'rebaseline',
+            { confirmation_token: confirmation.providedToken, idempotency_key: confirmation.restoreOperationId },
+          ),
         };
     }
   }

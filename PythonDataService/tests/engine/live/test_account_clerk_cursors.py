@@ -6,7 +6,7 @@
 | Full identity / stale-consumer rejection | ``test_drain_events_rejects_stale_account_namespace_and_run`` |
 | Crash before cursor acknowledges at least once | ``test_crash_after_bot_wal_before_cursor_redelivers_without_duplicate_fill_effect`` |
 | Restart resumes after the durable cursor | ``test_restarted_bot_resumes_after_durable_cursor`` |
-| Empty drain and no inactive relay cache | ``test_empty_drain_does_not_mutate_cursor_or_journal_or_cache_consumers`` |
+| Empty drain and no inactive relay cache | ``test_empty_drain_does_not_mutate_cursor_or_existing_journal_or_cache_consumers`` |
 """
 
 from __future__ import annotations
@@ -167,7 +167,8 @@ async def test_drain_events_real_unix_socket_returns_ordered_journal_rows(tmp_pa
     finally:
         await server.close()
 
-    assert [delivery.journal_seq for delivery in deliveries] == [2, 4]
+    # S6 records the Clerk's broker-unavailable startup recovery at sequence 1.
+    assert [delivery.journal_seq for delivery in deliveries] == [3, 5]
     assert [delivery.event.exec_id for delivery in deliveries] == ["exec-1", "exec-2"]
     assert cursor.last_journal_seq(_consumer()) == 0
     assert (tmp_path / "accounts" / ACCOUNT / "clerk_journal.jsonl").read_bytes() == journal_before
@@ -314,15 +315,18 @@ async def test_restarted_bot_resumes_after_durable_cursor(tmp_path: Path) -> Non
     finally:
         await server.close()
 
-    assert [delivery.journal_seq for delivery in resumed_deliveries] == [4]
+    assert [delivery.journal_seq for delivery in resumed_deliveries] == [5]
     assert [delivery.event.exec_id for delivery in resumed_deliveries] == ["exec-resume-2"]
 
 
 @pytest.mark.asyncio
-async def test_empty_drain_does_not_mutate_cursor_or_journal_or_cache_consumers(tmp_path: Path) -> None:
+async def test_empty_drain_does_not_mutate_cursor_or_existing_journal_or_cache_consumers(
+    tmp_path: Path,
+) -> None:
     _clerk, server = await _server(tmp_path)
     cursor = AccountClerkEventCursorRepo(tmp_path / "run")
     journal_path = tmp_path / "accounts" / ACCOUNT / "clerk_journal.jsonl"
+    journal_before = journal_path.read_bytes()
     try:
         deliveries = await AccountClerkRpcClient(artifacts_root=tmp_path, account_id=ACCOUNT).drain_events(
             after_seq=0,
@@ -334,5 +338,5 @@ async def test_empty_drain_does_not_mutate_cursor_or_journal_or_cache_consumers(
 
     assert deliveries == []
     assert not cursor.path.exists()
-    assert not journal_path.exists()
+    assert journal_path.read_bytes() == journal_before
     assert not hasattr(server, "_events_by_namespace")

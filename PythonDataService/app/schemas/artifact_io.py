@@ -21,18 +21,23 @@ read failed, log, or raise. The caller's domain logic decides what
 orphan classification NO_SIDECAR, etc.).
 
 The matching ``atomic_write_pydantic_artifact`` centralises the
-``tmp + fsync + replace`` pattern every writer needs: a partial reader
-must never observe a torn file. Direct write callers (no model
-involved) can use ``atomic_write_bytes`` instead.
+``unique tmp + fsync + replace + parent-dir fsync`` pattern every writer
+needs: a partial reader must never observe a torn file and a completed rename
+survives a power loss. Direct write callers (no model involved) can use
+``atomic_write_bytes`` instead.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import tempfile
 from pathlib import Path
 
 from pydantic import BaseModel
+
+from app.utils.atomic_parquet import fsync_parent_dir
 
 
 def read_pydantic_artifact[T: BaseModel](path: Path, model: type[T]) -> T | None:
@@ -66,25 +71,36 @@ def read_pydantic_artifact[T: BaseModel](path: Path, model: type[T]) -> T | None
 def atomic_write_pydantic_artifact(path: Path, artifact: BaseModel) -> None:
     """Atomically persist ``artifact`` to ``path`` as canonical JSON.
 
-    Writes a sibling ``<path>.tmp``, fsyncs, then ``replace``s onto
-    ``path`` in one POSIX rename. A concurrent reader observes either
-    the prior contents or the new file, never a torn intermediate
-    state. The parent directory is created if absent so callers don't
-    need to mkdir defensively.
+    Writes a unique sibling temp file, fsyncs it, atomically replaces ``path``,
+    then fsyncs the parent directory. A concurrent reader observes either the
+    prior contents or the new file, never a torn intermediate state. The parent
+    directory is created if absent so callers don't need to mkdir defensively.
 
     JSON is emitted with sorted keys and no extra whitespace so the
     on-disk bytes are stable for any downstream content-hash or diff
     comparison.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
     payload = artifact.model_dump(mode="json")
     data = json.dumps(payload, separators=(",", ":"), sort_keys=True)
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(data)
-        fh.flush()
-        os.fsync(fh.fileno())
-    tmp.replace(path)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+        text=True,
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, path)
+        fsync_parent_dir(path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp_path.unlink()
+        raise
 
 
 def _schema_version_compatible(artifact: BaseModel, model: type[BaseModel]) -> bool:

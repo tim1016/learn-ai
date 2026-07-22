@@ -10,7 +10,7 @@ submissions while the process can continue across day/night boundaries.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
 from zoneinfo import ZoneInfo
@@ -29,18 +29,6 @@ class StartBoundaryVerdict:
     message: str | None
     session_date: str | None
     effective_stop_ms: int | None
-
-
-@dataclass(frozen=True)
-class CohortWindowVerdict:
-    """Whether one fixed-duration cohort can finish before a daily stop."""
-
-    allowed: bool
-    reason_code: str | None
-    message: str | None
-    session_date: str | None
-    effective_stop_ms: int | None
-    required_window_end_ms: int
 
 
 def effective_stop_ms_for_date(session_date: date, live_config: Mapping[str, object] | None) -> int | None:
@@ -87,62 +75,6 @@ def start_boundary_verdict(now_ms: int, live_config: Mapping[str, object] | None
     )
 
 
-def cohort_window_verdict(
-    now_ms: int,
-    *,
-    live_configs: Sequence[Mapping[str, object]],
-    required_window_ms: int,
-) -> CohortWindowVerdict:
-    """Require a cohort's entire proof window to fit before every member's stop.
-
-    Members that have no daily stop (for example an explicitly extended-session
-    lifecycle) do not constrain the window. A malformed or unavailable policy
-    must be rejected by the caller before it reaches this function.
-    """
-
-    if required_window_ms <= 0:
-        raise ValueError("required_window_ms must be positive")
-    now_ny = datetime.fromtimestamp(now_ms / 1_000, tz=UTC).astimezone(_NY_TZ)
-    session_date = now_ny.date()
-    try:
-        stops = tuple(
-            stop
-            for live_config in live_configs
-            if (stop := effective_stop_ms_for_date(session_date, live_config)) is not None
-        )
-    except LookupError:
-        return CohortWindowVerdict(
-            allowed=False,
-            reason_code="NO_TRADING_SESSION",
-            message="No NYSE session is open for this cohort today. Run it on the next session day.",
-            session_date=session_date.isoformat(),
-            effective_stop_ms=None,
-            required_window_end_ms=now_ms + required_window_ms,
-        )
-    required_window_end_ms = now_ms + required_window_ms
-    effective_stop_ms = min(stops, default=None)
-    if effective_stop_ms is not None and required_window_end_ms > effective_stop_ms:
-        return CohortWindowVerdict(
-            allowed=False,
-            reason_code="COHORT_WINDOW_EXCEEDS_SESSION_STOP",
-            message=(
-                "Start refused because the cohort schedule and validation window will not "
-                "finish before the earliest effective stop."
-            ),
-            session_date=session_date.isoformat(),
-            effective_stop_ms=effective_stop_ms,
-            required_window_end_ms=required_window_end_ms,
-        )
-    return CohortWindowVerdict(
-        allowed=True,
-        reason_code=None,
-        message=None,
-        session_date=session_date.isoformat(),
-        effective_stop_ms=effective_stop_ms,
-        required_window_end_ms=required_window_end_ms,
-    )
-
-
 def configured_stop_from_live_config(live_config: Mapping[str, object] | None) -> time | None:
     if live_config is None:
         return _DEFAULT_STOP
@@ -185,9 +117,7 @@ def _declares_extended_session(live_config: Mapping[str, object]) -> bool:
 
 
 __all__ = [
-    "CohortWindowVerdict",
     "StartBoundaryVerdict",
-    "cohort_window_verdict",
     "configured_stop_from_live_config",
     "effective_stop_ms_for_date",
     "start_boundary_verdict",

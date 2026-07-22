@@ -2740,6 +2740,12 @@ def test_cmd_start_runs_account_truth_refresh_loop_for_durable_submit_child(
         def __init__(self, *, client: object, **_kwargs: object) -> None:
             assert isinstance(client, _Client)
             assert _kwargs["artifacts_root"] == artifacts_root
+            truth_observer = _kwargs["account_truth_observer"]
+            failure_observer = _kwargs["account_truth_failure_observer"]
+            assert callable(truth_observer)
+            assert callable(failure_observer)
+            assert truth_observer.__name__ == "observe_account_truth"
+            assert failure_observer.__name__ == "observe_account_truth_failure"
             loop_events.append("init")
 
         async def refresh_once(self) -> None:

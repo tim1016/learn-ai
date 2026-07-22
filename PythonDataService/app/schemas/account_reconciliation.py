@@ -310,6 +310,42 @@ class AccountClearFreezeResponse(BaseModel):
     triage: AccountTriageResponse
 
 
+class AccountSessionPolicyUpdateRequest(BaseModel):
+    """Explicit account-level future hook for outside-live-session actions."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    allow_outside_live_session: bool
+
+
+class AccountSessionPolicyUpdateResponse(BaseModel):
+    """Durable receipt for an account session-policy change."""
+
+    model_config = ConfigDict(frozen=True)
+
+    account_id: str = Field(min_length=1, max_length=64)
+    allow_outside_live_session: bool
+    updated_at_ms: int = Field(ge=0)
+
+
+class AccountClerkRestartSmokeRequest(BaseModel):
+    """Typed acknowledgement that the current Clerk passed its restart smoke."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    confirmation: Literal["CLERK_RESTART_SMOKE"]
+
+
+class AccountClerkRestartSmokeResponse(BaseModel):
+    """Durable Clerk-restart smoke receipt used by gate promotion."""
+
+    model_config = ConfigDict(frozen=True)
+
+    account_id: str = Field(min_length=1, max_length=64)
+    clerk_generation: int = Field(ge=1)
+    recorded_at_ms: int = Field(ge=0)
+
+
 class AccountAcceptExposureOverrideRequest(BaseModel):
     """Operator request to accept exposure and clear an exposure freeze."""
 

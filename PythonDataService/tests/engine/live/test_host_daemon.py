@@ -11,6 +11,7 @@ import signal
 import subprocess
 import sys
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -33,9 +34,18 @@ from app.engine.live.account_registry import (
     AccountInstanceBinding,
     bot_order_namespace_for_instance,
     compute_reconcile_namespaces,
+    fold_account_binding_retirements,
+    pending_account_binding_retirements,
     read_account_instance_registry,
     write_account_instance_binding,
 )
+from app.engine.live.bot_lifecycle_state import (
+    BotLifecyclePhase,
+    BotLifecycleStateRepo,
+    stable_bot_lifecycle_state_path,
+)
+from app.engine.live.clock_out import ClockOutReceipt, write_clock_out_receipt
+from app.engine.live.command_channel import Command, CommandChannel, CommandVerb
 from app.engine.live.daemon_auth import TOKEN_HEADER
 from app.engine.live.desired_state import (
     DesiredState,
@@ -61,12 +71,21 @@ from app.schemas.bot_events import (
 )
 from app.schemas.broker_session import GatewaySocketRow
 from app.schemas.live_runs import (
+    AccountEmergencyFlattenResponse,
     ExitReason,
     HostRunnerActionResponse,
     HostRunnerProcessState,
     HostRunnerProcessStatus,
     HostRunnerStartRequest,
     RunStatusSidecar,
+)
+from app.services.bot_deletion import (
+    BotRetirementBindingTarget,
+    BotRetirementTransitionRecord,
+    bot_lifecycle_operation_fence,
+    bot_retirement_is_pending,
+    retire_bot_lifecycle_and_bindings,
+    stable_bot_retirement_transition_path,
 )
 from app.services.bot_event_wal import BotEventRawWal, run_bot_event_wal_path
 
@@ -241,6 +260,21 @@ def test_boot_adopts_healthy_orphan_clerk_only_after_generation_handshake(
 
     monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("must not respawn adopted Clerk"))
     assert manager._ensure_account_clerk("DU123") is adopted
+
+
+def test_daemon_restart_keeps_the_clerk_binding_capability_for_adoption(
+    daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    """A living Clerk remains controllable after its supervising daemon restarts."""
+
+    manager, _ = daemon_context
+    restarted = RunnerProcessManager(
+        repo_root=manager.repo_root,
+        live_runs_root=manager.live_runs_root,
+        boot_id="restarted-daemon-boot",
+    )
+
+    assert restarted._clerk_host_binding_capability == manager._clerk_host_binding_capability
 
 
 def test_boot_refuses_to_adopt_legacy_live_clerk_lease_without_client_id(
@@ -509,13 +543,451 @@ def _add_managed_process(
     )
 
 
+def test_emergency_pause_refuses_to_continue_while_a_bot_is_still_running(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The emergency lane must not record bot pause after a graceful-stop timeout."""
+
+    manager, _ = daemon_context
+    _add_managed_process(manager, key="pause-proof", ended_at_ms=None, returncode=None)
+    managed = manager._managed["pause-proof"]
+    monkeypatch.setattr(manager, "command_account_id", lambda _run_id: "DU-PAUSE")
+
+    with pytest.raises(HostRunnerError, match="CLERK_EMERGENCY_BOT_PAUSE_UNPROVEN"):
+        manager._pause_on_duty_account_bots("DU-PAUSE")
+
+    assert managed.process.poll() is None
+    assert managed.process.signals
+
+
 @pytest.fixture
-def daemon_context(tmp_path: Path) -> tuple[RunnerProcessManager, Path]:
+def daemon_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[RunnerProcessManager, Path]:
     repo_root = tmp_path / "repo"
     live_runs_root = repo_root / "PythonDataService" / "artifacts" / "live_runs"
     run_dir = live_runs_root / RUN_ID
     run_dir.mkdir(parents=True)
-    return RunnerProcessManager(repo_root=repo_root, live_runs_root=live_runs_root), run_dir
+    manager = RunnerProcessManager(repo_root=repo_root, live_runs_root=live_runs_root)
+    def record_binding_through_test_clerk(
+        binding: AccountInstanceBinding,
+        *,
+        ibkr_host: str | None = None,
+    ) -> None:
+        manager._ensure_account_clerk(binding.account_id, ibkr_host=ibkr_host)
+        write_account_instance_binding(manager.artifacts_root, binding)
+
+    monkeypatch.setattr(manager, "_record_account_binding_decision_via_clerk", record_binding_through_test_clerk)
+    monkeypatch.setattr(manager, "reconcile_pending_account_binding_retirements", lambda **_kwargs: 0)
+    return manager, run_dir
+
+
+def test_daemon_submits_binding_transition_to_clerk_rpc(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The daemon does not append a lifecycle decision around the Clerk."""
+
+    from app.engine.live import host_daemon
+
+    manager, run_dir = daemon_context
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": RUN_ID,
+                "strategy_instance_id": "spy_ema_paper",
+                "account_id": "DU111",
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[AccountInstanceBinding] = []
+
+    class _ClerkClient:
+        def __init__(self, *, artifacts_root: Path, account_id: str, host_capability: str) -> None:
+            assert artifacts_root == manager.artifacts_root
+            assert account_id == "DU111"
+            assert host_capability == manager._clerk_host_binding_capability
+
+        async def record_binding_decision(self, binding: AccountInstanceBinding) -> AccountInstanceBinding:
+            calls.append(binding)
+            write_account_instance_binding(manager.artifacts_root, binding)
+            return binding
+
+    monkeypatch.setattr(manager, "_ensure_account_clerk", lambda _account_id, **_kwargs: SimpleNamespace())
+    monkeypatch.setattr(host_daemon, "AccountClerkHostRpcClient", _ClerkClient)
+    monkeypatch.setattr(
+        manager,
+        "_record_account_binding_decision_via_clerk",
+        RunnerProcessManager._record_account_binding_decision_via_clerk.__get__(manager, RunnerProcessManager),
+    )
+
+    manager._write_account_registry_binding(
+        run_dir,
+        run_id=RUN_ID,
+        lifecycle_state="ACTIVE",
+        source="host_daemon.start",
+    )
+
+    assert len(calls) == 1
+    assert calls[0].lifecycle_state == "ACTIVE"
+    assert read_account_instance_registry(manager.artifacts_root, "DU111") == calls
+
+
+def test_daemon_boot_replays_a_fenced_partial_bot_retirement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A crash between account rows cannot leave a later start or Clerk write live."""
+
+    from app.services import bot_deletion
+
+    repo_root = tmp_path / "repo"
+    live_runs_root = repo_root / "PythonDataService" / "artifacts" / "live_runs"
+    artifacts_root = live_runs_root.parent
+    run_id = "run-retirement-replay"
+    sid = "retirement-replay-bot"
+    run_dir = live_runs_root / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps({"run_id": run_id, "strategy_instance_id": sid, "account_id": "DU111"}),
+        encoding="utf-8",
+    )
+    for account_id in ("DU111", "DU222"):
+        write_account_instance_binding(
+            artifacts_root,
+            AccountInstanceBinding(
+                account_id=account_id,
+                strategy_instance_id=sid,
+                run_id=run_id,
+                bot_order_namespace=bot_order_namespace_for_instance(sid),
+                lifecycle_state="ACTIVE",
+                recorded_at_ms=10,
+                source="test",
+            ),
+        )
+
+    real_write = bot_deletion.write_fenced_lifecycle_retirement_binding
+
+    def fail_second_registry(
+        root: Path,
+        binding: AccountInstanceBinding,
+        *,
+        transition_path: Path,
+    ) -> Path:
+        if binding.account_id == "DU222" and binding.lifecycle_state == "RETIRED":
+            raise OSError("injected second-registry failure")
+        return real_write(root, binding, transition_path=transition_path)
+
+    monkeypatch.setattr(bot_deletion, "write_fenced_lifecycle_retirement_binding", fail_second_registry)
+    with pytest.raises(OSError, match="injected second-registry failure"):
+        retire_bot_lifecycle_and_bindings(
+            artifacts_root,
+            sid,
+            run_ids=[run_id],
+            updated_by="operator",
+            reason="test retirement",
+            now_ms=20,
+        )
+
+    assert bot_retirement_is_pending(artifacts_root, sid)
+    assert BotLifecycleStateRepo(stable_bot_lifecycle_state_path(artifacts_root, sid)).read() is None
+    assert read_account_instance_registry(artifacts_root, "DU111")[-1].lifecycle_state == "RETIRED"
+    assert read_account_instance_registry(artifacts_root, "DU222")[-1].lifecycle_state == "ACTIVE"
+
+    monkeypatch.setattr(bot_deletion, "write_fenced_lifecycle_retirement_binding", real_write)
+    manager = RunnerProcessManager(repo_root=repo_root, live_runs_root=live_runs_root)
+
+    assert manager._recovered_bot_retirements == (sid,)
+    assert not bot_retirement_is_pending(artifacts_root, sid)
+    lifecycle = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(artifacts_root, sid)).read()
+    assert lifecycle is not None
+    assert lifecycle.phase is BotLifecyclePhase.RETIRED
+    assert lifecycle.on_roster is False
+    assert read_account_instance_registry(artifacts_root, "DU222")[-1].lifecycle_state == "RETIRED"
+
+
+def test_start_rechecks_retirement_after_waiting_for_the_operation_fence(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A Start that was already in flight cannot append ACTIVE after PENDING."""
+
+    manager, run_dir = daemon_context
+    sid = "retirement-race-bot"
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps({"run_id": RUN_ID, "strategy_instance_id": sid, "account_id": "DU111"}),
+        encoding="utf-8",
+    )
+    from app.services import bot_deletion
+
+    original_pending = bot_deletion.bot_retirement_is_pending
+    checked_after_fence = threading.Event()
+    popen_called = threading.Event()
+    errors: list[BaseException] = []
+
+    def observe_pending(root: Path, instance_id: str) -> bool:
+        checked_after_fence.set()
+        return original_pending(root, instance_id)
+
+    def fake_popen(*_args: Any, **_kwargs: Any) -> FakeProcess:
+        popen_called.set()
+        return FakeProcess()
+
+    monkeypatch.setattr(bot_deletion, "bot_retirement_is_pending", observe_pending)
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    def start() -> None:
+        try:
+            manager.start(RUN_ID, HostRunnerStartRequest())
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    transition_path = stable_bot_retirement_transition_path(manager.artifacts_root, sid)
+    with bot_lifecycle_operation_fence(manager.artifacts_root, sid):
+        starter = threading.Thread(target=start)
+        starter.start()
+        assert not checked_after_fence.wait(timeout=0.1)
+        transition_path.parent.mkdir(parents=True, exist_ok=True)
+        transition_path.write_text(
+            BotRetirementTransitionRecord(
+                strategy_instance_id=sid,
+                targets=(BotRetirementBindingTarget(account_id="DU111", run_id=RUN_ID),),
+                prepared_at_ms=10,
+                updated_by="operator",
+                reason="retire",
+            ).model_dump_json(),
+            encoding="utf-8",
+        )
+    starter.join(timeout=2.0)
+
+    assert not starter.is_alive()
+    assert checked_after_fence.is_set()
+    assert len(errors) == 1 and isinstance(errors[0], HostRunnerError)
+    assert not popen_called.is_set()
+    assert read_account_instance_registry(manager.artifacts_root, "DU111") == []
+
+
+def test_reaper_does_not_hold_manager_lock_while_waiting_for_another_bot_fence(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One blocked reaper cannot deadlock an unrelated Start admission."""
+
+    manager, run_dir = daemon_context
+    blocked_sid = "blocked-reaper-bot"
+    _add_managed_process(manager, key=blocked_sid, ended_at_ms=None, returncode=1)
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps({"run_id": RUN_ID, "strategy_instance_id": blocked_sid}),
+        encoding="utf-8",
+    )
+    start_has_fence = threading.Event()
+    allow_start_to_acquire_manager = threading.Event()
+    started: list[BaseException] = []
+    real_fence = manager._bot_lifecycle_operation_fence
+
+    @contextmanager
+    def observe_fence(strategy_instance_id: str | None):
+        with real_fence(strategy_instance_id):
+            if (
+                strategy_instance_id == blocked_sid
+                and threading.current_thread().name == "starter"
+            ):
+                start_has_fence.set()
+                assert allow_start_to_acquire_manager.wait(timeout=1.0)
+            yield
+
+    def start_independent() -> None:
+        try:
+            manager.start(RUN_ID, HostRunnerStartRequest())
+        except BaseException as exc:  # pragma: no cover - asserted below
+            started.append(exc)
+
+    monkeypatch.setattr(manager, "_bot_lifecycle_operation_fence", observe_fence)
+    monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+    starter = threading.Thread(target=start_independent, name="starter")
+    starter.start()
+    assert start_has_fence.wait(timeout=1.0)
+    reaper = threading.Thread(target=manager.reap_exited_processes)
+    reaper.start()
+    allow_start_to_acquire_manager.set()
+    starter.join(timeout=1.0)
+    assert not starter.is_alive()
+    assert started == []
+    reaper.join(timeout=1.0)
+    assert not reaper.is_alive()
+
+
+def test_instance_status_is_a_pure_observation_not_a_reaper(
+    daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    manager, _ = daemon_context
+    sid = "status-observation-bot"
+    _add_managed_process(manager, key=sid, ended_at_ms=None, returncode=1)
+
+    status_snapshot = manager.instance_status(sid)
+
+    assert status_snapshot.state is HostRunnerProcessState.exited
+    assert manager._managed[sid].lifecycle_outcome_recorded_at_ms is None
+    assert BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(manager.artifacts_root, sid)
+    ).read() is None
+
+
+def test_host_deploy_reopens_retired_lifecycle_inside_operation_fence(
+    daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    manager, _ = daemon_context
+    sid = "deploy-replacement-bot"
+    repo = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(manager.artifacts_root, sid))
+    repo.retire(now_ms=100, updated_by="operator", reason="replace")
+
+    with manager._bot_lifecycle_operation_fence(sid):
+        manager._reopen_retired_lifecycle_for_deploy(sid, "run-replacement")
+
+    reopened = repo.read()
+    assert reopened is not None
+    assert reopened.phase is BotLifecyclePhase.OFF_DUTY
+    assert reopened.on_roster is True
+    assert reopened.retired_at_ms is None
+    assert reopened.reason == "deploy.replacement"
+
+
+def test_host_deploy_surfaces_lifecycle_reopen_failure(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, _ = daemon_context
+    sid = "deploy-reopen-failure"
+    repo = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(manager.artifacts_root, sid))
+    repo.retire(now_ms=100, updated_by="operator", reason="replace")
+
+    def fail_reopen(_self: object, **_kwargs: object) -> None:
+        raise OSError("state file is not writable")
+
+    monkeypatch.setattr(BotLifecycleStateRepo, "reopen_for_deploy", fail_reopen)
+    with manager._bot_lifecycle_operation_fence(sid), pytest.raises(HostRunnerError) as exc_info:
+        manager._reopen_retired_lifecycle_for_deploy(sid, "run-replacement")
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail["reason_code"] == "BOT_LIFECYCLE_REOPEN_FAILED"
+
+
+def test_reaper_does_not_treat_a_partial_clock_out_receipt_as_clean_exit(
+    daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    """A flat receipt without the completed command ack cannot end duty cleanly."""
+
+    manager, _ = daemon_context
+    sid = "clock-out-partial"
+    _add_managed_process(manager, key=sid, ended_at_ms=None, returncode=0)
+    managed = manager._managed[sid]
+    write_clock_out_receipt(
+        managed.run_dir,
+        ClockOutReceipt(
+            run_id=managed.run_id,
+            strategy_instance_id=sid,
+            command_seq=1,
+            status="flat",
+            requested_at_ms=10,
+            completed_at_ms=11,
+            broker_evidence_at_ms=11,
+            stop_persisted_at_ms=12,
+            reason_code="CLOCK_OUT_FLAT",
+        ),
+    )
+    DesiredStateRepo(
+        stable_desired_state_path(manager.artifacts_root, sid),
+        trusted_root=manager.artifacts_root / "live_state",
+    ).set(DesiredState.STOPPED, updated_by="test", reason="test", now_ms=12)
+
+    manager._refresh(managed)
+
+    lifecycle = BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(manager.artifacts_root, sid)
+    ).read()
+    assert lifecycle is not None and lifecycle.duty_outcome is not None
+    assert lifecycle.duty_outcome.kind == "EXITED_UNVERIFIED"
+    assert lifecycle.duty_outcome.kind != "CLOCKED_OUT_FLAT"
+
+
+def test_late_reaper_cannot_replace_a_newer_active_duty(
+    daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    manager, _ = daemon_context
+    sid = "late-reaper-bot"
+    _add_managed_process(manager, key=sid, ended_at_ms=None, returncode=1)
+    managed = manager._managed[sid]
+    (managed.run_dir / "run_ledger.json").write_text(
+        json.dumps({"run_id": managed.run_id, "strategy_instance_id": sid, "account_id": "DU111"}),
+        encoding="utf-8",
+    )
+    write_account_instance_binding(
+        manager.artifacts_root,
+        AccountInstanceBinding(
+            account_id="DU111",
+            strategy_instance_id=sid,
+            run_id="run-new-duty",
+            bot_order_namespace=bot_order_namespace_for_instance(sid),
+            lifecycle_state="ACTIVE",
+            recorded_at_ms=20,
+            source="new-duty",
+        ),
+    )
+    repo = BotLifecycleStateRepo(stable_bot_lifecycle_state_path(manager.artifacts_root, sid))
+    repo.set_phase(
+        BotLifecyclePhase.ON_DUTY,
+        now_ms=20,
+        updated_by="roll_call",
+        active_run_id="run-new-duty",
+    )
+
+    manager._refresh(managed)
+
+    current = repo.read()
+    assert current is not None
+    assert current.phase is BotLifecyclePhase.ON_DUTY
+    assert current.active_run_id == "run-new-duty"
+    assert current.duty_outcome is None
+    assert read_account_instance_registry(manager.artifacts_root, "DU111")[-1].run_id == "run-new-duty"
+
+
+def test_reaper_records_clocked_out_flat_only_after_complete_clock_out_evidence(
+    daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    manager, _ = daemon_context
+    sid = "clock-out-complete"
+    _add_managed_process(manager, key=sid, ended_at_ms=None, returncode=0)
+    managed = manager._managed[sid]
+    write_clock_out_receipt(
+        managed.run_dir,
+        ClockOutReceipt(
+            run_id=managed.run_id,
+            strategy_instance_id=sid,
+            command_seq=1,
+            status="flat",
+            requested_at_ms=10,
+            completed_at_ms=11,
+            broker_evidence_at_ms=11,
+            stop_persisted_at_ms=12,
+            reason_code="CLOCK_OUT_FLAT",
+        ),
+    )
+    CommandChannel(managed.run_dir / "commands").ack_completion(
+        Command(seq=1, verb=CommandVerb.CLOCK_OUT),
+        outcome={"status": "completed", "effect": "clocked_out_flat"},
+    )
+    DesiredStateRepo(
+        stable_desired_state_path(manager.artifacts_root, sid),
+        trusted_root=manager.artifacts_root / "live_state",
+    ).set(DesiredState.STOPPED, updated_by="test", reason="test", now_ms=12)
+
+    manager._refresh(managed)
+
+    lifecycle = BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(manager.artifacts_root, sid)
+    ).read()
+    assert lifecycle is not None and lifecycle.duty_outcome is not None
+    assert lifecycle.duty_outcome.kind == "CLOCKED_OUT_FLAT"
 
 
 async def test_health_reports_idle_process(daemon_context: tuple[RunnerProcessManager, Path]) -> None:
@@ -787,144 +1259,6 @@ def test_health_flags_stale_code_when_launch_sha_behind_head(tmp_path: Path) -> 
     assert health.commits_behind == 3  # linear history → exact
 
 
-def test_emergency_flatten_runs_cli_and_reports_success(
-    daemon_context: tuple[RunnerProcessManager, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The account-wide flatten reuses the one-shot emergency-flatten CLI: the
-    manager spawns it (fixed argv, --confirm + --account), and exit 0 → accepted."""
-    from app.engine.live import host_daemon as hd
-
-    manager, run_dir = daemon_context
-    captured: dict[str, list[str]] = {}
-
-    class _Result:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
-    def fake_run(command: list[str], **_kwargs: object) -> _Result:
-        captured["command"] = command
-        return _Result()
-
-    monkeypatch.setattr(hd.subprocess, "run", fake_run)
-
-    resp = manager.emergency_flatten(RUN_ID, "DU123")
-
-    assert resp.accepted is True
-    cmd = captured["command"]
-    assert cmd[1:4] == ["-m", "app.engine.live.run", "emergency-flatten"]
-    assert "--confirm" in cmd
-    assert "DU123" in cmd
-    assert str(run_dir.resolve()) in cmd
-
-
-def test_account_emergency_flatten_mints_audit_run_without_existing_bot(
-    daemon_context: tuple[RunnerProcessManager, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from app.engine.live import host_daemon as hd
-
-    manager, _ = daemon_context
-    captured: dict[str, list[str]] = {}
-
-    class _Result:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
-    def fake_run(command: list[str], **_kwargs: object) -> _Result:
-        captured["command"] = command
-        return _Result()
-
-    monkeypatch.setattr(hd.subprocess, "run", fake_run)
-
-    response = manager.emergency_flatten_account("DU123")
-
-    assert response.accepted is True
-    assert response.account_id == "DU123"
-    assert response.audit_run_id.startswith("eflat-")
-    audit_dir = manager.live_runs_root / response.audit_run_id
-    assert audit_dir.is_dir()
-    assert str(audit_dir) in captured["command"]
-
-
-def test_emergency_flatten_account_mismatch_maps_to_http_400(
-    daemon_context: tuple[RunnerProcessManager, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """CLI exit 2 (operator precondition — account mismatch / no --confirm) → 400."""
-    from app.engine.live import host_daemon as hd
-    from app.engine.live.host_daemon import HostRunnerError
-
-    manager, _ = daemon_context
-
-    class _Result:
-        returncode = 2
-        stdout = ""
-        stderr = "account mismatch"
-
-    monkeypatch.setattr(hd.subprocess, "run", lambda command, **_kwargs: _Result())
-
-    with pytest.raises(HostRunnerError) as exc_info:
-        manager.emergency_flatten(RUN_ID, "DU999")
-    assert exc_info.value.status_code == 400
-
-
-def test_emergency_flatten_broker_error_maps_to_http_502(
-    daemon_context: tuple[RunnerProcessManager, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """CLI exit 3 (broker/runtime) → 502, with the CLI stderr surfaced."""
-    from app.engine.live import host_daemon as hd
-    from app.engine.live.host_daemon import HostRunnerError
-
-    manager, _ = daemon_context
-
-    class _Result:
-        returncode = 3
-        stdout = ""
-        stderr = "broker boom"
-
-    monkeypatch.setattr(hd.subprocess, "run", lambda command, **_kwargs: _Result())
-
-    with pytest.raises(HostRunnerError) as exc_info:
-        manager.emergency_flatten(RUN_ID, "DU123")
-    assert exc_info.value.status_code == 502
-    assert "broker boom" in exc_info.value.detail
-
-
-def test_emergency_flatten_rejects_concurrent_same_account(
-    daemon_context: tuple[RunnerProcessManager, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A second concurrent flatten for the same account is rejected (409), not run
-    against the same pre-fill snapshot — preventing double-liquidation (Codex P1
-    on #451). The account is released after the run so a later flatten proceeds.
-    """
-    from app.engine.live import host_daemon as hd
-    from app.engine.live.host_daemon import HostRunnerError
-
-    manager, _ = daemon_context
-    reentrant: dict[str, int] = {}
-
-    class _Result:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
-    def fake_run(command: list[str], **_kwargs: object) -> _Result:
-        # While the first flatten holds the account, a re-entrant one is rejected.
-        with pytest.raises(HostRunnerError) as exc_info:
-            manager.emergency_flatten(RUN_ID, "DU123")
-        reentrant["status"] = exc_info.value.status_code
-        return _Result()
-
-    monkeypatch.setattr(hd.subprocess, "run", fake_run)
-
-    resp = manager.emergency_flatten(RUN_ID, "DU123")
-
-    assert resp.accepted is True
-    assert reentrant["status"] == 409
-    # Released after completion — the in-flight set does not leak the account.
-    assert "DU123" not in manager._flatten_in_flight
-
-
 async def test_start_launches_existing_run_with_host_env(
     daemon_context: tuple[RunnerProcessManager, Path],
     monkeypatch: pytest.MonkeyPatch,
@@ -951,6 +1285,7 @@ async def test_start_launches_existing_run_with_host_env(
                 "strategy": "spy_ema_crossover",
                 "max_orders_per_day": 3,
                 "ibkr_host": "127.0.0.1",
+                "idempotency_key": "start-host-env",
             },
         )
 
@@ -968,6 +1303,37 @@ async def test_start_launches_existing_run_with_host_env(
     assert captured["kwargs"]["env"]["IBKR_HOST"] == "127.0.0.1"
     assert captured["kwargs"]["env"]["IBKR_CLIENT_ID"] == "70"
     assert "PythonDataService" in captured["kwargs"]["env"]["PYTHONPATH"]
+
+
+def test_start_refuses_admission_while_account_emergency_is_in_flight(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No bot can cross host admission after the emergency envelope begins."""
+
+    manager, run_dir = daemon_context
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": RUN_ID,
+                "strategy_instance_id": "spy_ema_paper",
+                "account_id": "DU111",
+            }
+        ),
+        encoding="utf-8",
+    )
+    with manager._flatten_lock:
+        manager._flatten_in_flight.add("DU111")
+    monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("must not spawn"))
+
+    with pytest.raises(HostRunnerError) as exc_info:
+        manager.start(RUN_ID, request=HostRunnerStartRequest())
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == {
+        "reason_code": "CLERK_EMERGENCY_ADMISSION_CLOSED",
+        "account_id": "DU111",
+    }
 
 
 def test_start_refuses_stopped_desired_state_before_spawn(
@@ -1366,7 +1732,9 @@ def test_clerk_alone_receives_write_capability_and_bot_environment_is_forced_rea
     daemon_context: tuple[RunnerProcessManager, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#1049 trace: inherited write capability cannot leak into a bot child."""
+    """#1049/S4 trace: Clerk-only capabilities cannot leak into a bot child."""
+
+    from app.engine.live.daemon_auth import CLERK_HOST_BINDING_CAPABILITY_ENV
 
     manager, run_dir = daemon_context
     (run_dir / "run_ledger.json").write_text(
@@ -1395,8 +1763,10 @@ def test_clerk_alone_receives_write_capability_and_bot_environment_is_forced_rea
 
     assert environments["clerk"]["IBKR_READONLY"] == "false"
     assert environments["clerk"]["IBKR_HOST"] == "127.0.0.1"
+    assert environments["clerk"][CLERK_HOST_BINDING_CAPABILITY_ENV] == manager._clerk_host_binding_capability
     assert environments["bot"]["IBKR_READONLY"] == "true"
     assert environments["bot"]["IBKR_HOST"] == "127.0.0.1"
+    assert CLERK_HOST_BINDING_CAPABILITY_ENV not in environments["bot"]
 
 
 def test_health_reap_and_parallel_start_do_not_block_on_clerk_socket_readiness(
@@ -1536,6 +1906,8 @@ def test_concurrent_starts_cannot_allocate_same_ibkr_client_id(
     captured_lock = threading.Lock()
     first_popen_entered = threading.Event()
     allow_first_popen_to_finish = threading.Event()
+    second_popen_entered = threading.Event()
+    allow_second_popen_to_finish = threading.Event()
 
     def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
         if "app.engine.live.account_clerk" in command:
@@ -1546,6 +1918,9 @@ def test_concurrent_starts_cannot_allocate_same_ibkr_client_id(
         if call_number == 1:
             first_popen_entered.set()
             assert allow_first_popen_to_finish.wait(timeout=2.0)
+        if call_number == 2:
+            second_popen_entered.set()
+            assert allow_second_popen_to_finish.wait(timeout=2.0)
         return FakeProcess()
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
@@ -1562,11 +1937,26 @@ def test_concurrent_starts_cannot_allocate_same_ibkr_client_id(
     first.start()
     assert first_popen_entered.wait(timeout=2.0)
     second.start()
+    assert second_popen_entered.wait(timeout=2.0)
     allow_first_popen_to_finish.set()
     first.join(timeout=2.0)
-    second.join(timeout=2.0)
 
     assert not first.is_alive()
+    with pytest.raises(HostRunnerError) as exc_info:
+        manager._run_clerk_emergency_flatten(
+            account="DU111",
+            operation_id="start-interleaving",
+            authorization_id="authorization",
+        )
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == {
+        "reason_code": "CLERK_EMERGENCY_START_IN_FLIGHT",
+        "account_id": "DU111",
+    }
+
+    allow_second_popen_to_finish.set()
+    second.join(timeout=2.0)
+
     assert not second.is_alive()
     assert errors == []
     assert captured_ids == ["90", "92"]
@@ -1617,12 +2007,14 @@ async def test_start_writes_account_registry_before_spawn(
     )
 
     def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
+        if "app.engine.live.account_clerk" in command:
+            return FakeProcess()
         bindings = read_account_instance_registry(manager.artifacts_root, "DU111")
         assert bindings
         assert bindings[-1].strategy_instance_id == "spy_ema_paper"
         assert bindings[-1].run_id == RUN_ID
         assert bindings[-1].bot_order_namespace == "learn-ai/spy_ema_paper/v1"
-        assert bindings[-1].cohort_id == "cohort-restart-test"
+        assert bindings[-1].cohort_id is None
         assert bindings[-1].lifecycle_state == "ACTIVE"
         return FakeProcess()
 
@@ -1632,7 +2024,7 @@ async def test_start_writes_account_registry_before_spawn(
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         response = await client.post(
             f"/runs/{RUN_ID}/start",
-            json={"cohort_id": "cohort-restart-test"},
+            json={"idempotency_key": "start-account-binding"},
         )
 
     assert response.status_code == 200
@@ -1641,7 +2033,7 @@ async def test_start_writes_account_registry_before_spawn(
         for event in read_account_events(manager.artifacts_root, "DU111")
         if event.get("event_type") == "account_instance_binding_recorded"
     ]
-    assert event["cohort_id"] == "cohort-restart-test"
+    assert "cohort_id" not in event
 
 
 async def test_start_retires_account_registry_binding_when_spawn_fails(
@@ -1663,6 +2055,8 @@ async def test_start_retires_account_registry_binding_when_spawn_fails(
     )
 
     def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
+        if "app.engine.live.account_clerk" in command:
+            return FakeProcess()
         raise OSError("spawn failed")
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
@@ -1673,6 +2067,12 @@ async def test_start_retires_account_registry_binding_when_spawn_fails(
     bindings = read_account_instance_registry(manager.artifacts_root, "DU111")
     assert [binding.lifecycle_state for binding in bindings[-2:]] == ["ACTIVE", "RETIRED"]
     assert bindings[-1].source == "host_daemon.start_failed"
+    lifecycle = BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(manager.artifacts_root, "spy_ema_paper")
+    ).read()
+    assert lifecycle is not None and lifecycle.duty_outcome is not None
+    assert lifecycle.duty_outcome.kind == "FAILED_LAUNCH"
+    assert lifecycle.active_run_id is None
     events = BotEventRawWal(run_bot_event_wal_path(run_dir)).read_all()
     assert len(events) == 1
     event = events[0]
@@ -1691,7 +2091,7 @@ async def test_start_retires_account_registry_binding_when_spawn_fails(
     assert [incident.notice.code for incident in incidents] == ["submit.launch_failed"]
 
 
-async def test_child_without_status_retires_account_registry_binding_as_ended_without_status(
+async def test_child_without_status_proposes_account_retirement_for_clerk(
     daemon_context: tuple[RunnerProcessManager, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1721,8 +2121,15 @@ async def test_child_without_status_retires_account_registry_binding_as_ended_wi
     assert status.state == HostRunnerProcessState.exited
     assert status.exit_reason == "exited(-9)"
     bindings = read_account_instance_registry(manager.artifacts_root, "DU111")
-    assert [binding.lifecycle_state for binding in bindings[-2:]] == ["ACTIVE", "RETIRED"]
-    assert bindings[-1].source == "host_daemon.ended_without_status"
+    assert [binding.lifecycle_state for binding in bindings[-1:]] == ["ACTIVE"]
+    [proposal] = pending_account_binding_retirements(manager.artifacts_root, account_id="DU111")
+    assert proposal.source == "host_daemon.ended_without_status"
+    lifecycle = BotLifecycleStateRepo(
+        stable_bot_lifecycle_state_path(manager.artifacts_root, "spy_ema_paper")
+    ).read()
+    assert lifecycle is not None and lifecycle.duty_outcome is not None
+    assert lifecycle.duty_outcome.kind == "EXITED_UNVERIFIED"
+    assert lifecycle.active_run_id is None
     events = BotEventRawWal(run_bot_event_wal_path(run_dir)).read_all()
     assert len(events) == 1
     event = events[0]
@@ -1787,8 +2194,9 @@ async def test_child_controlled_halt_does_not_emit_launch_failed_event(
 
     assert status.state == HostRunnerProcessState.exited
     bindings = read_account_instance_registry(manager.artifacts_root, "DU111")
-    assert [binding.lifecycle_state for binding in bindings[-2:]] == ["ACTIVE", "RETIRED"]
-    assert bindings[-1].source == "host_daemon.process_halted"
+    assert [binding.lifecycle_state for binding in bindings[-1:]] == ["ACTIVE"]
+    [proposal] = pending_account_binding_retirements(manager.artifacts_root, account_id="DU111")
+    assert proposal.source == "host_daemon.process_halted"
     assert BotEventRawWal(run_bot_event_wal_path(run_dir)).read_all() == []
 
 
@@ -1831,8 +2239,9 @@ async def test_child_unclassified_exit_does_not_write_clean_retirement_source(
 
     assert status.state == HostRunnerProcessState.exited
     bindings = read_account_instance_registry(manager.artifacts_root, "DU111")
-    assert [binding.lifecycle_state for binding in bindings[-2:]] == ["ACTIVE", "RETIRED"]
-    assert bindings[-1].source == "host_daemon.ended_without_status"
+    assert [binding.lifecycle_state for binding in bindings[-1:]] == ["ACTIVE"]
+    [proposal] = pending_account_binding_retirements(manager.artifacts_root, account_id="DU111")
+    assert proposal.source == "host_daemon.ended_without_status"
 
 
 async def test_start_blocks_after_crash_retire_until_later_recovery_proof(
@@ -1881,14 +2290,15 @@ async def test_start_blocks_after_crash_retire_until_later_recovery_proof(
     with pytest.raises(HostRunnerError) as exc_info:
         manager.start(RUN_ID, request=HostRunnerStartRequest())
     assert exc_info.value.status_code == 409
-    assert "recovery proof" in exc_info.value.detail
+    assert "reconciliation is pending" in exc_info.value.detail
 
+    fold_account_binding_retirements(manager.artifacts_root, account_id="DU111")
     append_account_event(
         manager.artifacts_root,
         "DU111",
         {
             "event_type": "account_recovery_proof_recorded",
-            "recorded_at_ms": fixed_ms + 1,
+            "recorded_at_ms": fixed_ms + 2,
             "recovery_id": "proof-1",
             "reconciliation_result": "clean",
         },
@@ -1931,16 +2341,18 @@ async def test_start_blocks_when_restart_intensity_freezes_account(
                 recorded_at_ms=recorded_at_ms,
                 source="test",
             ),
-        )
+    )
 
     def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
+        if "app.engine.live.account_clerk" in command:
+            return FakeProcess()
         raise AssertionError("restart intensity freeze should block before spawn")
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
-        response = await client.post(f"/runs/{RUN_ID}/start", json={})
+        response = await client.post(f"/runs/{RUN_ID}/start", json={"idempotency_key": "start-freeze"})
 
     assert response.status_code == 409
     freeze = read_account_freeze(manager.artifacts_root, "DU111")
@@ -1960,8 +2372,8 @@ async def test_start_rejects_second_active_run(
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
-        first = await client.post(f"/runs/{RUN_ID}/start", json={})
-        second = await client.post(f"/runs/{RUN_ID}/start", json={})
+        first = await client.post(f"/runs/{RUN_ID}/start", json={"idempotency_key": "start-first"})
+        second = await client.post(f"/runs/{RUN_ID}/start", json={"idempotency_key": "start-second"})
 
     assert first.status_code == 200
     assert second.status_code == 409
@@ -1972,7 +2384,7 @@ async def test_start_rejects_missing_run(daemon_context: tuple[RunnerProcessMana
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
-        response = await client.post("/runs/missing-run/start", json={})
+        response = await client.post("/runs/missing-run/start", json={"idempotency_key": "start-missing"})
 
     assert response.status_code == 404
 
@@ -1987,8 +2399,8 @@ async def test_stop_force_kills_when_graceful_signal_does_not_exit(
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
-        start = await client.post(f"/runs/{RUN_ID}/start", json={})
-        stop = await client.post(f"/runs/{RUN_ID}/stop", json={"force": True})
+        start = await client.post(f"/runs/{RUN_ID}/start", json={"idempotency_key": "start-force"})
+        stop = await client.post(f"/runs/{RUN_ID}/stop", json={"force": True, "idempotency_key": "stop-force"})
 
     assert start.status_code == 200
     assert stop.status_code == 200
@@ -2015,12 +2427,156 @@ async def test_stop_handles_process_exiting_between_poll_and_signal(
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
-        start = await client.post(f"/runs/{RUN_ID}/start", json={})
-        stop = await client.post(f"/runs/{RUN_ID}/stop", json={"force": False})
+        start = await client.post(f"/runs/{RUN_ID}/start", json={"idempotency_key": "start-racing"})
+        stop = await client.post(f"/runs/{RUN_ID}/stop", json={"force": False, "idempotency_key": "stop-racing"})
 
     assert start.status_code == 200
     assert stop.status_code == 200
     assert stop.json()["accepted"] is False
+
+
+async def test_daemon_boundary_replays_matching_start_and_stop_without_reinvoking(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1156: all broker/process commands replay only at the host boundary."""
+
+    manager, run_dir = daemon_context
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps({"run_id": RUN_ID, "strategy_instance_id": "bot-1", "account_id": "DU123"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LIVE_RUNNER_DAEMON_COMMAND_IDEMPOTENCY_ENFORCED_ACCOUNTS", "DU123")
+    calls = {"start": 0, "stop": 0}
+    process = HostRunnerProcessStatus(state=HostRunnerProcessState.running, run_id=RUN_ID, pid=42)
+
+    def start(_run_id: str, _request: HostRunnerStartRequest) -> HostRunnerActionResponse:
+        calls["start"] += 1
+        return HostRunnerActionResponse(accepted=True, process=process)
+
+    def stop(_run_id: str, _request) -> HostRunnerActionResponse:
+        calls["stop"] += 1
+        return HostRunnerActionResponse(accepted=True, process=process, command_id="stop-1")
+
+    monkeypatch.setattr(manager, "start", start)
+    monkeypatch.setattr(manager, "stop", stop)
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
+        missing_key = await client.post(f"/runs/{RUN_ID}/start", json={})
+        start_first = await client.post(f"/runs/{RUN_ID}/start", json={"idempotency_key": "start-key"})
+        start_replay = await client.post(f"/runs/{RUN_ID}/start", json={"idempotency_key": "start-key"})
+        stop_first = await client.post(f"/runs/{RUN_ID}/stop", json={"idempotency_key": "stop-key"})
+        stop_replay = await client.post(f"/runs/{RUN_ID}/stop", json={"idempotency_key": "stop-key"})
+        conflict = await client.post(
+            f"/runs/{RUN_ID}/start",
+            json={"readonly": False, "idempotency_key": "start-key"},
+        )
+
+    assert missing_key.status_code == 400
+    assert [response.status_code for response in (start_first, start_replay, stop_first, stop_replay)] == [200] * 4
+    assert [start_replay.json()["idempotency_replayed"], stop_replay.json()["idempotency_replayed"]] == [True] * 2
+    assert calls == {"start": 1, "stop": 1}
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["reason_code"] == "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_COMMAND"
+
+
+async def test_daemon_boundary_replays_account_emergency_flatten_without_reinvoking(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The account-scoped flatten is also a broker command boundary."""
+
+    manager, _ = daemon_context
+    monkeypatch.setenv("LIVE_RUNNER_DAEMON_COMMAND_IDEMPOTENCY_ENFORCED_ACCOUNTS", "DU123")
+    calls = 0
+
+    def flatten_account(
+        account_id: str,
+        *,
+        operation_id: str,
+        authorization_id: str,
+    ) -> AccountEmergencyFlattenResponse:
+        nonlocal calls
+        calls += 1
+        assert authorization_id == "clerk-auth-123456"
+        return AccountEmergencyFlattenResponse(
+            accepted=True,
+            account_id=account_id,
+            audit_run_id=operation_id,
+            completed_at_ms=1_700_000_000_000,
+        )
+
+    monkeypatch.setattr(manager, "emergency_flatten_account", flatten_account)
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
+        first = await client.post(
+            "/accounts/DU123/emergency-flatten",
+            json={
+                "account": "DU123",
+                "confirmation_token": "FLATTEN",
+                "authorization_id": "clerk-auth-123456",
+                "idempotency_key": "account-flatten-key",
+            },
+        )
+        replay = await client.post(
+            "/accounts/DU123/emergency-flatten",
+            json={
+                "account": "DU123",
+                "confirmation_token": "FLATTEN",
+                "authorization_id": "clerk-auth-123456",
+                "idempotency_key": "account-flatten-key",
+            },
+        )
+
+    assert first.status_code == 200
+    assert replay.status_code == 200
+    assert replay.json()["idempotency_replayed"] is True
+    assert calls == 1
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "method_name"),
+    [
+        (f"/runs/{RUN_ID}/start", {"idempotency_key": "unknown-start"}, "start"),
+        (f"/runs/{RUN_ID}/stop", {"idempotency_key": "unknown-stop"}, "stop"),
+    ],
+)
+async def test_daemon_boundary_pending_command_never_reinvokes_after_uncertain_delivery(
+    path: str,
+    body: dict[str, object],
+    method_name: str,
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A daemon crash after command execution yields unknown, never a retry."""
+
+    manager, run_dir = daemon_context
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps({"run_id": RUN_ID, "strategy_instance_id": "bot-1", "account_id": "DU123"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("LIVE_RUNNER_DAEMON_COMMAND_IDEMPOTENCY_ENFORCED_ACCOUNTS", "DU123")
+    calls = 0
+
+    def lose_outcome(*_args: object, **_kwargs: object) -> HostRunnerActionResponse:
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("simulated daemon process exit after effect")
+
+    monkeypatch.setattr(manager, method_name, lose_outcome)
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+
+    async with AsyncClient(transport=transport, base_url="http://test", headers=_AUTH) as client:
+        first = await client.post(path, json=body)
+        duplicate = await client.post(path, json=body)
+
+    assert first.status_code == 500
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"]["reason_code"] == "IDEMPOTENCY_OUTCOME_UNKNOWN"
+    assert calls == 1
 
 
 async def test_instances_lists_each_managed_strategy_instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2043,7 +2599,7 @@ async def test_instances_lists_each_managed_strategy_instance(tmp_path: Path, mo
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
         for run_id in runs:
-            started = await client.post(f"/runs/{run_id}/start", json={})
+            started = await client.post(f"/runs/{run_id}/start", json={"idempotency_key": f"start-{run_id}"})
             assert started.status_code == 200  # different instances coexist
         listing = await client.get("/instances")
         exec_process = await client.get("/instances/spy_ema_paper/process")
@@ -2077,7 +2633,7 @@ async def test_start_falls_back_to_run_id_key_without_ledger_binding(
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
-        started = await client.post(f"/runs/{RUN_ID}/start", json={})
+        started = await client.post(f"/runs/{RUN_ID}/start", json={"idempotency_key": "start-legacy"})
         listing = await client.get("/instances")
 
     assert started.status_code == 200
@@ -2088,22 +2644,37 @@ async def test_start_falls_back_to_run_id_key_without_ledger_binding(
 
 
 async def test_start_injects_sibling_managed_symbols(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Starting a second instance injects the running sibling's symbol via
-    --managed-symbols so the unexpected-position gate excludes it (#395/#398)."""
+    """Sibling symbols come from each run's live configuration, not its shared spec.
+
+    Deployment-validation runs share a spec whose default symbol is SPY while
+    their persisted live configuration can target a different stock.  A
+    sibling MSFT position must therefore be declared as managed when NVDA
+    starts (#395/#398).
+    """
     from app.engine.strategy.spec import schema as spec_schema
 
-    fixture = Path(spec_schema.__file__).parent / "fixtures" / "spy_ema_crossover.spec.json"
-    expected_symbol = json.loads(fixture.read_text(encoding="utf-8"))["symbols"][0]
+    fixture = Path(spec_schema.__file__).parent / "fixtures" / "deployment_validation.spec.json"
+    assert json.loads(fixture.read_text(encoding="utf-8"))["symbols"] == ["SPY"]
+    expected_symbol = "MSFT"
 
     repo_root = tmp_path / "repo"
     live_runs_root = repo_root / "PythonDataService" / "artifacts" / "live_runs"
     ema_run = "run-ema-" + "a" * 54
     vwap_run = "run-vwap-" + "b" * 52
-    for run_id, sid in ((ema_run, "spy_ema"), (vwap_run, "spy_vwap")):
+    for run_id, sid, symbol in (
+        (ema_run, "deployment_validation_msft", "MSFT"),
+        (vwap_run, "deployment_validation_nvda", "NVDA"),
+    ):
         run_dir = live_runs_root / run_id
         run_dir.mkdir(parents=True)
         (run_dir / "run_ledger.json").write_text(
-            json.dumps({"strategy_instance_id": sid, "strategy_spec_path": str(fixture)}),
+            json.dumps(
+                {
+                    "strategy_instance_id": sid,
+                    "strategy_spec_path": str(fixture),
+                    "live_config": {"symbol": symbol},
+                }
+            ),
             encoding="utf-8",
         )
 
@@ -2118,8 +2689,8 @@ async def test_start_injects_sibling_managed_symbols(tmp_path: Path, monkeypatch
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
-        await client.post(f"/runs/{ema_run}/start", json={})
-        await client.post(f"/runs/{vwap_run}/start", json={})
+        await client.post(f"/runs/{ema_run}/start", json={"idempotency_key": "start-ema-symbol"})
+        await client.post(f"/runs/{vwap_run}/start", json={"idempotency_key": "start-vwap-symbol"})
 
     # First start has no running sibling -> no --managed-symbols.
     assert "--managed-symbols" not in captured[0]
@@ -2181,8 +2752,8 @@ async def test_sibling_symbols_resolves_relative_spec_paths_from_repo_root(
     app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
-        await client.post(f"/runs/{ema_run}/start", json={})
-        await client.post(f"/runs/{vwap_run}/start", json={})
+        await client.post(f"/runs/{ema_run}/start", json={"idempotency_key": "start-ema-sizing"})
+        await client.post(f"/runs/{vwap_run}/start", json={"idempotency_key": "start-vwap-sizing"})
 
     assert "--managed-symbols" in captured[1]
     idx = captured[1].index("--managed-symbols")
@@ -2324,7 +2895,10 @@ def _init_git_repo(repo: Path) -> None:
 
 
 @pytest.fixture
-def git_daemon_context(tmp_path: Path) -> tuple[RunnerProcessManager, Path]:
+def git_daemon_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[RunnerProcessManager, Path]:
     """Daemon manager whose repo_root is a clean git repo holding a spec + QC
     audit copy. Returns ``(manager, repo_root)``."""
     repo = tmp_path / "repo"
@@ -2360,6 +2934,18 @@ def git_daemon_context(tmp_path: Path) -> tuple[RunnerProcessManager, Path]:
 
     live_runs_root = repo / "PythonDataService" / "artifacts" / "live_runs"
     manager = RunnerProcessManager(repo_root=repo, live_runs_root=live_runs_root)
+
+    def record_binding_through_test_clerk(
+        binding: AccountInstanceBinding,
+        *,
+        ibkr_host: str | None = None,
+    ) -> None:
+        """Model the Clerk-approved write; RPC ownership is tested separately."""
+
+        del ibkr_host
+        write_account_instance_binding(manager.artifacts_root, binding)
+
+    monkeypatch.setattr(manager, "_record_account_binding_decision_via_clerk", record_binding_through_test_clerk)
     return manager, repo
 
 

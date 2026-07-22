@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from app.engine.live.account_artifacts import (
     AccountClerkLease,
@@ -8,6 +11,7 @@ from app.engine.live.account_artifacts import (
     write_account_clerk_lease,
 )
 from app.engine.live.account_observation_lease import AccountObservationLeaseRepo
+from app.engine.live.host_daemon_client import DaemonResult
 from app.services import deploy_preflight
 from app.services.deploy_preflight import DeployPreflightSignals, author_deploy_blockers
 
@@ -191,3 +195,29 @@ def test_every_blocker_satisfies_pairing_invariant() -> None:
             assert blocker.primary_move is not None
         if blocker.disposition == "wait":
             assert blocker.primary_move is None
+
+
+@pytest.mark.asyncio
+async def test_instance_running_check_uses_single_instance_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        deploy_preflight,
+        "get_settings",
+        lambda: SimpleNamespace(live_runner_daemon_url="http://daemon"),
+    )
+
+    async def fake_fetch_instance_process(daemon_url: str, instance_id: str):
+        calls.append((daemon_url, instance_id))
+        return DaemonResult.connected(), {"state": "running"}
+
+    monkeypatch.setattr(
+        deploy_preflight.host_daemon_client,
+        "fetch_instance_process",
+        fake_fetch_instance_process,
+    )
+
+    assert await deploy_preflight._instance_is_running_or_stopping("cohort5-aapl")
+    assert calls == [("http://daemon", "cohort5-aapl")]
