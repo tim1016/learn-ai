@@ -113,6 +113,12 @@ export function extractServerMessage(error: unknown, fallback: string): string {
   return isRecord(detail) && typeof detail['message'] === 'string' ? detail['message'] : fallback;
 }
 
+/** Return the opaque server reason token when a typed error supplied one. */
+export function extractServerReasonCode(error: unknown): string | null {
+  if (!isRecord(error) || !isRecord(error['error'])) return null;
+  return readPreconditionBody(error['error'])?.reason_code ?? null;
+}
+
 function readConfirmation(value: unknown): OperatorConfirmationCopy | null {
   if (!isRecord(value)) return null;
   const title = value['title'];

@@ -121,7 +121,9 @@ function makeRecoveryStore() {
     requestAutomationChange: vi.fn(),
     requestJournalCure: vi.fn(),
     requestLegacyRetirement: vi.fn(),
+    requestStaleBindingRetirement: vi.fn(),
     refreshLegacyCandidates: vi.fn(),
+    refreshStaleBindingCandidates: vi.fn(),
     setExposureOverrideReason: vi.fn(),
     setConfirmationToken: vi.fn(),
     cancelConfirmation: vi.fn(),
@@ -129,10 +131,14 @@ function makeRecoveryStore() {
     confirmation: signal(null),
     busy: signal(false),
     errorMessage: signal<string | null>(null),
+    errorReasonCode: signal<string | null>(null),
     success: signal(null),
     legacyCandidates: signal([]),
     legacyLoading: signal(false),
     legacyErrorMessage: signal<string | null>(null),
+    staleBindingCandidates: signal([]),
+    staleBindingLoading: signal(false),
+    staleBindingErrorMessage: signal<string | null>(null),
   };
 }
 

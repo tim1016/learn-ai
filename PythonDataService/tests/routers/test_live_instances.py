@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -3682,7 +3683,31 @@ async def test_delete_instance_soft_deletes_bot_from_catalog_list_and_status(
 ) -> None:
     app, root = app_with_root
     _write_ledger(root, "run-delete", "delete-me", 100)
+    write_account_instance_binding(
+        root.parent,
+        AccountInstanceBinding(
+            account_id="DU111",
+            strategy_instance_id="delete-me",
+            run_id="run-delete",
+            bot_order_namespace="learn-ai/delete-me/v1",
+            lifecycle_state="DEPLOYED",
+            recorded_at_ms=99,
+            source="deploy.strategy",
+        ),
+    )
     _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1}, process={"state": "idle"})
+    monkeypatch.setattr(live_instances, "_now_ms", lambda: 100)
+    worker_calls: list[Callable[..., object]] = []
+
+    async def run_in_worker(
+        function: Callable[..., object],
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        worker_calls.append(function)
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(live_instances.asyncio, "to_thread", run_in_worker)
     from app.services.surface_hub import SurfaceHubRegistry
 
     registry = SurfaceHubRegistry()
@@ -3702,11 +3727,20 @@ async def test_delete_instance_soft_deletes_bot_from_catalog_list_and_status(
         status_response = await client.get("/api/live-instances/delete-me/status")
 
     assert delete_response.status_code == 200
+    assert live_instances.soft_delete_and_retire_bot_runs_under_operation_fence in worker_calls
     delete_body = delete_response.json()
     assert delete_body["mode"] == "soft"
     assert delete_body["deleted_run_ids"] == ["run-delete"]
     assert delete_body["reason"] == "bad deploy spec"
     assert (root.parent / "live_state" / "delete-me" / "bot_deletion.json").is_file()
+    retired_binding = read_account_instance_registry(root.parent, "DU111")[-1]
+    assert retired_binding.account_id == "DU111"
+    assert retired_binding.strategy_instance_id == "delete-me"
+    assert retired_binding.run_id == "run-delete"
+    assert retired_binding.bot_order_namespace == "learn-ai/delete-me/v1"
+    assert retired_binding.lifecycle_state == "RETIRED"
+    assert retired_binding.recorded_at_ms == 100
+    assert retired_binding.source == "lifecycle.retire"
     assert live_instances._scan_runs_by_instance(root)["delete-me"][0]["run_id"] == "run-delete"
     assert catalog_response.json()["bots"] == []
     assert list_response.json() == []
@@ -3718,6 +3752,30 @@ async def test_delete_instance_soft_deletes_bot_from_catalog_list_and_status(
     assert read_account_instance_registry(root.parent, "DU111")[-1].lifecycle_state == "RETIRED"
     assert registry.get("delete-me") is None
     assert owned_hub.is_running is False
+
+
+async def test_delete_instance_surfaces_unconfirmed_binding_retirement_after_marker_write(
+    app_with_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A registry write failure leaves the bot visible instead of hiding active ownership."""
+
+    from app.services import bot_deletion
+
+    app, root = app_with_root
+    _write_ledger(root, "run-delete-partial", "delete-partial", 100)
+    _set_daemon(monkeypatch, instances={"instances": [], "fetched_at_ms": 1}, process={"state": "idle"})
+
+    def fail_registry_append(*_args: object, **_kwargs: object) -> None:
+        raise OSError("registry volume unavailable")
+
+    monkeypatch.setattr(bot_deletion, "write_fenced_lifecycle_retirement_binding", fail_registry_append)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.request("DELETE", "/api/live-instances/delete-partial")
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["reason_code"] == "ACCOUNT_REGISTRY_RETIRE_UNAVAILABLE"
+    assert not (root.parent / "live_state" / "delete-partial" / "bot_deletion.json").exists()
 
 
 def test_status_deletion_directory_scan_does_not_follow_instance_symlink(

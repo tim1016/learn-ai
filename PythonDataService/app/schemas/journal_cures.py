@@ -99,6 +99,16 @@ class JournalCurePreview(BaseModel):
     confirmation: OperatorConfirmationCopy | None = None
 
 
+class AccountClerkTransportStatus(BaseModel):
+    """A host-verified Clerk transport check for an operator recovery action."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    account_id: str = Field(min_length=1, max_length=64)
+    generation: int = Field(ge=1)
+    checked_at_ms: int = Field(ge=0)
+
+
 class AccountRecoveryFlattenCandidate(BaseModel):
     """One server-authored, exact Clerk recovery request safe to confirm."""
 

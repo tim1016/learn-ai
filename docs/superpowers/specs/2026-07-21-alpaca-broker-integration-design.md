@@ -19,7 +19,7 @@ capture and a read-only UI. No IBKR code is touched.
 | D1 | Phase-1 scope | Typed client + raw capture + **read-only** UI (account, positions, orders). No order submission. |
 | D2 | Architecture | Broker-first 4-layer: vendor client / raw capture / broker contract / adapter. IBKR is treated as the legacy exception, not the template. |
 | D3 | Raw capture medium | **Files canonical** (append-only JSONL journal). Postgres projection only if/when SQL querying becomes a real need; the projection is rebuildable from files, never authoritative. |
-| D4 | Wire client | **alpaca-py SDK** (official), with verbatim capture via a `requests.Session` response hook and a schema-drift test guarding field coverage. |
+| D4 | Wire client | An owned `requests.Session` transport over Alpaca's documented REST API, with a public response hook for verbatim capture before parsing; a schema-drift test guards field coverage. |
 | D5 | Data authority | Polygon remains the sole authority for signals, research, and backtesting. During live trading, each broker's own stream feeds bars (mirrors current IBKR behavior). Live-bar streaming is a formal broker capability, designed now, built in phase 3. |
 | D6 | V2 build strategy | Greenfield, **not** a copy-prune fork of the IBKR stack. V1's good things are carried via the V1 Goodness Inventory (§10): each item ported, improved, or marked N/A. |
 | D7 | Safety posture | Phase 1 hard-refuses `ALPACA_MODE` other than `paper` (validator raises). Live enablement is a deliberate future change. |
@@ -70,11 +70,11 @@ app/broker/
 │   └── journal.py               #   CaptureJournal (append-only JSONL, §6)
 └── alpaca/                      # Layer 1 + adapter — speaks pure Alpaca
     ├── config.py                #   AlpacaSettings (env_prefix="ALPACA_")
-    ├── client.py                #   wraps alpaca-py TradingClient; sync SDK calls run via
+    ├── client.py                #   owns the documented REST transport; sync calls run via
     │                            #   anyio.to_thread (repo mandates async I/O at the service layer)
     ├── capture_hook.py          #   requests.Session response hook → CaptureJournal
     ├── adapter.py               #   from_alpaca_account(...) etc. → contract models
-    └── errors.py                #   alpaca-py APIError / HTTP status → contract errors
+    └── errors.py                #   HTTP status / transport error → contract errors
 ```
 
 Rules:
@@ -95,15 +95,18 @@ Rules:
 ### Ports (phase 1)
 
 `BrokerReadPort` (Protocol): `get_account()`, `list_positions()`,
-`list_orders(status, limit, after_ms)`, `list_activities(after_ms)`,
-`list_assets(status)`, `get_clock_evidence()`. All async; implementations wrap
-the sync SDK in a threadpool.
+`list_orders(status, limit, after_ms)`, `list_assets(status)`,
+`get_clock_evidence()`. All async; implementations wrap the sync transport in
+a threadpool. Account activities are not included in phase 1: alpaca-py's
+supported activities surface is `BrokerClient`, whose Broker API is for a
+different account model. Phase 2 may add a dedicated documented Trading API
+activities transport if it is still required.
 
 ### Router
 
 New thin router `app/routers/brokers.py` (transport only, per the router-freeze
-discipline): `GET /api/brokers/{broker}/account | positions | orders |
-activities | assets | clock`. The registry resolves `{broker}`; unknown broker →
+discipline): `GET /api/brokers/{broker}/account | positions | orders | assets |
+clock`. The registry resolves `{broker}`; unknown broker →
 404 with a typed detail. Phase 1 registers only `alpaca`. The v1 route family
 (`/api/broker/...`) is untouched. New endpoints update the committed OpenAPI
 snapshot under `contracts/` (CI contract gate).
@@ -113,34 +116,39 @@ snapshot under `contracts/` (CI contract gate).
 ```
 Frontend → GET /api/brokers/alpaca/positions
   → router → registry → AlpacaBroker adapter
-    → client.py (anyio.to_thread) → alpaca-py → HTTPS
-      ← capture_hook journals VERBATIM response bytes (before SDK parsing)
-      ← SDK parses to alpaca-py model
+    → client.py (anyio.to_thread) → owned requests.Session → HTTPS
+      ← public response hook appends VERBATIM response bytes before parsing
+      ← client maps the payload into the adapter's vendor DTO
     ← adapter maps to BrokerPosition (strings → int64 ms UTC here)
   ← JSON response (snake_case contract model)
 ```
 
-The journal keeps Alpaca's original payload (vendor timestamp strings included —
-that is the audit record). Contract models carry only `int64 ms UTC`.
+The journal's `raw_body` is an opaque audit blob: it retains Alpaca's exact
+payload bytes, including vendor timestamp strings, and is never exposed as a
+structured storage or wire field. Every temporal value outside that blob,
+including `captured_at_ms` and every contract-model field, is `int64 ms UTC`.
 
 ## 6. Capture journal
 
 - **Location:** `<BROKER_CAPTURE_DIR>/<broker>/<endpoint-family>/<YYYY-MM-DD>.jsonl`
-  (endpoint families: `account`, `positions`, `orders`, `activities`, `assets`,
-  `clock`), rotation by UTC day. `BROKER_CAPTURE_DIR` is a capture-layer env
+  (endpoint families: `account`, `positions`, `orders`, `assets`, `clock`),
+  rotation by UTC day. `BROKER_CAPTURE_DIR` is a capture-layer env
   var (not `ALPACA_`-prefixed — it is broker-neutral), default
   `PythonDataService/var/broker_captures/` (git-ignored).
 - **Line format:**
   `{"broker","endpoint","method","params","status","captured_at_ms","raw_body"}`.
-  `raw_body` is the verbatim response text; a non-UTF-8 body is stored base64
-  with `"body_encoding":"base64"`.
+  `captured_at_ms` and any structured temporal request parameter are `int64 ms
+  UTC`; `raw_body` is the opaque verbatim response text audit blob. A non-UTF-8
+  body is stored base64 with `"body_encoding":"base64"`.
 - **All responses are captured, including errors.** A 403 from Alpaca is
   evidence too.
 - **Secrets never enter the journal.** The hook redacts auth headers and never
   records key material; `params` contains query/body parameters only.
-- **Failure policy (phase 1, reads):** a capture failure logs ERROR and
-  increments an observable counter but does not fail the user's request.
-  **Phase 2 flips this for the order path: no journal, no order** (the clerk's
+- **Failure policy (phase 1, reads):** capture is a prerequisite for a response.
+  If durable append fails, the client returns a typed unavailable error and the
+  router returns 503; it never serves an uncaptured account, position, or order
+  read. The failure logs ERROR and increments an observable counter. **Phase 2
+  applies the same rule to the order path: no journal, no order** (the clerk's
   inbox discipline).
 - Single writer per process; append + flush per line (fsync deferred to the
   phase-2 order path).
@@ -156,13 +164,14 @@ that is the audit record). Contract models carry only `int64 ms UTC`.
   `mode == "paper"`; base URL is derived from mode
   (`https://paper-api.alpaca.markets`), never independently configurable, so a
   mode/URL mismatch cannot exist.
-- Dependencies: `alpaca-py` pinned (`==`) in
-  `PythonDataService/requirements-light.txt`. Justification recorded here:
-  official SDK chosen over a hand-rolled httpx client for maintained models,
-  enums, and streaming clients; verbatim capture preserved via the session
-  hook; the alternative (raw REST + hand-written models) was considered and
-  rejected for model-maintenance cost. Dev-dep `responses` in
-  `requirements-dev.txt` (see §9).
+- Dependencies: `requests` is already transitive in the current service
+  environment; phase 1 declares it explicitly and pins it in
+  `PythonDataService/requirements-light.txt`. An owned documented REST
+  transport was chosen over `alpaca-py` because the SDK exposes no public
+  request-session or response-hook injection point; accessing its private
+  `_session` would make canonical capture upgrade-fragile. `alpaca-py` remains
+  a candidate for its public websocket surface in phase 3. Dev-dep `responses`
+  in `requirements-dev.txt` exercises the real Session hook path (see §9).
 
 ## 8. Frontend (v2 surface)
 
@@ -190,19 +199,18 @@ error-authoring standard. No silent catches.
 
 - Adapter: golden captured payloads → contract models, every field asserted
   (this is where "100% payload mapping" is proven).
-- **Schema-drift test:** recursively diffs key sets in captured raw payloads
-  against alpaca-py model fields; fails naming the unknown keys when Alpaca
-  ships a field the SDK doesn't know. This enforces the no-fields-dropped rule;
-  the journal always has everything regardless.
+- **Schema-drift test:** recursively diffs captured payload key sets against
+  the owned vendor DTO and adapter coverage map; fails naming unknown keys when
+  Alpaca ships a field the contract does not map. This enforces the
+  no-fields-dropped rule; the journal always has everything regardless.
 - Capture journal: verbatim byte round-trip, UTC-day rotation, error-response
   capture, base64 fallback, secret-redaction.
 - Settings: `ALPACA_MODE=live` refused; URL derivation.
 - Router: `httpx.AsyncClient` + `ASGITransport` with a fake `BrokerReadPort`
   bound in the registry.
-- SDK boundary: alpaca-py uses `requests`, which `respx`/`pytest-httpx` cannot
-  intercept — capture-hook tests use the `responses` dev-dep (the only
-  requests-level mock that exercises the real Session hook path); client-wrapper
-  tests mock SDK methods directly.
+- Transport boundary: capture-hook tests use the `responses` dev-dep to
+  exercise the owned public Session-hook path; client-wrapper tests mock the
+  documented REST responses at that boundary.
 - Frontend: Vitest + Angular Testing Library, service mocked at DI level,
   empty/error states asserted.
 - First real paper-account captures are sanitized (account IDs, order IDs where

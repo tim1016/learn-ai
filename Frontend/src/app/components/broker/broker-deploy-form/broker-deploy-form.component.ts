@@ -613,7 +613,7 @@ export class BrokerDeployFormComponent {
     () => this.ticketForm().valid() && this.ready() && this.commandState().canSubmit,
   );
 
-  async submit(): Promise<void> {
+  async submit(start = true): Promise<void> {
     if (!this.canSubmit()) {
       this.ticketForm.instanceId().markAsTouched();
       this.ticketForm.strategyKey().markAsTouched();
@@ -642,7 +642,7 @@ export class BrokerDeployFormComponent {
         sizing: this.resolveSizingPolicy(),
         action: this.actionPlan(),
       },
-      start: true,
+      start,
     };
     const parent = this.parentRunId();
     if (parent) request.parent_run_id = parent;
@@ -688,6 +688,10 @@ export class BrokerDeployFormComponent {
     } finally {
       this.busy.set(false);
     }
+  }
+
+  async deployOnly(): Promise<void> {
+    await this.submit(false);
   }
 
   private seedIdentityCoherenceEvidence(err: unknown): boolean {

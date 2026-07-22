@@ -45,6 +45,7 @@ from app.schemas.live_runs import GateResult
 
 ACCOUNT_INSTANCE_REGISTRY_FILENAME = "instance_registry.jsonl"
 ACTIVE_INSTANCE_BINDING_STATES = frozenset({"DEPLOYED", "ACTIVE"})
+SOFT_DELETE_RETIRED_BINDING_SOURCE = "operator.bot_soft_delete"
 
 
 class AccountInstanceBinding(BaseModel):
@@ -595,7 +596,7 @@ def backfill_false_crash_registry_rows(
     evidence are left untouched.
     """
 
-    accounts = _account_ids_for_false_crash_backfill(artifacts_root, account_id=account_id)
+    accounts = _account_ids_for_registry_scan(artifacts_root, account_id=account_id)
     accounts_scanned = 0
     candidate_rows = 0
     rows_repaired = 0
@@ -645,7 +646,54 @@ def backfill_false_crash_registry_rows(
     )
 
 
-def _account_ids_for_false_crash_backfill(artifacts_root: Path, *, account_id: str | None) -> tuple[str, ...]:
+def retire_soft_deleted_instance_bindings(
+    artifacts_root: Path,
+    *,
+    strategy_instance_id: str,
+    run_ids: Sequence[str],
+    now_ms: int,
+) -> tuple[AccountInstanceBinding, ...]:
+    """Append RETIRED rows for the active bindings hidden by a soft delete.
+
+    The catalog's soft-delete marker is run-scoped, so retirement must be
+    equally precise. Only the latest row for the named instance is eligible,
+    and only when it names one of the runs that deletion just hid. Historical
+    rows remain untouched and a later redeploy with a distinct run id is not
+    affected.
+    """
+
+    deleted_run_ids = frozenset(run_ids)
+    if not deleted_run_ids:
+        return ()
+    retired: list[AccountInstanceBinding] = []
+    next_recorded_at_ms = now_ms
+    for account_id in _account_ids_for_registry_scan(artifacts_root, account_id=None):
+        bindings = read_account_instance_registry(artifacts_root, account_id)
+        latest = index_account_instance_bindings(
+            bindings,
+            account_id=account_id,
+        ).latest_by_instance.get(strategy_instance_id)
+        if (
+            latest is None
+            or latest.lifecycle_state not in ACTIVE_INSTANCE_BINDING_STATES
+            or latest.run_id not in deleted_run_ids
+        ):
+            continue
+        next_recorded_at_ms = max(next_recorded_at_ms, latest.recorded_at_ms + 1)
+        retired_binding = latest.model_copy(
+            update={
+                "lifecycle_state": "RETIRED",
+                "recorded_at_ms": next_recorded_at_ms,
+                "source": SOFT_DELETE_RETIRED_BINDING_SOURCE,
+            }
+        )
+        write_account_instance_binding(artifacts_root, retired_binding)
+        retired.append(retired_binding)
+        next_recorded_at_ms += 1
+    return tuple(retired)
+
+
+def _account_ids_for_registry_scan(artifacts_root: Path, *, account_id: str | None) -> tuple[str, ...]:
     if account_id is not None:
         return (account_id,)
     accounts_root = artifacts_root / "accounts"
@@ -779,6 +827,7 @@ __all__ = [
     "ACCOUNT_INSTANCE_REGISTRY_FILENAME",
     "ACTIVE_INSTANCE_BINDING_STATES",
     "CRASH_RETIRED_BINDING_SOURCES",
+    "SOFT_DELETE_RETIRED_BINDING_SOURCE",
     "AccountInstanceBinding",
     "AccountInstanceBindingIndex",
     "AccountRegistryBootReconcileResult",
@@ -797,6 +846,7 @@ __all__ = [
     "latest_account_instance_binding",
     "pending_account_binding_retirements",
     "read_account_instance_registry",
+    "retire_soft_deleted_instance_bindings",
     "retire_unmanaged_active_bindings_on_daemon_boot",
     "write_account_instance_binding",
 ]

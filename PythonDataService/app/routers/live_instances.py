@@ -2149,7 +2149,8 @@ async def delete_instance(
 
         run_ids = [str(run["run_id"]) for run in runs]
         try:
-            record = soft_delete_and_retire_bot_runs_under_operation_fence(
+            record = await asyncio.to_thread(
+                soft_delete_and_retire_bot_runs_under_operation_fence,
                 root.parent,
                 sid,
                 run_ids=run_ids,
@@ -2157,6 +2158,18 @@ async def delete_instance(
                 reason=request.reason,
                 now_ms=_now_ms(),
             )
+        except OSError as exc:
+            logger.warning(
+                "could not retire bot bindings before soft delete",
+                extra={"strategy_instance_id": sid, "exception": repr(exc)},
+            )
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "reason_code": "ACCOUNT_REGISTRY_RETIRE_UNAVAILABLE",
+                    "message": "The account registry could not prove this bot retired; it was not deleted.",
+                },
+            ) from exc
         except (ValueError, BotDeletionCorruptError) as exc:
             logger.warning(
                 "failed to soft-delete bot",

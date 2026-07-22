@@ -526,8 +526,8 @@ describe('BrokerDeployFormComponent', () => {
     expect(deployButton(fixture).disabled).toBe(true);
   });
 
-  it('uses Deploy & run as the only launch action and reviews the trade asset', async () => {
-    const { fixture, component } = setup();
+  it('offers deploy-only and deploy-and-run actions while reviewing the trade asset', async () => {
+    const { fixture, component, svc } = setup();
     await flush();
     fillRequired(component);
     await settleResource(fixture);
@@ -535,9 +535,17 @@ describe('BrokerDeployFormComponent', () => {
 
     const text = fixture.nativeElement.textContent ?? '';
     expect(text).toContain('Deploy & run');
+    const root = fixture.nativeElement as HTMLElement;
+    const deployOnly = root.querySelector<HTMLButtonElement>('[data-testid="deploy-only"]');
+    expect(deployOnly?.textContent).toContain('Deploy only');
     expect(text).toContain('Trade asset');
     expect(text).toContain('SPY · Stock');
     expect(text).not.toContain('Prepare for cohort');
+
+    deployOnly?.click();
+    await flush();
+
+    expect(svc.deployInstance).toHaveBeenCalledWith(expect.objectContaining({ start: false }));
   });
 
   it('formats a code-like start state when the server does not supply a message', async () => {

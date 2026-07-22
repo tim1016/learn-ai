@@ -54,6 +54,7 @@ from app.engine.live.live_state_sidecar import LiveStateEnvelope, LiveStateSidec
 from app.engine.live.run_ledger import LiveRunLedger, write_ledger
 from app.routers import account_reconciliation
 from app.schemas.journal_cures import JournalCureReceipt, JournalCureRequest
+from app.schemas.live_runs import HostRunnerProcessState, HostRunnerProcessStatus
 from app.services.account_directory import AccountDirectoryService, CurrentBrokerAccount
 from app.services.account_event_journal import AccountEventJournalService
 from app.services.account_reconciliation import AccountReconciliationService
@@ -163,12 +164,22 @@ def _seed_legacy_claim(root: Path, *, binding_state: str = "RETIRED") -> None:
     )
 
 
-async def _dead_run_process(_base_url: str, _run_id: str) -> tuple[DaemonResult, dict]:
-    return DaemonResult.connected(), {"state": "exited", "run_id": _run_id}
+async def _dead_run_process(
+    _base_url: str, _run_id: str
+) -> tuple[DaemonResult, HostRunnerProcessStatus]:
+    return DaemonResult.connected(), HostRunnerProcessStatus(
+        state=HostRunnerProcessState.exited,
+        run_id=_run_id,
+    )
 
 
-async def _live_run_process(_base_url: str, _run_id: str) -> tuple[DaemonResult, dict]:
-    return DaemonResult.connected(), {"state": "running", "run_id": _run_id}
+async def _live_run_process(
+    _base_url: str, _run_id: str
+) -> tuple[DaemonResult, HostRunnerProcessStatus]:
+    return DaemonResult.connected(), HostRunnerProcessStatus(
+        state=HostRunnerProcessState.running,
+        run_id=_run_id,
+    )
 
 
 async def test_latest_reconciliation_returns_404_when_missing(tmp_path: Path) -> None:

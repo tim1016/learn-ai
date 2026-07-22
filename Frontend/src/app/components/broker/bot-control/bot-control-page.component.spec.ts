@@ -326,7 +326,9 @@ describe('BotControlPageComponent', () => {
 
     expect(element.textContent).toContain('No live process can be confirmed.');
     expect(element.textContent).toContain('blocks a future start');
-    expect(element.querySelector('[data-testid="trader-graceful-stop"]')).not.toBeNull();
+    const stop = element.querySelector<HTMLButtonElement>('[data-testid="trader-graceful-stop"]');
+    expect(stop).not.toBeNull();
+    expect(stop?.disabled).toBe(false);
   });
 
   it('prepares a roll-call start offer in the bot cockpit when the bot is off duty', async () => {
