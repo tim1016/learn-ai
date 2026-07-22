@@ -44,7 +44,15 @@ function status(): AccountServiceStatusResponse {
     generation: 2,
     generation_recorded_at_ms: 1_780_000_000_100,
     source: 'host_daemon.clerk_spawn',
-    binding: { state: 'ATTACHED', generation: 2, lease_generation: 2 },
+    binding: {
+      state: 'ATTACHED',
+      generation: 2,
+      lease_generation: 2,
+      pending_retirement_proposals: 0,
+      ledger_read_authority: 'legacy_registry',
+      ledger_parity: 'clean',
+      ledger_parity_issue_count: 0,
+    },
     lease: {
       status: 'RUNNING',
       generation: 2,

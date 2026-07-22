@@ -39,6 +39,13 @@ logger = logging.getLogger(__name__)
 # plane. When set on both sides, no token file is read or written.
 TOKEN_ENV_VAR = "LIVE_RUNNER_DAEMON_TOKEN"
 
+# This secret is intentionally unrelated to ``TOKEN_ENV_VAR``. It is durable
+# so a restarted daemon can still control an adopted healthy Clerk, but it is
+# inherited only by the Clerk and host-launched emergency children, never by
+# ordinary runner processes.
+CLERK_HOST_BINDING_CAPABILITY_ENV = "LIVE_RUNNER_CLERK_HOST_BINDING_CAPABILITY"
+CLERK_HOST_BINDING_CAPABILITY_FILENAME = ".clerk-host-binding-capability"
+
 # Header carrying the token on every protected request.
 TOKEN_HEADER = "X-Live-Runner-Token"
 
@@ -62,6 +69,12 @@ def token_file_path(artifacts_root: Path) -> Path:
     return artifacts_root / TOKEN_FILENAME
 
 
+def clerk_host_binding_capability_file_path(artifacts_root: Path) -> Path:
+    """Return the durable host-to-Clerk control-capability path."""
+
+    return artifacts_root / CLERK_HOST_BINDING_CAPABILITY_FILENAME
+
+
 def ensure_daemon_token(artifacts_root: Path) -> str:
     """Return the daemon's auth token, generating + persisting one if needed.
 
@@ -79,6 +92,24 @@ def ensure_daemon_token(artifacts_root: Path) -> str:
         return env_token
 
     path = token_file_path(artifacts_root)
+    return _ensure_persisted_secret(path, purpose="daemon token")
+
+
+def ensure_clerk_host_binding_capability(artifacts_root: Path) -> str:
+    """Return the stable private capability shared by daemon and its Clerks.
+
+    Unlike the daemon HTTP token, this never consults an environment override:
+    an inherited operator environment must not accidentally replace a
+    capability held by a still-healthy Clerk after a daemon restart.
+    """
+
+    path = clerk_host_binding_capability_file_path(artifacts_root)
+    return _ensure_persisted_secret(path, purpose="Clerk binding capability")
+
+
+def _ensure_persisted_secret(path: Path, *, purpose: str) -> str:
+    """Read one private file secret or create it atomically on first use."""
+
     try:
         existing = path.read_text(encoding="utf-8").strip()
         if existing:
@@ -86,9 +117,9 @@ def ensure_daemon_token(artifacts_root: Path) -> str:
     except FileNotFoundError:
         pass
     except OSError as exc:
-        raise RuntimeError(f"cannot read daemon token file {path}: {exc}") from exc
+        raise RuntimeError(f"cannot read {purpose} file {path}: {exc}") from exc
 
-    return _write_new_token(path)
+    return _write_new_token(path, purpose=purpose)
 
 
 def read_daemon_token(artifacts_root: Path) -> str | None:
@@ -113,8 +144,8 @@ def read_daemon_token(artifacts_root: Path) -> str | None:
         return None
 
 
-def _write_new_token(dest: Path) -> str:
-    """Generate a fresh token and write it to ``dest`` atomically.
+def _write_new_token(dest: Path, *, purpose: str) -> str:
+    """Generate a fresh private secret and write it to ``dest`` atomically.
 
     Atomic via ``tempfile.mkstemp`` + ``os.replace``: a crash mid-write must not
     leave a half-formed file, because both sides treat an empty file as "no
@@ -122,7 +153,7 @@ def _write_new_token(dest: Path) -> str:
     """
     token = secrets.token_urlsafe(_TOKEN_BYTES)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path_str = tempfile.mkstemp(prefix=".host-daemon-token-", dir=str(dest.parent))
+    fd, tmp_path_str = tempfile.mkstemp(prefix=f"{dest.name}-", dir=str(dest.parent))
     tmp_path = Path(tmp_path_str)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
@@ -137,6 +168,6 @@ def _write_new_token(dest: Path) -> str:
     try:
         os.chmod(dest, _TOKEN_FILE_MODE)
     except OSError as exc:
-        logger.info("could not chmod daemon token %s: %s", dest, exc)
-    logger.info("generated new host-daemon token at %s", dest)
+        logger.info("could not chmod %s %s: %s", purpose, dest, exc)
+    logger.info("generated new %s at %s", purpose, dest)
     return token

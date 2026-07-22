@@ -6,6 +6,8 @@ export type AccountEffectivePosture = 'PAPER_EXECUTION' | 'UNSAFE' | 'UNKNOWN';
 export type AccountServiceAttachment = 'ATTACHED' | 'UNATTACHED' | 'FENCED';
 export type AccountServicePhase = 'accepting' | 'reconnecting' | 'draining' | 'frozen';
 export type AccountServiceOperatingState = 'READY' | 'STANDBY' | 'ATTENTION';
+export type AccountBindingLedgerReadAuthority = 'legacy_registry' | 'clerk_ledger';
+export type AccountBindingLedgerParityState = 'clean' | 'dirty';
 
 export interface AccountServiceSummary {
   readonly attachment: AccountServiceAttachment;
@@ -39,6 +41,10 @@ export interface AccountServiceBinding {
   readonly state: AccountServiceAttachment;
   readonly generation: number | null;
   readonly lease_generation: number | null;
+  readonly pending_retirement_proposals: number;
+  readonly ledger_read_authority: AccountBindingLedgerReadAuthority;
+  readonly ledger_parity: AccountBindingLedgerParityState;
+  readonly ledger_parity_issue_count: number;
 }
 
 export interface AccountServiceLease {

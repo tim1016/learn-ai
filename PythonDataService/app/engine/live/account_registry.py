@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from collections.abc import Mapping, Sequence, Set
@@ -19,6 +20,18 @@ from app.engine.live.account_artifacts import (
     _safe_account_path_segment,
     account_artifacts_root,
     read_account_events,
+)
+from app.engine.live.account_binding_ledger import (
+    AccountBindingCommand,
+    BindingLedgerParity,
+    BindingRetirementFoldResult,
+    account_binding_ledger_read_enabled,
+    append_binding_decision,
+    append_binding_retirement_proposal,
+    binding_ledger_parity,
+    fold_binding_retirement_proposals,
+    pending_binding_retirement_proposals,
+    read_account_binding_commands,
 )
 from app.engine.live.exit_taxonomy import (
     CRASH_RETIRED_BINDING_SOURCES,
@@ -83,11 +96,11 @@ class AccountRegistryFalseCrashBackfillResult:
 
 @dataclass(frozen=True)
 class AccountRegistryBootReconcileResult:
-    """Durable retirements performed before a new daemon trusts siblings."""
+    """Daemon liveness proposals recorded before a new daemon trusts siblings."""
 
     accounts_scanned: int
     active_bindings_found: int
-    bindings_retired: int
+    retirement_proposals_recorded: int
     preserved_managed_run_ids: tuple[str, ...]
 
 
@@ -99,6 +112,133 @@ def write_account_instance_binding(
     artifacts_root: Path,
     binding: AccountInstanceBinding,
 ) -> Path:
+    """Serialize one binding decision into the Clerk ledger and legacy registry.
+
+    The registry is intentionally still the read authority during this
+    reversible migration.  Every forward write first obtains the binding-ledger
+    lock, which gives concurrent lifecycle writers one deterministic order.
+    """
+
+    legacy_path: Path | None = None
+
+    def write_legacy_row() -> None:
+        nonlocal legacy_path
+        legacy_path = _write_account_instance_binding_legacy(artifacts_root, binding)
+
+    append_binding_decision(
+        artifacts_root,
+        binding=binding.model_dump(mode="json"),
+        write_legacy_row=write_legacy_row,
+    )
+    assert legacy_path is not None
+    _append_account_event(
+        artifacts_root,
+        binding.account_id,
+        {
+            "event_type": "account_instance_binding_recorded",
+            "account_id": binding.account_id,
+            "strategy_instance_id": binding.strategy_instance_id,
+            "run_id": binding.run_id,
+            "bot_order_namespace": binding.bot_order_namespace,
+            "lifecycle_state": binding.lifecycle_state,
+            "recorded_at_ms": binding.recorded_at_ms,
+            "source": binding.source,
+        },
+    )
+    return legacy_path
+
+
+def write_fenced_direct_cli_start_binding(
+    artifacts_root: Path,
+    binding: AccountInstanceBinding,
+) -> Path:
+    """Record the legacy direct-CLI start transition behind an identity fence.
+
+    Normal production starts are daemon-launched and record their binding via
+    the host-authorized Clerk RPC.  The ``run.py start`` compatibility command
+    remains temporarily for existing operator scripts, but may record only its
+    own ``ACTIVE`` ``run.start`` transition.  Its per-instance file lock and
+    the shared account binding-ledger lock prevent it from interleaving a
+    second direct start with Clerk decisions.  No other lifecycle transition
+    may use this exceptional authority.
+    """
+
+    if binding.lifecycle_state != "ACTIVE" or binding.source != "run.start":
+        raise ValueError("direct CLI binding authority permits only ACTIVE run.start transitions")
+    from app.engine.live.identity import validate_strategy_instance_id
+
+    validate_strategy_instance_id(binding.strategy_instance_id)
+    fence_path = (
+        artifacts_root
+        / "live_state"
+        / binding.strategy_instance_id
+        / "direct_cli_binding_authority.lock"
+    )
+    fence_path.parent.mkdir(parents=True, exist_ok=True)
+    with _file_lock(fence_path):
+        return write_account_instance_binding(artifacts_root, binding)
+
+
+def write_fenced_lifecycle_retirement_binding(
+    artifacts_root: Path,
+    binding: AccountInstanceBinding,
+    *,
+    transition_path: Path,
+) -> Path:
+    """Write a lifecycle retirement only when its durable transaction permits it.
+
+    The lifecycle evaluator, rather than the daemon, owns a bot's retirement
+    intent.  This compatibility writer is deliberately narrower than the
+    generic binding decision seam: a durable, still-``PENDING`` retirement
+    transaction must name the exact account/run being retired.  It then takes
+    a second per-instance authority lock before joining the account-ledger
+    serialization.  Clerk/daemon paths must use their dedicated RPC/proposal
+    seams instead.
+    """
+
+    if binding.lifecycle_state != "RETIRED" or binding.source != "lifecycle.retire":
+        raise ValueError("lifecycle retirement authority permits only RETIRED lifecycle.retire transitions")
+    from app.engine.live.identity import validate_strategy_instance_id
+
+    validate_strategy_instance_id(binding.strategy_instance_id)
+    expected_transition_path = (
+        artifacts_root
+        / "live_state"
+        / binding.strategy_instance_id
+        / "retirement_transition.json"
+    )
+    if transition_path != expected_transition_path:
+        raise ValueError("lifecycle retirement transition path does not match the binding identity")
+    authority_lock = expected_transition_path.with_name("retirement_binding_authority.lock")
+    authority_lock.parent.mkdir(parents=True, exist_ok=True)
+    with _file_lock(authority_lock):
+        try:
+            payload = json.loads(expected_transition_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise OSError("lifecycle retirement transition evidence is unreadable") from exc
+        targets = payload.get("targets") if isinstance(payload, dict) else None
+        if (
+            not isinstance(payload, dict)
+            or payload.get("state") != "PENDING"
+            or payload.get("strategy_instance_id") != binding.strategy_instance_id
+            or not isinstance(targets, list)
+            or not any(
+                isinstance(target, dict)
+                and target.get("account_id") == binding.account_id
+                and target.get("run_id") == binding.run_id
+                for target in targets
+            )
+        ):
+            raise OSError("lifecycle retirement transition does not authorize this binding")
+        return write_account_instance_binding(artifacts_root, binding)
+
+
+def _write_account_instance_binding_legacy(
+    artifacts_root: Path,
+    binding: AccountInstanceBinding,
+) -> Path:
+    """Append only the compatibility registry row while the ledger lock is held."""
+
     safe_account_id = _safe_account_path_segment(binding.account_id)
     accounts_root = os.path.realpath(os.path.join(os.fspath(artifacts_root), "accounts"))
     root_real = os.path.realpath(os.path.join(accounts_root, safe_account_id))
@@ -116,20 +256,6 @@ def write_account_instance_binding(
             fh.flush()
             os.fsync(fh.fileno())
         _fsync_parent_dir(path)
-    _append_account_event(
-        artifacts_root,
-        binding.account_id,
-        {
-            "event_type": "account_instance_binding_recorded",
-            "account_id": binding.account_id,
-            "strategy_instance_id": binding.strategy_instance_id,
-            "run_id": binding.run_id,
-            "bot_order_namespace": binding.bot_order_namespace,
-            "lifecycle_state": binding.lifecycle_state,
-            "recorded_at_ms": binding.recorded_at_ms,
-            "source": binding.source,
-        },
-    )
     return path
 
 
@@ -137,6 +263,40 @@ def read_account_instance_registry(
     artifacts_root: Path,
     account_id: str,
 ) -> list[AccountInstanceBinding]:
+    """Read legacy rows by default, with an explicit reversible Clerk-ledger flip."""
+
+    if account_binding_ledger_read_enabled():
+        decisions = [
+            AccountInstanceBinding.model_validate(
+                command.model_dump(
+                    mode="json",
+                    exclude={"seq", "entry_kind", "proposal_seq"},
+                )
+            )
+            for command in read_account_binding_commands(artifacts_root, account_id)
+            if command.entry_kind == "decision"
+        ]
+        # Never make an accidental empty shadow ledger look like a clean empty
+        # account. The flip is only safe after parity is clean; otherwise keep
+        # the compatibility reader live rather than dropping a legacy-only bot.
+        legacy_bindings = _read_legacy_account_instance_registry(artifacts_root, account_id)
+        parity = binding_ledger_parity(
+            artifacts_root,
+            account_id=account_id,
+            legacy_bindings=(binding.model_dump(mode="json") for binding in legacy_bindings),
+        )
+        if decisions and parity.is_clean:
+            return decisions
+        return legacy_bindings
+    return _read_legacy_account_instance_registry(artifacts_root, account_id)
+
+
+def _read_legacy_account_instance_registry(
+    artifacts_root: Path,
+    account_id: str,
+) -> list[AccountInstanceBinding]:
+    """Read the compatibility registry without applying the migration read flag."""
+
     root = os.path.realpath(os.fspath(account_artifacts_root(artifacts_root, account_id)))
     registry_filename = os.path.basename(ACCOUNT_INSTANCE_REGISTRY_FILENAME)
     if registry_filename != ACCOUNT_INSTANCE_REGISTRY_FILENAME:
@@ -267,13 +427,14 @@ def retire_unmanaged_active_bindings_on_daemon_boot(
     managed_run_ids: Set[str],
     now_ms: int,
 ) -> AccountRegistryBootReconcileResult:
-    """Retire prior ``ACTIVE`` rows not owned by a live managed process.
+    """Propose retirement for prior ``ACTIVE`` rows not process-owned by this daemon.
 
     A newly booted daemon does not adopt children from an earlier boot. Its
     in-memory process registry is the liveness authority; a runtime sidecar is
-    useful diagnostic evidence but cannot prove process identity. Retiring an
-    unmanaged binding before the daemon serves requests removes its namespace
-    from sibling trust and makes the bot's submit gate fail closed.
+    useful diagnostic evidence but cannot prove process identity. The daemon is
+    not allowed to decide the resulting binding state: it records a durable
+    proposal. Pending proposals fail admission closed until the Clerk folds
+    them under its account-scoped serialized command ledger.
     """
 
     accounts_root = Path(artifacts_root) / "accounts"
@@ -282,7 +443,7 @@ def retire_unmanaged_active_bindings_on_daemon_boot(
 
     accounts_scanned = 0
     active_bindings_found = 0
-    bindings_retired = 0
+    retirement_proposals_recorded = 0
     preserved: list[str] = []
     next_recorded_at_ms = now_ms
 
@@ -305,24 +466,111 @@ def retire_unmanaged_active_bindings_on_daemon_boot(
                 next_recorded_at_ms,
                 binding.recorded_at_ms + 1,
             )
-            write_account_instance_binding(
-                artifacts_root,
-                binding.model_copy(
-                    update={
-                        "lifecycle_state": "RETIRED",
-                        "recorded_at_ms": next_recorded_at_ms,
-                        "source": LIVENESS_UNPROVEN_REGISTRY_SOURCE,
-                    }
-                ),
+            proposal = binding.model_copy(
+                update={
+                    "lifecycle_state": "RETIRED",
+                    "recorded_at_ms": next_recorded_at_ms,
+                    "source": LIVENESS_UNPROVEN_REGISTRY_SOURCE,
+                }
             )
-            bindings_retired += 1
+            append_binding_retirement_proposal(
+                artifacts_root,
+                binding=proposal.model_dump(mode="json"),
+            )
+            _append_account_event(
+                artifacts_root,
+                proposal.account_id,
+                {
+                    "event_type": "account_binding_retirement_proposed",
+                    "account_id": proposal.account_id,
+                    "strategy_instance_id": proposal.strategy_instance_id,
+                    "run_id": proposal.run_id,
+                    "bot_order_namespace": proposal.bot_order_namespace,
+                    "recorded_at_ms": proposal.recorded_at_ms,
+                    "source": proposal.source,
+                },
+            )
+            retirement_proposals_recorded += 1
             next_recorded_at_ms += 1
 
     return AccountRegistryBootReconcileResult(
         accounts_scanned=accounts_scanned,
         active_bindings_found=active_bindings_found,
-        bindings_retired=bindings_retired,
+        retirement_proposals_recorded=retirement_proposals_recorded,
         preserved_managed_run_ids=tuple(sorted(preserved)),
+    )
+
+
+def pending_account_binding_retirements(
+    artifacts_root: Path,
+    *,
+    account_id: str,
+    strategy_instance_id: str | None = None,
+) -> tuple[AccountBindingCommand, ...]:
+    """Read daemon retirement proposals that the Clerk has not folded yet."""
+
+    return pending_binding_retirement_proposals(
+        artifacts_root,
+        account_id=account_id,
+        strategy_instance_id=strategy_instance_id,
+    )
+
+
+def fold_account_binding_retirements(
+    artifacts_root: Path,
+    *,
+    account_id: str,
+) -> BindingRetirementFoldResult:
+    """Let the Clerk fold all outstanding retirement proposals in ledger order."""
+
+    def read_current(strategy_instance_id: str) -> dict[str, object] | None:
+        binding = latest_account_instance_binding(
+            read_account_instance_registry(artifacts_root, account_id),
+            account_id=account_id,
+            strategy_instance_id=strategy_instance_id,
+        )
+        return None if binding is None else binding.model_dump(mode="json")
+
+    def write_legacy(retirement: dict[str, object]) -> None:
+        retired = AccountInstanceBinding.model_validate(retirement)
+        _write_account_instance_binding_legacy(artifacts_root, retired)
+        _append_account_event(
+            artifacts_root,
+            retired.account_id,
+            {
+                "event_type": "account_instance_binding_recorded",
+                "account_id": retired.account_id,
+                "strategy_instance_id": retired.strategy_instance_id,
+                "run_id": retired.run_id,
+                "bot_order_namespace": retired.bot_order_namespace,
+                "lifecycle_state": retired.lifecycle_state,
+                "recorded_at_ms": retired.recorded_at_ms,
+                "source": retired.source,
+            },
+        )
+
+    return fold_binding_retirement_proposals(
+        artifacts_root,
+        account_id=account_id,
+        read_current_binding=read_current,
+        write_legacy_retirement=write_legacy,
+    )
+
+
+def account_binding_ledger_parity(
+    artifacts_root: Path,
+    *,
+    account_id: str,
+) -> BindingLedgerParity:
+    """Return the migration parity signal without repairing either ledger."""
+
+    return binding_ledger_parity(
+        artifacts_root,
+        account_id=account_id,
+        legacy_bindings=(
+            binding.model_dump(mode="json")
+            for binding in _read_legacy_account_instance_registry(artifacts_root, account_id)
+        ),
     )
 
 
@@ -433,6 +681,19 @@ def evaluate_account_instance_binding(
     run_id: str,
     bot_order_namespace: str,
 ) -> GateResult:
+    pending = pending_account_binding_retirements(
+        artifacts_root,
+        account_id=account_id,
+        strategy_instance_id=strategy_instance_id,
+    )
+    if pending:
+        latest_pending = pending[-1]
+        return _registry_gate_result(
+            status="block",
+            reason="ACCOUNT_BINDING_RETIREMENT_PENDING",
+            next_step="WAIT_FOR_ACCOUNT_CLERK_RECONCILIATION",
+            evidence_at_ms=latest_pending.recorded_at_ms,
+        )
     binding_index = index_account_instance_bindings(
         read_account_instance_registry(artifacts_root, account_id),
     )
@@ -516,14 +777,19 @@ __all__ = [
     "AccountInstanceBindingIndex",
     "AccountRegistryBootReconcileResult",
     "AccountRegistryFalseCrashBackfillResult",
+    "BindingLedgerParity",
+    "BindingRetirementFoldResult",
+    "account_binding_ledger_parity",
     "backfill_false_crash_registry_rows",
     "bot_order_namespace_for_instance",
     "compute_reconcile_namespaces",
     "crash_retired_restart_blocking_binding",
     "evaluate_account_instance_binding",
+    "fold_account_binding_retirements",
     "has_account_recovery_evidence_after",
     "index_account_instance_bindings",
     "latest_account_instance_binding",
+    "pending_account_binding_retirements",
     "read_account_instance_registry",
     "retire_unmanaged_active_bindings_on_daemon_boot",
     "write_account_instance_binding",

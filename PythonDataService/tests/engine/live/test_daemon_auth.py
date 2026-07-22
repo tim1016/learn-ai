@@ -8,8 +8,11 @@ from pathlib import Path
 import pytest
 
 from app.engine.live.daemon_auth import (
+    CLERK_HOST_BINDING_CAPABILITY_FILENAME,
     TOKEN_ENV_VAR,
     TOKEN_FILENAME,
+    clerk_host_binding_capability_file_path,
+    ensure_clerk_host_binding_capability,
     ensure_daemon_token,
     read_daemon_token,
 )
@@ -68,3 +71,18 @@ class TestReadDaemonToken:
     def test_empty_file_reads_as_none(self, tmp_path: Path, _clear_env: None) -> None:
         (tmp_path / TOKEN_FILENAME).write_text("   \n", encoding="utf-8")
         assert read_daemon_token(tmp_path) is None
+
+
+def test_clerk_binding_capability_is_durable_and_distinct_from_daemon_http_token(
+    tmp_path: Path,
+    _clear_env: None,
+) -> None:
+    http_token = ensure_daemon_token(tmp_path)
+    first = ensure_clerk_host_binding_capability(tmp_path)
+    second = ensure_clerk_host_binding_capability(tmp_path)
+
+    assert first == second
+    assert first != http_token
+    assert clerk_host_binding_capability_file_path(tmp_path) == (
+        tmp_path / CLERK_HOST_BINDING_CAPABILITY_FILENAME
+    )

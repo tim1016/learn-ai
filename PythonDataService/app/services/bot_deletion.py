@@ -23,7 +23,7 @@ from app.engine.live.account_registry import (
     bot_order_namespace_for_instance,
     index_account_instance_bindings,
     read_account_instance_registry,
-    write_account_instance_binding,
+    write_fenced_lifecycle_retirement_binding,
 )
 from app.engine.live.bot_lifecycle_state import (
     BotLifecycleStateRecord,
@@ -409,7 +409,11 @@ def _complete_retirement_transition_locked(
         for target in transition.targets
     ]
     for binding in bindings:
-        write_account_instance_binding(artifacts_root, binding)
+        write_fenced_lifecycle_retirement_binding(
+            artifacts_root,
+            binding,
+            transition_path=path,
+        )
     _verify_retired_registry_bindings(artifacts_root, transition.strategy_instance_id, bindings)
     lifecycle = BotLifecycleStateRepo(
         stable_bot_lifecycle_state_path(artifacts_root, transition.strategy_instance_id)

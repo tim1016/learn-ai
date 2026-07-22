@@ -38,6 +38,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.engine.live.account_clerk_rpc import (
+    AccountClerkHostRpcClient,
     AccountClerkRpcClient,
     AccountClerkRpcError,
     AccountClerkRpcRejectedError,
@@ -54,7 +55,13 @@ from app.engine.live.account_clerk_supervisor import (
     inspect_account_clerk_process as _inspect_account_clerk_process,
 )
 from app.engine.live.broker_socket_probe import BrokerSocketProbeError, LsofSocketEnumerator
-from app.engine.live.daemon_auth import TOKEN_HEADER, ensure_daemon_token, token_file_path
+from app.engine.live.daemon_auth import (
+    CLERK_HOST_BINDING_CAPABILITY_ENV,
+    TOKEN_HEADER,
+    ensure_clerk_host_binding_capability,
+    ensure_daemon_token,
+    token_file_path,
+)
 from app.engine.live.daemon_command_idempotency import (
     DaemonCommandIdempotencyService,
     DaemonCommandOutcome,
@@ -368,6 +375,12 @@ class RunnerProcessManager:
         # ``artifacts_root`` is ``<live_runs_root>/..`` per the daemon's
         # existing convention (token + cache live alongside live_runs).
         self.artifacts_root: Path = self.live_runs_root.parent
+        # This is distinct from the data-plane HTTP token. It persists solely
+        # to preserve control of a healthy Clerk that survives daemon restart,
+        # and is inherited only by Clerk/emergency subprocesses.
+        self._clerk_host_binding_capability = ensure_clerk_host_binding_capability(
+            self.artifacts_root
+        )
         # A retirement prepares a durable fail-closed fence before touching
         # multiple account registries. Complete any interrupted transaction on
         # daemon boot so an AFK recovery cannot strand a bot between registry
@@ -429,6 +442,7 @@ class RunnerProcessManager:
             creation_flags=_creation_flags,
             terminate_wait_seconds=lambda: _ACCOUNT_CLERK_TERMINATE_WAIT_SECONDS,
             kill_wait_seconds=lambda: _ACCOUNT_CLERK_KILL_WAIT_SECONDS,
+            host_binding_capability=self._clerk_host_binding_capability,
         )
         # The git SHA of the code THIS process is running, captured ONCE at
         # launch. The daemon does not reload on `git pull`, so the running code
@@ -629,6 +643,7 @@ class RunnerProcessManager:
         with self._managed_lock:
             self._prune_exited_records_locked()
         self._supervise_account_clerks()
+        self.reconcile_pending_account_binding_retirements()
 
     def instance_status(self, strategy_instance_id: str) -> HostRunnerProcessStatus:
         """Return a pure process observation for one strategy instance.
@@ -672,6 +687,7 @@ class RunnerProcessManager:
         # Clerk reap after observing a bot exit.  Keep that behavior, but do
         # the bounded process work after releasing the registry lock.
         self._supervise_account_clerks()
+        self.reconcile_pending_account_binding_retirements()
         return process_status
 
     def _persisted_terminal_process_status(self, run_id: str) -> HostRunnerProcessStatus | None:
@@ -927,6 +943,7 @@ class RunnerProcessManager:
                     run_id=run_id,
                     lifecycle_state="ACTIVE",
                     source="host_daemon.start",
+                    ibkr_host=request.ibkr_host,
                 )
                 active_binding_written = True
                 if account_freeze is not None:
@@ -934,13 +951,6 @@ class RunnerProcessManager:
                         status.HTTP_409_CONFLICT,
                         f"Account is frozen by {account_freeze.source}: {account_freeze.reason}",
                     )
-                account_id, _ = self._account_registry_identity(run_dir)
-                if account_id is not None:
-                    # The initial lease is synchronously persisted by
-                    # ``_ensure_account_clerk`` before the bot is allowed to
-                    # reach any submit surface.  A bot must never race ahead
-                    # of the account authority it depends on.
-                    self._ensure_account_clerk(account_id, ibkr_host=request.ibkr_host)
                 process = subprocess.Popen(
                     command,
                     cwd=str(self.repo_root),
@@ -1115,6 +1125,7 @@ class RunnerProcessManager:
             # ordinary bot's session identity.  The dedicated ID is outside
             # the configurable host-runner pool (whose default is 50-99).
             env["IBKR_CLIENT_ID"] = str(_EMERGENCY_FLATTEN_IBKR_CLIENT_ID)
+            env[CLERK_HOST_BINDING_CAPABILITY_ENV] = self._clerk_host_binding_capability
             try:
                 proc = subprocess.run(
                     command,
@@ -1427,6 +1438,7 @@ class RunnerProcessManager:
         run_id: str,
         lifecycle_state: str,
         source: str,
+        ibkr_host: str | None = None,
     ):
         account_id, strategy_instance_id = self._account_registry_identity(run_dir)
         if account_id is None or strategy_instance_id is None:
@@ -1437,14 +1449,33 @@ class RunnerProcessManager:
         )
         from app.engine.live.account_registry import (
             AccountInstanceBinding,
+            account_binding_ledger_parity,
             bot_order_namespace_for_instance,
-            write_account_instance_binding,
+            pending_account_binding_retirements,
         )
 
         try:
             recorded_at_ms = self._clock_ms()
-            write_account_instance_binding(
+            if lifecycle_state == "ACTIVE":
+                self.reconcile_pending_account_binding_retirements(account_id=account_id)
+                if not account_binding_ledger_parity(
+                    self.artifacts_root,
+                    account_id=account_id,
+                ).is_clean:
+                    raise HostRunnerError(
+                        status.HTTP_409_CONFLICT,
+                        "Account binding ledger parity is dirty; repair the dual-write evidence before admitting a bot.",
+                    )
+            if lifecycle_state == "ACTIVE" and pending_account_binding_retirements(
                 self.artifacts_root,
+                account_id=account_id,
+                strategy_instance_id=strategy_instance_id,
+            ):
+                raise HostRunnerError(
+                    status.HTTP_409_CONFLICT,
+                    "Account binding retirement reconciliation is pending; wait for the Account Clerk before starting this bot.",
+                )
+            self._record_account_binding_decision_via_clerk(
                 AccountInstanceBinding(
                     account_id=account_id,
                     strategy_instance_id=strategy_instance_id,
@@ -1454,6 +1485,7 @@ class RunnerProcessManager:
                     recorded_at_ms=recorded_at_ms,
                     source=source,
                 ),
+                ibkr_host=ibkr_host,
             )
             if lifecycle_state == "ACTIVE":
                 evaluate_restart_intensity(
@@ -1467,6 +1499,81 @@ class RunnerProcessManager:
             raise HostRunnerError(
                 status.HTTP_503_SERVICE_UNAVAILABLE,
                 f"could not write account instance registry: {exc}",
+            ) from exc
+
+    def _record_account_binding_decision_via_clerk(
+        self,
+        binding: object,
+        *,
+        ibkr_host: str | None = None,
+    ) -> None:
+        """Submit a daemon lifecycle fact to the Clerk's serialized decision seam."""
+
+        from app.engine.live.account_registry import AccountInstanceBinding
+
+        if not isinstance(binding, AccountInstanceBinding):
+            raise TypeError("binding must be an AccountInstanceBinding")
+        try:
+            self._ensure_account_clerk(binding.account_id, ibkr_host=ibkr_host)
+            asyncio.run(
+                AccountClerkHostRpcClient(
+                    artifacts_root=self.artifacts_root,
+                    account_id=binding.account_id,
+                    host_capability=self._clerk_host_binding_capability,
+                ).record_binding_decision(binding)
+            )
+        except (AccountClerkRpcError, OSError) as exc:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "Account Clerk is unavailable to record the binding transition.",
+            ) from exc
+
+    def _propose_account_registry_retirement(
+        self,
+        run_dir: Path,
+        *,
+        run_id: str,
+        source: str,
+    ) -> None:
+        """Persist an exited-child fact for the Clerk, never a daemon retirement decision."""
+
+        account_id, strategy_instance_id = self._account_registry_identity(run_dir)
+        if account_id is None or strategy_instance_id is None:
+            return
+        from app.engine.live.account_artifacts import append_account_event
+        from app.engine.live.account_binding_ledger import append_binding_retirement_proposal
+        from app.engine.live.account_registry import AccountInstanceBinding, bot_order_namespace_for_instance
+
+        try:
+            proposal = AccountInstanceBinding(
+                account_id=account_id,
+                strategy_instance_id=strategy_instance_id,
+                run_id=run_id,
+                bot_order_namespace=bot_order_namespace_for_instance(strategy_instance_id),
+                lifecycle_state="RETIRED",
+                recorded_at_ms=self._clock_ms(),
+                source=source,
+            )
+            append_binding_retirement_proposal(
+                self.artifacts_root,
+                binding=proposal.model_dump(mode="json"),
+            )
+            append_account_event(
+                self.artifacts_root,
+                account_id,
+                {
+                    "event_type": "account_binding_retirement_proposed",
+                    "strategy_instance_id": strategy_instance_id,
+                    "run_id": run_id,
+                    "bot_order_namespace": proposal.bot_order_namespace,
+                    "recorded_at_ms": proposal.recorded_at_ms,
+                    "source": source,
+                },
+            )
+        except (OSError, ValueError) as exc:
+            raise HostRunnerError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                f"could not record account binding retirement proposal: {exc}",
             ) from exc
 
     def _account_registry_identity(self, run_dir: Path) -> tuple[str | None, str | None]:
@@ -1958,6 +2065,8 @@ class RunnerProcessManager:
         # A bot submits only through the Account Clerk RPC boundary.  Override
         # any write-capable value inherited from the daemon environment.
         env["IBKR_READONLY"] = "true"
+        env.pop("LIVE_RUNNER_DAEMON_TOKEN", None)
+        env.pop(CLERK_HOST_BINDING_CAPABILITY_ENV, None)
         # PRD #619-B — propagate this daemon's boot_id so the spawned
         # child captures it as ``expected_daemon_boot_id`` and the
         # watchdog can detect daemon restart.
@@ -2079,6 +2188,57 @@ class RunnerProcessManager:
 
         self._clerk_supervisor.supervise(account_ids=account_ids)
 
+    def reconcile_pending_account_binding_retirements(
+        self,
+        *,
+        account_id: str | None = None,
+    ) -> int:
+        """Converge daemon liveness proposals through each account's live Clerk.
+
+        A proposal is safe to retry: a Clerk appends its folded marker under
+        the same ledger lock as the retirement decision, so a later reaper or
+        daemon restart observes no work once the fold has committed.
+        """
+
+        from app.engine.live.account_artifacts import list_account_artifact_ids
+        from app.engine.live.account_registry import pending_account_binding_retirements
+
+        try:
+            account_ids = (account_id,) if account_id is not None else list_account_artifact_ids(self.artifacts_root)
+        except (OSError, ValueError) as exc:
+            logger.warning(
+                "Could not enumerate account binding retirement proposals",
+                extra={"reason_code": "ACCOUNT_BINDING_PROPOSAL_ENUMERATION_FAILED", "error_type": type(exc).__name__},
+            )
+            return 0
+
+        folded_count = 0
+        for candidate_account_id in account_ids:
+            try:
+                if not pending_account_binding_retirements(
+                    self.artifacts_root,
+                    account_id=candidate_account_id,
+                ):
+                    continue
+                self._ensure_account_clerk(candidate_account_id)
+                result = asyncio.run(
+                    AccountClerkRpcClient(
+                        artifacts_root=self.artifacts_root,
+                        account_id=candidate_account_id,
+                    ).fold_binding_retirements()
+                )
+                folded_count += result.retirements_applied + result.superseded_proposals
+            except (AccountClerkRpcError, OSError, ValueError) as exc:
+                logger.warning(
+                    "Account binding retirement reconciliation remains pending",
+                    extra={
+                        "reason_code": "ACCOUNT_BINDING_RETIREMENT_PENDING",
+                        "account_id": candidate_account_id,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+        return folded_count
+
     def _refresh(self, managed: ManagedProcess, *, operation_fence_held: bool = False) -> None:
         """Settle a managed process if it has exited: stamp ``ended_at_ms``
         and close its log handle exactly once."""
@@ -2105,10 +2265,9 @@ class RunnerProcessManager:
         if managed.registry_retired_at_ms is None:
             try:
                 if self._can_retire_account_registry_binding(managed):
-                    self._write_account_registry_binding(
+                    self._propose_account_registry_retirement(
                         managed.run_dir,
                         run_id=managed.run_id,
-                        lifecycle_state="RETIRED",
                         source=self._account_registry_retirement_source(managed),
                     )
                 else:
@@ -2454,27 +2613,28 @@ def create_app(
             )
         except Exception:
             logger.exception("orphan classification on boot failed")
-        try:
-            # RPC handshakes and bounded process waits are synchronous host
-            # operations.  Keep them off the FastAPI loop while ensuring this
-            # happens before the daemon accepts a start request.
-            await asyncio.to_thread(process_manager.reconcile_account_clerks_on_boot)
-        except Exception:
-            logger.exception("account Clerk reconciliation on boot failed")
         boot_reconcile = retire_unmanaged_active_bindings_on_daemon_boot(
             process_manager.artifacts_root,
             managed_run_ids=process_manager.running_managed_run_ids(),
             now_ms=_now_ms(),
         )
-        if boot_reconcile.bindings_retired:
+        if boot_reconcile.retirement_proposals_recorded:
             logger.warning(
-                "Retired account bindings with unproven daemon-boot liveness",
+                "Recorded account binding retirement proposals with unproven daemon-boot liveness",
                 extra={
                     "accounts_scanned": boot_reconcile.accounts_scanned,
                     "active_bindings_found": boot_reconcile.active_bindings_found,
-                    "bindings_retired": boot_reconcile.bindings_retired,
+                    "retirement_proposals_recorded": boot_reconcile.retirement_proposals_recorded,
                 },
             )
+        try:
+            # RPC handshakes and bounded process waits are synchronous host
+            # operations.  Keep them off the FastAPI loop. A newly started
+            # Clerk folds boot proposals before this daemon accepts requests.
+            await asyncio.to_thread(process_manager.reconcile_account_clerks_on_boot)
+            await asyncio.to_thread(process_manager.reconcile_pending_account_binding_retirements)
+        except Exception:
+            logger.exception("account Clerk reconciliation on boot failed")
         reaper_stop = asyncio.Event()
         reaper_task = asyncio.create_task(
             _process_reaper(reaper_stop),

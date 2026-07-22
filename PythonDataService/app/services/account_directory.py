@@ -17,13 +17,16 @@ from app.engine.live.account_artifacts import (
     read_account_clerk_generation,
     read_account_clerk_lease,
 )
+from app.engine.live.account_binding_ledger import account_binding_ledger_read_enabled
 from app.engine.live.account_clerk_journal import inspect_account_clerk_journal
 from app.engine.live.account_clerk_journal_models import AccountClerkJournalCorruptError
 from app.engine.live.account_identity import normalize_account_id
 from app.engine.live.account_registry import (
     ACTIVE_INSTANCE_BINDING_STATES,
     AccountInstanceBinding,
+    account_binding_ledger_parity,
     index_account_instance_bindings,
+    pending_account_binding_retirements,
     read_account_instance_registry,
 )
 from app.schemas.account_directory import (
@@ -108,6 +111,10 @@ class AccountDirectoryService:
             generation = read_account_clerk_generation(self._artifacts_root, account_id)
             lease = read_account_clerk_lease(self._artifacts_root, account_id)
             journal = inspect_account_clerk_journal(self._artifacts_root, account_id)
+            ledger_parity = account_binding_ledger_parity(
+                self._artifacts_root,
+                account_id=account_id,
+            )
         except (
             AccountArtifactError,
             AccountClerkJournalCorruptError,
@@ -119,10 +126,32 @@ class AccountDirectoryService:
             raise AccountDirectoryError(str(exc)) from exc
 
         attachment = _attachment_state(generation, lease, now_ms=self._now_ms())
+        pending_retirement_proposals = len(
+            pending_account_binding_retirements(
+                self._artifacts_root,
+                account_id=account_id,
+            )
+        )
+        ledger_parity_issue_count = sum(
+            len(instances)
+            for instances in (
+                ledger_parity.legacy_only_instances,
+                ledger_parity.ledger_only_instances,
+                ledger_parity.mismatched_instances,
+            )
+        )
+        ledger_parity_state = "clean" if ledger_parity.is_clean else "dirty"
+        ledger_read_authority = (
+            "clerk_ledger"
+            if account_binding_ledger_read_enabled() and ledger_parity.is_clean
+            else "legacy_registry"
+        )
         operating_state, headline, detail = self._operating_copy(
             account_id,
             attachment,
             bindings=bindings,
+            pending_retirement_proposals=pending_retirement_proposals,
+            ledger_parity_issue_count=ledger_parity_issue_count,
         )
         return AccountServiceStatusResponse(
             account_id=account_id,
@@ -135,6 +164,10 @@ class AccountDirectoryService:
                 state=attachment,
                 generation=None if generation is None else generation.generation,
                 lease_generation=None if lease is None else lease.generation,
+                pending_retirement_proposals=pending_retirement_proposals,
+                ledger_read_authority=ledger_read_authority,
+                ledger_parity=ledger_parity_state,
+                ledger_parity_issue_count=ledger_parity_issue_count,
             ),
             lease=None if lease is None else AccountServiceLease(
                 status=lease.status,
@@ -158,7 +191,23 @@ class AccountDirectoryService:
         attachment: AccountServiceAttachmentState,
         *,
         bindings: list[AccountInstanceBinding] | None = None,
+        pending_retirement_proposals: int = 0,
+        ledger_parity_issue_count: int = 0,
     ) -> tuple[AccountServiceOperatingState, str, str]:
+        if ledger_parity_issue_count:
+            suffix = "difference" if ledger_parity_issue_count == 1 else "differences"
+            return (
+                "ATTENTION",
+                "Binding ledger parity needs attention",
+                f"{ledger_parity_issue_count} binding ledger {suffix} require operator repair; bot admission and Clerk intake remain fail-closed.",
+            )
+        if pending_retirement_proposals:
+            suffix = "proposal is" if pending_retirement_proposals == 1 else "proposals are"
+            return (
+                "ATTENTION",
+                "Binding retirement reconciliation pending",
+                f"{pending_retirement_proposals} daemon liveness {suffix} waiting for the Account Clerk to reconcile before bot admission can resume.",
+            )
         if attachment != "ATTACHED":
             return (
                 "ATTENTION",

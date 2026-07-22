@@ -1505,6 +1505,33 @@
             ],
             "title": "Lease Generation"
           },
+          "ledger_parity": {
+            "enum": [
+              "clean",
+              "dirty"
+            ],
+            "title": "Ledger Parity",
+            "type": "string"
+          },
+          "ledger_parity_issue_count": {
+            "minimum": 0.0,
+            "title": "Ledger Parity Issue Count",
+            "type": "integer"
+          },
+          "ledger_read_authority": {
+            "enum": [
+              "legacy_registry",
+              "clerk_ledger"
+            ],
+            "title": "Ledger Read Authority",
+            "type": "string"
+          },
+          "pending_retirement_proposals": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Pending Retirement Proposals",
+            "type": "integer"
+          },
           "state": {
             "enum": [
               "ATTACHED",
@@ -1516,7 +1543,10 @@
           }
         },
         "required": [
-          "state"
+          "state",
+          "ledger_read_authority",
+          "ledger_parity",
+          "ledger_parity_issue_count"
         ],
         "title": "AccountServiceBinding",
         "type": "object"

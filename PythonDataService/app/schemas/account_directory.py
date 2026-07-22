@@ -12,6 +12,8 @@ AccountEffectivePosture = Literal["PAPER_EXECUTION", "UNSAFE", "UNKNOWN"]
 AccountServiceAttachmentState = Literal["ATTACHED", "UNATTACHED", "FENCED"]
 AccountServicePhase = Literal["accepting", "reconnecting", "draining", "frozen"]
 AccountServiceOperatingState = Literal["READY", "STANDBY", "ATTENTION"]
+AccountBindingLedgerReadAuthority = Literal["legacy_registry", "clerk_ledger"]
+AccountBindingLedgerParityState = Literal["clean", "dirty"]
 
 
 class AccountServiceSummary(BaseModel):
@@ -66,6 +68,10 @@ class AccountServiceBinding(BaseModel):
     state: AccountServiceAttachmentState
     generation: int | None = Field(default=None, ge=1)
     lease_generation: int | None = Field(default=None, ge=1)
+    pending_retirement_proposals: int = Field(default=0, ge=0)
+    ledger_read_authority: AccountBindingLedgerReadAuthority
+    ledger_parity: AccountBindingLedgerParityState
+    ledger_parity_issue_count: int = Field(ge=0)
 
 
 class AccountServiceLease(BaseModel):

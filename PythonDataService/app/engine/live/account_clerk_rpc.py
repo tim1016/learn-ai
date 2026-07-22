@@ -69,6 +69,8 @@ from app.engine.live.account_clerk_rpc_protocol import (
 from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import (
     ACTIVE_INSTANCE_BINDING_STATES,
+    AccountInstanceBinding,
+    BindingRetirementFoldResult,
     index_account_instance_bindings,
     read_account_instance_registry,
 )
@@ -321,6 +323,32 @@ class AccountClerkRpcClient:
                 request_identity=request_identity(request),
             ) from exc
 
+    async def fold_binding_retirements(self) -> BindingRetirementFoldResult:
+        """Ask an already-running Clerk to fold queued daemon liveness facts."""
+
+        request = {"operation": "fold_binding_retirements"}
+        payload = await self._request(request)
+        try:
+            result = payload["binding_retirement_fold"]
+            if not isinstance(result, dict):
+                raise TypeError("binding retirement fold payload must be an object")
+            values = {
+                field: result[field]
+                for field in (
+                    "proposals_seen",
+                    "retirements_applied",
+                    "superseded_proposals",
+                )
+            }
+            if any(type(value) is not int or value < 0 for value in values.values()):
+                raise TypeError("binding retirement fold counters must be non-negative integers")
+            return BindingRetirementFoldResult(**values)
+        except (KeyError, TypeError) as exc:
+            raise AccountClerkRpcMalformedResponseError(
+                operation="fold_binding_retirements",
+                request_identity=request_identity(request),
+            ) from exc
+
     async def drain_events(
         self,
         *,
@@ -486,6 +514,36 @@ class AccountClerkRpcClient:
         return generation.generation
 
 
+class AccountClerkHostRpcClient(AccountClerkRpcClient):
+    """Host-only Clerk client carrying the daemon's private binding capability."""
+
+    def __init__(self, *, artifacts_root: Path, account_id: str, host_capability: str) -> None:
+        super().__init__(artifacts_root=artifacts_root, account_id=account_id)
+        if not host_capability:
+            raise ValueError("host_capability must not be empty")
+        self._host_capability = host_capability
+
+    async def record_binding_decision(
+        self,
+        binding: AccountInstanceBinding,
+    ) -> AccountInstanceBinding:
+        """Request a Clerk binding transition with the host-only capability."""
+
+        request = {
+            "operation": "record_binding_decision",
+            "binding": binding.model_dump(mode="json"),
+            "host_capability": self._host_capability,
+        }
+        payload = await self._request(request)
+        try:
+            return AccountInstanceBinding.model_validate(payload["binding_decision"])
+        except (KeyError, ValidationError, TypeError) as exc:
+            raise AccountClerkRpcMalformedResponseError(
+                operation="record_binding_decision",
+                request_identity=request_identity(request),
+            ) from exc
+
+
 class AccountClerkRpcServer:
     """Clerk-process RPC server; the broker stays exclusively behind this seam."""
 
@@ -519,6 +577,9 @@ class AccountClerkRpcServer:
             self._socket_path.unlink()
         # Restore durable attribution before the Clerk starts broker streaming.
         await self._clerk.rebuild_attribution()
+        # Daemon liveness is evidence, not a binding-state authority. Fold its
+        # ordered proposals before publishing this Clerk socket to any bot.
+        await self._clerk.fold_binding_retirement_proposals()
         self._callback_worker = asyncio.create_task(
             self._persist_broker_callbacks(),
             name="account-clerk-broker-callback-writer",
@@ -690,6 +751,26 @@ class AccountClerkRpcServer:
             return AccountClerkRpcSuccessEnvelope(
                 payload={"legacy_emergency_fence": receipt.model_dump(mode="json")}
             )
+        if operation == "record_binding_decision":
+            binding = AccountInstanceBinding.model_validate(request_object(request, "binding"))
+            recorded = await self._clerk.record_binding_decision(
+                binding,
+                host_capability=required_string(request, "host_capability"),
+            )
+            return AccountClerkRpcSuccessEnvelope(
+                payload={"binding_decision": recorded.model_dump(mode="json")}
+            )
+        if operation == "fold_binding_retirements":
+            folded = await self._clerk.fold_binding_retirement_proposals()
+            return AccountClerkRpcSuccessEnvelope(
+                payload={
+                    "binding_retirement_fold": {
+                        "proposals_seen": folded.proposals_seen,
+                        "retirements_applied": folded.retirements_applied,
+                        "superseded_proposals": folded.superseded_proposals,
+                    }
+                }
+            )
         consumer = self._validated_event_consumer(request)
         after_seq = required_nonnegative_int(request, "after_seq")
         events = await asyncio.to_thread(self._journal_events_after, consumer, after_seq)
@@ -838,6 +919,7 @@ __all__ = [
     "AccountClerkDeliveredEvent",
     "AccountClerkEventConsumerIdentity",
     "AccountClerkEventCursorRepo",
+    "AccountClerkHostRpcClient",
     "AccountClerkRpcClient",
     "AccountClerkRpcError",
     "AccountClerkRpcErrorEnvelope",

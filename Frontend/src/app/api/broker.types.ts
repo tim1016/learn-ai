@@ -5648,6 +5648,23 @@ export interface components {
             /** Lease Generation */
             lease_generation?: number | null;
             /**
+             * Ledger Parity
+             * @enum {string}
+             */
+            ledger_parity: "clean" | "dirty";
+            /** Ledger Parity Issue Count */
+            ledger_parity_issue_count: number;
+            /**
+             * Ledger Read Authority
+             * @enum {string}
+             */
+            ledger_read_authority: "legacy_registry" | "clerk_ledger";
+            /**
+             * Pending Retirement Proposals
+             * @default 0
+             */
+            pending_retirement_proposals?: number;
+            /**
              * State
              * @enum {string}
              */

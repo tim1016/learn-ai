@@ -23,6 +23,7 @@ from pathlib import Path
 from subprocess import Popen as _RealPopen
 from typing import TextIO
 
+from app.engine.live.daemon_auth import CLERK_HOST_BINDING_CAPABILITY_ENV
 from app.engine.live.host_runner_policy import host_process_ibkr_host
 from app.schemas.live_runs import AccountClerkHealth
 
@@ -235,6 +236,7 @@ class AccountClerkSupervisor:
         creation_flags: Callable[[], int] | None = None,
         terminate_wait_seconds: Callable[[], float] | None = None,
         kill_wait_seconds: Callable[[], float] | None = None,
+        host_binding_capability: str,
     ) -> None:
         self.repo_root = repo_root
         self.artifacts_root = artifacts_root
@@ -248,6 +250,7 @@ class AccountClerkSupervisor:
         self._creation_flags = creation_flags or (lambda: 0)
         self._terminate_wait_seconds = terminate_wait_seconds or (lambda: 2.0)
         self._kill_wait_seconds = kill_wait_seconds or (lambda: 2.0)
+        self._host_binding_capability = host_binding_capability
         self._clerks: dict[str, ManagedClerk] = {}
         self._reserved_client_ids: set[int] = set()
         self._quarantined_client_ids: set[int] = set()
@@ -657,6 +660,7 @@ class AccountClerkSupervisor:
             env["IBKR_CLIENT_ID"] = str(clerk_client_id)
             env["IBKR_MODE"] = "paper"
             env["IBKR_READONLY"] = "false"
+            env[CLERK_HOST_BINDING_CAPABILITY_ENV] = self._host_binding_capability
             process = subprocess.Popen(
                 [
                     sys.executable,

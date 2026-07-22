@@ -48,6 +48,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import signal
 import sys
 import time
@@ -1815,7 +1816,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                 AccountInstanceBinding,
                 bot_order_namespace_for_instance,
                 crash_retired_restart_blocking_binding,
-                write_account_instance_binding,
+                write_fenced_direct_cli_start_binding,
             )
 
             recorded_at_ms = now_ms()
@@ -1833,7 +1834,7 @@ def cmd_start(args: argparse.Namespace) -> int:
                         file=sys.stderr,
                     )
                     return 1
-                write_account_instance_binding(
+                write_fenced_direct_cli_start_binding(
                     _artifacts_root,
                     AccountInstanceBinding(
                         account_id=ledger.account_id,
@@ -2944,13 +2945,11 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
 
     from app.broker.ibkr.models import IbkrOrderSpec
     from app.engine.live.account_artifacts import read_account_owner_generation
-    from app.engine.live.account_clerk_rpc import AccountClerkRpcClient
+    from app.engine.live.account_clerk_rpc import AccountClerkHostRpcClient, AccountClerkRpcClient
     from app.engine.live.account_owner import AccountOwnerSubmitIntent
     from app.engine.live.account_owner_fence import account_owner_write_grant
-    from app.engine.live.account_registry import (
-        AccountInstanceBinding,
-        write_account_instance_binding,
-    )
+    from app.engine.live.account_registry import AccountInstanceBinding
+    from app.engine.live.daemon_auth import CLERK_HOST_BINDING_CAPABILITY_ENV
     from app.engine.live.intent_events import IntentEventType, IntentKind
     from app.engine.live.intent_wal import IntentWal
     from app.engine.live.order_identity import (
@@ -2986,6 +2985,19 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
         artifacts_root=artifacts_root,
         account_id=args.account,
     )
+    binding_client = getattr(args, "host_binding_client", None)
+    if binding_client is None and hasattr(clerk_client, "record_binding_decision"):
+        # Narrow test seam: production's bot-facing client deliberately
+        # lacks this host-only method.
+        binding_client = clerk_client
+    if binding_client is None:
+        host_capability = os.environ.get(CLERK_HOST_BINDING_CAPABILITY_ENV)
+        if host_capability:
+            binding_client = AccountClerkHostRpcClient(
+                artifacts_root=artifacts_root,
+                account_id=args.account,
+                host_capability=host_capability,
+            )
     emergency_binding_recorded = False
     emergency_run_id = args.run_dir.name
 
@@ -3018,9 +3030,12 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
     async def _flatten() -> int:
         nonlocal emergency_binding_recorded
 
-        def _record_emergency_binding(lifecycle_state: str, source: str) -> None:
-            write_account_instance_binding(
-                artifacts_root,
+        async def _record_emergency_binding(lifecycle_state: str, source: str) -> None:
+            nonlocal binding_client
+
+            if binding_client is None:
+                raise RuntimeError("host-only Clerk binding capability is unavailable")
+            await binding_client.record_binding_decision(
                 AccountInstanceBinding(
                     account_id=args.account,
                     strategy_instance_id=emergency_strategy_instance_id,
@@ -3029,7 +3044,7 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
                     lifecycle_state=lifecycle_state,
                     recorded_at_ms=_time_ns() // 1_000_000,
                     source=source,
-                ),
+                )
             )
 
         # Connect the IBKR client before any broker call. ``fetch_positions``
@@ -3141,7 +3156,7 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
                     order_spec=spec.model_dump(mode="json"),
                 )
                 if not emergency_binding_recorded:
-                    _record_emergency_binding("ACTIVE", "emergency_flatten.pre_submit")
+                    await _record_emergency_binding("ACTIVE", "emergency_flatten.pre_submit")
                     emergency_binding_recorded = True
                 owner_generation = _emergency_owner_generation_provider()
                 intent = AccountOwnerSubmitIntent(
@@ -3185,7 +3200,7 @@ def cmd_emergency_flatten(args: argparse.Namespace) -> int:
             return 0
         finally:
             if emergency_binding_recorded:
-                _record_emergency_binding("RETIRED", "emergency_flatten.complete")
+                await _record_emergency_binding("RETIRED", "emergency_flatten.complete")
             if client is not None:
                 try:
                     await client.disconnect()
@@ -3214,12 +3229,10 @@ def cmd_adopt_emergency_flatten_audit(args: argparse.Namespace) -> int:
 
     from app.broker.ibkr.models import IbkrOrderSpec
     from app.engine.live.account_artifacts import read_account_owner_generation
-    from app.engine.live.account_clerk_rpc import AccountClerkRpcClient
+    from app.engine.live.account_clerk_rpc import AccountClerkHostRpcClient, AccountClerkRpcClient
     from app.engine.live.account_owner import AccountOwnerSubmitIntent
-    from app.engine.live.account_registry import (
-        AccountInstanceBinding,
-        write_account_instance_binding,
-    )
+    from app.engine.live.account_registry import AccountInstanceBinding
+    from app.engine.live.daemon_auth import CLERK_HOST_BINDING_CAPABILITY_ENV
     from app.engine.live.intent_events import IntentEvent, IntentEventType, IntentKind
     from app.engine.live.intent_wal import IntentWal
     from app.engine.live.order_identity import (
@@ -3322,11 +3335,24 @@ def cmd_adopt_emergency_flatten_audit(args: argparse.Namespace) -> int:
         artifacts_root=artifacts_root,
         account_id=args.account,
     )
+    binding_client = getattr(args, "host_binding_client", None)
+    if binding_client is None and hasattr(clerk_client, "record_binding_decision"):
+        # Narrow test seam; see the matching emergency-flatten operation.
+        binding_client = clerk_client
+    if binding_client is None:
+        host_capability = os.environ.get(CLERK_HOST_BINDING_CAPABILITY_ENV)
+        if not host_capability:
+            logger.error("Emergency-flatten audit adoption requires host Clerk binding capability")
+            return 3
+        binding_client = AccountClerkHostRpcClient(
+            artifacts_root=artifacts_root,
+            account_id=args.account,
+            host_capability=host_capability,
+        )
 
     async def _adopt() -> None:
         recorded_at_ms = _time_ns() // 1_000_000
-        write_account_instance_binding(
-            artifacts_root,
+        await binding_client.record_binding_decision(
             AccountInstanceBinding(
                 account_id=args.account,
                 strategy_instance_id=strategy_instance_id,
@@ -3341,8 +3367,7 @@ def cmd_adopt_emergency_flatten_audit(args: argparse.Namespace) -> int:
             for intent in intents:
                 await clerk_client.register_emergency_flatten(intent)
         finally:
-            write_account_instance_binding(
-                artifacts_root,
+            await binding_client.record_binding_decision(
                 AccountInstanceBinding(
                     account_id=args.account,
                     strategy_instance_id=strategy_instance_id,

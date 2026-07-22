@@ -220,6 +220,61 @@ dies after claiming a key but before persisting an outcome, enforcement returns
 command. Operator-facing responses preserve the opaque key and mark a replay
 with `idempotency_replayed=true`.
 
+## Clerk S4 account-binding recovery boundary (2026-07-21)
+
+Issue #1157 makes the Clerk the binding-state authority. The host daemon may
+observe a boot orphan or a reaped child, but it writes only an fsync'd
+`retirement_proposal` into the account's append-only
+`binding_commands.jsonl`; it does not append a `RETIRED` registry row. A
+pending proposal blocks bot admission and is projected as an explicit account
+service attention state. On startup, before publishing its RPC socket, the
+Clerk folds proposals in ledger order. It applies a retirement only when the
+current binding still names the observed account, bot, run, and namespace; a
+later replacement is recorded as superseded rather than retired by stale
+evidence.
+
+Every forward registry decision dual-writes the Clerk binding ledger first and
+the legacy `instance_registry.jsonl` second under one ledger lock. A failure
+between those writes is intentionally observable through the parity projector,
+not repaired or hidden by a reader. The registry remains the default read
+authority in this slice. `ACCOUNT_BINDING_LEDGER_READ_ENABLED=true` is the
+explicit, reversible future read flip; it must be enabled only after a clean
+per-account parity corpus, and removing it immediately restores legacy reads.
+
+The primary regression seams are `test_account_binding_ledger.py`,
+`test_account_clerk_rpc.py`, and `test_host_daemon_boot_reconcile.py`.
+
+### S4 compatibility-authority ledger
+
+The daemon's binding-decision RPC is host-capability authenticated. The
+bot-facing `AccountClerkRpcClient` exposes no binding-decision method; only the
+daemon's private `AccountClerkHostRpcClient` can submit one. The capability is
+a dedicated durable host-control secret, inherited only by the Clerk and a
+host-launched emergency subprocess. It is deliberately distinct from the
+data-plane HTTP token so a daemon restart can adopt and continue controlling a
+healthy Clerk without rotating its authority. The Clerk compares it before
+serializing a transition, and ordinary bot environments do not receive it.
+
+This is a correctness boundary between cooperating first-party processes, not
+an operating-system sandbox for arbitrary Python running as the same user. A
+same-UID process that can inspect peer process state or mutate the artifacts
+directory is outside this slice's deployment trust model. Issue #1166 owns the
+required service-account, artifact-permission, and peer-credential design
+before the system may claim isolation from untrusted bot code.
+
+Two pre-existing compatibility writers remain deliberately narrow while their
+callers are migrated. `run.py start` may append only its own `ACTIVE`
+`run.start` binding while holding a per-instance direct-CLI fence plus the
+account-ledger lock. The lifecycle evaluator may append only an exact
+`RETIRED lifecycle.retire` target authorized by its fsync'd, still-`PENDING`
+`retirement_transition.json`, under a second per-instance authority fence.
+Neither seam can record a daemon liveness fact, a deployment, an emergency
+binding, or an arbitrary lifecycle state. Normal daemon lifecycle transitions
+and both emergency-flatten binding transitions use the host-authorized Clerk
+RPC and fail closed when it is unavailable. These two explicitly audited
+compatibility seams are scheduled for removal once direct CLI starts and the
+lifecycle retirement commit are Clerk-native end to end.
+
 ## Issue #1044 callback-stream hardening traceability
 
 | Requirement | Verification |

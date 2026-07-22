@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import hmac
 import inspect
 import os
 import signal
@@ -76,10 +77,16 @@ from app.engine.live.account_owner_fence import (
 )
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
+    BindingRetirementFoldResult,
+    account_binding_ledger_parity,
+    fold_account_binding_retirements,
     latest_account_instance_binding,
+    pending_account_binding_retirements,
     read_account_instance_registry,
+    write_account_instance_binding,
 )
 from app.engine.live.broker_callbacks import broker_callback_idempotency_key
+from app.engine.live.daemon_auth import CLERK_HOST_BINDING_CAPABILITY_ENV
 from app.services.bot_deletion import (
     BotDeletionCorruptError,
     bot_lifecycle_operation_fence,
@@ -115,6 +122,7 @@ class AccountClerk:
         durable_generation_provider: Callable[[], int | None] | None = None,
         on_generation_fenced: Callable[[], None] | None = None,
         now_ms: Callable[[], int] | None = None,
+        host_binding_capability: str | None = None,
     ) -> None:
         self._artifacts_root = artifacts_root
         self._account_id = account_id
@@ -123,6 +131,7 @@ class AccountClerk:
         self._durable_generation_provider = durable_generation_provider
         self._on_generation_fenced = on_generation_fenced
         self._now_ms = now_ms if now_ms is not None else _now_ms
+        self._host_binding_capability = host_binding_capability
         self._intake_lock = asyncio.Lock()
         self._journal = AccountClerkJournal(
             artifacts_root=artifacts_root,
@@ -467,6 +476,51 @@ class AccountClerk:
         async with self._intake_lock:
             return await asyncio.to_thread(self._recover_inbox_locked)
 
+    async def fold_binding_retirement_proposals(self) -> BindingRetirementFoldResult:
+        """Apply daemon liveness proposals before this Clerk accepts bot traffic."""
+
+        async with self._intake_lock:
+            return await asyncio.to_thread(
+                fold_account_binding_retirements,
+                self._artifacts_root,
+                account_id=self._account_id,
+            )
+
+    async def record_binding_decision(
+        self,
+        binding: AccountInstanceBinding,
+        *,
+        host_capability: str,
+    ) -> AccountInstanceBinding:
+        """Serialize one daemon lifecycle transition through the Clerk authority."""
+
+        if (
+            self._host_binding_capability is None
+            or not hmac.compare_digest(host_capability, self._host_binding_capability)
+        ):
+            raise AccountClerkIntentRejected(
+                reason="CLERK_HOST_BINDING_CAPABILITY_REQUIRED",
+                diagnostics={"account_id": self._account_id},
+            )
+        if binding.account_id != self._account_id:
+            raise AccountClerkIntentRejected(
+                reason="CLERK_BINDING_ACCOUNT_MISMATCH",
+                diagnostics={
+                    "account_id": self._account_id,
+                    "binding_account_id": binding.account_id,
+                    "strategy_instance_id": binding.strategy_instance_id,
+                    "run_id": binding.run_id,
+                },
+            )
+        async with self._intake_lock:
+            self._assert_current_generation("record_binding_decision")
+            await asyncio.to_thread(
+                write_account_instance_binding,
+                self._artifacts_root,
+                binding,
+            )
+            return binding
+
     async def append_operator_adjustment(
         self,
         adjustment: AccountClerkOperatorAdjustment,
@@ -664,6 +718,23 @@ class AccountClerk:
                 self._reject(intent, "CLERK_RETIREMENT_PENDING")
         except (BotDeletionCorruptError, ValueError):
             self._reject(intent, "CLERK_RETIREMENT_TRANSITION_UNREADABLE")
+        try:
+            if pending_account_binding_retirements(
+                self._artifacts_root,
+                account_id=self._account_id,
+                strategy_instance_id=intent.strategy_instance_id,
+            ):
+                self._reject(intent, "CLERK_BINDING_RETIREMENT_PENDING")
+        except ValueError:
+            self._reject(intent, "CLERK_BINDING_LEDGER_UNREADABLE")
+        try:
+            if not account_binding_ledger_parity(
+                self._artifacts_root,
+                account_id=self._account_id,
+            ).is_clean:
+                self._reject(intent, "CLERK_BINDING_LEDGER_PARITY_DIRTY")
+        except ValueError:
+            self._reject(intent, "CLERK_BINDING_LEDGER_UNREADABLE")
         binding = latest_account_instance_binding(
             read_account_instance_registry(self._artifacts_root, self._account_id),
             account_id=self._account_id,
@@ -900,6 +971,7 @@ async def _run_clerk_process(args: argparse.Namespace) -> int:
             clerk_generation=args.generation,
             durable_generation_provider=durable_generation_provider,
             on_generation_fenced=stop.set,
+            host_binding_capability=os.environ.get(CLERK_HOST_BINDING_CAPABILITY_ENV),
         )
 
         def on_callback_persistence_failure(_failure: BaseException) -> None:

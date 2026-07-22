@@ -26,6 +26,8 @@ AccountClerkRpcOperation = Literal[
     "operator_adjustment",
     "activate_legacy_emergency_fence",
     "release_legacy_emergency_fence",
+    "record_binding_decision",
+    "fold_binding_retirements",
     "drain_events",
 ]
 WRITE_OPERATIONS = frozenset(
@@ -38,6 +40,8 @@ WRITE_OPERATIONS = frozenset(
         "operator_adjustment",
         "activate_legacy_emergency_fence",
         "release_legacy_emergency_fence",
+        "record_binding_decision",
+        "fold_binding_retirements",
     }
 )
 AccountClerkRpcServerErrorCode = Literal[
@@ -225,6 +229,8 @@ def request_operation(request: Mapping[str, object]) -> AccountClerkRpcOperation
         "operator_adjustment",
         "activate_legacy_emergency_fence",
         "release_legacy_emergency_fence",
+        "record_binding_decision",
+        "fold_binding_retirements",
         "drain_events",
     ):
         raise _AccountClerkRpcRequestRejected("UNKNOWN_OPERATION")

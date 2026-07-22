@@ -121,14 +121,18 @@ def _args(
     clerk_client=None,
     artifacts_root: Path | None = None,
 ) -> argparse.Namespace:
+    root = artifacts_root or run_dir
+    clerk = clerk_client or _RecordingEmergencyClerk()
+    if isinstance(clerk, _RecordingEmergencyClerk):
+        clerk._artifacts_root = root
     return argparse.Namespace(
         run_dir=run_dir,
         account=account,
         confirm=confirm,
         broker=broker,
         client=client,
-        clerk_client=clerk_client or _RecordingEmergencyClerk(),
-        artifacts_root=artifacts_root or run_dir,
+        clerk_client=clerk,
+        artifacts_root=root,
     )
 
 
@@ -162,11 +166,19 @@ class _RecordingEmergencyClerk:
     def __init__(self, timeline: list[str] | None = None) -> None:
         self.intents = []
         self._timeline = timeline
+        self._artifacts_root: Path | None = None
 
     async def register_emergency_flatten(self, intent: object) -> None:
         self.intents.append(intent)
         if self._timeline is not None:
             self._timeline.append("clerk_recorded")
+
+    async def record_binding_decision(self, binding: object) -> object:
+        from app.engine.live.account_registry import write_account_instance_binding
+
+        assert self._artifacts_root is not None
+        write_account_instance_binding(self._artifacts_root, binding)
+        return binding
 
 
 # ──────────────────────────── Refusals ───────────────────────────────
@@ -543,8 +555,7 @@ def test_emergency_flatten_refuses_broker_submit_without_clerk_receipt(tmp_path:
     assert broker.placed == []
     [pending] = IntentWal(tmp_path / "emergency_flatten_audit.jsonl").read_tail()
     assert pending.event_type is IntentEventType.PENDING_INTENT
-    binding = read_account_instance_registry(tmp_path, "DU123")[-1]
-    assert binding.lifecycle_state == "RETIRED"
+    assert read_account_instance_registry(tmp_path, "DU123") == []
 
 
 def test_adopt_emergency_flatten_audit_registers_completed_legacy_order(tmp_path: Path) -> None:
@@ -580,6 +591,7 @@ def test_adopt_emergency_flatten_audit_registers_completed_legacy_order(tmp_path
         order_id=501,
     )
     clerk = _RecordingEmergencyClerk()
+    clerk._artifacts_root = tmp_path
 
     rc = cmd_adopt_emergency_flatten_audit(
         argparse.Namespace(

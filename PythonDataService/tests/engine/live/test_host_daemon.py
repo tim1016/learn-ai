@@ -34,6 +34,8 @@ from app.engine.live.account_registry import (
     AccountInstanceBinding,
     bot_order_namespace_for_instance,
     compute_reconcile_namespaces,
+    fold_account_binding_retirements,
+    pending_account_binding_retirements,
     read_account_instance_registry,
     write_account_instance_binding,
 )
@@ -258,6 +260,21 @@ def test_boot_adopts_healthy_orphan_clerk_only_after_generation_handshake(
 
     monkeypatch.setattr(subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("must not respawn adopted Clerk"))
     assert manager._ensure_account_clerk("DU123") is adopted
+
+
+def test_daemon_restart_keeps_the_clerk_binding_capability_for_adoption(
+    daemon_context: tuple[RunnerProcessManager, Path],
+) -> None:
+    """A living Clerk remains controllable after its supervising daemon restarts."""
+
+    manager, _ = daemon_context
+    restarted = RunnerProcessManager(
+        repo_root=manager.repo_root,
+        live_runs_root=manager.live_runs_root,
+        boot_id="restarted-daemon-boot",
+    )
+
+    assert restarted._clerk_host_binding_capability == manager._clerk_host_binding_capability
 
 
 def test_boot_refuses_to_adopt_legacy_live_clerk_lease_without_client_id(
@@ -535,7 +552,69 @@ def daemon_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Run
     manager = RunnerProcessManager(repo_root=repo_root, live_runs_root=live_runs_root)
     monkeypatch.setattr(manager, "_activate_legacy_emergency_fence", lambda _account, *, fence_id: None)
     monkeypatch.setattr(manager, "_release_legacy_emergency_fence", lambda _account, *, fence_id: None)
+    def record_binding_through_test_clerk(
+        binding: AccountInstanceBinding,
+        *,
+        ibkr_host: str | None = None,
+    ) -> None:
+        manager._ensure_account_clerk(binding.account_id, ibkr_host=ibkr_host)
+        write_account_instance_binding(manager.artifacts_root, binding)
+
+    monkeypatch.setattr(manager, "_record_account_binding_decision_via_clerk", record_binding_through_test_clerk)
+    monkeypatch.setattr(manager, "reconcile_pending_account_binding_retirements", lambda **_kwargs: 0)
     return manager, run_dir
+
+
+def test_daemon_submits_binding_transition_to_clerk_rpc(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The daemon does not append a lifecycle decision around the Clerk."""
+
+    from app.engine.live import host_daemon
+
+    manager, run_dir = daemon_context
+    (run_dir / "run_ledger.json").write_text(
+        json.dumps(
+            {
+                "run_id": RUN_ID,
+                "strategy_instance_id": "spy_ema_paper",
+                "account_id": "DU111",
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[AccountInstanceBinding] = []
+
+    class _ClerkClient:
+        def __init__(self, *, artifacts_root: Path, account_id: str, host_capability: str) -> None:
+            assert artifacts_root == manager.artifacts_root
+            assert account_id == "DU111"
+            assert host_capability == manager._clerk_host_binding_capability
+
+        async def record_binding_decision(self, binding: AccountInstanceBinding) -> AccountInstanceBinding:
+            calls.append(binding)
+            write_account_instance_binding(manager.artifacts_root, binding)
+            return binding
+
+    monkeypatch.setattr(manager, "_ensure_account_clerk", lambda _account_id, **_kwargs: SimpleNamespace())
+    monkeypatch.setattr(host_daemon, "AccountClerkHostRpcClient", _ClerkClient)
+    monkeypatch.setattr(
+        manager,
+        "_record_account_binding_decision_via_clerk",
+        RunnerProcessManager._record_account_binding_decision_via_clerk.__get__(manager, RunnerProcessManager),
+    )
+
+    manager._write_account_registry_binding(
+        run_dir,
+        run_id=RUN_ID,
+        lifecycle_state="ACTIVE",
+        source="host_daemon.start",
+    )
+
+    assert len(calls) == 1
+    assert calls[0].lifecycle_state == "ACTIVE"
+    assert read_account_instance_registry(manager.artifacts_root, "DU111") == calls
 
 
 def test_daemon_boot_replays_a_fenced_partial_bot_retirement(
@@ -571,17 +650,19 @@ def test_daemon_boot_replays_a_fenced_partial_bot_retirement(
             ),
         )
 
-    real_write = bot_deletion.write_account_instance_binding
+    real_write = bot_deletion.write_fenced_lifecycle_retirement_binding
 
     def fail_second_registry(
         root: Path,
         binding: AccountInstanceBinding,
+        *,
+        transition_path: Path,
     ) -> Path:
         if binding.account_id == "DU222" and binding.lifecycle_state == "RETIRED":
             raise OSError("injected second-registry failure")
-        return real_write(root, binding)
+        return real_write(root, binding, transition_path=transition_path)
 
-    monkeypatch.setattr(bot_deletion, "write_account_instance_binding", fail_second_registry)
+    monkeypatch.setattr(bot_deletion, "write_fenced_lifecycle_retirement_binding", fail_second_registry)
     with pytest.raises(OSError, match="injected second-registry failure"):
         retire_bot_lifecycle_and_bindings(
             artifacts_root,
@@ -597,7 +678,7 @@ def test_daemon_boot_replays_a_fenced_partial_bot_retirement(
     assert read_account_instance_registry(artifacts_root, "DU111")[-1].lifecycle_state == "RETIRED"
     assert read_account_instance_registry(artifacts_root, "DU222")[-1].lifecycle_state == "ACTIVE"
 
-    monkeypatch.setattr(bot_deletion, "write_account_instance_binding", real_write)
+    monkeypatch.setattr(bot_deletion, "write_fenced_lifecycle_retirement_binding", real_write)
     manager = RunnerProcessManager(repo_root=repo_root, live_runs_root=live_runs_root)
 
     assert manager._recovered_bot_retirements == (sid,)
@@ -1899,7 +1980,9 @@ def test_clerk_alone_receives_write_capability_and_bot_environment_is_forced_rea
     daemon_context: tuple[RunnerProcessManager, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#1049 trace: inherited write capability cannot leak into a bot child."""
+    """#1049/S4 trace: Clerk-only capabilities cannot leak into a bot child."""
+
+    from app.engine.live.daemon_auth import CLERK_HOST_BINDING_CAPABILITY_ENV
 
     manager, run_dir = daemon_context
     (run_dir / "run_ledger.json").write_text(
@@ -1928,8 +2011,10 @@ def test_clerk_alone_receives_write_capability_and_bot_environment_is_forced_rea
 
     assert environments["clerk"]["IBKR_READONLY"] == "false"
     assert environments["clerk"]["IBKR_HOST"] == "127.0.0.1"
+    assert environments["clerk"][CLERK_HOST_BINDING_CAPABILITY_ENV] == manager._clerk_host_binding_capability
     assert environments["bot"]["IBKR_READONLY"] == "true"
     assert environments["bot"]["IBKR_HOST"] == "127.0.0.1"
+    assert CLERK_HOST_BINDING_CAPABILITY_ENV not in environments["bot"]
 
 
 def test_health_reap_and_parallel_start_do_not_block_on_clerk_socket_readiness(
@@ -2150,6 +2235,8 @@ async def test_start_writes_account_registry_before_spawn(
     )
 
     def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
+        if "app.engine.live.account_clerk" in command:
+            return FakeProcess()
         bindings = read_account_instance_registry(manager.artifacts_root, "DU111")
         assert bindings
         assert bindings[-1].strategy_instance_id == "spy_ema_paper"
@@ -2196,6 +2283,8 @@ async def test_start_retires_account_registry_binding_when_spawn_fails(
     )
 
     def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
+        if "app.engine.live.account_clerk" in command:
+            return FakeProcess()
         raise OSError("spawn failed")
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
@@ -2230,7 +2319,7 @@ async def test_start_retires_account_registry_binding_when_spawn_fails(
     assert [incident.notice.code for incident in incidents] == ["submit.launch_failed"]
 
 
-async def test_child_without_status_retires_account_registry_binding_as_ended_without_status(
+async def test_child_without_status_proposes_account_retirement_for_clerk(
     daemon_context: tuple[RunnerProcessManager, Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2260,8 +2349,9 @@ async def test_child_without_status_retires_account_registry_binding_as_ended_wi
     assert status.state == HostRunnerProcessState.exited
     assert status.exit_reason == "exited(-9)"
     bindings = read_account_instance_registry(manager.artifacts_root, "DU111")
-    assert [binding.lifecycle_state for binding in bindings[-2:]] == ["ACTIVE", "RETIRED"]
-    assert bindings[-1].source == "host_daemon.ended_without_status"
+    assert [binding.lifecycle_state for binding in bindings[-1:]] == ["ACTIVE"]
+    [proposal] = pending_account_binding_retirements(manager.artifacts_root, account_id="DU111")
+    assert proposal.source == "host_daemon.ended_without_status"
     lifecycle = BotLifecycleStateRepo(
         stable_bot_lifecycle_state_path(manager.artifacts_root, "spy_ema_paper")
     ).read()
@@ -2332,8 +2422,9 @@ async def test_child_controlled_halt_does_not_emit_launch_failed_event(
 
     assert status.state == HostRunnerProcessState.exited
     bindings = read_account_instance_registry(manager.artifacts_root, "DU111")
-    assert [binding.lifecycle_state for binding in bindings[-2:]] == ["ACTIVE", "RETIRED"]
-    assert bindings[-1].source == "host_daemon.process_halted"
+    assert [binding.lifecycle_state for binding in bindings[-1:]] == ["ACTIVE"]
+    [proposal] = pending_account_binding_retirements(manager.artifacts_root, account_id="DU111")
+    assert proposal.source == "host_daemon.process_halted"
     assert BotEventRawWal(run_bot_event_wal_path(run_dir)).read_all() == []
 
 
@@ -2376,8 +2467,9 @@ async def test_child_unclassified_exit_does_not_write_clean_retirement_source(
 
     assert status.state == HostRunnerProcessState.exited
     bindings = read_account_instance_registry(manager.artifacts_root, "DU111")
-    assert [binding.lifecycle_state for binding in bindings[-2:]] == ["ACTIVE", "RETIRED"]
-    assert bindings[-1].source == "host_daemon.ended_without_status"
+    assert [binding.lifecycle_state for binding in bindings[-1:]] == ["ACTIVE"]
+    [proposal] = pending_account_binding_retirements(manager.artifacts_root, account_id="DU111")
+    assert proposal.source == "host_daemon.ended_without_status"
 
 
 async def test_start_blocks_after_crash_retire_until_later_recovery_proof(
@@ -2426,14 +2518,15 @@ async def test_start_blocks_after_crash_retire_until_later_recovery_proof(
     with pytest.raises(HostRunnerError) as exc_info:
         manager.start(RUN_ID, request=HostRunnerStartRequest())
     assert exc_info.value.status_code == 409
-    assert "recovery proof" in exc_info.value.detail
+    assert "reconciliation is pending" in exc_info.value.detail
 
+    fold_account_binding_retirements(manager.artifacts_root, account_id="DU111")
     append_account_event(
         manager.artifacts_root,
         "DU111",
         {
             "event_type": "account_recovery_proof_recorded",
-            "recorded_at_ms": fixed_ms + 1,
+            "recorded_at_ms": fixed_ms + 2,
             "recovery_id": "proof-1",
             "reconciliation_result": "clean",
         },
@@ -2476,9 +2569,11 @@ async def test_start_blocks_when_restart_intensity_freezes_account(
                 recorded_at_ms=recorded_at_ms,
                 source="test",
             ),
-        )
+    )
 
     def fake_popen(command: list[str], **kwargs: Any) -> FakeProcess:
+        if "app.engine.live.account_clerk" in command:
+            return FakeProcess()
         raise AssertionError("restart intensity freeze should block before spawn")
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)

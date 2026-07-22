@@ -186,7 +186,19 @@ function isBinding(value: unknown): boolean {
   return isRecord(value) &&
     isAttachment(value['state']) &&
     isNullableGeneration(value['generation']) &&
-    isNullableGeneration(value['lease_generation']);
+    isNullableGeneration(value['lease_generation']) &&
+    isInt64Ms(value['pending_retirement_proposals']) &&
+    isBindingLedgerReadAuthority(value['ledger_read_authority']) &&
+    isBindingLedgerParityState(value['ledger_parity']) &&
+    isInt64Ms(value['ledger_parity_issue_count']);
+}
+
+function isBindingLedgerReadAuthority(value: unknown): boolean {
+  return value === 'legacy_registry' || value === 'clerk_ledger';
+}
+
+function isBindingLedgerParityState(value: unknown): boolean {
+  return value === 'clean' || value === 'dirty';
 }
 
 function isNullableLease(value: unknown): boolean {

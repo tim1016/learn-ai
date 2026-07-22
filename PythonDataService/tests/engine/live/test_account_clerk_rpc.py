@@ -31,6 +31,7 @@ from app.engine.live.account_clerk_rpc import (
     ACCOUNT_CLERK_RPC_NORMAL_TIMEOUT_S,
     ACCOUNT_CLERK_RPC_RECOVERY_TIMEOUT_S,
     ACCOUNT_CLERK_RPC_SCHEMA_VERSION,
+    AccountClerkHostRpcClient,
     AccountClerkRpcCancelNamespaceUncertainError,
     AccountClerkRpcClient,
     AccountClerkRpcGenerationHandshake,
@@ -48,6 +49,10 @@ from app.engine.live.account_owner import AccountOwnerSubmitIntent
 from app.engine.live.account_registry import (
     AccountInstanceBinding,
     bot_order_namespace_for_instance,
+    latest_account_instance_binding,
+    pending_account_binding_retirements,
+    read_account_instance_registry,
+    retire_unmanaged_active_bindings_on_daemon_boot,
     write_account_instance_binding,
 )
 from app.engine.live.live_portfolio import LivePortfolio, SubmitUncertainHaltError
@@ -436,6 +441,144 @@ async def test_success_envelope_round_trips_over_real_unix_socket(tmp_path: Path
     assert envelope.schema_version == ACCOUNT_CLERK_RPC_SCHEMA_VERSION
     assert envelope.outcome == "success"
     assert envelope.payload["broker_acked"]["order_id"] == 101
+
+
+@pytest.mark.asyncio
+async def test_clerk_start_folds_daemon_retirement_proposal_before_serving_socket(tmp_path: Path) -> None:
+    _write_active_binding(tmp_path)
+    retire_unmanaged_active_bindings_on_daemon_boot(
+        tmp_path,
+        managed_run_ids=frozenset(),
+        now_ms=START_MS + 1,
+    )
+
+    server = AccountClerkRpcServer(
+        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_Broker(), clerk_generation=1)
+    )
+    await server.start()
+    try:
+        latest = latest_account_instance_binding(
+            read_account_instance_registry(tmp_path, ACCOUNT),
+            account_id=ACCOUNT,
+            strategy_instance_id="bot-a",
+        )
+        assert latest is not None
+        assert latest.lifecycle_state == "RETIRED"
+        assert pending_account_binding_retirements(tmp_path, account_id=ACCOUNT) == ()
+    finally:
+        await server.close()
+
+
+@pytest.mark.asyncio
+async def test_running_clerk_folds_a_reaper_proposal_without_a_process_restart(tmp_path: Path) -> None:
+    """An already-serving Clerk is the convergent recovery authority."""
+
+    _write_active_binding(tmp_path)
+    server = AccountClerkRpcServer(
+        AccountClerk(artifacts_root=tmp_path, account_id=ACCOUNT, broker=_Broker(), clerk_generation=1)
+    )
+    await server.start()
+    try:
+        retire_unmanaged_active_bindings_on_daemon_boot(
+            tmp_path,
+            managed_run_ids=frozenset(),
+            now_ms=START_MS + 1,
+        )
+
+        folded = await AccountClerkRpcClient(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+        ).fold_binding_retirements()
+        latest = latest_account_instance_binding(
+            read_account_instance_registry(tmp_path, ACCOUNT),
+            account_id=ACCOUNT,
+            strategy_instance_id="bot-a",
+        )
+    finally:
+        await server.close()
+
+    assert folded.retirements_applied == 1
+    assert latest is not None
+    assert latest.lifecycle_state == "RETIRED"
+    assert pending_account_binding_retirements(tmp_path, account_id=ACCOUNT) == ()
+
+
+@pytest.mark.asyncio
+async def test_host_binding_transition_round_trips_through_the_clerk_rpc(tmp_path: Path) -> None:
+    """The daemon-facing RPC makes the Clerk the only durable transition writer."""
+
+    binding = AccountInstanceBinding(
+        account_id=ACCOUNT,
+        strategy_instance_id="bot-a",
+        run_id="rpc-run",
+        bot_order_namespace=bot_order_namespace_for_instance("bot-a"),
+        lifecycle_state="DEPLOYED",
+        recorded_at_ms=START_MS + 1,
+        source="host_daemon.deploy",
+    )
+    server = AccountClerkRpcServer(
+        AccountClerk(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+            broker=_Broker(),
+            clerk_generation=1,
+            host_binding_capability="test-host-capability",
+        )
+    )
+    await server.start()
+    try:
+        recorded = await AccountClerkHostRpcClient(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+            host_capability="test-host-capability",
+        ).record_binding_decision(binding)
+    finally:
+        await server.close()
+
+    assert recorded == binding
+    assert read_account_instance_registry(tmp_path, ACCOUNT) == [binding]
+
+
+@pytest.mark.asyncio
+async def test_bot_rpc_cannot_record_an_account_binding_transition(tmp_path: Path) -> None:
+    """The shared bot client socket cannot mutate its own or a sibling binding."""
+
+    binding = AccountInstanceBinding(
+        account_id=ACCOUNT,
+        strategy_instance_id="bot-a",
+        run_id="forged-run",
+        bot_order_namespace=bot_order_namespace_for_instance("bot-a"),
+        lifecycle_state="RETIRED",
+        recorded_at_ms=START_MS + 1,
+        source="forged-bot-request",
+    )
+    server = AccountClerkRpcServer(
+        AccountClerk(
+            artifacts_root=tmp_path,
+            account_id=ACCOUNT,
+            broker=_Broker(),
+            clerk_generation=1,
+            host_binding_capability="test-host-capability",
+        )
+    )
+    await server.start()
+    try:
+        with pytest.raises(AccountClerkRpcRejectedError) as exc_info:
+            await AccountClerkRpcClient(
+                artifacts_root=tmp_path,
+                account_id=ACCOUNT,
+            )._request(
+                    {
+                        "operation": "record_binding_decision",
+                        "binding": binding.model_dump(mode="json"),
+                        "host_capability": "bot-client-does-not-have-the-host-secret",
+                    }
+            )
+    finally:
+        await server.close()
+
+    assert exc_info.value.reason == "CLERK_HOST_BINDING_CAPABILITY_REQUIRED"
+    assert read_account_instance_registry(tmp_path, ACCOUNT) == []
 
 
 @pytest.mark.asyncio
