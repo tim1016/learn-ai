@@ -37885,7 +37885,7 @@
     },
     "/api/accounts/{account_id}/emergency-flatten": {
       "post": {
-        "description": "Run the audited account-wide paper flatten without a surviving bot run.",
+        "description": "Authorize and dispatch one Clerk-owned account-wide paper flatten.",
         "operationId": "emergency_flatten_account_endpoint_api_accounts__account_id__emergency_flatten_post",
         "parameters": [
           {
