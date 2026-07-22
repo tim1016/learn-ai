@@ -1195,6 +1195,81 @@ async def test_operator_adjustment_endpoint_maps_clerk_rejection_to_409(
     assert response.json()["detail"]["reason_code"] == "JOURNAL_CURE_IDEMPOTENCY_CONFLICT"
 
 
+async def test_retire_stale_binding_endpoint_retires_deployed_binding(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, _ = daemon_context
+    write_account_instance_binding(
+        manager.artifacts_root,
+        AccountInstanceBinding(
+            account_id="DU123",
+            strategy_instance_id="stale-bot",
+            run_id="run-stale",
+            bot_order_namespace=bot_order_namespace_for_instance("stale-bot"),
+            lifecycle_state="DEPLOYED",
+            recorded_at_ms=100,
+            source="host_daemon.deploy",
+        ),
+    )
+    recorded: list[AccountInstanceBinding] = []
+    monkeypatch.setattr(
+        manager,
+        "_record_account_binding_decision_via_clerk",
+        lambda binding, **_kwargs: recorded.append(binding),
+    )
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
+        response = await client.post(
+            "/accounts/DU123/bindings/retire",
+            json={"strategy_instance_id": "stale-bot", "run_id": "run-stale"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["lifecycle_state"] == "RETIRED"
+    assert response.json()["strategy_instance_id"] == "stale-bot"
+    assert len(recorded) == 1
+    assert recorded[0].lifecycle_state == "RETIRED"
+    assert recorded[0].source == "operator.retire_stale_binding"
+
+
+async def test_retire_stale_binding_endpoint_rejects_non_deployed_binding(
+    daemon_context: tuple[RunnerProcessManager, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager, _ = daemon_context
+    write_account_instance_binding(
+        manager.artifacts_root,
+        AccountInstanceBinding(
+            account_id="DU123",
+            strategy_instance_id="live-bot",
+            run_id="run-live",
+            bot_order_namespace=bot_order_namespace_for_instance("live-bot"),
+            lifecycle_state="ACTIVE",
+            recorded_at_ms=100,
+            source="host_daemon.start",
+        ),
+    )
+    recorded: list[AccountInstanceBinding] = []
+    monkeypatch.setattr(
+        manager,
+        "_record_account_binding_decision_via_clerk",
+        lambda binding, **_kwargs: recorded.append(binding),
+    )
+    app = create_app(manager, allowed_origins=["http://localhost:4200"], auth_token=_TEST_TOKEN)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=_AUTH) as client:
+        response = await client.post(
+            "/accounts/DU123/bindings/retire",
+            json={"strategy_instance_id": "live-bot", "run_id": "run-live"},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "STALE_BINDING_NOT_DEPLOYED"
+    assert recorded == []
+
+
 async def test_release_clerk_endpoint_detaches_account_service(
     daemon_context: tuple[RunnerProcessManager, Path],
     monkeypatch: pytest.MonkeyPatch,

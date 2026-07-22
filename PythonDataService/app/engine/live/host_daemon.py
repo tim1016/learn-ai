@@ -109,6 +109,10 @@ from app.engine.live.lifecycle_exit_finalizer import (
 )
 from app.engine.live.run_ledger import LiveRunStartDefaults
 from app.engine.strategy.spec.schema import load_spec_from_path
+from app.schemas.account_reconciliation import (
+    StaleBindingRetirementReceipt,
+    StaleBindingRetirementRequest,
+)
 from app.schemas.broker_session import GatewaySocketsSnapshot
 from app.schemas.journal_cures import JournalCureReceipt, JournalCureRequest
 from app.schemas.live_runs import (
@@ -1474,6 +1478,60 @@ class RunnerProcessManager:
                 "Account Clerk is unavailable to record the binding transition.",
             ) from exc
 
+    def retire_stale_account_binding(
+        self,
+        *,
+        account_id: str,
+        strategy_instance_id: str,
+        run_id: str,
+    ) -> object:
+        """Retire one DEPLOYED binding through the Clerk's decision seam.
+
+        Deploy-only bindings persist across daemon restarts, so a forgotten one
+        is retired only on an explicit operator request. ACTIVE bindings must
+        exit via their stop/flatten flow; an already-RETIRED or unknown binding
+        is refused rather than silently re-decided.
+        """
+
+        from app.engine.live.account_registry import (
+            latest_account_instance_binding,
+            read_account_instance_registry,
+        )
+
+        binding = latest_account_instance_binding(
+            read_account_instance_registry(self.artifacts_root, account_id),
+            account_id=account_id,
+            strategy_instance_id=strategy_instance_id,
+        )
+        if binding is None or binding.run_id != run_id:
+            raise HostRunnerError(
+                status.HTTP_404_NOT_FOUND,
+                {
+                    "reason_code": "STALE_BINDING_NOT_FOUND",
+                    "message": "No binding matches the requested instance and run.",
+                },
+            )
+        if binding.lifecycle_state != "DEPLOYED":
+            raise HostRunnerError(
+                status.HTTP_409_CONFLICT,
+                {
+                    "reason_code": "STALE_BINDING_NOT_DEPLOYED",
+                    "message": (
+                        "Only a DEPLOYED binding can be retired here; this binding is "
+                        f"{binding.lifecycle_state}."
+                    ),
+                },
+            )
+        retired = binding.model_copy(
+            update={
+                "lifecycle_state": "RETIRED",
+                "recorded_at_ms": self._clock_ms(),
+                "source": "operator.retire_stale_binding",
+            }
+        )
+        self._record_account_binding_decision_via_clerk(retired)
+        return retired
+
     def _propose_account_registry_retirement(
         self,
         run_dir: Path,
@@ -2668,6 +2726,34 @@ def create_app(
                     "message": "Clerk rejected or could not complete the request.",
                 },
             ) from exc
+
+    @app.post(
+        "/accounts/{account_id}/bindings/retire",
+        response_model=StaleBindingRetirementReceipt,
+        dependencies=auth,
+    )
+    async def retire_stale_account_binding(
+        account_id: str,
+        request: StaleBindingRetirementRequest,
+    ) -> StaleBindingRetirementReceipt:
+        """Retire one DEPLOYED account binding via the host lifecycle authority."""
+
+        try:
+            binding = await run_in_threadpool(
+                process_manager.retire_stale_account_binding,
+                account_id=account_id,
+                strategy_instance_id=request.strategy_instance_id,
+                run_id=request.run_id,
+            )
+        except HostRunnerError as exc:
+            raise HTTPException(exc.status_code, detail=exc.detail) from exc
+        return StaleBindingRetirementReceipt(
+            account_id=binding.account_id,
+            strategy_instance_id=binding.strategy_instance_id,
+            run_id=binding.run_id,
+            bot_order_namespace=binding.bot_order_namespace,
+            recorded_at_ms=binding.recorded_at_ms,
+        )
 
     @app.post("/accounts/{account_id}/clerk/release", response_model=HostRunnerHealth, dependencies=auth)
     async def release_account_clerk(account_id: str) -> HostRunnerHealth:

@@ -401,3 +401,42 @@ class AccountFalseCrashBackfillResponse(BaseModel):
     rows_skipped_no_disproof: int = Field(ge=0)
     invalid_account_dirs: int = Field(ge=0)
     repaired_run_ids: list[str] = Field(default_factory=list)
+
+
+class AccountEventSequenceRepairReceipt(BaseModel):
+    """Result of an operator-triggered account-event sequence repair.
+
+    Restores contiguous event-sequence numbers for a ledger whose JSON rows are
+    valid but whose durable ``seq`` envelope was duplicated. Evidence is never
+    discarded; the pre-repair bytes are snapshotted beside the ledger.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    rewritten_rows: int = Field(ge=0)
+    backup_path: str | None = None
+
+
+class StaleBindingRetirementRequest(BaseModel):
+    """Operator request to retire one inactive (DEPLOYED) account binding."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    strategy_instance_id: str = Field(min_length=1, max_length=128)
+    run_id: str = Field(min_length=1, max_length=128)
+
+
+class StaleBindingRetirementReceipt(BaseModel):
+    """Durable proof that a stale DEPLOYED binding was moved to RETIRED."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: int = 1
+    account_id: str = Field(min_length=1, max_length=64)
+    strategy_instance_id: str = Field(min_length=1, max_length=128)
+    run_id: str = Field(min_length=1, max_length=128)
+    bot_order_namespace: str = Field(min_length=1, max_length=256)
+    lifecycle_state: Literal["RETIRED"] = "RETIRED"
+    recorded_at_ms: int = Field(ge=0)

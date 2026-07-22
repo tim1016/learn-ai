@@ -13,7 +13,11 @@ from app.broker.ibkr import account as ibkr_account
 from app.broker.ibkr.client import BrokerError, IbkrClient, NotConnectedError, _is_paper_account, get_client
 from app.broker.ibkr.config import get_settings
 from app.engine.live import host_daemon_client
-from app.engine.live.account_artifacts import AccountArtifactError, append_account_event
+from app.engine.live.account_artifacts import (
+    AccountArtifactError,
+    append_account_event,
+    repair_account_event_sequence,
+)
 from app.engine.live.account_clerk_rpc import (
     AccountClerkRpcClient,
     AccountClerkRpcError,
@@ -45,6 +49,7 @@ from app.schemas.account_reconciliation import (
     AccountClearFreezeResponse,
     AccountClerkRestartSmokeRequest,
     AccountClerkRestartSmokeResponse,
+    AccountEventSequenceRepairReceipt,
     AccountFalseCrashBackfillResponse,
     AccountReconciliationAutomationPolicy,
     AccountReconciliationAutomationPolicyUpdate,
@@ -56,6 +61,8 @@ from app.schemas.account_reconciliation import (
     LegacyStaleClaimCandidatesResponse,
     LegacyStaleClaimRetirementReceipt,
     LegacyStaleClaimRetireRequest,
+    StaleBindingRetirementReceipt,
+    StaleBindingRetirementRequest,
 )
 from app.schemas.journal_cures import (
     JournalCurePreview,
@@ -436,6 +443,73 @@ async def baseline_account_binding_ledger_endpoint(
         )
 
     return await run_in_threadpool(_baseline)
+
+
+@router.post(
+    "/{account_id}/events/repair-sequence",
+    response_model=AccountEventSequenceRepairReceipt,
+    status_code=status.HTTP_201_CREATED,
+)
+async def repair_account_event_sequence_endpoint(
+    account_id: str,
+    artifacts_root: AccountArtifactsRoot,
+) -> AccountEventSequenceRepairReceipt:
+    """Resequence a corrupt account-event journal without discarding evidence.
+
+    Repairs an ACCOUNT_EVENTS_JOURNAL_CORRUPT feed whose JSON rows are valid but
+    whose durable ``seq`` envelope was duplicated. Snapshots the original bytes
+    beside the ledger, then atomically rewrites only the ``seq`` field under the
+    ledger lock. Malformed or cross-account rows are refused, not silently dropped.
+    """
+
+    canonical_account_id = _canonical_account_id(account_id)
+    try:
+        result = await run_in_threadpool(
+            repair_account_event_sequence,
+            artifacts_root,
+            canonical_account_id,
+        )
+    except AccountArtifactError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={"reason_code": "ACCOUNT_EVENTS_REPAIR_UNSAFE", "message": str(exc)},
+        ) from exc
+    return AccountEventSequenceRepairReceipt(
+        account_id=result.account_id,
+        rewritten_rows=result.rewritten_rows,
+        backup_path=str(result.backup_path) if result.backup_path is not None else None,
+    )
+
+
+@router.post(
+    "/{account_id}/bindings/retire",
+    response_model=StaleBindingRetirementReceipt,
+    status_code=status.HTTP_201_CREATED,
+)
+async def retire_stale_binding_endpoint(
+    account_id: str,
+    request: StaleBindingRetirementRequest,
+) -> StaleBindingRetirementReceipt:
+    """Retire one inactive (DEPLOYED) binding via the host lifecycle authority.
+
+    Binding retirement is a host-authority mutation the Clerk records, so the
+    container delegates to the daemon rather than writing the RETIRED decision
+    itself. The daemon guards that the binding is currently DEPLOYED.
+    """
+
+    canonical_account_id = _canonical_account_id(account_id)
+    settings = get_settings()
+    try:
+        body = await host_daemon_client.retire_stale_binding(
+            settings.live_runner_daemon_url,
+            canonical_account_id,
+            request.model_dump(mode="json"),
+        )
+        return StaleBindingRetirementReceipt.model_validate(body)
+    except host_daemon_client.HostDaemonOutcomeUnknownError as exc:
+        raise _outcome_unknown_http_error(exc) from exc
+    except host_daemon_client.HostDaemonError as exc:
+        raise HTTPException(exc.status_code, detail=exc.detail) from exc
 
 
 class _AccountClerkRestoreUnconfirmedError(RuntimeError):
