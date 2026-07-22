@@ -1,0 +1,106 @@
+"""Schema-drift guard (spec §9).
+
+Recursively diffs the key sets of the captured raw Alpaca payloads against the
+alpaca-py model field names (and aliases). If Alpaca ships a field the SDK does
+not know, this fails and **names** the offending keys — enforcing the
+no-fields-dropped rule. The capture journal always keeps everything regardless;
+this test guards the *mapping's* field coverage.
+
+Parameterized over all six endpoint families; it auto-covers each as its
+fixtures land. When a real capture (HITL slice #1178) surfaces an unknown key,
+this is the test that fails first.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+from alpaca.trading.models import (
+    Asset,
+    Clock,
+    NonTradeActivity,
+    Order,
+    Position,
+    TradeAccount,
+    TradeActivity,
+)
+from pydantic import BaseModel
+
+# family → (fixture filename, alpaca-py model(s) that define its known fields)
+_FAMILIES: dict[str, tuple[str, tuple[type[BaseModel], ...]]] = {
+    "account": ("account.json", (TradeAccount,)),
+    "positions": ("positions.json", (Position,)),
+    "orders": ("orders.json", (Order,)),
+    "activities": ("activities.json", (TradeActivity, NonTradeActivity)),
+    "assets": ("assets.json", (Asset,)),
+    "clock": ("clock.json", (Clock,)),
+}
+
+
+def _known_names(model: type[BaseModel]) -> set[str]:
+    """Field names plus every alias (Alpaca's `class` → `asset_class`, etc.)."""
+    names: set[str] = set()
+    for field_name, field in model.model_fields.items():
+        names.add(field_name)
+        for candidate in (field.alias, field.serialization_alias):
+            if isinstance(candidate, str):
+                names.add(candidate)
+        validation_alias = field.validation_alias
+        if isinstance(validation_alias, str):
+            names.add(validation_alias)
+        elif validation_alias is not None:
+            names.update(
+                choice
+                for choice in getattr(validation_alias, "choices", [])
+                if isinstance(choice, str)
+            )
+    return names
+
+
+def _payload_keys(obj: Any) -> set[str]:
+    """Every dict key in a payload, at any nesting depth."""
+    keys: set[str] = set()
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            keys.add(key)
+            keys |= _payload_keys(value)
+    elif isinstance(obj, list):
+        for item in obj:
+            keys |= _payload_keys(item)
+    return keys
+
+
+def unknown_keys(payload: Any, models: tuple[type[BaseModel], ...]) -> set[str]:
+    """Keys present in the payload that no SDK model defines."""
+    known: set[str] = set().union(*(_known_names(model) for model in models))
+    return _payload_keys(payload) - known
+
+
+@pytest.mark.parametrize("family", list(_FAMILIES))
+def test_captured_payload_has_no_schema_drift(family: str, load_alpaca_fixture) -> None:
+    filename, models = _FAMILIES[family]
+    payload = load_alpaca_fixture(family, filename)
+
+    drift = unknown_keys(payload, models)
+
+    assert drift == set(), (
+        f"{family}: Alpaca payload carries keys the SDK model(s) do not define: "
+        f"{sorted(drift)}. Either the SDK is behind (upgrade alpaca-py and extend "
+        f"the adapter) or the fixture is wrong."
+    )
+
+
+def test_schema_drift_is_detected_and_named() -> None:
+    # A field the SDK has never seen must surface by name, not be silently dropped.
+    payload = {"id": "abc", "cash": "1000", "brand_new_alpaca_field": 1}
+
+    drift = unknown_keys(payload, (TradeAccount,))
+
+    assert drift == {"brand_new_alpaca_field"}
+
+
+def test_asset_class_alias_is_recognized() -> None:
+    # Alpaca's raw `class` key is aliased to `asset_class` in the SDK — the
+    # guard must treat it as known, not as drift.
+    assert "class" in _known_names(Asset)
