@@ -13,6 +13,7 @@ describe('AlpacaDeskComponent', () => {
           useValue: {
             getAccount: vi.fn().mockResolvedValue(undefined),
             listPositions: vi.fn().mockResolvedValue([]),
+            listOrders: vi.fn().mockResolvedValue([]),
           },
         },
       ],

@@ -1226,6 +1226,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/brokers/{broker}/activities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Activities */
+        get: operations["list_activities_api_brokers__broker__activities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/brokers/{broker}/orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Orders */
+        get: operations["list_orders_api_brokers__broker__orders_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/brokers/{broker}/positions": {
         parameters: {
             query?: never;
@@ -8095,6 +8129,34 @@ export interface components {
             trading_blocked: boolean;
         };
         /**
+         * BrokerActivity
+         * @description An account activity row (trade fills and non-trade events).
+         */
+        BrokerActivity: {
+            /** Activity Id */
+            activity_id: string;
+            /** Activity Type */
+            activity_type: string;
+            /** Broker */
+            broker: string;
+            /** Category */
+            category: string | null;
+            /** Net Amount */
+            net_amount: number | null;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Occurred At Ms */
+            occurred_at_ms: number | null;
+            /** Price */
+            price: number | null;
+            /** Quantity */
+            quantity: number | null;
+            /** Side */
+            side: string | null;
+            /** Symbol */
+            symbol: string | null;
+        };
+        /**
          * BrokerActivityHealth
          * @description PR 5 — broker-activity publisher health surface.
          *
@@ -8316,6 +8378,74 @@ export interface components {
              * @enum {string}
              */
             verdict: "CONSISTENT" | "CONFLICTING" | "UNKNOWN" | "NOT_COMPARABLE";
+        };
+        /**
+         * BrokerOrder
+         * @description An order and its status, for the recent-orders table.
+         */
+        BrokerOrder: {
+            /** Asset Class */
+            asset_class: string | null;
+            /** Broker */
+            broker: string;
+            /** Canceled At Ms */
+            canceled_at_ms: number | null;
+            /** Client Order Id */
+            client_order_id: string | null;
+            /** Created At Ms */
+            created_at_ms: number | null;
+            /** Events */
+            events: components["schemas"]["BrokerOrderEvent"][];
+            /** Expired At Ms */
+            expired_at_ms: number | null;
+            /** Filled At Ms */
+            filled_at_ms: number | null;
+            /** Filled Avg Price */
+            filled_avg_price: number | null;
+            /** Filled Quantity */
+            filled_quantity: number;
+            /** Limit Price */
+            limit_price: number | null;
+            /** Observed At Ms */
+            observed_at_ms: number;
+            /** Order Id */
+            order_id: string;
+            /** Order Type */
+            order_type: string;
+            /** Quantity */
+            quantity: number | null;
+            /** Side */
+            side: string;
+            /** Status */
+            status: string;
+            /** Stop Price */
+            stop_price: number | null;
+            /** Submitted At Ms */
+            submitted_at_ms: number | null;
+            /** Symbol */
+            symbol: string;
+            /** Time In Force */
+            time_in_force: string;
+            /** Updated At Ms */
+            updated_at_ms: number | null;
+        };
+        /**
+         * BrokerOrderEvent
+         * @description A lifecycle event on an order (fill/partial-fill/cancel/...).
+         *
+         *     Phase-1 REST orders carry only their own lifecycle timestamps, from which
+         *     the adapter synthesizes a fill event when the order reports a fill. The
+         *     richer per-event stream arrives with the phase-2 ``trade_updates`` consumer.
+         */
+        BrokerOrderEvent: {
+            /** Event Type */
+            event_type: string;
+            /** Occurred At Ms */
+            occurred_at_ms: number;
+            /** Price */
+            price: number | null;
+            /** Quantity */
+            quantity: number | null;
         };
         /**
          * BrokerPosition
@@ -24501,6 +24631,78 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BrokerAccountSnapshot"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_activities_api_brokers__broker__activities_get: {
+        parameters: {
+            query?: {
+                after_ms?: number | null;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrokerActivity"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_orders_api_brokers__broker__orders_get: {
+        parameters: {
+            query?: {
+                status?: ("open" | "closed" | "all") | null;
+                limit?: number | null;
+                after_ms?: number | null;
+            };
+            header?: {
+                "X-Data-Plane-Control-Secret"?: string | null;
+            };
+            path: {
+                broker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrokerOrder"][];
                 };
             };
             /** @description Validation Error */

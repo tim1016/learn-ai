@@ -14,7 +14,12 @@ from app.broker.alpaca import adapter
 from app.broker.alpaca.client import AlpacaTradingClient
 from app.broker.alpaca.config import BROKER_ID
 from app.broker.contract.capabilities import BrokerCapabilities
-from app.broker.contract.models import BrokerAccountSnapshot, BrokerPosition
+from app.broker.contract.models import (
+    BrokerAccountSnapshot,
+    BrokerActivity,
+    BrokerOrder,
+    BrokerPosition,
+)
 from app.broker.contract.registry import BrokerRegistry, get_broker_registry
 
 # Alpaca free / paper-account capabilities, verified 2026-07 (spec §3). Honest
@@ -54,6 +59,26 @@ class AlpacaBroker:
     async def list_positions(self) -> list[BrokerPosition]:
         payloads = await self._client.list_positions()
         return [adapter.from_alpaca_position(payload) for payload in payloads]
+
+    async def list_orders(
+        self,
+        *,
+        status: str | None = None,
+        limit: int | None = None,
+        after_ms: int | None = None,
+    ) -> list[BrokerOrder]:
+        payloads = await self._client.list_orders(
+            status=status, limit=limit, after_ms=after_ms
+        )
+        return [adapter.from_alpaca_order(payload) for payload in payloads]
+
+    async def list_activities(
+        self,
+        *,
+        after_ms: int | None = None,
+    ) -> list[BrokerActivity]:
+        payloads = await self._client.list_activities(after_ms=after_ms)
+        return [adapter.from_alpaca_activity(payload) for payload in payloads]
 
 
 def register_default_brokers(registry: BrokerRegistry | None = None) -> BrokerRegistry:

@@ -11,7 +11,12 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from app.broker.contract.errors import BrokerAuthError, BrokerRateLimited
-from app.broker.contract.models import BrokerAccountSnapshot, BrokerPosition
+from app.broker.contract.models import (
+    BrokerAccountSnapshot,
+    BrokerActivity,
+    BrokerOrder,
+    BrokerPosition,
+)
 from app.broker.contract.registry import (
     get_broker_registry,
     reset_broker_registry_for_testing,
@@ -51,10 +56,16 @@ def _snapshot(**overrides) -> BrokerAccountSnapshot:
 class _FakePort:
     broker_id = "alpaca"
 
-    def __init__(self, *, account=None, positions=None, error=None) -> None:
+    def __init__(
+        self, *, account=None, positions=None, orders=None, activities=None, error=None
+    ) -> None:
         self._account = account
         self._positions = positions if positions is not None else []
+        self._orders = orders if orders is not None else []
+        self._activities = activities if activities is not None else []
         self._error = error
+        self.orders_call = None
+        self.activities_call = None
 
     async def get_account(self) -> BrokerAccountSnapshot:
         if self._error is not None:
@@ -65,6 +76,18 @@ class _FakePort:
         if self._error is not None:
             raise self._error
         return self._positions
+
+    async def list_orders(self, *, status=None, limit=None, after_ms=None):
+        if self._error is not None:
+            raise self._error
+        self.orders_call = {"status": status, "limit": limit, "after_ms": after_ms}
+        return self._orders
+
+    async def list_activities(self, *, after_ms=None):
+        if self._error is not None:
+            raise self._error
+        self.activities_call = {"after_ms": after_ms}
+        return self._activities
 
 
 async def _get(path: str):
@@ -157,3 +180,80 @@ async def test_positions_endpoint_returns_empty_list() -> None:
 
     assert response.status_code == 200
     assert response.json() == []
+
+
+def _order(**overrides) -> BrokerOrder:
+    base = dict(
+        broker="alpaca",
+        order_id="o-1",
+        client_order_id=None,
+        symbol="AAPL",
+        asset_class="us_equity",
+        side="buy",
+        order_type="market",
+        time_in_force="day",
+        quantity=10.0,
+        filled_quantity=10.0,
+        limit_price=None,
+        stop_price=None,
+        filled_avg_price=135.8,
+        status="filled",
+        submitted_at_ms=1_700_000_000_000,
+        created_at_ms=1_700_000_000_000,
+        updated_at_ms=1_700_000_000_000,
+        filled_at_ms=1_700_000_000_500,
+        canceled_at_ms=None,
+        expired_at_ms=None,
+        events=[],
+        observed_at_ms=1_700_000_000_000,
+    )
+    base.update(overrides)
+    return BrokerOrder(**base)
+
+
+def _activity(**overrides) -> BrokerActivity:
+    base = dict(
+        broker="alpaca",
+        activity_id="act-1",
+        activity_type="FILL",
+        category="trade_activity",
+        symbol="AAPL",
+        side="buy",
+        quantity=10.0,
+        price=135.8,
+        net_amount=None,
+        occurred_at_ms=1_700_000_000_000,
+        observed_at_ms=1_700_000_000_000,
+    )
+    base.update(overrides)
+    return BrokerActivity(**base)
+
+
+async def test_orders_endpoint_returns_list_and_forwards_query_params() -> None:
+    port = _FakePort(orders=[_order(order_id="o-9")])
+    get_broker_registry().register(port)
+
+    response = await _get("/api/brokers/alpaca/orders?status=open&limit=5&after_ms=123")
+
+    assert response.status_code == 200
+    assert response.json()[0]["order_id"] == "o-9"
+    assert port.orders_call == {"status": "open", "limit": 5, "after_ms": 123}
+
+
+async def test_orders_endpoint_rejects_invalid_status() -> None:
+    get_broker_registry().register(_FakePort(orders=[]))
+
+    response = await _get("/api/brokers/alpaca/orders?status=bogus")
+
+    assert response.status_code == 422
+
+
+async def test_activities_endpoint_returns_list_and_forwards_after_ms() -> None:
+    port = _FakePort(activities=[_activity(activity_id="act-9")])
+    get_broker_registry().register(port)
+
+    response = await _get("/api/brokers/alpaca/activities?after_ms=999")
+
+    assert response.status_code == 200
+    assert response.json()[0]["activity_id"] == "act-9"
+    assert port.activities_call == {"after_ms": 999}

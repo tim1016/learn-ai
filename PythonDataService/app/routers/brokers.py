@@ -10,12 +10,17 @@ only ``alpaca``; unknown brokers resolve to ``404``.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from typing import NoReturn
+from typing import Literal, NoReturn
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from app.broker.contract.errors import BrokerError, BrokerRateLimited
-from app.broker.contract.models import BrokerAccountSnapshot, BrokerPosition
+from app.broker.contract.models import (
+    BrokerAccountSnapshot,
+    BrokerActivity,
+    BrokerOrder,
+    BrokerPosition,
+)
 from app.broker.contract.ports import BrokerReadPort
 from app.broker.contract.registry import get_broker_registry
 
@@ -58,3 +63,24 @@ async def get_account(broker: str) -> BrokerAccountSnapshot:
 @router.get("/{broker}/positions", response_model=list[BrokerPosition])
 async def list_positions(broker: str) -> list[BrokerPosition]:
     return await _run(broker, lambda port: port.list_positions())
+
+
+@router.get("/{broker}/orders", response_model=list[BrokerOrder])
+async def list_orders(
+    broker: str,
+    status: Literal["open", "closed", "all"] | None = None,
+    limit: int | None = Query(default=None, ge=1, le=500),
+    after_ms: int | None = None,
+) -> list[BrokerOrder]:
+    return await _run(
+        broker,
+        lambda port: port.list_orders(status=status, limit=limit, after_ms=after_ms),
+    )
+
+
+@router.get("/{broker}/activities", response_model=list[BrokerActivity])
+async def list_activities(
+    broker: str,
+    after_ms: int | None = None,
+) -> list[BrokerActivity]:
+    return await _run(broker, lambda port: port.list_activities(after_ms=after_ms))

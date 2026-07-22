@@ -6759,6 +6759,120 @@
         "title": "BrokerAccountSnapshot",
         "type": "object"
       },
+      "BrokerActivity": {
+        "additionalProperties": false,
+        "description": "An account activity row (trade fills and non-trade events).",
+        "properties": {
+          "activity_id": {
+            "title": "Activity Id",
+            "type": "string"
+          },
+          "activity_type": {
+            "title": "Activity Type",
+            "type": "string"
+          },
+          "broker": {
+            "title": "Broker",
+            "type": "string"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "net_amount": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Net Amount"
+          },
+          "observed_at_ms": {
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "occurred_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At Ms"
+          },
+          "price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price"
+          },
+          "quantity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantity"
+          },
+          "side": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Side"
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
+          }
+        },
+        "required": [
+          "broker",
+          "activity_id",
+          "activity_type",
+          "category",
+          "symbol",
+          "side",
+          "quantity",
+          "price",
+          "net_amount",
+          "occurred_at_ms",
+          "observed_at_ms"
+        ],
+        "title": "BrokerActivity",
+        "type": "object"
+      },
       "BrokerActivityHealth": {
         "additionalProperties": false,
         "description": "PR 5 \u2014 broker-activity publisher health surface.\n\nA single typed verdict (``state``) plus an optional operator-facing\nnotice (``headline``) and a list of all active notices (``notices``).\n``facts`` carries the raw diagnostics; the cockpit never derives\nstate from them.\n\nStates:\n- ``ready``       \u2014 publisher registered + running + emitting rows (or\n                    still within the silent-boot window).\n- ``starting``    \u2014 publisher registered but not yet running; within\n                    the starting-timeout window.\n- ``degraded``    \u2014 publisher registered + running but no rows recently.\n- ``unavailable`` \u2014 publisher not registered or timed out while starting.",
@@ -7284,6 +7398,257 @@
           "compared_at_ms"
         ],
         "title": "BrokerObservationConsistency",
+        "type": "object"
+      },
+      "BrokerOrder": {
+        "additionalProperties": false,
+        "description": "An order and its status, for the recent-orders table.",
+        "properties": {
+          "asset_class": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Asset Class"
+          },
+          "broker": {
+            "title": "Broker",
+            "type": "string"
+          },
+          "canceled_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Canceled At Ms"
+          },
+          "client_order_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Order Id"
+          },
+          "created_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At Ms"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/BrokerOrderEvent"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "expired_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expired At Ms"
+          },
+          "filled_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filled At Ms"
+          },
+          "filled_avg_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filled Avg Price"
+          },
+          "filled_quantity": {
+            "title": "Filled Quantity",
+            "type": "number"
+          },
+          "limit_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit Price"
+          },
+          "observed_at_ms": {
+            "title": "Observed At Ms",
+            "type": "integer"
+          },
+          "order_id": {
+            "title": "Order Id",
+            "type": "string"
+          },
+          "order_type": {
+            "title": "Order Type",
+            "type": "string"
+          },
+          "quantity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantity"
+          },
+          "side": {
+            "title": "Side",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "stop_price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Price"
+          },
+          "submitted_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submitted At Ms"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "time_in_force": {
+            "title": "Time In Force",
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At Ms"
+          }
+        },
+        "required": [
+          "broker",
+          "order_id",
+          "client_order_id",
+          "symbol",
+          "asset_class",
+          "side",
+          "order_type",
+          "time_in_force",
+          "quantity",
+          "filled_quantity",
+          "limit_price",
+          "stop_price",
+          "filled_avg_price",
+          "status",
+          "submitted_at_ms",
+          "created_at_ms",
+          "updated_at_ms",
+          "filled_at_ms",
+          "canceled_at_ms",
+          "expired_at_ms",
+          "events",
+          "observed_at_ms"
+        ],
+        "title": "BrokerOrder",
+        "type": "object"
+      },
+      "BrokerOrderEvent": {
+        "additionalProperties": false,
+        "description": "A lifecycle event on an order (fill/partial-fill/cancel/...).\n\nPhase-1 REST orders carry only their own lifecycle timestamps, from which\nthe adapter synthesizes a fill event when the order reports a fill. The\nricher per-event stream arrives with the phase-2 ``trade_updates`` consumer.",
+        "properties": {
+          "event_type": {
+            "title": "Event Type",
+            "type": "string"
+          },
+          "occurred_at_ms": {
+            "title": "Occurred At Ms",
+            "type": "integer"
+          },
+          "price": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Price"
+          },
+          "quantity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quantity"
+          }
+        },
+        "required": [
+          "event_type",
+          "occurred_at_ms",
+          "price",
+          "quantity"
+        ],
+        "title": "BrokerOrderEvent",
         "type": "object"
       },
       "BrokerPosition": {
@@ -42118,6 +42483,201 @@
           }
         },
         "summary": "Get Account",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/activities": {
+      "get": {
+        "operationId": "list_activities_api_brokers__broker__activities_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after_ms",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After Ms"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BrokerActivity"
+                  },
+                  "title": "Response List Activities Api Brokers  Broker  Activities Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Activities",
+        "tags": [
+          "brokers-v2"
+        ]
+      }
+    },
+    "/api/brokers/{broker}/orders": {
+      "get": {
+        "operationId": "list_orders_api_brokers__broker__orders_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "broker",
+            "required": true,
+            "schema": {
+              "title": "Broker",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "open",
+                    "closed",
+                    "all"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 500,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after_ms",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After Ms"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Data-Plane-Control-Secret",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Data-Plane-Control-Secret"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BrokerOrder"
+                  },
+                  "title": "Response List Orders Api Brokers  Broker  Orders Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Orders",
         "tags": [
           "brokers-v2"
         ]

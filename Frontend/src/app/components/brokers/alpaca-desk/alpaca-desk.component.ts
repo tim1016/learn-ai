@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component } from '@angular/core';
 
 import { AlpacaAccountCardComponent } from './alpaca-account-card.component';
+import { AlpacaOrdersTableComponent } from './alpaca-orders-table.component';
 import { AlpacaPositionsTableComponent } from './alpaca-positions-table.component';
 
 /**
@@ -11,7 +12,11 @@ import { AlpacaPositionsTableComponent } from './alpaca-positions-table.componen
 @Component({
   selector: 'app-alpaca-desk',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AlpacaAccountCardComponent, AlpacaPositionsTableComponent],
+  imports: [
+    AlpacaAccountCardComponent,
+    AlpacaPositionsTableComponent,
+    AlpacaOrdersTableComponent,
+  ],
   templateUrl: './alpaca-desk.component.html',
   styleUrl: './alpaca-desk.component.scss',
 })

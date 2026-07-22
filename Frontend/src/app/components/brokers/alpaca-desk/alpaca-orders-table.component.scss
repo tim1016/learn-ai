@@ -1,0 +1,48 @@
+:host {
+  display: block;
+}
+
+.state {
+  margin: 0;
+  padding: 12px 0;
+  color: var(--text-secondary, #9aa4b2);
+}
+
+.state-error {
+  color: var(--verdict-blocked-text, #ffb4b4);
+}
+
+.orders {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--text-primary, #e6e9ef);
+
+  caption {
+    text-align: left;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-secondary, #9aa4b2);
+    padding-bottom: 6px;
+  }
+
+  th,
+  td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-light, #2a3242);
+    text-align: left;
+    white-space: nowrap;
+  }
+
+  thead th {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-secondary, #9aa4b2);
+  }
+
+  .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+}

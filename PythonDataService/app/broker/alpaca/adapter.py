@@ -22,7 +22,13 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.broker.alpaca.config import BROKER_ID
-from app.broker.contract.models import BrokerAccountSnapshot, BrokerPosition
+from app.broker.contract.models import (
+    BrokerAccountSnapshot,
+    BrokerActivity,
+    BrokerOrder,
+    BrokerOrderEvent,
+    BrokerPosition,
+)
 
 # DST-correct ET zone for anchoring bare dates (never a fixed offset).
 _ET = ZoneInfo("America/New_York")
@@ -158,5 +164,80 @@ def from_alpaca_position(
         current_price=opt_float(payload.get("current_price")),
         unrealized_pl=to_float(payload["unrealized_pl"]),
         unrealized_plpc=opt_float(payload.get("unrealized_plpc")),
+        observed_at_ms=_observed(observed_at_ms),
+    )
+
+
+def _order_events(payload: Mapping[str, Any]) -> list[BrokerOrderEvent]:
+    """Synthesize the events the REST order payload carries.
+
+    Phase-1 REST orders expose only lifecycle timestamps, so a filled order
+    yields one ``fill`` event. The richer per-event history arrives with the
+    phase-2 ``trade_updates`` consumer.
+    """
+    filled_at = payload.get("filled_at")
+    filled_avg_price = payload.get("filled_avg_price")
+    if filled_at and filled_avg_price is not None:
+        return [
+            BrokerOrderEvent(
+                event_type="fill",
+                occurred_at_ms=rfc3339_to_ms(str(filled_at)),
+                price=opt_float(filled_avg_price),
+                quantity=opt_float(payload.get("filled_qty")),
+            )
+        ]
+    return []
+
+
+def from_alpaca_order(
+    payload: Mapping[str, Any],
+    *,
+    observed_at_ms: int | None = None,
+) -> BrokerOrder:
+    """Map a raw Alpaca order payload to a ``BrokerOrder`` with any fill event."""
+    return BrokerOrder(
+        broker=BROKER_ID,
+        order_id=str(payload["id"]),
+        client_order_id=opt_str(payload.get("client_order_id")),
+        symbol=str(payload["symbol"]),
+        asset_class=opt_str(payload.get("asset_class")),
+        side=str(payload["side"]),
+        order_type=str(payload.get("order_type") or payload.get("type")),
+        time_in_force=str(payload["time_in_force"]),
+        quantity=opt_float(payload.get("qty")),
+        filled_quantity=to_float(payload.get("filled_qty") or 0),
+        limit_price=opt_float(payload.get("limit_price")),
+        stop_price=opt_float(payload.get("stop_price")),
+        filled_avg_price=opt_float(payload.get("filled_avg_price")),
+        status=str(payload["status"]),
+        submitted_at_ms=opt_rfc3339_to_ms(payload.get("submitted_at")),
+        created_at_ms=opt_rfc3339_to_ms(payload.get("created_at")),
+        updated_at_ms=opt_rfc3339_to_ms(payload.get("updated_at")),
+        filled_at_ms=opt_rfc3339_to_ms(payload.get("filled_at")),
+        canceled_at_ms=opt_rfc3339_to_ms(payload.get("canceled_at")),
+        expired_at_ms=opt_rfc3339_to_ms(payload.get("expired_at")),
+        events=_order_events(payload),
+        observed_at_ms=_observed(observed_at_ms),
+    )
+
+
+def from_alpaca_activity(
+    payload: Mapping[str, Any],
+    *,
+    observed_at_ms: int | None = None,
+) -> BrokerActivity:
+    """Map a raw Alpaca activity payload (trade or non-trade) to ``BrokerActivity``."""
+    is_trade = "transaction_time" in payload
+    return BrokerActivity(
+        broker=BROKER_ID,
+        activity_id=str(payload["id"]),
+        activity_type=str(payload["activity_type"]),
+        category="trade_activity" if is_trade else "non_trade_activity",
+        symbol=opt_str(payload.get("symbol")),
+        side=opt_str(payload.get("side")),
+        quantity=opt_float(payload.get("qty")),
+        price=opt_float(payload.get("price")),
+        net_amount=opt_float(payload.get("net_amount")),
+        occurred_at_ms=occurred_at_ms(payload),
         observed_at_ms=_observed(observed_at_ms),
     )

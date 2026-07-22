@@ -1,8 +1,12 @@
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpParams } from '@angular/common/http';
 import { Injectable, inject } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 
-import type { BrokerAccountSnapshot, BrokerPosition } from '../api/alpaca.types';
+import type {
+  BrokerAccountSnapshot,
+  BrokerOrder,
+  BrokerPosition,
+} from '../api/alpaca.types';
 
 /**
  * Broker System v2 read client — targets `/api/brokers/{broker}/...`, the v2
@@ -24,6 +28,22 @@ export class BrokersService {
   listPositions(broker = 'alpaca'): Promise<BrokerPosition[]> {
     return firstValueFrom(
       this.http.get<BrokerPosition[]>(`${this.base}/${broker}/positions`),
+    );
+  }
+
+  listOrders(
+    broker = 'alpaca',
+    options: { status?: 'open' | 'closed' | 'all'; limit?: number } = {},
+  ): Promise<BrokerOrder[]> {
+    let params = new HttpParams();
+    if (options.status) {
+      params = params.set('status', options.status);
+    }
+    if (options.limit != null) {
+      params = params.set('limit', options.limit);
+    }
+    return firstValueFrom(
+      this.http.get<BrokerOrder[]>(`${this.base}/${broker}/orders`, { params }),
     );
   }
 }

@@ -1,0 +1,41 @@
+@if (orders.isLoading()) {
+  <p class="state" role="status">Loading orders…</p>
+} @else if (orders.error()) {
+  <p class="state state-error" role="alert">
+    Couldn't reach Alpaca. Orders are unavailable right now.
+  </p>
+} @else if (orders.value(); as rows) {
+  @if (rows.length === 0) {
+    <p class="state" role="status">No recent orders.</p>
+  } @else {
+    <table class="orders">
+      <caption>Recent orders</caption>
+      <thead>
+        <tr>
+          <th scope="col">Symbol</th>
+          <th scope="col">Side</th>
+          <th scope="col">Type</th>
+          <th scope="col" class="num">Qty</th>
+          <th scope="col" class="num">Filled</th>
+          <th scope="col">Status</th>
+          <th scope="col">Submitted</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (row of rows; track row.order_id) {
+          <tr>
+            <th scope="row">{{ row.symbol }}</th>
+            <td>{{ row.side | receiptLabel }}</td>
+            <td>{{ row.order_type | receiptLabel }}</td>
+            <td class="num">{{ row.quantity | number: '1.0-4' }}</td>
+            <td class="num">{{ row.filled_quantity | number: '1.0-4' }}</td>
+            <td>{{ row.status | receiptLabel }}</td>
+            <td>
+              <app-timestamp-display [value]="row.submitted_at_ms" mode="local" />
+            </td>
+          </tr>
+        }
+      </tbody>
+    </table>
+  }
+}

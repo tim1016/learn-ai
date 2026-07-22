@@ -8,3 +8,5 @@ import type { components } from './broker.types';
 
 export type BrokerAccountSnapshot = components['schemas']['BrokerAccountSnapshot'];
 export type BrokerPosition = components['schemas']['BrokerPosition'];
+export type BrokerOrder = components['schemas']['BrokerOrder'];
+export type BrokerOrderEvent = components['schemas']['BrokerOrderEvent'];
